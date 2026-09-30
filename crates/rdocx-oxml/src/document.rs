@@ -17,7 +17,8 @@ use crate::revision::CT_Revision;
 use crate::shared::{ST_PageOrientation, ST_SectionType};
 use crate::table::{CT_Tbl, ST_VerticalJc};
 use crate::text::{
-    CT_P, capture_root_attribute_record, is_root_attribute_record, push_root_attribute_record,
+    CT_P, capture_root_attribute_record, declare_w14_on_part_root, is_root_attribute_record,
+    push_root_attribute_record,
 };
 use crate::units::Twips;
 
@@ -2813,6 +2814,10 @@ pub struct CT_Document {
     /// Foreign same-local-name background children retained before the body.
     #[doc(hidden)]
     pub background_extra_xml: Vec<Vec<u8>>,
+    /// Non-namespace attributes of the original document element, such as
+    /// `mc:Ignorable`, in source order.
+    #[doc(hidden)]
+    pub root_attributes: Vec<(String, String)>,
 }
 
 #[allow(non_snake_case)]
@@ -2823,6 +2828,7 @@ impl CT_Document {
             extra_namespaces: Vec::new(),
             background_xml: None,
             background_extra_xml: Vec::new(),
+            root_attributes: Vec::new(),
         }
     }
 
@@ -2835,6 +2841,7 @@ impl CT_Document {
         let mut extra_namespaces = Vec::new();
         let mut background_xml = None;
         let mut background_extra_xml = Vec::new();
+        let mut root_attributes = Vec::new();
         let mut buf = Vec::new();
         let mut word_prefixes = Vec::new();
         let mut document_open = false;
@@ -2854,17 +2861,18 @@ impl CT_Document {
                         }
                         for attr in e.attributes().flatten() {
                             let key = attr.key.as_ref();
-                            if (key.starts_with(b"xmlns:") || key == b"xmlns")
-                                && !known_ns.contains(&key)
-                            {
-                                let key_str = std::str::from_utf8(key).unwrap_or("").to_string();
-                                let val_str = attr
-                                    .decoded_and_normalized_value(
-                                        XmlVersion::Implicit1_0,
-                                        e.decoder(),
-                                    )?
-                                    .into_owned();
+                            let is_namespace = key.starts_with(b"xmlns:") || key == b"xmlns";
+                            if is_namespace && known_ns.contains(&key) {
+                                continue;
+                            }
+                            let key_str = std::str::from_utf8(key).unwrap_or("").to_string();
+                            let val_str = attr
+                                .decoded_and_normalized_value(XmlVersion::Implicit1_0, e.decoder())?
+                                .into_owned();
+                            if is_namespace {
                                 extra_namespaces.push((key_str, val_str));
+                            } else {
+                                root_attributes.push((key_str, val_str));
                             }
                         }
                         document_open = true;
@@ -2942,6 +2950,7 @@ impl CT_Document {
             extra_namespaces,
             background_xml,
             background_extra_xml,
+            root_attributes,
         })
     }
 
@@ -2979,8 +2988,9 @@ impl CT_Document {
             doc_start.push_attribute(("xmlns:wp", wp_ns));
         }
 
-        // Replay captured extra namespaces
-        for (key, val) in &self.extra_namespaces {
+        // Replay captured extra namespaces, then the root attributes that
+        // may name their prefixes, such as `mc:Ignorable`.
+        for (key, val) in self.extra_namespaces.iter().chain(&self.root_attributes) {
             doc_start.push_attribute((key.as_str(), val.as_str()));
         }
 
@@ -2998,7 +3008,9 @@ impl CT_Document {
 
         writer.write_event(Event::End(BytesEnd::new("w:document")))?;
 
-        Ok(writer.into_inner())
+        let mut xml = writer.into_inner();
+        declare_w14_on_part_root(&mut xml)?;
+        Ok(xml)
     }
 }
 
@@ -3208,6 +3220,36 @@ mod tests {
             assert!(reopened.background_xml.is_none());
             assert_eq!(reopened.background_extra_xml, vec![raw.as_bytes().to_vec()]);
         }
+    }
+
+    /// #160: a typed rewrite dropped `mc:Ignorable` and every other
+    /// non-namespace attribute of the document root.
+    #[test]
+    fn root_attributes_survive_a_rewrite_after_the_namespace_declarations() {
+        let xml = format!(
+            r#"<w:document xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:w="{W_NS}" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" mc:Ignorable="w14" xmlns:x="urn:producer" x:root="a &amp; b"><w:body><w:p/></w:body></w:document>"#
+        );
+        let parsed = CT_Document::from_xml(xml.as_bytes()).unwrap();
+        assert_eq!(
+            parsed.root_attributes,
+            [
+                ("mc:Ignorable".to_owned(), "w14".to_owned()),
+                ("x:root".to_owned(), "a & b".to_owned()),
+            ]
+        );
+
+        let written = String::from_utf8(parsed.to_xml().unwrap()).unwrap();
+        let root = &written[written.find("<w:document").unwrap()..];
+        let root = &root[..=root.find('>').unwrap()];
+        assert!(
+            root.ends_with(
+                r#" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:x="urn:producer" mc:Ignorable="w14" x:root="a &amp; b">"#
+            ),
+            "{root}"
+        );
+        let reparsed = CT_Document::from_xml(written.as_bytes()).unwrap();
+        assert_eq!(reparsed.root_attributes, parsed.root_attributes);
+        assert_eq!(reparsed.to_xml().unwrap(), written.as_bytes());
     }
 
     #[test]

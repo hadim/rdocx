@@ -1,7 +1,7 @@
 //! Drawing elements for inline and anchor images: `CT_Drawing`, `CT_Inline`, `CT_Anchor`.
 
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
-use quick_xml::name::{Namespace, ResolveResult};
+use quick_xml::name::{Namespace, PrefixDeclaration, ResolveResult};
 use quick_xml::reader::NsReader;
 use quick_xml::{Reader, Writer, XmlVersion};
 
@@ -698,29 +698,7 @@ impl CT_Anchor {
                                 Ok(Event::Start(ref ie))
                                     if matches_local_name(ie.name().as_ref(), b"p") =>
                                 {
-                                    let raw = capture_ns_element(reader, ie)?;
-                                    let mut paragraph_reader = Reader::from_reader(raw.as_slice());
-                                    let mut paragraph_buffer = Vec::new();
-                                    loop {
-                                        match paragraph_reader
-                                            .read_event_into(&mut paragraph_buffer)?
-                                        {
-                                            Event::Start(ref paragraph_start)
-                                                if matches_local_name(
-                                                    paragraph_start.name().as_ref(),
-                                                    b"p",
-                                                ) =>
-                                            {
-                                                paragraphs.push(crate::text::CT_P::from_xml(
-                                                    &mut paragraph_reader,
-                                                )?);
-                                                break;
-                                            }
-                                            Event::Eof => break,
-                                            _ => {}
-                                        }
-                                        paragraph_buffer.clear();
-                                    }
+                                    paragraphs.extend(text_box_paragraph(reader, ie)?);
                                 }
                                 Ok(Event::End(ref ie))
                                     if matches_local_name(ie.name().as_ref(), b"txbxContent") =>
@@ -1382,6 +1360,54 @@ fn canonical_wp_element(
 ) -> bool {
     let (namespace, local) = reader.resolver().resolve_element(element.name());
     namespace_matches(&namespace, drawing_ns::WP, b"wp") && local.as_ref() == expected_local
+}
+
+/// Parse a text-box paragraph out of its anchor.
+///
+/// The paragraph is parsed on its own, so its start tag gets the bindings in
+/// scope here, on top of the scope `CT_P::from_xml` assumes. A run attribute
+/// under any prefix the part binds then resolves as it does in the body.
+fn text_box_paragraph(
+    reader: &mut NsReader<&[u8]>,
+    start: &BytesStart<'_>,
+) -> Result<Option<crate::text::CT_P>> {
+    let mut bindings = Vec::new();
+    for (prefix, namespace) in reader.resolver().bindings() {
+        let prefix = match prefix {
+            PrefixDeclaration::Default => "",
+            PrefixDeclaration::Named(prefix) => std::str::from_utf8(prefix)?,
+        };
+        let namespace = quick_xml::escape::unescape(std::str::from_utf8(namespace.as_ref())?)
+            .map_err(quick_xml::Error::from)?;
+        bindings.push((prefix.to_owned(), namespace.into_owned()));
+    }
+    let raw =
+        crate::text::raw_with_external_bindings(&capture_ns_element(reader, start)?, &bindings)?;
+    let mut paragraph_reader = Reader::from_reader(raw.as_slice());
+    let mut buffer = Vec::new();
+    loop {
+        match paragraph_reader.read_event_into(&mut buffer)? {
+            Event::Start(ref paragraph_start)
+                if matches_local_name(paragraph_start.name().as_ref(), b"p") =>
+            {
+                let prefixes = crate::numbering::word_prefixes_at(
+                    paragraph_start,
+                    &[
+                        "w".to_owned(),
+                        format!("\0r\0{}", crate::namespace::R_NS),
+                        format!("\0mc\0{}", crate::namespace::MC_NS),
+                    ],
+                )?;
+                return Ok(Some(crate::text::CT_P::from_xml_with_prefixes(
+                    &mut paragraph_reader,
+                    &prefixes,
+                )?));
+            }
+            Event::Eof => return Ok(None),
+            _ => {}
+        }
+        buffer.clear();
+    }
 }
 
 fn capture_ns_element(reader: &mut NsReader<&[u8]>, start: &BytesStart<'_>) -> Result<Vec<u8>> {

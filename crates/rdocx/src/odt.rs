@@ -138,9 +138,10 @@ impl Document {
     /// Serialize and save ODT to a path, returning lossy-conversion diagnostics.
     pub fn save_odt<P: AsRef<Path>>(&self, path: P) -> Result<Vec<OdtDiagnostic>> {
         let result = self.to_odt_bytes()?;
-        crate::document::write_atomic_file(
+        oxml_opc::write_atomic_file(
             path.as_ref(),
             &result.bytes,
+            "rdocx",
             "invalid file name",
             "could not allocate ODT-save staging file",
         )?;
@@ -339,7 +340,10 @@ impl<'a> OdtWriter<'a> {
                     "table-row properties were dropped during ODT export",
                 )?;
             }
-            for (index, _) in &row.extra_xml {
+            for (index, raw) in &row.extra_xml {
+                if CT_Row::raw_is_root_attributes(*index, raw) {
+                    continue;
+                }
                 self.diagnose(
                     &format!("{row_path}/raw[{index}]"),
                     "unmodelled table-row XML was dropped during ODT export",

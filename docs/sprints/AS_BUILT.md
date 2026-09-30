@@ -16398,3 +16398,63 @@ zero defects and zero smells.
 **Notes for future sessions.** The original private file still needs reporter
 validation if it becomes available. Keep split-row fallback explicit for
 unsupported ownership and geometry cases rather than duplicating content.
+
+### F-X137, Package and CLI safety contribution wave
+
+**Sprint.** S76
+**Completed.** 2026-09-30
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** Integrated PRs 174, 178, 182, 185 and 197. The CLIs refuse input-as-output and existing output without force, and tolerate a closed stdout reader. OPC, Word and PowerPoint saves stage replacement atomically. Edited Word story and comments roots bind their used namespaces, while unchanged producer parts retain their bytes. Word saves select the package class from the destination extension.
+
+**Non-obvious choices.** Replayed each PR's behavior commits rather than its shared archive measurement tail. The overlapping CLI and save paths were reconciled together, with one package writer. The root README credits hadim's community Claude plugin, and package archive measurements were refreshed after that attribution.
+
+**Deviations from the design plan.** Added `docs/hld/06-presentationml-model.md` to the plan's HLD impact list because the accepted atomic save changed PowerPoint behavior. No hash baseline change was needed.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`, `docs/hld/06-presentationml-model.md`, and `docs/hld/10-bindings-spec.md`.
+
+**Tests.** The CLI overwrite regression failed on the old behavior and passed with the implementation. The integrated full gate passed formatting, warnings-denied workspace clippy, workspace tests, 105 no-default-features layout tests, both WASM targets, warnings-denied rustdoc, README doctests, the repository policy suite with 131 tests and two expected skips, the clean 22-crate verified dry run, the 10 MiB archive ceiling, and `cargo deny`. Worker Python tests passed 28 cases with one skip. Microscope pass 2 reported zero defects and zero smells.
+
+**Hash harness.** Unchanged, 49 of 49 at the integrated checkpoint.
+
+**Notes for future sessions.** Keep the five PR behaviors and the measured archive updates distinct. The retained `work/f-x137-codex` branch and worktree remain available through sprint closure.
+
+### F-X138, Word story and content contribution wave
+
+**Sprint.** S76
+**Completed.** 2026-09-30
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** Integrated PRs 177, 179, 180, 191, 195, 202, 210 and 211. Direct body indexes now agree across search, run splitting, bookmarks and comments. Modeled content controls, notes, tracked insertions, text boxes and inline wrappers contribute to the supported text and replacement paths. Comment entry points anchor accepted-view runs and preserve story ownership.
+
+**Non-obvious choices.** Replayed unique behavior commits in stack order and skipped duplicate ancestor and measurement-only commits. A replacement edits every Word text-box copy while counting the first modeled Choice once. Conflict resolution retained producer whitespace flags and unmodeled XML. The root README keeps hadim's Claude plugin attribution with remeasured package archives.
+
+**Deviations from the design plan.** Added `docs/hld/05-drawingml-model.md` to the HLD impact list for the accepted text-box behavior. The first microscope pass found duplicate CLI count prose and an unclear producer exception. Both were corrected before the clean second pass.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`, `docs/hld/05-drawingml-model.md`, `docs/hld/10-bindings-spec.md`, and `docs/hld/12-testing-strategy.md`.
+
+**Tests.** The Issue 163 direct body index regression failed against the claimed base and passed after implementation. Focused Rust and Python suites passed. The integrated full gate passed formatting, warnings-denied workspace clippy, workspace tests, no-default-features layout tests, both WASM targets, warnings-denied rustdoc, 27 README pages and 22 package inventories, 131 policy tests with two expected skips, the clean 22-crate publication dry run, the 10 MiB archive ceiling, and `cargo deny`. The integrated Python suite passed 76 tests. Microscope pass 2 reported zero defects and zero smells.
+
+**Hash harness.** Unchanged, 49 of 49 at the integrated checkpoint.
+
+**Notes for future sessions.** F-X139 builds on these story and run coordinates. The broader Issue 160 and 172 matrices remain assigned to S78. Retain `work/f-x138-codex` and its worktree through sprint closure.
+
+### F-X139, Word identity and comparison contribution wave
+
+**Sprint.** S76
+**Completed.** 2026-09-30
+**Size.** L, estimated 5 days, actual 1 day
+
+**What was built.** Integrated PRs 183, 184, 190, 193, 198 and 205. TOC and text-box edits accept inherited Word prefixes and retain producer paragraph attributes. Duplicated rows and paragraphs receive safe identities. Comparison ignores identity-only differences, retains marker order, reports unsupported content-control metadata as diagnostics, and exposes granular options through the CLI. CLI comment mutations accept optional dates.
+
+**Non-obvious choices.** Replayed unique behavior commits and omitted their measurement-only tails, then reconciled comparison and text-box edits with F-X138's story traversal and replacement semantics. The CLI plain-text documentation now reflects F-X138's content-control and nested-table traversal. Package archive measurements were re-recorded after the combined edits.
+
+**Deviations from the design plan.** Added `docs/hld/12-testing-strategy.md` to HLD impact for the accepted PR 193 test intent and recorded the layout cache risk rider. No hash baseline change was needed.
+
+**Spec sections touched.** `docs/hld/03-architecture.md`, `docs/hld/04-opc-and-packaging.md`, `docs/hld/10-bindings-spec.md`, and `docs/hld/12-testing-strategy.md`.
+
+**Tests.** The Issue 159 identity-only content-control regression failed on the claimed base and passed after implementation. Focused Rust tests, 77 integrated Python tests, warnings-denied workspace Clippy and rustdoc, workspace tests, 105 no-default-features layout tests, both WASM targets, 131 policy tests with two expected skips, 27 README pages, the clean 22-crate publication dry run, the 10 MiB archive ceiling, and `cargo deny` passed. Microscope pass 1 reported zero defects and zero smells.
+
+**Hash harness.** Unchanged, 49 of 49 at the integrated S76 gate.
+
+**Notes for future sessions.** The broader Issue 159 and 161 acceptance matrices remain assigned to S78. Retain `work/f-x139-codex` and its worktree through sprint closure.

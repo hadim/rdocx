@@ -2313,8 +2313,15 @@ impl<'a> RowRef<'a> {
     }
 
     /// Whether the row contains direct content other than cells.
+    ///
+    /// The attributes of the row start tag, such as `w:rsidR` or
+    /// `w14:paraId`, are not content.
     pub fn has_unsupported_content(&self) -> bool {
-        !self.inner.extra_xml.is_empty() || !self.inner.content_controls.is_empty()
+        self.inner
+            .extra_xml
+            .iter()
+            .any(|(position, raw)| !CT_Row::raw_is_root_attributes(*position, raw))
+            || !self.inner.content_controls.is_empty()
     }
 
     /// Whether row properties retain facts outside the public reader model.

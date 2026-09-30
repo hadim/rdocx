@@ -813,9 +813,12 @@ each non-final body section properties value to a next-page section-ending
 paragraph, and retains the final body-level section properties value. A
 namespace-aware serialized-body pass remaps bookmark, content-control, and
 drawing identities together with bookmark field and hyperlink references,
-including values held in preserved raw XML. The operation does not evaluate
-structured template tags, and ordinary field traversal keeps its existing
-typed story scope.
+including values held in preserved raw XML. The same pass removes `w14:paraId`
+and `w14:textId` from every copied paragraph and table row, since a copy must
+not share them and Word assigns new ones, and keeps revision-save identities.
+Rich merge region copies and imported fragments go through it too. The
+operation does not evaluate structured template tags, and ordinary field
+traversal keeps its existing typed story scope.
 
 The same facade owns additive native rich mail merge over `MailMergeData` and
 owned text, image, and DOCX fragment values. Whole-paragraph and whole-row
@@ -839,15 +842,17 @@ container-aware stack parser. Top-level marker paragraphs clone body entries,
 including section-ending paragraphs and their section properties. Marker rows
 clone every row in a multi-row template group inside their owning table. The
 owning table is retained, and each row and cell is deep-cloned with its merge,
-banding, content-control, and ordered raw XML state. Numbered paragraphs in a
+banding, content-control, and ordered raw XML state. Every paragraph and table
+row a loop renders drops its `w14:paraId` and `w14:textId`, as other copies do,
+and keeps its revision-save identities. Numbered paragraphs in a
 loop retain their source `numId` and level, which keeps one continuous list
 without allocating definitions. Numbering references are validated before
 evaluation. Loop variables form lexical scopes, and dotted lookup searches the
 innermost scope before the root value. Structural controls are limited to the
-main body and its tables. Headers, footers, text boxes, and chart labels retain
-scalar-only replacement through the existing Word placeholder mapper. A
-successful render commits the staged document and package together and
-invalidates both layout caches once.
+main body and its tables. Headers, footers, footnotes, endnotes, text boxes, and
+chart labels retain scalar-only replacement through the existing Word
+placeholder mapper. A successful render commits the staged document and package
+together and invalidates both layout caches once.
 
 The content-control model owns one recursive `CT_Sdt` grammar at block, row,
 cell, paragraph, and run placement boundaries. It reports tag, alias, numeric
@@ -909,10 +914,25 @@ form changes replace that complete owner. Supported run, paragraph, table, and
 section properties emit property revisions that retain the original property
 sidecars. Unsupported formatting differences retain the original bytes and
 produce stable `ComparisonDiagnostic` values at the actual story path. Inputs
-with existing modeled revisions or differing story and control shells are
-rejected unless their story category is ignored. Attributed text alignment
-retains owner, formatting, content position, and raw-child boundaries, then
-coalesces adjacent equal-owner edits into minimal revision wrappers.
+with existing modeled revisions or differing story shells are rejected unless
+their story category is ignored. The root and owner start tags of a comment
+or note story compare as namespace-resolved trees, so a part written again
+with other declarations, attribute order, or empty-element forms keeps its
+shell. A content control's shell is its type and data binding, and a
+difference there is rejected too. Its `w:id` is producer
+identity and ignored. Its tag, alias, lock, placeholder, and document-part
+gallery are metadata, so controls that differ only by those align, compare,
+keep the original `w:sdtPr`, and report one `content-control <name> differs`
+diagnostic per property. Attributed text alignment retains owner,
+formatting, content position, and raw-child boundaries, then coalesces
+adjacent equal-owner edits into minimal revision wrappers. That alignment
+runs separately between consecutive hyperlink and inline-control boundaries,
+so no text matches across a shell and words inserted or deleted beside a
+shell move it. Text inserted between two boundaries with no original run
+between them, such as before a hyperlink that opens its paragraph, has no
+original bytes to go between and refuses the pair. When every run of a
+paragraph matches, the runs stay whole and only the differing inline
+controls are compared.
 When a main story gains a trailing run of paragraphs, comparison marks the
 original final paragraph boundary once, marks each intermediate inserted
 paragraph boundary once, and leaves the final inserted paragraph mark as the
@@ -1116,8 +1136,9 @@ breaks, and selected alternate-content fallbacks remain traversal boundaries
 so the facade preserves their unmodelled or separately typed XML.
 
 The facade also owns modern PresentationML package identity. The exact main
-part content type distinguishes PPTX, PPTM, POTX, POTM, PPSX, and PPSM. Normal
-serialization preserves that source class. An explicit output conversion
+part content type distinguishes PPTX, PPTM, POTX, POTM, PPSX, and PPSM. Byte
+serialization preserves that source class, while a path save writes the class
+that its PowerPoint extension names. An explicit output conversion
 changes only a staged content-type override, retains opaque executable parts
 and relationships, and invalidates retained package signature evidence when
 the signed table changes. Binary `.ppt` never enters this OPC path.
@@ -1222,7 +1243,16 @@ second document tree. The facade resolves package owners and stable source
 order. The existing `rdocx-oxml` grammar remains the authority for admitting
 content controls, revisions, and fields as typed content. Content rejected by
 that grammar remains one opaque preserved boundary and cannot expose nested
-owners or editable text.
+owners or editable text. Word writes a text box twice in a run's
+`mc:AlternateContent`, as DrawingML in `mc:Choice` and as VML in
+`mc:Fallback`. That text box is one text-box story, read from the first
+Choice that holds a text box, the one layout draws. Any other Choice and the
+Fallback stay opaque, and the Choice drawing adds no drawing item to the story
+that holds it. A story edit of that text box changes that Choice only. A
+reader of the VML Fallback, such as Word 2007 or a converter like mammoth.js,
+keeps seeing the text the box had before the edit. A later replacement edits
+every copy, see `10-bindings-spec.md`, which aligns the replaced text of the
+Fallback and not the rest of the edit.
 
 `StoryItemRef::links` returns modeled hyperlinks in item source order. Display
 text comes from the existing story text projection, while relationship targets
@@ -1250,6 +1280,25 @@ before enclosing content controls and exposes every matching body coordinate.
 Paragraph text and run handles use one accepted-view walk. Direct runs, inline
 content-control runs, insertion runs, and move-destination runs retain recursive
 source paths in exact order. Deletion and move-source text stays excluded.
+Literal and regex replacement read the same runs in the same order. The runs of
+one inline content control, insertion, or move destination form a stretch of
+their own, and a match must lie within one stretch, so a match that crosses an
+insertion boundary is not replaced and is not counted. A replacement inside an
+insertion is written back inside the same wrapper, which keeps its id, author,
+and date, so the edited text stays attributed to that tracked change. A
+deletion or a move source is never matched and does not split a stretch.
+
+The paragraph model keeps a smart tag and an inline custom XML element as raw
+XML, and a simple field as a field run whose source is its raw XML. Paragraph
+text and replacement parse the runs of these wrappers on demand from that
+source, in document order, nested wrappers included, and the paragraph run
+handles do not address them. The runs of each wrapper form a stretch of their
+own under the same rule. A replacement inside one writes the wrapper again from
+its start tag, its changed content, and its end tag, so its attributes and a
+field instruction keep their bytes, and a wrapper without a match keeps all of
+them. For a simple field, the replaced text is its cached result, which is what
+a reader sees until Word updates the field. A wrapper inside a content control,
+a revision, or a hyperlink is not read.
 
 `ContentFragment` owns one paragraph, table, block content control, or removed
 preserved node. Insert, remove, clone, and move resolve canonical
@@ -1257,7 +1306,8 @@ preserved node. Insert, remove, clone, and move resolve canonical
 children of the matching kind. `ContentLocation::end` is the distinct boundary
 after final direct content. It works for empty and self-closing owners and
 remains before body section properties. Moves stay within one unchanged story
-owner. Clones allocate fresh document identities, while relationship-bearing
+owner. Clones allocate fresh document identities and drop the `w14:paraId` and
+`w14:textId` of their paragraphs and table rows, while relationship-bearing
 fragments require the unchanged owner scope. Every operation serializes and
 reopens a staged candidate before publishing it.
 
@@ -1358,8 +1408,16 @@ both `MathArgument` and `String`. No wrapper, trait, feature flag, or binding
 surface is introduced.
 
 `Document::text` traverses body paragraphs and table cells in document order.
-The WASM binding uses that additive facade accessor for its existing `getText`
-method and otherwise owns one complete `Document`. It never reaches into
+Nested tables and the content controls at every level contribute their
+paragraphs in place. `Document::images` and `Document::word_count` reach the
+same content. `Document::headings` and `Document::links` read the body
+paragraphs and those that body-level content controls wrap, and do not search
+table cells. MHTML export sizes its images from the paragraphs the HTML emitter
+reaches, which leaves content controls out.
+Each paragraph contributes the same accepted-view text as paragraph text, so
+tracked insertions are included and tracked deletions are left out.
+The WASM binding uses `Document::text` for its existing `getText` method and
+otherwise owns one complete `Document`. It never reaches into
 `rdocx-oxml` or maintains a second package representation.
 
 `Document::render_page_to_svg`, its option-taking counterpart, and their two
@@ -1462,12 +1520,25 @@ layout caches unchanged. A successful operation invalidates layout once.
 
 Word comment mutation uses `RunPosition` and half-open `RunRange` values whose
 body indexes select top-level paragraphs and whose run indexes select insertion
-boundaries. `Document` validates both endpoints before mutation, allocates
+boundaries. Run indexes count the accepted-view runs that `Paragraph::runs`
+lists, including the runs inside inline content controls and tracked
+insertions. `CT_P::anchor_accepted_range` writes the markers inside
+`w:sdtContent` when a boundary falls between two runs of a control, and around
+the control when the range covers it. A range that crosses the edge of a
+control, has a boundary between two runs of a tracked insertion or move, sits
+next to a tracked change inside a hyperlink, or continues into another
+paragraph from inside a control is refused instead of shifted. Removal also
+clears the markers and reference runs that are direct children of a control's
+content. `Document` validates both endpoints before mutation, allocates
 collision-free comment and paragraph ids, updates the comment parts and all
 three anchors together, then invalidates layout once. `CommentRef` is a
 read-only view over the typed comment and its comments-extended thread entry.
 `StoryRunPosition` and `StoryRunRange` add checked `ContentLocation` ownership
-for body and table-cell paragraphs without changing `RunPosition`. The staged
+for body and table-cell paragraphs without changing `RunPosition`. A body
+location can also name a paragraph inside a block content control with a
+two-segment path, the control's story item then the paragraph's position among
+its paragraphs, which `Document::paragraph_story_location` returns for a
+paragraph index. The staged
 path validates both endpoints and edits cloned paragraphs before it creates
 comment relationships, so any path, run, or package failure publishes nothing.
 Replies follow paragraph-id parent linkage, resolution applies to the thread
@@ -1484,20 +1555,29 @@ location only after the image part, relationship, drawing identity, and story
 content all validate together.
 
 `Document::split_run` creates an exact accepted-view run boundary without
-changing `RunPosition`. It clones the selected paragraph, resolves the selected
+changing `RunPosition`. Its paragraph argument is the same direct body child
+index as `RunPosition` and `find_content_index`, and an index that names a
+table, a block content control, or preserved XML fails with an error naming
+that kind. It clones the selected paragraph, resolves the selected
 recursive source path, counts Unicode scalar values only in literal text,
 partitions ordered zero-width children at their source boundary, repairs
 hyperlink and marker coordinates, and publishes the clone only on success.
 Zero and end offsets select existing boundaries and leave typed state, layout,
-and binding revisions unchanged. A structural edit makes an earlier path-backed
-Python run handle stale.
+and binding revisions unchanged. A Python `Paragraph` handle to a paragraph
+inside a block content control splits through `Document::paragraph_mut`, which
+clears the cached layout even for those offsets. A structural edit makes an
+earlier path-backed Python run handle stale.
 
 Word bookmark mutation input reuses the same top-level `RunPosition` and
 half-open `RunRange` boundary as comments. `Document::bookmarks` returns
 immutable correlated summaries in typed main-story paragraph order through
 tables and block content controls. A reported body index is that recursive
 paragraph ordinal, and its run index is the accepted-view boundary used to
-extract bookmark text. Marker encounter order resolves direction when start
+extract bookmark text. `BookmarkRef::direct_range` reports the same range with
+the direct body child index of `RunPosition` when both markers sit in direct
+body paragraphs, and `None` otherwise. `Document::add_bookmark` takes the
+same accepted-view run boundaries and places its markers as comments do.
+Marker encounter order resolves direction when start
 and end share one accepted boundary, so end before start remains reversed and
 start before end is a valid empty range. Isolated projection refresh after a
 run, comment, or bookmark edit carries the original Word namespace aliases.

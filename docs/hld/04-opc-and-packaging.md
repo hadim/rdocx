@@ -427,15 +427,25 @@ rewriting the raw subtree bytes. Prefix aliases, nested shadows, and ordinary
 namespace URI escaping are resolved by the XML parser. Serialization fails
 closed when owner identity or a serializer prefix binding cannot be preserved
 safely, leaving the opened package bytes authoritative.
+The main document, header, and footer roots also retain their other
+attributes, such as `mc:Ignorable`, in source order. A typed rewrite writes
+them after every namespace declaration it keeps, so a compatibility attribute
+survives the rewrite and every prefix it lists stays declared.
 
-Modeled paragraph, run, and section-property owners retain every ordered root
-attribute, including producer identity, revision-session, foreign, and
-unqualified attributes. Retention uses the existing raw-preservation carriers
+Modeled paragraph, run, table-row, and section-property owners retain every
+ordered root attribute, including producer identity, revision-session, foreign,
+and unqualified attributes. Retention uses the existing raw-preservation carriers
 without exposing the attribute record as child XML. Expanded names govern
 duplicate rejection and authored paragraph identity precedence, so an authored
 `paraId` replaces only the retained attribute with the same namespace and
 local name. Typed child mutation leaves all other retained root attributes in
-source order.
+source order. A table row keeps its record in its raw-child list at a position
+no cell boundary reaches. Every reader that treats raw row children as content
+skips it: comparison row signatures and boundaries, the retained table layout
+cache, the row diagnostics of the MHTML, ODT, RTF and EPUB writers, and the
+rich merge row-region markers. The rich merge region-marker and whole-paragraph
+fragment checks skip the record of a paragraph the same way, so a paragraph
+Word wrote still holds a region marker or a fragment field.
 
 Retention covers attributes, not namespace bindings. A declaration is recorded
 only when a retained attribute uses its prefix, because the alias machinery
@@ -443,9 +453,29 @@ already materializes a binding onto every element that needs one, and recording
 a declaration a child carries for itself would emit it twice. A root carrying
 nothing but declarations retains no record at all. On the way back out, the
 canonical `w14` binding is not copied onto the written element, since the part
-root that owns the element already declares it and the authored identity write
-makes the same assumption. Together these keep a reopened save byte identical
-to the save it was read from.
+root that owns the element declares it in what Word and python-docx write, and
+the authored identity write makes the same assumption. Together these keep a
+reopened save byte identical to the save it was read from. A part root that
+does not declare `w14`, such as one rdocx wrote or one under an element that
+declared the prefix itself, gains the canonical declaration when the written
+content uses the prefix. The serializers of the document, header, footer,
+note and comment parts and the comparison output of every story add it, so the
+written part stays namespace well formed.
+
+A paragraph cut out of its part and parsed on its own carries none of the
+declarations of its part. The table-of-contents rebuild adds the bindings the
+instruction paragraph inherits to its start tag before it parses it, so every
+run attribute resolves as it does inside the part. The text-box anchor reader
+does the same for each text-box paragraph. The text-box replacement and
+template walkers still parse such a paragraph in the default scope, which names
+`w` as the Word prefix without binding it. For that scope the capture resolves
+a Word prefix that the scope names without a binding to the WordprocessingML
+namespace, and an explicit binding always wins. A run attribute under any other
+prefix, such as `w14`, a foreign namespace or a second WordprocessingML alias,
+still fails those two walkers. The replacement walker parses a text-box
+paragraph without its start tag. It writes an edited paragraph back under a
+start tag that carries the attributes it was read with, identities and local
+declarations included, since the paragraph returns to the scope it came from.
 
 An unknown default namespace declared on the document root is classified by
 its effective lexical scope before canonical serialization. An unused root
@@ -453,8 +483,13 @@ default may be omitted without blocking a typed mutation. An unprefixed element
 that inherits it keeps the binding live and blocks modified serialization.
 Nested default declarations shadow the root declaration, including when they
 repeat the same URI, and unprefixed attributes never use a default namespace.
-Malformed or ambiguous declarations fail closed. After a successful canonical
-publication, the document refreshes its root and body namespace facts from the
+Malformed or ambiguous declarations fail closed. A story splice into the main
+part also publishes canonical XML, so it applies the same root default
+classification before it publishes. Like a modified save, it also refuses any
+declaration on `w:body`, which the canonical body drops, and a root `w`, `r` or
+`mc` declaration bound to another URI, because the canonical root rebinds those
+prefixes. After a successful canonical publication, by a save or by a story
+splice, the document refreshes its root and body namespace facts from the
 published main-story bytes so a later save applies the same classification.
 
 Paragraph line spacing retains the signed integer path required by
@@ -528,12 +563,15 @@ remain zero-width and keep their relative schema positions around literal text.
 
 The Word facade resolves an existing comments part through the main document's
 `COMMENTS` relationship and retains the normalized target. Saving serializes
-the typed comments model back to that target with its content-type override.
-The model preserves unmodelled attributes and children at their insertion
-boundaries, while comment range and reference anchors remain ordered among
-neighbouring paragraph and run XML. A document without a comments relationship
-does not gain a comments part, relationship, or override during an ordinary
-save.
+the typed comments model back to that target with its content-type override
+once the model no longer matches the part. Every public output shares that
+test, so a save without a comment edit keeps the part byte for byte and leaves
+a package signature over it valid. The model preserves unmodelled attributes
+and children at their insertion boundaries, and a rewritten root keeps its
+producer declarations and compatibility attributes in source order. Comment
+range and reference anchors remain ordered among neighbouring paragraph and
+run XML. A document without a comments relationship does not gain a comments
+part, relationship, or override during an ordinary save.
 
 The Word facade resolves an existing settings part through the main document's
 `SETTINGS` relationship and retains the normalized target instead of assuming
@@ -1069,12 +1107,14 @@ immediately adjacent vertical merge ranges, then replace the live table.
 Existing direct table rows clone and remove through a staged `Document`
 mutation. A clone retains the complete row, cell, nested-content, relationship,
 and raw XML model, then freshens bookmark, content-control, and drawing
-identities and omits copied comment anchors. Body namespace declaration names
-are converted to fragment prefixes before freshening, including the empty
-prefix for a root default namespace. Table-level raw XML and content controls
-move with their logical row boundary. Removing a vertical-merge restart
-promotes a matching continuation below, and a table always retains one direct
-row. Invalid indexes, topology, XML, or reopen results discard the candidate.
+identities, drops the `w14:paraId` and `w14:textId` of the row and of its
+paragraphs, and omits copied comment anchors. Revision-save identities stay.
+Body namespace declaration names are converted to fragment prefixes before
+freshening, including the empty prefix for a root default namespace.
+Table-level raw XML and content controls move with their logical row boundary.
+Removing a vertical-merge restart promotes a matching continuation below, and a
+table always retains one direct row. Invalid indexes, topology, XML, or reopen
+results discard the candidate.
 
 Row and cell property readers select modeled elements and attributes by their
 bound WordprocessingML namespace. Foreign same-local children remain raw in
@@ -1317,6 +1357,9 @@ pairs nested controls within one body or table-row container before evaluation.
 The evaluator clones typed body entries and rows into candidate sequences, so
 section properties, row properties, and ordered raw-child sidecars travel with
 their owner. A row loop may clone several adjacent template rows per iteration.
+Every paragraph and table row a loop renders is a copy, so it drops the
+`w14:paraId` and `w14:textId` of its retained root-attribute record. Text-box
+paragraphs stay inside the raw XML of their drawing and keep theirs.
 The original table and its properties, grid, raw boundaries, content controls,
 and relationships remain in place. Cloned row and cell property sequences keep
 grid spans, vertical merge state, and unmodelled children byte for byte.
@@ -1324,9 +1367,10 @@ Repeated numbered paragraphs keep their existing numbering part reference and
 level. No numbering relationship, instance, or abstract definition is added.
 Markers are removed only from the candidate. Scalar syntax and JSON values are
 resolved against lexical loop scopes before replacement reaches typed body
-content, relationship-resolved headers and footers, raw text boxes, or chart
-parts. Replacement values pass through collision-free sentinels, so a value
-that contains template syntax is not evaluated recursively. The live typed
+content, relationship-resolved headers and footers, the notes of the footnotes
+and endnotes parts, raw text boxes, or chart parts. Replacement values pass
+through collision-free sentinels, so a value that contains template syntax is
+not evaluated recursively. The live typed
 document and package are replaced only after every discovered tag is accounted
 for, every repeated numbering reference resolves, and the candidate document
 serializes successfully. Any control, lookup, numbering, scalar-type, parse, or

@@ -7,7 +7,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyList, PyTuple};
 use smallvec::smallvec;
 
-use crate::paragraph::{PyParagraph, PyParagraphCollection};
+use crate::paragraph::{ParagraphLocation, PyParagraph, PyParagraphCollection};
 use crate::rdocx_to_pyerr;
 use crate::table::{PyTable, PyTableCollection};
 
@@ -390,13 +390,26 @@ pub struct PyStoryRunPosition {
 
 #[pymethods]
 impl PyStoryRunPosition {
+    /// Take a `StoryItem`, or a `Paragraph` handle, which also reaches a
+    /// paragraph inside a block content control.
     #[new]
-    #[pyo3(signature = (*, item, run_index))]
-    fn new(item: PyRef<'_, PyStoryItem>, run_index: usize) -> Self {
-        Self {
-            item: item.clone(),
-            run_index,
-        }
+    #[pyo3(signature = (*, item = None, run_index, paragraph = None))]
+    fn new(
+        py: Python<'_>,
+        item: Option<PyRef<'_, PyStoryItem>>,
+        run_index: usize,
+        paragraph: Option<PyRef<'_, PyParagraph>>,
+    ) -> PyResult<Self> {
+        let item = match (item, paragraph) {
+            (Some(item), None) => item.clone(),
+            (None, Some(paragraph)) => PyDocument::paragraph_story_item(py, &paragraph)?,
+            _ => {
+                return Err(PyTypeError::new_err(
+                    "StoryRunPosition takes exactly one of item and paragraph",
+                ));
+            }
+        };
+        Ok(Self { item, run_index })
     }
 
     #[getter]
@@ -933,6 +946,47 @@ impl PyDocument {
         })
     }
 
+    /// Snapshot the story item of a body paragraph handle. A paragraph
+    /// inside a block content control has no story item of its own, so it
+    /// gets the two-segment path of `paragraph_story_location` with the
+    /// paragraph text and no XML.
+    fn paragraph_story_item(py: Python<'_>, paragraph: &PyParagraph) -> PyResult<PyStoryItem> {
+        let ParagraphLocation::Body(paragraph_index) = paragraph.validate(py)? else {
+            return Err(PyValueError::new_err(
+                "StoryRunPosition does not accept a table cell paragraph handle",
+            ));
+        };
+        let document = paragraph.document.borrow(py);
+        let location = document
+            .inner
+            .paragraph_story_location(paragraph_index)
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
+        let [control_index, _] = location.index_path() else {
+            return document.story_item_snapshot(py, &location);
+        };
+        let control = document.story_item_snapshot(
+            py,
+            &rdocx::ContentLocation::new(
+                location.story().clone(),
+                rdocx::StoryItemKind::ContentControl,
+                vec![*control_index],
+            ),
+        )?;
+        Ok(PyStoryItem {
+            story: control.story,
+            kind: "paragraph".to_owned(),
+            index_path: location.index_path().to_vec(),
+            direct_body_index: control.direct_body_index,
+            text: document
+                .inner
+                .paragraph(paragraph_index)
+                .map(|paragraph| paragraph.text()),
+            xml: Vec::new(),
+            revision: document.revisions.current(),
+        })
+    }
+
     fn direct_content_index(
         slf: &Py<Self>,
         py: Python<'_>,
@@ -977,6 +1031,32 @@ impl PyDocument {
         Err(PyTypeError::new_err(format!(
             "{argument} must be a Paragraph or Table handle"
         )))
+    }
+
+    /// Split a run of the direct body paragraph at `body_index`. The revision
+    /// advances only when a continuation run is created.
+    fn split_body_run(
+        &mut self,
+        py: Python<'_>,
+        body_index: usize,
+        run_index: usize,
+        character_offset: usize,
+    ) -> PyResult<usize> {
+        let paragraph_index = self.inner.paragraph_index_of_content(body_index);
+        let run_count = |document: &rdocx::Document| {
+            paragraph_index
+                .and_then(|index| document.paragraph(index))
+                .map(|paragraph| paragraph.run_count())
+        };
+        let before = run_count(&self.inner);
+        let boundary = self
+            .inner
+            .split_run(body_index, run_index, character_offset)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        if run_count(&self.inner) != before {
+            self.revisions.bump();
+        }
+        Ok(boundary)
     }
 
     /// Run a native mutation that reports how many things it changed.
@@ -1193,26 +1273,57 @@ impl PyDocument {
     }
 
     fn split_run(
-        &mut self,
+        slf: Py<Self>,
         py: Python<'_>,
-        body_index: usize,
+        body_index: &Bound<'_, PyAny>,
         run_index: usize,
         character_offset: usize,
     ) -> PyResult<usize> {
-        let before = self
+        let Ok(paragraph) = body_index.cast::<PyParagraph>() else {
+            // An integer is the direct body index, as in `RunPosition`.
+            let body_index = body_index.extract::<usize>().map_err(|error| {
+                if error.is_instance_of::<PyTypeError>(py) {
+                    PyTypeError::new_err("body_index must be an int or a Paragraph handle")
+                } else {
+                    error
+                }
+            })?;
+            return slf
+                .borrow_mut(py)
+                .split_body_run(py, body_index, run_index, character_offset);
+        };
+        let paragraph = paragraph.borrow();
+        if !paragraph.belongs_to(py, &slf) {
+            return Err(PyValueError::new_err(
+                "paragraph handle belongs to a different document",
+            ));
+        }
+        // A cell handle counts paragraphs inside cell content controls, which
+        // `Cell::paragraph_mut` does not, so it could name another paragraph.
+        let ParagraphLocation::Body(paragraph_index) = paragraph.validate(py)? else {
+            return Err(PyValueError::new_err(
+                "split_run does not accept a table cell paragraph handle",
+            ));
+        };
+        let mut document = slf.borrow_mut(py);
+        if let Some(body_index) = document.inner.content_index_of_paragraph(paragraph_index) {
+            return document.split_body_run(py, body_index, run_index, character_offset);
+        }
+        // A paragraph inside a block content control has no direct body index.
+        let run_count = |document: &rdocx::Document| {
+            document
+                .paragraph(paragraph_index)
+                .map(|paragraph| paragraph.run_count())
+        };
+        let before = run_count(&document.inner);
+        let boundary = document
             .inner
-            .paragraph(body_index)
-            .map(|paragraph| paragraph.run_count());
-        let boundary = self
-            .inner
-            .split_run(body_index, run_index, character_offset)
+            .paragraph_mut(paragraph_index)
+            .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
+            .split_run(run_index, character_offset)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        let after = self
-            .inner
-            .paragraph(body_index)
-            .map(|paragraph| paragraph.run_count());
-        if before != after {
-            self.revisions.bump();
+        if run_count(&document.inner) != before {
+            document.revisions.bump();
         }
         Ok(boundary)
     }
@@ -1521,6 +1632,30 @@ impl PyDocument {
             ));
         }
         .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(id)
+    }
+
+    /// Comment on the `occurrence`-th match of `anchor`, counted from zero,
+    /// in the main story. Matching is case-sensitive, non-overlapping and
+    /// within one paragraph. A match whose range would also show other text,
+    /// such as a field result, raises.
+    #[pyo3(signature = (anchor, *, author, text, occurrence = 0, initials = None, date = None))]
+    #[allow(clippy::too_many_arguments)]
+    fn add_comment_on_text(
+        &mut self,
+        anchor: &str,
+        author: &str,
+        text: &str,
+        occurrence: usize,
+        initials: Option<&str>,
+        date: Option<&str>,
+        py: Python<'_>,
+    ) -> PyResult<i32> {
+        let id = self
+            .inner
+            .add_comment_on_text(anchor, occurrence, author, initials, text, date)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
         self.revisions.bump();
         Ok(id)
     }

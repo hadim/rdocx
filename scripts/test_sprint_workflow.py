@@ -9782,7 +9782,7 @@ Pedro Assumpcao and the rdocx maintainers.
         self.assertTrue(all(len(value) == 1 for value in placements.values()))
         self.assertEqual(
             {sprint for value in placements.values() for sprint, _, _ in value},
-            set(range(70, 81)) - {75},
+            set(range(70, 75)) | set(range(80, 86)),
         )
 
         backlog_rows: dict[str, list[tuple[int, str, str, str]]] = {

@@ -64,7 +64,7 @@ use oxml_opc::relationship::{Relationship, rel_types};
 pub use oxml_opc::{
     CoveredRelationship, SignatureIssue, SignatureReport, SignerCertificateIdentity,
 };
-use oxml_opc::{OpcError, OpcPackage, Relationships};
+use oxml_opc::{OpcError, OpcPackage, Relationships, write_atomic_file};
 #[cfg(feature = "render")]
 pub use rpptx_layout::timeline::{
     EvaluatedFrameState, EvaluatedMediaState, MediaPlaybackPhase, TimelinePosition,
@@ -519,6 +519,28 @@ impl PresentationPackageClass {
             Self::MacroEnabledSlideshow => content_types::SLIDESHOW_MACRO_ENABLED,
         }
     }
+
+    /// The class that a `.pptx`, `.pptm`, `.potx`, `.potm`, `.ppsx`, or `.ppsm` path names.
+    fn from_path(path: &Path) -> Option<Self> {
+        match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+            "pptx" => Some(Self::Presentation),
+            "pptm" => Some(Self::MacroEnabledPresentation),
+            "potx" => Some(Self::Template),
+            "potm" => Some(Self::MacroEnabledTemplate),
+            "ppsx" => Some(Self::Slideshow),
+            "ppsm" => Some(Self::MacroEnabledSlideshow),
+            _ => None,
+        }
+    }
+
+    fn is_macro_enabled(self) -> bool {
+        matches!(
+            self,
+            Self::MacroEnabledPresentation
+                | Self::MacroEnabledTemplate
+                | Self::MacroEnabledSlideshow
+        )
+    }
 }
 
 /// A package or presentation invariant that would make a saved deck unsafe.
@@ -780,92 +802,6 @@ fn register_content_type(
     }
 }
 
-#[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
-fn write_atomic_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    use std::io::Write as _;
-
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = path.file_name().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid file name")
-    })?;
-    for attempt in 0..128_u8 {
-        let mut temporary_name = std::ffi::OsString::from(".");
-        temporary_name.push(file_name);
-        temporary_name.push(format!(".rpptx-{}-{attempt}.tmp", std::process::id()));
-        let temporary = parent.join(temporary_name);
-        let mut file = match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-        {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error),
-        };
-        let result = file.write_all(bytes).and_then(|()| file.sync_all());
-        drop(file);
-        let result = result.and_then(|()| replace_file(&temporary, path));
-        if result.is_err() {
-            let _ = std::fs::remove_file(&temporary);
-        }
-        return result;
-    }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::AlreadyExists,
-        "could not allocate encrypted-save staging file",
-    ))
-}
-
-#[cfg(all(
-    feature = "agile-encryption",
-    not(target_arch = "wasm32"),
-    not(target_os = "windows")
-))]
-fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
-    std::fs::rename(source, destination)
-}
-
-#[cfg(all(
-    feature = "agile-encryption",
-    not(target_arch = "wasm32"),
-    target_os = "windows"
-))]
-fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-
-    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
-    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
-
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn MoveFileExW(
-            existing_file_name: *const u16,
-            new_file_name: *const u16,
-            flags: u32,
-        ) -> i32;
-    }
-
-    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
-    let destination: Vec<u16> = destination
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-    // SAFETY: both path buffers are NUL-terminated and remain alive for the call.
-    let replaced = unsafe {
-        MoveFileExW(
-            source.as_ptr(),
-            destination.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if replaced == 0 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
-}
-
 impl Presentation {
     /// Creates an empty 16:9 presentation from the bundled standard template.
     #[cfg(feature = "default-template")]
@@ -1079,6 +1015,33 @@ impl Presentation {
         let mut output = Cursor::new(Vec::new());
         package.write_to(&mut output)?;
         Ok(output.into_inner())
+    }
+
+    /// Serialises the bytes that [`Presentation::save`] writes to `path`.
+    pub fn to_bytes_for_path<P: AsRef<Path>>(&self, path: P) -> Result<Vec<u8>> {
+        let Some(target) = PresentationPackageClass::from_path(path.as_ref()) else {
+            return self.to_bytes();
+        };
+        let current = self.package_class()?;
+        if target == current {
+            return self.to_bytes();
+        }
+        let carries_vba = self
+            .package
+            .get_part_rels(&self.presentation_part)
+            .is_some_and(|relationships| {
+                relationships.get_by_type(rel_types::VBA_PROJECT).is_some()
+            });
+        if carries_vba && !target.is_macro_enabled() {
+            return Err(invalid_presentation_mutation(
+                "save",
+                format!(
+                    "{} cannot be written: the presentation carries a VBA project and the extension names a macro-free class, save it as .pptm, .potm, or .ppsm",
+                    path.as_ref().display()
+                ),
+            ));
+        }
+        self.to_bytes_as(target)
     }
 
     /// Serialises the current presentation through the fixed Agile write profile.
@@ -1512,14 +1475,36 @@ impl Presentation {
         Ok(package)
     }
 
-    /// Saves the deterministic package bytes to a `.pptx` path.
+    /// Saves the deterministic package bytes to a path.
+    ///
+    /// The bytes are staged in a synced sibling file and renamed over `path`
+    /// through [`oxml_opc::write_atomic_file`], so a failed save leaves an
+    /// existing file as it was. A symbolic link at `path` is kept and the file
+    /// it names is replaced, and on Unix that file keeps its permission bits.
+    ///
+    /// A `.pptx`, `.pptm`, `.potx`, `.potm`, `.ppsx`, or `.ppsm` extension
+    /// selects the main part content type, so a template saved as `.pptx`
+    /// declares a presentation. Any other extension keeps the opened class,
+    /// and `save_encrypted` ignores the extension. When the class changes, a
+    /// presentation part that carries a VBA project
+    /// cannot be saved under a macro-free extension, because the project
+    /// would remain in a file that claims to carry none.
+    /// [`Presentation::save_as_package_class`] performs that conversion
+    /// explicitly and keeps the VBA part.
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         debug_assert!(
             self.validate().is_empty(),
             "invalid presentation at path save boundary: {:?}",
             self.validate()
         );
-        std::fs::write(path, self.to_bytes()?).map_err(OpcError::from)?;
+        write_atomic_file(
+            path.as_ref(),
+            &self.to_bytes_for_path(path.as_ref())?,
+            "rpptx",
+            "invalid PowerPoint package file name",
+            "could not allocate PowerPoint package save staging file",
+        )
+        .map_err(OpcError::from)?;
         Ok(())
     }
 
@@ -1527,7 +1512,14 @@ impl Presentation {
     #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
     pub fn save_encrypted<P: AsRef<Path>>(&self, path: P, password: &str) -> Result<()> {
         let bytes = self.to_encrypted_bytes(password)?;
-        write_atomic_file(path.as_ref(), &bytes).map_err(OpcError::from)?;
+        write_atomic_file(
+            path.as_ref(),
+            &bytes,
+            "rpptx",
+            "invalid file name",
+            "could not allocate encrypted-save staging file",
+        )
+        .map_err(OpcError::from)?;
         Ok(())
     }
 
@@ -1537,12 +1529,21 @@ impl Presentation {
     }
 
     /// Saves an output copy with the selected modern package class.
+    ///
+    /// The file is replaced the way [`Presentation::save`] replaces it.
     pub fn save_as_package_class<P: AsRef<Path>>(
         &self,
         path: P,
         class: PresentationPackageClass,
     ) -> Result<()> {
-        std::fs::write(path, self.to_bytes_as(class)?).map_err(OpcError::from)?;
+        write_atomic_file(
+            path.as_ref(),
+            &self.to_bytes_as(class)?,
+            "rpptx",
+            "invalid PowerPoint package file name",
+            "could not allocate PowerPoint package save staging file",
+        )
+        .map_err(OpcError::from)?;
         Ok(())
     }
 

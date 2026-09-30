@@ -11,7 +11,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use rdocx_oxml::document::BodyContent;
 use rdocx_oxml::table::{
-    CT_Row, CT_Tbl, CT_TblGrid, CT_TblGridCol, CT_TblPr, CT_TblWidth, CT_Tc, VMerge,
+    CT_Row, CT_Tbl, CT_TblGrid, CT_TblGridCol, CT_TblPr, CT_TblWidth, CT_Tc, CellContent, VMerge,
 };
 use rdocx_oxml::text::{CT_P, RunContent};
 use rdocx_oxml::units::Twips;
@@ -552,9 +552,10 @@ impl Document {
 
     pub fn save_mhtml<P: AsRef<Path>>(&self, path: P) -> Result<Vec<MhtmlDiagnostic>> {
         let result = self.to_mhtml_bytes()?;
-        crate::document::write_atomic_file(
+        oxml_opc::write_atomic_file(
             path.as_ref(),
             &result.bytes,
+            "rdocx",
             "MHTML output path has no file name",
             "could not allocate an MHTML temporary file",
         )?;
@@ -616,15 +617,58 @@ fn base64_lines(bytes: &[u8]) -> String {
     output
 }
 
+/// Collect the body paragraphs, table cell paragraphs and nested table
+/// paragraphs in document order, leaving content controls out as the
+/// rdocx-html emitter does. This is the reach [`Document::images`] had before
+/// it read content controls, so the emitter's `<img>` tags still pair with the
+/// pictures of these paragraphs by position.
+fn emitted_paragraphs(content: &[BodyContent]) -> Vec<&CT_P> {
+    let mut paragraphs = Vec::new();
+    for item in content {
+        match item {
+            BodyContent::Paragraph(paragraph) => paragraphs.push(paragraph),
+            BodyContent::Table(table) => collect_emitted_table_paragraphs(table, &mut paragraphs),
+            BodyContent::ContentControl(_) | BodyContent::RawXml(_) => {}
+        }
+    }
+    paragraphs
+}
+
+fn collect_emitted_table_paragraphs<'a>(table: &'a CT_Tbl, paragraphs: &mut Vec<&'a CT_P>) {
+    for cell in table.rows.iter().flat_map(|row| &row.cells) {
+        for item in &cell.content {
+            match item {
+                CellContent::Paragraph(paragraph) => paragraphs.push(paragraph),
+                CellContent::Table(nested) => collect_emitted_table_paragraphs(nested, paragraphs),
+                CellContent::ContentControl(_) => {}
+            }
+        }
+    }
+}
+
 fn mhtml_export_html(document: &Document) -> Result<(String, Vec<MhtmlResource>)> {
     let html = document.to_html();
-    let image_sizes = document
-        .images()
-        .into_iter()
-        .filter(|image| {
-            !image.embed_id.is_empty() && document.image_data(&image.embed_id).is_some()
-        })
-        .collect::<Vec<_>>();
+    let mut image_sizes = Vec::new();
+    for paragraph in emitted_paragraphs(&document.document.body.content) {
+        for content in paragraph.runs.iter().flat_map(|run| &run.content) {
+            let RunContent::Drawing(drawing) = content else {
+                continue;
+            };
+            let inline = drawing
+                .inline
+                .as_ref()
+                .map(|image| (&image.embed_id, image.extent_cx.0, image.extent_cy.0));
+            let anchor = drawing
+                .anchor
+                .as_ref()
+                .map(|image| (&image.embed_id, image.extent_cx.0, image.extent_cy.0));
+            for (embed_id, width_emu, height_emu) in inline.into_iter().chain(anchor) {
+                if !embed_id.is_empty() && document.image_data(embed_id).is_some() {
+                    image_sizes.push((width_emu, height_emu));
+                }
+            }
+        }
+    }
     let mut image_size_index = 0_usize;
     let mut output = String::with_capacity(html.len());
     let mut remainder = html.as_str();
@@ -681,7 +725,7 @@ fn mhtml_export_html(document: &Document) -> Result<(String, Vec<MhtmlResource>)
             by_digest.insert(digest, index);
             index
         };
-        let image = image_sizes.get(image_size_index).ok_or_else(|| {
+        let (width_emu, height_emu) = *image_sizes.get(image_size_index).ok_or_else(|| {
             mhtml_error(
                 None,
                 0,
@@ -691,8 +735,8 @@ fn mhtml_export_html(document: &Document) -> Result<(String, Vec<MhtmlResource>)
         image_size_index += 1;
         output.push_str(&format!(
             "<img src=\"cid:image-{index}@rdocx\" width=\"{:.12}\" height=\"{:.12}\"",
-            image.width_emu as f64 / 9_525.0,
-            image.height_emu as f64 / 9_525.0,
+            width_emu as f64 / 9_525.0,
+            height_emu as f64 / 9_525.0,
         ));
         remainder = &tail[quote + 1..];
     }
@@ -3994,6 +4038,76 @@ mod tests {
                 }
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn mhtml_writer_sizes_only_the_pictures_the_html_emitter_serializes() {
+        let mut document = Document::new();
+        for (name, width, height) in [
+            ("body-control.png", 9_525, 9_525),
+            ("outside.png", 19_050, 28_575),
+            ("inline-control.png", 9_525, 9_525),
+        ] {
+            document.add_picture(
+                &one_pixel_png(),
+                name,
+                Length::emu(width),
+                Length::emu(height),
+            );
+        }
+        let mut package =
+            OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let mut xml =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        // The last run holds the third picture. Google Docs wraps it in an
+        // inline control, and Word wraps the first one in a picture control.
+        let run_start = xml.rfind("<w:r>").unwrap();
+        let run_end = xml.rfind("</w:r>").unwrap() + "</w:r>".len();
+        xml.insert_str(run_end, "</w:sdtContent></w:sdt>");
+        xml.insert_str(
+            run_start,
+            r#"<w:sdt><w:sdtPr><w:tag w:val="goog_rdk_0"/></w:sdtPr><w:sdtContent>"#,
+        );
+        let xml = xml
+            .replacen(
+                "<w:p>",
+                "<w:sdt><w:sdtPr><w:picture/></w:sdtPr><w:sdtContent><w:p>",
+                1,
+            )
+            .replacen("</w:p>", "</w:p></w:sdtContent></w:sdt>", 1);
+        package.set_part("/word/document.xml", xml.into_bytes());
+        let mut saved = Cursor::new(Vec::new());
+        package.write_to(&mut saved).unwrap();
+        let document = Document::from_bytes(saved.get_ref()).unwrap();
+        assert_eq!(document.images().len(), 3);
+
+        let written = document
+            .to_mhtml_bytes()
+            .expect("pictures in content controls are dropped, not refused");
+        assert_eq!(
+            written
+                .diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.location.as_str(), diagnostic.message.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("body[0]", "dropped Word body content control"),
+                (
+                    "body[2]/paragraph/item[0]",
+                    "dropped Word paragraph content control"
+                ),
+            ]
+        );
+        let reopened = Document::from_mhtml_bytes(&written.bytes).unwrap();
+        assert_eq!(
+            reopened
+                .document
+                .images()
+                .iter()
+                .map(|image| (image.width_emu, image.height_emu))
+                .collect::<Vec<_>>(),
+            [(19_050, 28_575)]
         );
     }
 

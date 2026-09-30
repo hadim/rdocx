@@ -225,7 +225,14 @@ class StoryItem:
 
 @_final
 class StoryRunPosition:
-    def __new__(cls, *, item: StoryItem, run_index: int) -> StoryRunPosition: ...
+    @_overload
+    def __new__(
+        cls, *, item: StoryItem, run_index: int, paragraph: None = None
+    ) -> StoryRunPosition: ...
+    @_overload
+    def __new__(
+        cls, *, item: None = None, run_index: int, paragraph: Paragraph
+    ) -> StoryRunPosition: ...
     @property
     def item(self) -> StoryItem: ...
     @property
@@ -428,7 +435,7 @@ class Document:
         self, story: Story, relationship_id: str, data: bytes
     ) -> None: ...
     def split_run(
-        self, body_index: int, run_index: int, character_offset: int
+        self, body_index: int | Paragraph, run_index: int, character_offset: int
     ) -> int: ...
     def to_pdf(self) -> bytes: ...
     def render_page_to_png(self, page_index: int, dpi: float = 150.0) -> bytes | None: ...
@@ -469,6 +476,16 @@ class Document:
         *,
         author: str,
         text: str,
+        initials: str | None = None,
+        date: str | None = None,
+    ) -> int: ...
+    def add_comment_on_text(
+        self,
+        anchor: str,
+        *,
+        author: str,
+        text: str,
+        occurrence: int = 0,
         initials: str | None = None,
         date: str | None = None,
     ) -> int: ...

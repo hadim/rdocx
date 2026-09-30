@@ -9,7 +9,7 @@ import zlib
 import pytest
 
 
-def _replace_document_body(document, body):
+def _replace_document_body(document, body, root_default=None):
     source = io.BytesIO(document.to_bytes())
     result = io.BytesIO()
     with zipfile.ZipFile(source) as source_zip:
@@ -20,6 +20,9 @@ def _replace_document_body(document, body):
                     start = data.index(b"<w:body>") + len(b"<w:body>")
                     end = data.index(b"</w:body>")
                     data = data[:start] + body.encode() + data[end:]
+                    if root_default:
+                        root = f'<w:document xmlns="{root_default}" '
+                        data = data.replace(b"<w:document ", root.encode(), 1)
                 result_zip.writestr(info, data)
     return type(document).from_bytes(result.getvalue())
 
@@ -349,6 +352,43 @@ def _one_pixel_png():
         + chunk(b"IDAT", zlib.compress(b"\x00\xff\xff\xff"))
         + chunk(b"IEND", b"")
     )
+
+
+def test_add_picture_beside_a_content_control_ignores_an_unused_root_default():
+    import rdocx
+
+    body = (
+        "<w:p><w:r><w:t>Before the control.</w:t></w:r></w:p>"
+        '<w:sdt><w:sdtPr><w:tag w:val="goog_rdk_0"/></w:sdtPr><w:sdtContent>'
+        "<w:p><w:r><w:t>Inside the control.</w:t></w:r></w:p>"
+        "</w:sdtContent></w:sdt>"
+        "<w:p><w:r><w:t>After the control.</w:t></w:r></w:p><w:sectPr/>"
+    )
+    tasks = "http://schemas.microsoft.com/office/tasks/2019/documenttasks"
+    for root_default in (None, tasks):
+        document = _replace_document_body(rdocx.Document(), body, root_default)
+        control = next(
+            item
+            for item in document.story_items
+            if item.story.kind == "body" and item.kind == "content_control"
+        )
+        size = {"width": rdocx.Inches(1), "height": rdocx.Inches(1)}
+        after = document.add_picture(_one_pixel_png(), "x.png", after=control, **size)
+        appended = document.add_picture(_one_pixel_png(), "x.png", **size)
+        assert after.kind == appended.kind == "paragraph"
+
+        xml = _document_xml(rdocx.Document.from_bytes(document.to_bytes()))
+        assert xml.count(b"<w:drawing>") == 2
+        positions = [
+            xml.index(b"Before the control."),
+            xml.index(b'<w:tag w:val="goog_rdk_0"/>'),
+            xml.index(b"Inside the control."),
+            xml.index(b"</w:sdt>"),
+            xml.index(b"<w:drawing>"),
+            xml.index(b"After the control."),
+            xml.rindex(b"<w:drawing>"),
+        ]
+        assert positions == sorted(positions)
 
 
 def _relationship_target(document, part_name, relationship_id):
@@ -939,6 +979,30 @@ def test_word_default_toc_switch_rebuilds_and_reports_ordered_diagnostics():
         report.diagnostics = ()
 
 
+def test_rebuild_toc_accepts_identity_attributes_on_the_field_runs():
+    import rdocx
+
+    # Word writes w:rsidR and w:rsidRPr on the runs it saves, and Google Docs
+    # exports write them on every run, the runs of the TOC field code included.
+    source = rdocx.Document()
+    source.add_paragraph("placeholder")
+    document = _replace_document_body(
+        source,
+        """
+        <w:p><w:r w:rsidR="00A1B2C3"><w:fldChar w:fldCharType="begin"/></w:r><w:r w:rsidRPr="00A1B2C3"><w:instrText>TOC \\o "1-1"</w:instrText></w:r><w:r w:rsidDel="00A1B2C3"><w:fldChar w:fldCharType="separate"/></w:r></w:p>
+        <w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Heading</w:t></w:r></w:p>
+        """,
+    )
+
+    assert document.rebuild_toc() == rdocx.TocRebuildReport(
+        entry_count=1, bookmark_count=1, diagnostics=()
+    )
+    saved = _document_xml(document)
+    for identity in (b'w:rsidR="00A1B2C3"', b'w:rsidRPr="00A1B2C3"', b'w:rsidDel="00A1B2C3"'):
+        assert identity in saved
+
+
 def test_update_page_fields_writes_layout_page_numbers():
     import rdocx
 
@@ -1289,6 +1353,339 @@ def test_split_run_rejects_bad_coordinates_without_changing_the_document():
         with pytest.raises(rdocx.RdocxError):
             document.split_run(*args)
         assert document.to_bytes() == before
+
+
+def test_split_run_takes_the_direct_body_index_after_a_table():
+    import rdocx
+
+    # GitHub issue #163: the index find_content_index returns must address
+    # the same paragraph in split_run.
+    document = rdocx.Document()
+    document.add_paragraph("Alpha paragraph before the table.")
+    document.add_table(1, 1).cell(0, 0).text = "cell"
+    document.add_paragraph("Beta paragraph after the table.")
+    document.add_paragraph("Gamma paragraph at the end.")
+    target = next(p for p in document.paragraphs if p.text.startswith("Beta"))
+    body_index = document.find_content_index(target)
+    assert body_index == 2
+
+    assert document.split_run(body_index, 0, 4) == 1
+    assert [[run.text for run in p.runs] for p in document.paragraphs] == [
+        ["Alpha paragraph before the table."],
+        ["Beta", " paragraph after the table."],
+        ["Gamma paragraph at the end."],
+    ]
+
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="is a table, not a paragraph"):
+        document.split_run(1, 0, 1)
+    with pytest.raises(TypeError, match="must be an int or a Paragraph handle"):
+        document.split_run("Beta", 0, 1)
+    with pytest.raises(OverflowError):
+        document.split_run(-1, 0, 1)
+    assert document.to_bytes() == before
+
+
+def test_split_run_accepts_a_paragraph_handle_in_a_control_or_the_body():
+    import rdocx
+
+    document = _replace_document_body(
+        rdocx.Document(),
+        "<w:p><w:r><w:t>Alpha.</w:t></w:r></w:p>"
+        "<w:sdt><w:sdtContent>"
+        "<w:p><w:r><w:t>Control one.</w:t></w:r></w:p>"
+        "<w:p><w:r><w:t>Control two.</w:t></w:r></w:p>"
+        "</w:sdtContent></w:sdt>"
+        '<w:tbl><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid>'
+        "<w:tr><w:tc>"
+        "<w:sdt><w:sdtContent>"
+        "<w:p><w:r><w:t>In control.</w:t></w:r></w:p>"
+        "</w:sdtContent></w:sdt>"
+        "<w:p><w:r><w:t>Cell text.</w:t></w:r></w:p>"
+        "</w:tc></w:tr>"
+        "</w:tbl>"
+        "<w:p><w:r><w:t>Beta.</w:t></w:r></w:p>",
+    )
+    control_two = document.paragraphs[2]
+    assert control_two.text == "Control two."
+    run = control_two.runs[0]
+    before_no_op = document.to_bytes()
+    assert document.split_run(control_two, 0, 0) == 0
+    assert document.to_bytes() == before_no_op
+    assert run.text == "Control two."
+
+    assert document.split_run(control_two, 0, 7) == 1
+    with pytest.raises(rdocx.StaleElementError):
+        run.text
+    with pytest.raises(rdocx.StaleElementError):
+        document.split_run(control_two, 0, 1)
+    assert [r.text for r in document.paragraphs[2].runs] == ["Control", " two."]
+
+    # A cell handle is refused, because its index counts the paragraph
+    # inside the cell's content control and the cell writer does not.
+    cell = document.tables[0].rows[0].cells[0]
+    assert [p.text for p in cell.paragraphs] == ["In control.", "Cell text."]
+    before_cell = document.to_bytes()
+    for cell_paragraph in cell.paragraphs:
+        with pytest.raises(ValueError, match="table cell paragraph handle"):
+            document.split_run(cell_paragraph, 0, 2)
+    assert document.to_bytes() == before_cell
+
+    beta = document.paragraphs[3]
+    assert document.find_content_index(beta) == 3
+    beta_run = beta.runs[0]
+    assert document.split_run(beta, 0, 5) == 1
+    assert beta_run.text == "Beta."
+    assert document.split_run(beta, 0, 4) == 1
+    assert [r.text for r in document.paragraphs[3].runs] == ["Beta", "."]
+
+    other = rdocx.Document()
+    other.add_paragraph("elsewhere")
+    before = document.to_bytes()
+    with pytest.raises(ValueError, match="different document"):
+        document.split_run(other.paragraphs[0], 0, 1)
+    assert document.to_bytes() == before
+
+
+def test_story_comment_after_a_block_content_control_anchors_on_its_paragraph():
+    import rdocx
+
+    document = _replace_document_body(
+        rdocx.Document(),
+        "<w:p><w:r><w:t>Alpha.</w:t></w:r></w:p>"
+        "<w:sdt><w:sdtContent>"
+        "<w:p><w:r><w:t>Control one.</w:t></w:r></w:p>"
+        "</w:sdtContent></w:sdt>"
+        "<w:p><w:r><w:t>Beta paragraph.</w:t></w:r></w:p>",
+    )
+    item = next(
+        item
+        for item in document.story_items
+        if item.story.kind == "body"
+        and item.kind == "paragraph"
+        and item.text == "Beta paragraph."
+    )
+    comment_id = document.add_comment(
+        rdocx.StoryRunRange(
+            start=rdocx.StoryRunPosition(item=item, run_index=0),
+            end=rdocx.StoryRunPosition(item=item, run_index=1),
+        ),
+        author="Ada",
+        text="Here",
+    )
+    xml = _document_xml(document).decode()
+    start = xml.index(f'commentRangeStart w:id="{comment_id}"')
+    end = xml.index(f'commentRangeEnd w:id="{comment_id}"')
+    assert re.findall(r"<w:t[^>]*>([^<]*)</w:t>", xml[start:end]) == [
+        "Beta paragraph."
+    ]
+
+
+# GitHub issue #172: a run index read from Paragraph.runs anchors on that run,
+# including the runs inside an inline content control.
+_INLINE_CONTROL_PARAGRAPH = (
+    '<w:p><w:r><w:t xml:space="preserve">before </w:t></w:r>'
+    "<w:sdt><w:sdtPr/><w:sdtContent>{runs}</w:sdtContent></w:sdt>"
+    '<w:r><w:t xml:space="preserve"> after</w:t></w:r></w:p>'
+)
+
+
+def _anchored_texts(document, comment_id):
+    xml = _document_xml(document).decode()
+    start = xml.index(f'commentRangeStart w:id="{comment_id}"')
+    end = xml.index(f'commentRangeEnd w:id="{comment_id}"')
+    return re.findall(r"<w:t[^>]*>([^<]*)</w:t>", xml[start:end])
+
+
+def _run_range(start, end, body_index=0):
+    import rdocx
+
+    return rdocx.RunRange(
+        start=rdocx.RunPosition(body_index=body_index, run_index=start),
+        end=rdocx.RunPosition(body_index=body_index, run_index=end),
+    )
+
+
+def test_comment_run_index_counts_the_runs_of_an_inline_content_control():
+    import rdocx
+
+    document = _replace_document_body(
+        rdocx.Document(),
+        _INLINE_CONTROL_PARAGRAPH.format(runs="<w:r><w:t>TARGET</w:t></w:r>"),
+    )
+    runs = [run.text for run in document.paragraphs[0].runs]
+    assert runs == ["before ", "TARGET", " after"]
+
+    target = document.add_comment(_run_range(1, 2), author="A", text="x")
+    assert _anchored_texts(document, target) == ["TARGET"]
+    # The reference run of the first comment is run 2 now.
+    assert [run.text for run in document.paragraphs[0].runs][3] == " after"
+    last = document.add_comment(_run_range(3, 4), author="A", text="y")
+    assert _anchored_texts(document, last) == [" after"]
+
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert [comment.text for comment in reopened.comments] == ["x", "y"]
+    assert _anchored_texts(reopened, target) == ["TARGET"]
+
+
+def test_story_comment_run_index_counts_the_runs_of_an_inline_content_control():
+    import rdocx
+
+    document = _replace_document_body(
+        rdocx.Document(),
+        _INLINE_CONTROL_PARAGRAPH.format(runs="<w:r><w:t>TARGET</w:t></w:r>"),
+    )
+    item = next(
+        item
+        for item in document.story_items
+        if item.story.kind == "body" and item.kind == "paragraph"
+    )
+    comment_id = document.add_comment(
+        rdocx.StoryRunRange(
+            start=rdocx.StoryRunPosition(item=item, run_index=1),
+            end=rdocx.StoryRunPosition(item=item, run_index=2),
+        ),
+        author="A",
+        text="x",
+    )
+    assert _anchored_texts(document, comment_id) == ["TARGET"]
+
+
+def test_comment_ranges_that_cannot_be_anchored_exactly_are_refused():
+    import rdocx
+
+    document = _replace_document_body(
+        rdocx.Document(),
+        _INLINE_CONTROL_PARAGRAPH.format(
+            runs="<w:r><w:t>A</w:t></w:r><w:r><w:t>B</w:t></w:r>"
+        ),
+    )
+    before = document.to_bytes()
+    for start, end in ((0, 2), (2, 4)):
+        with pytest.raises(
+            rdocx.RdocxError, match="crosses the edge of an inline content control"
+        ):
+            document.add_comment(_run_range(start, end), author="A", text="x")
+    assert document.to_bytes() == before
+
+    comment_id = document.add_comment(_run_range(2, 3), author="A", text="x")
+    assert _anchored_texts(document, comment_id) == ["B"]
+    assert document.remove_comment(comment_id)
+    xml = _document_xml(document).decode()
+    assert "commentRange" not in xml and "commentReference" not in xml
+    assert [run.text for run in document.paragraphs[0].runs] == [
+        "before ",
+        "A",
+        "B",
+        " after",
+    ]
+
+
+def test_story_run_position_takes_a_paragraph_handle_inside_a_block_control():
+    import rdocx
+
+    # GitHub issue #163: a paragraph inside a block content control has no
+    # story item of its own, and a handle reaches it.
+    document = _replace_document_body(
+        rdocx.Document(),
+        "<w:p><w:r><w:t>Alpha.</w:t></w:r></w:p>"
+        "<w:sdt><w:sdtContent>"
+        "<w:p><w:r><w:t>Control one.</w:t></w:r></w:p>"
+        "<w:p><w:r><w:t>Control two.</w:t></w:r></w:p>"
+        "</w:sdtContent></w:sdt>"
+        '<w:tbl><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid>'
+        "<w:tr><w:tc><w:p><w:r><w:t>Cell.</w:t></w:r></w:p></w:tc></w:tr>"
+        "</w:tbl>"
+        "<w:p><w:r><w:t>Beta.</w:t></w:r></w:p>",
+    )
+    control_two = document.paragraphs[2]
+    assert control_two.text == "Control two."
+    position = rdocx.StoryRunPosition(paragraph=control_two, run_index=0)
+    assert len(position.item.index_path) == 2
+    assert position.item.text == "Control two."
+    assert position.item.direct_body_index == 1
+    comment_id = document.add_comment(
+        rdocx.StoryRunRange(
+            start=position,
+            end=rdocx.StoryRunPosition(paragraph=control_two, run_index=1),
+        ),
+        author="Ada",
+        text="Here",
+    )
+    assert _anchored_texts(document, comment_id) == ["Control two."]
+    xml = _document_xml(document).decode()
+    assert xml.index("<w:sdtContent>") < xml.index("commentRangeStart")
+    assert xml.index("commentRangeEnd") < xml.index("</w:sdtContent>")
+    with pytest.raises(rdocx.StaleElementError):
+        rdocx.StoryRunPosition(paragraph=control_two, run_index=0)
+
+    beta = document.paragraphs[3]
+    beta_item = next(item for item in document.story_items if item.text == "Beta.")
+    assert rdocx.StoryRunPosition(paragraph=beta, run_index=0).item == beta_item
+
+    cell_paragraph = document.tables[0].rows[0].cells[0].paragraphs[0]
+    with pytest.raises(ValueError, match="table cell paragraph handle"):
+        rdocx.StoryRunPosition(paragraph=cell_paragraph, run_index=0)
+    with pytest.raises(TypeError, match="exactly one of item and paragraph"):
+        rdocx.StoryRunPosition(item=beta_item, paragraph=beta, run_index=0)
+    with pytest.raises(TypeError, match="exactly one of item and paragraph"):
+        rdocx.StoryRunPosition(run_index=0)
+
+
+def test_add_comment_on_text_anchors_the_occurrence_after_a_table():
+    import rdocx
+
+    # GitHub issue #163 asks for a helper that comments on a piece of text.
+    # This is the fixture of the issue.
+    def fixture():
+        document = rdocx.Document()
+        document.add_paragraph("Alpha paragraph before the table.")
+        document.add_table(1, 1).cell(0, 0).text = "cell"
+        document.add_paragraph("Beta paragraph after the table.")
+        document.add_paragraph("Gamma paragraph at the end.")
+        return document
+
+    document = fixture()
+    held = document.paragraphs[1]
+    comment_id = document.add_comment_on_text("Beta", author="Ada", text="Here")
+    assert _anchored_texts(document, comment_id) == ["Beta"]
+    assert [run.text for run in document.paragraphs[1].runs if run.text] == [
+        "Beta",
+        " paragraph after the table.",
+    ]
+    with pytest.raises(rdocx.StaleElementError):
+        held.text
+
+    document = fixture()
+    comment_id = document.add_comment_on_text(
+        "paragraph",
+        author="Ada",
+        text="Second",
+        occurrence=1,
+        initials="AL",
+        date="2026-09-27T10:00:00Z",
+    )
+    assert _anchored_texts(document, comment_id) == ["paragraph"]
+    assert [run.text for run in document.paragraphs[1].runs if run.text] == [
+        "Beta ",
+        "paragraph",
+        " after the table.",
+    ]
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    [comment] = reopened.comments
+    assert (comment.text, comment.initials, comment.date) == (
+        "Second",
+        "AL",
+        "2026-09-27T10:00:00Z",
+    )
+
+    before = document.to_bytes()
+    for anchor, occurrence in (("beta", 0), ("paragraph", 3), ("", 0)):
+        with pytest.raises(rdocx.RdocxError):
+            document.add_comment_on_text(
+                anchor, author="Ada", text="x", occurrence=occurrence
+            )
+    assert document.to_bytes() == before
 
 
 def test_python_round_three_authoring_and_inspection_is_typed_and_lossless():

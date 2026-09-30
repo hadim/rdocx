@@ -835,13 +835,10 @@ pub struct Paragraph<'a> {
 }
 
 impl<'a> Paragraph<'a> {
-    /// Get the combined text of all runs.
+    /// Get the combined text of all runs, with the text of the runs inside
+    /// smart tags, inline custom XML elements and simple fields.
     pub fn text(&self) -> String {
-        self.inner
-            .accepted_bookmark_runs()
-            .iter()
-            .map(|run| run.text())
-            .collect()
+        self.inner.accepted_text()
     }
 
     /// Iterate over typed equations in paragraph source order.
@@ -2233,13 +2230,10 @@ pub struct ParagraphRef<'a> {
 }
 
 impl<'a> ParagraphRef<'a> {
-    /// Get the combined text of all runs.
+    /// Get the combined text of all runs, with the text of the runs inside
+    /// smart tags, inline custom XML elements and simple fields.
     pub fn text(&self) -> String {
-        self.inner
-            .accepted_bookmark_runs()
-            .iter()
-            .map(|run| run.text())
-            .collect()
+        self.inner.accepted_text()
     }
 
     /// Iterate over typed equations in paragraph source order.
@@ -2561,9 +2555,14 @@ impl<'a> ParagraphRef<'a> {
             .map(|twips| Length::twips(twips.0.saturating_neg()))
     }
 
-    /// Get an iterator over immutable run references.
+    /// Get an iterator over immutable accepted-view run references, the runs
+    /// that [`Self::run`] indexes, including those inside inline content
+    /// controls and tracked insertions.
     pub fn runs(&self) -> impl Iterator<Item = RunRef<'_>> {
-        self.inner.runs.iter().map(|r| RunRef { inner: r })
+        self.inner
+            .accepted_bookmark_runs()
+            .into_iter()
+            .map(|inner| RunRef { inner })
     }
 
     /// Iterate over the paragraph's ruby annotations in source order.

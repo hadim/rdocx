@@ -10,7 +10,7 @@ use crate::namespace::{W_NS, matches_local_name};
 use crate::numbering::{namespace_bindings, word_prefixes_at};
 use crate::properties::is_word_element;
 use crate::raw_xml::{capture_element, capture_empty_element};
-use crate::text::CT_P;
+use crate::text::{CT_P, declare_w14_on_part_root};
 
 const VML_NS: &str = "urn:schemas-microsoft-com:vml";
 const OFFICE_NS: &str = "urn:schemas-microsoft-com:office:office";
@@ -194,8 +194,18 @@ pub struct CT_HdrFtr {
     watermarks: Vec<VmlWatermark>,
     /// Extra namespace declarations captured from the root element.
     pub extra_namespaces: Vec<(String, String)>,
+    /// Non-namespace attributes of the root element, such as `mc:Ignorable`,
+    /// in source order.
+    root_attributes: Vec<(String, String)>,
     /// Unknown child elements captured as raw XML.
     pub extra_xml: Vec<Vec<u8>>,
+    /// How many paragraphs precede each entry of `extra_xml`, so that a
+    /// rewrite puts a table or a content control back where it was. An entry
+    /// without a position is written after the last paragraph.
+    extra_xml_positions: Vec<usize>,
+    /// The namespace bindings of the root element, which a raw child is
+    /// parsed with when replacement reaches into it.
+    pub(crate) word_prefixes: Vec<String>,
 }
 
 #[allow(non_snake_case)]
@@ -205,7 +215,10 @@ impl CT_HdrFtr {
             paragraphs: Vec::new(),
             watermarks: Vec::new(),
             extra_namespaces: Vec::new(),
+            root_attributes: Vec::new(),
             extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
+            word_prefixes: vec!["w".to_owned()],
         }
     }
 
@@ -227,11 +240,17 @@ impl CT_HdrFtr {
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         let watermarks = parse_vml_watermarks(xml);
         let mut reader = Reader::from_reader(xml);
-        reader.config_mut().trim_text(true);
+        // A raw child is captured with the text events of this reader, so
+        // trimming them would drop the edge spaces of its text, such as the
+        // one of "Page " before a page number. The text between the children
+        // of the root is skipped below.
+        reader.config_mut().trim_text(false);
 
         let mut paragraphs = Vec::new();
         let mut extra_namespaces = Vec::new();
+        let mut root_attributes = Vec::new();
         let mut extra_xml = Vec::new();
+        let mut extra_xml_positions = Vec::new();
         let mut buf = Vec::new();
         let mut word_prefixes = Vec::new();
 
@@ -251,22 +270,32 @@ impl CT_HdrFtr {
                     } else if is_word_element(name.as_ref(), b"hdr", &prefixes)
                         || is_word_element(name.as_ref(), b"ftr", &prefixes)
                     {
-                        // Capture extra namespace declarations from root element
+                        // Capture extra namespace declarations and the other
+                        // attributes from root element
                         for attr in e.attributes().flatten() {
                             let key = attr.key.as_ref();
-                            if (key.starts_with(b"xmlns:") || key == b"xmlns")
-                                && !known_ns.contains(&key)
-                            {
+                            let is_namespace = key.starts_with(b"xmlns:") || key == b"xmlns";
+                            if is_namespace && !known_ns.contains(&key) {
                                 let key_str = std::str::from_utf8(key).unwrap_or("").to_string();
                                 let val_str =
                                     std::str::from_utf8(&attr.value).unwrap_or("").to_string();
                                 extra_namespaces.push((key_str, val_str));
+                            } else if !is_namespace {
+                                root_attributes.push((
+                                    std::str::from_utf8(key)?.to_owned(),
+                                    attr.decoded_and_normalized_value(
+                                        XmlVersion::Implicit1_0,
+                                        e.decoder(),
+                                    )?
+                                    .into_owned(),
+                                ));
                             }
                         }
                         word_prefixes = prefixes;
                     } else {
                         // Capture unknown elements as raw XML
                         extra_xml.push(capture_element(&mut reader, e)?);
+                        extra_xml_positions.push(paragraphs.len());
                     }
                 }
                 Ok(Event::Empty(ref e)) => {
@@ -278,6 +307,7 @@ impl CT_HdrFtr {
                         && !matches_local_name(name.as_ref(), b"ftr")
                     {
                         extra_xml.push(capture_empty_element(e)?);
+                        extra_xml_positions.push(paragraphs.len());
                     }
                 }
                 Ok(Event::Eof) => break,
@@ -291,7 +321,10 @@ impl CT_HdrFtr {
             paragraphs,
             watermarks,
             extra_namespaces,
+            root_attributes,
             extra_xml,
+            extra_xml_positions,
+            word_prefixes,
         })
     }
 
@@ -334,25 +367,40 @@ impl CT_HdrFtr {
             start.push_attribute(("xmlns:wp", wp_ns));
         }
 
-        // Replay captured extra namespaces
-        for (key, val) in &self.extra_namespaces {
+        // Replay captured extra namespaces, then the root attributes that
+        // may name their prefixes, such as `mc:Ignorable`.
+        for (key, val) in self.extra_namespaces.iter().chain(&self.root_attributes) {
             start.push_attribute((key.as_str(), val.as_str()));
         }
 
         writer.write_event(Event::Start(start))?;
 
-        for p in &self.paragraphs {
+        // Write each captured unknown element before the paragraph it
+        // preceded, and the rest after the last paragraph.
+        let mut raw_children = self
+            .extra_xml
+            .iter()
+            .enumerate()
+            .map(|(index, raw)| {
+                let position = self.extra_xml_positions.get(index).copied();
+                (position.unwrap_or(usize::MAX), raw)
+            })
+            .peekable();
+        for (index, p) in self.paragraphs.iter().enumerate() {
+            while let Some((_, raw)) = raw_children.next_if(|(position, _)| *position <= index) {
+                writer.get_mut().extend_from_slice(raw);
+            }
             p.to_xml(&mut writer)?;
         }
-
-        // Write captured unknown elements
-        for raw in &self.extra_xml {
+        for (_, raw) in raw_children {
             writer.get_mut().extend_from_slice(raw);
         }
 
         writer.write_event(Event::End(BytesEnd::new(root_tag)))?;
 
-        Ok(writer.into_inner())
+        let mut xml = writer.into_inner();
+        declare_w14_on_part_root(&mut xml)?;
+        Ok(xml)
     }
 }
 
@@ -1187,6 +1235,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_paragraph_identity_stays_bound_when_only_the_paragraph_declares_w14() {
+        let w14 = "http://schemas.microsoft.com/office/word/2010/wordml";
+        let xml = format!(
+            r#"<w:hdr xmlns:w="{W_NS}"><w:p xmlns:w14="{w14}" w14:paraId="1A2B3C4D"><w:r><w:t>header</w:t></w:r></w:p></w:hdr>"#
+        );
+        let header = CT_HdrFtr::from_xml(xml.as_bytes()).unwrap();
+        let output = String::from_utf8(header.to_xml_header().unwrap()).unwrap();
+        let root = &output[output.find("<w:hdr").unwrap()..];
+        let root = &root[..root.find('>').unwrap()];
+        assert!(root.contains(&format!(r#"xmlns:w14="{w14}""#)), "{output}");
+        assert!(output.contains(r#"w14:paraId="1A2B3C4D""#), "{output}");
+    }
+
+    #[test]
     fn round_trip_header() {
         let mut hdr = CT_HdrFtr::new();
         let mut p = CT_P::new();
@@ -1217,6 +1279,45 @@ mod tests {
         let xml = hdr.to_xml_header().unwrap();
         let parsed = CT_HdrFtr::from_xml(&xml).unwrap();
         assert_eq!(parsed.paragraphs.len(), 0);
+    }
+
+    /// A rewrite wrote every table and content control after the last
+    /// paragraph. A raw child a caller adds still goes after it.
+    #[test]
+    fn raw_children_keep_their_place_between_paragraphs() {
+        let xml = format!(
+            r#"<w:hdr xmlns:w="{W_NS}"><w:tbl><w:tblGrid/><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:p><w:r><w:t>one</w:t></w:r></w:p><w:sdt><w:sdtContent><w:p/></w:sdtContent></w:sdt><w:p><w:r><w:t>two</w:t></w:r></w:p><w:bookmarkStart w:id="0" w:name="end"/></w:hdr>"#
+        );
+        let mut parsed = CT_HdrFtr::from_xml(xml.as_bytes()).unwrap();
+        parsed
+            .extra_xml
+            .push(br#"<w:bookmarkEnd w:id="0"/>"#.to_vec());
+
+        let written = String::from_utf8(parsed.to_xml_header().unwrap()).unwrap();
+
+        let positions = [
+            "<w:tbl>",
+            ">one<",
+            "<w:sdt>",
+            ">two<",
+            "<w:bookmarkStart",
+            "<w:bookmarkEnd",
+        ]
+        .map(|marker| written.find(marker).unwrap());
+        assert!(positions.is_sorted(), "{written}");
+    }
+
+    /// A raw child was captured with trimmed text events, so the page-number
+    /// control of a footer came back as "Page" once the part was rewritten.
+    #[test]
+    fn a_raw_child_keeps_the_edge_spaces_of_its_text() {
+        let control = r#"<w:sdt><w:sdtContent><w:p><w:r><w:t xml:space="preserve">Page </w:t></w:r><w:fldSimple w:instr=" PAGE "/></w:p></w:sdtContent></w:sdt>"#;
+        let xml = format!("<w:ftr xmlns:w=\"{W_NS}\">\n  {control}\n  <w:p/>\n</w:ftr>");
+
+        let parsed = CT_HdrFtr::from_xml(xml.as_bytes()).unwrap();
+
+        assert_eq!(parsed.extra_xml, [control.as_bytes()]);
+        assert_eq!(parsed.paragraphs.len(), 1);
     }
 
     #[test]
@@ -1508,6 +1609,25 @@ mod tests {
             CT_HdrFtr::from_xml(&updated).unwrap().watermarks(),
             &[image]
         );
+    }
+
+    /// #160: a typed rewrite dropped `mc:Ignorable` from the part root.
+    #[test]
+    fn root_attributes_survive_a_rewrite_after_the_namespace_declarations() {
+        let xml = format!(
+            r#"<w:ftr xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:w="{W_NS}" mc:Ignorable="w14" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w:p><w:r><w:t>Page</w:t></w:r></w:p></w:ftr>"#
+        );
+        let parsed = CT_HdrFtr::from_xml(xml.as_bytes()).unwrap();
+        let written = String::from_utf8(parsed.to_xml_footer().unwrap()).unwrap();
+        assert!(
+            written.contains(
+                r#" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" mc:Ignorable="w14">"#
+            ),
+            "{written}"
+        );
+        let reparsed = CT_HdrFtr::from_xml(written.as_bytes()).unwrap();
+        assert_eq!(reparsed.root_attributes, parsed.root_attributes);
+        assert_eq!(reparsed.to_xml_footer().unwrap(), written.as_bytes());
     }
 
     #[test]

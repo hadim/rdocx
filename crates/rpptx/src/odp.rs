@@ -106,7 +106,14 @@ impl Presentation {
     /// Atomically saves deterministic ODP and returns ordered diagnostics.
     pub fn save_odp<P: AsRef<Path>>(&self, path: P) -> Result<Vec<OdpDiagnostic>> {
         let result = self.to_odp_bytes()?;
-        write_atomic(path.as_ref(), &result.bytes).map_err(OpcError::from)?;
+        write_atomic_file(
+            path.as_ref(),
+            &result.bytes,
+            "rpptx-odp",
+            "invalid ODP file name",
+            "could not allocate ODP save staging file",
+        )
+        .map_err(OpcError::from)?;
         Ok(result.diagnostics)
     }
 }
@@ -1479,80 +1486,4 @@ fn write_entry(
     archive
         .write_all(bytes)
         .map_err(|error| odp_error(Some(name), 0, format!("cannot write ODP entry: {error}")))
-}
-
-fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = path.file_name().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid ODP file name")
-    })?;
-    for attempt in 0..128_u8 {
-        let temporary = parent.join(format!(
-            ".{}.rpptx-odp-{}-{attempt}.tmp",
-            file_name.to_string_lossy(),
-            std::process::id()
-        ));
-        let mut file = match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-        {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error),
-        };
-        let result = file.write_all(bytes).and_then(|()| file.sync_all());
-        drop(file);
-        let result = result.and_then(|()| replace_atomic(&temporary, path));
-        if result.is_err() {
-            let _ = std::fs::remove_file(&temporary);
-        }
-        return result;
-    }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::AlreadyExists,
-        "could not allocate ODP save staging file",
-    ))
-}
-
-#[cfg(not(target_os = "windows"))]
-fn replace_atomic(source: &Path, destination: &Path) -> std::io::Result<()> {
-    std::fs::rename(source, destination)
-}
-
-#[cfg(target_os = "windows")]
-fn replace_atomic(source: &Path, destination: &Path) -> std::io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-
-    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
-    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
-
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn MoveFileExW(
-            existing_file_name: *const u16,
-            new_file_name: *const u16,
-            flags: u32,
-        ) -> i32;
-    }
-
-    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
-    let destination: Vec<u16> = destination
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-    // SAFETY: both buffers are NUL-terminated and remain alive for this call.
-    let replaced = unsafe {
-        MoveFileExW(
-            source.as_ptr(),
-            destination.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if replaced == 0 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
 }

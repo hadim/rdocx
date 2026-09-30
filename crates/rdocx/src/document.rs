@@ -14,7 +14,7 @@ use oxml_chart::{CT_ChartSpace, ChartData, ChartKind};
 use oxml_core::app_properties::AppProperties;
 use oxml_opc::content_types;
 use oxml_opc::relationship::rel_types;
-use oxml_opc::{OpcPackage, PackageReadLimits};
+use oxml_opc::{OpcPackage, PackageReadLimits, write_atomic_file};
 use oxml_sml::Workbook;
 use quick_xml::Writer;
 use quick_xml::XmlVersion;
@@ -231,6 +231,24 @@ impl WordPackageClass {
             content_types::WORD_TEMPLATE_MACRO_ENABLED => Some(Self::MacroEnabledTemplate),
             _ => None,
         }
+    }
+
+    /// The class that a `.docx`, `.docm`, `.dotx`, or `.dotm` path names.
+    fn from_path(path: &Path) -> Option<Self> {
+        match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+            "docx" => Some(Self::Document),
+            "docm" => Some(Self::MacroEnabledDocument),
+            "dotx" => Some(Self::Template),
+            "dotm" => Some(Self::MacroEnabledTemplate),
+            _ => None,
+        }
+    }
+
+    fn is_macro_enabled(self) -> bool {
+        matches!(
+            self,
+            Self::MacroEnabledDocument | Self::MacroEnabledTemplate
+        )
     }
 }
 
@@ -5194,6 +5212,7 @@ enum StoryNamespace {
     WordDrawing,
     WordShape,
     WordGroup,
+    MarkupCompatibility,
     Other,
 }
 
@@ -5242,6 +5261,9 @@ fn story_namespace(namespace: &ResolveResult<'_>) -> StoryNamespace {
             }
             b"http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" => {
                 StoryNamespace::WordGroup
+            }
+            b"http://schemas.openxmlformats.org/markup-compatibility/2006" => {
+                StoryNamespace::MarkupCompatibility
             }
             _ => StoryNamespace::Other,
         },
@@ -5413,6 +5435,19 @@ fn modeled_story_child(
         },
         (StoryNamespace::Vml, StoryNamespace::Word) => {
             parent.local_name == b"textbox" && local_name == b"txbxContent"
+        }
+        // Word writes a text box twice in a run, as DrawingML in `mc:Choice` and
+        // as VML in `mc:Fallback`. One Choice is read, see
+        // `modeled_story_event`, and the Fallback stays opaque, so the text box
+        // is one story.
+        (StoryNamespace::Word, StoryNamespace::MarkupCompatibility) => {
+            parent.local_name == b"r" && local_name == b"AlternateContent"
+        }
+        (StoryNamespace::MarkupCompatibility, StoryNamespace::MarkupCompatibility) => {
+            parent.local_name == b"AlternateContent" && local_name == b"Choice"
+        }
+        (StoryNamespace::MarkupCompatibility, StoryNamespace::Word) => {
+            parent.local_name == b"Choice" && local_name == b"drawing"
         }
         (StoryNamespace::Word, StoryNamespace::WordDrawing) => {
             parent.local_name == b"drawing" && matches!(local_name, b"inline" | b"anchor")
@@ -6594,8 +6629,34 @@ fn restart_merges_continued_below(table: &mut CT_Tbl, row_index: usize) -> Resul
 
 fn set_story_source_xml(document: &mut Document, part_name: &str, xml: Vec<u8>) -> Result<()> {
     if part_name == document.doc_part_name {
+        // The main-part story source is canonical XML. It drops a root
+        // default namespace and every body declaration, and binds the root
+        // `w`, `r` and `mc` prefixes to their canonical URIs. The save path's
+        // check on those declarations keeps retained content of the replaced
+        // part in its namespace.
+        let rewritten_root_declarations: Vec<_> = document
+            .root_namespace_declarations
+            .iter()
+            .filter(|(name, _)| {
+                matches!(name.as_str(), "xmlns" | "xmlns:w" | "xmlns:r" | "xmlns:mc")
+            })
+            .cloned()
+            .collect();
+        if let Some(prefix) = unsafe_serializer_namespace_prefix(
+            &rewritten_root_declarations,
+            &document.body_namespace_declarations,
+            document.package.get_part(part_name),
+        ) {
+            return Err(Error::Other(format!(
+                "cannot serialize a modified document with a shadowed `{prefix}` namespace"
+            )));
+        }
+        let namespace_scopes = document_namespace_scopes(&xml)?;
         document.document = CT_Document::from_xml(&xml)?;
         document.package.set_part(part_name, xml);
+        document.root_namespace_declarations = namespace_scopes.root_declarations;
+        document.body_namespace_declarations = namespace_scopes.body_declarations;
+        document.body_namespace_bindings = namespace_scopes.body_bindings;
     } else if document.comments_part_name.as_deref() == Some(part_name) {
         document.comments = Some(rdocx_oxml::comments::CT_Comments::from_xml(&xml)?);
         document.package.set_part(part_name, xml);
@@ -6930,6 +6991,18 @@ fn modeled_story_event(
     if !modeled_story_child(stack, namespace, local_name) {
         return Ok(false);
     }
+    if namespace == StoryNamespace::MarkupCompatibility && local_name == b"Choice" {
+        // The text box is read from the first Choice that holds one, as layout
+        // draws the first Choice drawing. Any other Choice stays opaque, as the
+        // Fallback does.
+        let Some(alternate) = stack.last() else {
+            return Ok(false);
+        };
+        let Some(text_box) = first_text_box_start(xml, alternate.full_start)? else {
+            return Ok(false);
+        };
+        return Ok(!empty && before < text_box && text_box < story_element_end(xml, before)?);
+    }
     if namespace != StoryNamespace::Word {
         return Ok(true);
     }
@@ -6968,6 +7041,42 @@ fn modeled_story_event(
         return Ok(false);
     }
     Ok(true)
+}
+
+/// Where the first `txbxContent` element inside the element that starts at
+/// `start` begins, whatever its prefix.
+fn first_text_box_start(xml: &[u8], start: usize) -> Result<Option<usize>> {
+    let fragment = xml
+        .get(start..)
+        .ok_or_else(|| Error::Other("story element begins outside its source part".to_owned()))?;
+    let mut reader = quick_xml::Reader::from_reader(fragment);
+    reader.config_mut().trim_text(false);
+    let mut depth = 0usize;
+    let mut buffer = Vec::new();
+    loop {
+        let before = start + reader.buffer_position() as usize;
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story text box scan failed: {error}")))?
+        {
+            Event::Start(element) | Event::Empty(element)
+                if depth > 0 && element.local_name().as_ref() == b"txbxContent" =>
+            {
+                return Ok(Some(before));
+            }
+            Event::Start(_) => depth += 1,
+            Event::Empty(_) if depth == 0 => return Ok(None),
+            Event::End(_) => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return Ok(None);
+                }
+            }
+            Event::Eof => return Ok(None),
+            _ => {}
+        }
+        buffer.clear();
+    }
 }
 
 fn opaque_story_event(
@@ -7526,6 +7635,15 @@ fn scan_story_items(xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<StoryItemS
                     match local_name.as_slice() {
                         b"sdt" => Some(StoryItemKind::ContentControl),
                         b"fldSimple" => Some(StoryItemKind::Field),
+                        // A drawing in `mc:Choice` is read only for the text
+                        // boxes it holds, and lists no item of its own.
+                        b"drawing"
+                            if stack.last().is_some_and(|parent| {
+                                parent.namespace == StoryNamespace::MarkupCompatibility
+                            }) =>
+                        {
+                            None
+                        }
                         b"drawing" | b"pict" => Some(StoryItemKind::Drawing),
                         _ => None,
                     }
@@ -9389,7 +9507,95 @@ fn visit_sdt(control: &CT_Sdt, visitor: &mut impl FnMut(&CT_P)) {
     }
 }
 
-fn visit_body_paragraphs_mut(content: &mut [BodyContent], visitor: &mut impl FnMut(&mut CT_P)) {
+/// Collect the body paragraphs in document order, those that body-level
+/// content controls wrap included. Tables are not entered, with or without a
+/// control around them. This is what [`Document::headings`] and
+/// [`Document::links`] read.
+fn block_paragraphs(content: &[BodyContent]) -> Vec<&CT_P> {
+    let mut paragraphs = Vec::new();
+    for item in content {
+        match item {
+            BodyContent::Paragraph(paragraph) => paragraphs.push(paragraph),
+            BodyContent::ContentControl(control) => {
+                collect_block_control_paragraphs(control, &mut paragraphs);
+            }
+            BodyContent::Table(_) | BodyContent::RawXml(_) => {}
+        }
+    }
+    paragraphs
+}
+
+fn collect_block_control_paragraphs<'a>(control: &'a CT_Sdt, paragraphs: &mut Vec<&'a CT_P>) {
+    for item in &control.content {
+        match item {
+            SdtContent::Paragraph(paragraph) => paragraphs.push(paragraph),
+            SdtContent::ContentControl(nested) => {
+                collect_block_control_paragraphs(nested, paragraphs);
+            }
+            SdtContent::Table(_)
+            | SdtContent::Row(_)
+            | SdtContent::Cell(_)
+            | SdtContent::Run(_)
+            | SdtContent::RawXml(_) => {}
+        }
+    }
+}
+
+/// Append a block-level paragraph to [`Document::text`] as one line.
+fn push_paragraph_line(paragraph: &CT_P, text: &mut String) {
+    text.push_str(&ParagraphRef { inner: paragraph }.text());
+    text.push('\n');
+}
+
+/// Append a table to [`Document::text`] as one line per row, rows wrapped by
+/// table-level content controls included.
+fn push_table_text(table: &CT_Tbl, text: &mut String) {
+    for index in 0..=table.rows.len() {
+        for (_, _, control) in table
+            .content_controls
+            .iter()
+            .filter(|(at, _, _)| *at == index)
+        {
+            push_control_text(control, text);
+        }
+        if let Some(row) = table.rows.get(index) {
+            push_row_text(row, text);
+        }
+    }
+}
+
+/// Append a row to [`Document::text`] as one line in which every paragraph of
+/// its cells ends with a tab, cell controls and nested tables included.
+fn push_row_text(row: &CT_Row, text: &mut String) {
+    visit_row(row, &mut |paragraph| push_cell_paragraph(paragraph, text));
+    text.push('\n');
+}
+
+fn push_cell_paragraph(paragraph: &CT_P, text: &mut String) {
+    text.push_str(&ParagraphRef { inner: paragraph }.text());
+    text.push('\t');
+}
+
+/// Append what a block, table or row content control wraps to [`Document::text`].
+fn push_control_text(control: &CT_Sdt, text: &mut String) {
+    for item in &control.content {
+        match item {
+            SdtContent::Paragraph(paragraph) => push_paragraph_line(paragraph, text),
+            SdtContent::Table(table) => push_table_text(table, text),
+            SdtContent::Row(row) => push_row_text(row, text),
+            SdtContent::Cell(cell) => {
+                visit_cell(cell, &mut |paragraph| push_cell_paragraph(paragraph, text));
+            }
+            SdtContent::Run(_) | SdtContent::RawXml(_) => {}
+            SdtContent::ContentControl(nested) => push_control_text(nested, text),
+        }
+    }
+}
+
+pub(crate) fn visit_body_paragraphs_mut(
+    content: &mut [BodyContent],
+    visitor: &mut impl FnMut(&mut CT_P),
+) {
     for item in content {
         match item {
             BodyContent::Paragraph(paragraph) => visit_paragraph_mut(paragraph, visitor),
@@ -11625,6 +11831,7 @@ impl Document {
         write_atomic_file(
             path.as_ref(),
             &bytes,
+            "rdocx",
             "invalid Word package file name",
             "could not allocate Word package save staging file",
         )?;
@@ -11988,7 +12195,26 @@ impl Document {
     }
 
     /// Save the document to a file path.
+    ///
+    /// The package is staged in a synced sibling file and renamed over `path`
+    /// through [`oxml_opc::write_atomic_file`], so a failed save leaves an
+    /// existing file as it was. A symbolic link at `path` is kept and the file
+    /// it names is replaced, and on Unix that file keeps its permission bits.
+    ///
+    /// A `.docx`, `.docm`, `.dotx`, or `.dotm` extension selects the main
+    /// part content type, so a template saved as `.docx` declares a document.
+    /// Any other extension keeps the opened class, and `save_encrypted` and
+    /// the Flat OPC saves ignore the extension. When the class changes, a
+    /// main part that carries a VBA project cannot be saved under a
+    /// macro-free extension, because the project would remain in a file that
+    /// claims to carry none. [`Document::save_as_package_class`] performs
+    /// that conversion explicitly and keeps the VBA part.
+    ///
     pub fn save<P: AsRef<Path>>(&mut self, path: P) -> Result<()> {
+        let path = path.as_ref();
+        if let Some(class) = self.package_class_for_path(path)? {
+            return self.save_as_package_class(path, class);
+        }
         let mut candidate = self.clone_for_staging();
         candidate.prepare_staged_output()?;
         crate::embedded::persist_invalidated_package_signature(
@@ -12012,6 +12238,44 @@ impl Document {
         Ok(buf.into_inner())
     }
 
+    /// Serialize the bytes that [`Document::save`] writes to `path`.
+    pub fn to_bytes_for_path<P: AsRef<Path>>(&mut self, path: P) -> Result<Vec<u8>> {
+        match self.package_class_for_path(path.as_ref())? {
+            Some(class) => self.to_bytes_as(class),
+            None => self.to_bytes(),
+        }
+    }
+
+    /// The class a save to `path` converts to, or `None` to keep the opened class.
+    fn package_class_for_path(&self, path: &Path) -> Result<Option<WordPackageClass>> {
+        let Some(target) = WordPackageClass::from_path(path) else {
+            return Ok(None);
+        };
+        // Read the override itself: a new compact document has no main part
+        // bytes until staging, so `package_class` cannot validate it yet.
+        let current = self
+            .package
+            .content_types
+            .override_for(&self.doc_part_name)
+            .and_then(WordPackageClass::from_content_type);
+        if current == Some(target) {
+            return Ok(None);
+        }
+        let carries_vba =
+            self.package
+                .get_part_rels(&self.doc_part_name)
+                .is_some_and(|relationships| {
+                    relationships.get_by_type(rel_types::VBA_PROJECT).is_some()
+                });
+        if carries_vba && !target.is_macro_enabled() {
+            return Err(Error::Other(format!(
+                "cannot save {}: the document carries a VBA project and the extension names a macro-free class, save it as .docm or .dotm",
+                path.display()
+            )));
+        }
+        Ok(Some(target))
+    }
+
     /// Save a password-protected document using the fixed Agile write profile.
     #[cfg(all(feature = "agile-encryption", not(target_arch = "wasm32")))]
     pub fn save_encrypted<P: AsRef<Path>>(&self, path: P, password: &str) -> Result<()> {
@@ -12019,6 +12283,7 @@ impl Document {
         write_atomic_file(
             path.as_ref(),
             &bytes,
+            "rdocx",
             "invalid file name",
             "could not allocate encrypted-save staging file",
         )?;
@@ -12053,8 +12318,20 @@ impl Document {
         self.flush_to_package()
     }
 
+    /// Stage every public output. A comments model that no longer matches its
+    /// part is written back even when no mutation marked it dirty. An
+    /// unchanged comments part keeps its producer bytes, as styles and the
+    /// other modelled parts do, so a save without a comment edit neither
+    /// rewrites it nor invalidates a package signature over it.
     pub(crate) fn prepare_staged_output(&mut self) -> Result<()> {
-        self.comments_dirty |= self.comments.is_some() && self.comments_part_name.is_some();
+        if let (Some(comments), Some(part_name)) = (&self.comments, &self.comments_part_name) {
+            self.comments_dirty |= self
+                .package
+                .get_part(part_name)
+                .and_then(|xml| rdocx_oxml::comments::CT_Comments::from_xml(xml).ok())
+                .as_ref()
+                != Some(comments);
+        }
         self.prepare_staged_package()
     }
 
@@ -13088,18 +13365,26 @@ impl Document {
     }
 
     pub(crate) fn story_paragraph_mut(&mut self, location: &ContentLocation) -> Result<&mut CT_P> {
-        let (part_name, mut paragraph_index, cell_route) = {
+        let (part_name, paragraph_slot, ordinal, cell_route) = {
             let (source, owner) = self.story_source_and_owner(&location.story)?;
             let part_name = source.part_name.clone();
             let source_xml = source.xml.into_owned();
-            if location.index_path.len() != 1 {
-                return Err(StoryError::InvalidPath {
-                    path: location.index_path.clone(),
+            // A paragraph inside a block content control of the body is the
+            // control item followed by the paragraph's position among the
+            // paragraphs of that control.
+            let (item_index, ordinal) = match location.index_path.as_slice() {
+                [item_index] => (*item_index, None),
+                [item_index, ordinal] if location.story.kind == StoryKind::Body => {
+                    (*item_index, Some(*ordinal))
                 }
-                .into());
-            }
+                _ => {
+                    return Err(StoryError::InvalidPath {
+                        path: location.index_path.clone(),
+                    }
+                    .into());
+                }
+            };
             let items = scan_story_items(&source_xml, &owner)?;
-            let item_index = location.index_path[0];
             let item = items.get(item_index).ok_or(StoryError::OutOfBounds {
                 index: item_index,
                 len: items.len(),
@@ -13109,22 +13394,40 @@ impl Document {
                     "comment positions must identify paragraphs".to_owned(),
                 ));
             }
-            if item.kind != location.item_kind {
+            if ordinal.is_some()
+                && (item.kind != StoryItemKind::ContentControl || !item.direct_owner_child)
+            {
+                return Err(Error::Other(
+                    "a two-segment comment position must start with a block content control"
+                        .to_owned(),
+                ));
+            }
+            if ordinal.is_none() && item.kind != location.item_kind {
                 return Err(StoryError::KindMismatch {
                     expected: location.item_kind,
                     actual: item.kind,
                 }
                 .into());
             }
-            let paragraph_index = items[..item_index]
-                .iter()
-                .filter(|item| item.kind == StoryItemKind::Paragraph)
-                .count();
+            // A paragraph item is a direct child of its owner. In the body it
+            // resolves to its direct body slot, the count of direct items
+            // before it, and in a cell to its position among the cell's
+            // direct paragraphs. Neither counts the paragraphs inside a block
+            // content control. The body section properties are serialized
+            // last, so they never precede a paragraph.
+            let preceding = items[..item_index].iter();
+            let paragraph_slot = if location.story.kind == StoryKind::Body {
+                preceding.filter(|item| item.direct_owner_child).count()
+            } else {
+                preceding
+                    .filter(|item| item.kind == StoryItemKind::Paragraph)
+                    .count()
+            };
             let cell_route = (location.story.kind == StoryKind::TableCell
                 && part_name == self.doc_part_name)
                 .then(|| modeled_main_cell_route(&source_xml, &owner))
                 .transpose()?;
-            (part_name, paragraph_index, cell_route)
+            (part_name, paragraph_slot, ordinal, cell_route)
         };
         if part_name != self.doc_part_name {
             return Err(Error::Other(
@@ -13133,8 +13436,18 @@ impl Document {
         }
         match location.story.kind {
             StoryKind::Body => {
-                nth_paragraph_in_body(&mut self.document.body.content, &mut paragraph_index)
-                    .ok_or_else(|| Error::Other("comment body paragraph is missing".to_owned()))
+                match (self.document.body.content.get_mut(paragraph_slot), ordinal) {
+                    (Some(BodyContent::Paragraph(paragraph)), None) => Ok(paragraph),
+                    (Some(BodyContent::ContentControl(control)), Some(mut remaining)) => {
+                        nth_paragraph_in_control(control, &mut remaining).ok_or_else(|| {
+                            Error::Other(format!(
+                                "comment content control has no paragraph {}",
+                                ordinal.unwrap_or_default()
+                            ))
+                        })
+                    }
+                    _ => Err(Error::Other("comment body paragraph is missing".to_owned())),
+                }
             }
             StoryKind::TableCell => {
                 let (content_index, mut cell_index) = cell_route.ok_or_else(|| {
@@ -13154,7 +13467,13 @@ impl Document {
                     BodyContent::Paragraph(_) | BodyContent::RawXml(_) => None,
                 }
                 .ok_or_else(|| Error::Other("comment table cell is missing".to_owned()))?;
-                nth_paragraph_in_cell(cell, &mut paragraph_index)
+                cell.content
+                    .iter_mut()
+                    .filter_map(|child| match child {
+                        CellContent::Paragraph(paragraph) => Some(paragraph),
+                        CellContent::Table(_) | CellContent::ContentControl(_) => None,
+                    })
+                    .nth(paragraph_slot)
                     .ok_or_else(|| Error::Other("comment cell paragraph is missing".to_owned()))
             }
             _ => Err(Error::Other(
@@ -14357,6 +14676,9 @@ impl Document {
     }
 
     /// Clone one checked direct child into a checked insertion boundary.
+    ///
+    /// Document-wide identities of the copy are made unique, and its
+    /// paragraphs and table rows drop `w14:paraId` and `w14:textId`.
     pub fn clone_content(
         &mut self,
         source_location: &ContentLocation,
@@ -14529,7 +14851,9 @@ impl Document {
             .collect()
     }
 
-    /// Get an immutable reference to a paragraph by index (among paragraphs only).
+    /// Get an immutable reference to a paragraph by its index in
+    /// [`Self::paragraphs`]. That index skips body tables and enters block
+    /// content controls, so it is not the direct body index.
     pub fn paragraph(&self, index: usize) -> Option<ParagraphRef<'_>> {
         self.document
             .body
@@ -14633,35 +14957,29 @@ impl Document {
     }
 
     /// Get the plain text of body paragraphs and table cells in document order.
+    ///
+    /// A body paragraph ends with a newline. A table row is one line in which
+    /// every cell paragraph ends with a tab, paragraphs of nested tables
+    /// included. Content controls at every level contribute the paragraphs,
+    /// rows and cells they wrap at the position they occupy.
+    /// Each paragraph contributes its accepted-view text, the same text as
+    /// [`ParagraphRef::text`]: tracked insertions are included and tracked
+    /// deletions are left out.
     pub fn text(&self) -> String {
         let mut result = String::new();
         for content in &self.document.body.content {
             match content {
-                BodyContent::Paragraph(paragraph) => {
-                    result.push_str(&paragraph.text());
-                    result.push('\n');
-                }
-                BodyContent::Table(table) => {
-                    for row in &table.rows {
-                        for cell in &row.cells {
-                            for content in &cell.content {
-                                if let CellContent::Paragraph(paragraph) = content {
-                                    result.push_str(&paragraph.text());
-                                    result.push('\t');
-                                }
-                            }
-                        }
-                        result.push('\n');
-                    }
-                }
-                BodyContent::ContentControl(_) => {}
+                BodyContent::Paragraph(paragraph) => push_paragraph_line(paragraph, &mut result),
+                BodyContent::Table(table) => push_table_text(table, &mut result),
+                BodyContent::ContentControl(control) => push_control_text(control, &mut result),
                 BodyContent::RawXml(_) => {}
             }
         }
         result
     }
 
-    /// Get a mutable reference to a paragraph by index (among paragraphs only).
+    /// Get a mutable reference to a paragraph by the same index as
+    /// [`Self::paragraph`].
     pub fn paragraph_mut(&mut self, index: usize) -> Option<Paragraph<'_>> {
         self.invalidate_layout();
         let mut remaining = index;
@@ -14671,6 +14989,14 @@ impl Document {
 
     /// Split a direct body paragraph run at a Unicode scalar offset of its
     /// literal text and return the resulting run boundary.
+    ///
+    /// `body_index` is the direct body child index that `RunPosition`,
+    /// [`Self::find_content_index`], [`Self::add_comment`] and
+    /// [`Self::insert_paragraph`] use, where a table or a block content
+    /// control counts as one child. An index that names a table, a block
+    /// content control or preserved XML is an error that names its kind. A
+    /// paragraph inside a block content control is split through
+    /// `paragraph_mut(i).split_run`.
     ///
     /// Zero returns the boundary before the selected run and the literal text
     /// length returns the boundary after it without changing the document.
@@ -14683,23 +15009,40 @@ impl Document {
         run_index: usize,
         character_offset: usize,
     ) -> Result<usize> {
-        let original = self.paragraph(body_index).ok_or_else(|| {
-            Error::Other(format!("body paragraph index {body_index} is out of range"))
-        })?;
-        let mut candidate = original.inner.clone();
+        let not_a_paragraph = |kind: &str| {
+            Error::Other(format!(
+                "body index {body_index} is {kind}, not a paragraph"
+            ))
+        };
+        let original = match self.document.body.content.get(body_index) {
+            Some(BodyContent::Paragraph(paragraph)) => paragraph,
+            Some(BodyContent::Table(_)) => return Err(not_a_paragraph("a table")),
+            Some(BodyContent::ContentControl(_)) => {
+                return Err(not_a_paragraph("a block content control"));
+            }
+            Some(BodyContent::RawXml(_)) => return Err(not_a_paragraph("preserved XML")),
+            None => {
+                return Err(Error::Other(format!(
+                    "body index {body_index} is out of range"
+                )));
+            }
+        };
+        let mut candidate = original.clone();
         let boundary = Paragraph {
             inner: &mut candidate,
         }
         .split_run(run_index, character_offset)?;
-        if candidate == *original.inner {
+        if candidate == *original {
             return Ok(boundary);
         }
 
-        self.invalidate_layout();
-        let mut remaining = body_index;
-        let paragraph = nth_paragraph_in_body(&mut self.document.body.content, &mut remaining)
-            .ok_or_else(|| Error::Other("body paragraph disappeared during split".to_owned()))?;
+        let Some(BodyContent::Paragraph(paragraph)) =
+            self.document.body.content.get_mut(body_index)
+        else {
+            unreachable!("body index {body_index} was checked to be a paragraph");
+        };
         *paragraph = candidate;
+        self.invalidate_layout();
         Ok(boundary)
     }
 
@@ -14736,8 +15079,9 @@ impl Document {
     /// `table_index` counts every table in document order, including nested
     /// tables. `insert_at` may equal the row count to append. The copy keeps
     /// row properties, cell formatting, nested content, relationships, and
-    /// preserved producer XML. Document-wide identities are made unique and
-    /// comment anchors are omitted. The document is unchanged on error.
+    /// preserved producer XML. Document-wide identities are made unique, the
+    /// row and its paragraphs drop `w14:paraId` and `w14:textId`, and comment
+    /// anchors are omitted. The document is unchanged on error.
     pub fn clone_table_row(
         &mut self,
         table_index: usize,
@@ -15032,6 +15376,59 @@ impl Document {
             .content
             .iter()
             .position(|content| matches!(content, BodyContent::Paragraph(paragraph) if std::ptr::eq(paragraph, target)))
+    }
+
+    /// Return the checked body story location of the paragraph addressed by
+    /// `paragraph_index`, the index of [`Self::paragraph_mut`].
+    ///
+    /// A direct body paragraph has its one-segment story item path. A
+    /// paragraph inside a block content control, which has no story item of
+    /// its own, has a two-segment path: the control's story item index, then
+    /// the paragraph's position among the control's paragraphs. Only
+    /// [`Self::add_story_comment`] accepts the two-segment form. Returns
+    /// `None` when the index is out of range.
+    pub fn paragraph_story_location(
+        &self,
+        paragraph_index: usize,
+    ) -> Result<Option<ContentLocation>> {
+        let mut remaining = paragraph_index;
+        let mut target = None;
+        for (slot, child) in self.document.body.content.iter().enumerate() {
+            let count = match child {
+                BodyContent::Paragraph(_) => 1,
+                BodyContent::ContentControl(control) => paragraph_count_in_control(control),
+                BodyContent::Table(_) | BodyContent::RawXml(_) => 0,
+            };
+            if remaining < count {
+                let ordinal = matches!(child, BodyContent::ContentControl(_)).then_some(remaining);
+                target = Some((slot, ordinal));
+                break;
+            }
+            remaining -= count;
+        }
+        let Some((slot, ordinal)) = target else {
+            return Ok(None);
+        };
+        let story = self
+            .stories()?
+            .into_iter()
+            .find(|story| story.kind == StoryKind::Body)
+            .ok_or_else(|| Error::Other("document body story is missing".to_owned()))?;
+        let (source, owner) = self.story_source_and_owner(&story)?;
+        // The body section properties come last, so the n-th direct item is
+        // the direct body child at slot n.
+        let item_index = scan_story_items(source.xml.as_ref(), &owner)?
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item.direct_owner_child)
+            .nth(slot)
+            .map(|(index, _)| index)
+            .ok_or_else(|| Error::Other("body paragraph has no story item".to_owned()))?;
+        Ok(Some(ContentLocation::new(
+            story,
+            StoryItemKind::Paragraph,
+            std::iter::once(item_index).chain(ordinal).collect(),
+        )))
     }
 
     /// Return the direct body index of the table addressed by `table_index`.
@@ -21212,8 +21609,18 @@ impl Document {
     /// Replace all occurrences of `placeholder` with `replacement` throughout the document.
     ///
     /// Searches body paragraphs, tables (including nested), headers, footers,
-    /// text boxes and chart labels. Handles placeholders split across multiple
-    /// runs. Returns the total number of replacements made.
+    /// footnotes, endnotes, the text boxes of the body, headers and footers,
+    /// and the chart labels of the body, and the content controls at every
+    /// level of them, inline controls included. It reads the text
+    /// [`crate::Paragraph::text`] reads: the text of a tracked insertion or
+    /// move destination, replaced inside that revision, and not deleted or
+    /// moved-away text. A text box inside a deleted run is the exception, as
+    /// the text box pass rewrites it like any other text box. A text box
+    /// inside a note, and the separator and continuation entries of the notes
+    /// parts, are never searched. Handles placeholders split across
+    /// multiple runs. A match that straddles a content-control or a
+    /// tracked-insertion boundary is not replaced. Returns the total number
+    /// of replacements made.
     ///
     /// A `replacement` that contains `placeholder` is substituted once, not
     /// repeatedly.
@@ -21284,13 +21691,21 @@ impl Document {
 
         for (rel_id, is_header) in self.header_footer_rel_ids() {
             if let Some(header_footer) = self.load_header_footer(&rel_id, is_header) {
-                sources.extend(crate::template::header_footer_sources(&header_footer));
+                sources.extend(rdocx_oxml::placeholder::header_footer_replaceable_texts(
+                    &header_footer,
+                ));
             }
         }
 
         for (part_name, _) in self.raw_text_bearing_part_names() {
             if let Some(xml) = self.package.get_part(&part_name) {
-                sources.extend(crate::template::text_box_sources(xml)?);
+                sources.extend(rdocx_oxml::placeholder::xml_part_replaceable_texts(xml)?);
+            }
+        }
+
+        for part_name in self.note_part_names() {
+            if let Some(xml) = self.package.get_part(&part_name) {
+                sources.extend(rdocx_oxml::placeholder::notes_part_replaceable_texts(xml)?);
             }
         }
 
@@ -21334,23 +21749,14 @@ impl Document {
         Ok(count)
     }
 
-    /// Run the typed replacement over body paragraphs and tables.
+    /// Run the typed replacement over every body paragraph, those of tables
+    /// and content controls at every level included.
     fn replace_in_body(&mut self, placeholder: &str, replacement: &str) -> usize {
-        use rdocx_oxml::placeholder;
-
         let mut count = 0;
-        for content in &mut self.document.body.content {
-            match content {
-                BodyContent::Paragraph(p) => {
-                    count += placeholder::replace_in_paragraph(p, placeholder, replacement);
-                }
-                BodyContent::Table(t) => {
-                    count += placeholder::replace_in_table(t, placeholder, replacement);
-                }
-                BodyContent::ContentControl(_) => {}
-                BodyContent::RawXml(_) => {}
-            }
-        }
+        visit_body_paragraphs_mut(&mut self.document.body.content, &mut |paragraph| {
+            count +=
+                rdocx_oxml::placeholder::replace_in_paragraph(paragraph, placeholder, replacement);
+        });
         count
     }
 
@@ -21448,8 +21854,11 @@ impl Document {
     /// Replace all regex matches with `replacement` throughout the document.
     ///
     /// The `replacement` string supports capture groups: `$1`, `$2`, etc.
-    /// Searches body paragraphs, tables (including nested), headers, and footers.
-    /// Returns the total number of replacements made, or an error if the regex is invalid.
+    /// Searches the stories [`Self::replace_text`] searches, except chart
+    /// labels: body paragraphs, tables (including nested), headers, footers,
+    /// footnotes, endnotes and text boxes, the content controls at every level
+    /// of them and the text of tracked insertions. Returns the total number of replacements made, or an error if the
+    /// regex is invalid.
     pub fn replace_regex(&mut self, pattern: &str, replacement: &str) -> Result<usize> {
         let re =
             regex::Regex::new(pattern).map_err(|e| Error::Other(format!("invalid regex: {e}")))?;
@@ -21484,19 +21893,10 @@ impl Document {
 
         let mut count = 0;
 
-        // Replace in body paragraphs and tables
-        for content in &mut self.document.body.content {
-            match content {
-                BodyContent::Paragraph(p) => {
-                    count += placeholder::replace_regex_in_paragraph(p, re, replacement);
-                }
-                BodyContent::Table(t) => {
-                    count += placeholder::replace_regex_in_table(t, re, replacement);
-                }
-                BodyContent::ContentControl(_) => {}
-                BodyContent::RawXml(_) => {}
-            }
-        }
+        // Replace in body paragraphs, tables and content controls
+        visit_body_paragraphs_mut(&mut self.document.body.content, &mut |paragraph| {
+            count += placeholder::replace_regex_in_paragraph(paragraph, re, replacement);
+        });
 
         // Replace in headers and footers
         for (rel_id, is_header) in self.header_footer_rel_ids() {
@@ -21519,26 +21919,31 @@ impl Document {
         Ok(count)
     }
 
-    /// Apply a regex replacement to the text-box content of the raw XML parts.
+    /// Apply a regex replacement to the text-box content of the raw XML parts,
+    /// then to the notes of the footnotes and endnotes parts.
     fn replace_regex_in_xml_parts(&mut self, re: &regex::Regex, replacement: &str) -> usize {
         let mut count = 0;
+        let mut changed = false;
 
         for (part_name, _) in self.text_bearing_part_names() {
             let Some(xml) = self.package.get_part(&part_name).map(<[u8]>::to_vec) else {
                 continue;
             };
+            // A part can change without a count, when a replacement reaches
+            // only the uncounted copy of a text box that Word writes twice.
             if let Ok((new_xml, n)) =
                 rdocx_oxml::placeholder::replace_regex_in_xml_part(&xml, re, replacement)
-                && n > 0
+                && (n > 0 || new_xml != xml)
             {
                 self.package.set_part(&part_name, new_xml);
                 count += n;
+                changed = true;
             }
         }
 
         // Re-parse so the in-memory model reflects the edited markup; otherwise
         // the next flush would write the pre-replacement document back out.
-        if count > 0
+        if changed
             && let Some(doc_xml) = self.package.get_part(&self.doc_part_name)
             && let Ok(doc) = CT_Document::from_xml(doc_xml)
         {
@@ -21546,6 +21951,9 @@ impl Document {
         }
 
         count
+            + self.rewrite_note_parts(|xml| {
+                rdocx_oxml::placeholder::replace_regex_in_notes_part(xml, re, replacement)
+            })
     }
 
     /// The main document part plus every header and footer part: everywhere
@@ -21568,6 +21976,55 @@ impl Document {
             }
         }
         names
+    }
+
+    /// The footnotes and endnotes parts of the main document, each once.
+    fn note_part_names(&self) -> Vec<String> {
+        let mut names = Vec::new();
+        for relationship in self
+            .package
+            .get_part_rels(&self.doc_part_name)
+            .map(|relationships| relationships.items.as_slice())
+            .unwrap_or_default()
+        {
+            if matches!(
+                relationship.rel_type.as_str(),
+                rel_types::FOOTNOTES | rel_types::ENDNOTES
+            ) && relationship_is_internal(relationship)
+            {
+                let name =
+                    OpcPackage::resolve_rel_target(&self.doc_part_name, &relationship.target);
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+        names
+    }
+
+    /// Apply `rewrite` to every footnotes and endnotes part and keep each
+    /// part it changes. The typed footnotes are read again from the new
+    /// part, since the next flush writes only what they add.
+    fn rewrite_note_parts(
+        &mut self,
+        mut rewrite: impl FnMut(&[u8]) -> rdocx_oxml::error::Result<(Vec<u8>, usize)>,
+    ) -> usize {
+        let mut count = 0;
+        for part_name in self.note_part_names() {
+            let Some(Ok((xml, n))) = self.package.get_part(&part_name).map(&mut rewrite) else {
+                continue;
+            };
+            if n == 0 {
+                continue;
+            }
+            if self.footnotes_part_name.as_deref() == Some(part_name.as_str()) {
+                self.footnotes =
+                    rdocx_oxml::footnotes::CT_Footnotes::from_xml(&xml).unwrap_or_default();
+            }
+            self.package.set_part(&part_name, xml);
+            count += n;
+        }
+        count
     }
 
     fn chart_part_names(&self) -> Vec<String> {
@@ -21630,23 +22087,30 @@ impl Document {
         })
     }
 
-    /// Run raw XML replacement on all XML parts (for text boxes, shapes, charts, etc.).
+    /// Run raw XML replacement on the text boxes of the body, header and footer
+    /// parts, on the chart parts, and on the notes of the footnotes and
+    /// endnotes parts.
     ///
     /// This is called after the typed-model replacement and flush_to_package.
     fn replace_in_xml_parts(&mut self, pairs: &[(&str, &str)]) -> usize {
         use rdocx_oxml::placeholder::{replace_many_in_chart_xml, replace_many_in_xml_part};
 
         let mut count = 0;
+        let mut changed = false;
 
         // Collect part names for XML parts to process (text boxes/shapes)
         for (part_name, _) in self.raw_text_bearing_part_names() {
             if let Some(xml) = self.package.get_part(&part_name) {
                 let xml = xml.to_vec();
+                // A part can change without a count, when a replacement
+                // reaches only the uncounted copy of a text box that Word
+                // writes twice.
                 if let Ok((new_xml, n)) = replace_many_in_xml_part(&xml, pairs)
-                    && n > 0
+                    && (n > 0 || new_xml != xml)
                 {
                     self.package.set_part(&part_name, new_xml);
                     count += n;
+                    changed = true;
                 }
             }
         }
@@ -21660,12 +22124,13 @@ impl Document {
                 {
                     self.package.set_part(&part_name, new_xml);
                     count += n;
+                    changed = true;
                 }
             }
         }
 
         // Re-parse document from the (possibly modified) package XML
-        if count > 0
+        if changed
             && let Some(doc_xml) = self.package.get_part(&self.doc_part_name)
             && let Ok(doc) = CT_Document::from_xml(doc_xml)
         {
@@ -21673,6 +22138,9 @@ impl Document {
         }
 
         count
+            + self.rewrite_note_parts(|xml| {
+                rdocx_oxml::placeholder::replace_many_in_notes_part(xml, pairs)
+            })
     }
 
     // ---- Layout and PDF conversion ----
@@ -22700,13 +23168,13 @@ impl Document {
 
     /// Get all headings in the document as (level, text) pairs.
     ///
-    /// Detects heading paragraphs by their style ID (e.g. "Heading1", "Heading2").
+    /// Detects heading paragraphs by their style ID (e.g. "Heading1", "Heading2")
+    /// among the body paragraphs, including those that body-level content
+    /// controls wrap. Table cells are not searched.
     pub fn headings(&self) -> Vec<(u32, String)> {
         let mut result = Vec::new();
-        for content in &self.document.body.content {
-            if let BodyContent::Paragraph(p) = content
-                && let Some(level) = Self::detect_heading_level_for_toc(p)
-            {
+        for p in block_paragraphs(&self.document.body.content) {
+            if let Some(level) = Self::detect_heading_level_for_toc(p) {
                 result.push((level, p.text()));
             }
         }
@@ -22724,75 +23192,39 @@ impl Document {
 
     /// Get information about all images in the document.
     ///
-    /// Returns metadata for each inline and anchored image found in body paragraphs.
+    /// Returns metadata for each inline and anchored image found in body
+    /// paragraphs, table cells and content controls, in document order.
     pub fn images(&self) -> Vec<ImageInfo> {
         let mut result = Vec::new();
-
-        for content in &self.document.body.content {
-            Self::collect_images_from_content(content, &mut result);
-        }
+        visit_all_drawings(&self.document.body.content, &mut |drawing| {
+            if let Some(inline) = &drawing.inline {
+                result.push(ImageInfo {
+                    embed_id: inline.embed_id.clone(),
+                    name: inline.name.clone(),
+                    description: inline.description.clone(),
+                    width_emu: inline.extent_cx.0,
+                    height_emu: inline.extent_cy.0,
+                    is_anchor: false,
+                });
+            }
+            if let Some(anchor) = &drawing.anchor {
+                result.push(ImageInfo {
+                    embed_id: anchor.embed_id.clone(),
+                    name: anchor.name.clone(),
+                    description: anchor.description.clone(),
+                    width_emu: anchor.extent_cx.0,
+                    height_emu: anchor.extent_cy.0,
+                    is_anchor: true,
+                });
+            }
+        });
         result
-    }
-
-    fn collect_images_from_content(content: &BodyContent, result: &mut Vec<ImageInfo>) {
-        match content {
-            BodyContent::Paragraph(p) => Self::collect_images_from_paragraph(p, result),
-            BodyContent::Table(tbl) => Self::collect_images_from_table(tbl, result),
-            BodyContent::ContentControl(_) => {}
-            BodyContent::RawXml(_) => {}
-        }
-    }
-
-    fn collect_images_from_paragraph(p: &CT_P, result: &mut Vec<ImageInfo>) {
-        for run in &p.runs {
-            for rc in &run.content {
-                let RunContent::Drawing(drawing) = rc else {
-                    continue;
-                };
-                if let Some(inline) = &drawing.inline {
-                    result.push(ImageInfo {
-                        embed_id: inline.embed_id.clone(),
-                        name: inline.name.clone(),
-                        description: inline.description.clone(),
-                        width_emu: inline.extent_cx.0,
-                        height_emu: inline.extent_cy.0,
-                        is_anchor: false,
-                    });
-                }
-                if let Some(anchor) = &drawing.anchor {
-                    result.push(ImageInfo {
-                        embed_id: anchor.embed_id.clone(),
-                        name: anchor.name.clone(),
-                        description: anchor.description.clone(),
-                        width_emu: anchor.extent_cx.0,
-                        height_emu: anchor.extent_cy.0,
-                        is_anchor: true,
-                    });
-                }
-            }
-        }
-    }
-
-    fn collect_images_from_table(tbl: &CT_Tbl, result: &mut Vec<ImageInfo>) {
-        use rdocx_oxml::table::CellContent;
-
-        for row in &tbl.rows {
-            for cell in &row.cells {
-                for cc in &cell.content {
-                    match cc {
-                        CellContent::Paragraph(p) => Self::collect_images_from_paragraph(p, result),
-                        CellContent::Table(nested) => {
-                            Self::collect_images_from_table(nested, result)
-                        }
-                        CellContent::ContentControl(_) => {}
-                    }
-                }
-            }
-        }
     }
 
     /// Get information about all hyperlinks in the document.
     ///
+    /// Reads the body paragraphs, including those that body-level content
+    /// controls wrap. Table cells are not searched.
     /// Resolves hyperlink relationship IDs to their target URLs where possible.
     pub fn links(&self) -> Vec<LinkInfo> {
         use oxml_opc::relationship::rel_types;
@@ -22810,35 +23242,33 @@ impl Document {
         }
 
         let mut result = Vec::new();
-        for content in &self.document.body.content {
-            if let BodyContent::Paragraph(p) = content {
-                for hl in &p.hyperlinks {
-                    // `HyperlinkSpan`'s bounds are public and can be set by
-                    // hand, so clamp rather than slice-panic on a bad range.
-                    let start = hl.run_start.min(p.runs.len());
-                    let end = hl.run_end.clamp(start, p.runs.len());
-                    let text: String = p.runs[start..end].iter().map(|r| r.text()).collect();
+        for p in block_paragraphs(&self.document.body.content) {
+            for hl in &p.hyperlinks {
+                // `HyperlinkSpan`'s bounds are public and can be set by
+                // hand, so clamp rather than slice-panic on a bad range.
+                let start = hl.run_start.min(p.runs.len());
+                let end = hl.run_end.clamp(start, p.runs.len());
+                let text: String = p.runs[start..end].iter().map(|r| r.text()).collect();
 
-                    let url = hl.rel_id.as_ref().and_then(|id| url_map.get(id)).cloned();
+                let url = hl.rel_id.as_ref().and_then(|id| url_map.get(id)).cloned();
 
-                    result.push(LinkInfo {
-                        text,
-                        url,
-                        anchor: hl.anchor.clone(),
-                        rel_id: hl.rel_id.clone(),
-                    });
-                }
-                for field in p.complex_field_hyperlinks() {
-                    let start = field.run_start.min(p.runs.len());
-                    let end = field.run_end.clamp(start, p.runs.len());
-                    let text: String = p.runs[start..end].iter().map(|run| run.text()).collect();
-                    result.push(LinkInfo {
-                        text,
-                        url: Some(field.target),
-                        anchor: None,
-                        rel_id: None,
-                    });
-                }
+                result.push(LinkInfo {
+                    text,
+                    url,
+                    anchor: hl.anchor.clone(),
+                    rel_id: hl.rel_id.clone(),
+                });
+            }
+            for field in p.complex_field_hyperlinks() {
+                let start = field.run_start.min(p.runs.len());
+                let end = field.run_end.clamp(start, p.runs.len());
+                let text: String = p.runs[start..end].iter().map(|run| run.text()).collect();
+                result.push(LinkInfo {
+                    text,
+                    url: Some(field.target),
+                    anchor: None,
+                    rel_id: None,
+                });
             }
         }
         result
@@ -22847,43 +23277,12 @@ impl Document {
     /// Count the number of words in the document.
     ///
     /// Counts whitespace-separated tokens across all paragraphs (including
-    /// paragraphs inside table cells).
+    /// paragraphs inside table cells and content controls).
     pub fn word_count(&self) -> usize {
         let mut count = 0;
-        for content in &self.document.body.content {
-            count += Self::word_count_in_content(content);
-        }
-        count
-    }
-
-    fn word_count_in_content(content: &BodyContent) -> usize {
-        match content {
-            BodyContent::Paragraph(p) => p.text().split_whitespace().count(),
-            BodyContent::Table(tbl) => Self::word_count_in_table(tbl),
-            BodyContent::ContentControl(_) => 0,
-            BodyContent::RawXml(_) => 0,
-        }
-    }
-
-    fn word_count_in_table(tbl: &CT_Tbl) -> usize {
-        use rdocx_oxml::table::CellContent;
-
-        let mut count = 0;
-        for row in &tbl.rows {
-            for cell in &row.cells {
-                for cc in &cell.content {
-                    match cc {
-                        CellContent::Paragraph(p) => {
-                            count += p.text().split_whitespace().count();
-                        }
-                        CellContent::Table(nested) => {
-                            count += Self::word_count_in_table(nested);
-                        }
-                        CellContent::ContentControl(_) => {}
-                    }
-                }
-            }
-        }
+        visit_body_paragraphs(&self.document.body.content, &mut |paragraph| {
+            count += paragraph.text().split_whitespace().count();
+        });
         count
     }
 
@@ -22971,86 +23370,6 @@ impl Document {
         }
 
         issues
-    }
-}
-
-pub(crate) fn write_atomic_file(
-    path: &Path,
-    bytes: &[u8],
-    invalid_name_message: &'static str,
-    exhausted_message: &'static str,
-) -> std::io::Result<()> {
-    let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = path.file_name().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, invalid_name_message)
-    })?;
-    for attempt in 0..128_u8 {
-        let mut temporary_name = std::ffi::OsString::from(".");
-        temporary_name.push(file_name);
-        temporary_name.push(format!(".rdocx-{}-{attempt}.tmp", std::process::id()));
-        let temporary = parent.join(temporary_name);
-        let mut file = match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-        {
-            Ok(file) => file,
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(error),
-        };
-        let result = std::io::Write::write_all(&mut file, bytes).and_then(|()| file.sync_all());
-        drop(file);
-        let result = result.and_then(|()| replace_file(&temporary, path));
-        if result.is_err() {
-            let _ = std::fs::remove_file(&temporary);
-        }
-        return result;
-    }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::AlreadyExists,
-        exhausted_message,
-    ))
-}
-
-#[cfg(not(target_os = "windows"))]
-pub(crate) fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
-    std::fs::rename(source, destination)
-}
-
-#[cfg(target_os = "windows")]
-pub(crate) fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-
-    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
-    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
-
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn MoveFileExW(
-            existing_file_name: *const u16,
-            new_file_name: *const u16,
-            flags: u32,
-        ) -> i32;
-    }
-
-    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
-    let destination: Vec<u16> = destination
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-    // SAFETY: both path buffers are NUL-terminated and remain alive for the call.
-    let replaced = unsafe {
-        MoveFileExW(
-            source.as_ptr(),
-            destination.as_ptr(),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    };
-    if replaced == 0 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
     }
 }
 
@@ -24938,6 +25257,51 @@ mod tests {
         assert_eq!(links.first().unwrap().1.text, "link 0");
         assert_eq!(links.last().unwrap().1.text, "link 63");
         assert_eq!(STORY_TEXT_PREFIX_BYTES.get(), 0);
+    }
+
+    /// Word writes a text box as DrawingML in `mc:Choice` and as VML in
+    /// `mc:Fallback`. Only the first Choice that holds a text box is an
+    /// owner, and its drawing lists no item in the paragraph that holds it.
+    /// A Choice before it, a picture here, and any Choice after it stay
+    /// opaque, as the Fallback does.
+    #[test]
+    fn only_the_first_choice_of_alternate_content_with_a_text_box_is_an_owner() {
+        let text_box = |text: &str| {
+            format!(r#"<w:txbxContent><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:txbxContent>"#)
+        };
+        let choice = |text: &str| {
+            format!(
+                r#"<mc:Choice Requires="wps"><w:drawing><wp:anchor><a:graphic><a:graphicData><wps:wsp><wps:txbx>{}</wps:txbx></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice>"#,
+                text_box(text)
+            )
+        };
+        let picture = r#"<mc:Choice Requires="wps"><w:drawing><wp:inline><a:graphic><a:graphicData/></a:graphic></wp:inline></w:drawing></mc:Choice>"#;
+        for branches in [
+            choice("choice"),
+            [picture, &choice("choice"), &choice("later choice")].concat(),
+        ] {
+            let xml = format!(
+                r#"<w:document xmlns:w="{WORD_NAMESPACE}" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:v="urn:schemas-microsoft-com:vml"><w:body><w:p><w:r><w:t>host</w:t></w:r><w:r><mc:AlternateContent>{branches}<mc:Fallback><w:pict><v:shape><v:textbox>{}</v:textbox></v:shape></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p></w:body></w:document>"#,
+                text_box("fallback"),
+            );
+
+            let owners = scan_story_owners(xml.as_bytes(), StoryKind::Body).unwrap();
+
+            assert_eq!(
+                owners.iter().map(|owner| owner.kind).collect::<Vec<_>>(),
+                [StoryKind::Body, StoryKind::TextBox]
+            );
+            assert_eq!(&xml[owners[1].full.clone()], text_box("choice"));
+            let body_items = scan_story_items(xml.as_bytes(), &owners[0]).unwrap();
+            assert_eq!(
+                body_items.iter().map(|item| item.kind).collect::<Vec<_>>(),
+                [StoryItemKind::Paragraph]
+            );
+            assert_eq!(
+                story_item_text(xml.as_bytes(), &body_items[0]).unwrap(),
+                Some("host".to_owned())
+            );
+        }
     }
 
     #[test]

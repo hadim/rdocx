@@ -806,6 +806,113 @@ impl CT_Sdt {
         }
     }
 
+    /// Insert direct `w:sdtContent` children before `index`, keeping the
+    /// revision and retained run source positions after it aligned.
+    pub(crate) fn insert_content(&mut self, index: usize, children: Vec<SdtContent>) -> bool {
+        if index > self.content.len() {
+            return false;
+        }
+        let count = children.len();
+        for (boundary, _) in &mut self.revisions {
+            if *boundary >= index {
+                *boundary += count;
+            }
+        }
+        for source in &mut self.inline_run_sources {
+            if source.content_index >= index {
+                source.content_index += count;
+            }
+        }
+        self.content.splice(index..index, children);
+        true
+    }
+
+    /// Remove the selected comment range markers and the reference runs
+    /// that are direct `w:sdtContent` children.
+    ///
+    /// A run loses only the selected references and is removed when nothing
+    /// else remains in it. Nested controls and block content are left to the
+    /// caller.
+    #[doc(hidden)]
+    pub fn remove_comment_anchors(&mut self, ids: &[i32]) {
+        // Markers added in this session carry the fixed `w` prefix whatever
+        // prefix the source document gave the Word namespace.
+        let mut marker_prefixes = vec!["w".to_owned()];
+        marker_prefixes.extend(self.content_word_prefixes.iter().cloned());
+        let removed = self
+            .content
+            .iter_mut()
+            .map(|child| match child {
+                SdtContent::Run(run) => {
+                    run.remove_comment_references(ids)
+                        && run.content.is_empty()
+                        && run.extra_xml.is_empty()
+                        && run.alt_drawings.is_empty()
+                }
+                SdtContent::RawXml(raw) => {
+                    crate::text::raw_comment_marker_id(raw, &marker_prefixes)
+                        .is_some_and(|id| ids.contains(&id))
+                }
+                _ => false,
+            })
+            .collect::<Vec<_>>();
+        if !removed.contains(&true) {
+            return;
+        }
+        let kept_before = |index: usize| removed[..index].iter().filter(|remove| !**remove).count();
+        self.revisions
+            .retain(|(boundary, _)| !removed.get(*boundary).copied().unwrap_or(false));
+        for (boundary, _) in &mut self.revisions {
+            *boundary = kept_before(*boundary);
+        }
+        self.inline_run_sources
+            .retain(|source| !removed.get(source.content_index).copied().unwrap_or(false));
+        for source in &mut self.inline_run_sources {
+            source.content_index = kept_before(source.content_index);
+        }
+        self.content = std::mem::take(&mut self.content)
+            .into_iter()
+            .zip(removed)
+            .filter_map(|(child, remove)| (!remove).then_some(child))
+            .collect();
+    }
+
+    /// Remap the facade-authored bookmark markers among the direct and nested
+    /// inline `w:sdtContent` children.
+    pub(crate) fn remap_authored_bookmark_ids(
+        &mut self,
+        remap: &std::collections::HashMap<i32, i32>,
+    ) {
+        for content in &mut self.content {
+            match content {
+                SdtContent::RawXml(raw) => crate::text::remap_authored_bookmark_marker(raw, remap),
+                SdtContent::ContentControl(control) => control.remap_authored_bookmark_ids(remap),
+                _ => {}
+            }
+        }
+    }
+
+    /// Remove one content child, keeping the revisions and the source bytes
+    /// of the later runs at their content index.
+    pub(crate) fn remove_content(&mut self, index: usize) {
+        if index >= self.content.len() {
+            return;
+        }
+        self.content.remove(index);
+        for (boundary, _) in &mut self.revisions {
+            if *boundary > index {
+                *boundary -= 1;
+            }
+        }
+        self.inline_run_sources
+            .retain(|source| source.content_index != index);
+        for source in &mut self.inline_run_sources {
+            if source.content_index > index {
+                source.content_index -= 1;
+            }
+        }
+    }
+
     pub(crate) fn word_prefixes(&self) -> &[String] {
         &self.word_prefixes
     }
@@ -1242,6 +1349,7 @@ fn parse_content(
                             reader,
                             &prefixes,
                             &owner_bindings,
+                            Some(&child),
                         )?,
                     ));
                 } else if is_word_element(child.name().as_ref(), b"tc", &prefixes) {
@@ -1298,7 +1406,7 @@ fn parse_content(
                 } else if is_word_element(child.name().as_ref(), b"tbl", &prefixes) {
                     content.push(SdtContent::Table(CT_Tbl::new()));
                 } else if is_word_element(child.name().as_ref(), b"tr", &prefixes) {
-                    content.push(SdtContent::Row(CT_Row::new()));
+                    content.push(SdtContent::Row(CT_Row::from_empty_root(&child, &prefixes)?));
                 } else if is_word_element(child.name().as_ref(), b"tc", &prefixes) {
                     content.push(SdtContent::Cell(CT_Tc {
                         properties: None,

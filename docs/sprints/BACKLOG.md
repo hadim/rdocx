@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth                                | 12 | 12 | 0 | 0  |
 | M23, From-scratch business documents           | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness        | 54 | 12 | 0 | 42 |
-| X, Cross-cutting (opportunistic)            | 146 | 141 | 0 | 1  |
-| **Total** | **471** | **403** | **0** | **64** |
+| X, Cross-cutting (opportunistic)            | 160 | 144 | 0 | 12 |
+| **Total** | **485** | **406** | **0** | **75** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -369,27 +369,27 @@ regenerated, never hand-edited.
 <!-- AUTOGEN:backlog-M19 START -->
 | F-ID | Title | Sprint | Size | Status |
 |------|-------|--------|------|--------|
-| F-184 | Advanced spreadsheet go or no-go             | S81  | S | pending |
-| F-185 | Workbook and worksheet model                 | S81  | L | pending |
-| F-186 | Shared strings, styles and number formats    | S82  | L | pending |
-| F-187 | Reader                                       | S84  | L | pending |
-| F-188 | Writer                                       | S84  | L | pending |
-| F-189 | Formula parser                               | S82  | L | pending |
-| F-190 | Calculation engine                           | S85  | L | pending |
-| F-191 | Charts in spreadsheets                       | S85  | M | pending |
-| F-192 | Conditional formatting and data validation   | S85  | M | pending |
-| F-193 | Pivot cache and table model                  | S86  | L | pending |
-| F-194 | Sheet rendering                              | S90  | L | pending |
-| F-195 | rxlsx distribution                           | S90  | L | pending |
-| F-204 | Spreadsheet corpus and compatibility matrix | S81  | M | pending |
-| F-205 | Excel tables and structured references      | S82  | L | pending |
-| F-206 | Advanced worksheet objects                  | S83  | L | pending |
-| F-207 | Pivot recalculation engine                  | S86  | L | pending |
-| F-208 | Slicers, pivot charts, and Data Model boundary | S86 | L | pending |
-| F-209 | Power Query package and M language          | S87  | L | pending |
-| F-210 | Power Query execution and connectors        | S88  | L | pending |
-| F-211 | Office Scripts artifacts and ExcelScript surface | S89 | L | pending |
-| F-212 | Sandboxed Office Scripts runtime            | S89  | L | pending |
+| F-184 | Advanced spreadsheet go or no-go             | S86  | S | pending |
+| F-185 | Workbook and worksheet model                 | S86  | L | pending |
+| F-186 | Shared strings, styles and number formats    | S87  | L | pending |
+| F-187 | Reader                                       | S89  | L | pending |
+| F-188 | Writer                                       | S89  | L | pending |
+| F-189 | Formula parser                               | S87  | L | pending |
+| F-190 | Calculation engine                           | S90  | L | pending |
+| F-191 | Charts in spreadsheets                       | S90  | M | pending |
+| F-192 | Conditional formatting and data validation   | S90  | M | pending |
+| F-193 | Pivot cache and table model                  | S91  | L | pending |
+| F-194 | Sheet rendering                              | S95  | L | pending |
+| F-195 | rxlsx distribution                           | S95  | L | pending |
+| F-204 | Spreadsheet corpus and compatibility matrix | S86  | M | pending |
+| F-205 | Excel tables and structured references      | S87  | L | pending |
+| F-206 | Advanced worksheet objects                  | S88  | L | pending |
+| F-207 | Pivot recalculation engine                  | S91  | L | pending |
+| F-208 | Slicers, pivot charts, and Data Model boundary | S91 | L | pending |
+| F-209 | Power Query package and M language          | S92  | L | pending |
+| F-210 | Power Query execution and connectors        | S93  | L | pending |
+| F-211 | Office Scripts artifacts and ExcelScript surface | S94 | L | pending |
+| F-212 | Sandboxed Office Scripts runtime            | S94  | L | pending |
 <!-- AUTOGEN:backlog-M19 END -->
 
 ### M20, Fidelity at scale
@@ -495,48 +495,48 @@ regenerated, never hand-edited.
 | F-268b | Floating table placement and wrap | S74 | M | done |
 | F-269 | Complete section page semantics | S74 | L | done |
 | F-270 | Complete settings and web settings authoring | S74 | L | done |
-| F-271 | Uniform rich header and footer editing | S76 | L | pending |
-| F-272 | Rich footnote authoring | S76 | L | pending |
-| F-273 | Rich endnote authoring | S76 | L | pending |
-| F-274 | Note separators, markers, and restart policy | S76 | L | pending |
-| F-275 | Cross-story bookmarks, ranges, and annotations | S76 | L | pending |
-| F-276 | Complete fragment conflict and dependency policy | S76 | L | pending |
-| F-277 | Glossary and building-block creation | S76 | L | pending |
-| F-278 | General simple and complex field builder | S76 | L | pending |
-| F-279 | Pagination field materialization across stories | S76 | L | pending |
-| F-280 | Captions, sequences, and complete cross-references | S76 | M | pending |
-| F-281 | Indexes and tables of figures and authorities | S76 | L | pending |
-| F-282 | Citations and bibliography authoring | S76 | L | pending |
-| F-283 | Complete numbering-aware navigation fields | S76 | L | pending |
-| F-284 | Stable container-wide template grammar | S76 | L | pending |
-| F-285 | Content control creation and lifecycle | S77 | L | pending |
-| F-286 | Rich, repeating, and typed content controls | S77 | L | pending |
-| F-287 | Custom XML stores and data binding authoring | S77 | L | pending |
-| F-288 | Legacy form field creation | S77 | M | pending |
-| F-289 | Modern Word form authoring | S77 | L | pending |
-| F-290 | Mail-merge package and data-source authoring | S77 | M | pending |
-| F-291 | Tracked insertion and deletion authoring | S78 | L | pending |
-| F-292 | Property revisions and move ranges | S78 | L | pending |
-| F-293 | Complete comments and modern comment metadata | S78 | L | pending |
-| F-294 | Permission ranges and protection integration | S78 | M | pending |
-| F-295 | Comparison output as complete revisions | S78 | L | pending |
-| F-296 | Collaboration identity and deterministic time policy | S78 | M | pending |
-| F-297 | Complete Word drawing anchor and effect authoring | S79 | L | pending |
-| F-298 | Shapes, text boxes, groups, and connectors in Word | S79 | L | pending |
-| F-299 | AlternateContent, VML, and SVG compatibility authoring | S79 | L | pending |
-| F-300 | Charts at arbitrary Word insertion points | S79 | M | pending |
-| F-301 | SmartArt and diagram authoring in Word | S79 | L | pending |
-| F-302 | Embedded objects, icons, and alternative-format parts | S79 | M | pending |
-| F-303 | Drawing and embedded-content layout completion | S79 | L | pending |
-| F-304 | Typed package extensibility facade | S80 | L | pending |
-| F-305 | Attached templates, web extensions, and task panes | S80 | L | pending |
-| F-306 | Executable compatibility attachment and signature rules | S80 | M | pending |
-| F-307 | Complete accessibility authoring and audit | S80 | L | pending |
-| F-308 | Fully modeled and losslessness diagnostics | S80 | L | pending |
-| F-309 | Strict, transitional, and repair-free conformance | S80 | L | pending |
-| F-310 | Determinism, resource limits, bindings, and stability gate | S80 | L | pending |
-| F-311 | Positioned paragraph frame placement | S80 | M | pending |
-| F-312 | Run visual effect render projection | S80 | L | pending |
+| F-271 | Uniform rich header and footer editing | S80 | L | pending |
+| F-272 | Rich footnote authoring | S80 | L | pending |
+| F-273 | Rich endnote authoring | S80 | L | pending |
+| F-274 | Note separators, markers, and restart policy | S81 | L | pending |
+| F-275 | Cross-story bookmarks, ranges, and annotations | S81 | L | pending |
+| F-276 | Complete fragment conflict and dependency policy | S81 | L | pending |
+| F-277 | Glossary and building-block creation | S81 | L | pending |
+| F-278 | General simple and complex field builder | S81 | L | pending |
+| F-279 | Pagination field materialization across stories | S81 | L | pending |
+| F-280 | Captions, sequences, and complete cross-references | S81 | M | pending |
+| F-281 | Indexes and tables of figures and authorities | S81 | L | pending |
+| F-282 | Citations and bibliography authoring | S81 | L | pending |
+| F-283 | Complete numbering-aware navigation fields | S81 | L | pending |
+| F-284 | Stable container-wide template grammar | S81 | L | pending |
+| F-285 | Content control creation and lifecycle | S82 | L | pending |
+| F-286 | Rich, repeating, and typed content controls | S82 | L | pending |
+| F-287 | Custom XML stores and data binding authoring | S82 | L | pending |
+| F-288 | Legacy form field creation | S82 | M | pending |
+| F-289 | Modern Word form authoring | S82 | L | pending |
+| F-290 | Mail-merge package and data-source authoring | S82 | M | pending |
+| F-291 | Tracked insertion and deletion authoring | S83 | L | pending |
+| F-292 | Property revisions and move ranges | S83 | L | pending |
+| F-293 | Complete comments and modern comment metadata | S83 | L | pending |
+| F-294 | Permission ranges and protection integration | S83 | M | pending |
+| F-295 | Comparison output as complete revisions | S83 | L | pending |
+| F-296 | Collaboration identity and deterministic time policy | S83 | M | pending |
+| F-297 | Complete Word drawing anchor and effect authoring | S84 | L | pending |
+| F-298 | Shapes, text boxes, groups, and connectors in Word | S84 | L | pending |
+| F-299 | AlternateContent, VML, and SVG compatibility authoring | S84 | L | pending |
+| F-300 | Charts at arbitrary Word insertion points | S84 | M | pending |
+| F-301 | SmartArt and diagram authoring in Word | S84 | L | pending |
+| F-302 | Embedded objects, icons, and alternative-format parts | S84 | M | pending |
+| F-303 | Drawing and embedded-content layout completion | S84 | L | pending |
+| F-304 | Typed package extensibility facade | S85 | L | pending |
+| F-305 | Attached templates, web extensions, and task panes | S85 | L | pending |
+| F-306 | Executable compatibility attachment and signature rules | S85 | M | pending |
+| F-307 | Complete accessibility authoring and audit | S85 | L | pending |
+| F-308 | Fully modeled and losslessness diagnostics | S85 | L | pending |
+| F-309 | Strict, transitional, and repair-free conformance | S85 | L | pending |
+| F-310 | Determinism, resource limits, bindings, and stability gate | S85 | L | pending |
+| F-311 | Positioned paragraph frame placement | S85 | M | pending |
+| F-312 | Run visual effect render projection | S85 | L | pending |
 <!-- AUTOGEN:backlog-M24 END -->
 
 ### X, Cross-cutting
@@ -686,8 +686,22 @@ regenerated, never hand-edited.
 | F-X130 | Show package depth, footprint, and speed | S74 | L | done |
 | F-X131 | Retain only the namespace declarations a root attribute uses | S74 | S | done |
 | F-X132 | Match a retained namespace owner by structure, not by identity | S74 | S | done |
-| F-X133 | Stop rebinding a canonical prefix on every retained element | S76 | S | pending |
+| F-X133 | Stop rebinding a canonical prefix on every retained element | S80 | S | pending |
 | F-X134 | Keep Python story hyperlink snapshots linear | S75 | S | done |
 | F-X135 | Integrate PRs 146 through 151 and resolve unassigned reports | S75 | L | done |
 | F-X136 | Fix table row breaks and footer-only pages | S75 | L | done |
+| F-X137 | Package and CLI safety contribution wave | S76 | L | done |
+| F-X138 | Word story and content contribution wave | S76 | L | done |
+| F-X139 | Word identity and comparison contribution wave | S76 | L | done |
+| F-X140 | Rendering and layout contribution wave | S77 | L | pending |
+| F-X141 | Word Python contribution wave | S77 | L | pending |
+| F-X142 | Presentation Python contribution wave | S77 | L | pending |
+| F-X143 | Revision listing and CLI story contribution wave | S77 | M | pending |
+| F-X144 | Identity and producer matrices across operations | S78 | L | pending |
+| F-X145 | Comparison options and redline completion | S78 | L | pending |
+| F-X146 | Word line height and inline picture spacing | S78 | L | pending |
+| F-X147 | Complete rdocx Python production checklist | S79 | L | pending |
+| F-X148 | Complete rpptx Python production checklist | S79 | L | pending |
+| F-X149 | Production fixtures and workflow acceptance gate | S79 | L | pending |
+| F-X150 | Reconcile issue closure evidence | S79 | M | pending |
 <!-- AUTOGEN:backlog-MX END -->

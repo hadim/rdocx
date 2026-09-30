@@ -8,11 +8,12 @@ use rdocx_oxml::comments_extended::{CT_CommentEx, CT_CommentsEx};
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::BodyContent;
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
-use rdocx_oxml::text::{CT_P, CT_R, CommentRangeMarker, RunContent};
+use rdocx_oxml::text::{CT_P, RangeAnchor};
 
 #[cfg(test)]
-use rdocx_oxml::text::HyperlinkSpan;
+use rdocx_oxml::text::{CT_R, CommentRangeMarker, HyperlinkSpan, RunContent};
 
+use crate::document::visit_body_paragraphs_mut;
 use crate::{ContentLocation, Document, Error, Result};
 
 pub(crate) const COMMENTS_EXTENDED_REL_TYPE: &str =
@@ -27,9 +28,12 @@ const DEFAULT_COMMENTS_EXTENDED_PART: &str = "/word/commentsExtended.xml";
 /// A stable insertion point between runs in a body paragraph.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RunPosition {
-    /// Index in the document body's paragraph and table sequence.
+    /// Direct body child index, where a table or a block content control
+    /// counts as one child. `Document::find_content_index` returns it.
     pub body_index: usize,
-    /// Run insertion index in the selected paragraph.
+    /// Run boundary in the selected paragraph, counted over the runs that
+    /// `Paragraph::runs` lists, including the runs inside inline content
+    /// controls and tracked insertions.
     pub run_index: usize,
 }
 
@@ -60,6 +64,7 @@ pub struct BookmarkRef {
     id: Option<i32>,
     name: Option<String>,
     range: Option<RunRange>,
+    direct_range: Option<RunRange>,
     text: String,
     issue: Option<String>,
 }
@@ -74,8 +79,25 @@ impl BookmarkRef {
     }
 
     /// Return the accepted-view half-open range reported by `Document::bookmarks`.
+    ///
+    /// Its body index is the paragraph ordinal counted recursively through
+    /// tables and block content controls, which field numbering reads.
+    /// [`Self::direct_range`] reports the direct body child index instead.
     pub fn range(&self) -> Option<RunRange> {
         self.range
+    }
+
+    /// Return the same range with the direct body child index that
+    /// `RunPosition`, `Document::add_bookmark` and
+    /// `Document::find_content_index` use.
+    ///
+    /// It is `None` when either marker sits in a table cell or a block content
+    /// control, which have no direct body index. Run indexes are the same
+    /// accepted-view boundaries as [`Self::range`], which are the
+    /// `RunPosition` run indexes that `Document::add_bookmark` and
+    /// `Document::add_comment` take.
+    pub fn direct_range(&self) -> Option<RunRange> {
+        self.direct_range
     }
 
     pub fn text(&self) -> &str {
@@ -256,10 +278,13 @@ impl Document {
     ///
     /// Reported body indexes count typed paragraphs recursively through tables and
     /// block content controls. Reported run indexes use accepted-view run boundaries.
+    /// `BookmarkRef::direct_range` also reports the direct body child index when
+    /// both markers sit in direct body paragraphs.
     pub fn bookmarks(&self) -> Vec<BookmarkRef> {
         #[derive(Clone)]
         struct Marker {
             position: RunPosition,
+            direct_position: Option<RunPosition>,
             start: bool,
             id: Option<i32>,
             name: Option<String>,
@@ -267,14 +292,28 @@ impl Document {
 
         let mut markers = Vec::new();
         let mut paragraphs = Vec::new();
-        collect_main_story_paragraphs(&self.document.body.content, &mut paragraphs);
-        for (body_index, paragraph) in paragraphs.into_iter().enumerate() {
+        for (direct_index, item) in self.document.body.content.iter().enumerate() {
+            let mut item_paragraphs = Vec::new();
+            collect_main_story_paragraphs(std::slice::from_ref(item), &mut item_paragraphs);
+            let direct_index = matches!(item, BodyContent::Paragraph(_)).then_some(direct_index);
+            paragraphs.extend(
+                item_paragraphs
+                    .into_iter()
+                    .map(|paragraph| (paragraph, direct_index)),
+            );
+        }
+        for (body_index, (paragraph, direct_index)) in paragraphs.into_iter().enumerate() {
             for marker in &paragraph.bookmark_markers {
+                let run_index = marker.projected_run_index();
                 markers.push(Marker {
                     position: RunPosition {
                         body_index,
-                        run_index: marker.projected_run_index(),
+                        run_index,
                     },
+                    direct_position: direct_index.map(|body_index| RunPosition {
+                        body_index,
+                        run_index,
+                    }),
                     start: marker.is_start(),
                     id: marker.id(),
                     name: marker.name().map(str::to_owned),
@@ -294,6 +333,7 @@ impl Document {
                         id: None,
                         name: marker.name.clone(),
                         range: None,
+                        direct_range: None,
                         text: String::new(),
                         issue: Some("bookmark marker has a malformed or missing id".to_owned()),
                     },
@@ -343,6 +383,12 @@ impl Document {
                     (Some(candidate), None)
                 }
             };
+            let direct_range = range.and_then(|_| {
+                Some(RunRange {
+                    start: markers[starts[0]].direct_position?,
+                    end: markers[ends[0]].direct_position?,
+                })
+            });
             let text = range
                 .map(|_| {
                     bookmark_range_text(
@@ -360,6 +406,7 @@ impl Document {
                     id: Some(id),
                     name,
                     range,
+                    direct_range,
                     text,
                     issue,
                 },
@@ -385,6 +432,7 @@ impl Document {
                     bookmark.name.as_deref().unwrap_or("")
                 ));
                 bookmark.range = None;
+                bookmark.direct_range = None;
                 bookmark.text.clear();
             }
         }
@@ -393,6 +441,13 @@ impl Document {
     }
 
     /// Insert a bookmark over a half-open range of body paragraph runs.
+    ///
+    /// Run indexes count the runs that `Paragraph::runs` lists. The markers
+    /// go inside an inline content control when the range starts or ends
+    /// between two of its runs, and around the control when the range covers
+    /// it. A range that cannot be anchored exactly, such as one that crosses
+    /// the edge of a control or ends between two runs of a tracked insertion,
+    /// is an error and leaves the document unchanged.
     pub fn add_bookmark(&mut self, name: &str, range: RunRange) -> Result<i32> {
         self.insert_bookmark(name, range)
     }
@@ -409,39 +464,12 @@ impl Document {
         }
         let mut identifiers = self.identifiers.clone();
         let id = identifiers.reserve_bookmark_id()?;
-
-        if range.start.body_index == range.end.body_index {
-            let mut paragraph = body_paragraph(&self.document.body.content, range.start.body_index)
-                .expect("bookmark range was validated")
-                .clone();
-            if !paragraph.insert_bookmark_start(range.start.run_index, id, name)
-                || !paragraph.insert_bookmark_end(range.end.run_index, id)
-            {
-                return Err(Error::Other(
-                    "bookmark insertion failed validation".to_owned(),
-                ));
-            }
-            *body_paragraph_mut(&mut self.document.body.content, range.start.body_index)
-                .expect("bookmark range was validated") = paragraph;
-        } else {
-            let mut start = body_paragraph(&self.document.body.content, range.start.body_index)
-                .expect("bookmark range was validated")
-                .clone();
-            let mut end = body_paragraph(&self.document.body.content, range.end.body_index)
-                .expect("bookmark range was validated")
-                .clone();
-            if !start.insert_bookmark_start(range.start.run_index, id, name)
-                || !end.insert_bookmark_end(range.end.run_index, id)
-            {
-                return Err(Error::Other(
-                    "bookmark insertion failed validation".to_owned(),
-                ));
-            }
-            *body_paragraph_mut(&mut self.document.body.content, range.start.body_index)
-                .expect("bookmark range was validated") = start;
-            *body_paragraph_mut(&mut self.document.body.content, range.end.body_index)
-                .expect("bookmark range was validated") = end;
-        }
+        anchor_body_range(
+            &mut self.document.body.content,
+            range,
+            RangeAnchor::Bookmark { id, name },
+            "bookmark",
+        )?;
         self.identifiers = identifiers;
         self.invalidate_layout();
         Ok(id)
@@ -481,6 +509,11 @@ impl Document {
     }
 
     /// Add a comment over a half-open range of body paragraph runs.
+    ///
+    /// Run indexes count the runs that `Paragraph::runs` lists, and the
+    /// range markers are placed as [`Self::add_bookmark`] places its markers.
+    /// The reference run follows the end marker. A range that cannot be
+    /// anchored exactly is an error and leaves the document unchanged.
     pub fn add_comment(
         &mut self,
         range: RunRange,
@@ -511,6 +544,11 @@ impl Document {
     }
 
     /// Add a dated comment over a checked body or table-cell run range.
+    ///
+    /// A body location can also name a paragraph inside a block content
+    /// control with the two-segment path that
+    /// [`Document::paragraph_story_location`] returns. Run indexes count the
+    /// runs that `Paragraph::runs` lists, as in [`Document::add_comment`].
     pub fn add_story_comment_with_date(
         &mut self,
         range: StoryRunRange,
@@ -526,7 +564,8 @@ impl Document {
         Ok(id)
     }
 
-    /// Add a comment over a checked body or table-cell run range.
+    /// Add a comment over a checked body or table-cell run range, as
+    /// [`Self::add_story_comment_with_date`] does without a date.
     pub fn add_story_comment(
         &mut self,
         range: StoryRunRange,
@@ -553,17 +592,16 @@ impl Document {
                 "comment story range start must not follow its end".to_owned(),
             ));
         }
-        let start_original = self.story_paragraph_mut(&range.start.location)?.clone();
-        let end_original = self.story_paragraph_mut(&range.end.location)?.clone();
-        for (label, position, paragraph) in [
-            ("start", &range.start, &start_original),
-            ("end", &range.end, &end_original),
-        ] {
-            if position.run_index > paragraph.runs.len() {
+        let mut start = self.story_paragraph_mut(&range.start.location)?.clone();
+        let mut end = self.story_paragraph_mut(&range.end.location)?.clone();
+        for (label, position, paragraph) in
+            [("start", &range.start, &start), ("end", &range.end, &end)]
+        {
+            let run_count = paragraph.accepted_run_paths().len();
+            if position.run_index > run_count {
                 return Err(Error::Other(format!(
-                    "comment range {label} run index {} exceeds paragraph run count {}",
+                    "comment range {label} run index {} exceeds paragraph run count {run_count}",
                     position.run_index,
-                    paragraph.runs.len()
                 )));
             }
         }
@@ -577,70 +615,36 @@ impl Document {
         let mut identifiers = self.identifiers.clone();
         let id = identifiers.reserve_comment_id()?;
         if range.start.location == range.end.location {
-            let mut paragraph = start_original;
-            insert_comment_reference(&mut paragraph, range.end.run_index, id);
-            paragraph.comment_ranges.push(CommentRangeMarker::Start {
-                id,
-                run_index: range.start.run_index,
-                raw_before: raw_count_at(&paragraph, range.start.run_index),
-                has_child_content: false,
-            });
-            paragraph.comment_ranges.push(CommentRangeMarker::End {
-                id,
-                run_index: range.end.run_index,
-                raw_before: raw_count_at(&paragraph, range.end.run_index),
-                has_child_content: false,
-            });
-            *self.story_paragraph_mut(&range.start.location)? = paragraph;
+            anchor_paragraph_range(
+                &mut start,
+                Some(range.start.run_index),
+                Some(range.end.run_index),
+                RangeAnchor::Comment(id),
+                "comment",
+            )?;
+            *self.story_paragraph_mut(&range.start.location)? = start;
         } else {
-            let mut start = start_original;
-            let mut end = end_original;
-            insert_comment_reference(&mut end, range.end.run_index, id);
-            start.comment_ranges.push(CommentRangeMarker::Start {
-                id,
-                run_index: range.start.run_index,
-                raw_before: raw_count_at(&start, range.start.run_index),
-                has_child_content: false,
-            });
-            end.comment_ranges.push(CommentRangeMarker::End {
-                id,
-                run_index: range.end.run_index,
-                raw_before: raw_count_at(&end, range.end.run_index),
-                has_child_content: false,
-            });
+            anchor_paragraph_range(
+                &mut start,
+                Some(range.start.run_index),
+                None,
+                RangeAnchor::Comment(id),
+                "comment",
+            )?;
+            anchor_paragraph_range(
+                &mut end,
+                None,
+                Some(range.end.run_index),
+                RangeAnchor::Comment(id),
+                "comment",
+            )?;
             *self.story_paragraph_mut(&range.start.location)? = start;
             *self.story_paragraph_mut(&range.end.location)? = end;
         }
 
         self.ensure_comment_models()?;
         self.ensure_comment_relationships()?;
-        let para_id = allocate_para_id(self.comments.as_ref(), self.comments_extended.as_ref())?;
-        let mut comment_paragraph = CT_P::new();
-        comment_paragraph.add_run(text);
-        self.comments
-            .as_mut()
-            .expect("comment model was initialized")
-            .comments
-            .push(CT_Comment {
-                id,
-                author: Some(author.to_owned()),
-                date: date.map(str::to_owned),
-                initials: initials.map(str::to_owned),
-                paragraphs: vec![comment_paragraph],
-                paragraph_ids: vec![Some(para_id.clone())],
-                extra_attributes: Vec::new(),
-                extra_xml: Vec::new(),
-            });
-        self.comments_extended
-            .as_mut()
-            .expect("comments-extended model was initialized")
-            .comments
-            .push(CT_CommentEx {
-                para_id,
-                para_id_parent: None,
-                done: None,
-                extra_attributes: Vec::new(),
-            });
+        self.push_comment_definition(id, author, initials, text, date)?;
         self.identifiers = identifiers;
         self.comments_dirty = true;
         self.invalidate_layout();
@@ -661,8 +665,139 @@ impl Document {
         self.ensure_comment_relationships()?;
         let mut identifiers = self.identifiers.clone();
         let id = identifiers.reserve_comment_id()?;
-        let para_id = allocate_para_id(self.comments.as_ref(), self.comments_extended.as_ref())?;
+        self.push_comment_definition(id, author, initials, text, date)?;
+        anchor_body_range(
+            &mut self.document.body.content,
+            range,
+            RangeAnchor::Comment(id),
+            "comment",
+        )?;
+        self.identifiers = identifiers;
+        self.comments_dirty = true;
+        self.invalidate_layout();
+        Ok(id)
+    }
 
+    /// Add a comment on the `occurrence`-th match of `anchor`, counted from
+    /// zero, in the main story.
+    ///
+    /// Matches are case-sensitive and non-overlapping, in document order
+    /// through body paragraphs, tables and block content controls, and one
+    /// match never spans two paragraphs. They are found in the literal run
+    /// text that [`Document::split_run`] offsets count, so tabs and breaks
+    /// have no width. The runs at both ends of the match are split and the
+    /// comment is anchored on the runs between the splits as
+    /// [`Self::add_comment`] anchors a run range. `date`, when present, must
+    /// be an RFC 3339 timestamp. A missing occurrence or a match that cannot
+    /// be anchored exactly is an error and leaves the document unchanged. A
+    /// match is not exact when its range would also show text that the
+    /// literal text leaves out, such as the result of a field between two of
+    /// its runs.
+    pub fn add_comment_on_text(
+        &mut self,
+        anchor: &str,
+        occurrence: usize,
+        author: &str,
+        initials: Option<&str>,
+        text: &str,
+        date: Option<&str>,
+    ) -> Result<i32> {
+        let mut candidate = self.clone_for_staging();
+        let id = candidate
+            .add_comment_on_text_staged(anchor, occurrence, author, initials, text, date)?;
+        candidate.flush_dirty_related_story_models()?;
+        self.commit_staged_mutation(candidate);
+        Ok(id)
+    }
+
+    fn add_comment_on_text_staged(
+        &mut self,
+        anchor: &str,
+        occurrence: usize,
+        author: &str,
+        initials: Option<&str>,
+        text: &str,
+        date: Option<&str>,
+    ) -> Result<i32> {
+        validate_comment_date(date)?;
+        if anchor.is_empty() {
+            return Err(Error::Other(
+                "comment anchor text must not be empty".to_owned(),
+            ));
+        }
+        self.ensure_comment_models()?;
+        self.ensure_comment_relationships()?;
+        let mut identifiers = self.identifiers.clone();
+        let id = identifiers.reserve_comment_id()?;
+        let mut remaining = occurrence;
+        let mut anchored = None;
+        visit_body_paragraphs_mut(&mut self.document.body.content, &mut |paragraph| {
+            if anchored.is_some() {
+                return;
+            }
+            let literal = paragraph.accepted_literal_text();
+            let matches = literal
+                .match_indices(anchor)
+                .map(|(byte, _)| byte)
+                .collect::<Vec<_>>();
+            let Some(byte) = matches.get(remaining) else {
+                remaining -= matches.len();
+                return;
+            };
+            let start = literal[..*byte].chars().count();
+            let end = start + anchor.chars().count();
+            anchored = Some(
+                paragraph
+                    .split_accepted_literal_span(start, end)
+                    .map_err(|error| {
+                        Error::Other(format!("comment anchor text cannot be split: {error}"))
+                    })
+                    .and_then(|(start, end)| {
+                        anchor_paragraph_range(
+                            paragraph,
+                            Some(start),
+                            Some(end),
+                            RangeAnchor::Comment(id),
+                            "comment",
+                        )
+                    })
+                    .and_then(|()| {
+                        // Preserved children such as `w:fldSimple` are not in
+                        // the literal text, but the range shows their text.
+                        let shown = paragraph.comment_range_text(id).unwrap_or_default();
+                        if shown == anchor {
+                            Ok(())
+                        } else {
+                            Err(Error::Other(format!(
+                                "comment anchor text {anchor:?} occurrence {occurrence} cannot be anchored exactly: its range would show {shown:?}"
+                            )))
+                        }
+                    }),
+            );
+        });
+        anchored.ok_or_else(|| {
+            Error::Other(format!(
+                "comment anchor text {anchor:?} has no occurrence {occurrence}"
+            ))
+        })??;
+        self.push_comment_definition(id, author, initials, text, date)?;
+        self.identifiers = identifiers;
+        self.comments_dirty = true;
+        self.invalidate_layout();
+        Ok(id)
+    }
+
+    /// Append comment `id`, holding one text paragraph, and its thread entry
+    /// to the comment models, which must already exist.
+    fn push_comment_definition(
+        &mut self,
+        id: i32,
+        author: &str,
+        initials: Option<&str>,
+        text: &str,
+        date: Option<&str>,
+    ) -> Result<()> {
+        let para_id = allocate_para_id(self.comments.as_ref(), self.comments_extended.as_ref())?;
         let mut paragraph = CT_P::new();
         paragraph.add_run(text);
         self.comments
@@ -689,30 +824,7 @@ impl Document {
                 done: None,
                 extra_attributes: Vec::new(),
             });
-
-        let end = body_paragraph_mut(&mut self.document.body.content, range.end.body_index)
-            .expect("range was validated");
-        insert_comment_reference(end, range.end.run_index, id);
-        let start = body_paragraph_mut(&mut self.document.body.content, range.start.body_index)
-            .expect("range was validated");
-        start.comment_ranges.push(CommentRangeMarker::Start {
-            id,
-            run_index: range.start.run_index,
-            raw_before: raw_count_at(start, range.start.run_index),
-            has_child_content: false,
-        });
-        let end = body_paragraph_mut(&mut self.document.body.content, range.end.body_index)
-            .expect("range was validated");
-        end.comment_ranges.push(CommentRangeMarker::End {
-            id,
-            run_index: range.end.run_index,
-            raw_before: raw_count_at(end, range.end.run_index),
-            has_child_content: false,
-        });
-        self.identifiers = identifiers;
-        self.comments_dirty = true;
-        self.invalidate_layout();
-        Ok(id)
+        Ok(())
     }
 
     /// Add a reply linked to the selected comment paragraph.
@@ -1000,11 +1112,11 @@ impl Document {
                         position.body_index
                     ))
                 })?;
-            if position.run_index > paragraph.runs.len() {
+            let run_count = paragraph.accepted_run_paths().len();
+            if position.run_index > run_count {
                 return Err(Error::Other(format!(
-                    "comment range {label} run index {} exceeds paragraph run count {}",
+                    "comment range {label} run index {} exceeds paragraph run count {run_count}",
                     position.run_index,
-                    paragraph.runs.len()
                 )));
             }
         }
@@ -1196,11 +1308,11 @@ fn validate_bookmark_range(content: &[BodyContent], range: RunRange) -> Result<(
                 position.body_index
             ))
         })?;
-        if position.run_index > paragraph.runs.len() {
+        let run_count = paragraph.accepted_run_paths().len();
+        if position.run_index > run_count {
             return Err(Error::Other(format!(
-                "bookmark range {label} run index {} exceeds paragraph run count {}",
+                "bookmark range {label} run index {} exceeds paragraph run count {run_count}",
                 position.run_index,
-                paragraph.runs.len()
             )));
         }
     }
@@ -1259,6 +1371,54 @@ fn body_paragraph(content: &[BodyContent], index: usize) -> Option<&CT_P> {
         BodyContent::Paragraph(paragraph) => Some(paragraph),
         BodyContent::Table(_) | BodyContent::ContentControl(_) | BodyContent::RawXml(_) => None,
     }
+}
+
+/// Write range markers over a validated body range. The paragraphs change
+/// only when every marker can be placed exactly.
+fn anchor_body_range(
+    content: &mut [BodyContent],
+    range: RunRange,
+    anchor: RangeAnchor<'_>,
+    label: &str,
+) -> Result<()> {
+    let (start, end) = (range.start, range.end);
+    let paragraph = |content: &[BodyContent], index| {
+        body_paragraph(content, index)
+            .cloned()
+            .expect("range was validated")
+    };
+    let mut first = paragraph(content, start.body_index);
+    if start.body_index == end.body_index {
+        anchor_paragraph_range(
+            &mut first,
+            Some(start.run_index),
+            Some(end.run_index),
+            anchor,
+            label,
+        )?;
+    } else {
+        let mut last = paragraph(content, end.body_index);
+        anchor_paragraph_range(&mut first, Some(start.run_index), None, anchor, label)?;
+        anchor_paragraph_range(&mut last, None, Some(end.run_index), anchor, label)?;
+        *body_paragraph_mut(content, end.body_index).expect("range was validated") = last;
+    }
+    *body_paragraph_mut(content, start.body_index).expect("range was validated") = first;
+    Ok(())
+}
+
+/// Write range markers at accepted-view run boundaries, the run index space
+/// that `Paragraph::runs` lists. A missing side continues in another
+/// paragraph.
+fn anchor_paragraph_range(
+    paragraph: &mut CT_P,
+    start: Option<usize>,
+    end: Option<usize>,
+    anchor: RangeAnchor<'_>,
+    label: &str,
+) -> Result<()> {
+    paragraph
+        .anchor_accepted_range(start, end, anchor)
+        .map_err(|error| Error::Other(format!("{label} range cannot be anchored: {error}")))
 }
 
 fn collect_main_story_paragraphs<'a>(content: &'a [BodyContent], output: &mut Vec<&'a CT_P>) {
@@ -1461,32 +1621,6 @@ fn take_paragraph<'a>(paragraph: &'a CT_P, remaining: &mut usize) -> Option<&'a 
     }
 }
 
-fn raw_count_at(paragraph: &CT_P, run_index: usize) -> usize {
-    paragraph
-        .extra_xml
-        .iter()
-        .filter(|(position, _)| *position == run_index)
-        .count()
-}
-
-fn comment_reference_run(id: i32) -> CT_R {
-    CT_R {
-        properties: None,
-        content: vec![RunContent::CommentReference { id, raw_before: 0 }],
-        extra_xml: Vec::new(),
-        extra_xml_positions: Vec::new(),
-        alt_drawings: Vec::new(),
-    }
-}
-
-fn insert_comment_reference(paragraph: &mut CT_P, run_index: usize, id: i32) {
-    let inserted = paragraph.insert_unwrapped_run(run_index, comment_reference_run(id));
-    debug_assert!(
-        inserted,
-        "validated comment insertion index must remain valid"
-    );
-}
-
 fn thread_root_para_id(extended: &CT_CommentsEx, para_id: &str) -> String {
     let mut current = para_id.to_owned();
     let mut seen = HashSet::new();
@@ -1632,15 +1766,16 @@ fn remove_anchors_from_cell(cell: &mut CT_Tc, ids: &HashSet<i32>) {
 }
 
 fn remove_anchors_from_control(control: &mut CT_Sdt, ids: &HashSet<i32>) {
+    // Markers written inside `w:sdtContent` are preserved children there.
+    control.remove_comment_anchors(&ids.iter().copied().collect::<Vec<_>>());
     for content in &mut control.content {
         match content {
             SdtContent::Paragraph(paragraph) => remove_anchors_from_paragraph(paragraph, ids),
             SdtContent::Table(table) => remove_anchors_from_table(table, ids),
             SdtContent::Row(row) => remove_anchors_from_row(row, ids),
             SdtContent::Cell(cell) => remove_anchors_from_cell(cell, ids),
-            SdtContent::Run(run) => remove_comment_references_from_run(run, ids),
             SdtContent::ContentControl(control) => remove_anchors_from_control(control, ids),
-            SdtContent::RawXml(_) => {}
+            SdtContent::Run(_) | SdtContent::RawXml(_) => {}
         }
     }
 }
@@ -1651,11 +1786,6 @@ fn remove_anchors_from_paragraph(paragraph: &mut CT_P, ids: &HashSet<i32>) {
     }
     let ids = ids.iter().copied().collect::<Vec<_>>();
     paragraph.remove_comment_anchors(&ids);
-}
-
-fn remove_comment_references_from_run(run: &mut CT_R, ids: &HashSet<i32>) {
-    let ids = ids.iter().copied().collect::<Vec<_>>();
-    run.remove_comment_references(&ids);
 }
 
 fn remap_raw_positions(extra_xml: &mut [(usize, Vec<u8>)], removed: &[bool]) {
@@ -2103,9 +2233,16 @@ mod tests {
             extra_xml_positions: Vec::new(),
             alt_drawings: Vec::new(),
         });
-        let mut reference = comment_reference_run(7);
-        reference.properties = Some(Default::default());
-        paragraph.runs.push(reference);
+        paragraph.runs.push(CT_R {
+            properties: Some(Default::default()),
+            content: vec![RunContent::CommentReference {
+                id: 7,
+                raw_before: 0,
+            }],
+            extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
+            alt_drawings: Vec::new(),
+        });
 
         remove_anchors_from_paragraph(&mut paragraph, &HashSet::from([7]));
 

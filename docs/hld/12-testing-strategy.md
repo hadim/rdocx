@@ -793,12 +793,12 @@ order. Focused tests cover dotted and lexical lookup, loop shadowing and scope
 restoration, every JSON truthiness case, malformed and crossed controls, and
 atomic rejection. The round-trip test clones section-ending paragraphs and
 table rows, then proves their section properties and unmodelled XML remain in
-schema order after saving and reopening. Headers, footers, text boxes, and
-chart labels retain the scalar-only coverage shared with literal placeholder
-replacement. The repeating-table regression gate expands three adjacent
-template rows over ten records and compares all thirty rows in order. It also
-checks banding, grid spans, vertical merge restarts and continuations, and
-atomic rejection of an invalid repeated numbering reference. The continuous
+schema order after saving and reopening. Headers, footers, footnotes, endnotes,
+text boxes, and chart labels retain the scalar-only coverage shared with literal
+placeholder replacement. The repeating-table regression gate expands three
+adjacent template rows over ten records and compares all thirty rows in order.
+It also checks banding, grid spans, vertical merge restarts and continuations,
+and atomic rejection of an invalid repeated numbering reference. The continuous
 numbering regression proves that mixed list and ordinary paragraphs retain one
 `numId` and level without changing the numbering part. The paired round-trip
 test compares row, cell, table, numbering, and raw XML state after reopen and
@@ -1841,7 +1841,18 @@ values, source attribute order, child schema order, and deterministic package
 bytes. Focused unit coverage rejects duplicate expanded names and proves that
 authored `paraId` replaces only its expanded-name match. The public run-shape
 regression prevents the internal retention record from changing the existing
-`CT_R` struct literal surface.
+`CT_R` struct literal surface. `table_row_identity_attribute_regressions`
+extends the gate to table rows, direct, inside a table-level content control,
+and self-closing. A one-word edit outside the table keeps every row identity
+in source order and a reopened save is byte identical. Identity-only row
+differences add no comparison revision, a changed word adds two, the rows
+raise no unsupported-content or export diagnostic, and rich merge region
+markers and whole-paragraph fragment fields still resolve in paragraphs and
+rows that carry Word identities. A row or paragraph that declares `w14` itself
+under a root that does not, and a comparison of main and header stories
+against a copy whose roots declare `w14`, both write a readable part. Rows
+and paragraphs copied by `clone_table_row`, `clone_content` and template loops
+drop their w14 identities and keep their revision-save identities.
 
 The run-level page-break differential gate authors both the break-only
 paragraph written by python-docx and a break between two pieces of text. Its

@@ -6,11 +6,10 @@ use quick_xml::Reader;
 use quick_xml::events::Event;
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Document};
-use rdocx_oxml::header_footer::CT_HdrFtr;
 use rdocx_oxml::namespace::matches_local_name;
 use rdocx_oxml::placeholder;
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
-use rdocx_oxml::text::{CT_P, RunContent};
+use rdocx_oxml::text::{CT_P, RunContent, drop_w14_paragraph_identities};
 use serde_json::Value;
 
 use crate::document::Document;
@@ -360,11 +359,22 @@ fn render_body(
     let mut render_item = |content: &mut BodyContent,
                            root: &Value,
                            scopes: &[Scope],
-                           sentinels: &mut SentinelPool| {
-        render_body_item(content, root, scopes, sentinels, &mut structural_change)
+                           sentinels: &mut SentinelPool,
+                           repeated: bool| {
+        let count = render_body_item(content, root, scopes, sentinels, &mut structural_change)?;
+        if repeated {
+            drop_copied_body_identities(content)?;
+        }
+        Ok(count)
     };
-    let (evaluated, count) =
-        evaluate_blocks(&blocks, data, &mut scopes, sentinels, &mut render_item)?;
+    let (evaluated, count) = evaluate_blocks(
+        &blocks,
+        data,
+        &mut scopes,
+        sentinels,
+        false,
+        &mut render_item,
+    )?;
     document.document.body.content = evaluated
         .into_iter()
         .map(|evaluated| evaluated.value)
@@ -433,7 +443,8 @@ fn render_table(
     let mut render_item = |item: &mut TableRowItem,
                            root: &Value,
                            scopes: &[Scope],
-                           sentinels: &mut SentinelPool| {
+                           sentinels: &mut SentinelPool,
+                           repeated: bool| {
         let mut count =
             render_nested_tables_in_row(&mut item.row, root, scopes, sentinels, structural_change)?;
         count += stage_row_scalars(&mut item.row, root, scopes, sentinels)?;
@@ -447,6 +458,12 @@ fn render_table(
             )?;
             count += stage_control_scalars(control, root, scopes, sentinels)?;
         }
+        if repeated {
+            drop_copied_row_identities(&mut item.row)?;
+            for (_, control) in &mut item.controls {
+                drop_copied_control_identities(control)?;
+            }
+        }
         Ok(count)
     };
     let (evaluated, mut count) = evaluate_blocks(
@@ -454,6 +471,7 @@ fn render_table(
         root,
         &mut local_scopes,
         sentinels,
+        false,
         &mut render_item,
     )?;
 
@@ -574,9 +592,77 @@ fn render_nested_tables_in_control(
     Ok(count)
 }
 
+/// Drop the w14 identities of every paragraph and table row in one loop copy.
+/// Copies must not share them, and Word assigns new ones to an element that
+/// has none. Text-box paragraphs stay in the raw XML of their drawing.
+fn drop_copied_body_identities(content: &mut BodyContent) -> Result<()> {
+    match content {
+        BodyContent::Paragraph(paragraph) => drop_copied_paragraph_identities(paragraph),
+        BodyContent::Table(table) => drop_copied_table_identities(table),
+        BodyContent::ContentControl(control) => drop_copied_control_identities(control),
+        BodyContent::RawXml(_) => Ok(()),
+    }
+}
+
+fn drop_copied_paragraph_identities(paragraph: &mut CT_P) -> Result<()> {
+    drop_w14_paragraph_identities(&mut paragraph.extra_xml)?;
+    for (_, _, _, control) in &mut paragraph.content_controls {
+        drop_copied_control_identities(control)?;
+    }
+    Ok(())
+}
+
+fn drop_copied_table_identities(table: &mut CT_Tbl) -> Result<()> {
+    for row in &mut table.rows {
+        drop_copied_row_identities(row)?;
+    }
+    for (_, _, control) in &mut table.content_controls {
+        drop_copied_control_identities(control)?;
+    }
+    Ok(())
+}
+
+fn drop_copied_row_identities(row: &mut CT_Row) -> Result<()> {
+    drop_w14_paragraph_identities(&mut row.extra_xml)?;
+    for cell in &mut row.cells {
+        drop_copied_cell_identities(cell)?;
+    }
+    for (_, _, control) in &mut row.content_controls {
+        drop_copied_control_identities(control)?;
+    }
+    Ok(())
+}
+
+fn drop_copied_cell_identities(cell: &mut CT_Tc) -> Result<()> {
+    for content in &mut cell.content {
+        match content {
+            CellContent::Paragraph(paragraph) => drop_copied_paragraph_identities(paragraph)?,
+            CellContent::Table(table) => drop_copied_table_identities(table)?,
+            CellContent::ContentControl(control) => drop_copied_control_identities(control)?,
+        }
+    }
+    Ok(())
+}
+
+fn drop_copied_control_identities(control: &mut CT_Sdt) -> Result<()> {
+    for content in &mut control.content {
+        match content {
+            SdtContent::Paragraph(paragraph) => drop_copied_paragraph_identities(paragraph)?,
+            SdtContent::Table(table) => drop_copied_table_identities(table)?,
+            SdtContent::Row(row) => drop_copied_row_identities(row)?,
+            SdtContent::Cell(cell) => drop_copied_cell_identities(cell)?,
+            SdtContent::ContentControl(nested) => drop_copied_control_identities(nested)?,
+            SdtContent::Run(_) | SdtContent::RawXml(_) => {}
+        }
+    }
+    Ok(())
+}
+
 fn body_marker(content: &BodyContent) -> Result<Option<Control>> {
     match content {
-        BodyContent::Paragraph(paragraph) => marker_from_sources(&[paragraph_text(paragraph)]),
+        BodyContent::Paragraph(paragraph) => {
+            marker_from_sources(&placeholder::replaceable_texts(paragraph))
+        }
         BodyContent::Table(_) | BodyContent::RawXml(_) => Ok(None),
         BodyContent::ContentControl(control) => {
             reject_unsupported_control_sources(&control_sources(control))?;
@@ -748,15 +834,18 @@ fn blocks_have_controls<T>(blocks: &[Block<T>]) -> bool {
         .any(|block| !matches!(block, Block::Item { .. }))
 }
 
+/// Evaluate the blocks of one level. `repeated` is set inside a loop, whose
+/// body is written once per item, so every item it renders is a copy.
 fn evaluate_blocks<T: Clone, F>(
     blocks: &[Block<T>],
     root: &Value,
     scopes: &mut Vec<Scope>,
     sentinels: &mut SentinelPool,
+    repeated: bool,
     render_item: &mut F,
 ) -> Result<(Vec<Evaluated<T>>, usize)>
 where
-    F: FnMut(&mut T, &Value, &[Scope], &mut SentinelPool) -> Result<usize>,
+    F: FnMut(&mut T, &Value, &[Scope], &mut SentinelPool, bool) -> Result<usize>,
 {
     let mut output = Vec::new();
     let mut count = 0;
@@ -767,7 +856,7 @@ where
                 value,
             } => {
                 let mut value = value.clone();
-                count += render_item(&mut value, root, scopes, sentinels)?;
+                count += render_item(&mut value, root, scopes, sentinels, repeated)?;
                 output.push(Evaluated {
                     source_index: *source_index,
                     value,
@@ -791,7 +880,14 @@ where
                         deferred: true,
                     });
                     let mut validation_sentinels = SentinelPool::new(&[]);
-                    evaluate_blocks(body, root, scopes, &mut validation_sentinels, render_item)?;
+                    evaluate_blocks(
+                        body,
+                        root,
+                        scopes,
+                        &mut validation_sentinels,
+                        true,
+                        render_item,
+                    )?;
                     scopes.pop();
                 }
                 for value in values {
@@ -800,7 +896,8 @@ where
                         value,
                         deferred: false,
                     });
-                    let evaluated = evaluate_blocks(body, root, scopes, sentinels, render_item)?;
+                    let evaluated =
+                        evaluate_blocks(body, root, scopes, sentinels, true, render_item)?;
                     scopes.pop();
                     output.extend(evaluated.0);
                     count += evaluated.1;
@@ -808,13 +905,21 @@ where
             }
             Block::If { path, body } => match resolve_value(root, scopes, path)? {
                 ResolvedValue::Value(value) if is_truthy(value) => {
-                    let evaluated = evaluate_blocks(body, root, scopes, sentinels, render_item)?;
+                    let evaluated =
+                        evaluate_blocks(body, root, scopes, sentinels, repeated, render_item)?;
                     output.extend(evaluated.0);
                     count += evaluated.1;
                 }
                 ResolvedValue::Value(_) | ResolvedValue::Deferred => {
                     let mut validation_sentinels = SentinelPool::new(&[]);
-                    evaluate_blocks(body, root, scopes, &mut validation_sentinels, render_item)?;
+                    evaluate_blocks(
+                        body,
+                        root,
+                        scopes,
+                        &mut validation_sentinels,
+                        repeated,
+                        render_item,
+                    )?;
                 }
             },
         }
@@ -928,7 +1033,8 @@ fn stage_paragraph_scalars(
     scopes: &[Scope],
     sentinels: &mut SentinelPool,
 ) -> Result<usize> {
-    let replacements = resolve_replacements(&[paragraph_text(paragraph)], root, scopes)?;
+    let replacements =
+        resolve_replacements(&placeholder::replaceable_texts(paragraph), root, scopes)?;
     let mut count = 0;
     for replacement in replacements {
         let sentinel = sentinels.stage(&replacement.value, replacement.occurrences);
@@ -1135,33 +1241,15 @@ pub(crate) fn body_sources(document: &CT_Document) -> Vec<String> {
     let mut sources = Vec::new();
     for content in &document.body.content {
         match content {
-            BodyContent::Paragraph(paragraph) => sources.push(paragraph_text(paragraph)),
+            BodyContent::Paragraph(paragraph) => {
+                sources.extend(placeholder::replaceable_texts(paragraph));
+            }
             BodyContent::Table(table) => collect_table(table, &mut sources),
             BodyContent::ContentControl(control) => collect_control(control, &mut sources),
             BodyContent::RawXml(_) => {}
         }
     }
     sources
-}
-
-pub(crate) fn header_footer_sources(header_footer: &CT_HdrFtr) -> Vec<String> {
-    header_footer
-        .paragraphs
-        .iter()
-        .map(paragraph_text)
-        .collect()
-}
-
-fn paragraph_text(paragraph: &CT_P) -> String {
-    paragraph
-        .runs
-        .iter()
-        .flat_map(|run| &run.content)
-        .filter_map(|content| match content {
-            RunContent::Text(text) => Some(text.text.as_str()),
-            _ => None,
-        })
-        .collect()
 }
 
 fn collect_table(table: &CT_Tbl, sources: &mut Vec<String>) {
@@ -1182,7 +1270,9 @@ fn control_sources(control: &CT_Sdt) -> Vec<String> {
 fn collect_control(control: &CT_Sdt, sources: &mut Vec<String>) {
     for content in &control.content {
         match content {
-            SdtContent::Paragraph(paragraph) => sources.push(paragraph_text(paragraph)),
+            SdtContent::Paragraph(paragraph) => {
+                sources.extend(placeholder::replaceable_texts(paragraph));
+            }
             SdtContent::Table(table) => collect_table(table, sources),
             SdtContent::Row(row) => collect_row(row, sources),
             SdtContent::Cell(cell) => collect_cell(cell, sources),
@@ -1213,7 +1303,9 @@ fn collect_row_marker_sources(row: &CT_Row, sources: &mut Vec<String>) {
 fn collect_cell_marker_sources(cell: &CT_Tc, sources: &mut Vec<String>) {
     for content in &cell.content {
         match content {
-            CellContent::Paragraph(paragraph) => sources.push(paragraph_text(paragraph)),
+            CellContent::Paragraph(paragraph) => {
+                sources.extend(placeholder::replaceable_texts(paragraph));
+            }
             CellContent::Table(_) => {}
             CellContent::ContentControl(control) => {
                 collect_control_marker_sources(control, sources);
@@ -1225,7 +1317,9 @@ fn collect_cell_marker_sources(cell: &CT_Tc, sources: &mut Vec<String>) {
 fn collect_control_marker_sources(control: &CT_Sdt, sources: &mut Vec<String>) {
     for content in &control.content {
         match content {
-            SdtContent::Paragraph(paragraph) => sources.push(paragraph_text(paragraph)),
+            SdtContent::Paragraph(paragraph) => {
+                sources.extend(placeholder::replaceable_texts(paragraph));
+            }
             SdtContent::Table(_) => {}
             SdtContent::Row(row) => collect_row_marker_sources(row, sources),
             SdtContent::Cell(cell) => collect_cell_marker_sources(cell, sources),
@@ -1249,51 +1343,13 @@ fn collect_control_marker_sources(control: &CT_Sdt, sources: &mut Vec<String>) {
 fn collect_cell(cell: &CT_Tc, sources: &mut Vec<String>) {
     for content in &cell.content {
         match content {
-            CellContent::Paragraph(paragraph) => sources.push(paragraph_text(paragraph)),
+            CellContent::Paragraph(paragraph) => {
+                sources.extend(placeholder::replaceable_texts(paragraph));
+            }
             CellContent::Table(table) => collect_table(table, sources),
             CellContent::ContentControl(control) => collect_control(control, sources),
         }
     }
-}
-
-pub(crate) fn text_box_sources(xml: &[u8]) -> Result<Vec<String>> {
-    let mut reader = Reader::from_reader(xml);
-    reader.config_mut().trim_text(false);
-    let mut sources = Vec::new();
-    let mut buffer = Vec::new();
-    let mut in_text_box = false;
-
-    loop {
-        match reader.read_event_into(&mut buffer) {
-            Ok(Event::Eof) => break,
-            Ok(Event::Start(element))
-                if matches_local_name(element.name().as_ref(), b"txbxContent") =>
-            {
-                in_text_box = true;
-            }
-            Ok(Event::Start(element))
-                if in_text_box && matches_local_name(element.name().as_ref(), b"p") =>
-            {
-                let paragraph = CT_P::from_xml(&mut reader)?;
-                sources.push(paragraph_text(&paragraph));
-            }
-            Ok(Event::Start(element)) if in_text_box => {
-                reader
-                    .read_to_end_into(element.name(), &mut Vec::new())
-                    .map_err(template_xml_error)?;
-            }
-            Ok(Event::End(element))
-                if in_text_box && matches_local_name(element.name().as_ref(), b"txbxContent") =>
-            {
-                in_text_box = false;
-            }
-            Ok(_) => {}
-            Err(error) => return Err(template_xml_error(error)),
-        }
-        buffer.clear();
-    }
-
-    Ok(sources)
 }
 
 pub(crate) fn chart_sources(xml: &[u8]) -> Result<Vec<String>> {

@@ -2,6 +2,7 @@
 //!
 //! Inspect, convert, diff, and manipulate DOCX files from the command line.
 
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process;
 
@@ -52,6 +53,9 @@ enum Command {
         /// Output file path (defaults to input with new extension)
         #[arg(long, short = 'o')]
         output: Option<PathBuf>,
+        /// Replace existing output files, but never the input file
+        #[arg(long)]
+        force: bool,
         /// DPI for image rendering (default: 150)
         #[arg(long, default_value = "150")]
         dpi: u32,
@@ -104,6 +108,9 @@ enum Command {
         /// Output directory (defaults to current directory)
         #[arg(long, short = 'o')]
         output_dir: Option<PathBuf>,
+        /// Replace existing page images, but never the input file
+        #[arg(long)]
+        force: bool,
         /// DPI resolution (default: 150)
         #[arg(long, default_value = "150")]
         dpi: f64,
@@ -145,6 +152,34 @@ enum Command {
         /// RFC 3339 revision timestamp
         #[arg(long)]
         timestamp: String,
+        /// Unit of a text change: run, word, or character
+        #[arg(
+            long,
+            value_name = "UNIT",
+            default_value = "run",
+            value_parser = commands::parse_comparison_granularity
+        )]
+        granularity: rdocx::ComparisonGranularity,
+        /// Keep the original formatting and record no formatting change
+        #[arg(long)]
+        ignore_formatting: bool,
+        /// Keep the original whitespace and record no whitespace-only change
+        #[arg(long)]
+        ignore_whitespace: bool,
+        /// Keep the original field results and record no field change
+        #[arg(long)]
+        ignore_fields: bool,
+        /// Keep the original comments and anchors, dropping the edited ones
+        #[arg(long)]
+        ignore_comments: bool,
+        /// Keep one story of the original, repeatable: body, header, footer,
+        /// comment, text_box, footnote, or endnote
+        #[arg(
+            long = "ignore-story",
+            value_name = "KIND",
+            value_parser = commands::parse_comparison_story
+        )]
+        ignore_stories: Vec<rdocx::ComparisonStoryKind>,
         /// Output DOCX file
         #[arg(long, short = 'o')]
         output: PathBuf,
@@ -184,6 +219,9 @@ enum CommentCommand {
         /// Comment text
         #[arg(long)]
         text: String,
+        /// RFC 3339 comment timestamp, omitted from the comment when absent
+        #[arg(long)]
+        date: Option<String>,
         /// Output DOCX file
         #[arg(long, short = 'o')]
         output: PathBuf,
@@ -204,6 +242,9 @@ enum CommentCommand {
         /// Reply text
         #[arg(long)]
         text: String,
+        /// RFC 3339 reply timestamp, omitted from the reply when absent
+        #[arg(long)]
+        date: Option<String>,
         /// Output DOCX file
         #[arg(long, short = 'o')]
         output: PathBuf,
@@ -246,13 +287,15 @@ struct CommentRangeArgs {
     /// Zero-based body paragraph index at the inclusive start
     #[arg(long)]
     start_paragraph: usize,
-    /// Zero-based run boundary at the inclusive start
+    /// Zero-based run boundary at the inclusive start, counting the runs that
+    /// `text --json` lists
     #[arg(long)]
     start_run: usize,
     /// Zero-based body paragraph index at the exclusive end
     #[arg(long)]
     end_paragraph: usize,
-    /// Zero-based run boundary at the exclusive end
+    /// Zero-based run boundary at the exclusive end, counting the runs that
+    /// `text --json` lists
     #[arg(long)]
     end_run: usize,
 }
@@ -350,6 +393,7 @@ fn main() {
             file,
             to,
             output,
+            force,
             dpi,
             font_dir,
             pages,
@@ -359,6 +403,7 @@ fn main() {
             &file,
             &to,
             output.as_deref(),
+            force,
             dpi,
             font_dir.as_deref(),
             commands::ImageOptions {
@@ -380,6 +425,7 @@ fn main() {
         Command::Render {
             file,
             output_dir,
+            force,
             dpi,
             page,
             pages,
@@ -389,6 +435,7 @@ fn main() {
         } => commands::render(
             &file,
             output_dir.as_deref(),
+            force,
             dpi,
             commands::RenderOptions {
                 page,
@@ -406,6 +453,7 @@ fn main() {
                 author,
                 initials,
                 text,
+                date,
                 output,
                 json,
             } => commands::comment_add(
@@ -423,6 +471,7 @@ fn main() {
                 &author,
                 initials.as_deref(),
                 &text,
+                date.as_deref(),
                 &output,
                 json,
             ),
@@ -431,9 +480,10 @@ fn main() {
                 id,
                 author,
                 text,
+                date,
                 output,
                 json,
-            } => commands::comment_reply(&file, id, &author, &text, &output, json),
+            } => commands::comment_reply(&file, id, &author, &text, date.as_deref(), &output, json),
             CommentCommand::Resolve {
                 file,
                 id,
@@ -489,9 +539,30 @@ fn main() {
             edited,
             author,
             timestamp,
+            granularity,
+            ignore_formatting,
+            ignore_whitespace,
+            ignore_fields,
+            ignore_comments,
+            ignore_stories,
             output,
             json,
-        } => commands::compare(&original, &edited, &author, &timestamp, &output, json),
+        } => commands::compare(
+            &original,
+            &edited,
+            &author,
+            &timestamp,
+            &rdocx::ComparisonOptions {
+                granularity,
+                ignore_formatting,
+                ignore_whitespace,
+                ignore_fields,
+                ignore_comments,
+                ignored_stories: ignore_stories,
+            },
+            &output,
+            json,
+        ),
         Command::Toc { command } => match command {
             TocCommand::Rebuild { file, output, json } => {
                 commands::toc_rebuild(&file, &output, json)
@@ -499,8 +570,18 @@ fn main() {
         },
     };
 
+    // Standard output is line buffered, so a last line without a newline is
+    // only written, and can only fail, when it is flushed.
+    let result = result.and_then(|()| io::stdout().flush().map_err(Into::into));
     if let Err(e) = result {
-        eprintln!("Error: {e}");
-        process::exit(1);
+        // A reader that closes standard output early, as `| head` does, ends
+        // the output. That is not a failure of the command.
+        let closed_stdout = e
+            .downcast_ref::<io::Error>()
+            .is_some_and(|e| e.kind() == io::ErrorKind::BrokenPipe);
+        if !closed_stdout {
+            eprintln!("Error: {e}");
+            process::exit(1);
+        }
     }
 }

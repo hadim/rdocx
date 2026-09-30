@@ -63,9 +63,10 @@ impl Document {
     /// Serialize and atomically save EPUB, returning lossy-conversion diagnostics.
     pub fn save_epub<P: AsRef<Path>>(&self, path: P) -> Result<Vec<EpubDiagnostic>> {
         let result = self.to_epub_bytes()?;
-        crate::document::write_atomic_file(
+        oxml_opc::write_atomic_file(
             path.as_ref(),
             &result.bytes,
+            "rdocx",
             "invalid EPUB file name",
             "could not allocate EPUB-save staging file",
         )?;
@@ -557,7 +558,10 @@ impl<'a> EpubWriter<'a> {
             if let Some(properties) = &row.properties {
                 self.scan_row_properties(properties, &row_path)?;
             }
-            for (raw_index, _) in row.extra_xml.iter().enumerate() {
+            for (raw_index, (position, raw)) in row.extra_xml.iter().enumerate() {
+                if CT_Row::raw_is_root_attributes(*position, raw) {
+                    continue;
+                }
                 self.diagnose(
                     format!("{row_path}/xml[{raw_index}]"),
                     "unmodelled table-row XML was dropped during EPUB export".to_owned(),

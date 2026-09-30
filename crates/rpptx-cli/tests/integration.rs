@@ -1,12 +1,15 @@
 use std::fs;
-use std::io::Cursor;
+use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, content_types};
-use rpptx::{Angle, CT_TextCharacterProperties, Comment, CommentAuthor, Emu, Presentation};
+use rpptx::{
+    Angle, CT_TextCharacterProperties, Comment, CommentAuthor, Emu, Presentation,
+    PresentationPackageClass,
+};
 use serde_json::json;
 
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -36,6 +39,73 @@ fn cli(args: &[&str]) -> Output {
         .args(args)
         .output()
         .expect("run rpptx CLI")
+}
+
+/// Runs the CLI while its reader takes a short prefix of standard output and
+/// then closes it, as `| head -1` does.
+fn cli_with_closed_stdout(args: &[&str]) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rpptx"))
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn rpptx CLI");
+    let mut stdout = child.stdout.take().expect("piped stdout");
+    stdout
+        .read_exact(&mut [0; 64])
+        .expect("read an output prefix");
+    drop(stdout);
+    child.wait_with_output().expect("wait for rpptx CLI")
+}
+
+/// Asserts that `args` refuses to replace an existing `output` and leaves it
+/// byte-identical, and that the same command with `--force` replaces it.
+fn assert_existing_output_needs_force(args: &[&str], output: &Path) {
+    fs::write(output, b"keep me").unwrap();
+    let refused = cli(args);
+    assert_eq!(refused.status.code(), Some(1), "{args:?} was not refused");
+    assert_eq!(
+        String::from_utf8_lossy(&refused.stderr),
+        format!(
+            "Error: output already exists: {} (pass --force to replace it)\n",
+            output.display()
+        )
+    );
+    assert_eq!(fs::read(output).unwrap(), b"keep me");
+
+    let forced = cli(&[args, &["--force"]].concat());
+    assert!(
+        forced.status.success(),
+        "{args:?} --force failed: {}",
+        String::from_utf8_lossy(&forced.stderr)
+    );
+    assert_ne!(fs::read(output).unwrap(), b"keep me");
+    assert!(
+        fs::read_dir(output.parent().unwrap())
+            .unwrap()
+            .all(|entry| {
+                !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".tmp")
+            })
+    );
+}
+
+/// Asserts that `args`, whose output is `input` under some spelling, leaves
+/// the input byte-identical with and without `--force`.
+fn assert_input_is_never_replaced(args: &[&str], input: &Path, output: &str) {
+    let before = fs::read(input).unwrap();
+    for force in [&[][..], &["--force"]] {
+        let refused = cli(&[args, force].concat());
+        assert_eq!(refused.status.code(), Some(1), "{args:?} {force:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&refused.stderr),
+            format!("Error: output is the input file: {output}\n")
+        );
+        assert_eq!(fs::read(input).unwrap(), before, "{args:?} {force:?}");
+    }
 }
 
 fn write_deck(path: &Path, texts: &[&str]) {
@@ -433,6 +503,67 @@ fn validate_rejects_corruption_and_accepts_the_pinned_corpus() {
 }
 
 #[test]
+fn printing_commands_end_cleanly_when_the_reader_closes_stdout() {
+    let temp = TempWorkspace::new("closed-stdout");
+    let deck = temp.path.join("long.pptx");
+    // Several hundred kilobytes outgrow a default pipe buffer, so the CLI
+    // is still writing when its reader goes away.
+    let text = "lorem ipsum dolor sit amet ".repeat(40);
+    write_deck(&deck, &vec![text.as_str(); 300]);
+    let deck = deck.to_str().unwrap();
+
+    for args in [vec!["text", deck], vec!["outline", deck, "--json"]] {
+        let output = cli_with_closed_stdout(&args);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{args:?} failed: {stderr}");
+        assert!(stderr.is_empty(), "{args:?} wrote stderr: {stderr}");
+    }
+}
+
+#[test]
+fn validate_keeps_its_verdict_when_the_reader_closes_stdout() {
+    let temp = TempWorkspace::new("validate-closed-stdout");
+    let deck = temp.path.join("valid.pptx");
+    write_deck(&deck, &["valid"]);
+
+    // The reader goes away before the CLI has opened the deck, so the pass
+    // line meets a closed pipe.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_rpptx"))
+        .args(["validate", deck.to_str().unwrap()])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn rpptx CLI");
+    drop(child.stdout.take());
+    let output = child.wait_with_output().expect("wait for rpptx CLI");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "validate failed: {stderr}");
+    assert!(stderr.is_empty(), "validate wrote stderr: {stderr}");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_failing_stdout_other_than_a_closed_pipe_is_an_error() {
+    let temp = TempWorkspace::new("full-stdout");
+    let deck = temp.path.join("short.pptx");
+    write_deck(&deck, &["No space left"]);
+    let full = fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .expect("open /dev/full");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_rpptx"))
+        .args(["text", deck.to_str().unwrap()])
+        .stdout(full)
+        .output()
+        .expect("run rpptx CLI");
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.starts_with("Error: "), "{stderr}");
+    assert!(!stderr.contains("panicked"), "{stderr}");
+}
+
+#[test]
 fn inspect_and_text_report_presentation_order() {
     let temp = TempWorkspace::new("inspect-text");
     let deck = temp.path.join("ordered.pptx");
@@ -777,6 +908,112 @@ fn multi_file_image_export_preserves_existing_outputs_before_streaming() {
 }
 
 #[test]
+fn convert_replaces_an_existing_output_only_with_force_and_never_its_input() {
+    let temp = TempWorkspace::new("convert-output-policy");
+    let input = temp.path.join("deck.pptx");
+    write_deck(&input, &["Output policy"]);
+    let deck = input.to_str().unwrap();
+    let spelled = temp.path.join("slides/../deck.pptx");
+    fs::create_dir(temp.path.join("slides")).unwrap();
+
+    let default_pdf = temp.path.join("deck.pdf");
+    assert_existing_output_needs_force(&["convert", deck, "--to", "pdf"], &default_pdf);
+    for to in ["pdf", "png", "tiff"] {
+        let output = temp.path.join(format!("converted.{to}"));
+        assert_existing_output_needs_force(
+            &[
+                "convert",
+                deck,
+                "--to",
+                to,
+                "--dpi",
+                "24",
+                "-o",
+                output.to_str().unwrap(),
+            ],
+            &output,
+        );
+        for spelling in [deck, spelled.to_str().unwrap()] {
+            assert_input_is_never_replaced(
+                &["convert", deck, "--to", to, "--dpi", "24", "-o", spelling],
+                &input,
+                spelling,
+            );
+        }
+    }
+}
+
+#[test]
+fn render_replaces_existing_slides_only_with_force_and_never_its_input() {
+    let temp = TempWorkspace::new("render-output-policy");
+    let input = temp.path.join("deck.pptx");
+    let slides = temp.path.join("slides");
+    write_deck(&input, &["Output policy"]);
+    fs::create_dir(&slides).unwrap();
+    let render = [
+        "render",
+        input.to_str().unwrap(),
+        "-o",
+        slides.to_str().unwrap(),
+        "--dpi",
+        "24",
+    ];
+
+    assert_existing_output_needs_force(&render, &slides.join("deck_slide1.png"));
+    assert_existing_output_needs_force(
+        &[render.as_slice(), &["--format", "tiff"]].concat(),
+        &slides.join("deck.tiff"),
+    );
+
+    // A deck named like its own TIFF output, rendered into its folder.
+    let named = temp.path.join("named.tiff");
+    fs::copy(&input, &named).unwrap();
+    assert_input_is_never_replaced(
+        &[
+            "render",
+            named.to_str().unwrap(),
+            "-o",
+            temp.path.to_str().unwrap(),
+            "--format",
+            "tiff",
+            "--dpi",
+            "24",
+        ],
+        &named,
+        named.to_str().unwrap(),
+    );
+}
+
+#[test]
+fn thumbnail_replaces_an_existing_output_only_with_force_and_never_its_input() {
+    let temp = TempWorkspace::new("thumbnail-output-policy");
+    let input = temp.path.join("deck.pptx");
+    write_deck(&input, &["Output policy"]);
+    let deck = input.to_str().unwrap();
+    let chosen = temp.path.join("chosen.png");
+    let spelled = temp.path.join("slides/../deck.pptx");
+    fs::create_dir(temp.path.join("slides")).unwrap();
+
+    assert_existing_output_needs_force(&["thumbnail", deck], &temp.path.join("deck.png"));
+    assert_existing_output_needs_force(
+        &["thumbnail", deck, "-o", chosen.to_str().unwrap()],
+        &chosen,
+    );
+    for spelling in [deck, spelled.to_str().unwrap()] {
+        assert_input_is_never_replaced(&["thumbnail", deck, "-o", spelling], &input, spelling);
+    }
+    #[cfg(unix)]
+    {
+        let refused = cli(&["thumbnail", deck, "-o", "/dev/null", "--force"]);
+        assert_eq!(refused.status.code(), Some(1));
+        assert_eq!(
+            String::from_utf8_lossy(&refused.stderr),
+            "Error: output is not a regular file: /dev/null\n"
+        );
+    }
+}
+
+#[test]
 fn diff_reports_slide_text_lcs_changes() {
     let temp = TempWorkspace::new("diff");
     let before = temp.path.join("before.pptx");
@@ -871,6 +1108,86 @@ fn replacement_preserves_formatting_and_opaque_parts() {
         package.get_part("/custom/opaque.bin"),
         Some(b"opaque bytes".as_slice())
     );
+}
+
+#[test]
+fn replace_output_extension_selects_the_package_class() {
+    let temp = TempWorkspace::new("replace-class");
+    let source = temp.path.join("template.potx");
+    write_deck(&source, &["Hello {{name}}"]);
+    assert_eq!(
+        Presentation::open(&source)
+            .unwrap()
+            .package_class()
+            .unwrap(),
+        PresentationPackageClass::Template
+    );
+
+    let output = temp.path.join("deck.pptx");
+    let result = cli(&[
+        "replace",
+        source.to_str().unwrap(),
+        "--placeholder",
+        "{{name}}",
+        "--value",
+        "Reader",
+        "--output",
+        output.to_str().unwrap(),
+    ]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        Presentation::open(&output)
+            .unwrap()
+            .package_class()
+            .unwrap(),
+        PresentationPackageClass::Presentation
+    );
+}
+
+#[test]
+fn replace_refuses_a_macro_free_output_for_a_vba_input() {
+    let temp = TempWorkspace::new("replace-vba");
+    let fixture = temp.path.join("fixture.pptx");
+    let source = temp.path.join("macros.pptm");
+    write_deck(&fixture, &["Hello {{name}}"]);
+    let mut package = OpcPackage::open(&fixture).unwrap();
+    fs::remove_file(&fixture).unwrap();
+    package
+        .get_or_create_part_rels("/ppt/presentation.xml")
+        .add(rel_types::VBA_PROJECT, "vbaProject.bin");
+    package.set_part("/ppt/vbaProject.bin", b"vba-project".to_vec());
+    package.content_types.add_override(
+        "/ppt/vbaProject.bin",
+        "application/vnd.ms-office.vbaProject",
+    );
+    package.content_types.add_override(
+        "/ppt/presentation.xml",
+        content_types::PRESENTATION_MACRO_ENABLED,
+    );
+    package.save(&source).unwrap();
+
+    let output = temp.path.join("deck.pptx");
+    let result = cli(&[
+        "replace",
+        source.to_str().unwrap(),
+        "--placeholder",
+        "{{name}}",
+        "--value",
+        "Reader",
+        "--output",
+        output.to_str().unwrap(),
+    ]);
+    assert_eq!(result.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&result.stderr).contains("VBA project"));
+    let entries: Vec<_> = fs::read_dir(&temp.path)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(entries, [source.file_name().unwrap()]);
 }
 
 #[test]

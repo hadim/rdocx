@@ -12902,6 +12902,140 @@ fn ordinary_save_preserves_opened_template_and_macro_classes() {
 }
 
 #[test]
+fn save_writes_the_package_class_that_the_path_extension_names() {
+    let directory =
+        std::env::temp_dir().join(format!("rpptx-extension-class-{}", std::process::id()));
+    fs::create_dir_all(&directory).unwrap();
+    let main_content_type = |path: &Path| {
+        OpcPackage::open(path)
+            .unwrap()
+            .content_types
+            .content_type_for(PRESENTATION_PART)
+            .unwrap()
+            .to_owned()
+    };
+
+    let template = Presentation::from_bytes(&package_bytes(f223_fixture_package(
+        PresentationPackageClass::Template,
+    )))
+    .unwrap();
+    let template_path = directory.join("t.potx");
+    template.save(&template_path).unwrap();
+    assert_eq!(
+        main_content_type(&template_path),
+        content_types::PRESENTATION_TEMPLATE
+    );
+    let presentation_path = directory.join("b.pptx");
+    Presentation::open(&template_path)
+        .unwrap()
+        .save(&presentation_path)
+        .unwrap();
+    assert_eq!(
+        main_content_type(&presentation_path),
+        content_types::PRESENTATION
+    );
+
+    for (extension, class) in [
+        ("PPTX", PresentationPackageClass::Presentation),
+        ("pptm", PresentationPackageClass::MacroEnabledPresentation),
+        ("potm", PresentationPackageClass::MacroEnabledTemplate),
+        ("ppsx", PresentationPackageClass::Slideshow),
+        ("ppsm", PresentationPackageClass::MacroEnabledSlideshow),
+    ] {
+        let path = directory.join(format!("converted.{extension}"));
+        template.save(&path).unwrap();
+        assert_eq!(
+            main_content_type(&path),
+            f223_content_type(class),
+            "{extension}"
+        );
+        let bytes = template.to_bytes_for_path(&path).unwrap();
+        assert_eq!(
+            Presentation::from_bytes(&bytes)
+                .unwrap()
+                .package_class()
+                .unwrap(),
+            class
+        );
+    }
+    assert_eq!(
+        template.package_class().unwrap(),
+        PresentationPackageClass::Template
+    );
+
+    let mut vba_free_package = f223_fixture_package(PresentationPackageClass::Presentation);
+    vba_free_package
+        .content_types
+        .add_override(PRESENTATION_PART, content_types::PRESENTATION_MACRO_ENABLED);
+    let vba_free = Presentation::from_bytes(&package_bytes(vba_free_package)).unwrap();
+    for (extension, class) in [
+        ("pptx", PresentationPackageClass::Presentation),
+        ("potx", PresentationPackageClass::Template),
+        ("ppsx", PresentationPackageClass::Slideshow),
+    ] {
+        let path = directory.join(format!("vba-free.{extension}"));
+        vba_free.save(&path).unwrap();
+        assert_eq!(
+            main_content_type(&path),
+            f223_content_type(class),
+            "{extension}"
+        );
+    }
+
+    for (class, same_class, refused) in [
+        (
+            PresentationPackageClass::Template,
+            "potx",
+            &["pptx", "ppsx"][..],
+        ),
+        (
+            PresentationPackageClass::MacroEnabledPresentation,
+            "pptm",
+            &["pptx", "potx", "ppsx"][..],
+        ),
+    ] {
+        let mut package = embedded_fixture_package(false);
+        package
+            .content_types
+            .add_override(PRESENTATION_PART, f223_content_type(class));
+        let presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+        let same_class_path = directory.join(format!("vba-same.{same_class}"));
+        presentation.save(&same_class_path).unwrap();
+        assert_eq!(
+            main_content_type(&same_class_path),
+            f223_content_type(class)
+        );
+        let converted_path = directory.join("vba-converted.potm");
+        presentation.save(&converted_path).unwrap();
+        assert_eq!(
+            main_content_type(&converted_path),
+            content_types::PRESENTATION_TEMPLATE_MACRO_ENABLED
+        );
+        assert_eq!(
+            OpcPackage::open(&converted_path)
+                .unwrap()
+                .get_part("/custom/vbaProject.bin"),
+            Some(b"vba-executable".as_slice())
+        );
+        for extension in refused {
+            let path = directory.join(format!("vba-refused.{extension}"));
+            assert!(
+                matches!(
+                    presentation.save(&path),
+                    Err(Error::InvalidPresentationMutation {
+                        operation: "save",
+                        message,
+                    }) if message.contains("VBA project")
+                ),
+                "{class:?} {extension}"
+            );
+            assert!(!path.exists(), "{class:?} {extension}");
+        }
+    }
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
 fn package_class_conversion_preserves_and_invalidates_signature_evidence() {
     let presentation =
         Presentation::from_bytes(&package_bytes(embedded_fixture_package(true))).unwrap();
@@ -13008,6 +13142,81 @@ fn assert_f223_relationships_equal(
             "{class:?}: {part}"
         );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn path_saves_replace_the_file_by_rename_and_keep_links_and_permissions() {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+
+    let directory = f222_temp_directory("atomic-save");
+    let links = directory.join("links");
+    fs::create_dir_all(&links).unwrap();
+    let staging_files = |directory: &Path| {
+        fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.extension().is_some_and(|extension| extension == "tmp"))
+            .collect::<Vec<_>>()
+    };
+    let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o7777;
+    let presentation = f222_source_presentation();
+
+    // The plain save replaces an existing file by rename and keeps its mode.
+    let destination = directory.join("existing.pptx");
+    fs::write(&destination, b"previous bytes").unwrap();
+    fs::set_permissions(&destination, fs::Permissions::from_mode(0o600)).unwrap();
+    let previous_inode = fs::metadata(&destination).unwrap().ino();
+    presentation.save(&destination).unwrap();
+    assert_ne!(fs::metadata(&destination).unwrap().ino(), previous_inode);
+    assert_eq!(mode(&destination), 0o600);
+    assert_eq!(
+        fs::read(&destination).unwrap(),
+        presentation.to_bytes().unwrap()
+    );
+
+    // A save through a symbolic link replaces the file it names and keeps the link.
+    let target = directory.join("linked.ppsx");
+    fs::write(&target, b"previous bytes").unwrap();
+    fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
+    let link = links.join("link.ppsx");
+    std::os::unix::fs::symlink("../linked.ppsx", &link).unwrap();
+    presentation.save_as_show(&link).unwrap();
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read_link(&link).unwrap(), Path::new("../linked.ppsx"));
+    assert_eq!(
+        fs::read(&target).unwrap(),
+        presentation
+            .to_bytes_as(PresentationPackageClass::Slideshow)
+            .unwrap()
+    );
+    assert_eq!(mode(&target), 0o640);
+
+    // The saver that already staged its output now keeps the mode too.
+    let odp = directory.join("existing.odp");
+    fs::write(&odp, b"previous bytes").unwrap();
+    fs::set_permissions(&odp, fs::Permissions::from_mode(0o600)).unwrap();
+    presentation.save_odp(&odp).unwrap();
+    assert_eq!(
+        fs::read(&odp).unwrap(),
+        presentation.to_odp_bytes().unwrap().bytes
+    );
+    assert_eq!(mode(&odp), 0o600);
+
+    // A save that cannot replace its destination leaves it and no staged file.
+    let occupied = directory.join("directory.pptx");
+    fs::create_dir(&occupied).unwrap();
+    assert!(presentation.save(&occupied).is_err());
+    assert!(occupied.is_dir());
+
+    assert!(staging_files(&directory).is_empty());
+    assert!(staging_files(&links).is_empty());
+    fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]

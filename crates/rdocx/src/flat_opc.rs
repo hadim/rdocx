@@ -9,13 +9,13 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use oxml_core::xml::validate_strict_xml_1_0;
 use oxml_opc::content_types::{self, ContentTypes};
 use oxml_opc::relationship::{Relationships, rel_types};
-use oxml_opc::{OpcPackage, PackageReadLimits};
+use oxml_opc::{OpcPackage, PackageReadLimits, write_atomic_file};
 use quick_xml::events::{BytesEnd, BytesStart, BytesText, Event};
 use quick_xml::name::{Namespace, ResolveResult};
 use quick_xml::reader::NsReader;
 use quick_xml::{Writer, XmlVersion};
 
-use crate::document::{Document, write_atomic_file};
+use crate::document::Document;
 use crate::error::{Error, Result};
 
 const PACKAGE_NAMESPACE: &[u8] = b"http://schemas.microsoft.com/office/2006/xmlPackage";
@@ -99,6 +99,7 @@ impl Document {
         write_atomic_file(
             path.as_ref(),
             &bytes,
+            "rdocx",
             "invalid Flat OPC file name",
             "could not allocate Flat OPC save staging file",
         )?;

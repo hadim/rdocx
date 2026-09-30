@@ -90,6 +90,7 @@ defended.
 | S73 | M23, X | 35 | 35 | 0 | 92 | 4 | Closed M23 with complete table and rich-content authoring, layout-backed fields, pure Rust generation of all five private corpus examples, contributor hardening, and verified Rust and Python publication. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and final sprint review pass 9 clean. M24 begins in S74 with complete text, table, section, and settings semantics |
 | S74 | M24 | 22 | 22 | 0 | 66 | 3 | Opened M24 with complete paragraph, run, multilingual typography, table, section, settings, and web-settings authoring, plus evidence-backed package documentation. The full close gate passed with all 49 hashes unchanged, every package archive below 10 MiB, and final sprint review pass 3 clean. The predecessor main CI timing failure passed in the exact isolated S74 binding suite and ten consecutive reruns. M24 continues in S75 with rich stories, notes, ranges, fragments, and building blocks |
 | S75 | M24, X | 11 | 3 | 8 | 47 | 8 | Restored the hosted Python story gate, integrated PRs 146 through 151, reconciled overlapping PRs 152 through 154, fixed the uncovered issues, and corrected table row breaks. F-X133 and F-271 through F-277 carry to S76 at the approved mid-milestone cutoff, preserving their dependency order. The full close gate passed with 49 matching hashes after PR 148's separately reviewed 15-entry layout delta, seven matching golden buffers, all archives below 10 MiB, and sprint review pass 1 clean. M24 remains open |
+| S76 | X | 3 | 3 | 0 | 15 | 2 | Integrated 19 reviewed contributor PRs in three dependency waves covering package and CLI safety, Word story traversal, producer identity, and comparison. The full close gate passed with 49 unchanged hashes, 77 Python tests, all archives below 10 MiB, and a clean final sprint review. The broader issue acceptance matrix remains planned for S78 and S79 |
 
 ## Completed features
 
@@ -498,6 +499,9 @@ defended.
 | F-X134 | S75 | S | 1 | 1 | 2026-09-20 | Batched hyperlink namespace scopes and bounded story link text extraction so Python snapshots remain linear |
 | F-X135 | S75 | L | 5 | 6 | 2026-09-26 | Integrated PRs 146 through 151, resolved five uncovered issues, audited late PRs 153 and 154, and preserved unchanged package bytes |
 | F-X136 | S75 | L | 5 | 1 | 2026-09-26 | Split ordinary Word table rows across page boundaries, respected cantSplit and exact heights, and removed the source-built footer-only page |
+| F-X137 | S76 | L | 5 | 1 | 2026-09-30 | Integrated five package and CLI safety PRs with atomic saves, safe output refusal, namespace binding and package class selection |
+| F-X138 | S76 | L | 5 | 1 | 2026-09-30 | Integrated eight Word story PRs with direct body coordinates, comment anchoring, content control traversal and source-preserving replacement |
+| F-X139 | S76 | L | 5 | 1 | 2026-09-30 | Integrated six Word identity and comparison PRs with producer attribute preservation, marker ordering, comparison options and CLI comment dates |
 
 ## Velocity
 
@@ -588,6 +592,7 @@ five working days.
 | S73 | 35 | 4 | 61.25 |
 | S74 | 22 | 3 | 36.67 |
 | S75 | 3 | 8 | 1.88 |
+| S76 | 3 | 2 | 7.50 |
 
 ## Escalation record
 
@@ -666,3 +671,4 @@ was done about it. Empty is the expected state.
 | 2026-09-18 | Sprint estimate variance exceeded 30 percent | S73 | Record 4 actual days against 92 estimated. Parallel isolated workers, reviewed contributor pull requests, established corpus and release workflows, and one consolidated publication boundary allowed implementation, review, and registry verification to overlap safely. The resulting 61.25 stories per week is not a sustainable forecast, so retain the dependency-defined S74 boundary |
 | 2026-09-20 | Sprint estimate variance exceeded 30 percent | S74 | Record 3 actual days against 66 estimated. Parallel isolated workers, split parent stories, established Word corpus and package gates, and dependency-prefix reviews allowed independent implementation and review work to overlap safely. The resulting 36.67 stories per week is not a sustainable forecast, so retain the dependency-defined S75 boundary |
 | 2026-09-26 | Sprint estimate variance exceeded 30 percent | S75 | Record 8 actual days against 47 originally estimated, with 36 estimated days moved to S76 in the approved eight-story carry. The three delivered stories were estimated at 11 days and took 8. This is a deliberate mid-milestone scope cutoff, not evidence that the remaining related-story work became cheaper. The resulting 1.88 stories per week is close to the long-run assumption, so retain the dependency-defined S76 boundary and split it before implementation if capacity requires |
+| 2026-09-30 | Sprint estimate variance exceeded 30 percent | S76 | Record 2 elapsed workdays against 15 estimated for three completed contribution waves. Stacked PRs reused established implementation and oracle paths, while dependency-prefix review and full verification remained explicit. The resulting 7.50 stories per week is a short contribution-intake result rather than a sustainable forecast, so retain the dependency-defined S77 boundary |

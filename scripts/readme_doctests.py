@@ -367,35 +367,40 @@ MEASUREMENT_COLUMNS = (
 )
 MEASUREMENT_DATE = "2026-09-19"
 ARCHIVE_REMEASUREMENT_DATES = {
-    "rdocx": "2026-09-26",
-    "rdocx-layout": "2026-09-26",
-    "rpptx": "2026-09-29",
-    "rpptx-oxml": "2026-09-29",
+    "oxml-cli-support": "2026-09-29",
+    "oxml-opc": "2026-09-29",
+    "rdocx": "2026-09-30",
+    "rdocx-cli": "2026-09-30",
+    "rdocx-layout": "2026-09-30",
+    "rdocx-oxml": "2026-09-30",
+    "rpptx": "2026-09-30",
+    "rpptx-cli": "2026-09-29",
+    "rpptx-oxml": "2026-09-30",
 }
 MEASUREMENT_PLATFORM = "macOS 26.6.2, Apple M5 Max, arm64"
 ARCHIVE_COMPRESSION_TOLERANCE_BYTES = 64
 ARCHIVE_MEASUREMENTS = {
     "oxml-chart": (102_042, 659_367, 6),
-    "oxml-cli-support": (6_718, 21_586, 6),
+    "oxml-cli-support": (8_614, 30_840, 6),
     "oxml-core": (20_677, 100_124, 15),
     "oxml-drawing": (161_119, 1_128_372, 24),
     "oxml-layout": (4_623_324, 9_227_483, 51),
     "oxml-media": (12_252, 50_992, 6),
-    "oxml-opc": (92_122, 355_510, 12),
+    "oxml-opc": (96_731, 373_059, 12),
     "oxml-pdf": (66_015, 304_432, 14),
     "oxml-sml": (12_511, 49_803, 6),
-    "rdocx": (1_092_256, 6_498_484, 36),
-    "rdocx-cli": (33_805, 145_256, 8),
+    "rdocx": (1_156_600, 6_799_680, 36),
+    "rdocx-cli": (46_413, 203_342, 8),
     "rdocx-html": (15_486, 63_894, 11),
-    "rdocx-layout": (255_752, 1_385_701, 15),
+    "rdocx-layout": (256_086, 1_387_027, 15),
     "rdocx-opc": (3_655, 9_668, 6),
-    "rdocx-oxml": (367_500, 2_380_047, 32),
+    "rdocx-oxml": (401_214, 2_530_627, 32),
     "rdocx-pdf": (8_111, 26_758, 6),
-    "rpptx": (408_180, 2_124_176, 16),
+    "rpptx": (409_182, 2_130_578, 16),
     "rpptx-chart": (6_648, 21_136, 6),
-    "rpptx-cli": (36_709, 159_585, 8),
+    "rpptx-cli": (39_989, 174_505, 8),
     "rpptx-layout": (79_109, 458_112, 11),
-    "rpptx-oxml": (153_454, 1_043_374, 20),
+    "rpptx-oxml": (153_461, 1_043_374, 20),
     "rpptx-render": (59_928, 329_994, 8),
 }
 PACKAGE_VERSIONS = {

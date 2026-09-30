@@ -6,11 +6,16 @@ publication, and JSON contracts.
 ## Capabilities
 
 - Positive one-based inclusive ranges with sorted, deduplicated results.
-- Output extension replacement and collision checks.
+- Output extension replacement and collision checks, including refusal of an
+  output that is the input file under any spelling of its path, or that is not
+  a regular file.
 - Adjacent temporary-file staging with cleanup and rollback after errors.
+- Atomic replacement of existing files when the caller allows it. A replacing
+  set keeps the files it has already swapped in when a later one fails, since
+  the files they replaced cannot be restored.
 - Versioned JSON object envelopes shared by Word and Presentation CLIs.
-- Bounded expansion and staged multi-output publication keep large or failed
-  requests from leaving partial command results.
+- Bounded expansion and staged multi-output publication without replacement
+  keep large or failed requests from leaving partial command results.
 
 ## Measured footprint and speed
 
@@ -18,7 +23,7 @@ The archive row is regenerated from the package that carries this README.
 
 | Measurement | Value | Version | Platform | Build mode | Input | Command | Statistic | Measured on |
 |---|---|---|---|---|---|---|---|---|
-| Crates.io archive: oxml-cli-support | 6,718 compressed bytes, 21,586 member bytes, 6 members | 0.12.1 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `oxml-cli-support` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-09-19 |
+| Crates.io archive: oxml-cli-support | 8,614 compressed bytes, 30,840 member bytes, 6 members | 0.12.1 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `oxml-cli-support` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-09-29 |
 
 ## Use it when
 

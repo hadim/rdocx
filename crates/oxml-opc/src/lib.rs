@@ -17,7 +17,7 @@ mod signature;
 
 pub use content_types::{ContentType, ContentTypes};
 pub use error::OpcError;
-pub use package::{OpcPackage, PackagePart, PackageReadLimits};
+pub use package::{OpcPackage, PackagePart, PackageReadLimits, write_atomic_file};
 pub use relationship::{Relationship, Relationships};
 #[cfg(feature = "digital-signatures")]
 pub use signature::{

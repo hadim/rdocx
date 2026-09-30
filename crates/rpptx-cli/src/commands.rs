@@ -1,10 +1,12 @@
 //! CLI command implementations.
 
 use std::collections::HashSet;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use oxml_cli_support::{
-    StagedOutputSet, default_output_path, ensure_output_paths_available, json_envelope, parse_range,
+    StagedOutputSet, default_output_path, ensure_output_paths_allowed,
+    ensure_output_paths_available, json_envelope, parse_range,
 };
 use oxml_pdf::{RasterFormat, RasterOptions, RasterOutput};
 use rpptx::{
@@ -18,6 +20,12 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 const MAX_RASTER_PIXELS: u64 = 8_000_000;
 const MAX_LCS_CELLS: usize = 1_000_000;
 const THUMBNAIL_WIDTH: f64 = 320.0;
+
+pub struct ImageOptions<'a> {
+    pub slides: Option<&'a str>,
+    pub quality: u8,
+    pub transparent: bool,
+}
 
 pub fn inspect(file: &Path, as_json: bool) -> Result<()> {
     let presentation = Presentation::open(file)?;
@@ -61,59 +69,61 @@ pub fn inspect(file: &Path, as_json: bool) -> Result<()> {
             },
             "slide_details": slides,
         }))?;
-        println!("{}", serde_json::to_string_pretty(&value)?);
+        writeln!(io::stdout(), "{}", serde_json::to_string_pretty(&value)?)?;
         return Ok(());
     }
 
-    println!("File: {}", file.display());
-    println!("Slides: {}", presentation.len());
-    println!("Layouts: {}", presentation.layout_count());
+    let mut stdout = io::stdout().lock();
+    writeln!(stdout, "File: {}", file.display())?;
+    writeln!(stdout, "Slides: {}", presentation.len())?;
+    writeln!(stdout, "Layouts: {}", presentation.layout_count())?;
     if let Some((width, height)) = size {
-        println!("Slide size: {} x {} EMU", width.0, height.0);
+        writeln!(stdout, "Slide size: {} x {} EMU", width.0, height.0)?;
     }
-    println!();
-    println!("Metadata:");
+    writeln!(stdout)?;
+    writeln!(stdout, "Metadata:")?;
     if let Some(core) = core {
         if let Some(value) = core.title.as_deref() {
-            println!("  Title: {value}");
+            writeln!(stdout, "  Title: {value}")?;
         }
         if let Some(value) = core.creator.as_deref() {
-            println!("  Creator: {value}");
+            writeln!(stdout, "  Creator: {value}")?;
         }
         if let Some(value) = core.subject.as_deref() {
-            println!("  Subject: {value}");
+            writeln!(stdout, "  Subject: {value}")?;
         }
         if let Some(value) = core.description.as_deref() {
-            println!("  Description: {value}");
+            writeln!(stdout, "  Description: {value}")?;
         }
         if let Some(value) = core.keywords.as_deref() {
-            println!("  Keywords: {value}");
+            writeln!(stdout, "  Keywords: {value}")?;
         }
         if let Some(value) = core.last_modified_by.as_deref() {
-            println!("  Last modified by: {value}");
+            writeln!(stdout, "  Last modified by: {value}")?;
         }
         if let Some(value) = core.created.as_deref() {
-            println!("  Created: {value}");
+            writeln!(stdout, "  Created: {value}")?;
         }
         if let Some(value) = core.modified.as_deref() {
-            println!("  Modified: {value}");
+            writeln!(stdout, "  Modified: {value}")?;
         }
         if core == &rpptx::CoreProperties::default() {
-            println!("  (none)");
+            writeln!(stdout, "  (none)")?;
         }
     } else {
-        println!("  (none)");
+        writeln!(stdout, "  (none)")?;
     }
-    println!();
+    writeln!(stdout)?;
     for (index, slide) in presentation.slides().enumerate() {
-        println!(
+        writeln!(
+            stdout,
             "Slide {}: id={}, name={}, hidden={}, shapes={}",
             index + 1,
             slide.id(),
             slide.name().unwrap_or(""),
             slide.hidden(),
             slide.shapes().len()
-        );
+        )?;
     }
     Ok(())
 }
@@ -140,10 +150,11 @@ pub fn text(file: &Path, as_json: bool, notes: bool) -> Result<()> {
             .collect::<Vec<_>>();
         return print_json(json!({ "slides": slides }));
     }
+    let mut stdout = io::stdout().lock();
     for slide in presentation.slides() {
-        println!("{}", slide.text());
+        writeln!(stdout, "{}", slide.text())?;
         if notes {
-            print_notes(slide);
+            print_notes(slide)?;
         }
     }
     Ok(())
@@ -291,20 +302,23 @@ fn autofit_label(mode: AutofitMode) -> &'static str {
     }
 }
 
-fn print_notes(slide: SlideRef<'_>) {
+fn print_notes(slide: SlideRef<'_>) -> io::Result<()> {
+    let mut stdout = io::stdout().lock();
     for line in slide.notes_text().unwrap_or_default().lines() {
         let line = normalize_outline_text(line);
         if !line.is_empty() {
-            println!("Notes: {line}");
+            writeln!(stdout, "Notes: {line}")?;
         }
     }
+    Ok(())
 }
 
 fn print_json(payload: Value) -> Result<()> {
-    println!(
+    writeln!(
+        io::stdout(),
         "{}",
         serde_json::to_string_pretty(&json_envelope(payload)?)?
-    );
+    )?;
     Ok(())
 }
 
@@ -312,14 +326,13 @@ pub fn convert(
     file: &Path,
     format: &str,
     output: Option<&Path>,
+    force: bool,
     dpi: f64,
-    slides: Option<&str>,
-    quality: u8,
-    transparent: bool,
+    image: ImageOptions<'_>,
 ) -> Result<()> {
     validate_dpi(dpi)?;
     let presentation = Presentation::open(file)?;
-    let image_format = parse_image_format(format, quality, transparent);
+    let image_format = parse_image_format(format, image.quality, image.transparent);
     let extension = match (format, image_format.as_ref()) {
         ("pdf", _) => "pdf",
         (_, Ok((_, extension))) => extension,
@@ -330,10 +343,19 @@ pub fn convert(
     let output = output
         .map(Path::to_path_buf)
         .unwrap_or_else(|| default_output_path(file, extension));
+    // Several PNG or JPEG slides are written under numbered names, so those
+    // outputs are checked once the slides are selected.
+    if !matches!(format, "png" | "jpg" | "jpeg") {
+        ensure_output_paths_allowed(std::slice::from_ref(&output), file, force)?;
+    }
+    let mut stdout = io::stdout().lock();
     match format {
         "pdf" => {
-            std::fs::write(&output, presentation.to_pdf_deterministic()?)?;
-            println!("Written to {}", output.display());
+            stage_and_publish(
+                &[(output.clone(), presentation.to_pdf_deterministic()?)],
+                force,
+            )?;
+            writeln!(stdout, "Written to {}", output.display())?;
         }
         "png" | "jpg" | "jpeg" | "tif" | "tiff" => {
             if presentation.is_empty() {
@@ -348,7 +370,7 @@ pub fn convert(
                 )
                 .into());
             }
-            let selected = selected_zero_based_slides(presentation.len(), slides)?;
+            let selected = selected_zero_based_slides(presentation.len(), image.slides)?;
             for index in &selected {
                 let page = &layout.pages[*index];
                 validate_raster_dimensions(page.width, page.height, dpi)?;
@@ -361,14 +383,14 @@ pub fn convert(
                     let RasterOutput::MultiPageTiff(tiff) = output_bytes else {
                         return Err("TIFF render did not produce one stream".into());
                     };
-                    stage_and_publish(&[(output.clone(), tiff)])?;
-                    println!("Written to {}", output.display());
+                    stage_and_publish(&[(output.clone(), tiff)], force)?;
+                    writeln!(stdout, "Written to {}", output.display())?;
                 }
                 RasterFormat::Png { .. } | RasterFormat::Jpeg { .. } => {
                     let output_paths =
                         convert_separate_output_paths(&output, extension, selected.len());
-                    ensure_output_paths_available(&output_paths)?;
-                    let mut staged = StagedOutputSet::new();
+                    ensure_output_paths_allowed(&output_paths, file, force)?;
+                    let mut staged = StagedOutputSet::with_replace_existing(force);
                     let mut rendered = Vec::with_capacity(selected.len());
                     for (one_based, (index, path)) in
                         selected.iter().zip(output_paths.iter()).enumerate()
@@ -380,7 +402,7 @@ pub fn convert(
                     }
                     staged.publish()?;
                     for (one_based, path) in rendered {
-                        println!("Slide {one_based} -> {}", path.display());
+                        writeln!(stdout, "Slide {one_based} -> {}", path.display())?;
                     }
                 }
             }
@@ -404,24 +426,25 @@ pub fn diff(file_a: &Path, file_b: &Path) -> Result<()> {
     let common = longest_common_subsequence(&text_a, &text_b)?;
     let mut a = 0;
     let mut b = 0;
+    let mut stdout = io::stdout().lock();
     for value in common {
         while text_a.get(a) != Some(&value) {
-            println!("- [{}] {}", a + 1, text_a[a]);
+            writeln!(stdout, "- [{}] {}", a + 1, text_a[a])?;
             a += 1;
         }
         while text_b.get(b) != Some(&value) {
-            println!("+ [{}] {}", b + 1, text_b[b]);
+            writeln!(stdout, "+ [{}] {}", b + 1, text_b[b])?;
             b += 1;
         }
         a += 1;
         b += 1;
     }
     while a < text_a.len() {
-        println!("- [{}] {}", a + 1, text_a[a]);
+        writeln!(stdout, "- [{}] {}", a + 1, text_a[a])?;
         a += 1;
     }
     while b < text_b.len() {
-        println!("+ [{}] {}", b + 1, text_b[b]);
+        writeln!(stdout, "+ [{}] {}", b + 1, text_b[b])?;
         b += 1;
     }
     Ok(())
@@ -494,10 +517,14 @@ pub fn replace(
     if count == 0 && expect != Some(0) {
         return Err(format!("no replacements found for \"{placeholder}\"").into());
     }
-    let bytes = presentation.to_bytes()?;
-    stage_and_publish(&[(output.to_path_buf(), bytes)])?;
-    println!("Replaced {count} occurrence(s) of \"{placeholder}\" -> \"{value}\"");
-    println!("Written to {}", output.display());
+    let bytes = presentation.to_bytes_for_path(output)?;
+    stage_and_publish(&[(output.to_path_buf(), bytes)], false)?;
+    let mut stdout = io::stdout().lock();
+    writeln!(
+        stdout,
+        "Replaced {count} occurrence(s) of \"{placeholder}\" -> \"{value}\""
+    )?;
+    writeln!(stdout, "Written to {}", output.display())?;
     Ok(())
 }
 
@@ -508,7 +535,13 @@ pub fn validate(file: &Path) -> Result<bool> {
         eprintln!("{issue:?}");
     }
     if issues.is_empty() {
-        println!("Validation passed: {}", file.display());
+        // A reader that closes standard output early, as `| head` does, does
+        // not change the verdict.
+        if let Err(error) = writeln!(io::stdout(), "Validation passed: {}", file.display())
+            && error.kind() != io::ErrorKind::BrokenPipe
+        {
+            return Err(error.into());
+        }
     } else {
         eprintln!("Validation failed with {} issue(s)", issues.len());
     }
@@ -518,16 +551,15 @@ pub fn validate(file: &Path) -> Result<bool> {
 pub fn render(
     file: &Path,
     output: Option<&Path>,
+    force: bool,
     dpi: f64,
-    range: Option<&str>,
     format: &str,
-    quality: u8,
-    transparent: bool,
+    image: ImageOptions<'_>,
 ) -> Result<()> {
     validate_dpi(dpi)?;
     let presentation = Presentation::open(file)?;
-    let (format, extension) = parse_image_format(format, quality, transparent)?;
-    let selected = selected_zero_based_slides(presentation.len(), range)?;
+    let (format, extension) = parse_image_format(format, image.quality, image.transparent)?;
+    let selected = selected_zero_based_slides(presentation.len(), image.slides)?;
     let output = output.unwrap_or_else(|| Path::new("."));
     let stem = file.file_stem().unwrap_or_default().to_string_lossy();
     let (_, layout) = presentation.render_deterministic()?;
@@ -538,17 +570,19 @@ pub fn render(
             .ok_or_else(|| format!("slide {} has no rendered page", index + 1))?;
         validate_raster_dimensions(page.width, page.height, dpi)?;
     }
+    let mut stdout = io::stdout().lock();
     match format {
         RasterFormat::Tiff => {
+            let path = output.join(format!("{stem}.tiff"));
+            ensure_output_paths_allowed(std::slice::from_ref(&path), file, force)?;
             let output_bytes =
                 oxml_pdf::render_pages(&layout, &selected, RasterOptions { dpi, format })?;
             let RasterOutput::MultiPageTiff(tiff) = output_bytes else {
                 return Err("TIFF render did not produce one stream".into());
             };
-            let path = output.join(format!("{stem}.tiff"));
             std::fs::create_dir_all(output)?;
-            stage_and_publish(&[(path.clone(), tiff)])?;
-            println!("Written to {}", path.display());
+            stage_and_publish(&[(path.clone(), tiff)], force)?;
+            writeln!(stdout, "Written to {}", path.display())?;
         }
         RasterFormat::Png { .. } | RasterFormat::Jpeg { .. } => {
             let output_paths = selected
@@ -559,8 +593,8 @@ pub fn render(
                 })
                 .collect::<Vec<_>>();
             std::fs::create_dir_all(output)?;
-            ensure_output_paths_available(&output_paths)?;
-            let mut staged = StagedOutputSet::new();
+            ensure_output_paths_allowed(&output_paths, file, force)?;
+            let mut staged = StagedOutputSet::with_replace_existing(force);
             let mut rendered = Vec::with_capacity(selected.len());
             for (index, path) in selected.iter().zip(output_paths.iter()) {
                 let one_based = index + 1;
@@ -570,18 +604,22 @@ pub fn render(
             }
             staged.publish()?;
             for (one_based, path) in rendered {
-                println!("Slide {one_based} -> {}", path.display());
+                writeln!(stdout, "Slide {one_based} -> {}", path.display())?;
             }
         }
     }
     Ok(())
 }
 
-pub fn thumbnail(file: &Path, output: Option<&Path>) -> Result<()> {
+pub fn thumbnail(file: &Path, output: Option<&Path>, force: bool) -> Result<()> {
     let presentation = Presentation::open(file)?;
     if presentation.is_empty() {
         return Err("cannot thumbnail a presentation with no slides".into());
     }
+    let output = output
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| default_output_path(file, "png"));
+    ensure_output_paths_allowed(std::slice::from_ref(&output), file, force)?;
     let (_, layout) = presentation.render_deterministic()?;
     let page = layout
         .pages
@@ -594,17 +632,15 @@ pub fn thumbnail(file: &Path, output: Option<&Path>) -> Result<()> {
     validate_raster_dimensions(page.width, page.height, dpi)?;
     let png = oxml_pdf::render_page_to_png(&layout, 0, dpi)
         .ok_or("slide one did not rasterize for thumbnail")?;
-    let output = output
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| default_output_path(file, "png"));
-    std::fs::write(&output, png)?;
-    println!("Written to {}", output.display());
+    stage_and_publish(&[(output.clone(), png)], force)?;
+    writeln!(io::stdout(), "Written to {}", output.display())?;
     Ok(())
 }
 
 pub fn outline(file: &Path, as_json: bool, notes: bool) -> Result<()> {
     let presentation = Presentation::open(file)?;
     let mut slides = Vec::new();
+    let mut stdout = io::stdout().lock();
     for (index, slide) in presentation.slides().enumerate() {
         let title_shape = slide.title();
         let title = normalize_outline_text(
@@ -633,15 +669,15 @@ pub fn outline(file: &Path, as_json: bool, notes: bool) -> Result<()> {
             continue;
         }
         if title.is_empty() {
-            println!("Slide {}", index + 1);
+            writeln!(stdout, "Slide {}", index + 1)?;
         } else {
-            println!("Slide {}: {title}", index + 1);
+            writeln!(stdout, "Slide {}: {title}", index + 1)?;
         }
         for (level, text) in items {
-            println!("{}- {text}", "  ".repeat(level as usize));
+            writeln!(stdout, "{}- {text}", "  ".repeat(level as usize))?;
         }
         if notes {
-            print_notes(slide);
+            print_notes(slide)?;
         }
     }
     if as_json {
@@ -733,11 +769,13 @@ pub fn comment_list(file: &Path, as_json: bool) -> Result<()> {
             .collect::<Vec<_>>();
         return print_json(json!({ "comments": records }));
     }
+    let mut stdout = io::stdout().lock();
     if entries.is_empty() {
-        println!("(no comments)");
+        writeln!(stdout, "(no comments)")?;
     }
     for entry in &entries {
-        println!(
+        writeln!(
+            stdout,
             "{}\t{}\t{}\t{}\t{}",
             entry.slide,
             entry.id,
@@ -747,7 +785,7 @@ pub fn comment_list(file: &Path, as_json: bool) -> Result<()> {
                 .filter(|status| *status != "active")
                 .unwrap_or("open"),
             entry.text.replace('\n', " ")
-        );
+        )?;
     }
     Ok(())
 }
@@ -944,14 +982,21 @@ fn next_comment_guid(presentation: &Presentation) -> String {
 }
 
 fn publish_presentation(presentation: &Presentation, output: &Path) -> Result<()> {
-    stage_and_publish(&[(output.to_path_buf(), presentation.to_bytes()?)])
+    stage_and_publish(
+        &[(
+            output.to_path_buf(),
+            presentation.to_bytes_for_path(output)?,
+        )],
+        false,
+    )
 }
 
 /// Prints a schema-1 operation record, or the action and the output path.
 fn mutation_record(as_json: bool, action: &str, mut record: Value, output: &Path) -> Result<()> {
     if !as_json {
-        println!("{action}");
-        println!("Written to {}", output.display());
+        let mut stdout = io::stdout().lock();
+        writeln!(stdout, "{action}")?;
+        writeln!(stdout, "Written to {}", output.display())?;
         return Ok(());
     }
     record["action"] = json!(action);
@@ -1033,13 +1078,16 @@ fn render_one_raster_page(
     Ok(pages.remove(0))
 }
 
-fn stage_and_publish(outputs: &[(PathBuf, Vec<u8>)]) -> Result<()> {
-    let paths = outputs
-        .iter()
-        .map(|(path, _)| path.clone())
-        .collect::<Vec<_>>();
-    ensure_output_paths_available(&paths)?;
-    let mut staged = StagedOutputSet::new();
+/// Publishes complete outputs, replacing existing files only with `force`.
+fn stage_and_publish(outputs: &[(PathBuf, Vec<u8>)], force: bool) -> Result<()> {
+    if !force {
+        let paths = outputs
+            .iter()
+            .map(|(path, _)| path.clone())
+            .collect::<Vec<_>>();
+        ensure_output_paths_available(&paths)?;
+    }
+    let mut staged = StagedOutputSet::with_replace_existing(force);
     for (path, bytes) in outputs {
         staged.stage_bytes(path, bytes)?;
     }
