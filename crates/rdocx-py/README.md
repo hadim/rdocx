@@ -50,7 +50,8 @@ with open("report.pdf", "wb") as output:
 - Tracked comparison, main-body comment threads, revision resolution, and TOC
   rebuilding.
 - Deterministic layout fragments, page geometry, and PDF, PNG, JPEG, and TIFF
-  output through the native document engine.
+  output through the native document engine, with a keyword-only
+  `revision_view="tracked"` that shows the tracked changes.
 - Python collections with negative indexes, slices, iteration, and explicit
   stale-handle errors after structural changes.
 

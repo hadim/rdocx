@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use oxml_opc::OpcPackage;
 use oxml_opc::relationship::rel_types;
-use rdocx::{Document, WordPackageClass};
+use rdocx::{Document, RenderOptions, RevisionView, WordPackageClass};
 use serde_json::{Value, json};
 
 static TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -1199,6 +1199,103 @@ fn render_uses_the_bundled_font_deterministic_path() {
     assert_eq!(all_bytes, expected);
 
     assert_eq!(fs::read(selected_png).unwrap(), fs::read(all_png).unwrap());
+}
+
+#[test]
+fn convert_and_render_select_the_revision_view() {
+    let temp = TempWorkspace::new("revision-view");
+    let redline = temp.path.join("redline.docx");
+    let mut document = fixture_document(&["Keep OLDWORD here."]);
+    document
+        .compare(
+            &fixture_document(&["Keep NEWWORD here."]),
+            "Reviewer",
+            "2026-09-30T12:00:00Z",
+        )
+        .unwrap();
+    document.save(&redline).unwrap();
+    let redline_doc = Document::open(&redline).unwrap();
+    let tracked = RenderOptions {
+        revision_view: RevisionView::Tracked,
+    };
+    let accepted_pdf = redline_doc.to_pdf().unwrap();
+    let tracked_pdf = redline_doc.to_pdf_with_options(tracked).unwrap();
+    let accepted_png = redline_doc
+        .render_page_to_png_deterministic(0, 24.0)
+        .unwrap()
+        .unwrap();
+    let tracked_png = redline_doc
+        .render_page_to_png_deterministic_with_options(0, 24.0, tracked)
+        .unwrap()
+        .unwrap();
+    assert_ne!(accepted_pdf, tracked_pdf);
+    assert_ne!(accepted_png, tracked_png);
+
+    for (view, expected_pdf, expected_png) in [
+        (None, &accepted_pdf, &accepted_png),
+        (Some("accepted"), &accepted_pdf, &accepted_png),
+        (Some("tracked"), &tracked_pdf, &tracked_png),
+    ] {
+        let label = view.unwrap_or("default");
+        let flag = view
+            .map(|view| vec!["--revision-view", view])
+            .unwrap_or_default();
+        let pdf = temp.path.join(format!("{label}.pdf"));
+        let converted = cli(&[
+            &["convert", path_text(&redline), "--to", "pdf", "-o"][..],
+            &[path_text(&pdf)],
+            &flag,
+        ]
+        .concat());
+        assert_success(&converted, &format!("convert {label}"));
+        assert_eq!(&fs::read(&pdf).unwrap(), expected_pdf, "{label}");
+
+        let out_dir = temp.path.join(label);
+        let rendered = cli(&[
+            &["render", path_text(&redline), "--dpi", "24", "--output-dir"][..],
+            &[path_text(&out_dir)],
+            &flag,
+        ]
+        .concat());
+        assert_success(&rendered, &format!("render {label}"));
+        assert_eq!(
+            &fs::read(out_dir.join("redline_page1.png")).unwrap(),
+            expected_png,
+            "{label}"
+        );
+    }
+
+    let unknown_pdf = temp.path.join("unknown.pdf");
+    for args in [
+        &[
+            "convert",
+            path_text(&redline),
+            "--to",
+            "pdf",
+            "-o",
+            path_text(&unknown_pdf),
+            "--revision-view",
+            "final",
+        ][..],
+        &[
+            "render",
+            path_text(&redline),
+            "--output-dir",
+            path_text(&temp.path),
+            "--revision-view",
+            "final",
+        ],
+    ] {
+        let refused = cli(args);
+        assert_eq!(refused.status.code(), Some(2), "{args:?}");
+        assert!(
+            String::from_utf8_lossy(&refused.stderr)
+                .contains("unknown revision view \"final\", expected accepted or tracked"),
+            "{args:?}"
+        );
+    }
+    assert!(!unknown_pdf.exists());
+    assert!(!temp.path.join("redline_page1.png").exists());
 }
 
 #[test]

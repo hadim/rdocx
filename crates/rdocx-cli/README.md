@@ -48,6 +48,7 @@ rdocx text report.docx --json
 rdocx layout report.docx --json
 rdocx replace template.docx -p TOKEN -v ready --expect 1 -o report.docx
 rdocx convert report.docx --to pdf -o report.pdf
+rdocx convert redline.docx --to pdf --revision-view tracked -o redline.pdf
 rdocx validate report.docx
 rdocx render report.docx --page 0 -o rendered
 rdocx comment list report.docx --json
@@ -86,6 +87,12 @@ the `comment` story excludes only the comments part, so a pair whose comments
 differ needs `--ignore-comments`. An unknown granularity or story name is a
 usage error, a repeated story fails, and neither creates the output. The
 `--json` record states the options that ran.
+
+`convert` to PDF or an image format and `render` draw the accepted view by
+default, as if every tracked change were accepted. `--revision-view tracked`
+draws both sides of each tracked change instead, with deletions struck through,
+insertions underlined, and a change bar in the margin. An unknown view is a
+usage error. The flag does not apply to HTML and Markdown conversion.
 
 Revision `list` reports the main story. Revision `accept` and `reject` operate
 across every supported story and accept at most one selector: `--id`,

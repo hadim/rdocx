@@ -8,6 +8,7 @@ from .enum import table as _table
 from .enum import text as _text
 
 _Path = str | _os.PathLike[str]
+_RevisionView = _Literal["accepted", "tracked"]
 __all__ = [
     "BoundingBox", "Cell", "CellCollection", "CellParagraphCollection",
     "Comment", "ComparisonDiagnostic", "ContentFragment", "Document", "Font", "HeaderFooterVariant",
@@ -437,9 +438,13 @@ class Document:
     def split_run(
         self, body_index: int | Paragraph, run_index: int, character_offset: int
     ) -> int: ...
-    def to_pdf(self) -> bytes: ...
-    def render_page_to_png(self, page_index: int, dpi: float = 150.0) -> bytes | None: ...
-    def render_all_pages(self, dpi: float = 150.0) -> list[bytes]: ...
+    def to_pdf(self, *, revision_view: _RevisionView = "accepted") -> bytes: ...
+    def render_page_to_png(
+        self, page_index: int, dpi: float = 150.0, *, revision_view: _RevisionView = "accepted"
+    ) -> bytes | None: ...
+    def render_all_pages(
+        self, dpi: float = 150.0, *, revision_view: _RevisionView = "accepted"
+    ) -> list[bytes]: ...
     def render_pages(
         self,
         *,
@@ -448,6 +453,7 @@ class Document:
         quality: int = 90,
         transparent: bool = False,
         pages: list[int] | None = None,
+        revision_view: _RevisionView = "accepted",
     ) -> list[bytes] | bytes: ...
     def compare(
         self, edited: Document, author: str, timestamp: str

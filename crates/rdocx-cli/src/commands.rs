@@ -9,7 +9,7 @@ use oxml_cli_support::{
 };
 use rdocx::{
     BodyItemRef, ComparisonGranularity, ComparisonOptions, ComparisonStoryKind, Document,
-    RasterFormat, RasterOptions, RasterOutput, RevisionKind, RunRange,
+    RasterFormat, RasterOptions, RasterOutput, RevisionKind, RevisionView, RunRange,
 };
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Document};
@@ -31,6 +31,7 @@ pub struct RenderOptions<'a> {
     pub format: &'a str,
     pub quality: u8,
     pub transparent: bool,
+    pub revision_view: RevisionView,
 }
 
 #[derive(Clone, Copy)]
@@ -375,6 +376,7 @@ fn collect_control_paragraphs(
 }
 
 /// Convert a DOCX file to another format.
+#[allow(clippy::too_many_arguments)]
 pub fn convert(
     file: &Path,
     to: &str,
@@ -382,9 +384,11 @@ pub fn convert(
     force: bool,
     dpi: u32,
     font_dir: Option<&Path>,
+    revision_view: RevisionView,
     image: ImageOptions<'_>,
 ) -> Result<()> {
     let doc = Document::open(file)?;
+    let render_options = rdocx::RenderOptions { revision_view };
 
     let default_ext = match to {
         "pdf" => "pdf",
@@ -420,9 +424,9 @@ pub fn convert(
                     .iter()
                     .map(|f| (f.family.as_str(), f.data.as_slice()))
                     .collect();
-                doc.to_pdf_with_fonts(&font_refs)?
+                doc.to_pdf_with_fonts_and_options(&font_refs, render_options)?
             } else {
-                doc.to_pdf()?
+                doc.to_pdf_with_options(render_options)?
             };
             stage_and_publish(&[(output_path.clone(), bytes)], force)?;
         }
@@ -436,7 +440,7 @@ pub fn convert(
         }
         "png" | "jpg" | "jpeg" | "tif" | "tiff" => {
             let (format, extension) = parse_image_format(to, image.quality, image.transparent)?;
-            let layout = doc.layout_deterministic()?;
+            let layout = doc.layout_deterministic_with_options(render_options)?;
             let selected = selected_zero_based_pages(layout.layout.pages.len(), image.pages)?;
             match format {
                 RasterFormat::Tiff => {
@@ -811,6 +815,17 @@ pub fn parse_comparison_granularity(
         })
 }
 
+/// Parse a `--revision-view` value.
+pub fn parse_revision_view(name: &str) -> std::result::Result<RevisionView, String> {
+    match name {
+        "accepted" => Ok(RevisionView::Accepted),
+        "tracked" => Ok(RevisionView::Tracked),
+        _ => Err(format!(
+            "unknown revision view {name:?}, expected accepted or tracked"
+        )),
+    }
+}
+
 /// Parse one `--ignore-story` value.
 pub fn parse_comparison_story(name: &str) -> std::result::Result<ComparisonStoryKind, String> {
     COMPARISON_STORIES
@@ -1084,7 +1099,9 @@ pub fn render(
     let out_dir = output_dir.unwrap_or_else(|| Path::new("."));
     let (format, extension) =
         parse_image_format(options.format, options.quality, options.transparent)?;
-    let layout = doc.layout_deterministic()?;
+    let layout = doc.layout_deterministic_with_options(rdocx::RenderOptions {
+        revision_view: options.revision_view,
+    })?;
     let selected = selected_render_pages(layout.layout.pages.len(), options.page, options.pages)?;
     let stem = file.file_stem().unwrap_or_default().to_string_lossy();
     let legacy_single_page = options.page.is_some();
@@ -1460,6 +1477,7 @@ mod tests {
             false,
             96,
             None,
+            RevisionView::Accepted,
             ImageOptions {
                 pages: None,
                 quality: 90,
