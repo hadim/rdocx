@@ -38929,3 +38929,221 @@ fn issue_159_content_control_identity_only_comparison_has_no_revision() {
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     assert!(compared.revisions().is_empty());
 }
+
+/// The properties of each body paragraph, with an empty `w:pPr` or mark
+/// `w:rPr` read as none.
+fn resolved_paragraph_properties(
+    document: &mut Document,
+) -> Vec<Option<rdocx_oxml::properties::CT_PPr>> {
+    body_from_document(document)
+        .content
+        .iter()
+        .map(|content| {
+            let BodyContent::Paragraph(paragraph) = content else {
+                panic!("unexpected body item");
+            };
+            paragraph.properties.clone().and_then(|mut properties| {
+                if properties.rpr == Some(Default::default()) {
+                    properties.rpr = None;
+                }
+                (properties != Default::default()).then_some(properties)
+            })
+        })
+        .collect()
+}
+
+#[test]
+fn rejecting_paragraph_property_change_keeps_mark_and_section_properties() {
+    let change = |id: u32, local: &str, prior: &str| {
+        format!(
+            r#"<w:{local}Change w:id="{id}" w:author="Reviewer" w:date="2026-10-01T00:09:00Z">{prior}</w:{local}Change>"#
+        )
+    };
+    let section =
+        |width: u32| format!(r#"<w:sectPr><w:pgSz w:w="{width}" w:h="15840"/></w:sectPr>"#);
+    let paragraph = |properties: &str| {
+        format!(
+            r#"<w:p><w:pPr>{properties}</w:pPr><w:r><w:t>a</w:t></w:r></w:p><w:p><w:r><w:t>z</w:t></w:r></w:p>"#
+        )
+    };
+    let centred = r#"<w:pPr><w:jc w:val="center"/></w:pPr>"#;
+    let cases = [
+        // Word's shape: an unrevised bold mark beside a paragraph change.
+        (
+            format!(
+                r#"<w:jc w:val="right"/><w:rPr><w:b/></w:rPr>{}"#,
+                change(1, "pPr", centred)
+            ),
+            r#"<w:jc w:val="right"/><w:rPr><w:b/></w:rPr>"#.to_owned(),
+            r#"<w:jc w:val="center"/><w:rPr><w:b/></w:rPr>"#.to_owned(),
+        ),
+        // The mark resolves its own change independently.
+        (
+            format!(
+                r#"<w:jc w:val="right"/><w:rPr><w:i/>{}</w:rPr>{}"#,
+                change(1, "rPr", "<w:rPr><w:b/></w:rPr>"),
+                change(2, "pPr", centred)
+            ),
+            r#"<w:jc w:val="right"/><w:rPr><w:i/></w:rPr>"#.to_owned(),
+            r#"<w:jc w:val="center"/><w:rPr><w:b/></w:rPr>"#.to_owned(),
+        ),
+        // An unrevised section break stays.
+        (
+            format!(
+                r#"<w:jc w:val="right"/><w:rPr><w:b/></w:rPr>{}{}"#,
+                section(12240),
+                change(1, "pPr", centred)
+            ),
+            format!(
+                r#"<w:jc w:val="right"/><w:rPr><w:b/></w:rPr>{}"#,
+                section(12240)
+            ),
+            format!(
+                r#"<w:jc w:val="center"/><w:rPr><w:b/></w:rPr>{}"#,
+                section(12240)
+            ),
+        ),
+        // A revised section break resolves its own change.
+        (
+            format!(
+                r#"<w:jc w:val="right"/><w:sectPr><w:pgSz w:w="15840" w:h="15840"/>{}</w:sectPr>{}"#,
+                change(1, "sectPr", &section(12240)),
+                change(2, "pPr", centred)
+            ),
+            format!(r#"<w:jc w:val="right"/>{}"#, section(15840)),
+            format!(r#"<w:jc w:val="center"/>{}"#, section(12240)),
+        ),
+        // Older rdocx redlines keep the prior mark formatting in the prior
+        // properties, which still wins over the current mark.
+        (
+            format!(
+                r#"<w:jc w:val="right"/><w:rPr><w:i/></w:rPr>{}{}"#,
+                section(12240),
+                change(
+                    1,
+                    "pPr",
+                    r#"<w:pPr><w:jc w:val="center"/><w:rPr><w:b/></w:rPr></w:pPr>"#
+                )
+            ),
+            format!(
+                r#"<w:jc w:val="right"/><w:rPr><w:i/></w:rPr>{}"#,
+                section(12240)
+            ),
+            format!(
+                r#"<w:jc w:val="center"/><w:rPr><w:b/></w:rPr>{}"#,
+                section(12240)
+            ),
+        ),
+    ];
+    for (redline, accepted, rejected) in cases {
+        for (accept, expected) in [(true, &accepted), (false, &rejected)] {
+            let mut resolved =
+                document_with_content_controls(&wrap_word_body(&paragraph(&redline)));
+            if accept {
+                resolved.accept_all().expect("accept");
+            } else {
+                resolved.reject_all().expect("reject");
+            }
+            assert!(resolved.revisions().is_empty(), "{redline} accept={accept}");
+            let mut expected =
+                document_with_content_controls(&wrap_word_body(&paragraph(expected)));
+            assert_eq!(
+                resolved_paragraph_properties(&mut resolved),
+                resolved_paragraph_properties(&mut expected),
+                "{redline} accept={accept}"
+            );
+        }
+    }
+}
+
+#[test]
+fn compared_paragraph_properties_track_the_mark_formatting_apart() {
+    let paragraph = |properties: &str| {
+        format!(
+            r#"<w:p><w:pPr>{properties}</w:pPr><w:r><w:t>a</w:t></w:r></w:p><w:p><w:r><w:t>z</w:t></w:r></w:p>"#
+        )
+    };
+    let section = r#"<w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr>"#;
+    let centred_bold = r#"<w:jc w:val="center"/><w:rPr><w:b/></w:rPr>"#;
+    let pairs = [
+        (
+            centred_bold.to_owned(),
+            r#"<w:jc w:val="right"/>"#.to_owned(),
+        ),
+        (
+            r#"<w:jc w:val="center"/>"#.to_owned(),
+            r#"<w:jc w:val="right"/><w:rPr><w:b/></w:rPr>"#.to_owned(),
+        ),
+        (
+            centred_bold.to_owned(),
+            r#"<w:jc w:val="center"/>"#.to_owned(),
+        ),
+        (
+            centred_bold.to_owned(),
+            r#"<w:jc w:val="right"/><w:rPr><w:b/></w:rPr>"#.to_owned(),
+        ),
+        (
+            format!("{centred_bold}{section}"),
+            format!(r#"<w:jc w:val="right"/><w:rPr><w:i/></w:rPr>{section}"#),
+        ),
+    ];
+    for granularity in [
+        rdocx::ComparisonGranularity::Word,
+        rdocx::ComparisonGranularity::Run,
+    ] {
+        for (original, edited) in &pairs {
+            let label = format!("{granularity:?} {original} -> {edited}");
+            let document = |properties: &str| {
+                document_with_content_controls(&wrap_word_body(&paragraph(properties)))
+            };
+            let mut compared = document(original);
+            compared
+                .compare_with_options(
+                    &document(edited),
+                    "Reviewer",
+                    "2026-10-01T12:00:00Z",
+                    &rdocx::ComparisonOptions {
+                        granularity,
+                        ..Default::default()
+                    },
+                )
+                .unwrap_or_else(|error| panic!("{label}: {error}"));
+            let redline = compared.to_bytes().expect("save redline");
+            for (accept, expected) in [(true, edited), (false, original)] {
+                let mut resolved = Document::from_bytes(&redline).expect("reopen redline");
+                if accept {
+                    resolved.accept_all().expect("accept");
+                } else {
+                    resolved.reject_all().expect("reject");
+                }
+                assert!(resolved.revisions().is_empty(), "{label} accept={accept}");
+                assert_eq!(
+                    resolved_paragraph_properties(&mut resolved),
+                    resolved_paragraph_properties(&mut document(expected)),
+                    "{label} accept={accept}"
+                );
+            }
+        }
+    }
+
+    // The shape Word's own Compare writes: the prior paragraph properties hold
+    // only the base properties, and the mark records its own change.
+    let mut compared = document_with_content_controls(&wrap_word_body(&paragraph(centred_bold)));
+    compared
+        .compare(
+            &document_with_content_controls(&wrap_word_body(&paragraph(
+                r#"<w:jc w:val="right"/>"#,
+            ))),
+            "Reviewer",
+            "2026-10-01T12:00:00Z",
+        )
+        .expect("compare");
+    let xml = document_xml(&mut compared);
+    assert!(
+        xml.contains(concat!(
+            r#"<w:pPr><w:jc w:val="right"/><w:rPr><w:rPrChange w:id="0" w:author="Reviewer" w:date="2026-10-01T12:00:00Z"><w:rPr><w:b/></w:rPr></w:rPrChange></w:rPr>"#,
+            r#"<w:pPrChange w:id="1" w:author="Reviewer" w:date="2026-10-01T12:00:00Z"><w:pPr><w:jc w:val="center"/></w:pPr></w:pPrChange></w:pPr>"#
+        )),
+        "{xml}"
+    );
+}

@@ -891,7 +891,11 @@ footnotes, endnotes, and text boxes nested in those stories.
 Accepting keeps insertions and move destinations, while rejecting keeps
 deletions and move sources and converts deleted text to ordinary text.
 Property rejection restores exactly one namespace-correct prior property
-value. Contextual markers act on their owning run, paragraph mark, numbering
+value. A `w:pPrChange` holds only the base paragraph properties, so rejecting
+it keeps the paragraph mark `w:rPr` and the `w:sectPr`, which resolve their
+own markers, `w:rPrChange`, and `w:sectPrChange`. A prior value that carries
+its own `w:rPr` or `w:sectPr`, as older rdocx redlines do, replaces that child
+instead. Contextual markers act on their owning run, paragraph mark, numbering
 property, or row. Resolution stages every affected package part, resolves
 selected descendants before their enclosing subtree, reparses the complete
 candidate package, and commits once only after validation succeeds.
@@ -912,8 +916,11 @@ only within one story.
 Changed field results remain inside their field owner, while instruction or
 form changes replace that complete owner. Supported run, paragraph, table, and
 section properties emit property revisions that retain the original property
-sidecars. Unsupported formatting differences retain the original bytes and
-produce stable `ComparisonDiagnostic` values at the actual story path. Inputs
+sidecars. A changed paragraph records its prior base properties in
+`w:pPrChange` and its prior mark formatting in a final `w:rPrChange` in the
+mark `w:rPr`, as Word's own Compare writes them. Unsupported formatting
+differences retain the original bytes and produce stable
+`ComparisonDiagnostic` values at the actual story path. Inputs
 with existing modeled revisions or differing story shells are rejected unless
 their story category is ignored. The root and owner start tags of a comment
 or note story compare as namespace-resolved trees, so a part written again

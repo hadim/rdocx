@@ -607,8 +607,13 @@ impl<'a> XmlTree<'a> {
             .iter()
             .map(|(change, _)| *change)
             .collect::<HashSet<_>>();
-        let retained =
-            self.render_retained_owner_children(owner, &selected, state, promoted_namespaces)?;
+        let retained = self.render_retained_owner_children(
+            owner,
+            Some(prior),
+            &selected,
+            state,
+            promoted_namespaces,
+        )?;
         let prior_element = &self.elements[prior];
         if prior_element.word
             && matches!(prior_element.local.as_str(), "pPr" | "tblPr")
@@ -648,8 +653,13 @@ impl<'a> XmlTree<'a> {
             state.resolved.insert(*marker);
             self.validate_selected_descendants(*marker, state)?;
         }
-        let retained =
-            self.render_retained_owner_children(owner, &selected, state, promoted_namespaces)?;
+        let retained = self.render_retained_owner_children(
+            owner,
+            None,
+            &selected,
+            state,
+            promoted_namespaces,
+        )?;
         if retained.is_empty() {
             return Ok(Vec::new());
         }
@@ -660,9 +670,17 @@ impl<'a> XmlTree<'a> {
         Ok(output)
     }
 
+    /// Render the children of a property owner that its rejected prior value
+    /// does not replace.
+    ///
+    /// A `w:pPrChange` holds only the prior base paragraph properties, so the
+    /// paragraph mark `w:rPr` and the `w:sectPr` stay and resolve their own
+    /// revisions. Older rdocx redlines put the prior mark formatting in the
+    /// prior properties, and a prior child of the same name replaces them.
     fn render_retained_owner_children(
         &self,
         owner: usize,
+        prior: Option<usize>,
         selected: &HashSet<usize>,
         state: &mut RenderState<'_>,
         promoted_namespaces: &[(String, String)],
@@ -673,6 +691,27 @@ impl<'a> XmlTree<'a> {
         let mut output = Vec::new();
         for child in &element.children {
             let child_element = &self.elements[*child];
+            if let Some(prior) = prior
+                && element.word
+                && element.local == "pPr"
+                && child_element.word
+                && matches!(child_element.local.as_str(), "rPr" | "sectPr")
+            {
+                if self.elements[prior].children.iter().any(|replacement| {
+                    self.elements[*replacement].word
+                        && self.elements[*replacement].local == child_element.local
+                }) {
+                    self.validate_selected_descendants(*child, state)?;
+                } else {
+                    output.extend_from_slice(&self.render_with_namespaces(
+                        *child,
+                        state,
+                        false,
+                        &child_namespaces,
+                    )?);
+                }
+                continue;
+            }
             if !selected.contains(child)
                 && (child_element.revision.is_some()
                     || !child_element.word
