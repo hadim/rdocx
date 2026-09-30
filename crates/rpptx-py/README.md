@@ -73,6 +73,8 @@ with open("review.pdf", "wb") as output:
 - Group members added through `group.shapes`, with the group refit to its
   members as in python-pptx.
 - Run hyperlinks, read, added, retargeted, and removed as in python-pptx.
+- Shape click actions, a hyperlink or a slide jump, through `shape.click_action`
+  as in python-pptx.
 
 ## Use it when
 

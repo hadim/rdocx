@@ -1,6 +1,12 @@
 import os as _os
 from collections.abc import Iterator as _Iterator
-from typing import IO as _IO, NoReturn as _Never, final as _final, overload as _overload
+from typing import (
+    IO as _IO,
+    ClassVar as _ClassVar,
+    NoReturn as _Never,
+    final as _final,
+    overload as _overload,
+)
 
 from .dml.color import RGBColor as _RGBColor
 from .enum.dml import MSO_FILL_TYPE as _MSO_FILL_TYPE
@@ -23,8 +29,9 @@ __all__ = [
     "Presentation", "CommentAuthor", "Comment", "CommentReply",
     "BoundingBox", "TextLineLayout", "TextFrameLayout", "ValidationIssue",
     "SlideLayout", "SlideLayoutCollection", "Slide", "Background",
-    "SlideCollection", "Shape", "ShapeCollection", "PlaceholderCollection",
-    "Image", "AdjustmentCollection", "FillFormat", "LineFormat", "ColorFormat",
+    "SlideCollection", "Shape", "ActionSetting", "ShapeCollection",
+    "PlaceholderCollection", "Image", "AdjustmentCollection", "FillFormat",
+    "LineFormat", "ColorFormat",
     "TextFrame", "Paragraph", "ParagraphCollection", "Run", "RunCollection",
     "Hyperlink", "Font", "Table", "Column", "ColumnCollection", "Row",
     "RowCollection", "Cell",
@@ -205,6 +212,8 @@ class SlideLayoutCollection:
 @_final
 class Slide:
     def __new__(cls, *, _private: _Never) -> Slide: ...
+    def __eq__(self, other: object, /) -> bool: ...
+    __hash__: _ClassVar[None]  # type: ignore[assignment]
     @property
     def shapes(self) -> ShapeCollection: ...
     @property
@@ -296,6 +305,8 @@ class Shape:
     @name.setter
     def name(self, value: str) -> None: ...
     @property
+    def click_action(self) -> ActionSetting: ...
+    @property
     def rotation(self) -> float: ...
     @rotation.setter
     def rotation(self, value: float) -> None: ...
@@ -342,6 +353,17 @@ class Shape:
     def has_table(self) -> bool: ...
     @property
     def table(self) -> Table: ...
+
+
+@_final
+class ActionSetting:
+    def __new__(cls, *, _private: _Never) -> ActionSetting: ...
+    @property
+    def hyperlink(self) -> Hyperlink: ...
+    @property
+    def target_slide(self) -> Slide | None: ...
+    @target_slide.setter
+    def target_slide(self, value: Slide | None) -> None: ...
 
 
 @_final

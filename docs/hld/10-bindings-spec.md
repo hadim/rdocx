@@ -551,6 +551,18 @@ once nothing on the slide names it, so retargeting does not grow the part.
 `None` or an empty string removes the hyperlink, as in python-pptx, an address
 with a control character raises `RpptxError`, and the write does not advance
 the revision.
+`Shape.click_action` returns a live `ActionSetting`, like python-pptx. Its
+`hyperlink` is the same `Hyperlink` class over the shape's `p:cNvPr/a:hlinkClick`
+and goes through the native `set_shape_hyperlink`. `target_slide` reads the
+slide a named, first, last, next, or previous slide jump opens, or `None`, and
+assigning a `Slide` of the same presentation goes through
+`set_shape_target_slide`, while `None` removes the click action. A slide of
+another presentation raises `ValueError`. A group accepts a click action, where
+python-pptx raises `TypeError`, because PowerPoint honours it. Two current
+`Slide` handles compare equal when they name the same slide, so
+`target_slide == prs.slides[2]` holds, and like python-pptx a `Slide` is not
+hashable. No click action write advances the
+revision.
 
 Text formatting follows python-pptx names and value types. Every property
 reads the direct value only, `None` when the element or attribute is absent,

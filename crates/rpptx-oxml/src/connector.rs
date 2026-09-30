@@ -12,9 +12,10 @@ use quick_xml::{Reader, Writer};
 
 use crate::namespace::{
     FIXED_SHAPE_TREE_PREFIXES, MC_NS, NamespaceBindings, P_NS, R_NS, all_attributes,
-    root_attributes, self_contained_attributes,
+    non_visual_click_hyperlink, root_attributes, self_contained_attributes,
+    set_non_visual_click_hyperlink,
 };
-use crate::shape_tree::CT_ShapeStyle;
+use crate::shape_tree::{CT_ShapeStyle, ClickHyperlink};
 
 pub type Result<T> = std::result::Result<T, OxmlError>;
 type RawAttributes = Vec<(String, String)>;
@@ -188,6 +189,26 @@ impl CT_ConnectionShape {
         } else {
             attributes.push(("name".to_owned(), name.to_owned()));
         }
+        Ok(())
+    }
+
+    pub(crate) fn click_hyperlink(&self) -> Option<ClickHyperlink> {
+        let mut writer = Writer::new(Vec::new());
+        self.raw
+            .non_visual
+            .drawing_properties
+            .write_xml(&mut writer, "p:cNvPr")
+            .ok()?;
+        non_visual_click_hyperlink(&writer.into_inner())
+    }
+
+    pub(crate) fn set_click_hyperlink(&mut self, hyperlink: Option<&ClickHyperlink>) -> Result<()> {
+        let drawing_properties = &mut self.raw.non_visual.drawing_properties;
+        let mut writer = Writer::new(Vec::new());
+        drawing_properties.write_xml(&mut writer, "p:cNvPr")?;
+        let mut xml = writer.into_inner();
+        set_non_visual_click_hyperlink(&mut xml, hyperlink)?;
+        *drawing_properties = RawElement::from_fragment(&xml)?;
         Ok(())
     }
 

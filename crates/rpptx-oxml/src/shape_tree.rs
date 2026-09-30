@@ -21,8 +21,8 @@ use crate::connector::CT_ConnectionShape;
 use crate::graphic_frame::CT_GraphicFrame;
 use crate::namespace::{
     FIXED_SHAPE_TREE_PREFIXES, MC_NS, NamespaceBindings, P_NS, R_NS, all_attributes,
-    non_visual_drawing_id, non_visual_drawing_name, root_attributes, self_contained_attributes,
-    set_non_visual_drawing_name,
+    non_visual_click_hyperlink, non_visual_drawing_id, non_visual_drawing_name, root_attributes,
+    self_contained_attributes, set_non_visual_click_hyperlink, set_non_visual_drawing_name,
 };
 use crate::picture::CT_Picture;
 use crate::placeholder::{ApplicationProperties, CT_Placeholder, parse_application_properties};
@@ -73,6 +73,59 @@ impl ShapeTreeChild {
         .map(str::to_owned)
     }
 
+    /// Returns the child's click action, its `p:cNvPr/a:hlinkClick`.
+    ///
+    /// Alternate content has none.
+    pub fn click_hyperlink(&self) -> Option<ClickHyperlink> {
+        match self {
+            Self::Shape(shape) => {
+                non_visual_click_hyperlink(&shape.raw.non_visual_drawing_properties)
+            }
+            Self::Picture(picture) => picture.click_hyperlink(),
+            Self::GraphicFrame(frame) => frame.click_hyperlink(),
+            Self::GroupShape(group) => group
+                .non_visual_group_properties
+                .drawing_properties_index
+                .and_then(|index| group.non_visual_group_properties.raw_children.get(index))
+                .and_then(|xml| non_visual_click_hyperlink(xml)),
+            Self::Connector(connector) => connector.click_hyperlink(),
+            Self::AlternateContent(_) => None,
+        }
+    }
+
+    /// Replaces the child's `p:cNvPr/a:hlinkClick` with a fresh element that
+    /// carries only `hyperlink`, or removes it with `None`.
+    ///
+    /// The other children of `p:cNvPr` keep their bytes and order. Alternate
+    /// content is rejected.
+    pub fn set_click_hyperlink(&mut self, hyperlink: Option<&ClickHyperlink>) -> Result<()> {
+        match self {
+            Self::Shape(shape) => set_non_visual_click_hyperlink(
+                &mut shape.raw.non_visual_drawing_properties,
+                hyperlink,
+            ),
+            Self::Picture(picture) => picture.set_click_hyperlink(hyperlink),
+            Self::GraphicFrame(frame) => frame.set_click_hyperlink(hyperlink),
+            Self::GroupShape(group) => {
+                let drawing_properties = group
+                    .non_visual_group_properties
+                    .drawing_properties_index
+                    .and_then(|index| {
+                        group
+                            .non_visual_group_properties
+                            .raw_children
+                            .get_mut(index)
+                    })
+                    .ok_or_else(|| OxmlError::MissingElement("p:cNvPr".to_owned()))?;
+                set_non_visual_click_hyperlink(drawing_properties, hyperlink)
+            }
+            Self::Connector(connector) => connector.set_click_hyperlink(hyperlink),
+            Self::AlternateContent(_) => Err(OxmlError::InvalidValue(
+                "mc:AlternateContent has no click action".to_owned(),
+            )),
+        }
+    }
+
     fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
         match self {
             Self::Shape(shape) => shape.write_xml_internal(writer, false)?,
@@ -84,6 +137,22 @@ impl ShapeTreeChild {
         }
         Ok(())
     }
+}
+
+/// The click action of a slide child, its `p:cNvPr/a:hlinkClick`.
+///
+/// Only the relationship id and the action verb are modelled. The other
+/// attributes and children of a parsed element, such as a tooltip or a click
+/// sound, stay in the preserved non-visual properties, and writing a click
+/// action replaces the whole element.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ClickHyperlink {
+    /// The `r:id` of the relationship the action targets, `None` when it is
+    /// absent or empty.
+    pub relationship_id: Option<String>,
+    /// The `action` verb, such as `ppaction://hlinksldjump`, `None` for a
+    /// plain hyperlink.
+    pub action: Option<String>,
 }
 
 /// Allocates shape ids that are unused across a complete shape tree.
@@ -2311,7 +2380,10 @@ mod style_tests {
     use oxml_drawing::style_ref::FontCollectionIndex;
     use oxml_drawing::xfrm::{CT_Point2D, CT_PositiveSize2D, CT_Transform2D};
 
-    use super::{CT_GroupShape, CT_Shape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild};
+    use super::{
+        A_NS, CT_GroupShape, CT_Shape, CT_ShapeTree, ClickHyperlink, P_NS, R_NS, ShapeIdAllocator,
+        ShapeTreeChild,
+    };
 
     const ALLOCATOR_TREE: &[u8] = br#"<p:spTree xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><p:nvGrpSpPr><p:cNvPr id="1" name="Root"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="2" name="Root shape"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp><p:grpSp><p:nvGrpSpPr><p:cNvPr id="4" name="Group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:pic><p:nvPicPr><p:cNvPr id="6" name="Nested picture"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill/><p:spPr/></p:pic></p:grpSp><mc:AlternateContent><mc:Fallback><p:cxnSp><p:nvCxnSpPr><p:cNvPr id="8" name="Fallback connector"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr/></p:cxnSp></mc:Fallback></mc:AlternateContent></p:spTree>"#;
 
@@ -2428,6 +2500,72 @@ mod style_tests {
             tree.children[0].non_visual_name().as_deref(),
             Some("!!Hero & Partner")
         );
+    }
+
+    #[test]
+    fn every_child_kind_reads_writes_and_round_trips_its_click_hyperlink() {
+        let link = r#"<a:hlinkClick r:id="rId7" action="ppaction://hlinkshowjump?jump=nextslide" tooltip="Next &amp; more" highlightClick="1" x:keep="1"><a:snd r:embed="rId8" name="click"/><x:extra/></a:hlinkClick>"#;
+        let xml = format!(
+            r#"<p:spTree xmlns:p="{P_NS}" xmlns:a="{A_NS}" xmlns:r="{R_NS}" xmlns:x="urn:x"><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="2" name="Shape">{link}</p:cNvPr><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp><p:pic><p:nvPicPr><p:cNvPr id="3" name="Picture">{link}</p:cNvPr><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill/><p:spPr/></p:pic><p:cxnSp><p:nvCxnSpPr><p:cNvPr id="4" name="Connector">{link}</p:cNvPr><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr/></p:cxnSp><p:graphicFrame><p:nvGraphicFramePr><p:cNvPr id="5" name="Frame">{link}</p:cNvPr><p:cNvGraphicFramePr/><p:nvPr/></p:nvGraphicFramePr><p:xfrm><a:off x="0" y="0"/><a:ext cx="1" cy="1"/></p:xfrm><a:graphic><a:graphicData uri="urn:other"><x:payload/></a:graphicData></a:graphic></p:graphicFrame><p:grpSp><p:nvGrpSpPr><p:cNvPr id="6" name="Group">{link}</p:cNvPr><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/></p:grpSp></p:spTree>"#
+        );
+        let mut tree = CT_ShapeTree::from_xml(xml.as_bytes()).unwrap();
+        let written = String::from_utf8(tree.to_xml().unwrap()).unwrap();
+        assert_eq!(written.matches(link).count(), 5, "{written}");
+
+        let parsed = ClickHyperlink {
+            relationship_id: Some("rId7".to_owned()),
+            action: Some("ppaction://hlinkshowjump?jump=nextslide".to_owned()),
+        };
+        let jump = ClickHyperlink {
+            relationship_id: Some("rId9".to_owned()),
+            action: Some("ppaction://hlinksldjump".to_owned()),
+        };
+        for child in &mut tree.children {
+            assert_eq!(child.click_hyperlink(), Some(parsed.clone()));
+            child.set_click_hyperlink(Some(&jump)).unwrap();
+            assert_eq!(child.click_hyperlink(), Some(jump.clone()));
+        }
+        let written = String::from_utf8(tree.to_xml().unwrap()).unwrap();
+        assert_eq!(
+            written
+                .matches(r#"<a:hlinkClick r:id="rId9" action="ppaction://hlinksldjump"/>"#)
+                .count(),
+            5,
+            "{written}"
+        );
+        assert!(!written.contains("tooltip") && !written.contains("a:snd"));
+
+        for child in &mut tree.children {
+            child.set_click_hyperlink(None).unwrap();
+            assert_eq!(child.click_hyperlink(), None);
+        }
+        let written = String::from_utf8(tree.to_xml().unwrap()).unwrap();
+        assert!(!written.contains("hlinkClick"), "{written}");
+        for (id, name) in [
+            (2, "Shape"),
+            (3, "Picture"),
+            (4, "Connector"),
+            (5, "Frame"),
+            (6, "Group"),
+        ] {
+            assert!(
+                written.contains(&format!(r#"<p:cNvPr id="{id}" name="{name}"/>"#)),
+                "{written}"
+            );
+        }
+        assert_eq!(
+            CT_ShapeTree::from_xml(written.as_bytes())
+                .unwrap()
+                .to_xml()
+                .unwrap(),
+            written.as_bytes()
+        );
+
+        let mut alternate = CT_ShapeTree::from_xml(ALLOCATOR_TREE).unwrap();
+        let alternate = &mut alternate.children[2];
+        assert!(matches!(alternate, ShapeTreeChild::AlternateContent(_)));
+        assert_eq!(alternate.click_hyperlink(), None);
+        assert!(alternate.set_click_hyperlink(Some(&jump)).is_err());
     }
 
     #[test]

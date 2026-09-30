@@ -914,7 +914,10 @@ impl PyRun {
     }
 }
 
-/// The click hyperlink of one run, like python-pptx `_Hyperlink`.
+/// The click hyperlink of one run or one shape, like python-pptx `_Hyperlink`.
+///
+/// A path that ends at a run addresses the run's `a:rPr/a:hlinkClick`, and a
+/// path that ends at a shape addresses the shape's `p:cNvPr/a:hlinkClick`.
 #[pyclass(name = "Hyperlink")]
 pub struct PyHyperlink {
     presentation: Py<PyPresentation>,
@@ -922,6 +925,10 @@ pub struct PyHyperlink {
 }
 
 impl PyHyperlink {
+    pub(crate) fn new(presentation: Py<PyPresentation>, path: ContentPath) -> Self {
+        Self { presentation, path }
+    }
+
     /// Returns the run's direct character properties, raising when the run
     /// no longer exists.
     fn run_properties(
@@ -941,53 +948,74 @@ impl PyHyperlink {
             .map(|run| run.properties().cloned())
             .ok_or_else(|| PyIndexError::new_err("run index out of range"))
     }
+
+    /// Returns the relationship id of the run's or the shape's click
+    /// hyperlink, raising when the run or the shape no longer exists.
+    fn relationship_id(
+        &self,
+        py: Python<'_>,
+        presentation: &PyPresentation,
+    ) -> PyResult<Option<String>> {
+        if run_index(&self.path).is_none() {
+            validate_path(
+                py,
+                presentation,
+                &self.path,
+                "hyperlink",
+                ".click_action.hyperlink",
+            )?;
+            return shape_ref_at(&presentation.inner, &self.path)
+                .map(|shape| {
+                    shape
+                        .click_hyperlink()
+                        .and_then(|hyperlink| hyperlink.relationship_id)
+                })
+                .ok_or_else(|| PyIndexError::new_err("shape index out of range"));
+        }
+        Ok(self
+            .run_properties(py, presentation)?
+            .and_then(|properties| properties.hyperlink_click)
+            .and_then(|hyperlink| hyperlink.relationship_id)
+            .filter(|id| !id.is_empty()))
+    }
 }
 
 #[pymethods]
 impl PyHyperlink {
-    /// The address the run's click hyperlink opens, or `None` without one.
+    /// The address the click hyperlink opens, or `None` without one.
     #[getter]
     fn address(&self, py: Python<'_>) -> PyResult<Option<String>> {
         let presentation = self.presentation.borrow(py);
-        let properties = self.run_properties(py, &presentation)?;
-        let Some(relationship_id) = properties
-            .as_ref()
-            .and_then(|properties| properties.hyperlink_click.as_ref())
-            .and_then(|hyperlink| hyperlink.relationship_id.as_deref())
-            .filter(|id| !id.is_empty())
-        else {
+        let Some(relationship_id) = self.relationship_id(py, &presentation)? else {
             return Ok(None);
         };
         Ok(presentation
             .inner
-            .hyperlink_address(slide_index(&self.path)?, relationship_id)
+            .hyperlink_address(slide_index(&self.path)?, &relationship_id)
             .map(str::to_owned))
     }
 
-    /// Points the run's click hyperlink at `value`, or removes it for `None`
-    /// or an empty string, as python-pptx does. The relationship the old
-    /// hyperlink used goes when nothing else on the slide uses it.
+    /// Points the click hyperlink at `value`, or removes it for `None` or an
+    /// empty string, as python-pptx does. The relationship the old hyperlink
+    /// used goes when nothing else on the slide uses it.
     #[setter]
     fn set_address(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
         let mut presentation = self.presentation.borrow_mut(py);
-        self.run_properties(py, &presentation)?;
-        let paragraph = paragraph_index(&self.path)
-            .ok_or_else(|| PyIndexError::new_err("paragraph index is missing"))?;
-        let run =
-            run_index(&self.path).ok_or_else(|| PyIndexError::new_err("run index is missing"))?;
+        self.relationship_id(py, &presentation)?;
+        let slide = slide_index(&self.path)?;
         let shape_id = shape_ref_at(&presentation.inner, &self.path)
             .and_then(|shape| shape.non_visual_id())
             .ok_or_else(|| PyValueError::new_err("shape has no id"))?;
-        presentation
-            .inner
-            .set_run_hyperlink(
-                slide_index(&self.path)?,
-                shape_id,
-                paragraph,
-                run,
-                value.filter(|value| !value.is_empty()),
-            )
-            .map_err(|error| rpptx_to_pyerr(py, error))
+        let value = value.filter(|value| !value.is_empty());
+        match (paragraph_index(&self.path), run_index(&self.path)) {
+            (Some(paragraph), Some(run)) => presentation
+                .inner
+                .set_run_hyperlink(slide, shape_id, paragraph, run, value),
+            _ => presentation
+                .inner
+                .set_shape_hyperlink(slide, shape_id, value),
+        }
+        .map_err(|error| rpptx_to_pyerr(py, error))
     }
 }
 
