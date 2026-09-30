@@ -1409,8 +1409,17 @@ the native default, and `word` or `character` marks only the changed words or
 characters. `--ignore-story` is
 repeatable and takes the Python `Story.kind` names, where `body` selects the
 main story. An unknown granularity or story name is a usage error, and a
-duplicated story keeps the native rejection. Python and WASM preserve
-comparison output when they save their owned document.
+duplicated story keeps the native rejection. Python
+`Document.compare` takes the `ComparisonOptions` fields as keyword-only
+arguments. `granularity` is `"run"`, `"word"`, or `"character"` and defaults to
+the native `"run"`. `ignore_formatting`, `ignore_whitespace`, `ignore_fields`,
+and `ignore_comments` default to false. `ignored_stories` takes `Story.kind`
+names, where `body` selects the main story and `table_cell` is not a comparison
+category. An unknown granularity or story name raises `RdocxError` before the
+document changes, and a duplicated story keeps the native rejection.
+`ignore_comments` also leaves comment anchors to the original, while ignoring
+the `comment` story excludes only the comments part. WASM preserves comparison
+output when it saves its owned document.
 
 Native Word rendering exposes `rdocx::RevisionView` and the concrete
 `rdocx::RenderOptions`, whose default selects the accepted view. Additive

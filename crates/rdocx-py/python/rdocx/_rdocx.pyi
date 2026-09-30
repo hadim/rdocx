@@ -1,6 +1,6 @@
 import datetime as _datetime
 import os as _os
-from collections.abc import Iterator as _Iterator
+from collections.abc import Iterator as _Iterator, Sequence as _Sequence
 from typing import Literal as _Literal, NoReturn as _Never, final as _final, overload as _overload
 
 from . import shared as _shared
@@ -450,8 +450,31 @@ class Document:
         pages: list[int] | None = None,
     ) -> list[bytes] | bytes: ...
     def compare(
-        self, edited: Document, author: str, timestamp: str
-    ) -> tuple[ComparisonDiagnostic, ...]: ...
+        self,
+        edited: Document,
+        author: str,
+        timestamp: str,
+        *,
+        granularity: _Literal["run", "word", "character"] = "run",
+        ignore_formatting: bool = False,
+        ignore_whitespace: bool = False,
+        ignore_fields: bool = False,
+        ignore_comments: bool = False,
+        ignored_stories: _Sequence[
+            _Literal["body", "header", "footer", "comment", "text_box", "footnote", "endnote"]
+        ] | None = None,
+    ) -> tuple[ComparisonDiagnostic, ...]:
+        """Record how ``edited`` differs from this document as tracked changes.
+
+        ``granularity`` selects the unit of a text change. The default ``"run"``
+        replaces a changed run whole, while ``"word"`` and ``"character"`` mark
+        only the changed words or characters. ``ignored_stories`` takes
+        ``Story.kind`` names. The ignore options and ``ignored_stories`` are
+        left-biased: an ignored difference or story keeps this document's
+        content. With ``ignore_comments=True`` the result keeps this document's
+        comments and anchors, and the comments of ``edited`` are not carried
+        over. An unknown option value raises ``RdocxError``.
+        """
     @property
     def comments(self) -> tuple[Comment, ...]: ...
     @property
