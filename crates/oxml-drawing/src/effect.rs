@@ -8,7 +8,7 @@ use oxml_core::xml::{get_attr, local_name, matches_local_name};
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::name::{Namespace, ResolveResult};
 use quick_xml::reader::NsReader;
-use quick_xml::{Reader, Writer};
+use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::color::{ColorChoice, ColorError};
 use crate::namespace::A_NS;
@@ -92,7 +92,8 @@ pub enum RectAlignment {
 }
 
 impl RectAlignment {
-    fn parse(value: &str) -> Option<Self> {
+    /// Parses an `ST_RectAlignment` token such as `tl` or `ctr`.
+    pub fn parse(value: &str) -> Option<Self> {
         match value {
             "tl" => Some(Self::TopLeft),
             "t" => Some(Self::Top),
@@ -107,7 +108,8 @@ impl RectAlignment {
         }
     }
 
-    const fn as_str(self) -> &'static str {
+    /// Returns the `ST_RectAlignment` token written for this alignment.
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::TopLeft => "tl",
             Self::Top => "t",
@@ -265,6 +267,32 @@ impl CT_OuterShadowEffect {
     pub fn raw_children(&self) -> &OrderedRawChildren {
         &self.raw_children
     }
+
+    /// Reports a colour choice that is kept as raw XML, such as an
+    /// `a:scrgbClr` or `a:hslClr`, which `color` does not model.
+    pub fn has_unmodelled_color(&self) -> bool {
+        (0..=1).any(|boundary| self.raw_children.at(boundary).any(raw_is_color))
+    }
+
+    /// Replaces the shadow colour, dropping an unmodelled colour choice so
+    /// that the element keeps the single colour its schema allows. The new
+    /// colour takes the dropped one's place among the unmodelled siblings.
+    pub fn replace_color(&mut self, color: ColorChoice) {
+        let mut raw_children = OrderedRawChildren::default();
+        let mut boundary = 0;
+        for child in self.raw_children.at(0) {
+            if raw_is_color(child) {
+                boundary = 1;
+            } else {
+                raw_children.push(boundary, child.to_vec());
+            }
+        }
+        for child in self.raw_children.at(1).filter(|child| !raw_is_color(child)) {
+            raw_children.push(1, child.to_vec());
+        }
+        self.raw_children = raw_children;
+        self.color = Some(color);
+    }
 }
 
 /// DrawingML `a:effectLst` with an outer shadow and preserved other effects.
@@ -272,6 +300,7 @@ impl CT_OuterShadowEffect {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CT_EffectList {
     pub outer_shadow: Option<CT_OuterShadowEffect>,
+    raw_attributes: Vec<(String, String)>,
     raw_children: OrderedRawChildren,
 }
 
@@ -288,12 +317,17 @@ impl CT_EffectList {
                 Event::Start(element)
                     if matches_local_name(element.name().as_ref(), b"effectLst") =>
                 {
-                    return Self::from_element(&mut reader);
+                    let mut effects = Self::from_element(&mut reader)?;
+                    effects.raw_attributes = capture_raw_attributes(&element)?;
+                    return Ok(effects);
                 }
                 Event::Empty(element)
                     if matches_local_name(element.name().as_ref(), b"effectLst") =>
                 {
-                    return Ok(Self::default());
+                    return Ok(Self {
+                        raw_attributes: capture_raw_attributes(&element)?,
+                        ..Self::default()
+                    });
                 }
                 Event::Start(element) | Event::Empty(element) => {
                     return Err(unexpected(&element));
@@ -332,12 +366,18 @@ impl CT_EffectList {
                 {
                     return Err(EffectError::MissingColor);
                 }
-                Event::Start(element) => effects
-                    .raw_children
-                    .push(boundary, capture_element(reader, &element)?),
-                Event::Empty(element) => effects
-                    .raw_children
-                    .push(boundary, capture_empty_element(&element)?),
+                Event::Start(element) => {
+                    boundary = boundary.max(raw_effect_boundary(element.name().as_ref()));
+                    effects
+                        .raw_children
+                        .push(boundary, capture_element(reader, &element)?);
+                }
+                Event::Empty(element) => {
+                    boundary = boundary.max(raw_effect_boundary(element.name().as_ref()));
+                    effects
+                        .raw_children
+                        .push(boundary, capture_empty_element(&element)?);
+                }
                 Event::End(element)
                     if matches_local_name(element.name().as_ref(), b"effectLst") =>
                 {
@@ -360,10 +400,14 @@ impl CT_EffectList {
 
     /// Writes this effect list into an existing XML writer.
     pub fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
-        if self.outer_shadow.is_none() && self.raw_children.is_empty() {
-            return write_empty(writer, BytesStart::new("a:effectLst"));
+        let mut start = BytesStart::new("a:effectLst");
+        for (name, value) in &self.raw_attributes {
+            start.push_attribute((name.as_str(), value.as_str()));
         }
-        write_start(writer, BytesStart::new("a:effectLst"))?;
+        if self.outer_shadow.is_none() && self.raw_children.is_empty() {
+            return write_empty(writer, start);
+        }
+        write_start(writer, start)?;
         emit_raw(writer, self.raw_children.at(0))?;
         if let Some(shadow) = &self.outer_shadow {
             shadow.write_xml(writer)?;
@@ -392,6 +436,15 @@ impl CT_EffectList {
     }
 }
 
+/// Places an effect the schema orders after `a:outerShdw` behind the outer
+/// shadow slot, so a shadow added later is still written before it.
+fn raw_effect_boundary(name: &[u8]) -> usize {
+    match local_name(name) {
+        b"prstShdw" | b"reflection" | b"softEdge" => 1,
+        _ => 0,
+    }
+}
+
 pub(crate) fn raw_contains_placeholder_color(xml: &[u8]) -> bool {
     let mut reader = NsReader::from_reader(xml);
     let mut buffer = Vec::new();
@@ -411,7 +464,8 @@ pub(crate) fn raw_contains_placeholder_color(xml: &[u8]) -> bool {
     }
 }
 
-pub(crate) fn raw_is_effect_dag(xml: &[u8]) -> bool {
+/// Reports whether one captured element is a DrawingML `a:effectDag`.
+pub fn raw_is_effect_dag(xml: &[u8]) -> bool {
     let mut reader = NsReader::from_reader(xml);
     let mut buffer = Vec::new();
     loop {
@@ -433,6 +487,33 @@ fn is_drawingml_namespace(namespace: &ResolveResult<'_>) -> bool {
         ResolveResult::Unknown(prefix) => prefix == b"a",
         ResolveResult::Unbound => false,
     }
+}
+
+fn raw_is_color(xml: &[u8]) -> bool {
+    let name_end = xml
+        .iter()
+        .position(|byte| byte.is_ascii_whitespace() || matches!(byte, b'/' | b'>'))
+        .unwrap_or(xml.len());
+    matches!(
+        local_name(xml.get(1..name_end).unwrap_or_default()),
+        b"scrgbClr" | b"srgbClr" | b"hslClr" | b"sysClr" | b"schemeClr" | b"prstClr"
+    )
+}
+
+fn capture_raw_attributes(start: &BytesStart<'_>) -> Result<Vec<(String, String)>> {
+    let mut raw = Vec::new();
+    for attribute in start.attributes() {
+        let attribute = attribute.map_err(OxmlError::from)?;
+        let name = std::str::from_utf8(attribute.key.as_ref())
+            .map_err(OxmlError::from)?
+            .to_owned();
+        let value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())
+            .map_err(OxmlError::from)?
+            .into_owned();
+        raw.push((name, value));
+    }
+    Ok(raw)
 }
 
 fn is_color(name: &[u8]) -> bool {
@@ -599,6 +680,42 @@ mod tests {
         let written = CT_EffectList::from_xml(xml).unwrap().to_xml().unwrap();
 
         assert_eq!(written, br#"<a:effectLst><x:before/><z:blur rad="10"/><z:glow rad="20"><x:item>one &amp; two</x:item></z:glow><z:innerShdw><z:srgbClr val="010203"/></z:innerShdw><a:outerShdw dist="30"><x:shadowBefore/><a:srgbClr val="AABBCC"/><x:shadowAfter/></a:outerShdw><z:prstShdw prst="shdw1"><z:srgbClr val="040506"/></z:prstShdw><z:reflection blurRad="40"/><x:after/></a:effectLst>"#);
+    }
+
+    #[test]
+    fn an_outer_shadow_added_later_precedes_the_effects_the_schema_puts_after_it() {
+        let xml = br#"<a:effectLst><a:glow rad="1"><a:srgbClr val="FF0000"/></a:glow><x:middle/><a:reflection/><x:after/><a:softEdge rad="2"/></a:effectLst>"#;
+        let mut effects = CT_EffectList::from_xml(xml).unwrap();
+        assert_eq!(effects.to_xml().unwrap(), xml);
+
+        effects.outer_shadow = Some(super::CT_OuterShadowEffect {
+            color: Some(ColorChoice::srgb(crate::color::RgbColor::new(0, 0, 0))),
+            ..Default::default()
+        });
+        assert_eq!(
+            effects.to_xml().unwrap(),
+            br#"<a:effectLst><a:glow rad="1"><a:srgbClr val="FF0000"/></a:glow><x:middle/><a:outerShdw><a:srgbClr val="000000"/></a:outerShdw><a:reflection/><x:after/><a:softEdge rad="2"/></a:effectLst>"#
+        );
+    }
+
+    #[test]
+    fn root_attributes_and_an_unmodelled_shadow_colour_are_kept_until_replaced() {
+        let xml = br#"<z:effectLst xmlns:x="urn:x" x:keep="1"><z:outerShdw dist="1"><z:scrgbClr r="0" g="0" b="0"><z:alpha val="50000"/></z:scrgbClr><x:after/></z:outerShdw></z:effectLst>"#;
+        let mut effects = CT_EffectList::from_xml(xml).unwrap();
+        assert_eq!(
+            effects.to_xml().unwrap(),
+            br#"<a:effectLst xmlns:x="urn:x" x:keep="1"><a:outerShdw dist="1"><z:scrgbClr r="0" g="0" b="0"><z:alpha val="50000"/></z:scrgbClr><x:after/></a:outerShdw></a:effectLst>"#
+        );
+        let shadow = effects.outer_shadow.as_mut().unwrap();
+        assert!(shadow.color.is_none());
+        assert!(shadow.has_unmodelled_color());
+
+        shadow.replace_color(ColorChoice::srgb(crate::color::RgbColor::new(1, 2, 3)));
+        assert!(!shadow.has_unmodelled_color());
+        assert_eq!(
+            effects.to_xml().unwrap(),
+            br#"<a:effectLst xmlns:x="urn:x" x:keep="1"><a:outerShdw dist="1"><a:srgbClr val="010203"/><x:after/></a:outerShdw></a:effectLst>"#
+        );
     }
 
     #[test]

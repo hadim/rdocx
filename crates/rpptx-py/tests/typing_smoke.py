@@ -36,6 +36,7 @@ from rpptx._rpptx import (
     PlaceholderCollection,
     Run,
     RunCollection,
+    ShadowFormat,
     Shape,
     ShapeCollection,
     Slide,
@@ -214,6 +215,24 @@ def exercise_rpptx_types(path: Path) -> None:
     line_width: Length = line.width
     line.color.rgb = RGBColor.from_string("FF0000")
     line_fill: FillFormat = line.fill
+    shadow: ShadowFormat = shape.shadow
+    shadow.inherit = False
+    inherits: bool = shadow.inherit
+    shadow.visible = True
+    visible: bool = shadow.visible
+    shadow.color.rgb = RGBColor(0, 0, 0)
+    shadow.alpha = 0.4
+    alpha: float | None = shadow.alpha
+    shadow.blur_radius = Pt(4)
+    blur_radius: Length | None = shadow.blur_radius
+    shadow.distance = Pt(3)
+    distance: Length | None = shadow.distance
+    shadow.direction = 45.0
+    direction: float | None = shadow.direction
+    shadow.align = "tl"
+    align: str | None = shadow.align
+    shadow.rotate_with_shape = False
+    rotate_with_shape: bool | None = shadow.rotate_with_shape
     shape_xml: bytes = shape.xml
     connector: Shape = presentation.slides[0].shapes.add_connector(
         MSO_CONNECTOR.STRAIGHT, 0, 0, Inches(1), Inches(1)
@@ -349,6 +368,7 @@ if TYPE_CHECKING:
     PlaceholderCollection()  # type: ignore[call-arg]
     Run()  # type: ignore[call-arg]
     RunCollection()  # type: ignore[call-arg]
+    ShadowFormat()  # type: ignore[call-arg]
     Shape()  # type: ignore[call-arg]
     ShapeCollection()  # type: ignore[call-arg]
     Slide()  # type: ignore[call-arg]

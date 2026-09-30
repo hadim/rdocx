@@ -1,6 +1,12 @@
 import os as _os
 from collections.abc import Iterator as _Iterator
-from typing import IO as _IO, NoReturn as _Never, final as _final, overload as _overload
+from typing import (
+    IO as _IO,
+    Literal as _Literal,
+    NoReturn as _Never,
+    final as _final,
+    overload as _overload,
+)
 
 from .dml.color import RGBColor as _RGBColor
 from .enum.dml import MSO_FILL_TYPE as _MSO_FILL_TYPE
@@ -25,6 +31,7 @@ __all__ = [
     "SlideLayout", "SlideLayoutCollection", "Slide", "Background",
     "SlideCollection", "Shape", "ShapeCollection", "PlaceholderCollection",
     "Image", "AdjustmentCollection", "FillFormat", "LineFormat", "ColorFormat",
+    "ShadowFormat",
     "TextFrame", "Paragraph", "ParagraphCollection", "Run", "RunCollection",
     "Font", "Table", "Column", "ColumnCollection", "Cell",
 ]
@@ -286,6 +293,8 @@ class Shape:
     @property
     def line(self) -> LineFormat: ...
     @property
+    def shadow(self) -> ShadowFormat: ...
+    @property
     def xml(self) -> bytes: ...
     @property
     def image(self) -> Image: ...
@@ -403,6 +412,48 @@ class ColorFormat:
     def rgb(self) -> _RGBColor | None: ...
     @rgb.setter
     def rgb(self, value: _RGBColor) -> None: ...
+
+
+_RectAlignment = _Literal["tl", "t", "tr", "l", "ctr", "r", "bl", "b", "br"]
+
+
+@_final
+class ShadowFormat:
+    def __new__(cls, *, _private: _Never) -> ShadowFormat: ...
+    @property
+    def inherit(self) -> bool: ...
+    @inherit.setter
+    def inherit(self, value: bool) -> None: ...
+    @property
+    def visible(self) -> bool: ...
+    @visible.setter
+    def visible(self, value: bool) -> None: ...
+    @property
+    def color(self) -> ColorFormat: ...
+    @property
+    def alpha(self) -> float | None: ...
+    @alpha.setter
+    def alpha(self, value: float) -> None: ...
+    @property
+    def blur_radius(self) -> _Length | None: ...
+    @blur_radius.setter
+    def blur_radius(self, value: int) -> None: ...
+    @property
+    def distance(self) -> _Length | None: ...
+    @distance.setter
+    def distance(self, value: int) -> None: ...
+    @property
+    def direction(self) -> float | None: ...
+    @direction.setter
+    def direction(self, value: float) -> None: ...
+    @property
+    def align(self) -> _RectAlignment | None: ...
+    @align.setter
+    def align(self, value: _RectAlignment) -> None: ...
+    @property
+    def rotate_with_shape(self) -> bool | None: ...
+    @rotate_with_shape.setter
+    def rotate_with_shape(self, value: bool) -> None: ...
 
 
 @_final

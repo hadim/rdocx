@@ -329,6 +329,28 @@ on its own as bytes. A picture's `image` is a frozen `Image` snapshot with
 `blob`, `content_type`, and the python-pptx `ext`, and `replace_image` changes
 only that picture through the native staged replacement.
 
+`shadow` returns a live `ShadowFormat` for ordinary shapes, pictures,
+connectors, and groups, and raises `NotImplementedError` for a graphic frame
+as python-pptx does. `inherit` is python-pptx's: it reads whether the shape
+has no `a:effectLst`, assigning `True` removes the list and every effect in
+it, and assigning `False` adds an empty one. The outer shadow properties are
+`visible`, `color`, `alpha`, `blur_radius`, `distance`, `direction`, `align`,
+and `rotate_with_shape`. They read `None` without an `a:outerShdw` of the
+shape's own, a theme shadow included, and read the schema default for an
+omitted attribute. Assigning one to a shape without an outer shadow first
+adds the shadow PowerPoint for Mac writes for its Offset Diagonal Bottom
+Right preset, measured through `msoShadow21`: preset black at 40% opacity,
+a 4 pt blur, 3 pt away at 45 degrees, aligned top left and not rotating
+with the shape. `visible = False` removes the outer shadow and keeps the
+list, so the theme shadow stays off, and changes nothing on a shape without
+an outer shadow of its own. `color` is a `ColorFormat` whose `rgb` keeps the
+opacity across a change of colour kind and replaces an `a:scrgbClr` or
+`a:hslClr` whole. `alpha` runs from 0.0 transparent to 1.0 opaque, and 1.0
+removes `a:alpha`. Beside those two unmodelled colours `alpha` reads `None`
+and assigning it is a `ValueError`. `direction` uses the `rotation` degrees
+and rounding. `align` is an `ST_RectAlignment` token string, and lengths are
+EMU.
+
 `ShapeCollection.add_shape` accepts a DrawingML preset name or an `MSO_SHAPE`
 member. `add_connector` follows the python-pptx signature, `add_group_shape`
 appends an empty group, and `add_picture` accepts a path, bytes, or a binary

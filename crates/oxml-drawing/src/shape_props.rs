@@ -168,7 +168,9 @@ impl CT_ShapeProperties {
                     if properties.parse_modelled(&name, &raw)? {
                         boundary = boundary.max(modelled_boundary(&name));
                     } else {
-                        properties.raw_children.push(boundary, raw);
+                        properties
+                            .raw_children
+                            .push(boundary.max(raw_boundary_before(&name)), raw);
                         boundary = boundary.max(raw_boundary_after(&name));
                     }
                 }
@@ -178,7 +180,9 @@ impl CT_ShapeProperties {
                     if properties.parse_modelled(&name, &raw)? {
                         boundary = boundary.max(modelled_boundary(&name));
                     } else {
-                        properties.raw_children.push(boundary, raw);
+                        properties
+                            .raw_children
+                            .push(boundary.max(raw_boundary_before(&name)), raw);
                         boundary = boundary.max(raw_boundary_after(&name));
                     }
                 }
@@ -339,6 +343,13 @@ fn raw_boundary_after(name: &[u8]) -> usize {
     }
 }
 
+/// The earliest boundary an unmodelled child may be written at. A child such
+/// as `a:scene3d` read where no `a:effectLst` stood stays behind the effect
+/// slot, so an effect list added later is written before it.
+fn raw_boundary_before(name: &[u8]) -> usize {
+    raw_boundary_after(name).saturating_sub(1)
+}
+
 fn emit_raw<'a, W: Write>(
     writer: &mut Writer<W>,
     children: impl Iterator<Item = &'a [u8]>,
@@ -398,6 +409,21 @@ mod tests {
         let written = properties.to_xml().unwrap();
         assert_eq!(written, br#"<a:spPr><x:before/><a:xfrm rot="60000"><a:off x="1" y="2"/></a:xfrm><x:afterXfrm/><a:custGeom><a:pathLst><a:path/></a:pathLst></a:custGeom><x:afterGeom/><a:solidFill><a:srgbClr val="112233"/></a:solidFill><x:afterFill/><a:ln w="12700"><a:noFill/></a:ln><x:afterLine/><a:effectLst><z:glow rad="40000"><z:srgbClr val="445566"/></z:glow></a:effectLst><x:afterEffects/></a:spPr>"#);
         assert_eq!(CT_ShapeProperties::from_xml(&written).unwrap(), properties);
+    }
+
+    #[test]
+    fn modelled_children_added_later_precede_unmodelled_3d_and_extensions() {
+        let xml = br#"<a:spPr><a:prstGeom prst="rect"/><a:scene3d/><x:after/><a:sp3d/><a:extLst/></a:spPr>"#;
+        let mut properties = CT_ShapeProperties::from_xml(xml).unwrap();
+        assert_eq!(properties.to_xml().unwrap(), xml);
+
+        properties.fill = Some(crate::fill::Fill::from_xml(br#"<a:noFill/>"#).unwrap());
+        properties.line = Some(crate::line::CT_LineProperties::default());
+        properties.effects = Some(crate::effect::CT_EffectList::default());
+        assert_eq!(
+            properties.to_xml().unwrap(),
+            br#"<a:spPr><a:prstGeom prst="rect"/><a:noFill/><a:ln/><a:effectLst/><a:scene3d/><x:after/><a:sp3d/><a:extLst/></a:spPr>"#
+        );
     }
 
     #[test]

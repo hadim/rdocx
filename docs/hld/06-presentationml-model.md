@@ -317,9 +317,19 @@ children only. The selected `mc:Fallback` view remains read-only.
 Position, size, rotation, and name setters support ordinary shapes, pictures,
 graphic frames, groups, and connectors. Fill and line setters support ordinary
 shapes, pictures, and connectors because those kinds own typed shape
-properties. Adjustment mutation supports finite values on preset geometry.
-Unsupported shape kinds and unsupported geometry return concrete facade
-errors. Indexed access remains total and returns `Option`.
+properties. `ShapeRef::effects` reads and `ShapeMut::set_effects` replaces or
+removes the direct `a:effectLst` of those kinds and of groups, whose
+`p:grpSpPr` models the list beside its transform. The group list is parsed
+as strictly as the `a:spPr` one, so a malformed outer shadow there fails the
+part where its bytes used to pass through. The list keeps its root
+attributes and namespace declarations. `None` removes the list so
+the theme effect applies again, and an empty list suppresses it. A shape that
+carries an `a:effectDag` refuses a list, and a list whose outer shadow cannot
+be written is refused before the slide changes. The list lands before
+`a:scene3d`, `a:sp3d`, and `a:extLst` and keeps its unmodelled effects.
+Adjustment mutation supports finite values on preset geometry. Unsupported
+shape kinds and unsupported geometry return concrete facade errors. Indexed
+access remains total and returns `Option`.
 
 Ordinary shapes expose text mutation through behavior-bearing borrowed
 handles:
