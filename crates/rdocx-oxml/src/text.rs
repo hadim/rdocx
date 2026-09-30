@@ -368,6 +368,23 @@ pub struct Field {
     legacy_form_parse_error: bool,
     nested_order: Vec<NestedFieldPosition>,
     source: FieldSource,
+    /// The physical run this field shares with text outside it, if any.
+    span: Option<Box<FieldRunSpan>>,
+}
+
+/// The model runs a physical field span was split into on read.
+///
+/// A run such as `Page {PAGE} of the report` holds text outside the field.
+/// The reader turns it into sibling runs so every consumer sees that text,
+/// and the writer puts the original bytes back while the runs are untouched.
+#[derive(Debug, Clone)]
+struct FieldRunSpan {
+    /// The span's runs in order, `None` where a field of the span sits.
+    runs: Vec<Option<CT_R>>,
+    /// Where this field sits among `runs`.
+    position: usize,
+    /// Which field of the span this is, counted from the first.
+    field_index: usize,
 }
 
 /// The bounded legacy form kind projected from `w:ffData`.
@@ -418,6 +435,7 @@ impl Field {
             legacy_form: None,
             legacy_form_parse_error: false,
             nested_order: Vec::new(),
+            span: None,
         }
     }
 
@@ -449,6 +467,7 @@ impl Field {
             legacy_form: legacy_form.clone(),
             legacy_form_parse_error,
             nested_order: Vec::new(),
+            span: None,
             source: FieldSource::Parsed {
                 source_id,
                 owner_id: source_id,
@@ -712,6 +731,18 @@ impl Field {
         let mut writer = Writer::new(Vec::new());
         write_field(&mut writer, self, None)?;
         Ok(Some((raw_xml, writer.into_inner())))
+    }
+
+    /// Return what this field writes on its own when it was read from a run
+    /// that also held content outside it.
+    #[doc(hidden)]
+    pub fn detached_source(&self) -> Result<Option<Vec<u8>>> {
+        if self.span.is_none() {
+            return Ok(None);
+        }
+        let mut writer = Writer::new(Vec::new());
+        write_run_field(&mut writer, self, None, None)?;
+        Ok(Some(writer.into_inner()))
     }
 
     /// Return the retained physical XML owner identity for a parsed field.
@@ -3397,13 +3428,9 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
             });
         }
 
-        let replacement_count = fields.len();
-        runs.splice(
-            start..=end,
-            fields
-                .into_iter()
-                .map(|(field, properties)| field_run(field, properties)),
-        );
+        let replacement = field_span_runs(&raw_xml, fields, word_prefixes);
+        let replacement_count = replacement.len();
+        runs.splice(start..=end, replacement);
         run_sources.splice(start..=end, std::iter::repeat_n(None, replacement_count));
         remap_complex_field_boundaries(
             start,
@@ -3480,6 +3507,277 @@ fn complex_field_source(
         }
     }
     source
+}
+
+/// One part of a physical field span: a whole field, or content outside any field.
+struct FieldSpanPart {
+    field: bool,
+    bytes: Vec<u8>,
+}
+
+/// Split the exact bytes of a complex field span into its fields and the run
+/// content outside them, in order.
+///
+/// Each part is written as its own runs, so a part taken from a shared run
+/// repeats that run's start tag and `w:rPr`. Returns `None` for a shape this
+/// does not model, which leaves the span as it was read.
+fn field_span_parts(raw: &[u8], word_prefixes: &[String]) -> Result<Option<Vec<FieldSpanPart>>> {
+    use std::ops::Range;
+
+    // A run's start tag, `w:rPr` and end tag.
+    let mut runs = Vec::<(Range<usize>, Option<Range<usize>>, Range<usize>)>::new();
+    // Each part: whether it is a field, and its children (run index, bytes).
+    let mut parts = Vec::<(bool, Vec<(Option<usize>, Range<usize>)>)>::new();
+    let mut current: Option<usize> = None;
+    let mut depth = 0usize;
+    let mut reader = Reader::from_reader(raw);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let event = reader.read_event_into(&mut buffer)?;
+        let (run_start, run_prefixes) = match event {
+            Event::Start(start) => {
+                let prefixes = word_prefixes_at(&start, word_prefixes)?;
+                if is_word_element(start.name().as_ref(), b"r", &prefixes) {
+                    (before..reader.buffer_position() as usize, prefixes)
+                } else {
+                    reader.read_to_end_into(start.name(), &mut Vec::new())?;
+                    let range = before..reader.buffer_position() as usize;
+                    let Some(part) = current.filter(|_| depth > 0) else {
+                        return Ok(None);
+                    };
+                    parts[part].1.push((None, range));
+                    buffer.clear();
+                    continue;
+                }
+            }
+            Event::Eof => break,
+            _ => {
+                let range = before..reader.buffer_position() as usize;
+                let Some(part) = current.filter(|_| depth > 0) else {
+                    return Ok(None);
+                };
+                parts[part].1.push((None, range));
+                buffer.clear();
+                continue;
+            }
+        };
+        let run = runs.len();
+        runs.push((run_start, None, 0..0));
+        let mut children = 0usize;
+        loop {
+            buffer.clear();
+            let child_start = reader.buffer_position() as usize;
+            let kind = match reader.read_event_into(&mut buffer)? {
+                Event::Start(child) => {
+                    let prefixes = word_prefixes_at(&child, &run_prefixes)?;
+                    let kind = field_span_child_kind(&child, &prefixes);
+                    reader.read_to_end_into(child.name(), &mut Vec::new())?;
+                    kind
+                }
+                Event::Empty(child) => {
+                    let prefixes = word_prefixes_at(&child, &run_prefixes)?;
+                    field_span_child_kind(&child, &prefixes)
+                }
+                Event::End(_) => {
+                    let end = reader.buffer_position() as usize;
+                    if children == 0 {
+                        let Some(part) = current.filter(|_| depth > 0) else {
+                            return Ok(None);
+                        };
+                        parts[part].1.push((Some(run), child_start..child_start));
+                    }
+                    runs[run].2 = child_start..end;
+                    break;
+                }
+                Event::Eof => return Ok(None),
+                _ => FieldSpanChild::Other,
+            };
+            let range = child_start..reader.buffer_position() as usize;
+            if kind == FieldSpanChild::Properties {
+                runs[run].1 = Some(range);
+                continue;
+            }
+            children += 1;
+            let inside = match kind {
+                FieldSpanChild::Begin => {
+                    if depth == 0 {
+                        parts.push((true, Vec::new()));
+                        current = Some(parts.len() - 1);
+                    }
+                    depth += 1;
+                    true
+                }
+                FieldSpanChild::End => {
+                    if depth == 0 {
+                        return Ok(None);
+                    }
+                    depth -= 1;
+                    true
+                }
+                FieldSpanChild::FieldMarker => {
+                    if depth == 0 {
+                        return Ok(None);
+                    }
+                    true
+                }
+                FieldSpanChild::Other | FieldSpanChild::Properties => depth > 0,
+            };
+            if !inside && current.is_none_or(|part| parts[part].0) {
+                parts.push((false, Vec::new()));
+                current = Some(parts.len() - 1);
+            }
+            let part = current.expect("a part is open");
+            parts[part].1.push((Some(run), range));
+            if kind == FieldSpanChild::End && depth == 0 {
+                current = None;
+            }
+        }
+        buffer.clear();
+    }
+    if depth != 0 {
+        return Ok(None);
+    }
+
+    let materialize = |children: &[(Option<usize>, Range<usize>)]| {
+        let mut bytes = Vec::new();
+        let mut open = None;
+        for (run, range) in children {
+            if *run != open {
+                if let Some(open) = open {
+                    bytes.extend_from_slice(&raw[runs[open].2.clone()]);
+                }
+                if let Some(run) = *run {
+                    bytes.extend_from_slice(&raw[runs[run].0.clone()]);
+                    if let Some(properties) = runs[run].1.clone() {
+                        bytes.extend_from_slice(&raw[properties]);
+                    }
+                }
+                open = *run;
+            }
+            bytes.extend_from_slice(&raw[range.clone()]);
+        }
+        if let Some(open) = open {
+            bytes.extend_from_slice(&raw[runs[open].2.clone()]);
+        }
+        bytes
+    };
+
+    // Content outside every field that no reader sees, such as whitespace or
+    // an unknown element, stays with its neighbouring field as before.
+    let mut index = 0;
+    while index < parts.len() {
+        let visible = parts[index].0
+            || parse_run_raw(&materialize(&parts[index].1), word_prefixes)
+                .is_ok_and(|run| !run.content.is_empty());
+        if visible {
+            index += 1;
+            continue;
+        }
+        let (_, children) = parts.remove(index);
+        if let Some(next) = parts.get_mut(index) {
+            next.1.splice(0..0, children);
+        } else if let Some(previous) = index.checked_sub(1).and_then(|at| parts.get_mut(at)) {
+            previous.1.extend(children);
+        }
+    }
+    Ok(Some(
+        parts
+            .iter()
+            .map(|(field, children)| FieldSpanPart {
+                field: *field,
+                bytes: materialize(children),
+            })
+            .collect(),
+    ))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FieldSpanChild {
+    Properties,
+    Begin,
+    End,
+    /// A separator or instruction text, which only ever sits inside a field.
+    FieldMarker,
+    Other,
+}
+
+fn field_span_child_kind(element: &BytesStart<'_>, word_prefixes: &[String]) -> FieldSpanChild {
+    let name = element.name();
+    if is_word_element(name.as_ref(), b"rPr", word_prefixes) {
+        return FieldSpanChild::Properties;
+    }
+    if is_word_element(name.as_ref(), b"instrText", word_prefixes) {
+        return FieldSpanChild::FieldMarker;
+    }
+    if !is_word_element(name.as_ref(), b"fldChar", word_prefixes) {
+        return FieldSpanChild::Other;
+    }
+    match optional_word_attribute(element, b"fldCharType", word_prefixes).as_deref() {
+        Some("begin") => FieldSpanChild::Begin,
+        Some("end") => FieldSpanChild::End,
+        _ => FieldSpanChild::FieldMarker,
+    }
+}
+
+/// Turn a projected field span into model runs, splitting out the run
+/// content that sits outside its fields.
+///
+/// Without such content the span stays one run per field, as before.
+fn field_span_runs(
+    raw: &[u8],
+    fields: Vec<(Field, Option<CT_RPr>)>,
+    word_prefixes: &[String],
+) -> Vec<CT_R> {
+    let parts = match field_span_parts(raw, word_prefixes) {
+        Ok(Some(parts))
+            if parts.iter().any(|part| !part.field)
+                && parts.iter().filter(|part| part.field).count() == fields.len() =>
+        {
+            parts
+        }
+        _ => {
+            return fields
+                .into_iter()
+                .map(|(field, properties)| field_run(field, properties))
+                .collect();
+        }
+    };
+    let mut shape = Vec::with_capacity(parts.len());
+    for part in &parts {
+        if part.field {
+            shape.push(None);
+        } else {
+            match parse_run_raw(&part.bytes, word_prefixes) {
+                Ok(run) => shape.push(Some(run)),
+                Err(_) => {
+                    return fields
+                        .into_iter()
+                        .map(|(field, properties)| field_run(field, properties))
+                        .collect();
+                }
+            }
+        }
+    }
+    let mut fields = fields.into_iter().enumerate();
+    shape
+        .iter()
+        .enumerate()
+        .map(|(position, run)| match run {
+            Some(run) => run.clone(),
+            None => {
+                let (field_index, (mut field, properties)) =
+                    fields.next().expect("one field per field part");
+                field.span = Some(Box::new(FieldRunSpan {
+                    runs: shape.clone(),
+                    position,
+                    field_index,
+                }));
+                field_run(field, properties)
+            }
+        })
+        .collect()
 }
 
 fn has_typed_boundary_inside(
@@ -6074,7 +6372,11 @@ impl CT_P {
         let mut current_hyperlink: Option<usize> = None;
         let mut current_ruby: Option<usize> = None;
         let mut written_field_owner = None;
+        let mut written_span_end = 0;
         for (run_idx, run) in self.runs.iter().enumerate() {
+            if run_idx < written_span_end {
+                continue;
+            }
             let in_hl = hyperlink_runs.get(&run_idx).copied();
 
             // A ruby annotation wraps its base runs, so it closes before any
@@ -6136,11 +6438,30 @@ impl CT_P {
                 )?;
             }
 
+            let foreign_word_namespace = current_hyperlink
+                .and_then(|index| shadowed_word_namespace(&self.hyperlinks[index]));
+            if let Some((span_end, raw)) = self.untouched_field_span(run_idx) {
+                write_raw_with_word_override(writer, raw, foreign_word_namespace)?;
+                written_field_owner = None;
+                written_span_end = span_end;
+                continue;
+            }
+
             // Fields are paragraph children even though the facade stores them
             // in synthetic runs for the existing inline traversal contract.
             if run.content.len() == 1
                 && let RunContent::Field(field) = &run.content[0]
             {
+                if field.span.is_some() {
+                    write_run_field(
+                        writer,
+                        field,
+                        foreign_word_namespace,
+                        run.properties.as_ref(),
+                    )?;
+                    written_field_owner = None;
+                    continue;
+                }
                 let owner_id = field.source_owner_id();
                 if owner_id.is_some() && owner_id == written_field_owner {
                     continue;
@@ -6273,6 +6594,95 @@ impl CT_P {
         Ok(())
     }
 
+    /// Each untouched field span's source bytes, with the bytes that write its
+    /// split runs as separate physical runs.
+    #[doc(hidden)]
+    pub fn detached_field_spans(&self) -> Result<Vec<(&[u8], Vec<u8>)>> {
+        let mut spans = Vec::new();
+        let mut run_idx = 0;
+        while run_idx < self.runs.len() {
+            let Some((end, raw)) = self.untouched_field_span(run_idx) else {
+                run_idx += 1;
+                continue;
+            };
+            let mut writer = Writer::new(Vec::new());
+            for run in &self.runs[run_idx..end] {
+                match run.content.as_slice() {
+                    [RunContent::Field(field)] => {
+                        write_run_field(&mut writer, field, None, run.properties.as_ref())?
+                    }
+                    _ => run.to_xml(&mut writer)?,
+                }
+            }
+            spans.push((raw, writer.into_inner()));
+            run_idx = end;
+        }
+        Ok(spans)
+    }
+
+    /// The end and source bytes of an untouched field span starting at `run_idx`.
+    ///
+    /// The reader splits a run shared by a field and text into sibling runs.
+    /// While those runs, their fields and the boundaries between them are as
+    /// read, the span is written back as its original bytes.
+    fn untouched_field_span(&self, run_idx: usize) -> Option<(usize, &[u8])> {
+        for lead in 0..=1 {
+            let [RunContent::Field(field)] = self.runs.get(run_idx + lead)?.content.as_slice()
+            else {
+                continue;
+            };
+            let Some(span) = field.span.as_deref() else {
+                continue;
+            };
+            let FieldSource::Parsed {
+                raw_xml, owner_id, ..
+            } = &field.source
+            else {
+                continue;
+            };
+            if span.position != lead || span.field_index != 0 {
+                continue;
+            }
+            let end = run_idx + span.runs.len();
+            let intact =
+                self.runs.get(run_idx..end)?.iter().zip(&span.runs).all(
+                    |(run, shape)| match shape {
+                        Some(shape) => run == shape,
+                        None => matches!(
+                            run.content.as_slice(),
+                            [RunContent::Field(candidate)]
+                                if candidate.source_owner_id() == Some(*owner_id)
+                                    && candidate.is_unchanged()
+                        ),
+                    },
+                );
+            let last = end - 1;
+            let inside = |at: usize| at > run_idx && at <= last;
+            let bounded = has_typed_boundary_inside(
+                run_idx,
+                last,
+                &self.comment_ranges,
+                &self.bookmark_markers,
+                &self.content_controls,
+                &self.revisions,
+                &self.hyperlinks,
+            ) || self.extra_xml.iter().any(|(at, _)| inside(*at))
+                || self.equations.iter().any(|(at, _, _)| inside(*at))
+                || self
+                    .rubies
+                    .iter()
+                    .any(|ruby| ruby.base_start < end && ruby.base_end > run_idx)
+                || self.hyperlinks.iter().any(|hyperlink| {
+                    hyperlink
+                        .extra_xml
+                        .iter()
+                        .any(|(boundary, _, _)| inside(hyperlink.run_start + *boundary))
+                });
+            return (intact && !bounded).then_some((end, raw_xml.as_slice()));
+        }
+        None
+    }
+
     pub(crate) fn collect_runs<'a>(&'a self, runs: &mut Vec<&'a CT_R>) {
         for index in 0..=self.runs.len() {
             for (_, _, _, sdt) in self
@@ -6296,6 +6706,57 @@ impl CT_P {
     }
 }
 
+/// Write one field, leaving out the run content the reader split off it.
+///
+/// A field read from a run it shared with text keeps that whole run as its
+/// source. Once the span is edited the text is written by its own runs, so
+/// only this field's part of the source is written here.
+fn write_run_field<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    field: &Field,
+    foreign_word_namespace: Option<&str>,
+    result_properties: Option<&CT_RPr>,
+) -> Result<()> {
+    let Some(span) = &field.span else {
+        return write_field_with_result_properties(
+            writer,
+            field,
+            foreign_word_namespace,
+            result_properties,
+        );
+    };
+    if span.runs.iter().filter(|run| run.is_none()).count() > 1 && !field.is_unchanged() {
+        return Err(OxmlError::InvalidValue(
+            "a field sharing one physical run was changed".to_owned(),
+        ));
+    }
+    let mut captured = Writer::new(Vec::new());
+    write_field_with_result_properties(&mut captured, field, None, result_properties)?;
+    let captured = captured.into_inner();
+    let mut word_prefixes = match &field.source {
+        FieldSource::Parsed { word_prefixes, .. } => word_prefixes.clone(),
+        FieldSource::New { .. } => Vec::new(),
+    };
+    if !word_prefixes.iter().any(|prefix| prefix == "w") {
+        word_prefixes.push("w".to_owned());
+    }
+    let part = field_span_parts(&captured, &word_prefixes)?.and_then(|parts| {
+        parts
+            .into_iter()
+            .filter(|part| part.field)
+            .nth(span.field_index)
+    });
+    match part {
+        Some(part) => write_raw_with_word_override(writer, &part.bytes, foreign_word_namespace),
+        None if span.field_index == 0 => {
+            write_raw_with_word_override(writer, &captured, foreign_word_namespace)
+        }
+        None => Err(OxmlError::InvalidValue(
+            "a field could not be separated from its physical run".to_owned(),
+        )),
+    }
+}
+
 fn write_mixed_field_run<W: std::io::Write>(
     writer: &mut Writer<W>,
     run: &CT_R,
@@ -6315,7 +6776,7 @@ fn write_mixed_field_run<W: std::io::Write>(
             false,
             foreign_word_namespace,
         )?;
-        write_field_with_result_properties(
+        write_run_field(
             writer,
             field,
             foreign_word_namespace,
