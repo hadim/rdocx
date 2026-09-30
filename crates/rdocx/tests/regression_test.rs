@@ -3900,6 +3900,154 @@ fn part_local_drawing_identity_scope_survives_story_round_trip() {
     }
 }
 
+/// Two body pictures whose `wp:docPr/@id` both read `id`, as some producers
+/// write them. With `one_paragraph` both pictures share one paragraph,
+/// otherwise each follows its own caption paragraph.
+fn repeated_drawing_id_package(id: &str, one_paragraph: bool) -> Vec<u8> {
+    let mut document = Document::new();
+    for name in ["A", "B"] {
+        if !one_paragraph {
+            document.add_paragraph(&format!("Picture {name}"));
+        }
+        document.add_picture(
+            format!("image {name}").as_bytes(),
+            &format!("{name}.png"),
+            Length::pt(1.0),
+            Length::pt(1.0),
+        );
+    }
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let mut xml =
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    if one_paragraph {
+        let first_run_end = xml.find("</w:drawing>").unwrap();
+        let first_run_end = first_run_end + xml[first_run_end..].find("</w:r>").unwrap() + 6;
+        let second_run = first_run_end + xml[first_run_end..].find("<w:r>").unwrap();
+        assert!(xml[first_run_end..second_run].contains("</w:p>"), "{xml}");
+        xml.replace_range(first_run_end..second_run, "");
+    }
+    let mut pieces = xml.split(r#"<wp:docPr id=""#);
+    let mut repeated = pieces.next().unwrap().to_owned();
+    for piece in pieces {
+        let (_, rest) = piece.split_once('"').unwrap();
+        repeated.push_str(&format!(r#"<wp:docPr id="{id}""#));
+        repeated.push_str(rest);
+    }
+    assert_eq!(repeated_drawing_ids(&repeated), [id, id], "{repeated}");
+    package.set_part("/word/document.xml", repeated.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    bytes.into_inner()
+}
+
+fn repeated_drawing_ids(xml: &str) -> Vec<String> {
+    xml.split("<wp:docPr")
+        .skip(1)
+        .filter_map(|suffix| f255_xml_attribute(suffix, "id"))
+        .collect()
+}
+
+fn saved_body_drawing_ids(document: &mut Document) -> Vec<String> {
+    let bytes = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    repeated_drawing_ids(
+        std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap(),
+    )
+}
+
+#[test]
+fn repeated_drawing_ids_in_one_part_do_not_block_document_open() {
+    for repeated in ["0", "7"] {
+        let bytes = repeated_drawing_id_package(repeated, false);
+        let mut document = Document::from_bytes(&bytes).unwrap();
+        let text = document.text();
+        assert!(
+            text.contains("Picture A") && text.contains("Picture B"),
+            "{text}"
+        );
+        assert_eq!(document.to_bytes().unwrap(), bytes);
+
+        document.add_picture(
+            b"authored image",
+            "authored.png",
+            Length::pt(1.0),
+            Length::pt(1.0),
+        );
+        let ids = saved_body_drawing_ids(&mut document);
+        assert_eq!(ids.len(), 3, "{ids:?}");
+        assert_eq!(ids[..2], [repeated, repeated]);
+        assert_ne!(ids[2], repeated);
+        Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    }
+}
+
+#[test]
+fn an_edit_may_not_add_an_occurrence_of_a_repeated_drawing_id() {
+    let mut document = Document::from_bytes(&repeated_drawing_id_package("7", false)).unwrap();
+    let body = f254_story(&document, StoryKind::Body);
+    let picture = document
+        .remove_content_at(&f254_item(&document, &body, 1))
+        .unwrap();
+    let body = f254_story(&document, StoryKind::Body);
+    document
+        .insert_content(&ContentLocation::end(body), picture.clone())
+        .unwrap();
+    assert_eq!(saved_body_drawing_ids(&mut document), ["7", "7"]);
+
+    let before = document.to_bytes().unwrap();
+    let body = f254_story(&document, StoryKind::Body);
+    let error = document
+        .insert_content(&ContentLocation::end(body), picture)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("duplicate drawing id 7"), "{error}");
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn copied_drawings_that_share_an_id_get_distinct_fresh_ids() {
+    let mut document = Document::from_bytes(&repeated_drawing_id_package("7", true)).unwrap();
+    let body = f254_story(&document, StoryKind::Body);
+    document
+        .clone_content(&f254_item(&document, &body, 0), &ContentLocation::end(body))
+        .unwrap();
+    let ids = saved_body_drawing_ids(&mut document);
+    assert_eq!(ids.len(), 4, "{ids:?}");
+    assert_eq!(ids[..2], ["7", "7"]);
+    assert!(
+        ids[2] != "7" && ids[3] != "7" && ids[2] != ids[3],
+        "{ids:?}"
+    );
+
+    let source = Document::from_bytes(&repeated_drawing_id_package("7", false)).unwrap();
+    let body = f254_story(&source, StoryKind::Body);
+    let fragment = DocumentFragment::from_range(
+        &source,
+        &f254_item(&source, &body, 0),
+        &ContentLocation::end(body),
+        false,
+    )
+    .unwrap();
+    let mut destination = Document::from_bytes(&repeated_drawing_id_package("7", false)).unwrap();
+    let body = f254_story(&destination, StoryKind::Body);
+    destination
+        .import_fragment(
+            &ContentLocation::end(body),
+            &fragment,
+            FragmentConflictPolicy::default(),
+        )
+        .unwrap();
+    let ids = saved_body_drawing_ids(&mut destination);
+    assert_eq!(ids.len(), 4, "{ids:?}");
+    assert_eq!(ids[..2], ["7", "7"]);
+    assert!(
+        ids[2] != "7" && ids[3] != "7" && ids[2] != ids[3],
+        "{ids:?}"
+    );
+}
+
 #[test]
 fn related_footnote_insertion_survives_later_typed_mutation() {
     let mut seed = Document::new();
@@ -35745,8 +35893,11 @@ fn imported_and_preserved_collisions_fail_before_mutation() {
     let collided = xml.replacen(r#"<wp:docPr id="2""#, r#"<wp:docPr id="1""#, 1);
     assert_ne!(xml, collided, "second drawing id must be present");
     package.set_part("/word/document.xml", collided.into_bytes());
-    let error = f249_open_error("drawing", package);
-    assert!(error.contains("duplicate drawing id 1"), "{error}");
+    let mut output = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut output).unwrap();
+    // A producer may repeat a drawing id within one part. It opens, and
+    // `repeated_drawing_ids_in_one_part_do_not_block_document_open` covers it.
+    Document::from_bytes(&output.into_inner()).unwrap();
 
     let mut package = f249_package(&bytes);
     let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
