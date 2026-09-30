@@ -12,11 +12,12 @@ use quick_xml::{Reader, Writer};
 
 use crate::diagram::DiagramRelationshipIds;
 use crate::namespace::{
-    FIXED_SHAPE_TREE_PREFIXES, NamespaceBindings, P_NS, all_attributes, non_visual_drawing_id,
-    non_visual_drawing_name, root_attributes, self_contained_attributes,
-    set_non_visual_drawing_name,
+    FIXED_SHAPE_TREE_PREFIXES, NamespaceBindings, P_NS, all_attributes, non_visual_click_hyperlink,
+    non_visual_drawing_id, non_visual_drawing_name, root_attributes, self_contained_attributes,
+    set_non_visual_click_hyperlink, set_non_visual_drawing_name,
 };
 use crate::picture::CT_Picture;
+use crate::shape_tree::ClickHyperlink;
 
 const TABLE_URI: &str = "http://schemas.openxmlformats.org/drawingml/2006/table";
 const CHART_URI: &str = "http://schemas.openxmlformats.org/drawingml/2006/chart";
@@ -272,6 +273,22 @@ impl CT_GraphicFrame {
         set_non_visual_drawing_name(drawing_properties, name)?;
         self.non_visual_properties.non_visual_name = Some(name.to_owned());
         Ok(())
+    }
+
+    pub(crate) fn click_hyperlink(&self) -> Option<ClickHyperlink> {
+        self.non_visual_properties
+            .drawing_properties_index
+            .and_then(|index| self.non_visual_properties.children.get(index))
+            .and_then(|xml| non_visual_click_hyperlink(xml))
+    }
+
+    pub(crate) fn set_click_hyperlink(&mut self, hyperlink: Option<&ClickHyperlink>) -> Result<()> {
+        let drawing_properties = self
+            .non_visual_properties
+            .drawing_properties_index
+            .and_then(|index| self.non_visual_properties.children.get_mut(index))
+            .ok_or_else(|| OxmlError::MissingElement("p:cNvPr".to_owned()))?;
+        set_non_visual_click_hyperlink(drawing_properties, hyperlink)
     }
 
     /// Parses a complete `p:graphicFrame` with any PresentationML prefix.

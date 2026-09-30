@@ -12,11 +12,12 @@ use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::namespace::{
-    FIXED_SHAPE_TREE_PREFIXES, MC_NS, NamespaceBindings, P_NS, R_NS, non_visual_drawing_id,
-    non_visual_drawing_name, root_attributes, self_contained_attributes,
-    set_non_visual_drawing_name,
+    FIXED_SHAPE_TREE_PREFIXES, MC_NS, NamespaceBindings, P_NS, R_NS, non_visual_click_hyperlink,
+    non_visual_drawing_id, non_visual_drawing_name, root_attributes, self_contained_attributes,
+    set_non_visual_click_hyperlink, set_non_visual_drawing_name,
 };
 use crate::placeholder::{ApplicationProperties, CT_Placeholder, parse_application_properties};
+use crate::shape_tree::ClickHyperlink;
 
 pub type Result<T> = std::result::Result<T, OxmlError>;
 type RawAttributes = Vec<(String, String)>;
@@ -230,6 +231,14 @@ impl CT_Picture {
         set_non_visual_drawing_name(&mut self.raw.non_visual_drawing_properties, name)?;
         self.raw.non_visual_name = Some(name.to_owned());
         Ok(())
+    }
+
+    pub(crate) fn click_hyperlink(&self) -> Option<ClickHyperlink> {
+        non_visual_click_hyperlink(&self.raw.non_visual_drawing_properties)
+    }
+
+    pub(crate) fn set_click_hyperlink(&mut self, hyperlink: Option<&ClickHyperlink>) -> Result<()> {
+        set_non_visual_click_hyperlink(&mut self.raw.non_visual_drawing_properties, hyperlink)
     }
 
     /// Parses a complete `p:pic` with any prefix bound to PresentationML.

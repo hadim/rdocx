@@ -542,6 +542,34 @@ changes the run and the relationships together. An empty address, a control
 character, or a missing shape, paragraph, or run leaves the slide and its
 relationships unchanged.
 
+Shape click actions follow the same rules on `p:cNvPr/a:hlinkClick` of a
+shape, picture, connector, graphic frame, or group:
+
+```rust
+pub fn click_target_slide(&self, slide_index: usize, hyperlink: &ClickHyperlink) -> Option<usize>;
+pub fn set_shape_hyperlink(&mut self, slide_index: usize, shape_id: u32, address: Option<&str>) -> Result<()>;
+pub fn set_shape_target_slide(
+    &mut self,
+    slide_index: usize,
+    shape_id: u32,
+    target_slide_index: Option<usize>,
+) -> Result<()>;
+```
+
+`ShapeRef::click_hyperlink` reads the element's `r:id` and `action` as a
+`ClickHyperlink`. `p:cNvPr` stays preserved bytes, so a tooltip, a click sound,
+or an extension of a parsed element round-trips verbatim, and a write replaces
+the whole element with a fresh first child, as python-pptx does.
+`set_shape_hyperlink` names the slide's external hyperlink relationship to the
+address. `set_shape_target_slide` writes the action `ppaction://hlinksldjump`
+and names the slide's internal relationship to the target slide part, reused
+when present. `click_target_slide` resolves that jump, and the first, last,
+next, and previous jumps of `ppaction://hlinkshowjump`, counted from the slide
+that holds the shape. A jump off either end of the deck returns `None` where
+python-pptx raises. python-pptx refuses a click action on a group, but
+PowerPoint honours one, so rpptx writes it. Relationships only the old click
+action named are removed, and alternate content is rejected.
+
 An ordinary shape has canonical non-visual properties, a typed transform,
 preset geometry, and a minimal text body. `add_shape` keeps the string API but
 accepts only names in the generated table of all 187 ECMA preset shapes. An

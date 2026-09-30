@@ -63,6 +63,8 @@ with open("review.pdf", "wb") as output:
 - Picture crop, read and written as in python-pptx.
 - Shape z-order through `slide.shapes.move(from_, to)`.
 - Run hyperlinks, read, added, retargeted, and removed as in python-pptx.
+- Shape click actions, a hyperlink or a slide jump, through `shape.click_action`
+  as in python-pptx.
 
 ## Use it when
 

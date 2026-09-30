@@ -23,8 +23,9 @@ __all__ = [
     "Presentation", "CommentAuthor", "Comment", "CommentReply",
     "BoundingBox", "TextLineLayout", "TextFrameLayout",
     "SlideLayout", "SlideLayoutCollection", "Slide", "Background",
-    "SlideCollection", "Shape", "ShapeCollection", "PlaceholderCollection",
-    "Image", "AdjustmentCollection", "FillFormat", "LineFormat", "ColorFormat",
+    "SlideCollection", "Shape", "ActionSetting", "ShapeCollection",
+    "PlaceholderCollection", "Image", "AdjustmentCollection", "FillFormat",
+    "LineFormat", "ColorFormat",
     "TextFrame", "Paragraph", "ParagraphCollection", "Run", "RunCollection",
     "Hyperlink", "Font", "Table", "Column", "ColumnCollection", "Row",
     "RowCollection", "Cell",
@@ -190,6 +191,7 @@ class SlideLayoutCollection:
 @_final
 class Slide:
     def __new__(cls, *, _private: _Never) -> Slide: ...
+    def __eq__(self, other: object, /) -> bool: ...
     @property
     def shapes(self) -> ShapeCollection: ...
     @property
@@ -275,6 +277,8 @@ class Shape:
     @name.setter
     def name(self, value: str) -> None: ...
     @property
+    def click_action(self) -> ActionSetting: ...
+    @property
     def rotation(self) -> float: ...
     @rotation.setter
     def rotation(self, value: float) -> None: ...
@@ -321,6 +325,17 @@ class Shape:
     def has_table(self) -> bool: ...
     @property
     def table(self) -> Table: ...
+
+
+@_final
+class ActionSetting:
+    def __new__(cls, *, _private: _Never) -> ActionSetting: ...
+    @property
+    def hyperlink(self) -> Hyperlink: ...
+    @property
+    def target_slide(self) -> Slide | None: ...
+    @target_slide.setter
+    def target_slide(self, value: Slide | None) -> None: ...
 
 
 @_final

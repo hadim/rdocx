@@ -21,6 +21,7 @@ from rpptx import (
     TextLineLayout,
 )
 from rpptx._rpptx import (
+    ActionSetting,
     AdjustmentCollection,
     Background,
     Cell,
@@ -351,6 +352,18 @@ def exercise_rpptx_hyperlink_types(run: Run) -> None:
     (address,)
 
 
+def exercise_rpptx_click_action_types(shape: Shape, slide: Slide) -> None:
+    action: ActionSetting = shape.click_action
+    link: Hyperlink = action.hyperlink
+    link.address = "https://example.com"
+    link.address = None
+    action.target_slide = slide
+    target: Slide | None = action.target_slide
+    action.target_slide = None
+    same: bool = target == slide
+    (same,)
+
+
 def exercise_rpptx_text_layout_types(presentation: Presentation) -> None:
     frames: tuple[TextFrameLayout, ...] = presentation.text_layout()
     narrower: tuple[TextFrameLayout, ...] = presentation.text_layout(width_factor=0.95)
@@ -392,6 +405,7 @@ def exercise_rpptx_text_layout_types(presentation: Presentation) -> None:
 
 
 if TYPE_CHECKING:
+    ActionSetting()  # type: ignore[call-arg]
     BoundingBox()  # type: ignore[call-arg]
     AdjustmentCollection()  # type: ignore[call-arg]
     Background()  # type: ignore[call-arg]

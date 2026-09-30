@@ -7770,7 +7770,7 @@ use oxml_opc::relationship::rel_types;
 use oxml_opc::{OpcPackage, content_types};
 use rpptx::{
     Angle, CT_LineProperties, CT_TextCharacterProperties, CT_TextParagraphProperties, CellBorder,
-    ChartData, ChartKind, ConnectorType, EmbeddedContentKind, EmbeddedMediaInput,
+    ChartData, ChartKind, ClickHyperlink, ConnectorType, EmbeddedContentKind, EmbeddedMediaInput,
     EmbeddedMutationPolicy, EmbeddedSignatureState, Emu, Error, Fill, HandoutLayout,
     MediaDiagnostic, MediaFallbackPolicy, MediaKind, MediaPlaybackPhase, MediaPlaybackSettings,
     MediaPoster, MediaSourceInput, Percent1000, Presentation, PresentationPackageClass, ShapeKind,
@@ -14654,6 +14654,308 @@ print([run.hyperlink.address for run in runs])
 "#,
     );
     assert_eq!(records, "['https://example.com/a?x=1&y=2', None]\n");
+}
+
+/// Builds three slides, the first holding one child of every kind that has
+/// a click action, and returns the ids of those children in z-order.
+fn click_action_deck() -> (Presentation, Vec<u32>) {
+    let mut presentation = Presentation::new().unwrap();
+    for _ in 0..3 {
+        presentation.add_slide(6).unwrap();
+    }
+    presentation
+        .add_picture(
+            0,
+            &valid_one_pixel_png(),
+            "pixel.png",
+            Emu(0),
+            Emu(0),
+            Some(Emu(914_400)),
+            Some(Emu(914_400)),
+        )
+        .unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    slide
+        .add_textbox(Emu(0), Emu(0), Emu(914_400), Emu(914_400))
+        .unwrap()
+        .set_text("box")
+        .unwrap();
+    slide
+        .add_shape("rect", Emu(0), Emu(0), Emu(914_400), Emu(914_400))
+        .unwrap();
+    slide
+        .add_connector(
+            ConnectorType::Straight,
+            Emu(0),
+            Emu(0),
+            Emu(914_400),
+            Emu(914_400),
+        )
+        .unwrap();
+    slide
+        .add_table(1, 1, Emu(0), Emu(0), Emu(914_400), Emu(914_400))
+        .unwrap();
+    slide.add_group_shape().unwrap();
+    let ids = (0..6)
+        .map(|index| first_slide_shape_id(&presentation, index))
+        .collect();
+    (presentation, ids)
+}
+
+fn first_slide_click(presentation: &Presentation, index: usize) -> Option<ClickHyperlink> {
+    presentation
+        .slide(0)
+        .unwrap()
+        .shape(index)
+        .unwrap()
+        .click_hyperlink()
+}
+
+fn first_slide_relationships(presentation: &Presentation, relationship_type: &str) -> Vec<String> {
+    open_opc(
+        &presentation.to_bytes().unwrap(),
+        "click action relationships",
+    )
+    .get_part_rels("/ppt/slides/slide1.xml")
+    .unwrap()
+    .get_all_by_type(relationship_type)
+    .into_iter()
+    .map(|relationship| relationship.target.clone())
+    .collect()
+}
+
+#[test]
+fn shape_click_actions_link_jump_reuse_and_prune_their_relationships() {
+    let (mut presentation, ids) = click_action_deck();
+    let before = presentation.to_bytes().unwrap();
+    for address in ["", "https://example.com/\nnext", "\u{FFFE}"] {
+        assert!(matches!(
+            presentation.set_shape_hyperlink(0, ids[0], Some(address)),
+            Err(Error::InvalidShapeMutation { .. })
+        ));
+    }
+    assert!(
+        presentation
+            .set_shape_hyperlink(3, ids[0], Some("https://example.com"))
+            .is_err()
+    );
+    assert!(
+        presentation
+            .set_shape_hyperlink(0, 999, Some("https://example.com"))
+            .unwrap_err()
+            .to_string()
+            .contains("not on the slide")
+    );
+    assert!(matches!(
+        presentation.set_shape_target_slide(0, ids[0], Some(3)),
+        Err(Error::UnknownSlideIndex { index: 3, .. })
+    ));
+    presentation.set_shape_hyperlink(0, ids[0], None).unwrap();
+    presentation
+        .set_shape_target_slide(0, ids[0], None)
+        .unwrap();
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+
+    let address = "https://example.com/a?x=1&y=2";
+    for id in &ids {
+        presentation
+            .set_shape_hyperlink(0, *id, Some(address))
+            .unwrap();
+    }
+    let link = first_slide_click(&presentation, 0).unwrap();
+    assert_eq!(link.action, None);
+    for index in 0..ids.len() {
+        assert_eq!(first_slide_click(&presentation, index), Some(link.clone()));
+    }
+    let link_id = link.relationship_id.clone().unwrap();
+    assert_eq!(presentation.hyperlink_address(0, &link_id), Some(address));
+    assert_eq!(presentation.click_target_slide(0, &link), None);
+    assert_eq!(
+        slide_hyperlink_targets(&presentation),
+        [(link_id, address.to_owned())]
+    );
+    let linked = presentation.to_bytes().unwrap();
+    presentation
+        .set_shape_hyperlink(0, ids[1], Some(address))
+        .unwrap();
+    assert_eq!(presentation.to_bytes().unwrap(), linked);
+
+    presentation
+        .set_shape_target_slide(0, ids[0], Some(2))
+        .unwrap();
+    presentation
+        .set_shape_target_slide(0, ids[1], Some(2))
+        .unwrap();
+    presentation
+        .set_shape_target_slide(0, ids[2], Some(0))
+        .unwrap();
+    let jump = first_slide_click(&presentation, 0).unwrap();
+    assert_eq!(jump.action.as_deref(), Some("ppaction://hlinksldjump"));
+    assert_eq!(first_slide_click(&presentation, 1), Some(jump.clone()));
+    assert_eq!(presentation.click_target_slide(0, &jump), Some(2));
+    assert_eq!(
+        presentation.hyperlink_address(0, jump.relationship_id.as_deref().unwrap()),
+        Some("slide3.xml")
+    );
+    let own = first_slide_click(&presentation, 2).unwrap();
+    assert_eq!(presentation.click_target_slide(0, &own), Some(0));
+    assert_eq!(
+        first_slide_relationships(&presentation, rel_types::SLIDE),
+        ["slide3.xml", "slide1.xml"]
+    );
+    let jumped = presentation.to_bytes().unwrap();
+    presentation
+        .set_shape_target_slide(0, ids[1], Some(2))
+        .unwrap();
+    assert_eq!(presentation.to_bytes().unwrap(), jumped);
+    presentation.move_slide(2, 1).unwrap();
+    assert_eq!(presentation.click_target_slide(0, &jump), Some(1));
+
+    for id in &ids {
+        presentation.set_shape_hyperlink(0, *id, None).unwrap();
+    }
+    for index in 0..ids.len() {
+        assert_eq!(first_slide_click(&presentation, index), None);
+    }
+    assert!(first_slide_relationships(&presentation, rel_types::HYPERLINK).is_empty());
+    assert!(first_slide_relationships(&presentation, rel_types::SLIDE).is_empty());
+
+    presentation
+        .set_shape_hyperlink(0, ids[3], Some(address))
+        .unwrap();
+    presentation
+        .set_shape_target_slide(0, ids[4], Some(2))
+        .unwrap();
+    let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
+    assert!(reopened.validate().is_empty(), "{:?}", reopened.validate());
+    let link = first_slide_click(&reopened, 3).unwrap();
+    assert_eq!(
+        reopened.hyperlink_address(0, link.relationship_id.as_deref().unwrap()),
+        Some(address)
+    );
+    let jump = first_slide_click(&reopened, 4).unwrap();
+    assert_eq!(reopened.click_target_slide(0, &jump), Some(2));
+}
+
+#[test]
+fn shape_click_action_parts_survive_and_relative_jumps_resolve() {
+    let (base, _) = click_action_deck();
+    let slide_part = "/ppt/slides/slide1.xml";
+    let mut package = open_opc(&base.to_bytes().unwrap(), "click action parts");
+    let relationships = package.get_or_create_part_rels(slide_part);
+    let link_id = relationships.add_external(rel_types::HYPERLINK, "https://example.com/sound");
+    let sound_id = relationships.add_external(rel_types::AUDIO, "https://example.com/click.wav");
+    let link = format!(
+        r#"<a:hlinkClick r:id="{link_id}" tooltip="Play &amp; open" highlightClick="1"><a:snd r:embed="{sound_id}" name="click"/><a:extLst><a:ext uri="{{00000000-0000-0000-0000-000000000000}}"><x:keep xmlns:x="urn:x"/></a:ext></a:extLst></a:hlinkClick>"#
+    );
+    let group = format!(
+        r#"<p:grpSp><p:nvGrpSpPr><p:cNvPr id="50" name="Group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="51" name="Inner">{link}</p:cNvPr><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp></p:grpSp>"#
+    );
+    let xml = String::from_utf8(package.get_part(slide_part).unwrap().to_vec())
+        .unwrap()
+        .replacen("</p:spTree>", &format!("{group}</p:spTree>"), 1);
+    package.set_part(slide_part, xml.into_bytes());
+    let mut presentation = open_package(package).unwrap();
+    let saved = open_opc(&presentation.to_bytes().unwrap(), "click action parts");
+    let saved = String::from_utf8(saved.get_part(slide_part).unwrap().to_vec()).unwrap();
+    assert!(saved.contains(&link), "{saved}");
+    let inner = presentation
+        .slide(0)
+        .unwrap()
+        .shape(6)
+        .unwrap()
+        .child(0)
+        .unwrap()
+        .click_hyperlink()
+        .unwrap();
+    assert_eq!(inner.relationship_id.as_deref(), Some(link_id.as_str()));
+    assert_eq!(
+        presentation.hyperlink_address(0, &link_id),
+        Some("https://example.com/sound")
+    );
+
+    presentation.set_shape_hyperlink(0, 51, None).unwrap();
+    let relationships = open_opc(&presentation.to_bytes().unwrap(), "click sound")
+        .get_part_rels(slide_part)
+        .unwrap()
+        .clone();
+    assert!(relationships.get_by_id(&link_id).is_none());
+    assert!(relationships.get_by_id(&sound_id).is_none());
+
+    let duplicate = with_first_slide_children(
+        &base,
+        r#"<p:sp><p:nvSpPr><p:cNvPr id="2" name="Duplicate"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp>"#,
+        &[],
+    );
+    let mut duplicate = duplicate;
+    assert!(
+        duplicate
+            .set_shape_hyperlink(0, 2, Some("https://example.com"))
+            .unwrap_err()
+            .to_string()
+            .contains("not unique")
+    );
+
+    let jump = |action: &str| ClickHyperlink {
+        relationship_id: None,
+        action: Some(action.to_owned()),
+    };
+    for (slide, action, target) in [
+        (1, "ppaction://hlinkshowjump?jump=firstslide", Some(0)),
+        (1, "ppaction://hlinkshowjump?jump=lastslide", Some(2)),
+        (1, "ppaction://hlinkshowjump?jump=nextslide", Some(2)),
+        (1, "ppaction://hlinkshowjump?jump=previousslide", Some(0)),
+        (2, "ppaction://hlinkshowjump?jump=nextslide", None),
+        (0, "ppaction://hlinkshowjump?jump=previousslide", None),
+        (1, "ppaction://hlinkshowjump?jump=lastslideviewed", None),
+        (1, "ppaction://hlinkshowjump?jump=endshow", None),
+        (1, "ppaction://hlinksldjump", None),
+        (1, "ppaction://macro?name=Run", None),
+        (3, "ppaction://hlinkshowjump?jump=firstslide", None),
+    ] {
+        assert_eq!(
+            presentation.click_target_slide(slide, &jump(action)),
+            target,
+            "{action} on slide {slide}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires uv and pinned python-pptx 1.0.2"]
+fn shape_click_actions_read_back_in_pinned_python_pptx() {
+    let (mut presentation, ids) = click_action_deck();
+    for id in &ids[..3] {
+        presentation
+            .set_shape_hyperlink(0, *id, Some("https://example.com/a?x=1&y=2"))
+            .unwrap();
+    }
+    for id in &ids[3..] {
+        presentation
+            .set_shape_target_slide(0, *id, Some(2))
+            .unwrap();
+    }
+    let records = python_pptx_1_0_2_reads(
+        &presentation.to_bytes().unwrap(),
+        "shape-click-actions",
+        r#"
+import sys
+import pptx
+from pptx import Presentation
+
+assert pptx.__version__ == "1.0.2", pptx.__version__
+presentation = Presentation(sys.argv[1])
+slides = list(presentation.slides)
+for shape in presentation.slides[0].shapes:
+    action = shape.click_action
+    target = action.target_slide
+    print(action.hyperlink.address, None if target is None else slides.index(target))
+"#,
+    );
+    assert_eq!(
+        records,
+        "https://example.com/a?x=1&y=2 None\n".repeat(3) + &"slide3.xml 2\n".repeat(3)
+    );
 }
 
 fn plain_shape_fixture_bytes(from: &str, to: &str) -> Vec<u8> {
