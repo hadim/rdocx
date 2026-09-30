@@ -642,6 +642,10 @@ fn story_xml<'a>(document: &'a Document, story: &StoryPart) -> Result<&'a [u8]> 
     })
 }
 
+/// Hyperlink relationships carried into the redline, each with the part name
+/// of the original owner it belongs to.
+type CarriedLinks = Vec<(String, Relationship)>;
+
 /// Give each edited image and hyperlink relationship the id of its
 /// equivalent in the original. A hyperlink with no equivalent gets a fresh
 /// id, and is returned with the original owner it belongs to, for the
@@ -653,7 +657,7 @@ fn remap_equivalent_story_relationships(
     edited: &mut Document,
     original_stories: &[StoryPart],
     edited_stories: &[StoryPart],
-) -> Result<(Vec<(String, Relationship)>, Vec<EditedImage>)> {
+) -> Result<(CarriedLinks, Vec<EditedImage>)> {
     let mut images = Vec::new();
     let mut carried = remap_equivalent_owner_relationships(
         original,
