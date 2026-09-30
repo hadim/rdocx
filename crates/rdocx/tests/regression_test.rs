@@ -13318,7 +13318,8 @@ fn namespace_classification_metadata_exists_only_for_raw_children() {
     ));
 }
 
-/// The body read walkers see through content controls (GitHub issue #160).
+/// The body read walkers and the exporters see through content controls
+/// (GitHub issue #160).
 mod content_control_read_walker_regressions {
     use super::*;
 
@@ -13557,6 +13558,330 @@ mod content_control_read_walker_regressions {
             assert_eq!(seen.headings, headings, "{location}: headings");
             assert_eq!(seen.links, links, "{location}: links");
         }
+    }
+
+    /// A structurally valid one-pixel PNG, which EPUB export requires.
+    const PNG: &[u8] = &[
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
+        0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 8, 29, 99, 96, 96, 96, 248, 15, 0,
+        1, 4, 1, 0, 30, 115, 156, 64, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ];
+
+    /// A run showing the picture of `relationship_id` at `cx` by `cy` EMU.
+    fn picture_run(relationship_id: &str, id: usize, cx: i64, cy: i64) -> String {
+        format!(
+            r#"<w:r><w:drawing><wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><wp:extent cx="{cx}" cy="{cy}"/><wp:docPr id="{id}" name="Picture {id}"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="{relationship_id}"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"#
+        )
+    }
+
+    /// A document with a content control wherever one can wrap exported
+    /// content: around a body heading, a run, a cell paragraph, a run in a
+    /// cell, a cell, a row, another control, and two of three pictures. The
+    /// header paragraph is wrapped too. With `wrap` false, the same document
+    /// without any control.
+    fn exporter_fixture(wrap: bool) -> Document {
+        let wrap_in = |tag: &str, content: &str| {
+            if wrap {
+                control(tag, content)
+            } else {
+                content.to_owned()
+            }
+        };
+        let run = |text: &str| format!(r#"<w:r><w:t xml:space="preserve">{text}</w:t></w:r>"#);
+        let mut seed = Document::new();
+        seed.set_header("Header text");
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        package.set_part("/word/media/pixel.png", PNG.to_vec());
+        package.content_types.add_default("png", "image/png");
+        let image = package
+            .get_or_create_part_rels("/word/document.xml")
+            .add(oxml_opc::relationship::rel_types::IMAGE, "media/pixel.png");
+
+        let body = [
+            paragraph("Plain before."),
+            wrap_in(
+                "heading",
+                r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Wrapped heading</w:t></w:r></w:p>"#,
+            ),
+            format!(
+                "<w:p>{}{}{}</w:p>",
+                run("Inline "),
+                wrap_in(
+                    "inline",
+                    r#"<w:r><w:rPr><w:b/></w:rPr><w:t>wrapped run</w:t></w:r>"#
+                ),
+                run(" after.")
+            ),
+            table(&format!(
+                "{}{}",
+                row(&format!(
+                    "{}{}{}",
+                    cell(&wrap_in("cell block", &paragraph("Cell block"))),
+                    cell(&format!(
+                        "<w:p>{}{}</w:p>",
+                        run("Cell "),
+                        wrap_in("cell inline", &run("inline"))
+                    )),
+                    wrap_in("cells", &cell(&paragraph("Wrapped cell"))),
+                )),
+                wrap_in(
+                    "rows",
+                    &row(&format!(
+                        "{}{}{}",
+                        cell(&paragraph("Wrapped row")),
+                        cell(&format!(
+                            "<w:p>{}</w:p>",
+                            wrap_in("cell picture", &picture_run(&image, 1, 9_525, 19_050))
+                        )),
+                        cell("<w:p/>"),
+                    ))
+                ),
+            )),
+            wrap_in("outer", &wrap_in("inner", &paragraph("Nested text"))),
+            wrap_in(
+                "picture",
+                &format!("<w:p>{}</w:p>", picture_run(&image, 2, 19_050, 28_575)),
+            ),
+            format!("<w:p>{}</w:p>", picture_run(&image, 3, 28_575, 38_100)),
+            paragraph("Plain after."),
+        ]
+        .concat();
+        let xml =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        let start = xml.find("<w:body>").unwrap() + "<w:body>".len();
+        let end = xml.find("<w:sectPr").unwrap();
+        package.set_part(
+            "/word/document.xml",
+            format!("{}{body}{}", &xml[..start], &xml[end..]).into_bytes(),
+        );
+
+        let header =
+            String::from_utf8(package.get_part("/word/header1.xml").unwrap().to_vec()).unwrap();
+        let start = header.find("<w:p>").unwrap();
+        let end = header.rfind("</w:p>").unwrap() + "</w:p>".len();
+        package.set_part(
+            "/word/header1.xml",
+            format!(
+                "{}{}{}",
+                &header[..start],
+                wrap_in("header", &header[start..end]),
+                &header[end..]
+            )
+            .into_bytes(),
+        );
+
+        let mut output = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut output).unwrap();
+        Document::from_bytes(output.get_ref()).unwrap()
+    }
+
+    fn archive_text(bytes: &[u8], name: &str) -> String {
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut archive.by_name(name).unwrap(), &mut text).unwrap();
+        text
+    }
+
+    #[test]
+    fn every_exporter_writes_what_content_controls_wrap_in_place() {
+        let wrapped = exporter_fixture(true);
+        let plain = exporter_fixture(false);
+        assert_eq!(
+            wrapped
+                .body_items()
+                .filter(|item| matches!(item, BodyItemRef::ContentControl(_)))
+                .count(),
+            3
+        );
+        assert_eq!(wrapped.text(), plain.text());
+
+        // A control is transparent: each exporter writes the wrapped document
+        // exactly as the same document without controls.
+        let markdown = wrapped.to_markdown();
+        assert_eq!(markdown, plain.to_markdown());
+        assert_eq!(
+            markdown,
+            "Plain before.\n\n# Wrapped heading\n\nInline **wrapped run** after.\n\n\
+             | Cell block | Cell inline | Wrapped cell |\n| --- | --- | --- |\n\
+             | Wrapped row |  |  |\n\nNested text\n\n\n\nPlain after.\n\n"
+        );
+
+        let html = wrapped.to_html();
+        assert_eq!(html, plain.to_html());
+        for text in [
+            "<p>Plain before.</p>",
+            "<h1>Wrapped heading</h1>",
+            "<p>Inline <strong>wrapped run</strong> after.</p>",
+            "<td><p>Cell block</p>",
+            "<td><p>Cell inline</p>",
+            "<td><p>Wrapped cell</p>",
+            "<td><p>Wrapped row</p>",
+            "<p>Nested text</p>",
+            "<p>Plain after.</p>",
+        ] {
+            assert!(html.contains(text), "{text}: {html}");
+        }
+        assert_eq!(html.matches("<img ").count(), 3, "{html}");
+        assert!(!html.contains("Header text"), "{html}");
+
+        // MHTML pairs each picture with its size in document order: the one in
+        // the row control, the one in the block control, then the plain one.
+        let mhtml = wrapped.to_mhtml_bytes().unwrap();
+        let plain_mhtml = plain.to_mhtml_bytes().unwrap();
+        assert_eq!(mhtml.bytes, plain_mhtml.bytes);
+        let reopened = Document::from_mhtml_bytes(&mhtml.bytes).unwrap();
+        assert_eq!(
+            reopened
+                .document
+                .images()
+                .iter()
+                .map(|image| (image.width_emu, image.height_emu))
+                .collect::<Vec<_>>(),
+            [(9_525, 19_050), (19_050, 28_575), (28_575, 38_100)]
+        );
+
+        let epub = wrapped.to_epub_bytes().unwrap();
+        let plain_epub = plain.to_epub_bytes().unwrap();
+        assert_eq!(epub.bytes, plain_epub.bytes);
+        let navigation = archive_text(&epub.bytes, "EPUB/nav.xhtml");
+        assert!(navigation.contains(">Wrapped heading</a>"), "{navigation}");
+        let chapter = archive_text(&epub.bytes, "EPUB/chapter-001.xhtml");
+        for text in [
+            ">Wrapped heading</h1>",
+            "Inline <strong>wrapped run</strong> after.",
+            "<p>Cell block</p>",
+            "<p>Cell inline</p>",
+            "<p>Wrapped cell</p>",
+            "<p>Wrapped row</p>",
+            "<p>Nested text</p>",
+            "<p>Plain after.</p>",
+        ] {
+            assert!(chapter.contains(text), "{text}: {chapter}");
+        }
+        assert_eq!(chapter.matches("<img ").count(), 3, "{chapter}");
+
+        // Each exporter reports what it loses of the wrapped content as it does
+        // outside a control, in document order, and notes each control it
+        // flattens.
+        let mhtml_diagnostics = |result: &rdocx::MhtmlWriteResult| {
+            result
+                .diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.location.clone(), diagnostic.message.clone()))
+                .collect::<Vec<_>>()
+        };
+        let epub_diagnostics = |result: &rdocx::EpubWriteResult| {
+            result
+                .diagnostics
+                .iter()
+                .map(|diagnostic| (diagnostic.path.clone(), diagnostic.message.clone()))
+                .collect::<Vec<_>>()
+        };
+        let split = |diagnostics: Vec<(String, String)>| {
+            let (notes, losses): (Vec<_>, Vec<_>) = diagnostics
+                .into_iter()
+                .partition(|(_, message)| message.contains("content control"));
+            let losses = losses
+                .into_iter()
+                .map(|(_, message)| message)
+                .collect::<Vec<_>>();
+            (notes, losses)
+        };
+        let owned = |notes: &[(&str, &str)]| {
+            notes
+                .iter()
+                .map(|(path, message)| ((*path).to_owned(), (*message).to_owned()))
+                .collect::<Vec<_>>()
+        };
+
+        let (notes, losses) = split(mhtml_diagnostics(&mhtml));
+        assert_eq!(losses, split(mhtml_diagnostics(&plain_mhtml)).1);
+        assert_eq!(
+            notes,
+            owned(&[
+                ("body[1]", "flattened Word body content control"),
+                (
+                    "body[2]/paragraph/item[1]",
+                    "flattened Word paragraph content control"
+                ),
+                (
+                    "body[3]/table/row[0]/cell[0]/item[0]",
+                    "flattened Word table cell content control"
+                ),
+                (
+                    "body[3]/table/row[0]/cell[1]/paragraph[0]/item[1]",
+                    "flattened Word paragraph content control"
+                ),
+                (
+                    "body[3]/table/row[0]/content-control[0]",
+                    "flattened Word table cell content control"
+                ),
+                (
+                    "body[3]/table/content-control[0]",
+                    "flattened Word table row content control"
+                ),
+                (
+                    "body[3]/table/content-control[0]/item[0]/row/cell[1]/paragraph[0]/item[0]",
+                    "flattened Word paragraph content control"
+                ),
+                ("body[4]", "flattened Word body content control"),
+                ("body[4]/item[0]", "flattened nested Word content control"),
+                ("body[5]", "flattened Word body content control"),
+            ])
+        );
+
+        let (notes, losses) = split(epub_diagnostics(&epub));
+        assert_eq!(losses, split(epub_diagnostics(&plain_epub)).1);
+        assert!(
+            losses.contains(&"drawing extent was simplified to responsive EPUB sizing".to_owned())
+        );
+        assert_eq!(
+            notes,
+            owned(&[
+                (
+                    "body[1]",
+                    "body content control was flattened during EPUB export"
+                ),
+                (
+                    "body[2]/content-control[0]",
+                    "run content control was flattened during EPUB export"
+                ),
+                (
+                    "body[3]/row[0]/cell[0]/content[0]",
+                    "table-cell content control was flattened during EPUB export"
+                ),
+                (
+                    "body[3]/row[0]/cell[1]/content[0]/content-control[0]",
+                    "run content control was flattened during EPUB export"
+                ),
+                (
+                    "body[3]/row[0]/content-control[0]",
+                    "table-cell content control was flattened during EPUB export"
+                ),
+                (
+                    "body[3]/content-control[0]",
+                    "table row content control was flattened during EPUB export"
+                ),
+                (
+                    "body[3]/content-control[0]/content[0]/cell[1]/content[0]/content-control[0]",
+                    "run content control was flattened during EPUB export"
+                ),
+                (
+                    "body[4]",
+                    "body content control was flattened during EPUB export"
+                ),
+                (
+                    "body[4]/content[0]",
+                    "nested content control was flattened during EPUB export"
+                ),
+                (
+                    "body[5]",
+                    "body content control was flattened during EPUB export"
+                ),
+            ])
+        );
     }
 }
 

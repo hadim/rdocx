@@ -9436,7 +9436,7 @@ fn insert_html_content_into_cell(
     Ok(())
 }
 
-fn visit_body_paragraphs(content: &[BodyContent], visitor: &mut impl FnMut(&CT_P)) {
+pub(crate) fn visit_body_paragraphs(content: &[BodyContent], visitor: &mut impl FnMut(&CT_P)) {
     for item in content {
         match item {
             BodyContent::Paragraph(paragraph) => visit_paragraph(paragraph, visitor),
