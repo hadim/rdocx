@@ -9707,6 +9707,92 @@ fn numbered_toc_entries_reuse_the_visible_layout_marker() {
     );
 }
 
+/// GitHub issue #168: python-docx's default template gives `Subtitle` a
+/// `w:numPr` holding a `w:ilvl` and no `w:numId`, so every numbering edit of
+/// a python-docx document was refused. The style takes the instance of its
+/// `basedOn` chain and is not numbered when the chain has none, which is what
+/// Word renders: `1.`, `1.1)`, `1.2)`, `2.` and an unnumbered subtitle here.
+#[test]
+fn style_numbering_level_without_an_instance_follows_its_based_on_chain() {
+    let producer_styles = concat!(
+        // python-docx's `Subtitle`, without its linked character style.
+        r#"<w:style w:type="paragraph" w:styleId="Subtitle"><w:name w:val="Subtitle"/>"#,
+        r#"<w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:uiPriority w:val="11"/>"#,
+        r#"<w:qFormat/><w:pPr><w:numPr><w:ilvl w:val="1"/></w:numPr></w:pPr></w:style>"#,
+        r#"<w:style w:type="paragraph" w:styleId="Base"><w:name w:val="Base"/>"#,
+        r#"<w:basedOn w:val="Normal"/></w:style>"#,
+        r#"<w:style w:type="paragraph" w:styleId="Derived"><w:name w:val="Derived"/>"#,
+        r#"<w:basedOn w:val="Base"/><w:pPr><w:numPr><w:ilvl w:val="1"/></w:numPr></w:pPr>"#,
+        r#"</w:style>"#,
+    );
+    let body = [
+        ("Base", "Base one"),
+        ("Derived", "Derived one"),
+        ("Derived", "Derived two"),
+        ("Base", "Base two"),
+        ("Subtitle", "Subtitle text"),
+    ]
+    .map(|(style, text)| {
+        format!(
+            r#"<w:p><w:pPr><w:pStyle w:val="{style}"/></w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>"#
+        )
+    })
+    .concat();
+    let mut document = document_with_producer_styles(&body, producer_styles);
+    document.validate_numbering_graph().unwrap();
+
+    let definition = document
+        .add_numbering_definition(&[
+            ListLevel::decimal().level_text("%1."),
+            ListLevel::decimal().level_text("%1.%2)"),
+        ])
+        .unwrap();
+    let instance = document.add_numbering_instance(definition, &[]).unwrap();
+    document
+        .link_style_to_numbering("Base", instance, 0)
+        .unwrap();
+
+    let markers = |document: &mut Document| {
+        let layout = document.layout_deterministic().unwrap();
+        (0..5)
+            .map(|body_index| {
+                layout
+                    .document_body_paragraph_numbering(body_index)
+                    .map(|numbering| numbering.marker_text.clone())
+            })
+            .collect::<Vec<_>>()
+    };
+    let expected = ["1.", "1.1)", "1.2)", "2."]
+        .map(|marker| Some(marker.to_owned()))
+        .into_iter()
+        .chain([None])
+        .collect::<Vec<_>>();
+    assert_eq!(markers(&mut document), expected);
+
+    // A level may name the inheriting style back, which records its link.
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let numbering =
+        String::from_utf8(package.get_part("/word/numbering.xml").unwrap().to_vec()).unwrap();
+    let level = numbering.find(r#"<w:lvl w:ilvl="1""#).unwrap();
+    let level_end = level + numbering[level..].find("<w:lvlText").unwrap();
+    let numbering = format!(
+        r#"{}<w:pStyle w:val="Derived"/>{}"#,
+        &numbering[..level_end],
+        &numbering[level_end..]
+    );
+    package.set_part("/word/numbering.xml", numbering.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    document.validate_numbering_graph().unwrap();
+    document
+        .add_numbering_definition(&[ListLevel::decimal()])
+        .unwrap();
+    assert_eq!(markers(&mut document), expected);
+}
+
 fn fx114_toc_document() -> Document {
     use rdocx_oxml::borders::{CT_TabStop, CT_Tabs};
     use rdocx_oxml::properties::CT_PPr;
