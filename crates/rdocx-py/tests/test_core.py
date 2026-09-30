@@ -340,7 +340,7 @@ def test_update_fields_on_open_sets_clears_and_removes_the_setting():
         assert document.to_bytes() == before
 
 
-def _one_pixel_png():
+def _one_pixel_png(pixel=b"\xff\xff\xff"):
     def chunk(kind, data):
         crc = struct.pack(">I", zlib.crc32(kind + data))
         return struct.pack(">I", len(data)) + kind + data + crc
@@ -349,9 +349,62 @@ def _one_pixel_png():
     return (
         b"\x89PNG\r\n\x1a\n"
         + chunk(b"IHDR", header)
-        + chunk(b"IDAT", zlib.compress(b"\x00\xff\xff\xff"))
+        + chunk(b"IDAT", zlib.compress(b"\x00" + pixel))
         + chunk(b"IEND", b"")
     )
+
+
+def _body_images(data):
+    with zipfile.ZipFile(io.BytesIO(data)) as package:
+        xml = package.read("word/document.xml").decode()
+        relationships = package.read("word/_rels/document.xml.rels").decode()
+        targets = {
+            re.search(r'Id="([^"]+)"', element).group(1): re.search(
+                r'Target="([^"]+)"', element
+            ).group(1)
+            for element in re.findall(r"<Relationship [^>]*>", relationships)
+        }
+        return [
+            package.read(posixpath.join("word", targets[embed]))
+            for embed in re.findall(r'r:embed="([^"]+)"', xml)
+        ]
+
+
+@pytest.mark.parametrize(
+    ("caption", "size"),
+    [
+        ("Figure 1. Caption.", (1, 0.66)),
+        ("Figure 1. New caption.", (1, 0.66)),
+        ("Figure 1. Caption.", (1.2, 0.8)),
+    ],
+)
+def test_compare_records_a_picture_whose_image_changed(caption, size):
+    import rdocx
+
+    red, blue = _one_pixel_png(b"\xff\x00\x00"), _one_pixel_png(b"\x00\x00\xff")
+
+    def document(image, caption="Figure 1. Caption.", size=(1, 0.66)):
+        document = rdocx.Document()
+        document.add_paragraph("Before the figure.")
+        document.add_picture(
+            image, "figure1.png", rdocx.Inches(size[0]), rdocx.Inches(size[1])
+        )
+        document.add_paragraph(caption)
+        return document
+
+    redline = document(red)
+    redline.compare(document(blue, caption, size), "Reviewer", "2026-09-30T12:00:00Z")
+    assert redline.revisions
+    tracked = redline.to_bytes()
+    assert _body_images(tracked) == [red, blue]
+    for resolve, image, text in (
+        ("accept_all", blue, caption),
+        ("reject_all", red, "Figure 1. Caption."),
+    ):
+        resolved = rdocx.Document.from_bytes(tracked)
+        getattr(resolved, resolve)()
+        assert _body_images(resolved.to_bytes()) == [image]
+        assert [paragraph.text for paragraph in resolved.paragraphs][-1] == text
 
 
 def test_add_picture_beside_a_content_control_ignores_an_unused_root_default():

@@ -1301,7 +1301,12 @@ package's main-document bytes are authoritative. Exact source spans flow through
 body items, paragraphs, tables, rows, cells, controls, and runs, including when
 another child of the same owner changes. An unchanged drawing-bearing run keeps
 its complete wrapper, local namespace declarations, extended drawing children,
-and relationship identifier. Policy
+and relationship identifier. Image relationships align by the bytes of the
+part they target, not by identifier. An image only the edited story shows is
+copied into the redline package under a new relationship of the original
+owner, so a picture whose image changed becomes a deleted run that keeps the
+original relationship followed by an inserted run that shows the edited image.
+Policy
 projection removes only the selected comparison facts. Ignored formatting,
 textual whitespace, fields, comments, and story categories retain the original
 bytes. Character and word alignment carries source ownership and raw-child

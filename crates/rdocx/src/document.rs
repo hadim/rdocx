@@ -4319,7 +4319,7 @@ fn hdr_ftr_type_order(value: HdrFtrType) -> u8 {
     }
 }
 
-fn xml_relationship_ids_in_order(xml: &[u8]) -> Result<Vec<String>> {
+pub(crate) fn xml_relationship_ids_in_order(xml: &[u8]) -> Result<Vec<String>> {
     xml_relationship_ids_in_order_with_bindings(xml, &[])
 }
 
@@ -12967,7 +12967,7 @@ impl Document {
         Ok(id)
     }
 
-    fn add_image_relationship_checked(
+    pub(crate) fn add_image_relationship_checked(
         &mut self,
         owner: &str,
         image_data: &[u8],

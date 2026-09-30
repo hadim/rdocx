@@ -252,7 +252,7 @@ impl Document {
     ) -> Result<Vec<ComparisonDiagnostic>> {
         validate_revision_timestamp(timestamp)?;
         validate_comparison_options(options)?;
-        let original = comparison_input(self)?;
+        let mut original = comparison_input(self)?;
         let mut edited = comparison_input(edited)?;
         let original_stories = story_parts_with_options(&original, options)?;
         let edited_stories = story_parts_with_options(&edited, options)?;
@@ -262,7 +262,7 @@ impl Document {
             ));
         }
         remap_equivalent_story_relationships(
-            &original,
+            &mut original,
             &mut edited,
             &original_stories,
             &edited_stories,
@@ -599,7 +599,7 @@ fn story_xml<'a>(document: &'a Document, story: &StoryPart) -> Result<&'a [u8]> 
 }
 
 fn remap_equivalent_story_relationships(
-    original: &Document,
+    original: &mut Document,
     edited: &mut Document,
     original_stories: &[StoryPart],
     edited_stories: &[StoryPart],
@@ -607,7 +607,7 @@ fn remap_equivalent_story_relationships(
     remap_equivalent_owner_relationships(
         original,
         edited,
-        &original.doc_part_name,
+        &original.doc_part_name.clone(),
         &edited.doc_part_name.clone(),
     )?;
     for (left, right) in original_stories.iter().zip(edited_stories) {
@@ -616,8 +616,13 @@ fn remap_equivalent_story_relationships(
     Ok(())
 }
 
+/// Give the edited story the original's id for every image both hold, and
+/// relate every image only the edited story shows, such as a regenerated
+/// figure, to a copy of it in the original package. A changed picture then
+/// aligns as a deleted drawing that keeps the original image and an inserted
+/// drawing that shows the edited one.
 fn remap_equivalent_owner_relationships(
-    original: &Document,
+    original: &mut Document,
     edited: &mut Document,
     original_owner: &str,
     edited_owner: &str,
@@ -631,6 +636,12 @@ fn remap_equivalent_owner_relationships(
         .package
         .get_part_rels(edited_owner)
         .cloned()
+        .unwrap_or_default();
+    let referenced = edited
+        .package
+        .get_part(edited_owner)
+        .map(crate::document::xml_relationship_ids_in_order)
+        .transpose()?
         .unwrap_or_default();
     let mut used = HashSet::new();
     let mut remap = HashMap::new();
@@ -651,6 +662,19 @@ fn remap_equivalent_owner_relationships(
                         && relationship_payload(original, original_owner, left) == right_payload
                 })
         else {
+            if let Some(payload) = right_payload
+                && crate::document::relationship_is_internal(right)
+                && referenced.contains(&right.id)
+            {
+                let imported = original.add_image_relationship_checked(
+                    original_owner,
+                    &payload,
+                    &right.target,
+                )?;
+                if imported != right.id {
+                    remap.insert(right.id.clone(), imported);
+                }
+            }
             continue;
         };
         used.insert(index);

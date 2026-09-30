@@ -38929,3 +38929,125 @@ fn issue_159_content_control_identity_only_comparison_has_no_revision() {
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     assert!(compared.revisions().is_empty());
 }
+
+/// The images the main story's drawings show, in document order, with
+/// their extents.
+fn issue_254_body_pictures(bytes: &[u8]) -> Vec<(Vec<u8>, String)> {
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let relationships = package.get_part_rels("/word/document.xml").unwrap();
+    let mut pictures = Vec::new();
+    for (index, _) in xml.match_indices("<w:drawing") {
+        let drawing = &xml[index..index + xml[index..].find("</w:drawing>").unwrap()];
+        let attribute = |marker: &str| {
+            let start = drawing.find(marker).unwrap() + marker.len();
+            drawing[start..start + drawing[start..].find('"').unwrap()].to_owned()
+        };
+        let relationship = relationships.get_by_id(&attribute("r:embed=\"")).unwrap();
+        let target =
+            oxml_opc::OpcPackage::resolve_rel_target("/word/document.xml", &relationship.target);
+        pictures.push((
+            package.get_part(&target).unwrap().to_vec(),
+            format!("{}x{}", attribute("cx=\""), attribute("cy=\"")),
+        ));
+    }
+    pictures
+}
+
+#[test]
+fn issue_254_comparison_records_a_picture_whose_image_changed() {
+    let red: &[u8] = b"\x89PNG\r\n\x1a\nred figure";
+    let blue: &[u8] = b"\x89PNG\r\n\x1a\nblue figure";
+    let document = |image: &[u8], caption: &str, size: (f64, f64)| {
+        let mut document = Document::new();
+        document.add_paragraph("Before the figure.");
+        document.add_picture(
+            image,
+            "figure1.png",
+            Length::inches(size.0),
+            Length::inches(size.1),
+        );
+        document.add_paragraph(caption);
+        document
+    };
+    let original = || document(red, "Figure 1. Caption.", (1.0, 0.66));
+    let original_size = issue_254_body_pictures(&original().to_bytes().unwrap())[0]
+        .1
+        .clone();
+    for granularity in [
+        rdocx::ComparisonGranularity::Run,
+        rdocx::ComparisonGranularity::Word,
+    ] {
+        for (case, caption, size) in [
+            ("image only", "Figure 1. Caption.", (1.0, 0.66)),
+            ("image and caption", "Figure 1. New caption.", (1.0, 0.66)),
+            ("image and size", "Figure 1. Caption.", (1.2, 0.8)),
+        ] {
+            let mut edited = document(blue, caption, size);
+            let edited_size = issue_254_body_pictures(&edited.to_bytes().unwrap())[0]
+                .1
+                .clone();
+            let mut compared = original();
+            compared
+                .compare_with_options(
+                    &edited,
+                    "Reviewer",
+                    "2026-09-30T12:00:00Z",
+                    &rdocx::ComparisonOptions {
+                        granularity,
+                        ..Default::default()
+                    },
+                )
+                .unwrap_or_else(|error| panic!("{granularity:?} {case}: {error}"));
+            assert!(
+                !compared.revisions().is_empty(),
+                "{granularity:?} {case}: no revision"
+            );
+            let tracked = compared.to_bytes().unwrap();
+            let pictures = issue_254_body_pictures(&tracked);
+            assert_eq!(
+                pictures
+                    .iter()
+                    .map(|(image, _)| image.as_slice())
+                    .collect::<Vec<_>>(),
+                [red, blue],
+                "{granularity:?} {case}"
+            );
+            let main = |bytes: &[u8]| {
+                let package =
+                    oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+                std::str::from_utf8(package.get_part("/word/document.xml").unwrap())
+                    .unwrap()
+                    .to_owned()
+            };
+            let xml = main(&tracked);
+            assert!(
+                xml.contains("<w:del ") && xml.contains("<w:ins "),
+                "{granularity:?} {case}: {xml}"
+            );
+            for (accept, image, caption, size) in [
+                (true, blue, caption, &edited_size),
+                (false, red, "Figure 1. Caption.", &original_size),
+            ] {
+                let mut resolved = Document::from_bytes(&tracked).unwrap();
+                if accept {
+                    resolved.accept_all().unwrap();
+                } else {
+                    resolved.reject_all().unwrap();
+                }
+                let bytes = resolved.to_bytes().unwrap();
+                assert_eq!(
+                    issue_254_body_pictures(&bytes),
+                    [(image.to_vec(), size.clone())],
+                    "{granularity:?} {case} accept={accept}"
+                );
+                let text = f_x093_visible_text(&main(&bytes));
+                assert!(
+                    text.contains(caption),
+                    "{granularity:?} {case} accept={accept}: {text}"
+                );
+                Document::from_bytes(&bytes).unwrap();
+            }
+        }
+    }
+}
