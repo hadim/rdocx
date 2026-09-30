@@ -18049,7 +18049,7 @@ impl Document {
 
     // ---- Style manipulation ----
 
-    /// Add a custom style after validating the complete style graph.
+    /// Add a custom style after validating the change to the style graph.
     ///
     /// A defect the styles part already has, such as a style ID a producer
     /// repeated, is retained, and [`Document::validate_style_graph`] still
@@ -18091,7 +18091,7 @@ impl Document {
         Ok(())
     }
 
-    /// Replace an existing style after validating the complete style graph.
+    /// Replace an existing style after validating the change to the style graph.
     ///
     /// A repeated style ID updates its first definition. Validation retains
     /// existing defects as in [`Document::add_style`].

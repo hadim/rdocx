@@ -9783,6 +9783,39 @@ fn style_mutations_reject_a_defect_they_introduce_behind_repeated_style_ids() {
         "invalid style graph: style 'Normal' names missing next style 'Missing'"
     );
     assert_eq!(document.to_bytes().unwrap(), before);
+
+    // Defects are counted. The same defect on another definition, or on a
+    // new style inheriting an existing cycle, is still a new one.
+    let mut shadowed_orphan = document_with_producer_styles(
+        ONE_HEADING_TOC_BODY,
+        r#"<w:style w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal Copy"/><w:basedOn w:val="Missing"/></w:style>"#,
+    );
+    let before = shadowed_orphan.to_bytes().unwrap();
+    assert_eq!(
+        shadowed_orphan
+            .set_style(StyleBuilder::paragraph("Normal", "Normal").based_on("Missing"))
+            .unwrap_err()
+            .to_string(),
+        "invalid style graph: style 'Normal' is based on missing style 'Missing'"
+    );
+    assert_eq!(shadowed_orphan.to_bytes().unwrap(), before);
+
+    let mut cycle = document_with_producer_styles(
+        ONE_HEADING_TOC_BODY,
+        concat!(
+            r#"<w:style w:type="paragraph" w:styleId="CycleA"><w:name w:val="Cycle A"/><w:basedOn w:val="CycleB"/></w:style>"#,
+            r#"<w:style w:type="paragraph" w:styleId="CycleB"><w:name w:val="Cycle B"/><w:basedOn w:val="CycleA"/></w:style>"#,
+        ),
+    );
+    let before = cycle.to_bytes().unwrap();
+    assert_eq!(
+        cycle
+            .add_style(StyleBuilder::paragraph("CycleC", "Cycle C").based_on("CycleA"))
+            .unwrap_err()
+            .to_string(),
+        "invalid style graph: based-on cycle contains style 'CycleA'"
+    );
+    assert_eq!(cycle.to_bytes().unwrap(), before);
 }
 
 #[test]
