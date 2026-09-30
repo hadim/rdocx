@@ -750,13 +750,12 @@ impl Importer<'_> {
             .slide_mut(slide_index)
             .expect("new HTML slide exists");
         let mut shape = if style.background.is_some() || style.border_width.is_some() {
-            slide.append_preset_shape(
+            slide.add_unstyled_shape(
                 "rect",
                 geometry.left,
                 geometry.top,
                 geometry.width,
                 geometry.height,
-                false,
             )?
         } else {
             slide.add_textbox(geometry.left, geometry.top, geometry.width, geometry.height)?
