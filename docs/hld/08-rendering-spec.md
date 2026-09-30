@@ -511,11 +511,30 @@ paragraph on this path leaves the paragraph block cache, because the retained
 size of a rich inline item cannot be bounded. Shared shaping still owns script
 and coverage segmentation, clusters, offsets, and line fitting. Exact Word line
 spacing places rich text on the Word baseline at 0.8 of the largest run em for
-the line. Automatic spacing and the established Latin-only path retain their
-existing metrics and output bytes. Producer-written fractional paragraph line
-spacing enters layout only after exact normalization to its nearest integer
-twip, so it produces the same geometry and raster bytes as that canonical
-integer input.
+the line.
+
+Every other Word line, on the rich and the Latin-only path alike, is measured
+the way Word measures it. Each run takes the metrics Windows reports for its
+font: the OS/2 `usWinAscent` and `usWinDescent`, plus the external leading, the
+part of the `hhea` line gap the Windows extent does not already cover, which
+Word puts above the ascent. A face that sets `USE_TYPO_METRICS` is measured on
+its typographic values. A single line of Calibri or Carlito is therefore
+2500/2048 em with its baseline 1950/2048 em down, and one of Arial or
+Liberation Sans 2355/2048 em. The line takes the greatest ascent and descent of
+its runs. A line with no run is a line of the font it carries: a blank
+paragraph's mark, resolved through the style chain, and the empty line a break
+leaves, of the nearest text before it. An inline picture or chart stands on the
+baseline, and proportional spacing adds `line / 240 - 1` times the height of
+the line's text only, so a picture keeps its own height. A line holding only
+pictures takes that text height from its paragraph mark, is never shorter than
+one line of the mark, and puts its pictures on its bottom. Exact spacing keeps
+its own rule, at-least spacing takes the greater of the value and this single
+height, and a paragraph re-broken around a floating object is measured again
+the same way.
+
+Producer-written fractional paragraph line spacing enters layout only after
+exact normalization to its nearest integer twip, so it produces the same
+geometry and raster bytes as that canonical integer input.
 
 Word `w:bidi` selects the paragraph base direction and `w:rtl` selects the
 direction of its exact logical run span. Start and end justification and

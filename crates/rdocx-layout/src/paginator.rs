@@ -3058,24 +3058,23 @@ fn reflow_around_wraps(
         } else {
             break_into_lines(reflow_items, &params, fm)
         };
-        let Ok(reflowed) = reflowed else {
+        let Ok(mut reflowed) = reflowed else {
             return None;
         };
-        lines = reflowed;
         // The re-break went through the generic line breaker, which knows
-        // nothing about the section grid, so the snap is applied again over
-        // its result. It runs inside the loop, so the second pass reserves
-        // against the heights the first will actually paint. Snapping an
-        // already-snapped height leaves it where it is. A paragraph off the
-        // grid carries no pitch and is untouched.
-        if let Some(pitch) = reflow.grid_line_pitch_pt.filter(|pitch| *pitch > 0.0) {
-            for line in &mut lines {
-                let rows = (line.height / pitch - crate::convert::GRID_ROW_TOLERANCE)
-                    .ceil()
-                    .max(1.0);
-                line.height = pitch * rows;
-            }
-        }
+        // nothing about Word's line measure or the section grid, so both are
+        // applied again over its result, as they were to the first break. It
+        // runs inside the loop, so the second pass reserves against the
+        // heights the first will actually paint. A paragraph off the grid
+        // carries no pitch.
+        crate::convert::restore_word_line_heights(
+            &mut reflowed,
+            reflow.params.line_spacing,
+            reflow.grid_line_pitch_pt,
+            fm,
+            reflow.paragraph_mark,
+        );
+        lines = reflowed;
         offset_top = next_offset_top;
     }
 
@@ -3787,11 +3786,11 @@ fn render_paragraph_lines(
                     media_id,
                 } => {
                     let image = media.get(media_id);
-                    // Image positioned at current x, top-aligned with line
+                    // An inline picture stands on the baseline, as in Word.
                     let image = PositionedElement::Image {
                         rect: Rect {
                             x,
-                            y: geometry.margin_top + y,
+                            y: baseline_y - height,
                             width: *width,
                             height: *height,
                         },
@@ -3834,7 +3833,7 @@ fn render_paragraph_lines(
                             PositionedElement::Image {
                                 rect: Rect {
                                     x,
-                                    y: geometry.margin_top + y,
+                                    y: baseline_y - height,
                                     width: *width,
                                     height: *height,
                                 },
@@ -5229,6 +5228,7 @@ mod tests {
             items: reflow_items,
             params,
             grid_line_pitch_pt: None,
+            paragraph_mark: None,
         }));
         let wrap = PlacedWrap {
             rect: Rect {
@@ -5314,6 +5314,7 @@ mod tests {
                 ..Default::default()
             },
             grid_line_pitch_pt: None,
+            paragraph_mark: None,
         }));
         let mut elements = Vec::new();
         render_paragraph_lines(
@@ -5401,6 +5402,7 @@ mod tests {
                 ..Default::default()
             },
             grid_line_pitch_pt: None,
+            paragraph_mark: None,
         }));
 
         let mut elements = Vec::new();
@@ -5492,6 +5494,7 @@ mod tests {
                     ..Default::default()
                 },
                 grid_line_pitch_pt: None,
+                paragraph_mark: None,
             }));
             let semantics = ParagraphSemantics {
                 source_node: Some(source_node),
@@ -5595,6 +5598,7 @@ mod tests {
                 ..Default::default()
             },
             grid_line_pitch_pt: None,
+            paragraph_mark: None,
         }));
         let semantics = ParagraphSemantics {
             source_node: Some(rebound),
@@ -5726,6 +5730,7 @@ mod tests {
                     ..Default::default()
                 },
                 grid_line_pitch_pt: None,
+                paragraph_mark: None,
             }));
             let mut elements = Vec::new();
             render_paragraph_lines(
@@ -5837,6 +5842,7 @@ mod tests {
                 ..Default::default()
             },
             grid_line_pitch_pt: None,
+            paragraph_mark: None,
         }));
 
         let mut elements = Vec::new();
@@ -5931,6 +5937,7 @@ mod tests {
                 ..Default::default()
             },
             grid_line_pitch_pt: None,
+            paragraph_mark: None,
         }));
 
         let mut elements = Vec::new();

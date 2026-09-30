@@ -1,8 +1,8 @@
 //! Conversion from WordprocessingML flow values to shared layout values.
 
 use oxml_layout::{
-    Align, LayoutLine, LineBreakParams, LineSpacing, TabAlign, TabLeader, TabStop, TextDirection,
-    Underline,
+    Align, FontManager, FontMetrics, LayoutLine, LineBreakParams, LineItem, LineSpacing, TabAlign,
+    TabLeader, TabStop, TextDirection, Underline,
 };
 use rdocx_oxml::borders::CT_TabStop;
 use rdocx_oxml::properties::CT_PPr;
@@ -130,24 +130,61 @@ pub(crate) fn line_break_params(
 
 /// Restore Word line advance, optionally on a section character grid.
 ///
+/// Word measures a line's text on the Windows metrics of each run's font
+/// ([`FontManager::word_line_metrics`]) and puts the external leading above
+/// the ascent, so a single line of Calibri is 2500/2048 em with its baseline
+/// 1950/2048 em down, and a single line of Arial is 2355/2048 em. An inline
+/// picture or chart stands on the baseline. Proportional (`auto`) spacing
+/// adds `line / 240 - 1` times the height of the line's text, not of the
+/// whole line, so a 400 point picture at 1.1 lines keeps its 400 points plus
+/// a tenth of a text line. A line with no text takes that height from its
+/// paragraph mark, `paragraph_mark`, the Word metrics of the mark's font,
+/// is never shorter than one line of it, and adds none when the mark's font
+/// did not resolve. A line with nothing
+/// on it, left by a line break, is a line of the break's font, which is the
+/// nearest text before it (after it when there is none before), and of the
+/// paragraph mark when the paragraph holds no text. Only a line with none of
+/// these falls back to 12 points. Exact spacing keeps the metrics the line
+/// breaker measured, since its height and baseline are the author's.
+///
 /// `grid_line_pitch_pt` is `Some` only for a `lines`, `linesAndChars` or
 /// `snapToChars` grid on a paragraph that has not opted out with
-/// `w:snapToGrid w:val="0"`. `None` is the ungridded path, byte for byte the
-/// arithmetic this function has always run.
+/// `w:snapToGrid w:val="0"`. `None` is the ungridded path.
 pub(crate) fn restore_word_line_heights(
     lines: &mut [LayoutLine],
-    properties: &CT_PPr,
+    spacing: LineSpacing,
     grid_line_pitch_pt: Option<f64>,
+    fm: &FontManager,
+    paragraph_mark: Option<FontMetrics>,
 ) {
-    for line in lines {
+    let mark = paragraph_mark.map(|mark| (mark.line_gap + mark.ascent, mark.descent));
+    let carriers = lines
+        .iter()
+        .map(|line| last_text_extent(line, fm))
+        .collect::<Vec<_>>();
+    for (index, line) in lines.iter_mut().enumerate() {
+        let empty_line = carriers[..index]
+            .iter()
+            .rev()
+            .chain(&carriers[index + 1..])
+            .find_map(|carrier| *carrier)
+            .or(mark);
+        let text_height = match spacing {
+            LineSpacing::Exact(_) => 0.0,
+            _ => measure_word_line(line, fm, mark, empty_line),
+        };
         let natural = line.ascent + line.descent;
-        let natural = if natural < 1.0 { 12.0 } else { natural };
+        let (natural, text_height) = if natural < 1.0 {
+            (12.0, 12.0)
+        } else {
+            (natural, text_height)
+        };
         line.line_gap = 0.0;
-        line.height = match (properties.line_spacing, properties.line_rule.as_deref()) {
-            (Some(spacing), Some("exact")) => spacing.to_pt(),
-            (Some(spacing), Some("atLeast")) => natural.max(spacing.to_pt()),
-            (Some(spacing), _) => natural * spacing.0 as f64 / 240.0,
-            (None, _) => natural,
+        line.height = match spacing {
+            LineSpacing::Exact(points) => points,
+            LineSpacing::AtLeast(points) => natural.max(points),
+            LineSpacing::Multiple(factor) => natural + (factor - 1.0) * text_height,
+            LineSpacing::Single => natural,
         };
         // A gridded line takes whole grid rows. An exact `w:lineRule` is an
         // author's absolute height and stays absolute, which is what Word
@@ -158,12 +195,125 @@ pub(crate) fn restore_word_line_heights(
         // than pushing it onto the next one over a representation error.
         if let Some(pitch) = grid_line_pitch_pt
             && pitch > 0.0
-            && properties.line_rule.as_deref() != Some("exact")
+            && !matches!(spacing, LineSpacing::Exact(_))
         {
             let rows = (line.height / pitch - GRID_ROW_TOLERANCE).ceil().max(1.0);
             line.height = pitch * rows;
         }
     }
+}
+
+/// The Word extent of the last text run on `line`, the run a line break
+/// that ends it would carry.
+fn last_text_extent(line: &LayoutLine, fm: &FontManager) -> Option<(f64, f64)> {
+    line.items
+        .iter()
+        .rev()
+        .find_map(|item| match word_line_extent(item, fm) {
+            Some(WordLineExtent::Text { ascent, descent }) => Some((ascent, descent)),
+            _ => None,
+        })
+}
+
+/// Measure `line` the way Word does, and return the height of its text.
+///
+/// The line's ascent and descent become the greater of its text and of the
+/// inline objects standing on its baseline. A line of objects only takes its
+/// text height from `mark`, and a line with neither stands on `empty_line`,
+/// or keeps what the line breaker measured when that is `None`.
+fn measure_word_line(
+    line: &mut LayoutLine,
+    fm: &FontManager,
+    mark: Option<(f64, f64)>,
+    empty_line: Option<(f64, f64)>,
+) -> f64 {
+    let mut text: Option<(f64, f64)> = None;
+    let mut object_ascent: Option<f64> = None;
+    for item in &line.items {
+        match word_line_extent(item, fm) {
+            Some(WordLineExtent::Text { ascent, descent }) => {
+                let (text_ascent, text_descent) = text.unwrap_or((0.0, 0.0));
+                text = Some((text_ascent.max(ascent), text_descent.max(descent)));
+            }
+            Some(WordLineExtent::Object { height }) => {
+                object_ascent = Some(object_ascent.unwrap_or(0.0).max(height));
+            }
+            None => {}
+        }
+    }
+    match (text, object_ascent) {
+        (None, None) => {
+            if let Some((ascent, descent)) = empty_line {
+                line.ascent = ascent;
+                line.descent = descent;
+            }
+            line.ascent + line.descent
+        }
+        (Some((ascent, descent)), object_ascent) => {
+            line.ascent = ascent.max(object_ascent.unwrap_or(0.0));
+            line.descent = descent;
+            ascent + descent
+        }
+        (None, Some(object_ascent)) => {
+            // Word gives a line of objects at least the height of its
+            // paragraph mark, with the objects on the bottom of the line.
+            let mark_height = mark.map_or(0.0, |(ascent, descent)| ascent + descent);
+            line.ascent = object_ascent.max(mark_height);
+            line.descent = 0.0;
+            mark_height
+        }
+    }
+}
+
+/// How one line item stands on a Word line.
+enum WordLineExtent {
+    /// Text, whose height proportional spacing scales.
+    Text { ascent: f64, descent: f64 },
+    /// An inline object resting on the baseline, which it does not scale.
+    Object { height: f64 },
+}
+
+/// The extent of one line item on a Word line, or `None` when it takes none.
+///
+/// A text run takes the Word metrics of its font, with the external leading
+/// counted into its ascent, which is where Word puts it. A run the engine
+/// gave no extent, such as a bookmark target, stays without one, and a run
+/// whose font the manager does not hold keeps the extent it was shaped
+/// with. A group with a text baseline (an equation, a ruby or an East Asian
+/// layout) keeps the extent it was measured with and counts as text, as it
+/// always has. A picture, and a group drawn from its top such as a chart, is
+/// an object.
+fn word_line_extent(item: &LineItem, fm: &FontManager) -> Option<WordLineExtent> {
+    let segment = match item {
+        LineItem::Text(segment) | LineItem::Marker(segment) => segment,
+        LineItem::MultilingualText(segment) => segment.base(),
+        LineItem::Image { height, .. } => return Some(WordLineExtent::Object { height: *height }),
+        LineItem::Group {
+            height, baseline, ..
+        } => {
+            let baseline = baseline
+                .filter(|baseline| baseline.is_finite() && height.is_finite())
+                .map(|baseline| baseline.clamp(0.0, height.max(0.0)));
+            return Some(match baseline {
+                Some(baseline) => WordLineExtent::Text {
+                    ascent: baseline,
+                    descent: height - baseline,
+                },
+                None => WordLineExtent::Object { height: *height },
+            });
+        }
+        LineItem::Figure { item, .. } => return word_line_extent(item, fm),
+        _ => return None,
+    };
+    if segment.ascent + segment.descent <= 0.0 {
+        return None;
+    }
+    let (ascent, descent) = fm
+        .word_line_metrics(segment.font_id, segment.font_size)
+        .map_or((segment.ascent, segment.descent), |metrics| {
+            (metrics.line_gap + metrics.ascent, metrics.descent)
+        });
+    Some(WordLineExtent::Text { ascent, descent })
 }
 
 #[cfg(test)]
@@ -295,6 +445,109 @@ mod tests {
         assert!(params.wrap);
     }
 
+    /// Calibri 11 as Word measures it: 1950, 550 and 0 units of 2048.
+    const CALIBRI_11_MARK: FontMetrics = FontMetrics {
+        ascent: 11.0 * 1950.0 / 2048.0,
+        descent: 11.0 * 550.0 / 2048.0,
+        line_gap: 0.0,
+        units_per_em: 2048,
+    };
+
+    fn restore(lines: &mut [LayoutLine], properties: &CT_PPr, paragraph_mark: Option<FontMetrics>) {
+        let fm = FontManager::new_deterministic().expect("bundled fonts load");
+        restore_word_line_heights(lines, line_spacing(properties), None, &fm, paragraph_mark);
+    }
+
+    fn auto(line: i32) -> CT_PPr {
+        CT_PPr {
+            line_spacing: Some(Twips(line)),
+            line_rule: Some("auto".to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn line_of(items: Vec<LineItem>, ascent: f64, descent: f64) -> LayoutLine {
+        LayoutLine {
+            items,
+            width: 0.0,
+            ascent,
+            descent,
+            line_gap: 0.0,
+            height: ascent + descent,
+            indent_left: 0.0,
+            available_width: 468.0,
+            is_last: true,
+            forced_break_after: None,
+        }
+    }
+
+    fn picture(height: f64) -> LineItem {
+        LineItem::Image {
+            width: height,
+            height,
+            media_id: oxml_layout::MediaId(0),
+        }
+    }
+
+    /// Word keeps a 100 point picture alone on its line at 100 points plus
+    /// the proportional share of its Calibri 11 paragraph mark: 101.34 at
+    /// 1.1 lines, 106.71 at 1.5 and 113.43 at 2, measured in Word 16.
+    #[test]
+    fn a_picture_line_scales_only_the_text_height_of_its_paragraph_mark() {
+        for (line, expected) in [(240, 100.0), (264, 101.34), (360, 106.71), (480, 113.43)] {
+            let mut lines = vec![line_of(vec![picture(100.0)], 100.0, 0.0)];
+            restore(&mut lines, &auto(line), Some(CALIBRI_11_MARK));
+            assert!(
+                (lines[0].height - expected).abs() < 0.01,
+                "w:line {line}: {} against Word's {expected}",
+                lines[0].height
+            );
+            assert_eq!((lines[0].ascent, lines[0].descent), (100.0, 0.0));
+        }
+    }
+
+    /// A caption set in Arial 12 scales by its own 2355/2048 em line, and a
+    /// figure wrapped in its alternative text stands exactly as the picture.
+    #[test]
+    fn a_picture_line_takes_its_text_height_from_the_paragraph_mark_font() {
+        let arial_12 = FontMetrics {
+            ascent: 12.0 * 1854.0 / 2048.0,
+            descent: 12.0 * 434.0 / 2048.0,
+            line_gap: 12.0 * 67.0 / 2048.0,
+            units_per_em: 2048,
+        };
+        let figure = LineItem::Figure {
+            item: Box::new(picture(100.0)),
+            alternate_text: "A figure".to_owned(),
+            structure_id: None,
+        };
+        let mut lines = vec![line_of(vec![figure], 100.0, 0.0)];
+        restore(&mut lines, &auto(360), Some(arial_12));
+        // Word 16: 106.90.
+        assert!((lines[0].height - (100.0 + 0.5 * 12.0 * 2355.0 / 2048.0)).abs() < 1e-9);
+        assert!((lines[0].height - 106.90).abs() < 0.01);
+    }
+
+    /// Exact and at-least spacing are not proportional, so a picture line
+    /// under either keeps the rule it has always had.
+    #[test]
+    fn exact_and_at_least_spacing_keep_their_picture_line_rules() {
+        for (spacing, rule, expected) in [
+            (300, "exact", 15.0),
+            (300, "atLeast", 100.0),
+            (2400, "atLeast", 120.0),
+        ] {
+            let mut lines = vec![line_of(vec![picture(100.0)], 100.0, 0.0)];
+            let properties = CT_PPr {
+                line_spacing: Some(Twips(spacing)),
+                line_rule: Some(rule.to_owned()),
+                ..Default::default()
+            };
+            restore(&mut lines, &properties, Some(CALIBRI_11_MARK));
+            assert_eq!(lines[0].height, expected, "{rule} {spacing}");
+        }
+    }
+
     #[test]
     fn word_auto_spacing_uses_glyph_height_not_point_size() {
         let mut lines = vec![LayoutLine {
@@ -314,7 +567,7 @@ mod tests {
             line_rule: Some("auto".to_string()),
             ..Default::default()
         };
-        restore_word_line_heights(&mut lines, &properties, None);
+        restore(&mut lines, &properties, None);
         assert_eq!(lines[0].height, 26.0);
         assert_eq!(lines[0].line_gap, 0.0);
     }
@@ -344,7 +597,7 @@ mod tests {
                 line_rule: rule.map(str::to_owned),
                 ..Default::default()
             };
-            restore_word_line_heights(&mut lines, &properties, None);
+            restore(&mut lines, &properties, None);
             let row_height = 3.0 + lines.iter().map(|line| line.height).sum::<f64>() + 5.0;
             assert_eq!(row_height, 3.0 + 3.0 * expected + 5.0);
         }
