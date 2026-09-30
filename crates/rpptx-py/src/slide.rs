@@ -186,8 +186,8 @@ impl PySlide {
 
 #[pymethods]
 impl PySlide {
-    /// Two handles are equal when they name the same slide of one
-    /// presentation at the same revision.
+    /// Two current handles are equal when they name the same slide of one
+    /// presentation. Like python-pptx `Slide`, a handle is not hashable.
     fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
         other
             .extract::<PyRef<'_, PySlide>>()

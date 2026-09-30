@@ -481,9 +481,9 @@ or previous slide jump opens, or `None`, and assigning a `Slide` of the same
 presentation goes through the native `set_shape_target_slide`, while `None`
 removes the click action. A slide of another presentation raises `ValueError`.
 A group accepts a click action, where python-pptx raises `TypeError`, because
-PowerPoint honours it. `Slide` handles compare equal when they name the same
-slide at the same revision, so `target_slide == prs.slides[2]` holds. No click
-action write advances the revision.
+PowerPoint honours it. Two current `Slide` handles compare equal when they name
+the same slide, so `target_slide == prs.slides[2]` holds, and like python-pptx a
+`Slide` is not hashable. No click action write advances the revision.
 
 `ShapeCollection.add_shape` accepts a DrawingML preset name or an `MSO_SHAPE`
 member. `add_connector` follows the python-pptx signature, `add_group_shape`

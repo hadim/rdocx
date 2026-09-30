@@ -268,10 +268,12 @@ relationship scope, and content-type override. An attached notes part and its
 scope are removed with the slide. Matching `p:sld` entries are spliced out of
 preserved `p:custShowLst` XML without changing its containers or unrelated
 bytes.
-Every other slide's internal relationship to the removed part goes too, and
-each `a:hlinkClick` or `a:hlinkMouseOver` that named it, on a shape or on a
-text run, becomes `<a:hlinkClick r:id="" action="ppaction://noaction"/>`, which
-is what PowerPoint writes when it deletes the target of a slide jump.
+On every other slide, each `a:hlinkClick`, `a:hlinkHover`, or
+`a:hlinkMouseOver` that names a relationship to the removed part, on a shape or
+on a text run, keeps its name with an empty `r:id` and the action
+`ppaction://noaction`, which is what PowerPoint writes when it deletes the
+target of a slide jump or hover. The relationship goes once no `r:` attribute
+of that slide names it.
 
 Duplication also stages a complete graph. It allocates a new slide part,
 producer slide id, presentation relationship, and destination relationship

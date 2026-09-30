@@ -162,7 +162,8 @@ fn rewrite_rel_ids_inner(
     splice_replacements(raw, replacements)
 }
 
-/// Turns every `hlinkClick` and `hlinkMouseOver` whose relationship id is in
+/// Turns every `hlinkClick`, `hlinkHover`, and `hlinkMouseOver` whose
+/// relationship id is in
 /// `relationship_ids` into a hyperlink that does nothing, as PowerPoint does
 /// when the slide a hyperlink jumps to is deleted.
 ///
@@ -238,7 +239,7 @@ fn released_hyperlink(
 ) -> Result<Option<String>> {
     if !matches!(
         element.local_name().as_ref(),
-        b"hlinkClick" | b"hlinkMouseOver"
+        b"hlinkClick" | b"hlinkHover" | b"hlinkMouseOver"
     ) {
         return Ok(None);
     }
@@ -424,11 +425,11 @@ mod tests {
 
     #[test]
     fn released_hyperlinks_do_nothing_and_keep_every_other_byte() {
-        let xml = br#"<p:sld xmlns:p="urn:p" xmlns:a="urn:a" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:cNvPr id="2"><a:hlinkClick r:id="rId3" action="ppaction://hlinksldjump" tooltip="Go"><a:snd r:embed="rId9"/></a:hlinkClick></p:cNvPr><a:rPr lang="en-US"><a:hlinkClick r:id="rId3" action="ppaction://hlinksldjump"/><a:hlinkMouseOver r:id="rId3"/></a:rPr><a:rPr><a:hlinkClick r:id="rId4"/><x:hlinkClick xmlns:x="urn:x" x:id="rId3"/></a:rPr></p:sld>"#;
+        let xml = br#"<p:sld xmlns:p="urn:p" xmlns:a="urn:a" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:cNvPr id="2"><a:hlinkClick r:id="rId3" action="ppaction://hlinksldjump" tooltip="Go"><a:snd r:embed="rId9"/></a:hlinkClick><a:hlinkHover r:id="rId3" action="ppaction://hlinksldjump"/></p:cNvPr><a:rPr lang="en-US"><a:hlinkClick r:id="rId3" action="ppaction://hlinksldjump"/><a:hlinkMouseOver r:id="rId3"/></a:rPr><a:rPr><a:hlinkClick r:id="rId4"/><x:hlinkClick xmlns:x="urn:x" x:id="rId3"/></a:rPr></p:sld>"#;
         let ids = HashSet::from(["rId3".to_owned()]);
         assert_eq!(
             String::from_utf8(release_hyperlinks(xml, &ids).unwrap()).unwrap(),
-            r#"<p:sld xmlns:p="urn:p" xmlns:a="urn:a" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:cNvPr id="2"><a:hlinkClick r:id="" action="ppaction://noaction"/></p:cNvPr><a:rPr lang="en-US"><a:hlinkClick r:id="" action="ppaction://noaction"/><a:hlinkMouseOver r:id="" action="ppaction://noaction"/></a:rPr><a:rPr><a:hlinkClick r:id="rId4"/><x:hlinkClick xmlns:x="urn:x" x:id="rId3"/></a:rPr></p:sld>"#
+            r#"<p:sld xmlns:p="urn:p" xmlns:a="urn:a" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:cNvPr id="2"><a:hlinkClick r:id="" action="ppaction://noaction"/><a:hlinkHover r:id="" action="ppaction://noaction"/></p:cNvPr><a:rPr lang="en-US"><a:hlinkClick r:id="" action="ppaction://noaction"/><a:hlinkMouseOver r:id="" action="ppaction://noaction"/></a:rPr><a:rPr><a:hlinkClick r:id="rId4"/><x:hlinkClick xmlns:x="urn:x" x:id="rId3"/></a:rPr></p:sld>"#
         );
         assert_eq!(release_hyperlinks(xml, &HashSet::new()).unwrap(), xml);
     }

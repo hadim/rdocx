@@ -16232,8 +16232,9 @@ fn removing_a_jump_target_turns_its_links_into_no_action_like_powerpoint() {
     let mut package = open_opc(&base.to_bytes().unwrap(), "slide jump removal");
     let relationships = package.get_or_create_part_rels(slide_part);
     let run_jump = relationships.add(rel_types::SLIDE, "slide3.xml");
+    let hover_jump = relationships.add(rel_types::SLIDE, "slide3.xml");
     let run = format!(
-        r#"<p:sp><p:nvSpPr><p:cNvPr id="60" name="Run jump"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US"><a:hlinkClick r:id="{run_jump}" action="ppaction://hlinksldjump" tooltip="Go"/></a:rPr><a:t>run to 3</a:t></a:r></a:p></p:txBody></p:sp>"#
+        r#"<p:sp><p:nvSpPr><p:cNvPr id="60" name="Run jump"><a:hlinkHover r:id="{hover_jump}" action="ppaction://hlinksldjump"/></p:cNvPr><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US"><a:hlinkClick r:id="{run_jump}" action="ppaction://hlinksldjump" tooltip="Go"/></a:rPr><a:t>run to 3</a:t></a:r></a:p></p:txBody></p:sp>"#
     );
     let xml = String::from_utf8(package.get_part(slide_part).unwrap().to_vec())
         .unwrap()
@@ -16265,6 +16266,9 @@ fn removing_a_jump_target_turns_its_links_into_no_action_like_powerpoint() {
         2,
         "{xml}"
     );
+    assert!(xml.contains(
+        r#"<p:cNvPr id="60" name="Run jump"><a:hlinkHover r:id="" action="ppaction://noaction"/></p:cNvPr>"#
+    ));
     assert!(xml.contains(
         r#"<a:rPr lang="en-US"><a:hlinkClick r:id="" action="ppaction://noaction"/></a:rPr>"#
     ));

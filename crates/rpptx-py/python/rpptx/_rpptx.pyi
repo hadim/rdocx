@@ -1,6 +1,12 @@
 import os as _os
 from collections.abc import Iterator as _Iterator
-from typing import IO as _IO, NoReturn as _Never, final as _final, overload as _overload
+from typing import (
+    IO as _IO,
+    ClassVar as _ClassVar,
+    NoReturn as _Never,
+    final as _final,
+    overload as _overload,
+)
 
 from .dml.color import RGBColor as _RGBColor
 from .enum.dml import MSO_FILL_TYPE as _MSO_FILL_TYPE
@@ -209,6 +215,7 @@ class SlideLayoutCollection:
 class Slide:
     def __new__(cls, *, _private: _Never) -> Slide: ...
     def __eq__(self, other: object, /) -> bool: ...
+    __hash__: _ClassVar[None]  # type: ignore[assignment]
     @property
     def shapes(self) -> ShapeCollection: ...
     @property
