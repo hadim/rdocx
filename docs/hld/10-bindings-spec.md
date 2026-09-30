@@ -475,7 +475,12 @@ removes one attribute, and an end left without attributes is removed. An
 `a:ln` left empty is kept, as python-pptx keeps it. A removal never creates an
 `a:ln`. `adjustments` is a live `AdjustmentCollection` of
 the effective preset adjustments, normalized so that 1.0 is 100000, and
-assignment truncates as python-pptx does. `auto_shape_type` reads the
+assignment truncates as python-pptx does. `theme_effect_index` reads the
+`a:effectRef` index of an ordinary shape or connector style, or `None` without
+one, and writing 0 removes the theme's effect, such as the shadow of a connector
+from `add_connector`. It accepts an `int` only. `None` is refused because
+dropping `p:style` would leave a connector without a direct line invisible, and
+writing it on a shape without a style raises `RpptxError`. `auto_shape_type` reads the
 `MSO_SHAPE` member of the preset like python-pptx, through
 `MSO_SHAPE.from_xml`, which picks the first member in definition order where
 two share a preset. A picture reports its mask or `None`, and any other shape
