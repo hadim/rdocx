@@ -10395,13 +10395,18 @@ fn invalid_style_graph_never_publishes_a_partial_mutation() {
     package.write_to(&mut invalid_bytes).unwrap();
     let mut invalid = Document::from_bytes(invalid_bytes.get_ref()).unwrap();
     assert!(invalid.validate_style_graph().is_err());
+    // The source's own defect is retained. Only a defect the change adds rejects it.
     let invalid_before = invalid.to_bytes().unwrap();
     assert!(
         invalid
-            .add_style(StyleBuilder::paragraph("Rejected", "Rejected"))
+            .add_style(StyleBuilder::paragraph("Rejected", "Rejected").based_on("MissingStyle"))
             .is_err()
     );
     assert_eq!(invalid.to_bytes().unwrap(), invalid_before);
+    invalid
+        .add_style(StyleBuilder::paragraph("Accepted", "Accepted"))
+        .unwrap();
+    assert!(invalid.validate_style_graph().is_err());
 }
 
 #[test]
