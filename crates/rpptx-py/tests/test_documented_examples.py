@@ -1967,6 +1967,43 @@ def test_slide_layout_hidden_and_background_round_trip_through_python_pptx(tmp_p
     assert oracle.slides[0]._element.get("show") in (None, "1")
 
 
+def test_slide_layout_assignment_retargets_the_slide_and_keeps_unplaced_placeholders(tmp_path):
+    import rpptx
+
+    source = _python_pptx_deck(
+        tmp_path / "layouts.pptx", lambda deck: deck.slides.add_slide(deck.slide_layouts[1])
+    )
+    prs = rpptx.Presentation(source)
+    for index, text in enumerate(("Title", "Body")):
+        prs.slides[0].shapes[index].text = text
+    slide = prs.slides[0]
+    body_geometry = slide.shapes[1].effective_geometry()
+    slide.slide_layout = prs.slide_layouts[5]
+    _assert_stale_after_exactly_one_bump(rpptx, lambda: slide.slide_layout)
+    slide = prs.slides[0]
+    assert slide.slide_layout == prs.slide_layouts[5]
+    title, body = slide.shapes
+    assert title.left is None
+    assert (body.left, body.top, body.width, body.height) == body_geometry
+    assert [frame.shape_id for frame in prs.text_layout()] == [title.shape_id, body.shape_id]
+
+    prs.slides[0].slide_layout = prs.slide_layouts[0]
+    assert prs.slides[0].shapes[0].effective_geometry() == (685800, 2130425, 7772400, 1470025)
+    with pytest.raises(ValueError, match="slide layout is not in this presentation"):
+        prs.slides[0].slide_layout = rpptx.Presentation().slide_layouts[1]
+    with pytest.raises(TypeError):
+        prs.slides[0].slide_layout = 1
+    output = tmp_path / "relaid.pptx"
+    prs.save(output)
+
+    pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
+    oracle = pptx.Presentation(output).slides[0]
+    assert oracle.slide_layout.name == "Title Slide"
+    title, body = oracle.shapes
+    assert (title.left, title.top, title.width, title.height) == (685800, 2130425, 7772400, 1470025)
+    assert (body.left, body.top, body.width, body.height) == body_geometry
+
+
 def test_shape_geometry_name_and_rotation_setters_match_python_pptx(tmp_path):
     import rpptx
 
@@ -2010,6 +2047,61 @@ def test_shape_geometry_name_and_rotation_setters_match_python_pptx(tmp_path):
         rpptx.Inches(4),
     )
     assert (oracle.name, oracle.rotation) == ("Renamed box", 30.0)
+
+
+def test_placeholder_effective_geometry_matches_python_pptx_and_one_setter_keeps_the_rest(tmp_path):
+    import rpptx
+
+    pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
+    source = _python_pptx_deck(
+        tmp_path / "placeholders.pptx",
+        lambda deck: [deck.slides.add_slide(deck.slide_layouts[index]) for index in (0, 1, 5, 8)],
+    )
+    oracle = pptx.Presentation(source)
+    prs = rpptx.Presentation(source)
+    for slide, oracle_slide in zip(prs.slides, oracle.slides, strict=True):
+        for shape, expected in zip(slide.shapes, oracle_slide.shapes, strict=True):
+            assert (shape.left, shape.top, shape.width, shape.height) == (None,) * 4
+            geometry = shape.effective_geometry()
+            assert geometry == (expected.left, expected.top, expected.width, expected.height)
+            assert all(isinstance(value, rpptx.Length) for value in geometry)
+    assert prs.slides[2].shapes[0].effective_geometry() == (457200, 274638, 8229600, 1143000)
+
+    prs.slides[0].shapes[0].text = "Rotated title"
+    prs.slides[2].shapes[0].text = "Moved title"
+    title = prs.slides[2].shapes[0]
+    title.left = title.effective_geometry()[0] + rpptx.Inches(0.1)
+    moved = (457200 + 91440, 274638, 8229600, 1143000)
+    assert (title.left, title.top, title.width, title.height) == moved
+    assert title.effective_geometry() == moved
+    body = prs.slides[1].shapes[1]
+    body.height = 1000000
+    assert (body.left, body.top, body.width, body.height) == (457200, 1600200, 8229600, 1000000)
+    rotated = prs.slides[0].shapes[0]
+    rotated_geometry = rotated.effective_geometry()
+    rotated.rotation = 30.0
+    assert rotated.rotation == 30.0
+    assert rotated.effective_geometry() == rotated_geometry
+    assert (rotated.left, rotated.top, rotated.width, rotated.height) == rotated_geometry
+    assert [(frame.slide_index, frame.shape_id) for frame in prs.text_layout()] == [
+        (0, rotated.shape_id),
+        (2, title.shape_id),
+    ]
+    output = tmp_path / "moved.pptx"
+    prs.save(output)
+    reread = pptx.Presentation(output)
+    oracle_title = reread.slides[2].shapes[0]
+    assert (oracle_title.left, oracle_title.top, oracle_title.width, oracle_title.height) == moved
+    oracle_body = reread.slides[1].shapes[1]
+    assert (oracle_body.left, oracle_body.width, oracle_body.height) == (457200, 8229600, 1000000)
+    oracle_rotated = reread.slides[0].shapes[0]
+    assert (
+        oracle_rotated.left,
+        oracle_rotated.top,
+        oracle_rotated.width,
+        oracle_rotated.height,
+    ) == rotated_geometry
+    assert oracle_rotated.rotation == 30.0
 
 
 def test_shape_type_reports_the_python_pptx_member_for_every_shape_kind(tmp_path):

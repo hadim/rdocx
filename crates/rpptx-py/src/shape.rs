@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use oxml_py_support::{ContentPath, PathSeg};
 use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyByteArray, PyBytes, PyIterator, PyList, PySlice, PyString};
+use pyo3::types::{PyAny, PyByteArray, PyBytes, PyIterator, PyList, PySlice, PyString, PyTuple};
 
 use crate::dml::{FillTarget, PyFillFormat, PyLineFormat};
 use crate::normalize_index;
@@ -216,6 +216,17 @@ impl PyShape {
         self.edit(py, |shape| shape.set_crop(left, top, right, bottom))
     }
 
+    /// Copies a placeholder's inherited transform onto it before a geometry or rotation edit.
+    fn materialize_geometry(&self, py: Python<'_>) -> PyResult<()> {
+        self.validate(py)?;
+        let shape_path = shape_indices(&self.path).collect::<Vec<_>>();
+        self.presentation
+            .borrow_mut(py)
+            .inner
+            .materialize_geometry(slide_index(&self.path)?, &shape_path)
+            .map_err(|error| rpptx_to_pyerr(py, error))
+    }
+
     fn picture_id(&self, py: Python<'_>) -> PyResult<(usize, u32)> {
         let (kind, id) = self.read(py, |shape| (shape.kind(), shape.non_visual_id()))?;
         match (kind, id) {
@@ -271,6 +282,31 @@ impl PyShape {
         length(py, value)
     }
 
+    /// Left, top, width and height as rendering places the shape.
+    ///
+    /// A placeholder without its own transform reports the one it inherits
+    /// from its layout and master, where `left` and the other properties
+    /// report `None`.
+    fn effective_geometry<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyTuple>>> {
+        self.validate(py)?;
+        let shape_path = shape_indices(&self.path).collect::<Vec<_>>();
+        let geometry = self
+            .presentation
+            .borrow(py)
+            .inner
+            .effective_geometry(slide_index(&self.path)?, &shape_path)
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        let Some((left, top, width, height)) = geometry else {
+            return Ok(None);
+        };
+        let length = py.import("rpptx")?.getattr("Length")?;
+        let values = [left, top, width, height]
+            .into_iter()
+            .map(|value| length.call1((value.0,)))
+            .collect::<PyResult<Vec<_>>>()?;
+        PyTuple::new(py, values).map(Some)
+    }
+
     #[getter]
     fn shape_id(&self, py: Python<'_>) -> PyResult<Option<u32>> {
         self.validate(py)?;
@@ -283,6 +319,7 @@ impl PyShape {
     #[setter]
     fn set_left(&self, py: Python<'_>, value: i64) -> PyResult<()> {
         check_coordinate("left", value, MIN_COORDINATE)?;
+        self.materialize_geometry(py)?;
         let top = self.read(py, |shape| {
             shape.position().map_or(rpptx::Emu(0), |(_, top)| top)
         })?;
@@ -292,6 +329,7 @@ impl PyShape {
     #[setter]
     fn set_top(&self, py: Python<'_>, value: i64) -> PyResult<()> {
         check_coordinate("top", value, MIN_COORDINATE)?;
+        self.materialize_geometry(py)?;
         let left = self.read(py, |shape| {
             shape.position().map_or(rpptx::Emu(0), |(left, _)| left)
         })?;
@@ -301,6 +339,7 @@ impl PyShape {
     #[setter]
     fn set_width(&self, py: Python<'_>, value: i64) -> PyResult<()> {
         check_coordinate("width", value, 0)?;
+        self.materialize_geometry(py)?;
         let height = self.read(py, |shape| {
             shape.size().map_or(rpptx::Emu(0), |(_, height)| height)
         })?;
@@ -310,6 +349,7 @@ impl PyShape {
     #[setter]
     fn set_height(&self, py: Python<'_>, value: i64) -> PyResult<()> {
         check_coordinate("height", value, 0)?;
+        self.materialize_geometry(py)?;
         let width = self.read(py, |shape| {
             shape.size().map_or(rpptx::Emu(0), |(width, _)| width)
         })?;
@@ -349,6 +389,7 @@ impl PyShape {
         let units = ((value * ANGLE_UNITS_PER_DEGREE).round_ties_even() as i64)
             .rem_euclid(ANGLE_UNITS_PER_TURN);
         let angle = rpptx::Angle(i32::try_from(units).expect("a normalized angle fits in i32"));
+        self.materialize_geometry(py)?;
         self.edit(py, |shape| shape.set_rotation(angle))
     }
 

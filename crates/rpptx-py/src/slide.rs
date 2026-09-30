@@ -253,6 +253,29 @@ impl PySlide {
         )
     }
 
+    /// Moves the slide to another layout of this presentation.
+    ///
+    /// Placeholders the new layout does not place keep the geometry they
+    /// inherited, and the revision advances once.
+    #[setter]
+    fn set_slide_layout(&self, py: Python<'_>, layout: &Bound<'_, PyAny>) -> PyResult<()> {
+        let index = self.validate(py)?;
+        let layout = layout.extract::<PyRef<'_, PySlideLayout>>()?;
+        if !layout.presentation.is(&self.presentation) {
+            return Err(PyValueError::new_err(
+                "slide layout is not in this presentation",
+            ));
+        }
+        layout.validate(py)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        presentation
+            .inner
+            .set_slide_layout(index, layout.index)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        presentation.revisions.bump();
+        Ok(())
+    }
+
     #[getter]
     fn hidden(&self, py: Python<'_>) -> PyResult<bool> {
         let index = self.validate(py)?;

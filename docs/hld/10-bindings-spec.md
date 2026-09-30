@@ -339,13 +339,20 @@ preset name as `xml_value`. `UP_ARROW` is absent because the generated preset
 table has no `upArrow`.
 
 Presentation `Shape` handles expose optional `Length` values for left, top,
-width, and height plus optional non-visual id and name.
+width, and height plus optional non-visual id and name. Those values are the
+shape's own. `Shape.effective_geometry()` returns the four as rendering places
+the shape: its own transform, or for a placeholder without one, the transform
+it inherits from its layout placeholder, then from that placeholder's master
+counterpart. It returns `None` when the resolved transform has no extent.
 
 `Presentation.slide_width` and `slide_height` read the optional `p:sldSz` as
 `Length` values. Assigning one keeps the other, and a deck without `p:sldSz`
 pairs the assigned value with the bundled 16:9 size. `Slide.slide_layout`
 returns the layout the slide relates to, equal to the same entry of
 `slide_layouts`, and `SlideLayoutCollection.index` returns its position.
+Assigning a layout of the same presentation to `slide_layout` uses the native
+staged layout change and advances the revision once. A placeholder the new
+layout does not place keeps the transform it inherited.
 `Slide.hidden` reads and writes `p:sld/@show`. `Slide.background.fill` is a
 live `FillFormat` over the direct background fill that never changes the slide
 when read, and `follow_master_background` reports and sets whether the slide
@@ -359,9 +366,13 @@ comments part is refused, even when removing its last comment left that part
 empty, and the refusal leaves the package and the revision unchanged.
 
 `Shape` geometry, `name`, and `rotation` are writable without a revision bump.
-A missing partner coordinate becomes zero, as in python-pptx, and a negative
-extent is a `ValueError`. `rotation` reads clockwise degrees normalized below
-360 and writes them with round-half-even into the 60000-per-degree angle.
+Assigning one coordinate or the rotation of a placeholder first copies the
+missing parts of its inherited transform onto the shape, so the values not
+assigned keep their effective values and rendering keeps drawing it. On any
+other shape a missing partner coordinate becomes zero, as in python-pptx. A
+negative extent is a `ValueError`. `rotation` reads clockwise degrees
+normalized below 360 and writes them with round-half-even into the
+60000-per-degree angle.
 `shape_type` reports an `MSO_SHAPE_TYPE` member or `None`. `fill` and `line`
 return live `FillFormat` and `LineFormat` views for ordinary shapes, pictures,
 and connectors, and raise `ValueError` for other kinds. `FillFormat` offers
