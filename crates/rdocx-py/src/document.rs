@@ -1,4 +1,5 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
 
 use oxml_py_support::{PathSeg, RevisionCounter, StaleElementError};
@@ -606,7 +607,7 @@ impl PyContentFragment {
 }
 
 #[pyclass(name = "Hyperlink", frozen, eq, skip_from_py_object)]
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct PyHyperlink {
     story: PyStory,
     index_path: Vec<usize>,
@@ -614,6 +615,36 @@ pub struct PyHyperlink {
     url: Option<String>,
     anchor: Option<String>,
     relationship_id: Option<String>,
+    /// The position among the native `story_links` of `story`, which
+    /// selects one of several identical links, and the story's link layout
+    /// when the snapshot was taken. A constructed record has neither.
+    position: Option<(usize, u64)>,
+}
+
+/// Equality covers the public fields only, so a snapshot equals a record
+/// rebuilt from them.
+impl PartialEq for PyHyperlink {
+    fn eq(&self, other: &Self) -> bool {
+        self.story == other.story
+            && self.index_path == other.index_path
+            && self.text == other.text
+            && self.url == other.url
+            && self.anchor == other.anchor
+            && self.relationship_id == other.relationship_id
+    }
+}
+
+impl Eq for PyHyperlink {}
+
+/// A digest of one story's link layout: the item path and text of every link
+/// in order. Retargeting a link keeps it, and adding or removing one changes it.
+fn story_link_layout<'a>(links: impl IntoIterator<Item = (&'a [usize], &'a str)>) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    for (index_path, text) in links {
+        index_path.hash(&mut hasher);
+        text.hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 #[pymethods]
@@ -635,6 +666,7 @@ impl PyHyperlink {
             url,
             anchor,
             relationship_id,
+            position: None,
         }
     }
 
@@ -1462,6 +1494,62 @@ impl PyDocument {
             })
     }
 
+    /// The live story of a `Hyperlink` record and the position of its link.
+    ///
+    /// A snapshot resolves at its recorded position when the story's link
+    /// layout is unchanged and the link there still has the snapshot's
+    /// fields. A constructed record resolves when exactly one link matches.
+    fn native_hyperlink(
+        &self,
+        py: Python<'_>,
+        hyperlink: &PyHyperlink,
+    ) -> PyResult<(rdocx::StoryId, usize)> {
+        let story = self.native_story(py, &hyperlink.story)?;
+        let links = self
+            .inner
+            .story_links(&story)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let matches = |(location, link): &(rdocx::ContentLocation, rdocx::LinkInfo)| {
+            location.index_path() == hyperlink.index_path.as_slice()
+                && link.text == hyperlink.text
+                && link.url == hyperlink.url
+                && link.anchor == hyperlink.anchor
+                && link.rel_id == hyperlink.relationship_id
+        };
+        let index =
+            match hyperlink.position {
+                Some((index, layout)) => links
+                    .get(index)
+                    .filter(|entry| {
+                        matches(entry)
+                            && story_link_layout(links.iter().map(|(location, link)| {
+                                (location.index_path(), link.text.as_str())
+                            })) == layout
+                    })
+                    .map(|_| index),
+                None => {
+                    let mut found = links
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, entry)| matches(entry))
+                        .map(|(index, _)| index);
+                    match (found.next(), found.next()) {
+                        (Some(index), None) => Some(index),
+                        _ => None,
+                    }
+                }
+            };
+        index.map(|index| (story, index)).ok_or_else(|| {
+            rdocx_to_pyerr(
+                py,
+                rdocx::Error::Other(
+                    "the hyperlink does not match exactly one link of the document, re-fetch it with document.hyperlinks"
+                        .to_owned(),
+                ),
+            )
+        })
+    }
+
     fn body_story(&self, py: Python<'_>) -> PyResult<rdocx::StoryId> {
         self.inner
             .stories()
@@ -1992,6 +2080,24 @@ impl PyDocument {
         self.inner
             .replace_image_for_story(&story, relationship_id, data)
             .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    fn set_picture_size(
+        &mut self,
+        py: Python<'_>,
+        relationship_id: &str,
+        width: i64,
+        height: i64,
+    ) -> PyResult<usize> {
+        // No content moves, so live handles stay valid.
+        py.detach(|| {
+            self.inner.set_picture_size(
+                relationship_id,
+                rdocx::Length::emu(width),
+                rdocx::Length::emu(height),
+            )
+        })
+        .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
     fn split_run(
@@ -2772,18 +2878,60 @@ impl PyDocument {
             .inner
             .story_link_snapshots()
             .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let mut story_links = HashMap::<_, Vec<_>>::new();
+        for (location, link) in &links {
+            story_links
+                .entry(location.story().clone())
+                .or_default()
+                .push((location.index_path(), link.text.as_str()));
+        }
+        let mut layouts = story_links
+            .into_iter()
+            .map(|(story, links)| (story, (0usize, story_link_layout(links))))
+            .collect::<HashMap<_, _>>();
         let snapshots = links
             .into_iter()
-            .map(|(location, link)| PyHyperlink {
-                story: story_snapshot(location.story()),
-                index_path: location.index_path().to_vec(),
-                text: link.text,
-                url: link.url,
-                anchor: link.anchor,
-                relationship_id: link.rel_id,
+            .map(|(location, link)| {
+                let (next, layout) = layouts
+                    .get_mut(location.story())
+                    .expect("every snapshot story has a layout");
+                let position = Some((*next, *layout));
+                *next += 1;
+                PyHyperlink {
+                    story: story_snapshot(location.story()),
+                    index_path: location.index_path().to_vec(),
+                    text: link.text,
+                    url: link.url,
+                    anchor: link.anchor,
+                    relationship_id: link.rel_id,
+                    position,
+                }
             })
             .collect::<Vec<_>>();
         PyTuple::new(py, snapshots)
+    }
+
+    fn set_hyperlink_url(
+        &mut self,
+        py: Python<'_>,
+        hyperlink: PyRef<'_, PyHyperlink>,
+        url: &str,
+    ) -> PyResult<()> {
+        let (story, link_index) = self.native_hyperlink(py, &hyperlink)?;
+        // No content moves, so live handles stay valid.
+        py.detach(|| self.inner.set_hyperlink_url(&story, link_index, url))
+            .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    fn remove_hyperlink(
+        &mut self,
+        py: Python<'_>,
+        hyperlink: PyRef<'_, PyHyperlink>,
+    ) -> PyResult<()> {
+        let (story, link_index) = self.native_hyperlink(py, &hyperlink)?;
+        // The runs stay in their paragraph, so live handles stay valid.
+        py.detach(|| self.inner.remove_hyperlink(&story, link_index))
+            .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
     fn set_header(&mut self, text: &str) {

@@ -561,6 +561,184 @@ def test_replace_image_preserves_drawings_and_story_relationship_ownership():
     assert document.image_data("rIdMissing") is None
 
 
+def _linked_report_docx():
+    """A python-docx report with two pictures of one image and hyperlinks in
+    the body, a table cell, and the header, two of them on one relationship."""
+    docx = pytest.importorskip("docx")
+    from docx.opc.constants import RELATIONSHIP_TYPE
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+
+    def add_link(paragraph, text, url, relationship_id=None):
+        if relationship_id is None:
+            relationship_id = paragraph.part.relate_to(
+                url, RELATIONSHIP_TYPE.HYPERLINK, is_external=True
+            )
+        link = OxmlElement("w:hyperlink")
+        link.set(qn("r:id"), relationship_id)
+        run = OxmlElement("w:r")
+        properties = OxmlElement("w:rPr")
+        style = OxmlElement("w:rStyle")
+        style.set(qn("w:val"), "Hyperlink")
+        properties.append(style)
+        properties.append(OxmlElement("w:b"))
+        run.append(properties)
+        text_element = OxmlElement("w:t")
+        text_element.text = text
+        run.append(text_element)
+        link.append(run)
+        paragraph._p.append(link)
+        return relationship_id
+
+    source = docx.Document()
+    source.add_picture(
+        io.BytesIO(_one_pixel_png()), width=docx.shared.Inches(2), height=docx.shared.Inches(1)
+    )
+    source.add_picture(
+        io.BytesIO(_one_pixel_png()), width=docx.shared.Inches(4), height=docx.shared.Inches(2)
+    )
+    paragraph = source.add_paragraph("See ")
+    shared = add_link(paragraph, "first", "https://example.com/shared")
+    add_link(paragraph, "second", "https://example.com/shared", shared)
+    add_link(
+        source.add_table(1, 1).cell(0, 0).paragraphs[0], "cell", "https://example.com/cell"
+    )
+    add_link(
+        source.sections[0].header.paragraphs[0], "header", "https://example.com/header"
+    )
+    buffer = io.BytesIO()
+    source.save(buffer)
+    return buffer.getvalue()
+
+
+def test_hyperlinks_are_retargeted_or_removed_in_every_story():
+    docx = pytest.importorskip("docx")
+    import rdocx
+
+    document = rdocx.Document.from_bytes(_linked_report_docx())
+    held = document.paragraphs[2]
+    # The first link shares its relationship, so only it moves to a new one.
+    document.set_hyperlink_url(document.hyperlinks[0], "https://example.org/new")
+    links = document.hyperlinks
+    assert [(link.story.kind, link.text, link.url) for link in links] == [
+        ("body", "first", "https://example.org/new"),
+        ("body", "second", "https://example.com/shared"),
+        ("table_cell", "cell", "https://example.com/cell"),
+        ("header", "header", "https://example.com/header"),
+    ]
+    document.set_hyperlink_url(links[3], "https://example.org/header")
+    document.remove_hyperlink(links[2])
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="re-fetch"):
+        document.remove_hyperlink(links[2])
+    assert document.to_bytes() == before
+    assert held.text == "See firstsecond"
+
+    saved_bytes = document.to_bytes()
+    saved = docx.Document(io.BytesIO(saved_bytes))
+    assert [(link.text, link.url) for link in saved.paragraphs[2].hyperlinks] == [
+        ("first", "https://example.org/new"),
+        ("second", "https://example.com/shared"),
+    ]
+    cell = saved.tables[0].cell(0, 0).paragraphs[0]
+    assert cell.hyperlinks == []
+    assert [(run.text, run.bold, run.style.name) for run in cell.runs] == [
+        ("cell", True, "Default Paragraph Font")
+    ]
+    assert [
+        (link.text, link.url)
+        for link in saved.sections[0].header.paragraphs[0].hyperlinks
+    ] == [("header", "https://example.org/header")]
+    with zipfile.ZipFile(io.BytesIO(saved_bytes)) as archive:
+        assert b"example.com/cell" not in archive.read("word/_rels/document.xml.rels")
+
+
+def test_a_stale_hyperlink_snapshot_never_edits_another_link():
+    import rdocx
+
+    word = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"'
+    rel = 'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+    body = (
+        '<w:p><w:hyperlink r:id="rIdU"><w:r><w:t>x</w:t></w:r></w:hyperlink>'
+        '<w:r><w:t xml:space="preserve"> </w:t></w:r>'
+        '<w:hyperlink r:id="rIdU"><w:r><w:rPr><w:b/></w:rPr><w:t>here</w:t></w:r></w:hyperlink>'
+        '<w:r><w:t xml:space="preserve"> and </w:t></w:r>'
+        '<w:hyperlink r:id="rIdU"><w:r><w:t>here</w:t></w:r></w:hyperlink></w:p><w:sectPr/>'
+    )
+    source = io.BytesIO(rdocx.Document().to_bytes())
+    result = io.BytesIO()
+    with zipfile.ZipFile(source) as source_zip, zipfile.ZipFile(result, "w") as result_zip:
+        for info in source_zip.infolist():
+            data = source_zip.read(info.filename)
+            if info.filename == "word/document.xml":
+                data = f"<w:document {word} {rel}><w:body>{body}</w:body></w:document>".encode()
+            elif info.filename == "word/_rels/document.xml.rels":
+                data = data.replace(
+                    b"</Relationships>",
+                    b'<Relationship Id="rIdU" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://u/" TargetMode="External"/></Relationships>',
+                )
+            result_zip.writestr(info, data)
+    document = rdocx.Document.from_bytes(result.getvalue())
+
+    links = document.hyperlinks
+    document.remove_hyperlink(links[0])
+    before = document.to_bytes()
+    # The bold link moved to position 0, and the plain one now sits at the
+    # snapshot's position with the same fields. Neither is edited.
+    with pytest.raises(rdocx.RdocxError, match="re-fetch"):
+        document.remove_hyperlink(links[1])
+    assert document.to_bytes() == before
+
+    # A record rebuilt from the public fields equals the snapshot and resolves
+    # only when exactly one link matches it.
+    fresh = document.hyperlinks
+    rebuilt = [
+        rdocx.Hyperlink(
+            story=link.story,
+            index_path=link.index_path,
+            text=link.text,
+            url=link.url,
+            anchor=link.anchor,
+            relationship_id=link.relationship_id,
+        )
+        for link in fresh
+    ]
+    assert rebuilt == list(fresh)
+    with pytest.raises(rdocx.RdocxError, match="re-fetch"):
+        document.set_hyperlink_url(rebuilt[0], "https://z/")
+    document.set_hyperlink_url(fresh[1], "https://plain/")
+    document.set_hyperlink_url(fresh[0], "https://bold/")
+    assert [(link.text, link.url) for link in document.hyperlinks] == [
+        ("here", "https://bold/"),
+        ("here", "https://plain/"),
+    ]
+
+
+def test_set_picture_size_resizes_every_drawing_of_a_relationship():
+    docx = pytest.importorskip("docx")
+    import rdocx
+
+    document = rdocx.Document.from_bytes(_linked_report_docx())
+    relationship_id = re.search(
+        rb'r:embed="([^"]+)"', _document_xml(document)
+    ).group(1).decode()
+    # Both pictures share one image relationship, so both are resized.
+    assert (
+        document.set_picture_size(
+            relationship_id, width=rdocx.Inches(1), height=rdocx.Inches(1)
+        )
+        == 2
+    )
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError):
+        document.set_picture_size("rIdMissing", width=1, height=1)
+    assert document.to_bytes() == before
+    saved = docx.Document(io.BytesIO(document.to_bytes()))
+    assert [(shape.width, shape.height) for shape in saved.inline_shapes] == [
+        (rdocx.Inches(1), rdocx.Inches(1))
+    ] * 2
+
+
 def _document_with_structure_snapshots(document):
     word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
     rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
