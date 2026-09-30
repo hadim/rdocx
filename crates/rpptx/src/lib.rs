@@ -6726,8 +6726,7 @@ impl<'a> SlideMut<'a> {
         height: Emu,
     ) -> Result<ShapeMut<'_>> {
         append_new_member(self.shape_tree(), &[], |id| {
-            unstyled_preset_member(id, preset, left, top, width, height)
-                .map(ShapeTreeChild::Shape)
+            unstyled_preset_member(id, preset, left, top, width, height).map(ShapeTreeChild::Shape)
         })
     }
 
