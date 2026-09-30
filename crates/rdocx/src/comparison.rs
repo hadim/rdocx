@@ -2666,14 +2666,7 @@ fn moved_paragraph(
     let marker = IdAllocator::marker_with_id(kind, metadata.author, metadata.timestamp, id);
     let mut properties = paragraph.properties.clone().unwrap_or_default();
     properties.rpr = Some(properties.rpr.take().unwrap_or_default());
-    let mut properties = property_xml(&properties)?;
-    let run_properties = direct_word_element_spans(&properties, "rPr")?;
-    if let Some(span) = run_properties.first() {
-        let updated = append_word_child(&properties[span.clone()], "rPr", &marker)?;
-        properties.replace_range(span.clone(), &updated);
-    } else {
-        properties = append_word_child(&properties, "pPr", &format!("<w:rPr>{marker}</w:rPr>"))?;
-    }
+    let properties = marked_paragraph_properties_xml(&property_xml(&properties)?, &marker)?;
     let mut output = format!("<w:p>{properties}");
     for run in &paragraph.runs {
         output.push_str(&IdAllocator::revision_with_id(
@@ -2728,6 +2721,8 @@ enum EmittedOwner {
     /// of the same kind crosses it, because resolving that kind removes the
     /// table and leaves the paragraphs on either side adjacent.
     MarkedTable(&'static str),
+    /// Source whitespace between owners, which every change crosses.
+    Whitespace,
     Other,
 }
 
@@ -2757,7 +2752,11 @@ fn mark_previous_paragraph(
     let Some((_, paragraph)) = output
         .iter_mut()
         .rev()
-        .find(|(owner, _)| !matches!(owner, EmittedOwner::MarkedTable(marked) if *marked == kind))
+        .find(|(owner, _)| match owner {
+            EmittedOwner::MarkedTable(marked) => *marked != kind,
+            EmittedOwner::Whitespace => false,
+            EmittedOwner::Paragraph | EmittedOwner::Other => true,
+        })
         .filter(|(owner, _)| *owner == EmittedOwner::Paragraph)
     else {
         return Err(Error::Other(
@@ -2774,17 +2773,7 @@ fn mark_previous_paragraph(
 fn marked_paragraph_xml(paragraph: &str, marker: &str) -> Result<String> {
     let paragraph_properties = direct_word_element_spans(paragraph, "pPr")?;
     if let Some(properties_span) = paragraph_properties.first() {
-        let properties = &paragraph[properties_span.clone()];
-        let run_properties = direct_word_element_spans(properties, "rPr")?;
-        let updated = if let Some(run_span) = run_properties.first() {
-            let run_properties = &properties[run_span.clone()];
-            let updated_run = append_word_child(run_properties, "rPr", marker)?;
-            let mut updated = properties.to_owned();
-            updated.replace_range(run_span.clone(), &updated_run);
-            updated
-        } else {
-            append_word_child(properties, "pPr", &format!("<w:rPr>{marker}</w:rPr>"))?
-        };
+        let updated = marked_paragraph_properties_xml(&paragraph[properties_span.clone()], marker)?;
         let mut marked = paragraph.to_owned();
         marked.replace_range(properties_span.clone(), &updated);
         return Ok(marked);
@@ -2809,6 +2798,43 @@ fn marked_paragraph_xml(paragraph: &str, marker: &str) -> Result<String> {
         &paragraph[..open],
         &paragraph[open..]
     ))
+}
+
+/// Put a paragraph-mark revision marker into serialized `w:pPr` in schema
+/// order: first in `w:rPr`, and a new `w:rPr` before `w:sectPr` and
+/// `w:pPrChange`.
+fn marked_paragraph_properties_xml(properties: &str, marker: &str) -> Result<String> {
+    if let Some(run_span) = direct_word_element_spans(properties, "rPr")?.first() {
+        let run_properties = &properties[run_span.clone()];
+        let open = run_properties
+            .find('>')
+            .ok_or_else(|| Error::Other("run properties XML has no start".to_owned()))?
+            + 1;
+        let updated_run = if run_properties[..open].ends_with("/>") {
+            format!("{}>{marker}</w:rPr>", &run_properties[..open - 2])
+        } else {
+            format!(
+                "{}{marker}{}",
+                &run_properties[..open],
+                &run_properties[open..]
+            )
+        };
+        let mut updated = properties.to_owned();
+        updated.replace_range(run_span.clone(), &updated_run);
+        return Ok(updated);
+    }
+    let run_properties = format!("<w:rPr>{marker}</w:rPr>");
+    let later = direct_word_element_spans(properties, "sectPr")?
+        .into_iter()
+        .chain(direct_word_element_spans(properties, "pPrChange")?)
+        .map(|span| span.start)
+        .min();
+    if let Some(start) = later {
+        let mut updated = properties.to_owned();
+        updated.insert_str(start, &run_properties);
+        return Ok(updated);
+    }
+    append_word_child(properties, "pPr", &run_properties)
 }
 
 fn mark_previous_paragraph_with_id(
@@ -4440,15 +4466,7 @@ fn paragraph_mark_properties(
         .marker(kind, metadata.author, metadata.timestamp)?;
     let mut properties = properties.cloned().unwrap_or_default();
     properties.rpr = Some(properties.rpr.take().unwrap_or_default());
-    let mut xml = property_xml(&properties)?;
-    let run_properties = direct_word_element_spans(&xml, "rPr")?;
-    if let Some(run_span) = run_properties.first() {
-        let updated = append_word_child(&xml[run_span.clone()], "rPr", &marker)?;
-        xml.replace_range(run_span.clone(), &updated);
-        Ok(xml)
-    } else {
-        append_word_child(&xml, "pPr", &format!("<w:rPr>{marker}</w:rPr>"))
-    }
+    marked_paragraph_properties_xml(&property_xml(&properties)?, &marker)
 }
 
 fn compare_table(
@@ -4979,7 +4997,7 @@ fn compare_control_from_xml(
             && !whitespace_emitted[index]
             && !whitespace_slots[index].is_empty()
         {
-            content.push((EmittedOwner::Other, whitespace_slots[index].clone()));
+            content.push((EmittedOwner::Whitespace, whitespace_slots[index].clone()));
             whitespace_emitted[index] = true;
         }
         let next_is_paragraph = aligned.get(position + 1).is_some_and(|(left, right)| {
@@ -5035,7 +5053,7 @@ fn compare_control_from_xml(
     if let Some(trailing) = whitespace_slots.last()
         && !trailing.is_empty()
     {
-        content.push((EmittedOwner::Other, trailing.clone()));
+        content.push((EmittedOwner::Whitespace, trailing.clone()));
     }
     let content = content.into_iter().map(|(_, xml)| xml).collect::<String>();
     replace_element_inner(original_xml, "w:sdtContent", &content)

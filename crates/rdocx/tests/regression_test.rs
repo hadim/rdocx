@@ -39015,7 +39015,8 @@ fn issue_255_table_added_or_removed_with_final_paragraph_compares() {
 
 #[test]
 fn issue_255_table_added_or_removed_with_final_control_paragraph_compares() {
-    let document = |spec: &[&str]| {
+    // A pretty-printed control keeps whitespace between its children.
+    let document = |spec: &[&str], indent: &str| {
         let content = spec
             .iter()
             .map(|item| match *item {
@@ -39023,10 +39024,23 @@ fn issue_255_table_added_or_removed_with_final_control_paragraph_compares() {
                 "" => "<w:p/>".to_owned(),
                 text => format!("<w:p><w:r><w:t>{text}</w:t></w:r></w:p>"),
             })
+            .map(|item| format!("{indent}{item}"))
             .collect::<String>();
         document_with_content_controls(&wrap_word_body(&format!(
-            r#"<w:sdt><w:sdtPr><w:id w:val="7"/></w:sdtPr><w:sdtContent>{content}</w:sdtContent></w:sdt><w:p/>"#
+            r#"<w:sdt><w:sdtPr><w:id w:val="7"/></w:sdtPr><w:sdtContent>{content}{indent}</w:sdtContent></w:sdt><w:p/>"#
         )))
+    };
+    // Inserted content carries no indentation, so whitespace is not compared.
+    let resolved_body = |document: &mut Document| {
+        let mut body = body_from_document(document);
+        for content in &mut body.content {
+            if let BodyContent::ContentControl(control) = content {
+                control.content.retain(|child| {
+                    !matches!(child, SdtContent::RawXml(raw) if raw.iter().all(u8::is_ascii_whitespace))
+                });
+            }
+        }
+        body
     };
     let pairs: [(&[&str], &[&str]); 5] = [
         (&["a"], &["a", "T", ""]),
@@ -39035,16 +39049,18 @@ fn issue_255_table_added_or_removed_with_final_control_paragraph_compares() {
         (&["a"], &["a", "T", "b"]),
         (&["a", "T", "b"], &["a"]),
     ];
-    for granularity in [
-        rdocx::ComparisonGranularity::Word,
-        rdocx::ComparisonGranularity::Run,
+    for (granularity, indent) in [
+        (rdocx::ComparisonGranularity::Word, ""),
+        (rdocx::ComparisonGranularity::Run, ""),
+        (rdocx::ComparisonGranularity::Word, "\n        "),
+        (rdocx::ComparisonGranularity::Run, "\n        "),
     ] {
         for (original, edited) in pairs {
-            let label = format!("{granularity:?} {original:?} -> {edited:?}");
-            let mut compared = document(original);
+            let label = format!("{granularity:?} {indent:?} {original:?} -> {edited:?}");
+            let mut compared = document(original, indent);
             compared
                 .compare_with_options(
-                    &document(edited),
+                    &document(edited, indent),
                     "Reviewer",
                     "2026-09-30T12:00:00Z",
                     &rdocx::ComparisonOptions {
@@ -39063,11 +39079,89 @@ fn issue_255_table_added_or_removed_with_final_control_paragraph_compares() {
                 }
                 assert!(resolved.revisions().is_empty(), "{label} accept={accept}");
                 assert_eq!(
-                    body_from_document(&mut resolved),
-                    body_from_document(&mut document(expected)),
+                    resolved_body(&mut resolved),
+                    resolved_body(&mut document(expected, indent)),
                     "{label} accept={accept}"
                 );
             }
         }
     }
+}
+
+#[test]
+fn issue_255_redline_marks_follow_schema_order() {
+    fn redline(original: &mut Document, edited: &Document) -> String {
+        original
+            .compare_with_options(
+                edited,
+                "Reviewer",
+                "2026-09-30T12:00:00Z",
+                &rdocx::ComparisonOptions {
+                    granularity: rdocx::ComparisonGranularity::Word,
+                    ..Default::default()
+                },
+            )
+            .expect("compare");
+        let package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(original.to_bytes().unwrap()))
+                .unwrap();
+        String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap()
+    }
+    // The XML of paragraph "a" up to its text.
+    fn paragraph_a(xml: &str) -> &str {
+        let text = xml.find("<w:t>a</w:t>").expect("paragraph a");
+        let start = xml[..text]
+            .rfind("<w:p>")
+            .max(xml[..text].rfind("<w:p "))
+            .expect("paragraph a start");
+        &xml[start..text]
+    }
+    let table = r#"<w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
+
+    let xml = redline(
+        &mut issue_255_document(&["a"]),
+        &issue_255_document(&["a", "T", "b"]),
+    );
+    assert!(paragraph_a(&xml).contains("<w:pPr><w:rPr><w:ins "), "{xml}");
+    let table_xml = &xml[xml.find("<w:tbl>").unwrap()..xml.find("</w:tbl>").unwrap()];
+    let rows = table_xml.matches("<w:tr>").count() + table_xml.matches("<w:tr ").count();
+    assert!(rows > 0, "{xml}");
+    assert_eq!(table_xml.matches("<w:trPr><w:ins ").count(), rows, "{xml}");
+
+    let bold = |text: &str| {
+        format!(r#"<w:p><w:pPr><w:rPr><w:b/></w:rPr></w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>"#)
+    };
+    let xml = redline(
+        &mut document_with_content_controls(&wrap_word_body(&bold("a"))),
+        &document_with_content_controls(&wrap_word_body(&format!(
+            "{}{table}{}",
+            bold("a"),
+            bold("b")
+        ))),
+    );
+    assert!(paragraph_a(&xml).contains("<w:pPr><w:rPr><w:ins "), "{xml}");
+    let a = paragraph_a(&xml);
+    assert!(
+        a.find("<w:ins ").unwrap() < a.find("<w:b/>").unwrap(),
+        "{a}"
+    );
+
+    let section = r#"<w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr>"#;
+    let aligned = |text: &str, alignment: &str| {
+        format!(
+            r#"<w:p><w:pPr><w:jc w:val="{alignment}"/>{section}</w:pPr><w:r><w:t>{text}</w:t></w:r></w:p>"#
+        )
+    };
+    let xml = redline(
+        &mut document_with_content_controls(&wrap_word_body(&aligned("a", "left"))),
+        &document_with_content_controls(&wrap_word_body(&format!(
+            "{}{table}{}",
+            aligned("a", "center"),
+            aligned("b", "left")
+        ))),
+    );
+    let a = paragraph_a(&xml);
+    let order = ["<w:jc ", "<w:rPr><w:ins ", "<w:sectPr", "<w:pPrChange"]
+        .map(|child| a.find(child).unwrap_or_else(|| panic!("{child} in {a}")));
+    assert!(order.is_sorted(), "{a}");
 }
