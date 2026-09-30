@@ -1617,6 +1617,53 @@ mod fresh_word_package_profile_tests {
     }
 
     #[test]
+    fn saving_repairs_only_an_app_version_word_refuses() {
+        fn app_xml(application: &str, version: &str) -> Vec<u8> {
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>{application}</Application><AppVersion>{version}</AppVersion></Properties>"#
+            )
+            .into_bytes()
+        }
+        fn resave(app: Vec<u8>) -> (OpcPackage, OpcPackage) {
+            let mut package = package_from_profile(WordCreationProfile::WordCompatible(
+                WordPackageClass::Document,
+            ));
+            package.set_part("/docProps/app.xml", app);
+            let bytes = package_bytes(&package);
+            let saved = Document::from_bytes(&bytes).unwrap().to_bytes().unwrap();
+            let saved = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+            (package, saved)
+        }
+        fn app_version(package: &OpcPackage) -> Option<String> {
+            let app = std::str::from_utf8(package.get_part("/docProps/app.xml").unwrap()).unwrap();
+            app.split_once("<AppVersion>")
+                .and_then(|(_, rest)| rest.split_once("</AppVersion>"))
+                .map(|(version, _)| version.to_owned())
+        }
+
+        // What rdocx 0.14.0 wrote: rewritten to the version rdocx stamps now.
+        let (_, saved) = resave(app_xml("rdocx", "0.14.0"));
+        let fresh = package_from_profile(WordCreationProfile::WordCompatible(
+            WordPackageClass::Document,
+        ));
+        assert_eq!(app_version(&saved), app_version(&fresh));
+        assert_ne!(app_version(&saved).as_deref(), Some("0.14.0"));
+
+        // Another producer's invalid value is dropped, its Application kept.
+        let (_, saved) = resave(app_xml("Producer", "2.1"));
+        assert_eq!(app_version(&saved), None);
+        let app = std::str::from_utf8(saved.get_part("/docProps/app.xml").unwrap()).unwrap();
+        assert!(app.contains("<Application>Producer</Application>"));
+
+        // A valid foreign value keeps its part byte-identical.
+        let (original, saved) = resave(app_xml("Microsoft Office Word", "16.0000"));
+        assert_eq!(
+            saved.get_part("/docProps/app.xml"),
+            original.get_part("/docProps/app.xml")
+        );
+    }
+
+    #[test]
     fn document_new_uses_the_word_compatible_docx_profile() {
         let default = Document::new().to_bytes().unwrap();
         let compatible = Document::new_with_profile(WordCreationProfile::WordCompatible(

@@ -5145,13 +5145,33 @@ fn new_word_compatible_package(
 fn default_application_properties() -> AppProperties {
     let mut properties = AppProperties::default();
     properties.application = Some("rdocx".to_owned());
-    // ECMA-376 Part 1, 22.2.2.3 fixes AppVersion to the form XX.YYYY, and Word
-    // refuses to open a package whose AppVersion has another shape, such as 0.14.0.
-    properties.application_version = Some(format!(
+    properties.application_version = Some(rdocx_app_version());
+    properties
+}
+
+/// The AppVersion rdocx stamps. ECMA-376 Part 1, 22.2.2.3 fixes AppVersion to
+/// the form XX.YYYY, and Word refuses to open a package whose AppVersion has
+/// another shape, such as 0.14.0.
+fn rdocx_app_version() -> String {
+    format!(
         "{:0>2}.{:0>4}",
         env!("CARGO_PKG_VERSION_MAJOR"),
         env!("CARGO_PKG_VERSION_MINOR")
-    ));
+    )
+}
+
+/// Repair an AppVersion Word would refuse, as rdocx 0.14.0 wrote it: rdocx's
+/// own properties take the current stamp, and any other producer's value is
+/// dropped. A valid AppVersion is left alone, so its part stays byte-identical.
+fn repair_application_version(mut properties: AppProperties) -> AppProperties {
+    if properties
+        .application_version
+        .as_deref()
+        .is_some_and(|version| !is_app_version(version))
+    {
+        properties.application_version =
+            (properties.application.as_deref() == Some("rdocx")).then(rdocx_app_version);
+    }
     properties
 }
 
@@ -11986,7 +12006,8 @@ impl Document {
         let application_properties = application_properties_part_name
             .as_deref()
             .and_then(|part| package.get_part(part))
-            .and_then(|xml| AppProperties::from_xml(xml).ok());
+            .and_then(|xml| AppProperties::from_xml(xml).ok())
+            .map(repair_application_version);
 
         let custom_properties_part_name = package
             .package_rels

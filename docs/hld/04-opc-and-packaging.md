@@ -69,7 +69,9 @@ declare macro-capable main-part identity without inventing a VBA project. Empty
 core properties omit created and modified timestamps, so equivalent fresh
 constructions remain byte-identical. Fresh application properties stamp the
 crate major and minor version as an `XX.YYYY` AppVersion, the only form Word
-opens.
+opens. Reading a package repairs any other AppVersion, so a save rewrites it to
+that stamp when the Application is `rdocx` and drops it otherwise, and a valid
+AppVersion leaves its part byte-identical.
 
 Word story discovery begins with the main body and its nested cell and text-box
 owners, then follows header and footer references in document order and note
