@@ -373,8 +373,10 @@ ARCHIVE_REMEASUREMENT_DATES = {
     "rdocx-cli": "2026-09-30",
     "rdocx-layout": "2026-09-30",
     "rdocx-oxml": "2026-09-30",
-    "rpptx": "2026-09-29",
+    "rpptx": "2026-09-30",
     "rpptx-cli": "2026-09-29",
+    "rpptx-layout": "2026-09-30",
+    "rpptx-oxml": "2026-09-30",
 }
 MEASUREMENT_PLATFORM = "macOS 26.6.2, Apple M5 Max, arm64"
 ARCHIVE_COMPRESSION_TOLERANCE_BYTES = 64
@@ -395,11 +397,11 @@ ARCHIVE_MEASUREMENTS = {
     "rdocx-opc": (3_655, 9_668, 6),
     "rdocx-oxml": (401_214, 2_530_627, 32),
     "rdocx-pdf": (8_111, 26_758, 6),
-    "rpptx": (408_587, 2_128_353, 16),
+    "rpptx": (409_903, 2_133_557, 16),
     "rpptx-chart": (6_648, 21_136, 6),
     "rpptx-cli": (39_989, 174_505, 8),
-    "rpptx-layout": (79_109, 458_112, 11),
-    "rpptx-oxml": (153_216, 1_042_644, 20),
+    "rpptx-layout": (79_559, 460_381, 11),
+    "rpptx-oxml": (153_801, 1_044_817, 20),
     "rpptx-render": (59_928, 329_994, 8),
 }
 PACKAGE_VERSIONS = {
