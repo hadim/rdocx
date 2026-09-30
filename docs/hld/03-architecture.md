@@ -1510,7 +1510,18 @@ Revision traversal follows that ownership tree through the main body, tables,
 cells, and content controls. `Document::revisions` reports every valid modeled
 revision once in document order as a borrowed `RevisionRef`. The facade does
 not copy or reparse the raw subtree, and revisions outside the main document
-part remain outside this traversal.
+part remain outside this traversal. `Document::story_revisions` covers every
+story instead. It stages a copy of the document as revision resolution does
+and scans the main part and each related story part left in the staged
+package with the element inventory that resolution counts, so its length
+equals the accept and reject counts, text boxes included, and it fails where
+staging fails. Each revision belongs to the innermost owner that
+`Document::stories` reports around it, with table cells folded into their
+story. Where the typed serialization that `stories` scans drops a namespace
+binding the staged part keeps, owners pair across the two, and a text box
+that `stories` does not report folds into the story around it. A revision
+outside every owner, such as one in a footnote separator, is an error rather
+than a silent omission.
 
 Revision mutation uses explicit all, exact-author, inclusive RFC 3339 instant,
 and id selectors. One id operation resolves every modeled element carrying the

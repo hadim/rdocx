@@ -87,15 +87,18 @@ differ needs `--ignore-comments`. An unknown granularity or story name is a
 usage error, a repeated story fails, and neither creates the output. The
 `--json` record states the options that ran.
 
-Revision `list` reports the main story. Revision `accept` and `reject` operate
-across every supported story and accept at most one selector: `--id`,
-`--author`, or the paired `--start-date` and `--end-date` RFC 3339 bounds.
-Omitting a selector resolves all modeled revisions. Every mutation, comparison,
-and TOC rebuild requires `-o/--output`, publishes only a complete validated
-DOCX, and supports a schema-1 record through `--json`. A `.docx`, `.docm`,
-`.dotx`, or `.dotm` output extension selects the package class the output
-declares, so a template edited into `report.docx` is written as a document. An
-input that carries a VBA project cannot change to a macro-free extension.
+Revision `list` reports every supported story and names the story of each
+revision. Revision `accept` and `reject` operate across every supported story
+and accept at most one selector: `--id`, `--author`, or the paired
+`--start-date` and `--end-date` RFC 3339 bounds. Omitting a selector resolves
+all modeled revisions. `compare` reports how many revisions it created in each
+story, and its JSON record keeps `main_story_revisions` for the main-body
+projection. Every mutation, comparison, and TOC rebuild requires
+`-o/--output`, publishes only a complete validated DOCX, and supports a
+schema-1 record through `--json`. A `.docx`, `.docm`, `.dotx`, or `.dotm`
+output extension selects the package class the output declares, so a template
+edited into `report.docx` is written as a document. An input that carries a
+VBA project cannot change to a macro-free extension.
 
 `text` prints each paragraph with the same accepted-view text as `text --json`:
 tracked insertions and move destinations are included, and tracked deletions

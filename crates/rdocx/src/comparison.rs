@@ -19,7 +19,7 @@ use rdocx_oxml::text::{
 use sha2::{Digest, Sha256};
 
 use crate::revision::validate_revision_timestamp;
-use crate::{Document, Error, Result};
+use crate::{Document, Error, Result, StoryKind};
 
 use oxml_opc::OpcPackage;
 use oxml_opc::relationship::{Relationship, rel_types};
@@ -584,8 +584,24 @@ fn story_parts_with_options(
     Ok(stories)
 }
 
-pub(crate) fn related_story_part_names(document: &Document) -> Result<Vec<String>> {
-    story_parts(document).map(|stories| stories.into_iter().map(|story| story.part_name).collect())
+pub(crate) fn revision_story_parts(document: &Document) -> Result<Vec<(StoryKind, String)>> {
+    story_parts(document).map(|stories| {
+        stories
+            .into_iter()
+            .map(|story| {
+                let kind = match story.kind {
+                    ComparisonStoryKind::Main => StoryKind::Body,
+                    ComparisonStoryKind::Header => StoryKind::Header,
+                    ComparisonStoryKind::Footer => StoryKind::Footer,
+                    ComparisonStoryKind::Comment => StoryKind::Comment,
+                    ComparisonStoryKind::TextBox => StoryKind::TextBox,
+                    ComparisonStoryKind::Footnote => StoryKind::Footnote,
+                    ComparisonStoryKind::Endnote => StoryKind::Endnote,
+                };
+                (kind, story.part_name)
+            })
+            .collect()
+    })
 }
 
 fn story_xml<'a>(document: &'a Document, story: &StoryPart) -> Result<&'a [u8]> {

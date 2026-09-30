@@ -9,7 +9,7 @@ use oxml_cli_support::{
 };
 use rdocx::{
     BodyItemRef, ComparisonGranularity, ComparisonOptions, ComparisonStoryKind, Document,
-    RasterFormat, RasterOptions, RasterOutput, RevisionKind, RunRange,
+    RasterFormat, RasterOptions, RasterOutput, RevisionKind, RunRange, StoryId, StoryKind,
 };
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Document};
@@ -688,10 +688,10 @@ pub fn comment_remove(file: &Path, id: i32, output: &Path, json_output: bool) ->
     )
 }
 
-/// List modeled revisions from the main story.
+/// List modeled revisions from every supported story.
 pub fn revision_list(file: &Path, json_output: bool) -> Result<()> {
     let doc = Document::open(file)?;
-    let revisions = doc.revisions();
+    let revisions = doc.story_revisions()?;
     let records = revisions
         .iter()
         .map(|revision| {
@@ -700,26 +700,30 @@ pub fn revision_list(file: &Path, json_output: bool) -> Result<()> {
                 "author": revision.author(),
                 "timestamp": revision.timestamp(),
                 "kind": revision_kind_label(revision.kind()),
+                "story": story_json(revision.story()),
             })
         })
         .collect::<Vec<_>>();
     let mut stdout = io::stdout().lock();
     if json_output {
         print_json(json!({
-            "scope": "main",
+            "scope": "all-supported-stories",
             "revisions": records,
         }))?;
     } else if revisions.is_empty() {
-        writeln!(stdout, "(no revisions in main story)")?;
+        writeln!(stdout, "(no revisions)")?;
     } else {
         for revision in revisions {
             writeln!(
                 stdout,
-                "{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}",
                 revision.id(),
                 revision.author(),
                 revision.timestamp().unwrap_or(""),
-                revision_kind_label(revision.kind())
+                revision_kind_label(revision.kind()),
+                story_kind_label(revision.story().kind()),
+                revision.story().part_name(),
+                revision.story().owner_index()
             )?;
         }
     }
@@ -863,7 +867,18 @@ pub fn compare(
     let mut original_doc = Document::open(original)?;
     let edited_doc = Document::open(edited)?;
     let diagnostics = original_doc.compare_with_options(&edited_doc, author, timestamp, options)?;
-    let revision_count = original_doc.revisions().len();
+    let main_story_revisions = original_doc.revisions().len();
+    let revisions = original_doc.story_revisions()?;
+    let mut stories = Vec::<(&StoryId, usize)>::new();
+    for revision in &revisions {
+        match stories
+            .iter_mut()
+            .find(|(story, _)| *story == revision.story())
+        {
+            Some((_, count)) => *count += 1,
+            None => stories.push((revision.story(), 1)),
+        }
+    }
     let records = diagnostics
         .iter()
         .map(|diagnostic| {
@@ -875,10 +890,20 @@ pub fn compare(
         .collect::<Vec<_>>();
     publish_document(&mut original_doc, output)?;
     if json_output {
+        let story_records = stories
+            .iter()
+            .map(|(story, count)| {
+                let mut record = story_json(story);
+                record["revisions"] = json!(count);
+                record
+            })
+            .collect::<Vec<_>>();
         print_json(json!({
             "scope": "all-supported-stories",
             "options": comparison_options_json(options),
-            "main_story_revisions": revision_count,
+            "revisions": revisions.len(),
+            "stories": story_records,
+            "main_story_revisions": main_story_revisions,
             "diagnostics": records,
             "output": output.display().to_string(),
         }))?;
@@ -886,8 +911,19 @@ pub fn compare(
         let mut stdout = io::stdout().lock();
         writeln!(
             stdout,
-            "Created {revision_count} main-story revision element(s)"
+            "Created {} revision element(s) in {} story(ies)",
+            revisions.len(),
+            stories.len()
         )?;
+        for (story, count) in &stories {
+            writeln!(
+                stdout,
+                "  {}\t{}\t{}\t{count}",
+                story_kind_label(story.kind()),
+                story.part_name(),
+                story.owner_index()
+            )?;
+        }
         writeln!(stdout, "Diagnostics: {}", diagnostics.len())?;
         writeln!(stdout, "Written to {}", output.display())?;
     }
@@ -964,6 +1000,28 @@ fn revision_kind_label(kind: RevisionKind) -> &'static str {
         RevisionKind::TablePropertyChange => "table-property-change",
         RevisionKind::SectionPropertyChange => "section-property-change",
     }
+}
+
+fn story_kind_label(kind: StoryKind) -> &'static str {
+    match kind {
+        StoryKind::Body => "body",
+        StoryKind::TableCell => "table-cell",
+        StoryKind::Header => "header",
+        StoryKind::Footer => "footer",
+        StoryKind::Footnote => "footnote",
+        StoryKind::Endnote => "endnote",
+        StoryKind::Comment => "comment",
+        StoryKind::TextBox => "text-box",
+        _ => "unknown",
+    }
+}
+
+fn story_json(story: &StoryId) -> Value {
+    json!({
+        "kind": story_kind_label(story.kind()),
+        "part_name": story.part_name(),
+        "owner_index": story.owner_index(),
+    })
 }
 
 fn publish_document(doc: &mut Document, output: &Path) -> Result<()> {

@@ -259,18 +259,26 @@ pub struct PyRevision {
     pub author: String,
     pub timestamp: Option<String>,
     pub kind: String,
+    pub story: Option<PyStory>,
 }
 
 #[pymethods]
 impl PyRevision {
     #[new]
-    #[pyo3(signature = (*, id, author, timestamp, kind))]
-    fn new(id: i32, author: String, timestamp: Option<String>, kind: String) -> Self {
+    #[pyo3(signature = (*, id, author, timestamp, kind, story=None))]
+    fn new(
+        id: i32,
+        author: String,
+        timestamp: Option<String>,
+        kind: String,
+        story: Option<PyRef<'_, PyStory>>,
+    ) -> Self {
         Self {
             id,
             author,
             timestamp,
             kind,
+            story: story.map(|story| story.clone()),
         }
     }
 }
@@ -1798,17 +1806,19 @@ impl PyDocument {
 
     #[getter(revisions)]
     fn revision_snapshots<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let revisions = self
+            .inner
+            .story_revisions()
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
         PyTuple::new(
             py,
-            self.inner
-                .revisions()
-                .into_iter()
-                .map(|revision| PyRevision {
-                    id: revision.id(),
-                    author: revision.author().to_owned(),
-                    timestamp: revision.timestamp().map(str::to_owned),
-                    kind: revision_kind_name(revision.kind()).to_owned(),
-                }),
+            revisions.iter().map(|revision| PyRevision {
+                id: revision.id(),
+                author: revision.author().to_owned(),
+                timestamp: revision.timestamp().map(str::to_owned),
+                kind: revision_kind_name(revision.kind()).to_owned(),
+                story: Some(story_snapshot(revision.story())),
+            }),
         )
     }
 

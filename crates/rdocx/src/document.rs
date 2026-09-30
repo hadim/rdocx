@@ -63,7 +63,7 @@ use crate::Length;
 use crate::content_control::ContentControlRef;
 use crate::error::{Error, Result};
 use crate::paragraph::{Paragraph, ParagraphRef};
-use crate::revision::RevisionRef;
+use crate::revision::{RevisionRef, StoryRevision};
 use crate::run::{FieldDisplaySegmentRef, RunRef};
 use crate::style::{self, Style, StyleBuilder};
 use crate::table::{Table, TableRef, row_cell_ranges, validate_table_topology};
@@ -7456,6 +7456,68 @@ fn scan_story_owners(xml: &[u8], root_kind: StoryKind) -> Result<Vec<StoryOwnerS
         *count += 1;
     }
     Ok(owners)
+}
+
+/// Pair the non-cell story owners of `scanned`, the bytes revision resolution
+/// scans, with the identities [`Document::stories`] reports from `reported`,
+/// its own bytes for the same part.
+///
+/// Owners pair in order when both byte streams have the same owner kinds.
+/// Otherwise the two disagree, for example because the typed serialization
+/// dropped the namespace binding of a text box, so root owners pair by index
+/// and text boxes by identical bytes. An owner without a partner is left
+/// out, which folds its revisions into the owner around it.
+fn paired_story_owners(
+    part_name: &str,
+    root_kind: StoryKind,
+    scanned: &[u8],
+    reported: Option<&[u8]>,
+) -> Result<Vec<(Range<usize>, StoryId)>> {
+    let non_cell_owners = |xml: &[u8]| -> Result<Vec<StoryOwnerSpan>> {
+        Ok(scan_story_owners(xml, root_kind)?
+            .into_iter()
+            .filter(|owner| owner.kind != StoryKind::TableCell)
+            .collect())
+    };
+    let scanned_owners = non_cell_owners(scanned)?;
+    let reported_owners = match reported {
+        Some(xml) if xml == scanned => scanned_owners.clone(),
+        Some(xml) => non_cell_owners(xml)?,
+        None => Vec::new(),
+    };
+    let story = |owner: &StoryOwnerSpan| StoryId {
+        kind: owner.kind,
+        part_name: part_name.to_owned(),
+        owner_index: owner.owner_index,
+        fingerprint: owner.fingerprint,
+    };
+    let same_kinds = scanned_owners.len() == reported_owners.len()
+        && scanned_owners
+            .iter()
+            .zip(&reported_owners)
+            .all(|(scanned, reported)| scanned.kind == reported.kind);
+    if same_kinds {
+        return Ok(scanned_owners
+            .iter()
+            .zip(&reported_owners)
+            .map(|(scanned, reported)| (scanned.full.clone(), story(reported)))
+            .collect());
+    }
+    let mut unpaired = reported_owners.iter().collect::<Vec<_>>();
+    Ok(scanned_owners
+        .iter()
+        .filter_map(|scanned| {
+            let position = unpaired.iter().position(|reported| {
+                reported.kind == scanned.kind
+                    && if scanned.kind == root_kind {
+                        reported.owner_index == scanned.owner_index
+                    } else {
+                        reported.fingerprint == scanned.fingerprint
+                    }
+            })?;
+            Some((scanned.full.clone(), story(unpaired.remove(position))))
+        })
+        .collect())
 }
 
 fn structural_fingerprint(xml: &[u8]) -> Result<u64> {
@@ -14940,12 +15002,63 @@ impl Document {
     }
 
     /// Return every valid modeled main-document revision in document order.
+    ///
+    /// This borrowed projection covers the main body, its tables, cells, and
+    /// content controls. [`Document::story_revisions`] lists every story.
     pub fn revisions(&self) -> Vec<RevisionRef<'_>> {
         self.document
             .revisions()
             .into_iter()
             .map(|inner| RevisionRef { inner })
             .collect()
+    }
+
+    /// Return every modeled revision that accepting or rejecting all revisions
+    /// resolves, each with the story that holds it.
+    ///
+    /// The list covers the main document, headers, footers, comments, normal
+    /// footnotes, endnotes, and the text boxes inside them. It has one entry per
+    /// revision element, so its length is the count [`Document::accept_all`]
+    /// and [`Document::reject_all`] report. The main document comes first, then
+    /// headers and footers in section order, then comments, footnotes, and
+    /// endnotes. Revisions keep document order within each part.
+    ///
+    /// Each story is one returned by [`Document::stories`]. A revision in a
+    /// table cell belongs to the story that holds the table. A text box that
+    /// `stories` does not report, such as one under `mc:AlternateContent` or
+    /// one whose namespace binding the typed serialization drops, belongs to
+    /// the story that holds its drawing. A revision outside every story owner,
+    /// such as one inside a footnote separator, is an error, and so is a
+    /// document that resolution cannot stage.
+    pub fn story_revisions(&self) -> Result<Vec<StoryRevision>> {
+        // Resolution scans the parts staging leaves in the package. The main
+        // part there keeps its original bytes, or its namespace declarations
+        // replayed, which the typed serialization that `stories` scans lacks.
+        let mut staged = self.clone_for_staging();
+        staged.prepare_staged_package()?;
+        let mut parts = vec![(StoryKind::Body, staged.doc_part_name.clone())];
+        parts.extend(crate::comparison::revision_story_parts(&staged)?);
+        let mut seen = HashSet::new();
+        let mut revisions = Vec::new();
+        for (root_kind, part_name) in parts {
+            if !seen.insert(part_name.clone()) {
+                continue;
+            }
+            let scanned = staged
+                .package
+                .get_part(&part_name)
+                .ok_or_else(|| Error::Other(format!("missing revision story part {part_name}")))?;
+            let reported = if part_name == self.doc_part_name {
+                Some(Cow::Owned(self.document.to_xml()?))
+            } else {
+                self.package.get_part(&part_name).map(Cow::Borrowed)
+            };
+            let owners = paired_story_owners(&part_name, root_kind, scanned, reported.as_deref())?;
+            revisions.extend(crate::revision::story_part_revisions(
+                &part_name, scanned, &owners,
+            )?);
+        }
+        Ok(revisions)
     }
 
     /// Return valid document-protection metadata recorded in the settings part.

@@ -254,9 +254,11 @@ exact text in the main story without run index bookkeeping. The original
 direct-body constructors and call shape remain unchanged.
 `Comment`, `ComparisonDiagnostic`, `BoundingBox`, `LayoutFragment`,
 `LayoutPage`, `TocRebuildReport`, and `Revision` are frozen typed snapshots.
-`Document.revisions` lists main-document revisions with a snake_case `kind`,
-while the accept and reject methods resolve revisions in every story and return
-how many they resolved. `try_replace_text` and `replace_all_regex` return their
+`Document.revisions` lists the revisions of every story that the accept and
+reject methods resolve, each with a snake_case `kind` and the `Story` that
+holds it, so its length equals the count they return. A `Revision` built
+directly keeps its four-field constructor and has no story unless one is
+passed. `try_replace_text` and `replace_all_regex` return their
 replacement counts. `update_fields` takes the native evaluation context as
 keyword arguments, reads the wall-clock fields of `now` as given, and returns
 the number of updated fields. Comments are
@@ -1288,9 +1290,17 @@ Each immutable `RevisionRef` exposes the revision id, author, optional
 timestamp, and `RevisionKind`. Results recursively cover the main document
 body in document order, including tables, cells, and content controls. The
 facade reads a typed projection while serialization continues to use the
-captured raw WordprocessingML subtree. `rdocx-cli revision list` exposes this
-main-story projection with an explicit scope field. Python and WASM load and
-save paths preserve the revision XML without a revision inspection method.
+captured raw WordprocessingML subtree. The additive
+`Document::story_revisions` returns owned `StoryRevision` snapshots for every
+story that revision resolution reaches: the main document, headers, footers,
+comments, normal footnotes, endnotes, and the text boxes inside them. Each
+snapshot adds the `StoryId` of its Word story, with table cells folded into the
+story that holds the table. It scans the parts as resolution stages them, so
+the list has one entry per revision element that `accept_all` and
+`reject_all` resolve and its length equals their count.
+`rdocx-cli revision list` and Python `Document.revisions` expose this all-story
+listing. WASM load and save paths preserve the revision XML without a revision
+inspection method.
 
 Native Word paragraph handles expose
 `Paragraph::add_run_inheriting_mark(&mut self, text)`. The method appends one
@@ -1387,11 +1397,13 @@ ids select every matching placement, author matching is case-sensitive, and
 missing dates do not match a date range. Invalid bounds and malformed selected
 changes return an error before mutation. Resolution covers the main document,
 headers, footers, comments, normal footnotes, endnotes, and nested text boxes.
-`Document::revisions` remains main-story-only. These eight methods are additive
-on `rdocx::Document`. `rdocx-cli revision accept|reject` exposes the all-story
-resolution boundary with mutually exclusive id, exact-author, or paired date
-selectors. An omitted selector resolves all modeled revisions. Python and WASM
-continue to preserve the resulting document when they save it.
+`Document::revisions` remains main-story-only, while
+`Document::story_revisions` lists exactly the elements these methods resolve.
+These eight methods are additive on `rdocx::Document`.
+`rdocx-cli revision accept|reject` exposes the all-story resolution boundary
+with mutually exclusive id, exact-author, or paired date selectors. An omitted
+selector resolves all modeled revisions. Python and WASM continue to preserve
+the resulting document when they save it.
 
 Native callers generate tracked changes with `Document::compare`, supplying an
 edited document, author, and RFC 3339 timestamp. The additive
@@ -2219,15 +2231,15 @@ run-aware replacement count before staged publication. A mismatch creates no
 output and leaves an existing destination untouched. Both the selected page
 and all-page `render` paths use bundled deterministic fonts. The compiled
 surface also includes nested comment thread commands with optional RFC 3339
-comment dates, main-story revision inspection, all-story filtered revision
-resolution, comparison with explicit granularity and ignore options, and TOC
-rebuild. Every new mutation requires an explicit output and publishes through
-the shared staged output set. Their schema-1 records state `main` or
-`all-supported-stories` scope, and the comparison record also states the
-options that ran. Revision selectors are mutually exclusive, and
-RFC 3339 start and end bounds must be paired. The complete compiled surface is
-covered by one integration binary, with fixtures constructed in code and no
-command-only test dependency.
+comment dates, all-story revision inspection, all-story filtered revision
+resolution, comparison with explicit granularity and ignore options and
+per-story revision counts, and TOC rebuild. Every new mutation requires an
+explicit output and publishes through the shared staged output set. Their
+schema-1 records state `main` or `all-supported-stories` scope, and the
+comparison record also states the options that ran. Revision selectors are
+mutually exclusive, and RFC 3339 start and end bounds must be paired. The
+complete compiled surface is covered by one integration binary, with fixtures
+constructed in code and no command-only test dependency.
 
 Rust release tags also distribute the selected CLI as prebuilt archives.
 Stable `v*` tags carry only `rdocx`, and incubating `rpptx-v*` tags carry only

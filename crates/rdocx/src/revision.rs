@@ -1,13 +1,14 @@
 //! Native tracked-revision inspection and atomic resolution.
 
 use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, XmlVersion};
 pub use rdocx_oxml::RevisionKind;
 use rdocx_oxml::{CT_Document, CT_Revision};
 
-use crate::{Document, Error, ParagraphRef, Result};
+use crate::{Document, Error, ParagraphRef, Result, StoryId};
 
 const WORD_NS: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 
@@ -45,6 +46,45 @@ impl RevisionRef<'_> {
         self.inner
             .content_paragraph()
             .map(|inner| ParagraphRef { inner })
+    }
+}
+
+/// One owned tracked revision and the Word story that holds it.
+///
+/// [`Document::story_revisions`] returns one snapshot for each revision
+/// element that accepting or rejecting every revision resolves.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoryRevision {
+    story: StoryId,
+    id: i32,
+    author: String,
+    timestamp: Option<String>,
+    kind: RevisionKind,
+}
+
+impl StoryRevision {
+    /// Return the story that holds this revision.
+    ///
+    /// Table cells fold into the story that holds the table. The identity is
+    /// one of those returned by [`Document::stories`] for the same document.
+    pub fn story(&self) -> &StoryId {
+        &self.story
+    }
+
+    pub fn id(&self) -> i32 {
+        self.id
+    }
+
+    pub fn author(&self) -> &str {
+        &self.author
+    }
+
+    pub fn timestamp(&self) -> Option<&str> {
+        self.timestamp.as_deref()
+    }
+
+    pub fn kind(&self) -> RevisionKind {
+        self.kind
     }
 }
 
@@ -177,8 +217,8 @@ impl Document {
             candidate.package.set_part(&candidate.doc_part_name, output);
         }
 
-        let story_parts = crate::comparison::related_story_part_names(&candidate)?;
-        for part_name in story_parts {
+        let story_parts = crate::comparison::revision_story_parts(&candidate)?;
+        for (_, part_name) in story_parts {
             let part = candidate
                 .package
                 .get_part(&part_name)
@@ -226,6 +266,40 @@ pub(crate) fn modeled_revision_count(source: &[u8]) -> Result<usize> {
         .iter()
         .filter(|element| element.revision.is_some())
         .count())
+}
+
+/// List the modeled revisions of one story part in document order.
+///
+/// These are the elements that resolving the part counts. Each one belongs to
+/// the innermost span in `owners` that holds its start tag.
+pub(crate) fn story_part_revisions(
+    part_name: &str,
+    source: &[u8],
+    owners: &[(Range<usize>, StoryId)],
+) -> Result<Vec<StoryRevision>> {
+    let tree = XmlTree::parse(source)?;
+    tree.elements
+        .iter()
+        .filter_map(|element| Some((element.start, element.revision.as_ref()?)))
+        .map(|(start, metadata)| {
+            let (_, story) = owners
+                .iter()
+                .filter(|(span, _)| span.contains(&start))
+                .max_by_key(|(span, _)| span.start)
+                .ok_or_else(|| {
+                    Error::Other(format!(
+                        "tracked revision at byte {start} of {part_name} has no story owner"
+                    ))
+                })?;
+            Ok(StoryRevision {
+                story: story.clone(),
+                id: metadata.id,
+                author: metadata.author.clone(),
+                timestamp: metadata.timestamp.clone(),
+                kind: metadata.kind,
+            })
+        })
+        .collect()
 }
 
 fn date_scope(start: &str, end: &str) -> Result<RevisionScope<'static>> {

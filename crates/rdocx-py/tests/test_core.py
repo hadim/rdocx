@@ -107,6 +107,43 @@ def test_reject_revision_id_then_reject_all_restores_the_original():
     assert [paragraph.text for paragraph in document.paragraphs] == ["alpha"]
 
 
+def test_revisions_list_every_story_and_name_the_story_that_holds_them():
+    import rdocx
+
+    def footer_document(text):
+        document = rdocx.Document()
+        document.add_paragraph("Body.")
+        document.set_footer(text)
+        return rdocx.Document.from_bytes(document.to_bytes())
+
+    document = footer_document("Footer lorem ipsum")
+    document.compare(
+        footer_document("Footer lorem IPSUM"), "R", "2026-09-27T12:00:00Z"
+    )
+    revisions = document.revisions
+    footer = next(story for story in document.stories if story.kind == "footer")
+    assert footer.part_name == "/word/footer1.xml"
+    assert len(revisions) == 2
+    assert all(revision.story == footer for revision in revisions)
+    assert sorted(revision.kind for revision in revisions) == ["deletion", "insertion"]
+    assert {revision.author for revision in revisions} == {"R"}
+
+    body = rdocx.Story(kind="body", part_name="/word/document.xml", owner_index=0)
+    assert {revision.story == body for revision in _tracked_document().revisions} == {
+        True
+    }
+    unscoped = rdocx.Revision(id=1, author="R", timestamp=None, kind="insertion")
+    assert unscoped.story is None
+    scoped = rdocx.Revision(
+        id=1, author="R", timestamp=None, kind="insertion", story=footer
+    )
+    assert scoped.story == footer
+    assert scoped != unscoped
+
+    assert document.accept_all() == len(revisions)
+    assert document.revisions == ()
+
+
 def test_counted_replacement_spans_runs_and_a_bad_regex_changes_nothing():
     import rdocx
 
