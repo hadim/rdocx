@@ -4,11 +4,11 @@
     "command": "pdftoppm",
     "version": "pdftoppm version 26.01.0"
   },
-  "reason": "PR 148 paragraph spacing, cell margins, and horizontal table borders move contract, invoice, and quote under pinned Poppler 26.01.0",
+  "reason": "List text now starts at the hanging indent, as in Word.",
   "samples": {
     "contract": {
       "height": 1650,
-      "rgba_sha256": "1161c8beb71a576b32e0bd388900efb2aba3e9d95d87ce30fe1a664ee1e3bbb6",
+      "rgba_sha256": "3c7d797cfac0f88395a4695601b643df01372522632545f66e53d14dd04f51ff",
       "width": 1275
     },
     "feature_showcase": {
@@ -23,7 +23,7 @@
     },
     "letter": {
       "height": 1650,
-      "rgba_sha256": "5e5e15d7e030b698eadb7f22fe957b4ae08bd6de13be0e8c390af382d0d1eefc",
+      "rgba_sha256": "d3edd185999df3a600000a8ccad699ad93aff58208d6fcf15c89d2e7dd567e6d",
       "width": 1275
     },
     "proposal": {
