@@ -865,6 +865,8 @@ impl PyRun {
             .ok_or_else(|| PyIndexError::new_err("run index out of range"))
     }
 
+    /// Replaces this run's text in place. No run, break, or paragraph is
+    /// added or removed for any value, so the revision does not advance.
     #[setter]
     fn set_text(&self, py: Python<'_>, value: &str) -> PyResult<()> {
         validate_path(py, &self.presentation.borrow(py), &self.path, "run", "")?;
@@ -883,7 +885,6 @@ impl PyRun {
             .run_mut(run)
             .ok_or_else(|| PyIndexError::new_err("run index out of range"))?;
         run.set_text(value);
-        presentation.revisions.bump();
         Ok(())
     }
 
