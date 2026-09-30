@@ -2992,6 +2992,8 @@ fn compare_paragraph(
     metadata: &mut Metadata<'_>,
     diagnostics: &mut Vec<ComparisonDiagnostic>,
 ) -> Result<String> {
+    let detached = detach_field_spans(original, original_source)?;
+    let original_source = detached.as_deref().or(original_source);
     if uses_attributed_run_path(metadata.options) {
         return compare_granular_paragraph(
             original,
@@ -6963,6 +6965,42 @@ fn body_content_xml(content: &BodyContent) -> Result<String> {
     }
 }
 
+/// The paragraph source with each run that the reader split around a field
+/// written as separate physical runs, one per modeled run.
+fn detach_field_spans(paragraph: &CT_P, source: Option<&str>) -> Result<Option<String>> {
+    let spans = paragraph.detached_field_spans()?;
+    if spans.is_empty() {
+        return Ok(None);
+    }
+    let mut source =
+        source.map_or_else(|| paragraph_xml(paragraph), |source| Ok(source.to_owned()))?;
+    // Each span starts at a physical run of the paragraph, in order.
+    let runs = paragraph_run_spans(&source)?;
+    let mut edits = Vec::with_capacity(spans.len());
+    let mut cursor = 0;
+    for (raw, detached) in spans {
+        let raw = std::str::from_utf8(raw).map_err(utf8_error)?;
+        let start = runs
+            .iter()
+            .map(|run| run.start)
+            .find(|start| *start >= cursor && source[*start..].starts_with(raw))
+            .ok_or_else(|| {
+                Error::Other(
+                    "comparison could not find a split field run in its paragraph".to_owned(),
+                )
+            })?;
+        cursor = start + raw.len();
+        edits.push((
+            start..cursor,
+            String::from_utf8(detached).map_err(utf8_error)?,
+        ));
+    }
+    for (range, detached) in edits.into_iter().rev() {
+        source.replace_range(range, &detached);
+    }
+    Ok(Some(source))
+}
+
 fn paragraph_xml(paragraph: &CT_P) -> Result<String> {
     let mut bytes = Vec::new();
     paragraph.to_xml(&mut Writer::new(&mut bytes))?;
@@ -7326,6 +7364,19 @@ fn modeled_paragraph_run_spans(paragraph: &CT_P, xml: &str) -> Result<Vec<Range<
     for (modeled_index, run) in paragraph.runs.iter().enumerate() {
         let (physical_count, field_owner) = match run.content.as_slice() {
             [RunContent::Field(field)] if field.is_complex() => {
+                if let Some(source) = field.detached_source()? {
+                    let source = String::from_utf8(source).map_err(utf8_error)?;
+                    let count = paragraph_run_spans(&format!("<w:p>{source}</w:p>"))?.len();
+                    if count == 0 || cursor + count > physical.len() {
+                        return Err(Error::Other(format!(
+                            "comparison could not correlate split field run {modeled_index}"
+                        )));
+                    }
+                    projected.push(physical[cursor].start..physical[cursor + count - 1].end);
+                    cursor += count;
+                    previous_field_owner = None;
+                    continue;
+                }
                 let field_owner = field.source_owner_id().ok_or_else(|| {
                     Error::Other("parsed complex field has no source owner".to_owned())
                 })?;

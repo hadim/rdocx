@@ -629,7 +629,13 @@ hyperlinks, accepted insertion and move-destination revisions, and inline
 content controls in exact document order. Each nested content control retains
 its own namespace scope for this projection. Opaque wrappers remain excluded,
 and direct markers are not duplicated. Complex-field collapse remaps both run
-views. Direct-run and marker mutation rebuild the same read projection in
+views. Fields that share a physical run form one span, so a run where one field
+ends and the next begins keeps both. Visible content that shares a physical run
+with a complex field, such as the text of `Page {PAGE} of the report`, is read
+as sibling runs in source order around the field, so such a paragraph reports
+more runs than it has physical runs. The span writes its original bytes while
+those runs and its fields are unchanged. Otherwise each field writes its own
+part of the span, so one field of a shared run can be updated alone. Direct-run and marker mutation rebuild the same read projection in
 memory. Simple and complex fields share one recursive
 `Field` grammar with a normalized name, text or
 nested arguments, switches, cached result, and optional dirty state. Its private

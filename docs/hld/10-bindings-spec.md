@@ -1897,7 +1897,9 @@ Detached inline and anchor wrappers retain only the inherited namespace
 bindings they use and that are not already carried by the story root. Dirty
 typed inputs recover matching package drawing payloads before serialization.
 Complex fields map every physical source run to one modeled comparison owner,
-and sibling fields from one physical run share that owner.
+and sibling fields from one physical run share that owner. Text read out of a
+field's physical run is compared as its own runs, and the comparison source
+writes that span as one physical run per modeled run.
 It emits same-story moves and supported run, paragraph, table, and section
 property revisions. Diagnostic locations retain the actual story identity and
 stable owner path. `rdocx-cli compare` takes an explicit author, RFC 3339

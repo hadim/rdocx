@@ -42166,3 +42166,321 @@ mod tab_stop_regressions {
         assert_at(runs[7].2, 522.0, "right-aligned page count");
     }
 }
+
+mod run_text_around_a_complex_field {
+    use rdocx::Document;
+
+    use super::{document_with_content_controls, document_xml, f252_page_text, wrap_word_body};
+
+    fn text(value: &str) -> String {
+        format!(r#"<w:t xml:space="preserve">{value}</w:t>"#)
+    }
+
+    fn field(instruction: &str, result: Option<&str>) -> String {
+        let mut xml = format!(
+            r#"<w:fldChar w:fldCharType="begin"/><w:instrText xml:space="preserve"> {instruction} </w:instrText>"#
+        );
+        if let Some(result) = result {
+            xml.push_str(r#"<w:fldChar w:fldCharType="separate"/>"#);
+            xml.push_str(&format!("<w:t>{result}</w:t>"));
+        }
+        xml.push_str(r#"<w:fldChar w:fldCharType="end"/>"#);
+        xml
+    }
+
+    /// `Page {PAGE} of the report` in one run, as some producers write it.
+    fn page_of_the_report() -> String {
+        format!(
+            "<w:r>{}{}{}</w:r>",
+            text("Page "),
+            field("PAGE", Some("1")),
+            text(" of the report")
+        )
+    }
+
+    fn document(paragraph: &str) -> Document {
+        document_with_content_controls(&wrap_word_body(&format!("<w:p>{paragraph}</w:p>")))
+    }
+
+    #[test]
+    fn text_in_the_run_of_a_complex_field_is_read_in_order() {
+        let cases = [
+            (page_of_the_report(), "Page 1 of the report"),
+            (
+                format!("<w:r>{}{}</w:r>", text("Page "), field("PAGE", Some("1"))),
+                "Page 1",
+            ),
+            (
+                format!(
+                    "<w:r>{}{}</w:r>",
+                    field("PAGE", Some("1")),
+                    text(" of the report")
+                ),
+                "1 of the report",
+            ),
+            (
+                format!(
+                    "<w:r>{}{}{}{}{}</w:r>",
+                    text("Page "),
+                    field("PAGE", Some("1")),
+                    text(" of "),
+                    field("NUMPAGES", Some("3")),
+                    text(" pages")
+                ),
+                "Page 1 of 3 pages",
+            ),
+            (
+                format!(
+                    "<w:r>{}{}{}</w:r>",
+                    text("Page "),
+                    field("PAGE", None),
+                    text(" of the report")
+                ),
+                "Page  of the report",
+            ),
+            (
+                format!(
+                    "<w:r>{}<w:tab/>{}<w:br/>{}</w:r>",
+                    text("A"),
+                    field("PAGE", Some("1")),
+                    text("B")
+                ),
+                "A\t1\nB",
+            ),
+            (
+                format!(
+                    r#"<w:r>{}<w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/>{}</w:r>"#,
+                    text("Page "),
+                    text(" of the report")
+                ),
+                "Page 1 of the report",
+            ),
+        ];
+        for (paragraph, expected) in cases {
+            let mut document = document(&paragraph);
+            assert_eq!(document.paragraphs()[0].text(), expected, "{paragraph}");
+            assert_eq!(document.text(), format!("{expected}\n"), "{paragraph}");
+            let saved = document_xml(&mut document);
+            assert!(
+                saved.contains(&format!("<w:p>{paragraph}</w:p>")),
+                "an unedited save keeps the run bytes: {saved}"
+            );
+        }
+    }
+
+    #[test]
+    fn text_around_a_field_is_read_in_cells_controls_and_insertions() {
+        let run = page_of_the_report();
+        let bodies = [
+            format!(r#"<w:tbl><w:tr><w:tc><w:p>{run}</w:p></w:tc></w:tr></w:tbl>"#),
+            format!(r#"<w:p><w:sdt><w:sdtPr/><w:sdtContent>{run}</w:sdtContent></w:sdt></w:p>"#),
+            format!(
+                r#"<w:p><w:ins w:id="1" w:author="A" w:date="2026-01-01T00:00:00Z">{run}</w:ins></w:p>"#
+            ),
+        ];
+        for body in bodies {
+            let mut document = document_with_content_controls(&wrap_word_body(&body));
+            assert!(
+                document.text().contains("Page 1 of the report"),
+                "{body}: {:?}",
+                document.text()
+            );
+            assert!(document_xml(&mut document).contains(&body), "{body}");
+        }
+    }
+
+    /// A document whose body holds `pages` pages and whose footer holds
+    /// `footer_paragraph`, with the footer part name and its exact XML.
+    fn footer_document(footer_paragraph: &str, pages: usize) -> (Document, String, String) {
+        let mut seed = Document::new();
+        for page in 0..pages {
+            seed.add_paragraph("Body text")
+                .set_page_break_before(page > 0);
+        }
+        seed.set_footer("placeholder");
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap()))
+                .unwrap();
+        let footer = (1..=3)
+            .map(|index| format!("/word/footer{index}.xml"))
+            .find(|name| package.contains_part(name))
+            .expect("a footer part");
+        let footer_xml = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p>{footer_paragraph}</w:p></w:ftr>"#
+        );
+        package.set_part(&footer, footer_xml.clone().into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        (
+            Document::from_bytes(&bytes.into_inner()).unwrap(),
+            footer,
+            footer_xml,
+        )
+    }
+
+    #[test]
+    fn the_renderer_paints_text_around_a_footer_page_field() {
+        let (mut document, footer, footer_xml) = footer_document(&page_of_the_report(), 1);
+
+        assert_eq!(
+            document.footer_text().as_deref(),
+            Some("Page 1 of the report")
+        );
+        let layout = document.layout_deterministic().unwrap();
+        let page = f252_page_text(&layout.layout.pages[0]);
+        assert!(page.contains("Page 1 of the report"), "{page:?}");
+
+        let saved =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+                .unwrap();
+        assert_eq!(saved.get_part(&footer).unwrap(), footer_xml.as_bytes());
+    }
+
+    #[test]
+    fn replacing_text_around_a_field_keeps_the_field() {
+        let mut document = document(&page_of_the_report());
+        assert_eq!(document.replace_text("Page", "Folio"), 1);
+        assert_eq!(document.replace_text("report", "summary"), 1);
+        let saved = document.to_bytes().unwrap();
+        let xml = {
+            let mut reopened = Document::from_bytes(&saved).unwrap();
+            document_xml(&mut reopened)
+        };
+        assert_eq!(xml.matches(r#"w:fldCharType="begin""#).count(), 1, "{xml}");
+        assert_eq!(xml.matches("Folio").count(), 1, "{xml}");
+        assert!(!xml.contains("report"), "{xml}");
+        let reopened = Document::from_bytes(&saved).unwrap();
+        assert_eq!(reopened.paragraphs()[0].text(), "Folio 1 of the summary");
+
+        // Two fields in one run, with the text between them edited.
+        let mut document = self::document(&format!(
+            "<w:r>{}{}{}{}</w:r>",
+            text("Page "),
+            field("PAGE", Some("1")),
+            text(" of "),
+            field("NUMPAGES", Some("3"))
+        ));
+        assert_eq!(document.replace_text(" of ", " out of "), 1);
+        let xml = document_xml(&mut document);
+        assert_eq!(xml.matches(r#"w:fldCharType="begin""#).count(), 2, "{xml}");
+        assert_eq!(xml.matches("Page ").count(), 1, "{xml}");
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.paragraphs()[0].text(), "Page 1 out of 3");
+    }
+
+    #[test]
+    fn a_comment_can_anchor_on_text_around_a_field() {
+        let mut document = document(&page_of_the_report());
+        document
+            .add_comment_on_text("the report", 0, "Ada", None, "Here", None)
+            .unwrap();
+        let xml = document_xml(&mut document);
+        let start = xml.find("<w:commentRangeStart").expect("a comment range");
+        let end = xml.find("<w:commentRangeEnd").expect("a comment range");
+        assert!(xml[start..end].contains("the report"), "{xml}");
+        assert_eq!(xml.matches(r#"w:fldCharType="begin""#).count(), 1, "{xml}");
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.paragraphs()[0].text(), "Page 1 of the report");
+    }
+
+    #[test]
+    fn comparison_sees_text_around_a_field() {
+        let mut original = document(&page_of_the_report());
+        let edited = document(&page_of_the_report().replace("the report", "the summary"));
+        original
+            .compare(&edited, "R", "2026-09-30T00:00:00Z")
+            .unwrap();
+        assert!(!original.revisions().is_empty(), "the edit is a revision");
+        let xml = document_xml(&mut original);
+        assert_eq!(xml.matches(r#"w:fldCharType="begin""#).count(), 1, "{xml}");
+        assert!(xml.contains(" of the report</w:delText>"), "{xml}");
+        let reopened = Document::from_bytes(&original.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.paragraphs()[0].text(), "Page 1 of the summary");
+    }
+
+    #[test]
+    fn updating_a_field_keeps_the_text_of_its_run() {
+        let mut document = document(&page_of_the_report());
+        let body = document.stories().unwrap().remove(0);
+        let field = document
+            .story_items(&body)
+            .unwrap()
+            .into_iter()
+            .find(|item| item.kind() == rdocx::StoryItemKind::Field)
+            .expect("the PAGE field is a story item")
+            .location()
+            .clone();
+        document.set_story_text(&field, "7").unwrap();
+        let xml = document_xml(&mut document);
+        assert_eq!(xml.matches("Page ").count(), 1, "{xml}");
+        assert_eq!(xml.matches(" of the report").count(), 1, "{xml}");
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.paragraphs()[0].text(), "Page 7 of the report");
+    }
+
+    /// Field A begins in the first run and ends in the second, where field B
+    /// begins, and B ends in the third.
+    fn overlapping_fields() -> String {
+        concat!(
+            r#"<w:r><w:t xml:space="preserve">A </w:t><w:fldChar w:fldCharType="begin"/><w:instrText> PAGE </w:instrText><w:fldChar w:fldCharType="separate"/><w:t>1</w:t></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="end"/><w:t xml:space="preserve"> mid </w:t><w:fldChar w:fldCharType="begin"/><w:instrText> NUMPAGES </w:instrText><w:fldChar w:fldCharType="separate"/></w:r>"#,
+            r#"<w:r><w:t>9</w:t><w:fldChar w:fldCharType="end"/><w:t xml:space="preserve"> Z</w:t></w:r>"#,
+        )
+        .to_owned()
+    }
+
+    #[test]
+    fn fields_that_share_a_run_keep_every_run_through_a_save() {
+        let paragraphs = format!(
+            "<w:p>{}</w:p><w:p><w:r><w:t>Hello world</w:t></w:r></w:p>",
+            overlapping_fields()
+        );
+        let source = document_with_content_controls(&wrap_word_body(&paragraphs));
+        assert_eq!(source.paragraphs()[0].text(), "A 1 mid 9 Z");
+
+        let mut edited = document_with_content_controls(&wrap_word_body(&paragraphs));
+        assert_eq!(edited.replace_text("Hello", "Bye"), 1);
+        let xml = document_xml(&mut edited);
+        assert!(xml.contains(&overlapping_fields()), "{xml}");
+        assert_eq!(xml.matches("NUMPAGES").count(), 1, "{xml}");
+        let reopened = Document::from_bytes(&edited.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.paragraphs()[0].text(), "A 1 mid 9 Z");
+
+        let mut compared = document_with_content_controls(&wrap_word_body(&paragraphs));
+        compared
+            .compare(&reopened, "R", "2026-09-30T00:00:00Z")
+            .unwrap();
+        let xml = document_xml(&mut compared);
+        assert!(xml.contains(&overlapping_fields()), "{xml}");
+    }
+
+    #[test]
+    fn layout_backed_updates_reach_two_fields_in_one_footer_run() {
+        let run = format!(
+            "<w:r>{}{}{}{}</w:r>",
+            text("Page "),
+            field("PAGE", Some("9")),
+            text(" of "),
+            field("NUMPAGES", Some("9"))
+        );
+        let (mut document, footer, _) = footer_document(&run, 2);
+        let report = document.update_layout_backed_fields().unwrap();
+        assert_eq!(report.updated_count(), 2);
+        assert_eq!(document.footer_text().as_deref(), Some("Page 1 of 2"));
+
+        let saved = document.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+        let xml = std::str::from_utf8(package.get_part(&footer).unwrap()).unwrap();
+        assert_eq!(xml.matches(r#"w:fldCharType="begin""#).count(), 2, "{xml}");
+        assert_eq!(xml.matches("Page ").count(), 1, "{xml}");
+        let reopened = Document::from_bytes(&saved).unwrap();
+        assert_eq!(reopened.footer_text().as_deref(), Some("Page 1 of 2"));
+
+        // The same run in the body.
+        let mut document = self::document(&run);
+        document.update_layout_backed_fields().unwrap();
+        assert_eq!(document.paragraphs()[0].text(), "Page 1 of 1");
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.paragraphs()[0].text(), "Page 1 of 1");
+    }
+}
