@@ -39258,3 +39258,246 @@ fn issue_255_word_compare_output_for_a_final_table_resolves() {
         }
     }
 }
+
+/// Body XML for the final paragraph property tests. "A" is a centred "a"
+/// with a bold paragraph mark, "R" a right-aligned "a", "B" a "b" with only a
+/// bold mark, and "T" a one-cell table. Any other item is a plain paragraph.
+fn final_paragraph_properties_xml(spec: &[&str]) -> String {
+    spec.iter()
+        .map(|item| match *item {
+            "A" => r#"<w:p><w:pPr><w:jc w:val="center"/><w:rPr><w:b/></w:rPr></w:pPr><w:r><w:t>a</w:t></w:r></w:p>"#.to_owned(),
+            "R" => r#"<w:p><w:pPr><w:jc w:val="right"/></w:pPr><w:r><w:t>a</w:t></w:r></w:p>"#.to_owned(),
+            "B" => r#"<w:p><w:pPr><w:rPr><w:b/></w:rPr></w:pPr><w:r><w:t>b</w:t></w:r></w:p>"#.to_owned(),
+            "T" => r#"<w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#.to_owned(),
+            text => format!("<w:p><w:r><w:t>{text}</w:t></w:r></w:p>"),
+        })
+        .collect()
+}
+
+/// Each paragraph's text and properties in body order, including those in
+/// block content controls, with a table read as "T". An empty `w:pPr` or mark
+/// `w:rPr` carries no formatting, so it reads as none.
+fn final_paragraph_properties(
+    body: &CT_Body,
+) -> Vec<(String, Option<rdocx_oxml::properties::CT_PPr>)> {
+    fn paragraph(paragraph: &CT_P) -> (String, Option<rdocx_oxml::properties::CT_PPr>) {
+        let properties = paragraph.properties.clone().and_then(|mut properties| {
+            if properties.rpr == Some(Default::default()) {
+                properties.rpr = None;
+            }
+            (properties != Default::default()).then_some(properties)
+        });
+        (paragraph.text(), properties)
+    }
+    let mut items = Vec::new();
+    for content in &body.content {
+        match content {
+            BodyContent::Paragraph(content) => items.push(paragraph(content)),
+            BodyContent::Table(_) => items.push(("T".to_owned(), None)),
+            BodyContent::ContentControl(control) => {
+                for content in &control.content {
+                    match content {
+                        SdtContent::Paragraph(content) => items.push(paragraph(content)),
+                        SdtContent::Table(_) => items.push(("T".to_owned(), None)),
+                        SdtContent::RawXml(raw) if raw.iter().all(u8::is_ascii_whitespace) => {}
+                        _ => panic!("unexpected control content"),
+                    }
+                }
+            }
+            _ => panic!("unexpected body item"),
+        }
+    }
+    items
+}
+
+/// Redline XML with the revision ids, author and date left out.
+fn without_revision_metadata(xml: &str) -> String {
+    let mut output = xml.replace(r#" w:author="Reviewer" w:date="2026-09-30T12:00:00Z""#, "");
+    while let Some(start) = output.find(r#" w:id=""#) {
+        let end = output[start + 7..].find('"').expect("closed id") + start + 8;
+        output.replace_range(start..end, "");
+    }
+    output
+}
+
+const FINAL_PARAGRAPH_PROPERTY_PAIRS: [(&[&str], &[&str]); 7] = [
+    (&["A"], &["A", "b"]),
+    (&["A"], &["A", "T", "b"]),
+    (&["A", "b"], &["A"]),
+    (&["A", "T", "b"], &["A"]),
+    // "a" carries its own w:pPrChange as well.
+    (&["A"], &["R", "b"]),
+    (&["A", "b"], &["R"]),
+    // Only the paragraph properties differ, and both marks are bold.
+    (&["A"], &["A", "B"]),
+];
+
+#[test]
+fn final_paragraph_change_keeps_paragraph_properties_of_both_versions() {
+    let document = |spec: &[&str]| {
+        document_with_content_controls(&wrap_word_body(&final_paragraph_properties_xml(spec)))
+    };
+    for granularity in [
+        rdocx::ComparisonGranularity::Word,
+        rdocx::ComparisonGranularity::Run,
+    ] {
+        // Only the body appends a run of paragraphs from one boundary.
+        let appended: (&[&str], &[&str]) = (&["A"], &["A", "b", "c"]);
+        for (original, edited) in FINAL_PARAGRAPH_PROPERTY_PAIRS.into_iter().chain([appended]) {
+            let label = format!("{granularity:?} {original:?} -> {edited:?}");
+            let mut compared = document(original);
+            compared
+                .compare_with_options(
+                    &document(edited),
+                    "Reviewer",
+                    "2026-09-30T12:00:00Z",
+                    &rdocx::ComparisonOptions {
+                        granularity,
+                        ..Default::default()
+                    },
+                )
+                .unwrap_or_else(|error| panic!("{label}: {error}"));
+            let redline = compared.to_bytes().expect("save redline");
+            for (accept, expected) in [(true, edited), (false, original)] {
+                let mut resolved = Document::from_bytes(&redline).expect("reopen redline");
+                if accept {
+                    resolved.accept_all().expect("accept redline");
+                } else {
+                    resolved.reject_all().expect("reject redline");
+                }
+                assert!(resolved.revisions().is_empty(), "{label} accept={accept}");
+                assert_eq!(
+                    final_paragraph_properties(&body_from_document(&mut resolved)),
+                    final_paragraph_properties(&body_from_document(&mut document(expected))),
+                    "{label} accept={accept}"
+                );
+            }
+        }
+    }
+
+    // The shape Word's own Compare writes for the same two pairs: the mark of
+    // "a" carries the change, and the final paragraph records the other
+    // version's properties.
+    let redline = |original: &[&str], edited: &[&str]| {
+        let mut compared = document(original);
+        compared
+            .compare_with_options(
+                &document(edited),
+                "Reviewer",
+                "2026-09-30T12:00:00Z",
+                &rdocx::ComparisonOptions {
+                    granularity: rdocx::ComparisonGranularity::Word,
+                    ..Default::default()
+                },
+            )
+            .expect("compare");
+        let xml = document_xml(&mut compared);
+        without_revision_metadata(
+            &xml[xml.find("<w:body>").unwrap()..xml.find("</w:body>").unwrap()],
+        )
+    };
+    assert_eq!(
+        redline(&["A"], &["A", "b"]),
+        concat!(
+            r#"<w:body><w:p><w:pPr><w:jc w:val="center"/><w:rPr><w:ins/><w:b/></w:rPr></w:pPr><w:r><w:t>a</w:t></w:r></w:p>"#,
+            r#"<w:p><w:pPr><w:rPr><w:rPrChange><w:rPr><w:b/></w:rPr></w:rPrChange></w:rPr><w:pPrChange><w:pPr><w:jc w:val="center"/></w:pPr></w:pPrChange></w:pPr><w:ins><w:r><w:t>b</w:t></w:r></w:ins></w:p>"#,
+        )
+    );
+    assert_eq!(
+        redline(&["A", "b"], &["A"]),
+        concat!(
+            r#"<w:body><w:p><w:pPr><w:jc w:val="center"/><w:rPr><w:del/><w:b/></w:rPr></w:pPr><w:r><w:t>a</w:t></w:r></w:p>"#,
+            r#"<w:p><w:pPr><w:jc w:val="center"/><w:rPr><w:b/><w:rPrChange><w:rPr/></w:rPrChange></w:rPr><w:pPrChange><w:pPr/></w:pPrChange></w:pPr><w:del><w:r><w:delText>b</w:delText></w:r></w:del></w:p>"#,
+        )
+    );
+}
+
+#[test]
+fn final_control_paragraph_change_keeps_paragraph_properties_of_both_versions() {
+    let document = |spec: &[&str], indent: &str| {
+        let content =
+            final_paragraph_properties_xml(spec).replace("<w:p>", &format!("{indent}<w:p>"));
+        let content = content.replace("<w:tbl>", &format!("{indent}<w:tbl>"));
+        document_with_content_controls(&wrap_word_body(&format!(
+            r#"<w:sdt><w:sdtPr><w:id w:val="7"/></w:sdtPr><w:sdtContent>{content}{indent}</w:sdtContent></w:sdt><w:p/>"#
+        )))
+    };
+    for (granularity, indent) in [
+        (rdocx::ComparisonGranularity::Word, ""),
+        (rdocx::ComparisonGranularity::Run, ""),
+        (rdocx::ComparisonGranularity::Word, "\n        "),
+        (rdocx::ComparisonGranularity::Run, "\n        "),
+    ] {
+        for (original, edited) in FINAL_PARAGRAPH_PROPERTY_PAIRS {
+            let label = format!("{granularity:?} {indent:?} {original:?} -> {edited:?}");
+            let mut compared = document(original, indent);
+            compared
+                .compare_with_options(
+                    &document(edited, indent),
+                    "Reviewer",
+                    "2026-09-30T12:00:00Z",
+                    &rdocx::ComparisonOptions {
+                        granularity,
+                        ..Default::default()
+                    },
+                )
+                .unwrap_or_else(|error| panic!("{label}: {error}"));
+            let redline = compared.to_bytes().expect("save redline");
+            for (accept, expected) in [(true, edited), (false, original)] {
+                let mut resolved = Document::from_bytes(&redline).expect("reopen redline");
+                if accept {
+                    resolved.accept_all().expect("accept redline");
+                } else {
+                    resolved.reject_all().expect("reject redline");
+                }
+                assert!(resolved.revisions().is_empty(), "{label} accept={accept}");
+                assert_eq!(
+                    final_paragraph_properties(&body_from_document(&mut resolved)),
+                    final_paragraph_properties(&body_from_document(&mut document(
+                        expected, indent
+                    ))),
+                    "{label} accept={accept}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn word_final_paragraph_property_redlines_resolve_both_ways() {
+    // Word's own Compare output for ["A"] -> ["A", "b"] and back, without the
+    // w14 and w16du attributes.
+    let inserted = concat!(
+        r#"<w:p w:rsidR="00FA4091" w:rsidRDefault="00A51C98"><w:pPr><w:jc w:val="center"/><w:rPr><w:ins w:id="0" w:author="Reviewer" w:date="2026-10-01T00:09:00Z"/><w:b/></w:rPr></w:pPr><w:proofErr w:type="gramStart"/><w:r><w:t>a</w:t></w:r><w:proofErr w:type="gramEnd"/></w:p>"#,
+        r#"<w:p w:rsidR="000F5773" w:rsidRDefault="00A51C98"><w:pPr><w:rPr><w:rPrChange w:id="1" w:author="Reviewer" w:date="2026-10-01T00:09:00Z"><w:rPr><w:b/></w:rPr></w:rPrChange></w:rPr><w:pPrChange w:id="2" w:author="Reviewer" w:date="2026-10-01T00:09:00Z"><w:pPr><w:jc w:val="center"/></w:pPr></w:pPrChange></w:pPr><w:proofErr w:type="gramStart"/><w:ins w:id="3" w:author="Reviewer" w:date="2026-10-01T00:09:00Z"><w:r><w:t>b</w:t></w:r></w:ins><w:proofErr w:type="gramEnd"/></w:p>"#,
+    );
+    let deleted = concat!(
+        r#"<w:p w:rsidR="001D62AF" w:rsidRDefault="0042396E"><w:pPr><w:jc w:val="center"/><w:rPr><w:del w:id="0" w:author="Reviewer" w:date="2026-10-01T00:09:00Z"/><w:b/></w:rPr></w:pPr><w:proofErr w:type="gramStart"/><w:r><w:t>a</w:t></w:r><w:proofErr w:type="gramEnd"/></w:p>"#,
+        r#"<w:p w:rsidR="001D62AF" w:rsidRDefault="0042396E"><w:pPr><w:jc w:val="center"/><w:rPr><w:b/><w:rPrChange w:id="1" w:author="Reviewer" w:date="2026-10-01T00:09:00Z"><w:rPr/></w:rPrChange></w:rPr><w:pPrChange w:id="2" w:author="Reviewer" w:date="2026-10-01T00:09:00Z"><w:pPr/></w:pPrChange></w:pPr><w:del w:id="3" w:author="Reviewer" w:date="2026-10-01T00:09:00Z"><w:r><w:delText>b</w:delText></w:r></w:del></w:p>"#,
+    );
+    let document = |body: &str| document_with_content_controls(&wrap_word_body(body));
+    let expected = |spec: &[&str]| {
+        final_paragraph_properties(&body_from_document(&mut document(
+            &final_paragraph_properties_xml(spec),
+        )))
+    };
+    for (redline, accepted, rejected) in [
+        (inserted, &["A", "b"][..], &["A"][..]),
+        (deleted, &["A"][..], &["A", "b"][..]),
+    ] {
+        for (accept, spec) in [(true, accepted), (false, rejected)] {
+            let mut resolved = document(redline);
+            if accept {
+                resolved.accept_all().expect("accept Word redline");
+            } else {
+                resolved.reject_all().expect("reject Word redline");
+            }
+            assert!(resolved.revisions().is_empty(), "{spec:?}");
+            assert_eq!(
+                final_paragraph_properties(&body_from_document(&mut resolved)),
+                expected(spec),
+                "accept={accept}"
+            );
+        }
+    }
+}

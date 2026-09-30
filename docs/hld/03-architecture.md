@@ -896,9 +896,10 @@ property, or row. A removed paragraph mark merges with the next paragraph
 across a table that immediately follows it when every row of that table is
 removed by the same resolution. A removed paragraph mark inside content that
 the resolution removes, such as a cell paragraph of a removed row, needs no
-merge partner. Resolution stages every affected package part, resolves
-selected descendants before their enclosing subtree, reparses the complete
-candidate package, and commits once only after validation succeeds.
+merge partner. The merged paragraph keeps the resolved properties of the last
+paragraph, whose mark remains. Resolution stages every affected package part,
+resolves selected descendants before their enclosing subtree, reparses the
+complete candidate package, and commits once only after validation succeeds.
 
 The `rdocx` facade also owns deterministic comparison of those same stories. A
 source index assigns stable public story categories and private owner paths to
@@ -953,6 +954,14 @@ Word's own Compare writes it. Without the cell marks Word merges the adjacent
 paragraph into the first cell.
 A paragraph-mark marker is the first child of `w:rPr`, and a new `w:rPr` goes
 before `w:sectPr` and `w:pPrChange`, as the schema orders them.
+Removing the marked paragraph mark merges that paragraph into the final one,
+which keeps its own properties. When the two resolutions need different
+properties there, the final paragraph carries the accepted paragraph
+properties with a `w:pPrChange` that holds the rejected ones, and its mark
+`w:rPr` ends with a `w:rPrChange` that holds the rejected mark formatting, as
+Word's own Compare writes them. An inserted paragraph therefore records the
+original properties of the paragraph before it, and a deleted one the edited
+properties of that paragraph.
 Comparison patches only owned source spans, preserves every unowned byte,
 stages the complete package, proves that acceptance matches the edited policy
 projection and rejection matches the original, then commits once.
