@@ -5,10 +5,11 @@ use oxml_core::OxmlError;
 use oxml_core::raw_xml::{capture_element, capture_empty_element};
 use oxml_core::xml::{get_attr, local_name, matches_local_name};
 use quick_xml::events::{BytesEnd, BytesStart, Event};
-use quick_xml::{Reader, Writer};
+use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::color::ColorError;
 use crate::fill::FillError;
+use crate::namespace::reject_conflicting_a_prefix;
 use crate::order::OrderedRawChildren;
 
 const MAX_TEXT_SPACING_PERCENT: i32 = 13_200_000;
@@ -301,6 +302,9 @@ impl TextAutofit {
 }
 
 /// Insets, anchoring, wrapping, vertical direction, and autofit on `a:bodyPr`.
+///
+/// Every other attribute, such as `rot`, `numCol`, `spcCol` or `anchorCtr`,
+/// is kept verbatim in source order and written after the modelled ones.
 #[allow(non_camel_case_types)]
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CT_TextBodyProperties {
@@ -313,6 +317,7 @@ pub struct CT_TextBodyProperties {
     pub vertical: Option<TextVertical>,
     pub space_first_last_paragraph: Option<bool>,
     pub autofit: Option<TextAutofit>,
+    raw_attributes: Vec<(String, String)>,
     raw_children: OrderedRawChildren,
 }
 
@@ -381,6 +386,9 @@ impl CT_TextBodyProperties {
         if !matches_local_name(start.name().as_ref(), b"bodyPr") {
             return Err(TextError::UnexpectedElement(element_name(start)));
         }
+        // Raw attributes are written back, so a local `xmlns:a` would rebind
+        // the fixed prefix of this element and of its typed autofit child.
+        reject_conflicting_a_prefix(start)?;
         Ok(Self {
             left_inset: parse_coordinate(start, b"lIns")?,
             top_inset: parse_coordinate(start, b"tIns")?,
@@ -390,7 +398,9 @@ impl CT_TextBodyProperties {
             wrap: parse_enum(start, b"wrap", TextWrap::parse)?,
             vertical: parse_enum(start, b"vert", TextVertical::parse)?,
             space_first_last_paragraph: parse_optional_bool(start, b"spcFirstLastPara")?,
-            ..Self::default()
+            autofit: None,
+            raw_attributes: capture_raw_attributes(start)?,
+            raw_children: OrderedRawChildren::default(),
         })
     }
 
@@ -473,6 +483,9 @@ impl CT_TextBodyProperties {
         if let Some(value) = self.space_first_last_paragraph {
             start.push_attribute(("spcFirstLastPara", if value { "1" } else { "0" }));
         }
+        for (name, value) in &self.raw_attributes {
+            start.push_attribute((name.as_str(), value.as_str()));
+        }
 
         if self.autofit.is_none() && self.raw_children.is_empty() {
             return write_empty(writer, start);
@@ -497,6 +510,41 @@ impl CT_TextBodyProperties {
     pub fn raw_children(&self) -> &OrderedRawChildren {
         &self.raw_children
     }
+}
+
+/// The attributes `from_start` models, which the raw list must not repeat.
+const MODELLED_ATTRIBUTES: [&[u8]; 8] = [
+    b"lIns",
+    b"tIns",
+    b"rIns",
+    b"bIns",
+    b"anchor",
+    b"wrap",
+    b"vert",
+    b"spcFirstLastPara",
+];
+
+fn capture_raw_attributes(start: &BytesStart<'_>) -> Result<Vec<(String, String)>> {
+    let mut raw = Vec::new();
+    for attribute in start.attributes() {
+        let attribute = attribute.map_err(OxmlError::from)?;
+        let key = attribute.key.as_ref();
+        if MODELLED_ATTRIBUTES
+            .iter()
+            .any(|name| matches_local_name(key, name))
+        {
+            continue;
+        }
+        let name = std::str::from_utf8(key)
+            .map_err(OxmlError::from)?
+            .to_owned();
+        let value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())
+            .map_err(OxmlError::from)?
+            .into_owned();
+        raw.push((name, value));
+    }
+    Ok(raw)
 }
 
 fn parse_coordinate(start: &BytesStart<'_>, attribute: &[u8]) -> Result<Option<Coordinate32Value>> {
@@ -683,7 +731,7 @@ pub(crate) fn missing_end(element: &str) -> TextError {
 mod tests {
     use std::panic;
 
-    use super::{CT_TextBodyProperties, Coordinate32Value, TextAutofit};
+    use super::{CT_TextBodyProperties, Coordinate32Value, TextAnchor, TextAutofit};
     use crate::text::CT_TextBody;
 
     #[test]
@@ -714,6 +762,33 @@ mod tests {
         assert_eq!(parsed.left_inset, Some(Coordinate32Value::Emu(i32::MIN)));
         assert_eq!(parsed.space_first_last_paragraph, Some(true));
         assert!(matches!(parsed.autofit, Some(TextAutofit::NoAutofit)));
+    }
+
+    #[test]
+    fn every_body_property_attribute_survives_a_round_trip() {
+        let xml = br#"<q:bodyPr xmlns:x="urn:producer" rot="5400000" spcFirstLastPara="1" vertOverflow="clip" horzOverflow="overflow" vert="vert270" wrap="square" lIns="1" tIns="2" rIns="3" bIns="4" numCol="2" spcCol="91440" rtlCol="1" fromWordArt="1" anchor="ctr" anchorCtr="0" forceAA="1" upright="1" compatLnSpc="0" x:marker="kept"><q:normAutofit fontScale="90000"/></q:bodyPr>"#;
+        let parsed = CT_TextBodyProperties::from_xml(xml).unwrap();
+        let written = parsed.to_xml().unwrap();
+        // Modelled attributes keep their fixed order and every other one
+        // follows in source order, so a second pass writes the same bytes.
+        assert_eq!(
+            written,
+            br#"<a:bodyPr lIns="1" tIns="2" rIns="3" bIns="4" anchor="ctr" wrap="square" vert="vert270" spcFirstLastPara="1" xmlns:x="urn:producer" rot="5400000" vertOverflow="clip" horzOverflow="overflow" numCol="2" spcCol="91440" rtlCol="1" fromWordArt="1" anchorCtr="0" forceAA="1" upright="1" compatLnSpc="0" x:marker="kept"><a:normAutofit fontScale="90000"/></a:bodyPr>"#
+        );
+        let reparsed = CT_TextBodyProperties::from_xml(&written).unwrap();
+        assert_eq!(reparsed, parsed);
+        assert_eq!(reparsed.to_xml().unwrap(), written);
+
+        let mut edited = CT_TextBodyProperties::from_xml(
+            br#"<q:bodyPr numCol="3" spcCol="45720" rot="-600000" anchorCtr="1"/>"#,
+        )
+        .unwrap();
+        edited.anchor = Some(TextAnchor::Bottom);
+        edited.left_inset = Some(Coordinate32Value::Emu(0));
+        assert_eq!(
+            edited.to_xml().unwrap(),
+            br#"<a:bodyPr lIns="0" anchor="b" numCol="3" spcCol="45720" rot="-600000" anchorCtr="1"/>"#
+        );
     }
 
     #[test]
@@ -761,6 +836,7 @@ mod tests {
             br#"<q:bodyPr><q:noAutofit><x:child/></q:noAutofit></q:bodyPr>"#,
             br#"<q:bodyPr><q:noAutofit/><q:spAutoFit/></q:bodyPr>"#,
             br#"<q:bodyPr><q:sp3d/><q:flatTx/></q:bodyPr>"#,
+            br#"<q:bodyPr xmlns:a="urn:producer" numCol="2"/>"#,
         ];
         for xml in body_cases {
             let result = panic::catch_unwind(|| CT_TextBodyProperties::from_xml(xml));
