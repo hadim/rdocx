@@ -972,6 +972,7 @@ fn reject_cross_story_moves(
                 story.kind,
                 options,
                 marker.as_deref(),
+                normalized_body_with_options,
             )?,
         ));
         edited_by_story.push((
@@ -983,6 +984,7 @@ fn reject_cross_story_moves(
                 story.kind,
                 options,
                 marker.as_deref(),
+                normalized_body_with_options,
             )?,
         ));
     }
@@ -2416,6 +2418,7 @@ fn normalized_package(
                     .related
                     .get(&story.part_name)
                     .map(String::as_str),
+                postcondition_body,
             )?,
         ));
     }
@@ -2435,7 +2438,7 @@ fn normalized_package(
     let bindings = root_namespace_bindings(source, "document", &[])?;
     let mut main_document = story_document(extract_body_inner(source.as_bytes())?, &bindings)?;
     normalize_drawing_relationships(&mut main_document, document, &document.doc_part_name);
-    let main = normalized_body_with_options(&main_document, options);
+    let main = postcondition_body(&main_document, options);
     Ok((main, related))
 }
 
@@ -2446,6 +2449,7 @@ fn normalized_story_part(
     kind: ComparisonStoryKind,
     options: &ComparisonOptions,
     text_box_marker: Option<&str>,
+    story_projection: fn(&CT_Document, &ComparisonOptions) -> Vec<String>,
 ) -> Result<Vec<String>> {
     let masked;
     let xml = if story_ignored(options, ComparisonStoryKind::TextBox) {
@@ -2475,14 +2479,14 @@ fn normalized_story_part(
             let owner_bindings = root_namespace_bindings(owner_xml, owner_local, &root_bindings)?;
             let mut model = story_document(&owner_xml[inner], &owner_bindings)?;
             normalize_drawing_relationships(&mut model, document, physical_owner);
-            normalized.extend(normalized_body_with_options(&model, options));
+            normalized.extend(story_projection(&model, options));
         }
         Ok(normalized)
     } else {
         let bindings = root_namespace_bindings(xml, kind.root_local(), &[])?;
         let mut model = story_document(&xml[root], &bindings)?;
         normalize_drawing_relationships(&mut model, document, physical_owner);
-        Ok(normalized_body_with_options(&model, options))
+        Ok(story_projection(&model, options))
     }
 }
 
@@ -2602,6 +2606,7 @@ fn compare_body(
         .map(|(position, _)| position)
         .last();
     let mut output: Vec<(EmittedOwner, String)> = Vec::new();
+    let mut trailing_merged = None;
     for (position, (original_index, edited_index)) in aligned.iter().copied().enumerate() {
         let next_is_paragraph = aligned.get(position + 1).is_some_and(|(left, right)| {
             right
@@ -2638,32 +2643,40 @@ fn compare_body(
                         diagnostics,
                     )?
                 };
-                output.push((EmittedOwner::of(edited_content, None), compared));
+                output.push((
+                    EmittedOwner::of(original_content, edited_content, None),
+                    compared,
+                ));
             }
             (Some(left), None) => {
                 let content = &original.body.content[left];
                 if let Some(id) = moves.original[left] {
-                    if matches!(content, BodyContent::Paragraph(_)) && !next_is_paragraph {
-                        mark_previous_paragraph_with_id(&mut output, "moveFrom", id, metadata)?;
-                        output.push((
-                            EmittedOwner::Paragraph,
-                            moved_paragraph_content(content, "moveFrom", id, metadata)?,
-                        ));
+                    if let BodyContent::Paragraph(paragraph) = content
+                        && !next_is_paragraph
+                    {
+                        let merged =
+                            mark_previous_paragraph_with_id(&mut output, "moveFrom", id, metadata)?;
+                        output.push(final_paragraph(
+                            paragraph,
+                            "moveFrom",
+                            Some(id),
+                            merged,
+                            metadata,
+                        )?);
                     } else {
                         output.push((
-                            EmittedOwner::of(content, None),
+                            EmittedOwner::of(content, content, None),
                             moved_body_content(content, "moveFrom", id, metadata)?,
                         ));
                     }
-                } else if matches!(content, BodyContent::Paragraph(_)) && !next_is_paragraph {
-                    mark_previous_paragraph(&mut output, "del", metadata)?;
-                    output.push((
-                        EmittedOwner::Paragraph,
-                        deleted_paragraph_content(content, metadata)?,
-                    ));
+                } else if let BodyContent::Paragraph(paragraph) = content
+                    && !next_is_paragraph
+                {
+                    let merged = mark_previous_paragraph(&mut output, "del", metadata)?;
+                    output.push(final_paragraph(paragraph, "del", None, merged, metadata)?);
                 } else {
                     output.push((
-                        EmittedOwner::of(content, Some("del")),
+                        EmittedOwner::of(content, content, Some("del")),
                         deleted_body_content(content, metadata)?,
                     ));
                 }
@@ -2671,39 +2684,52 @@ fn compare_body(
             (None, Some(right)) => {
                 let content = &edited.body.content[right];
                 if let Some(id) = moves.edited[right] {
-                    if matches!(content, BodyContent::Paragraph(_)) && !next_is_paragraph {
-                        mark_previous_paragraph_with_id(&mut output, "moveTo", id, metadata)?;
-                        output.push((
-                            EmittedOwner::Paragraph,
-                            moved_paragraph_content(content, "moveTo", id, metadata)?,
-                        ));
+                    if let BodyContent::Paragraph(paragraph) = content
+                        && !next_is_paragraph
+                    {
+                        let merged =
+                            mark_previous_paragraph_with_id(&mut output, "moveTo", id, metadata)?;
+                        output.push(final_paragraph(
+                            paragraph,
+                            "moveTo",
+                            Some(id),
+                            merged,
+                            metadata,
+                        )?);
                     } else {
                         output.push((
-                            EmittedOwner::of(content, None),
+                            EmittedOwner::of(content, content, None),
                             moved_body_content(content, "moveTo", id, metadata)?,
                         ));
                     }
-                } else if matches!(content, BodyContent::Paragraph(_))
+                } else if let BodyContent::Paragraph(paragraph) = content
                     && trailing_paragraph_insert_start.is_some_and(|start| position >= start)
                 {
                     if trailing_paragraph_insert_start == Some(position) {
-                        mark_previous_paragraph(&mut output, "ins", metadata)?;
+                        trailing_merged = mark_previous_paragraph(&mut output, "ins", metadata)?;
                     }
-                    let inserted = if next_is_paragraph {
-                        inserted_body_content(content, metadata)?
+                    if next_is_paragraph {
+                        output.push((
+                            EmittedOwner::of(content, content, None),
+                            inserted_body_content(content, metadata)?,
+                        ));
                     } else {
-                        inserted_paragraph_content(content, metadata)?
-                    };
-                    output.push((EmittedOwner::Paragraph, inserted));
-                } else if matches!(content, BodyContent::Paragraph(_)) && !next_is_paragraph {
-                    mark_previous_paragraph(&mut output, "ins", metadata)?;
-                    output.push((
-                        EmittedOwner::Paragraph,
-                        inserted_paragraph_content(content, metadata)?,
-                    ));
+                        output.push(final_paragraph(
+                            paragraph,
+                            "ins",
+                            None,
+                            trailing_merged,
+                            metadata,
+                        )?);
+                    }
+                } else if let BodyContent::Paragraph(paragraph) = content
+                    && !next_is_paragraph
+                {
+                    let merged = mark_previous_paragraph(&mut output, "ins", metadata)?;
+                    output.push(final_paragraph(paragraph, "ins", None, merged, metadata)?);
                 } else {
                     output.push((
-                        EmittedOwner::of(content, Some("ins")),
+                        EmittedOwner::of(content, content, Some("ins")),
                         inserted_body_content(content, metadata)?,
                     ));
                 }
@@ -2736,7 +2762,7 @@ fn interleave_story_source(
     source: &str,
     spans: &[Range<usize>],
     aligned: &[(Option<usize>, Option<usize>)],
-    output: Vec<(EmittedOwner, String)>,
+    output: Vec<(EmittedOwner<'_>, String)>,
     section_start: Option<usize>,
 ) -> Result<String> {
     if spans.len() != aligned.iter().filter(|(left, _)| left.is_some()).count()
@@ -2837,33 +2863,6 @@ fn moved_body_content(
     }
 }
 
-fn moved_paragraph_content(
-    content: &BodyContent,
-    kind: &str,
-    id: i32,
-    metadata: &Metadata<'_>,
-) -> Result<String> {
-    let BodyContent::Paragraph(paragraph) = content else {
-        unreachable!("caller checked paragraph content")
-    };
-    refuse_moved_markers(paragraph)?;
-    let mut output = String::from("<w:p>");
-    if let Some(properties) = &paragraph.properties {
-        output.push_str(&property_xml(properties)?);
-    }
-    output.push_str(&wrapped_paragraph_children(paragraph, false, |content| {
-        Ok(IdAllocator::revision_with_id(
-            kind,
-            metadata.author,
-            metadata.timestamp,
-            content,
-            id,
-        ))
-    })?);
-    output.push_str("</w:p>");
-    Ok(output)
-}
-
 fn moved_paragraph(
     paragraph: &CT_P,
     kind: &str,
@@ -2932,10 +2931,14 @@ fn moved_row(row: &CT_Row, kind: &str, id: i32, metadata: &Metadata<'_>) -> Resu
 }
 
 /// What a later final paragraph change can do with an owner already emitted.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum EmittedOwner {
-    /// A paragraph whose mark can carry the change.
-    Paragraph,
+#[derive(Clone, Copy)]
+enum EmittedOwner<'a> {
+    /// A paragraph whose mark can carry the change, with its properties after
+    /// acceptance and after rejection.
+    Paragraph {
+        accepted: Option<&'a CT_PPr>,
+        rejected: Option<&'a CT_PPr>,
+    },
     /// A table whose every row carries this `w:ins` or `w:del` marker. A change
     /// of the same kind crosses it, because resolving that kind removes the
     /// table and leaves the paragraphs on either side adjacent.
@@ -2945,38 +2948,59 @@ enum EmittedOwner {
     Other,
 }
 
-impl EmittedOwner {
-    fn of(content: &BodyContent, marked_kind: Option<&'static str>) -> Self {
-        match (content, marked_kind) {
-            (BodyContent::Paragraph(_), _) => Self::Paragraph,
-            (BodyContent::Table(_), Some(kind)) => Self::MarkedTable(kind),
+impl<'a> EmittedOwner<'a> {
+    /// The owner emitted for an original and an edited item, the same item
+    /// when only one side has it.
+    fn of(
+        original: &'a BodyContent,
+        edited: &'a BodyContent,
+        marked_kind: Option<&'static str>,
+    ) -> Self {
+        match (original, edited, marked_kind) {
+            (BodyContent::Paragraph(original), BodyContent::Paragraph(edited), _) => {
+                Self::paragraph(original, edited)
+            }
+            (_, BodyContent::Table(_), Some(kind)) => Self::MarkedTable(kind),
             _ => Self::Other,
         }
     }
 
-    fn of_control(content: &SdtContent, marked_kind: Option<&'static str>) -> Self {
-        match (content, marked_kind) {
-            (SdtContent::Paragraph(_), _) => Self::Paragraph,
-            (SdtContent::Table(_), Some(kind)) => Self::MarkedTable(kind),
+    fn of_control(
+        original: &'a SdtContent,
+        edited: &'a SdtContent,
+        marked_kind: Option<&'static str>,
+    ) -> Self {
+        match (original, edited, marked_kind) {
+            (SdtContent::Paragraph(original), SdtContent::Paragraph(edited), _) => {
+                Self::paragraph(original, edited)
+            }
+            (_, SdtContent::Table(_), Some(kind)) => Self::MarkedTable(kind),
             _ => Self::Other,
+        }
+    }
+
+    fn paragraph(original: &'a CT_P, edited: &'a CT_P) -> Self {
+        Self::Paragraph {
+            accepted: edited.properties.as_ref(),
+            rejected: original.properties.as_ref(),
         }
     }
 }
 
-fn mark_previous_paragraph(
-    output: &mut [(EmittedOwner, String)],
+/// Mark the paragraph before a final inserted or deleted paragraph, and
+/// return its properties on the side that removes that mark, which
+/// [`final_paragraph`] gives the paragraph the two merge into.
+fn mark_previous_paragraph<'a>(
+    output: &mut [(EmittedOwner<'a>, String)],
     kind: &str,
     metadata: &mut Metadata<'_>,
-) -> Result<()> {
-    let Some((_, paragraph)) = output
-        .iter_mut()
-        .rev()
-        .find(|(owner, _)| match owner {
+) -> Result<Option<&'a CT_PPr>> {
+    let Some((EmittedOwner::Paragraph { accepted, rejected }, paragraph)) =
+        output.iter_mut().rev().find(|(owner, _)| match owner {
             EmittedOwner::MarkedTable(marked) => *marked != kind,
             EmittedOwner::Whitespace => false,
-            EmittedOwner::Paragraph | EmittedOwner::Other => true,
+            EmittedOwner::Paragraph { .. } | EmittedOwner::Other => true,
         })
-        .filter(|(owner, _)| *owner == EmittedOwner::Paragraph)
     else {
         return Err(Error::Other(
             "comparison needs an adjacent paragraph for a final paragraph change".to_owned(),
@@ -2986,7 +3010,7 @@ fn mark_previous_paragraph(
         .ids
         .marker(kind, metadata.author, metadata.timestamp)?;
     *paragraph = marked_paragraph_xml(paragraph, &marker)?;
-    Ok(())
+    Ok(if kind == "del" { *accepted } else { *rejected })
 }
 
 fn marked_paragraph_xml(paragraph: &str, marker: &str) -> Result<String> {
@@ -3044,57 +3068,73 @@ fn marked_paragraph_properties_xml(properties: &str, marker: &str) -> Result<Str
     append_word_child(properties, "pPr", &run_properties)
 }
 
-fn mark_previous_paragraph_with_id(
-    output: &mut [(EmittedOwner, String)],
+/// [`mark_previous_paragraph`] for a final moved paragraph, whose move
+/// pair shares `id`. The paragraph before must be the last owner emitted.
+fn mark_previous_paragraph_with_id<'a>(
+    output: &mut [(EmittedOwner<'a>, String)],
     kind: &str,
     id: i32,
     metadata: &Metadata<'_>,
-) -> Result<()> {
-    let Some((EmittedOwner::Paragraph, paragraph)) = output.last_mut() else {
+) -> Result<Option<&'a CT_PPr>> {
+    let Some((EmittedOwner::Paragraph { accepted, rejected }, paragraph)) = output.last_mut()
+    else {
         return Err(Error::Other(
             "comparison needs an adjacent paragraph for a final paragraph move".to_owned(),
         ));
     };
     let marker = IdAllocator::marker_with_id(kind, metadata.author, metadata.timestamp, id);
     *paragraph = marked_paragraph_xml(paragraph, &marker)?;
-    Ok(())
+    Ok(if kind == "moveFrom" {
+        *accepted
+    } else {
+        *rejected
+    })
 }
 
-fn deleted_paragraph_content(content: &BodyContent, metadata: &mut Metadata<'_>) -> Result<String> {
-    let BodyContent::Paragraph(paragraph) = content else {
-        unreachable!("caller checked paragraph content")
-    };
-    let mut output = String::from("<w:p>");
-    if let Some(properties) = &paragraph.properties {
-        output.push_str(&property_xml(properties)?);
-    }
-    output.push_str(&wrapped_paragraph_children(paragraph, true, |content| {
-        metadata
-            .ids
-            .revision("del", metadata.author, metadata.timestamp, content)
-    })?);
-    output.push_str("</w:p>");
-    Ok(output)
-}
-
-fn inserted_paragraph_content(
-    content: &BodyContent,
+/// A final inserted, deleted or moved paragraph. Its own mark stays as the
+/// story terminator, and the mark of the paragraph before it carries the
+/// change. A move wraps the runs with the `move_id` of its pair.
+///
+/// Removing that mark merges the paragraph before into this one, and the
+/// merged paragraph keeps these properties. `merged` holds the properties the
+/// paragraph before has on that side, so this paragraph carries the accepted
+/// properties with a `w:pPrChange` and a mark `w:rPrChange` that hold the
+/// rejected ones, and both resolutions keep each paragraph's properties.
+fn final_paragraph<'a>(
+    paragraph: &'a CT_P,
+    kind: &str,
+    move_id: Option<i32>,
+    merged: Option<&'a CT_PPr>,
     metadata: &mut Metadata<'_>,
-) -> Result<String> {
-    let BodyContent::Paragraph(paragraph) = content else {
-        unreachable!("caller checked paragraph content")
+) -> Result<(EmittedOwner<'a>, String)> {
+    let own = paragraph.properties.as_ref();
+    let (accepted, rejected) = if matches!(kind, "del" | "moveFrom") {
+        (merged, own)
+    } else {
+        (own, merged)
     };
     let mut output = String::from("<w:p>");
-    if let Some(properties) = &paragraph.properties {
-        output.push_str(&property_xml(properties)?);
-    }
-    output.push_str(&wrapped_paragraph_children(paragraph, false, |content| {
-        metadata
-            .ids
-            .revision("ins", metadata.author, metadata.timestamp, content)
-    })?);
+    output.push_str(&final_paragraph_properties_xml(
+        own, accepted, rejected, metadata,
+    )?);
+    output.push_str(&wrapped_paragraph_children(
+        paragraph,
+        kind == "del",
+        |content| match move_id {
+            Some(id) => Ok(IdAllocator::revision_with_id(
+                kind,
+                metadata.author,
+                metadata.timestamp,
+                content,
+                id,
+            )),
+            None => metadata
+                .ids
+                .revision(kind, metadata.author, metadata.timestamp, content),
+        },
+    )?);
     output.push_str("</w:p>");
-    Ok(output)
+    Ok((EmittedOwner::Paragraph { accepted, rejected }, output))
 }
 
 fn compare_body_content(
@@ -4578,6 +4618,71 @@ fn split_paragraph_mark(
     }
 }
 
+/// The `w:pPr` of a [`final_paragraph`]: the `own` properties when both
+/// resolutions agree, otherwise the `accepted` ones with the section break of
+/// `own`, a `w:pPrChange` holding the rejected paragraph properties, and a
+/// mark `w:rPrChange` holding the rejected mark formatting.
+///
+/// Rejecting a `w:pPrChange` keeps a mark `w:rPr` only when it holds a
+/// revision, so a mark with formatting also carries the `w:rPrChange` when
+/// only the paragraph properties differ.
+fn final_paragraph_properties_xml(
+    own: Option<&CT_PPr>,
+    accepted: Option<&CT_PPr>,
+    rejected: Option<&CT_PPr>,
+    metadata: &mut Metadata<'_>,
+) -> Result<String> {
+    let accepted_modeled = modeled_paragraph_properties(accepted);
+    let rejected_modeled = modeled_paragraph_properties(rejected);
+    if metadata.options.ignore_formatting || accepted_modeled == rejected_modeled {
+        return own
+            .map(property_xml)
+            .transpose()
+            .map(Option::unwrap_or_default);
+    }
+    let (accepted_base, accepted_mark) = split_paragraph_mark(accepted_modeled);
+    let (rejected_base, rejected_mark) = split_paragraph_mark(rejected_modeled);
+    let mark_changed = accepted_mark != rejected_mark
+        || (accepted_base != rejected_base && accepted_mark.is_some());
+    let mut current = accepted.cloned().unwrap_or_default();
+    current.sect_pr = own.and_then(|properties| properties.sect_pr.clone());
+    let mut xml = property_xml(&current)?;
+    if xml.is_empty() {
+        xml.push_str("<w:pPr></w:pPr>");
+    }
+    if mark_changed {
+        let previous = run_property_xml(rejected_mark.as_ref())?;
+        let change =
+            metadata
+                .ids
+                .revision("rPrChange", metadata.author, metadata.timestamp, &previous)?;
+        if let Some(span) = direct_word_element_spans(&xml, "rPr")?.into_iter().next() {
+            let updated = append_word_child(&xml[span.clone()], "rPr", &change)?;
+            xml.replace_range(span, &updated);
+        } else {
+            let run_properties = format!("<w:rPr>{change}</w:rPr>");
+            match direct_word_element_spans(&xml, "sectPr")?.first() {
+                Some(section) => xml.insert_str(section.start, &run_properties),
+                None => xml = append_word_child(&xml, "pPr", &run_properties)?,
+            }
+        }
+    }
+    if accepted_base != rejected_base {
+        let previous = rejected_base
+            .as_ref()
+            .map(property_xml)
+            .transpose()?
+            .filter(|previous| !previous.is_empty())
+            .unwrap_or_else(|| "<w:pPr/>".to_owned());
+        let change =
+            metadata
+                .ids
+                .revision("pPrChange", metadata.author, metadata.timestamp, &previous)?;
+        xml = inject_before_close(&xml, "</w:pPr>", &change)?;
+    }
+    Ok(xml)
+}
+
 fn modeled_paragraph_properties(properties: Option<&CT_PPr>) -> Option<CT_PPr> {
     properties.cloned().and_then(|mut properties| {
         properties.sect_pr = None;
@@ -5365,6 +5470,7 @@ fn compare_control_from_xml(
         })
         .map(|(position, _)| position)
         .last();
+    let mut trailing_merged = None;
     let content_spans = direct_word_element_spans(original_xml, "sdtContent")?;
     let content_span = content_spans.first().ok_or_else(|| {
         Error::Other(format!(
@@ -5408,7 +5514,7 @@ fn compare_control_from_xml(
         let child_location = format!("{location}/content[{position}]");
         match (left, right) {
             (Some(i), Some(j)) => content.push((
-                EmittedOwner::of_control(edited_content[j], None),
+                EmittedOwner::of_control(original_content[i], edited_content[j], None),
                 compare_control_content(
                     original_content[i],
                     edited_content[j],
@@ -5419,49 +5525,54 @@ fn compare_control_from_xml(
                 )?,
             )),
             (Some(i), None) => {
-                if matches!(original_content[i], SdtContent::Paragraph(_)) && !next_is_paragraph {
-                    mark_previous_paragraph(&mut content, "del", metadata)?;
-                    content.push((
-                        EmittedOwner::Paragraph,
-                        marked_control_content(original_content[i], "del", false, metadata)?,
-                    ));
+                if let SdtContent::Paragraph(paragraph) = original_content[i]
+                    && !next_is_paragraph
+                {
+                    let merged = mark_previous_paragraph(&mut content, "del", metadata)?;
+                    content.push(final_paragraph(paragraph, "del", None, merged, metadata)?);
                 } else {
                     content.push((
-                        EmittedOwner::of_control(original_content[i], Some("del")),
-                        marked_control_content(original_content[i], "del", true, metadata)?,
+                        EmittedOwner::of_control(
+                            original_content[i],
+                            original_content[i],
+                            Some("del"),
+                        ),
+                        marked_control_content(original_content[i], "del", metadata)?,
                     ));
                 }
             }
             (None, Some(j)) => {
-                if matches!(edited_content[j], SdtContent::Paragraph(_))
+                if let SdtContent::Paragraph(paragraph) = edited_content[j]
                     && trailing_paragraph_insert_start.is_some_and(|start| position >= start)
                 {
                     // As in the main story: the paragraph before the run is
                     // marked once and the last inserted mark ends the control.
                     if trailing_paragraph_insert_start == Some(position) {
-                        mark_previous_paragraph(&mut content, "ins", metadata)?;
+                        trailing_merged = mark_previous_paragraph(&mut content, "ins", metadata)?;
                     }
-                    content.push((
-                        EmittedOwner::Paragraph,
-                        marked_control_content(
-                            edited_content[j],
+                    if next_is_paragraph {
+                        content.push((
+                            EmittedOwner::of_control(edited_content[j], edited_content[j], None),
+                            marked_control_content(edited_content[j], "ins", metadata)?,
+                        ));
+                    } else {
+                        content.push(final_paragraph(
+                            paragraph,
                             "ins",
-                            next_is_paragraph,
+                            None,
+                            trailing_merged,
                             metadata,
-                        )?,
-                    ));
-                } else if matches!(edited_content[j], SdtContent::Paragraph(_))
+                        )?);
+                    }
+                } else if let SdtContent::Paragraph(paragraph) = edited_content[j]
                     && !next_is_paragraph
                 {
-                    mark_previous_paragraph(&mut content, "ins", metadata)?;
-                    content.push((
-                        EmittedOwner::Paragraph,
-                        marked_control_content(edited_content[j], "ins", false, metadata)?,
-                    ));
+                    let merged = mark_previous_paragraph(&mut content, "ins", metadata)?;
+                    content.push(final_paragraph(paragraph, "ins", None, merged, metadata)?);
                 } else {
                     content.push((
-                        EmittedOwner::of_control(edited_content[j], Some("ins")),
-                        marked_control_content(edited_content[j], "ins", true, metadata)?,
+                        EmittedOwner::of_control(edited_content[j], edited_content[j], Some("ins")),
+                        marked_control_content(edited_content[j], "ins", metadata)?,
                     ));
                 }
             }
@@ -5730,22 +5841,11 @@ fn compare_control_runs_with_options(
 fn marked_control_content(
     content: &SdtContent,
     kind: &str,
-    paragraph_marker: bool,
     metadata: &mut Metadata<'_>,
 ) -> Result<String> {
     match content {
-        SdtContent::Paragraph(paragraph) if paragraph_marker && kind == "del" => {
-            deleted_paragraph(paragraph, metadata)
-        }
-        SdtContent::Paragraph(paragraph) if paragraph_marker => {
-            inserted_paragraph(paragraph, metadata)
-        }
-        SdtContent::Paragraph(paragraph) if kind == "del" => {
-            deleted_paragraph_content(&BodyContent::Paragraph(paragraph.clone()), metadata)
-        }
-        SdtContent::Paragraph(paragraph) => {
-            inserted_paragraph_content(&BodyContent::Paragraph(paragraph.clone()), metadata)
-        }
+        SdtContent::Paragraph(paragraph) if kind == "del" => deleted_paragraph(paragraph, metadata),
+        SdtContent::Paragraph(paragraph) => inserted_paragraph(paragraph, metadata),
         SdtContent::Table(table) => marked_table(table, kind, metadata),
         SdtContent::Row(row) => marked_row(row, kind, metadata),
         SdtContent::Run(run) if kind == "del" => metadata.ids.revision(
@@ -6829,6 +6929,74 @@ fn normalized_body(document: &CT_Document) -> Vec<String> {
     document.body.content.iter().map(body_signature).collect()
 }
 
+/// The accept and reject postcondition projection of a story: each item's
+/// policy signature followed by the modeled properties of every paragraph it
+/// owns. The signature leaves formatting out because alignment matches changed
+/// paragraphs through it, so without the properties a resolution that loses
+/// a paragraph's alignment or mark formatting would pass.
+fn postcondition_body(document: &CT_Document, options: &ComparisonOptions) -> Vec<String> {
+    let mut items = normalized_body_with_options(document, options);
+    if options.ignore_formatting {
+        return items;
+    }
+    for (item, content) in items.iter_mut().zip(&document.body.content) {
+        let mut properties = Vec::new();
+        match content {
+            BodyContent::Paragraph(paragraph) => {
+                properties.push(modeled_paragraph_properties(paragraph.properties.as_ref()));
+            }
+            BodyContent::Table(table) => table_paragraph_properties(table, &mut properties),
+            BodyContent::ContentControl(control) => {
+                control_paragraph_properties(control, &mut properties);
+            }
+            BodyContent::RawXml(_) => {}
+        }
+        item.push_str(&format!(":{properties:?}"));
+    }
+    items
+}
+
+fn table_paragraph_properties(table: &CT_Tbl, properties: &mut Vec<Option<CT_PPr>>) {
+    for cell in table.rows.iter().flat_map(|row| &row.cells) {
+        cell_paragraph_properties(cell, properties);
+    }
+}
+
+fn cell_paragraph_properties(cell: &CT_Tc, properties: &mut Vec<Option<CT_PPr>>) {
+    for content in &cell.content {
+        match content {
+            CellContent::Paragraph(paragraph) => {
+                properties.push(modeled_paragraph_properties(paragraph.properties.as_ref()));
+            }
+            CellContent::Table(table) => table_paragraph_properties(table, properties),
+            CellContent::ContentControl(control) => {
+                control_paragraph_properties(control, properties);
+            }
+        }
+    }
+}
+
+fn control_paragraph_properties(control: &CT_Sdt, properties: &mut Vec<Option<CT_PPr>>) {
+    for content in &control.content {
+        match content {
+            SdtContent::Paragraph(paragraph) => {
+                properties.push(modeled_paragraph_properties(paragraph.properties.as_ref()));
+            }
+            SdtContent::Table(table) => table_paragraph_properties(table, properties),
+            SdtContent::Row(row) => {
+                for cell in &row.cells {
+                    cell_paragraph_properties(cell, properties);
+                }
+            }
+            SdtContent::Cell(cell) => cell_paragraph_properties(cell, properties),
+            SdtContent::ContentControl(control) => {
+                control_paragraph_properties(control, properties);
+            }
+            SdtContent::Run(_) | SdtContent::RawXml(_) => {}
+        }
+    }
+}
+
 fn normalized_body_with_options(
     document: &CT_Document,
     options: &ComparisonOptions,
@@ -7841,7 +8009,8 @@ mod tests {
     use super::{
         ComparisonGranularity, ComparisonOptions, FAIL_AFTER_COMPARISON_STAGING,
         attributed_run_units, canonical_owned_story, comparison_postcondition_error,
-        complex_field_result, deleted_text_xml, story_document, word_fragments,
+        complex_field_result, deleted_text_xml, normalized_body_with_options, postcondition_body,
+        story_document, word_fragments,
     };
     use crate::Document;
     use rdocx_oxml::document::BodyContent;
@@ -7890,6 +8059,54 @@ mod tests {
             document.body.content[1],
             BodyContent::Paragraph(_)
         ));
+    }
+
+    #[test]
+    fn postcondition_projection_compares_paragraph_properties() {
+        let body = |properties: &str| {
+            let paragraph = format!("<w:p>{properties}<w:r><w:t>a</w:t></w:r></w:p>");
+            story_document(
+                &format!(
+                    "{paragraph}<w:sdt><w:sdtContent>{paragraph}</w:sdtContent></w:sdt>\
+                     <w:tbl><w:tr><w:tc>{paragraph}</w:tc></w:tr></w:tbl>"
+                ),
+                &[("xmlns:w".to_owned(), W_NS.to_owned())],
+            )
+            .unwrap()
+        };
+        let plain = body("");
+        let default = ComparisonOptions::default();
+        let ignored = ComparisonOptions {
+            ignore_formatting: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            postcondition_body(&plain, &default),
+            postcondition_body(&body("<w:pPr><w:rPr/></w:pPr>"), &default)
+        );
+        for properties in [
+            r#"<w:pPr><w:jc w:val="center"/></w:pPr>"#,
+            "<w:pPr><w:rPr><w:b/></w:rPr></w:pPr>",
+        ] {
+            let formatted = body(properties);
+            // Alignment matches a paragraph whose properties changed.
+            assert_eq!(
+                normalized_body_with_options(&plain, &default),
+                normalized_body_with_options(&formatted, &default)
+            );
+            let (plain_items, formatted_items) = (
+                postcondition_body(&plain, &default),
+                postcondition_body(&formatted, &default),
+            );
+            assert_eq!(plain_items.len(), 3);
+            for (plain_item, formatted_item) in plain_items.iter().zip(&formatted_items) {
+                assert_ne!(plain_item, formatted_item, "{properties}");
+            }
+            assert_eq!(
+                postcondition_body(&plain, &ignored),
+                postcondition_body(&formatted, &ignored)
+            );
+        }
     }
 
     #[test]
