@@ -17940,6 +17940,13 @@ impl Document {
     }
 
     /// Atomically remove one exact paragraph-style numbering association.
+    ///
+    /// Unlinking removes the style's `w:numId` and `w:ilvl` together, so a
+    /// style that held only a `w:ilvl` before it was linked does not get it
+    /// back. A style that holds only a `w:ilvl`, takes its instance from its
+    /// `basedOn` chain and is named back by the level loses only that name
+    /// and keeps its level. A style holding only a `w:ilvl` that no level
+    /// names is not linked, and unlinking it changes nothing.
     pub fn unlink_style_from_numbering(
         &mut self,
         style_id: &str,
@@ -18002,10 +18009,17 @@ impl Document {
             .unwrap_or(&numbering.abstract_nums[definition_index].levels[definition_level_index])
             .p_style
             .as_deref();
-        if style_numbering == (None, None) && target_style.is_none() {
+        if style_numbering.0.is_none() && target_style.is_none() {
             return Ok(());
         }
-        if style_numbering != (Some(num_id), Some(level)) || target_style != Some(style_id) {
+        // A level may name back a style that takes its instance from its
+        // `basedOn` chain, which is the link recorded for it.
+        let inherited = style_numbering == (None, Some(level))
+            && style::resolve_paragraph_properties(Some(style_id), &candidate.styles).num_id
+                == Some(num_id);
+        if (style_numbering != (Some(num_id), Some(level)) && !inherited)
+            || target_style != Some(style_id)
+        {
             return Err(Error::Other(format!(
                 "style '{style_id}' and numbering instance {num_id} level {level} are not linked"
             )));
@@ -18017,8 +18031,10 @@ impl Document {
             .ppr
             .as_mut()
             .expect("the exact style link was validated above");
-        properties.num_id = None;
-        properties.num_ilvl = None;
+        if !inherited {
+            properties.num_id = None;
+            properties.num_ilvl = None;
+        }
         let numbering = candidate
             .numbering
             .as_mut()

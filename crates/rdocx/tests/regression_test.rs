@@ -10105,6 +10105,28 @@ fn style_numbering_level_without_an_instance_follows_its_based_on_chain() {
         .add_numbering_definition(&[ListLevel::decimal()])
         .unwrap();
     assert_eq!(markers(&mut document), expected);
+
+    // Unlinking the style that the level names back removes only that name,
+    // and the style stays numbered through `Base`.
+    document
+        .unlink_style_from_numbering("Derived", instance, 1)
+        .unwrap();
+    assert_eq!(markers(&mut document), expected);
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let numbering = std::str::from_utf8(package.get_part("/word/numbering.xml").unwrap()).unwrap();
+    assert!(
+        !numbering.contains(r#"<w:pStyle w:val="Derived"/>"#),
+        "{numbering}"
+    );
+    // A style that no level names is not linked, and unlinking it changes
+    // nothing.
+    let before = document.to_bytes().unwrap();
+    document
+        .unlink_style_from_numbering("Subtitle", instance, 1)
+        .unwrap();
+    assert_eq!(document.to_bytes().unwrap(), before);
 }
 
 /// The same rule for a style linked to a list and for a repeated template
@@ -10172,6 +10194,22 @@ fn link_and_template_accept_a_numbering_level_without_an_instance() {
             entry("Note two", None),
             entry("Subtitle", Some("S1.")),
         ]
+    );
+
+    // Unlinking removes the whole `w:numPr`, so the level the style held
+    // before it was linked does not come back.
+    document
+        .unlink_style_from_numbering("Subtitle", subtitle, 0)
+        .unwrap();
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let styles = std::str::from_utf8(package.get_part("/word/styles.xml").unwrap()).unwrap();
+    let subtitle_start = styles.find(r#"w:styleId="Subtitle""#).unwrap();
+    let subtitle_end = subtitle_start + styles[subtitle_start..].find("</w:style>").unwrap();
+    assert!(
+        !styles[subtitle_start..subtitle_end].contains("numPr"),
+        "{styles}"
     );
 }
 
