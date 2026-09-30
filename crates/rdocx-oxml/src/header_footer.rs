@@ -343,7 +343,7 @@ impl CT_HdrFtr {
     }
 
     fn to_xml_root(&self, root_tag: &str) -> Result<Vec<u8>> {
-        let mut writer = Writer::new_with_indent(Vec::new(), b' ', 2);
+        let mut writer = Writer::new(Vec::new());
 
         writer.write_event(Event::Decl(BytesDecl::new(
             "1.0",
@@ -1250,6 +1250,27 @@ mod tests {
         let root = &root[..root.find('>').unwrap()];
         assert!(root.contains(&format!(r#"xmlns:w14="{w14}""#)), "{output}");
         assert!(output.contains(r#"w14:paraId="1A2B3C4D""#), "{output}");
+    }
+
+    #[test]
+    fn a_rewritten_header_is_compact_and_declares_w_once() {
+        // Word writes a header without indentation and puts `w:rsid*` on
+        // nearly every paragraph and run, bound by the root alone.
+        let xml = format!(
+            r#"<w:hdr xmlns:w="{W_NS}"><w:p w:rsidR="00A1B2C3"><w:r w:rsidRPr="00A1B2C4"><w:t xml:space="preserve">header </w:t></w:r></w:p></w:hdr>"#
+        );
+        let header = CT_HdrFtr::from_xml(xml.as_bytes()).unwrap();
+        let output = String::from_utf8(header.to_xml_header().unwrap()).unwrap();
+        assert_eq!(output.matches("xmlns:w=").count(), 1, "{output}");
+        assert!(!output.contains('\n'), "{output}");
+        assert!(
+            output.contains(r#"<w:p w:rsidR="00A1B2C3"><w:r w:rsidRPr="00A1B2C4"><w:t xml:space="preserve">header </w:t></w:r></w:p>"#),
+            "{output}"
+        );
+        assert_eq!(
+            CT_HdrFtr::from_xml(output.as_bytes()).unwrap().paragraphs,
+            header.paragraphs
+        );
     }
 
     #[test]

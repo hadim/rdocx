@@ -17621,6 +17621,47 @@ fn paragraph_run_and_section_identity_attributes_survive_noop_save() {
     assert_eq!(stable.to_bytes().unwrap(), reopened.to_bytes().unwrap());
 }
 
+/// An edit rewrites the part it touches. The rewrite used to indent every
+/// element and declare `w` again on every element with a `w:rsid*`
+/// attribute, which Word writes on nearly every paragraph and run, so one
+/// replaced word doubled the part and an XML diff showed all of it.
+#[test]
+fn an_edited_word_part_stays_compact_and_declares_w_once() {
+    let paragraph = |index: usize| {
+        format!(
+            r#"<w:p w:rsidR="00AB12CD" w:rsidRDefault="00AB12CE"><w:r w:rsidRPr="00AB12CF"><w:t xml:space="preserve">Paragraph {index} alpha beta. </w:t></w:r></w:p>"#
+        )
+    };
+    let body = (0..20).map(paragraph).collect::<String>();
+    let xml = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{W_NS}"><w:body>{body}<w:tbl><w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr w:rsidR="00AB12D0"><w:tc><w:p w:rsidR="00AB12D1"><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:sectPr w:rsidR="00AB12D2"><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:body></w:document>"#
+    );
+    let mut document = document_with_content_controls(&xml);
+    assert_eq!(
+        document
+            .try_replace_text("Paragraph 7 ", "Paragraph seven ")
+            .unwrap(),
+        1
+    );
+
+    let saved = document_xml(&mut document);
+    assert_eq!(saved.matches("xmlns:w=").count(), 1, "{saved}");
+    assert!(!saved.contains('\n'), "{saved}");
+    assert!(saved.contains(&paragraph(6)), "{saved}");
+    assert!(
+        saved.contains(r#"<w:p w:rsidR="00AB12CD" w:rsidRDefault="00AB12CE"><w:r w:rsidRPr="00AB12CF"><w:t xml:space="preserve">Paragraph seven alpha beta. </w:t>"#),
+        "{saved}"
+    );
+    assert!(saved.contains(r#"<w:tr w:rsidR="00AB12D0">"#), "{saved}");
+    assert!(
+        saved.contains(r#"<w:sectPr w:rsidR="00AB12D2">"#),
+        "{saved}"
+    );
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert!(reopened.text().contains("Paragraph seven alpha beta."));
+    assert!(reopened.text().contains("cell"));
+}
+
 /// Word and Google Docs write revision-save and paragraph identities on every
 /// table row. They survived only a save with no edit, because the row model
 /// had no carrier for them. They are now kept like the ones on paragraphs and
@@ -21607,7 +21648,7 @@ fn ref_and_pageref_resolve_to_the_bookmark_text_and_final_page() {
     let original_xml =
         String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
     let xml = original_xml.replace(
-            "<w:r>\n        <w:t>field-placeholder</w:t>\n      </w:r>",
+            "<w:r><w:t>field-placeholder</w:t></w:r>",
             r#"<w:fldSimple w:instr=" REF destination "><w:r><w:t>cached</w:t></w:r></w:fldSimple><w:r><w:t> page </w:t></w:r><w:fldSimple w:instr=" PAGEREF destination "><w:r><w:t>cached-page</w:t></w:r></w:fldSimple>"#,
         );
     assert_ne!(xml, original_xml, "{original_xml}");
@@ -21674,7 +21715,7 @@ fn malformed_and_unmatched_bookmark_markers_are_reported_without_loss() {
         String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
     let xml = original_xml
         .replace(
-            "<w:r>\n        <w:t>content</w:t>\n      </w:r>",
+            "<w:r><w:t>content</w:t></w:r>",
             r#"<w:bookmarkStart w:name="missing-id"/><w:r><w:t>content</w:t></w:r><w:bookmarkEnd w:id="9"/>"#,
         );
     assert_ne!(xml, original_xml);
@@ -36024,8 +36065,8 @@ fn f256_dependency_source() -> Document {
     let styles_xml = String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec())
         .unwrap()
         .replacen(
-            "<w:name w:val=\"Fragment Number Style\"/>\n  </w:style>",
-            "<w:name w:val=\"Fragment Number Style\"/>\n    <w:pPr><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"42\"/></w:numPr></w:pPr>\n  </w:style>",
+            "<w:name w:val=\"Fragment Number Style\"/></w:style>",
+            "<w:name w:val=\"Fragment Number Style\"/><w:pPr><w:numPr><w:ilvl w:val=\"0\"/><w:numId w:val=\"42\"/></w:numPr></w:pPr></w:style>",
             1,
         );
     assert!(styles_xml.contains(r#"<w:numId w:val="42"/>"#));
