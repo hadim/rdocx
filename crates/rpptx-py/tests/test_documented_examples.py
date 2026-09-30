@@ -3565,6 +3565,98 @@ def test_validate_returns_the_issues_the_cli_prints_as_frozen_snapshots(tmp_path
         issue.kind = "other"
 
 
+def test_try_replace_text_scoped_to_a_slide_or_a_text_frame(tmp_path):
+    import rpptx
+
+    prs = _textbox_presentation(rpptx)
+    prs.slides[0].shapes[0].text = "Same text"
+    table = prs.slides[0].shapes.add_table(1, 1, 0, 0, 100, 100).table
+    table.cell(0, 0).text = "Same text"
+    prs.slides[0].shapes.add_textbox(0, 0, 100, 100).text = "Same text"
+    prs.slides[0].notes_text = "Same text in the notes"
+    prs.slides.add_slide(prs.slide_layouts[6])
+    prs.slides[1].shapes.add_textbox(0, 0, 100, 100).text = "Same text"
+    prs.slides[1].notes_text = "Same text in the notes"
+    before = prs.to_bytes()
+
+    with pytest.raises(rpptx.ReplacementCountError) as raised:
+        prs.try_replace_text("Same text", "Other text", expect=1)
+    assert str(raised.value) == 'expected 1 replacement(s) of "Same text", found 6'
+    held = prs.slides[0]
+    with pytest.raises(rpptx.ReplacementCountError) as raised:
+        held.try_replace_text("Same text", "Other text", expect=1)
+    assert str(raised.value) == 'expected 1 replacement(s) of "Same text", found 4'
+    assert (raised.value.expected, raised.value.found) == (1, 4)
+    with pytest.raises(rpptx.ReplacementCountError, match="found 3"):
+        held.try_replace_text("Same text", "Other text", expect=1, notes=False)
+    with pytest.raises(rpptx.RpptxError, match="placeholder must not be empty"):
+        held.try_replace_text("", "x")
+    assert held.try_replace_text("MISSING", "x") == 0
+    assert held.try_replace_text("MISSING", "x", expect=0) == 0
+    assert prs.to_bytes() == before
+
+    assert held.try_replace_text("Same text", "Other text", expect=3, notes=False) == 3
+    _assert_stale_after_exactly_one_bump(rpptx, lambda: held.shapes)
+    first = prs.slides[0]
+    shapes = first.shapes
+    assert shapes[0].text == "Other text"
+    assert shapes[1].table.cell(0, 0).text == "Other text"
+    assert shapes[2].text == "Other text"
+    assert first.notes_text == "Same text in the notes"
+    assert first.try_replace_text("Same text", "Other text") == 1
+    assert prs.slides[0].notes_text == "Other text in the notes"
+    assert prs.slides[1].shapes[0].text == "Same text"
+    assert prs.slides[1].notes_text == "Same text in the notes"
+
+    frame = prs.slides[1].shapes[0].text_frame
+    frame.text = "Same text and Same text"
+    frame = prs.slides[1].shapes[0].text_frame
+    snapshot = prs.to_bytes()
+    with pytest.raises(rpptx.ReplacementCountError) as raised:
+        frame.try_replace_text("Same text", "Other text", expect=1)
+    assert str(raised.value) == 'expected 1 replacement(s) of "Same text", found 2'
+    with pytest.raises(rpptx.RpptxError, match="placeholder must not be empty"):
+        frame.try_replace_text("", "x")
+    assert frame.try_replace_text("MISSING", "x") == 0
+    assert prs.to_bytes() == snapshot
+    assert frame.try_replace_text("Same text", "Other text", expect=2) == 2
+    _assert_stale_after_exactly_one_bump(rpptx, lambda: frame.text)
+    assert prs.slides[1].shapes[0].text == "Other text and Other text"
+    assert prs.slides[1].notes_text == "Same text in the notes"
+    assert prs.slides[1].shapes[0].text_frame.try_replace_text("Other", "New") == 2
+
+    if importlib.util.find_spec("pptx") is None:
+        return
+    from pptx import Presentation as OraclePresentation
+
+    # rpptx cannot add group children, so python-pptx builds a group whose
+    # text box splits the match across a bold run and a plain one.
+    source = tmp_path / "grouped.pptx"
+    oracle = OraclePresentation()
+    slide = oracle.slides.add_slide(oracle.slide_layouts[6])
+    group = slide.shapes.add_group_shape()
+    paragraph = group.shapes.add_textbox(0, 0, 100, 100).text_frame.paragraphs[0]
+    bold = paragraph.add_run()
+    bold.text = "Same te"
+    bold.font.bold = True
+    paragraph.add_run().text = "xt in a group"
+    slide.shapes.add_textbox(0, 0, 100, 100).text_frame.text = "Same text"
+    oracle.save(source)
+
+    prs = rpptx.Presentation(source)
+    frame = prs.slides[0].shapes[0].shapes[0].text_frame
+    with pytest.raises(rpptx.ReplacementCountError, match="found 1"):
+        frame.try_replace_text("Same text", "Other", expect=2)
+    assert frame.try_replace_text("Same text", "Other", expect=1) == 1
+    runs = prs.slides[0].shapes[0].shapes[0].text_frame.paragraphs[0].runs
+    assert [run.text for run in runs] == ["Other", " in a group"]
+    assert runs[0].font.bold is True
+    assert prs.slides[0].shapes[1].text == "Same text"
+    prs.slides[0].shapes[0].shapes[0].text_frame.text = "Same text in a group"
+    assert prs.slides[0].try_replace_text("Same text", "Other", expect=2) == 2
+    assert prs.slides[0].shapes[0].shapes[0].text == "Other in a group"
+
+
 def test_add_shape_accepts_preset_names_and_every_mso_shape_member(tmp_path):
     import rpptx
     from rpptx.enum.shapes import MSO_AUTO_SHAPE_TYPE, MSO_CONNECTOR, MSO_CONNECTOR_TYPE, MSO_SHAPE, MSO_SHAPE_TYPE
