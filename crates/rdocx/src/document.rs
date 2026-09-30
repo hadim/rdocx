@@ -5155,6 +5155,18 @@ fn default_application_properties() -> AppProperties {
     properties
 }
 
+/// Whether `version` has the `XX.YYYY` form ECMA-376 Part 1, 22.2.2.3 gives AppVersion.
+fn is_app_version(version: &str) -> bool {
+    version.split_once('.').is_some_and(|(major, minor)| {
+        major.len() == 2
+            && minor.len() == 4
+            && major
+                .bytes()
+                .chain(minor.bytes())
+                .all(|byte| byte.is_ascii_digit())
+    })
+}
+
 fn equivalent_abstract_numbering(left: &CT_AbstractNum, right: &CT_AbstractNum) -> bool {
     let mut left = left.clone();
     let mut right = right.clone();
@@ -20818,7 +20830,18 @@ impl Document {
     }
 
     /// Replace the complete application-properties model.
+    ///
+    /// An `application_version` must have the form `XX.YYYY` (ECMA-376 Part 1,
+    /// 22.2.2.3), because Word refuses to open a package with any other shape.
     pub fn set_application_properties(&mut self, properties: AppProperties) -> Result<()> {
+        if let Some(version) = properties.application_version.as_deref()
+            && !is_app_version(version)
+        {
+            return Err(Error::Other(format!(
+                "application version {version:?} must have the form XX.YYYY \
+                 (two digits, a dot, four digits), which Word requires to open the file"
+            )));
+        }
         let mut candidate = self.clone_for_staging();
         candidate.reserve_application_properties_bundle()?;
         candidate.application_properties = Some(properties);

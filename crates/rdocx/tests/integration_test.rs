@@ -2357,7 +2357,7 @@ mod settings_and_properties_tests {
         application.pages = Some(7);
         application.words = Some(420);
         application.application = Some("rdocx test".to_owned());
-        application.application_version = Some("1.0".to_owned());
+        application.application_version = Some("01.0000".to_owned());
         document
             .set_application_properties(application.clone())
             .unwrap();
@@ -2611,6 +2611,30 @@ mod settings_and_properties_tests {
     }
 
     #[test]
+    fn application_version_outside_the_word_form_is_refused() {
+        let mut document = Document::new();
+        let before = document.to_bytes().unwrap();
+        for version in ["0.14.0", "1.0", "test", "1.0000", "01.000", "01.00a0", ""] {
+            let mut application = AppProperties::default();
+            application.application_version = Some(version.to_owned());
+            let error = document
+                .set_application_properties(application)
+                .expect_err(version);
+            assert!(error.to_string().contains("XX.YYYY"), "{error}");
+            assert_eq!(document.to_bytes().unwrap(), before);
+        }
+        let mut application = AppProperties::default();
+        application.application_version = Some("16.0000".to_owned());
+        document.set_application_properties(application).unwrap();
+        assert_eq!(
+            document
+                .application_properties()
+                .and_then(|properties| properties.application_version.as_deref()),
+            Some("16.0000")
+        );
+    }
+
+    #[test]
     fn fresh_property_output_has_no_clock_or_host_input() {
         fn authored() -> Vec<u8> {
             let mut document = Document::new_with_profile(WordCreationProfile::Minimal(
@@ -2624,7 +2648,7 @@ mod settings_and_properties_tests {
                 .unwrap();
             let mut application = AppProperties::default();
             application.application = Some("rdocx".to_owned());
-            application.application_version = Some("test".to_owned());
+            application.application_version = Some("00.0001".to_owned());
             document.set_application_properties(application).unwrap();
             document.to_bytes().unwrap()
         }

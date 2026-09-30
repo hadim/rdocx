@@ -67,7 +67,9 @@ and application properties with exact content types and internal
 relationships. `Document::new()` selects Word-compatible DOCX. DOCM and DOTM
 declare macro-capable main-part identity without inventing a VBA project. Empty
 core properties omit created and modified timestamps, so equivalent fresh
-constructions remain byte-identical.
+constructions remain byte-identical. Fresh application properties stamp the
+crate major and minor version as an `XX.YYYY` AppVersion, the only form Word
+opens.
 
 Word story discovery begins with the main body and its nested cell and text-box
 owners, then follows header and footer references in document order and note
