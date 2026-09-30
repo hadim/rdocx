@@ -462,12 +462,18 @@ nothing, and assigning its `rgb` makes the line fill solid. `LineFormat.width`
 reads zero without a width, writes `None` as zero, and rejects values above
 the `ST_LineWidth` maximum. `adjustments` is a live `AdjustmentCollection` of
 the effective preset adjustments, normalized so that 1.0 is 100000, and
-assignment truncates as python-pptx does. `xml` returns the element serialized
-on its own as bytes. A picture's `image` is a frozen `Image` snapshot with
-`blob`, `content_type`, and the python-pptx `ext`, and `replace_image` changes
-only that picture through the native staged replacement. `crop_left`,
-`crop_top`, `crop_right`, and `crop_bottom` read and write the picture's
-`a:srcRect` insets as python-pptx floats, where 0.25 is a quarter of the image.
+assignment truncates as python-pptx does. `theme_effect_index` reads the
+`a:effectRef` index of an ordinary shape or connector style, or `None` without
+one, and writing 0 removes the theme's effect, such as the shadow of a connector
+from `add_connector`. It accepts an `int` only. `None` is refused because
+dropping `p:style` would leave a connector without a direct line invisible, and
+writing it on a shape without a style raises `RpptxError`. `xml` returns the
+element serialized on its own as bytes. A picture's `image` is a frozen `Image`
+snapshot with `blob`, `content_type`, and the python-pptx `ext`, and
+`replace_image` changes only that picture through the native staged
+replacement. `crop_left`, `crop_top`, `crop_right`, and `crop_bottom` read and
+write the picture's `a:srcRect` insets as python-pptx floats, where 0.25 is a
+quarter of the image.
 A missing edge reads 0.0, a write rounds half to even as python-pptx does and
 changes nothing when the value is unchanged, and a value that is not finite or
 outside the `ST_Percentage` range raises `ValueError`. Other shape kinds raise

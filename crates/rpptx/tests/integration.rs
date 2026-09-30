@@ -17467,6 +17467,84 @@ fn added_connector_carries_the_theme_style_and_renders_its_line() {
 }
 
 #[test]
+fn theme_effect_index_zero_removes_the_added_connector_shadow() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(6).expect("add blank slide");
+    let mut slide = presentation.slide_mut(0).unwrap();
+    slide
+        .add_connector(
+            ConnectorType::Straight,
+            Emu::from_cm(2.0),
+            Emu::from_cm(3.0),
+            Emu::from_cm(20.0),
+            Emu::from_cm(3.0),
+        )
+        .expect("add connector");
+    slide
+        .add_connector(
+            ConnectorType::Straight,
+            Emu::from_cm(2.0),
+            Emu::from_cm(6.0),
+            Emu::from_cm(20.0),
+            Emu::from_cm(6.0),
+        )
+        .expect("add connector")
+        .set_theme_effect_index(0)
+        .expect("drop the theme effect");
+    let mut textbox = slide
+        .add_textbox(Emu(0), Emu(0), Emu(100), Emu(100))
+        .expect("add textbox");
+    assert!(matches!(
+        textbox.set_theme_effect_index(0),
+        Err(rpptx::Error::InvalidShapeMutation { .. })
+    ));
+    let mut group = slide.add_group_shape().expect("add group");
+    assert!(matches!(
+        group.set_theme_effect_index(0),
+        Err(rpptx::Error::UnsupportedShapeMutation { .. })
+    ));
+
+    let bytes = presentation.to_bytes().expect("serialize connector deck");
+    let reopened = Presentation::from_bytes(&bytes).expect("reopen connector deck");
+    let indices: Vec<_> = reopened
+        .slide(0)
+        .unwrap()
+        .shapes()
+        .map(|shape| shape.theme_effect_index())
+        .collect();
+    assert_eq!(indices, [Some(1), Some(0), None, None]);
+    let package = open_opc(&bytes, "connector without theme effect");
+    let xml =
+        String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec()).unwrap();
+    assert!(xml.contains(r#"<a:effectRef idx="1"><a:schemeClr val="accent1"/></a:effectRef>"#));
+    assert!(xml.contains(r#"<a:effectRef idx="0"><a:schemeClr val="accent1"/></a:effectRef>"#));
+
+    assert!(reopened.validate().is_empty());
+    let (_, layout) = reopened.render_deterministic().unwrap();
+    assert!(layout.diagnostics.is_empty(), "{:?}", layout.diagnostics);
+    // The bundled theme's first effect is a 38 % black shadow 1.57 pt below
+    // the shape. At 72 DPI the 2 pt lines at 3 cm and 6 cm end on pixel rows
+    // 85 and 170, so rows 88 and 173 lie in the shadow when there is one.
+    let png = reopened.slide_png_deterministic(0, 72.0).unwrap().unwrap();
+    let pixmap = tiny_skia::Pixmap::decode_png(&png).unwrap();
+    let shade = |y: u32| {
+        let pixel = pixmap.pixel(300, y).unwrap();
+        (pixel.red(), pixel.green(), pixel.blue())
+    };
+    assert_eq!(shade(170), (0x4F, 0x81, 0xBD));
+    assert_eq!(
+        shade(173),
+        (0xFF, 0xFF, 0xFF),
+        "no shadow under the second line"
+    );
+    let (red, green, blue) = shade(88);
+    assert!(
+        red == green && green == blue && red < 0xF8,
+        "shadow pixel {red:02x}"
+    );
+}
+
+#[test]
 fn unknown_preset_does_not_mutate_the_slide() {
     let mut presentation = Presentation::new().expect("open bundled template");
     presentation.add_slide(0).expect("add slide");

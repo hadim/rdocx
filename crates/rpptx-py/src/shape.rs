@@ -472,6 +472,21 @@ impl PyShape {
         )
     }
 
+    /// The theme effect style index the shape's `p:style` references, or
+    /// `None` without one. Writing 0 removes the theme's effect, such as the
+    /// shadow of a connector from `add_connector`. The setter takes an `int`
+    /// only: `None` is refused, because dropping `p:style` would leave a
+    /// connector without a direct line invisible.
+    #[getter]
+    fn theme_effect_index(&self, py: Python<'_>) -> PyResult<Option<u32>> {
+        self.read(py, |shape| shape.theme_effect_index())
+    }
+
+    #[setter]
+    fn set_theme_effect_index(&self, py: Python<'_>, value: u32) -> PyResult<()> {
+        self.edit(py, |shape| shape.set_theme_effect_index(value))
+    }
+
     /// The shape element serialized on its own, as bytes.
     #[getter]
     fn xml<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
