@@ -452,9 +452,10 @@ only when a retained attribute uses its prefix, because the alias machinery
 already materializes a binding onto every element that needs one, and recording
 a declaration a child carries for itself would emit it twice. A root carrying
 nothing but declarations retains no record at all. On the way back out, the
-canonical `w14` binding is not copied onto the written element, since the part
-root that owns the element declares it in what Word and python-docx write, and
-the authored identity write makes the same assumption. Together these keep a
+canonical `w` and `w14` bindings are not copied onto the written element, since
+the part root that owns the element declares them in what Word and python-docx
+write, and the element's own `w:` name and the authored identity write make the
+same assumption. A binding of either prefix to another URI is still copied. Together these keep a
 reopened save byte identical to the save it was read from. A part root that
 does not declare `w14`, such as one rdocx wrote or one under an element that
 declared the prefix itself, gains the canonical declaration when the written
