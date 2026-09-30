@@ -13449,6 +13449,72 @@ mod header_footer_pdf {
         );
     }
 
+    /// GitHub issue #171. Carlito, the bundled Calibri, joins ti, fi, ft, ffi
+    /// and more into one glyph. The PDF text layer paired glyphs with
+    /// characters by index, which garbled every Calibri paragraph.
+    #[test]
+    fn ligatures_keep_their_characters_in_pdf_text_of_every_bundled_family() {
+        const TEXT: &str = "Location Rating Action fifteen office Observation";
+        let mut document = Document::new();
+        let mut expected = Vec::new();
+        for font in [
+            "Calibri",
+            "Arial",
+            "Cambria",
+            "Times New Roman",
+            "Courier New",
+        ] {
+            for bold in [false, true] {
+                let weight = if bold { "bold" } else { "regular" };
+                let line = format!("{font} {weight}: {TEXT}");
+                document
+                    .add_paragraph("")
+                    .add_run(&line)
+                    .font(font)
+                    .size(11.0)
+                    .bold(bold);
+                expected.push(line);
+            }
+        }
+        let pdf = document.to_pdf_deterministic().unwrap();
+
+        let page_text = pdf_page_text(&pdf).concat();
+        for line in &expected {
+            assert!(
+                page_text.contains(line.as_str()),
+                "{line:?} in {page_text:?}"
+            );
+        }
+
+        let path = std::env::temp_dir().join(format!(
+            "rdocx-171-ligatures-{}-{:?}.pdf",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::write(&path, &pdf).unwrap();
+        let extracted = std::process::Command::new("pdftotext")
+            .arg(&path)
+            .arg("-")
+            .output();
+        std::fs::remove_file(&path).unwrap();
+        match extracted {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!("#171 pdftotext check skipped because pdftotext is absent");
+            }
+            extracted => {
+                let extracted = extracted.unwrap();
+                assert!(extracted.status.success());
+                let lines = String::from_utf8(extracted.stdout).unwrap();
+                let lines = lines
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .collect::<Vec<_>>();
+                assert_eq!(lines, expected);
+            }
+        }
+    }
+
     #[test]
     fn word_semantics_reach_owned_multi_page_pdf_structure() {
         fn count_bytes(haystack: &[u8], needle: &[u8]) -> usize {

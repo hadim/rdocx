@@ -598,6 +598,71 @@ fn pdf_import_differential_rejects_geometry_text_link_and_pixel_perturbations() 
     ));
 }
 
+/// GitHub issue #171. Without an inherited `rtl` a paragraph draws its Latin
+/// text as plain runs, which carry no shaping clusters, so a Carlito ligature
+/// reaches the PDF text layer only through the ToUnicode map.
+#[test]
+#[cfg(feature = "render")]
+fn plain_run_ligatures_keep_their_characters_in_pdf_text() {
+    const TEXT: &str = "Location Rating Action fifteen office Observation";
+    let mut source = Presentation::new().unwrap();
+    source.add_slide(0).unwrap();
+    source
+        .slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(457_200), Emu(914_400), Emu(8_229_600), Emu(914_400))
+        .unwrap()
+        .set_text(TEXT)
+        .unwrap();
+    let mut package = open_opc(&source.to_bytes().unwrap(), "#171 ligature deck");
+    for part in [
+        "/ppt/presentation.xml",
+        "/ppt/slideMasters/slideMaster1.xml",
+    ] {
+        let xml = String::from_utf8(package.get_part(part).unwrap().to_vec()).unwrap();
+        assert!(xml.contains(r#" rtl="0""#), "{part} sets the direction");
+        package.set_part(part, xml.replace(r#" rtl="0""#, "").into_bytes());
+    }
+    let presentation = Presentation::from_bytes(&package_bytes(package)).unwrap();
+
+    let (_, layout) = presentation.render_deterministic().unwrap();
+    let mut plain_text = String::new();
+    walk(&layout.pages[0].elements, &mut |element, _| match element {
+        PositionedElement::Text(run) => plain_text.push_str(&run.text),
+        PositionedElement::MultilingualText(run) => {
+            panic!("{:?} took the path with clusters", run.logical_text)
+        }
+        _ => {}
+    });
+    assert_eq!(plain_text.trim_end(), TEXT);
+
+    // lopdf decodes each drawn run through the ToUnicode map on its own line.
+    let pdf = presentation.to_pdf_deterministic().unwrap();
+    let decoded = lopdf::Document::load_mem(&pdf)
+        .unwrap()
+        .extract_text(&[1])
+        .unwrap();
+    assert_eq!(
+        decoded.split_whitespace().collect::<Vec<_>>().join(" "),
+        TEXT
+    );
+
+    let path = std::env::temp_dir().join(format!("rpptx-171-ligatures-{}.pdf", std::process::id()));
+    fs::write(&path, &pdf).unwrap();
+    let extracted = Command::new("pdftotext").arg(&path).arg("-").output();
+    fs::remove_file(&path).unwrap();
+    match extracted {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            eprintln!("#171 pdftotext check skipped because pdftotext is absent");
+        }
+        extracted => {
+            let extracted = extracted.unwrap();
+            assert!(extracted.status.success());
+            assert_eq!(String::from_utf8(extracted.stdout).unwrap().trim(), TEXT);
+        }
+    }
+}
+
 #[test]
 #[cfg(feature = "default-template")]
 #[ignore = "requires Google Chrome 152.0.7977.65"]
