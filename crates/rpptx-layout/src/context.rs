@@ -807,6 +807,23 @@ impl<'a> ResolveCtx<'a> {
                     .as_ref()
                     .map(resolved_line_ends)
                     .unwrap_or((None, None));
+                // A connector's effects only add a shadow, so an effect the
+                // theme cannot resolve drops the shadow instead of the slide.
+                let shadow = self
+                    .effective_effects(connector.style(), &connector.shape_properties)
+                    .and_then(|effects| {
+                        effects
+                            .as_ref()
+                            .and_then(|effects| effects.outer_shadow.as_ref())
+                            .map(|shadow| self.concrete_shadow(shadow))
+                            .transpose()
+                    })
+                    .unwrap_or_else(|error| {
+                        diagnostics.push(Diagnostic {
+                            message: format!("connector effect not rendered: {error}"),
+                        });
+                        None
+                    });
                 let (geometry, geometry_unsupported, geometry_diagnostic) = if let Some(custom) =
                     &connector.shape_properties.custom_geometry
                 {
@@ -882,7 +899,7 @@ impl<'a> ResolveCtx<'a> {
                     line,
                     head_end,
                     tail_end,
-                    shadow: None,
+                    shadow,
                     content: ResolvedContent::None,
                     unsupported,
                 }))
@@ -6581,6 +6598,93 @@ mod tests {
                 .iter()
                 .all(|shape| shape.unsupported.is_none())
         );
+    }
+
+    #[test]
+    fn connector_shadow_resolves_from_its_effect_reference_under_its_direct_effects() {
+        let styled = |effect_index: u32, direct: &str| {
+            connector("line", 127_000, 254_000, "", direct).replace(
+                "</p:cxnSp>",
+                &format!(
+                    r#"<p:style><a:lnRef idx="2"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="0"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="{effect_index}"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"><a:schemeClr val="tx1"/></a:fontRef></p:style></p:cxnSp>"#
+                ),
+            )
+        };
+        let direct_shadow = r#"<a:ln w="12700"/><a:effectLst><a:outerShdw blurRad="12700" dist="25400" dir="0"><a:srgbClr val="FF0000"/></a:outerShdw></a:effectLst>"#;
+        let fixture = Fixture::new(
+            &[
+                styled(3, ""),
+                styled(0, ""),
+                styled(3, "<a:effectLst/>"),
+                connector("line", 127_000, 254_000, "", direct_shadow),
+            ]
+            .join(""),
+            "",
+            "",
+        );
+
+        let resolved = fixture.context().resolve_slide((720.0, 540.0)).unwrap();
+
+        assert!(
+            resolved.diagnostics.is_empty(),
+            "{:?}",
+            resolved.diagnostics
+        );
+        let shadows: Vec<_> = resolved
+            .shapes
+            .iter()
+            .map(|shape| shape.shadow.is_some())
+            .collect();
+        assert_eq!(shadows, [true, false, false, true]);
+        assert!(matches!(
+            resolved.shapes[3].shadow,
+            Some(Effect::OuterShadow { color, .. }) if color == Color::from_hex("FF0000")
+        ));
+    }
+
+    #[test]
+    fn unresolvable_connector_effect_drops_only_the_shadow_with_a_diagnostic() {
+        let styled = |effect_reference: &str, direct: &str| {
+            connector("line", 127_000, 254_000, "", direct).replace(
+                "</p:cxnSp>",
+                &format!(
+                    r#"<p:style><a:lnRef idx="2"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="0"><a:schemeClr val="accent1"/></a:fillRef>{effect_reference}<a:fontRef idx="minor"><a:schemeClr val="tx1"/></a:fontRef></p:style></p:cxnSp>"#
+                ),
+            )
+        };
+        let placeholder_shadow = r#"<a:effectLst><a:outerShdw blurRad="12700" dist="25400" dir="0"><a:schemeClr val="phClr"/></a:outerShdw></a:effectLst>"#;
+        let fixture = Fixture::new(
+            &[
+                styled(
+                    r#"<a:effectRef idx="9"><a:schemeClr val="accent1"/></a:effectRef>"#,
+                    "",
+                ),
+                styled(r#"<a:effectRef idx="0"/>"#, placeholder_shadow),
+            ]
+            .join(""),
+            "",
+            "",
+        );
+
+        let resolved = fixture.context().resolve_slide((720.0, 540.0)).unwrap();
+
+        let messages: Vec<_> = resolved
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect();
+        assert_eq!(
+            messages,
+            [
+                "connector effect not rendered: effect style index 9 is outside the 3 available entries",
+                "connector effect not rendered: effect style retains an unresolved phClr placeholder colour",
+            ]
+        );
+        let accent1 = Paint::Solid(Color::from_hex("156082"));
+        for shape in &resolved.shapes {
+            assert_eq!(shape.shadow, None);
+            assert_eq!(shape.line.as_ref().map(|line| &line.paint), Some(&accent1));
+        }
     }
 
     #[test]

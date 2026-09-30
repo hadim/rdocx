@@ -409,8 +409,9 @@ transforms precede the placeholder colour's transforms. Fill and modelled
 effects are atomic replacements. Line width, cap, fill, dash, join, head, and
 tail values overlay independently, so omitted direct properties retain their
 theme values. An explicit `a:noFill` replaces a referenced fill. A connector
-resolves its line reference the same way. Its fill and effect references are
-not rendered yet.
+resolves its line and effect references the same way, so its theme shadow is
+drawn, and an `a:effectRef idx="0"` or an empty direct `a:effectLst` leaves it
+without one. Its fill reference is not rendered yet.
 
 Opaque effect children remain preserved rather than being claimed as resolved.
 An opaque effect that still contains `phClr` returns
