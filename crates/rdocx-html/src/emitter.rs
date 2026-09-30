@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use rdocx_oxml::document::CT_Body;
 use rdocx_oxml::numbering::CT_Numbering;
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
+use rdocx_oxml::revision::RevisionKind;
 use rdocx_oxml::shared::ST_Jc;
 use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::table::{CT_Row, CT_Tbl, VMerge};
@@ -25,10 +26,17 @@ pub(crate) fn emit_body(
 ) -> String {
     let mut out = String::new();
     let mut list_stack: Vec<ListState> = Vec::new();
+    let mut carried = Vec::new();
 
-    for block in body_blocks(&body.content) {
-        match block {
+    let blocks = body_blocks(&body.content);
+    for (index, block) in blocks.iter().enumerate() {
+        match *block {
             Block::Paragraph(p) => {
+                let next_is_paragraph = matches!(blocks.get(index + 1), Some(Block::Paragraph(_)));
+                let Some(runs) = paragraph_runs(p, next_is_paragraph, hyperlink_urls, &mut carried)
+                else {
+                    continue;
+                };
                 let list_info = detect_list(p, numbering);
 
                 // Close lists that are no longer active
@@ -58,14 +66,14 @@ pub(crate) fn emit_body(
                         }
                     }
                     out.push_str("<li>");
-                    emit_paragraph_content(&mut out, p, styles, images, hyperlink_urls, options);
+                    emit_paragraph_content(&mut out, runs, images, options);
                     out.push_str("</li>\n");
                 } else {
                     // Close all remaining lists
                     while !list_stack.is_empty() {
                         close_list(&mut out, &mut list_stack);
                     }
-                    emit_paragraph(&mut out, p, styles, images, hyperlink_urls, options);
+                    emit_paragraph(&mut out, p, runs, styles, images, options);
                 }
             }
             Block::Table(tbl) => {
@@ -175,9 +183,9 @@ fn detect_list(para: &CT_P, numbering: Option<&CT_Numbering>) -> Option<(bool, u
 fn emit_paragraph(
     out: &mut String,
     para: &CT_P,
+    runs: Vec<(Option<&str>, CT_R)>,
     styles: &CT_Styles,
     images: &HashMap<String, ImageData>,
-    hyperlink_urls: &HashMap<String, String>,
     options: &HtmlOptions,
 ) {
     let heading_level = detect_heading_level(para.properties.as_ref(), styles);
@@ -199,7 +207,7 @@ fn emit_paragraph(
         out.push_str(&format!("<{tag} style=\"{}\">", escape_html_attr(&style)));
     }
 
-    emit_paragraph_content(out, para, styles, images, hyperlink_urls, options);
+    emit_paragraph_content(out, runs, images, options);
 
     out.push_str(&format!("</{tag}>\n"));
 }
@@ -208,38 +216,13 @@ fn emit_paragraph(
 /// hyperlinks).
 fn emit_paragraph_content(
     out: &mut String,
-    para: &CT_P,
-    _styles: &CT_Styles,
+    runs: Vec<(Option<&str>, CT_R)>,
     images: &HashMap<String, ImageData>,
-    hyperlink_urls: &HashMap<String, String>,
     options: &HtmlOptions,
 ) {
-    // The runs the text readers read, those of content controls, tracked
-    // insertions, smart tags and custom XML included, deleted ones left out.
-    let para = &para.accepted_view();
-
-    // Build a map of which runs are inside hyperlinks
-    let mut hyperlink_map: HashMap<usize, &str> = HashMap::new();
-    for hl in &para.hyperlinks {
-        // A target with an unsafe scheme yields no <a> at all, so the run text
-        // still renders but cannot become a script trigger.
-        if let Some(rel_id) = &hl.rel_id
-            && let Some(url) = hyperlink_urls
-                .get(rel_id)
-                .map(String::as_str)
-                .and_then(safe_url)
-        {
-            for i in hl.run_start..hl.run_end {
-                hyperlink_map.insert(i, url);
-            }
-        }
-    }
-
     let mut current_link: Option<&str> = None;
 
-    for (run_idx, run) in para.runs.iter().enumerate() {
-        let in_link = hyperlink_map.get(&run_idx).copied();
-
+    for (in_link, run) in runs {
         // Open/close link tags as needed
         match (current_link, in_link) {
             (None, Some(url)) => {
@@ -258,13 +241,93 @@ fn emit_paragraph_content(
             _ => {}
         }
 
-        emit_run(out, run, images, options);
+        emit_run(out, &run, images, options);
     }
 
     // Close any open link
     if current_link.is_some() {
         out.push_str("</a>");
     }
+}
+
+/// Collect the runs of the accepted view of `para` in document order, each
+/// with the URL of the hyperlink it sits in.
+///
+/// These are the runs the text readers read (see `CT_P::accepted_view`):
+/// those of content controls, tracked insertions and moves in, smart tags and
+/// custom XML included, deleted and moved-away ones left out. MHTML export in
+/// `rdocx` pairs the emitted `<img>` tags with the pictures its
+/// `visit_accepted_drawings` reaches in the same view.
+pub(crate) fn accepted_runs<'a>(
+    para: &CT_P,
+    hyperlink_urls: &'a HashMap<String, String>,
+    output: &mut Vec<(Option<&'a str>, CT_R)>,
+) {
+    let para = para.accepted_view();
+
+    // Build a map of which runs are inside hyperlinks
+    let mut hyperlink_map: HashMap<usize, &str> = HashMap::new();
+    for hl in &para.hyperlinks {
+        // A target with an unsafe scheme yields no <a> at all, so the run text
+        // still renders but cannot become a script trigger.
+        if let Some(rel_id) = &hl.rel_id
+            && let Some(url) = hyperlink_urls
+                .get(rel_id)
+                .map(String::as_str)
+                .and_then(safe_url)
+        {
+            for i in hl.run_start..hl.run_end {
+                hyperlink_map.insert(i, url);
+            }
+        }
+    }
+
+    for (index, run) in para.runs.iter().enumerate() {
+        output.push((hyperlink_map.get(&index).copied(), run.clone()));
+    }
+}
+
+/// Return the runs to emit for `para`, after the runs `carried` from the
+/// paragraphs before it, or `None` when the accepted view has no paragraph
+/// here.
+///
+/// Accepting a deleted or moved paragraph mark merges the paragraph into the
+/// next one, which keeps its own properties. So the runs of such a paragraph
+/// are carried into the next paragraph when one follows, and a paragraph left
+/// without runs is dropped. Before a table and at the end of the body or of a
+/// cell, a paragraph that still has runs keeps its own block.
+pub(crate) fn paragraph_runs<'a>(
+    para: &CT_P,
+    next_is_paragraph: bool,
+    hyperlink_urls: &'a HashMap<String, String>,
+    carried: &mut Vec<(Option<&'a str>, CT_R)>,
+) -> Option<Vec<(Option<&'a str>, CT_R)>> {
+    let mut runs = std::mem::take(carried);
+    accepted_runs(para, hyperlink_urls, &mut runs);
+    let mark_is_removed = para
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.rpr.as_ref())
+        .is_some_and(|rpr| {
+            rpr.revision_markers
+                .iter()
+                .any(|marker| marker.kind() == RevisionKind::Deletion)
+                // The model keeps a moved-away mark as raw XML, so it is
+                // recognized by its local name.
+                || rpr.revision_xml.iter().any(|raw| {
+                    let name = raw.strip_prefix(b"<").unwrap_or(raw);
+                    let end = name
+                        .iter()
+                        .position(|byte| byte.is_ascii_whitespace() || matches!(byte, b'/' | b'>'))
+                        .unwrap_or(name.len());
+                    name[..end].rsplit(|byte| *byte == b':').next() == Some(b"moveFrom")
+                })
+        });
+    if mark_is_removed && (next_is_paragraph || runs.is_empty()) {
+        *carried = runs;
+        return None;
+    }
+    Some(runs)
 }
 
 /// Emit a single run.
@@ -558,10 +621,18 @@ fn emit_table(
                 ));
             }
 
-            for block in cell_blocks(cell) {
-                match block {
+            let mut carried = Vec::new();
+            let blocks = cell_blocks(cell);
+            for (index, block) in blocks.iter().enumerate() {
+                match *block {
                     Block::Paragraph(p) => {
-                        emit_paragraph(out, p, styles, images, hyperlink_urls, options);
+                        let next_is_paragraph =
+                            matches!(blocks.get(index + 1), Some(Block::Paragraph(_)));
+                        if let Some(runs) =
+                            paragraph_runs(p, next_is_paragraph, hyperlink_urls, &mut carried)
+                        {
+                            emit_paragraph(out, p, runs, styles, images, options);
+                        }
                     }
                     Block::Table(nested) => {
                         emit_table(out, nested, styles, images, hyperlink_urls, options);
