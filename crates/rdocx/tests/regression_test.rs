@@ -21018,14 +21018,88 @@ fn compare_and_resolve(
 }
 
 #[test]
+fn comparison_tracks_a_rebuilt_table_of_contents() {
+    // The rebuild moves the field begin into a paragraph of its own, writes
+    // each entry with a PAGEREF field, as a hyperlink under `\h`, and
+    // bookmarks each heading. Each of those paragraphs refused the pair as a
+    // paragraph boundary or modeled field change.
+    let titles = [
+        ("Heading1", "Chapter 1"),
+        ("Heading2", "Section 1.1"),
+        ("Heading1", "Chapter 2"),
+    ];
+    for switches in [r#""1-3" \h \z \u"#, r#""1-3" \z \u"#] {
+        let mut entries = String::new();
+        for (index, (_, title)) in titles.iter().enumerate() {
+            entries.push_str(r#"<w:p><w:pPr><w:pStyle w:val="TOC1"/></w:pPr>"#);
+            if index == 0 {
+                entries.push_str(&format!(
+                    r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText xml:space="preserve"> TOC \o {switches} </w:instrText><w:fldChar w:fldCharType="separate"/></w:r>"#
+                ));
+            }
+            entries.push_str(&format!(
+                "<w:r><w:t>{title}</w:t><w:tab/><w:t>9</w:t></w:r>"
+            ));
+            if index + 1 == titles.len() {
+                entries.push_str(r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#);
+            }
+            entries.push_str("</w:p>");
+        }
+        let mut body = format!(
+            r#"<w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="Table of Contents"/><w:docPartUnique/></w:docPartObj></w:sdtPr><w:sdtContent><w:p><w:pPr><w:pStyle w:val="TOCHeading"/></w:pPr><w:r><w:t>Contents</w:t></w:r></w:p>{entries}</w:sdtContent></w:sdt>"#
+        );
+        for (style, title) in titles {
+            body.push_str(&format!(
+                r#"<w:p><w:pPr><w:pStyle w:val="{style}"/></w:pPr><w:r><w:t>{title}</w:t></w:r></w:p><w:p><w:r><w:t>Body text.</w:t></w:r></w:p>"#
+            ));
+        }
+        let original_bytes = document_with_field_parts(&wrap_word_body(&body), None, None)
+            .to_bytes()
+            .unwrap();
+        let mut edited = Document::from_bytes(&original_bytes).unwrap();
+        assert_eq!(edited.rebuild_toc().unwrap().entry_count, 3, "{switches}");
+        let edited_bytes = edited.to_bytes().unwrap();
+
+        for granularity in [
+            rdocx::ComparisonGranularity::Run,
+            rdocx::ComparisonGranularity::Word,
+        ] {
+            let options = rdocx::ComparisonOptions {
+                granularity,
+                ..Default::default()
+            };
+            let xml = compare_and_resolve(&original_bytes, &edited_bytes, &options);
+            // Every cached entry is deleted before any rebuilt entry is
+            // inserted, so each side keeps one whole TOC field, and the
+            // deleted field code is Word's `w:delInstrText`.
+            let control =
+                &xml[xml.find("<w:sdtContent>").unwrap()..xml.find("</w:sdtContent>").unwrap()];
+            assert!(
+                control.rfind("<w:delText").unwrap() < control.find("PAGEREF").unwrap(),
+                "{switches}: {control}"
+            );
+            assert_eq!(control.matches("<w:delInstrText").count(), 1, "{control}");
+            assert_eq!(control.matches("<w:instrText").count(), 1, "{control}");
+            for character in ["begin", "separate", "end"] {
+                let character = format!(r#"w:fldCharType="{character}""#);
+                assert_eq!(control.matches(&character).count(), 2, "{control}");
+            }
+        }
+    }
+}
+
+#[test]
 fn comparison_keeps_the_inline_structures_of_whole_paragraph_changes() {
     // A whole inserted, deleted or moved paragraph kept only its runs, so a
     // hyperlink, simple field or bookmark in it failed the acceptance or
-    // rejection check.
+    // rejection check, and a paragraph that gained a hyperlink or a field
+    // refused.
     let plain = r#"<w:p><w:r><w:t>Alpha</w:t></w:r></w:p>"#;
     let last = r#"<w:p><w:r><w:t>Omega</w:t></w:r></w:p>"#;
     let structured = r#"<w:p><w:bookmarkStart w:id="5" w:name="target"/><w:hyperlink w:anchor="target"><w:r><w:t>Linked</w:t></w:r></w:hyperlink><w:r><w:tab/></w:r><w:fldSimple w:instr=" PAGE "><w:r><w:t>1</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="5"/></w:p>"#;
+    let linked = r#"<w:p><w:r><w:t>Alpha</w:t></w:r><w:hyperlink w:anchor="elsewhere"><w:r><w:t> linked</w:t></w:r></w:hyperlink></w:p>"#;
     let moved = r#"<w:p><w:hyperlink w:anchor="elsewhere"><w:r><w:t>Moved link</w:t></w:r></w:hyperlink></w:p>"#;
+    let paged = r#"<w:p><w:r><w:t xml:space="preserve">Alpha </w:t></w:r><w:fldSimple w:instr=" PAGE "><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p>"#;
     let control = |content: &str| {
         format!(
             r#"<w:sdt><w:sdtPr><w:tag w:val="kept"/></w:sdtPr><w:sdtContent>{content}</w:sdtContent></w:sdt>{last}"#
@@ -21048,6 +21122,16 @@ fn comparison_keeps_the_inline_structures_of_whole_paragraph_changes() {
             format!("{plain}{last}"),
         ),
         (
+            "gains a hyperlink",
+            format!("{plain}{last}"),
+            format!("{linked}{last}"),
+        ),
+        (
+            "gains a simple field",
+            format!("{plain}{last}"),
+            format!("{paged}{last}"),
+        ),
+        (
             "moved",
             format!("{moved}{plain}{last}"),
             format!("{plain}{last}{moved}"),
@@ -21055,7 +21139,7 @@ fn comparison_keeps_the_inline_structures_of_whole_paragraph_changes() {
         (
             "two paragraphs appended to a control",
             control(plain),
-            control(&format!("{plain}{structured}{moved}")),
+            control(&format!("{plain}{structured}{linked}")),
         ),
     ];
     for (name, original_body, edited_body) in cases {
@@ -21074,7 +21158,10 @@ fn comparison_keeps_the_inline_structures_of_whole_paragraph_changes() {
                 ..Default::default()
             };
             let xml = compare_and_resolve(&original_bytes, &edited_bytes, &options);
-            assert!(xml.contains("<w:hyperlink"), "{name}: {xml}");
+            assert!(
+                xml.contains("<w:hyperlink") || xml.contains(r#"w:instr=" PAGE ""#),
+                "{name}: {xml}"
+            );
         }
     }
 }

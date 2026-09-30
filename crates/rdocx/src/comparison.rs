@@ -2372,8 +2372,24 @@ fn compare_body(
         .iter()
         .map(|content| body_signature_with_options(content, metadata.options))
         .collect::<Vec<_>>();
+    fn paragraphs(content: &[BodyContent]) -> Vec<Option<&CT_P>> {
+        content
+            .iter()
+            .map(|content| match content {
+                BodyContent::Paragraph(paragraph) => Some(paragraph),
+                _ => None,
+            })
+            .collect()
+    }
     let aligned = expand_body_alignment(
-        align(&original_signatures, &edited_signatures),
+        replace_changed_paragraph_runs(
+            align(&original_signatures, &edited_signatures),
+            &paragraphs(&original.body.content),
+            &paragraphs(&edited.body.content),
+            &original_signatures,
+            &edited_signatures,
+            metadata.options,
+        ),
         &original.body.content,
         &edited.body.content,
     );
@@ -3096,23 +3112,12 @@ fn compare_granular_paragraph(
     metadata: &mut Metadata<'_>,
     diagnostics: &mut Vec<ComparisonDiagnostic>,
 ) -> Result<String> {
-    let control_slots = |paragraph: &CT_P| {
-        paragraph
-            .content_controls
-            .iter()
-            .map(|(_, raw_before, markers_before, _)| (*raw_before, *markers_before))
-            .collect::<Vec<_>>()
-    };
     let boundary_error = || {
         Error::Other(format!(
             "comparison cannot revise paragraph boundary structures at {location}"
         ))
     };
-    if hyperlink_shells(original, metadata.options) != hyperlink_shells(edited, metadata.options)
-        || (!metadata.options.ignore_comments && original.comment_ranges != edited.comment_ranges)
-        || original.bookmark_markers != edited.bookmark_markers
-        || control_slots(original) != control_slots(edited)
-    {
+    if paragraph_boundaries_differ(original, edited, metadata.options) {
         return Err(boundary_error());
     }
     let original_boundaries = shell_run_boundaries(original);
@@ -3993,18 +3998,7 @@ fn compare_complex_paragraph(
             .map(str::to_owned)
             .map_or_else(|| paragraph_xml(original), Ok);
     }
-    if original.hyperlinks != edited.hyperlinks
-        || (!metadata.options.ignore_comments && original.comment_ranges != edited.comment_ranges)
-        || original.bookmark_markers != edited.bookmark_markers
-        || original
-            .extra_xml
-            .iter()
-            .filter(|(position, raw)| !CT_P::raw_is_root_attributes(*position, raw))
-            .ne(edited
-                .extra_xml
-                .iter()
-                .filter(|(position, raw)| !CT_P::raw_is_root_attributes(*position, raw)))
-        || paragraph_control_boundaries(original) != paragraph_control_boundaries(edited)
+    if paragraph_boundaries_differ(original, edited, metadata.options)
         || (!metadata.options.ignore_formatting
             && paragraph_properties_differ(
                 original.properties.as_ref(),
@@ -4148,6 +4142,45 @@ fn paragraph_control_boundaries(paragraph: &CT_P) -> Vec<(usize, usize, usize)> 
         .iter()
         .map(|(at, raw_before, markers_before, _)| (*at, *raw_before, *markers_before))
         .collect()
+}
+
+/// Whether two paragraphs differ in an inline structure that revising the
+/// paragraph in place cannot express: a hyperlink, comment range, bookmark,
+/// preserved raw child or inline content control.
+///
+/// The word and character paths follow a hyperlink or control through the
+/// text alignment, so only the shells and their slots count there.
+fn paragraph_boundaries_differ(
+    original: &CT_P,
+    edited: &CT_P,
+    options: &ComparisonOptions,
+) -> bool {
+    if (!options.ignore_comments && original.comment_ranges != edited.comment_ranges)
+        || original.bookmark_markers != edited.bookmark_markers
+    {
+        return true;
+    }
+    if uses_attributed_run_path(options) {
+        let control_slots = |paragraph: &CT_P| {
+            paragraph
+                .content_controls
+                .iter()
+                .map(|(_, raw_before, markers_before, _)| (*raw_before, *markers_before))
+                .collect::<Vec<_>>()
+        };
+        return hyperlink_shells(original, options) != hyperlink_shells(edited, options)
+            || control_slots(original) != control_slots(edited);
+    }
+    original.hyperlinks != edited.hyperlinks
+        || original
+            .extra_xml
+            .iter()
+            .filter(|(position, raw)| !CT_P::raw_is_root_attributes(*position, raw))
+            .ne(edited
+                .extra_xml
+                .iter()
+                .filter(|(position, raw)| !CT_P::raw_is_root_attributes(*position, raw)))
+        || paragraph_control_boundaries(original) != paragraph_control_boundaries(edited)
 }
 
 fn paragraph_properties_xml(
@@ -4945,8 +4978,24 @@ fn compare_control_from_xml(
         .iter()
         .map(|content| control_content_signature_with_options(content, metadata.options))
         .collect::<Vec<_>>();
+    fn paragraphs<'a>(content: &[&'a SdtContent]) -> Vec<Option<&'a CT_P>> {
+        content
+            .iter()
+            .map(|content| match content {
+                SdtContent::Paragraph(paragraph) => Some(paragraph),
+                _ => None,
+            })
+            .collect()
+    }
     let aligned = expand_control_alignment(
-        align(&original_signatures, &edited_signatures),
+        replace_changed_paragraph_runs(
+            align(&original_signatures, &edited_signatures),
+            &paragraphs(&original_content),
+            &paragraphs(&edited_content),
+            &original_signatures,
+            &edited_signatures,
+            metadata.options,
+        ),
         &original_content,
         &edited_content,
     );
@@ -5753,6 +5802,97 @@ fn align(original: &[String], edited: &[String]) -> Vec<(Option<usize>, Option<u
         right = matched_right.saturating_add(1);
     }
     result
+}
+
+/// Replace each changed run of paragraphs that revising in place cannot
+/// express.
+///
+/// A run is the consecutive changed entries of paragraphs only, between
+/// unchanged owners, tables or controls. When one of its pairs differs in
+/// its inline boundary structures, or gains or loses a modeled field, the
+/// run becomes all its original paragraphs deleted, then all its edited
+/// paragraphs inserted. A field that spans those paragraphs, such as a
+/// table of contents, then stays whole on each side instead of losing its
+/// begin or end to a neighbouring pair.
+///
+/// A bookmark or comment range on both sides of the run would be held twice
+/// by the replacement, so such a run keeps its pairs and their refusal.
+fn replace_changed_paragraph_runs(
+    aligned: Vec<(Option<usize>, Option<usize>)>,
+    original: &[Option<&CT_P>],
+    edited: &[Option<&CT_P>],
+    original_signatures: &[String],
+    edited_signatures: &[String],
+    options: &ComparisonOptions,
+) -> Vec<(Option<usize>, Option<usize>)> {
+    fn markers<'a>(paragraphs: impl Iterator<Item = &'a CT_P>) -> HashSet<String> {
+        let mut markers = HashSet::new();
+        for paragraph in paragraphs {
+            for marker in &paragraph.bookmark_markers {
+                markers.extend(marker.id().map(|id| format!("bookmark id {id}")));
+                markers.extend(marker.name().map(|name| format!("bookmark {name}")));
+            }
+            for marker in &paragraph.comment_ranges {
+                let (CommentRangeMarker::Start { id, .. } | CommentRangeMarker::End { id, .. }) =
+                    marker;
+                markers.insert(format!("comment {id}"));
+            }
+        }
+        markers
+    }
+    let changed = |(left, right): &(Option<usize>, Option<usize>)| match (left, right) {
+        (Some(i), Some(j)) => original_signatures[*i] != edited_signatures[*j],
+        _ => true,
+    };
+    // In-place revision refuses a modeled field it cannot pair with one on
+    // the other side.
+    let fields = |paragraph: &CT_P| {
+        paragraph
+            .runs
+            .iter()
+            .filter(|run| run_is_field(run))
+            .count()
+    };
+    let paragraphs_only = |(left, right): &(Option<usize>, Option<usize>)| {
+        left.is_none_or(|i| original[i].is_some()) && right.is_none_or(|j| edited[j].is_some())
+    };
+    let mut replaced = Vec::with_capacity(aligned.len());
+    for run in aligned.chunk_by(|first, second| {
+        (changed(first), paragraphs_only(first)) == (changed(second), paragraphs_only(second))
+    }) {
+        let originals = || {
+            run.iter()
+                .filter_map(|(left, _)| left.and_then(|i| original[i]))
+        };
+        let edits = || {
+            run.iter()
+                .filter_map(|(_, right)| right.and_then(|j| edited[j]))
+        };
+        let inexpressible = run.iter().any(|(left, right)| {
+            matches!(
+                (left.and_then(|i| original[i]), right.and_then(|j| edited[j])),
+                (Some(left), Some(right)) if paragraph_boundaries_differ(left, right, options)
+                    || (!options.ignore_fields && fields(left) != fields(right))
+            )
+        });
+        if changed(&run[0])
+            && paragraphs_only(&run[0])
+            && inexpressible
+            && markers(originals()).is_disjoint(&markers(edits()))
+        {
+            replaced.extend(
+                run.iter()
+                    .filter_map(|(left, _)| left.map(|i| (Some(i), None))),
+            );
+            replaced.extend(
+                run.iter()
+                    .filter_map(|(_, right)| right.map(|j| (None, Some(j)))),
+            );
+        } else {
+            replaced.extend_from_slice(run);
+        }
+    }
+    replaced
 }
 
 fn expand_body_alignment(

@@ -909,9 +909,16 @@ left-biased ignores for formatting, textual whitespace, fields, comments, and
 selected story categories. Selected categories leave the original story bytes
 untouched and are excluded before shell checks and revision-id allocation.
 Non-text content remains atomic. Unmatched identical owners become move pairs
-only within one story. A whole deleted, inserted, or moved paragraph carries
-its hyperlinks, simple fields, bookmarks, and comment ranges inside its
-revision wrappers, and deleted content writes a field code as
+only within one story. A changed run of consecutive paragraphs that holds a
+pair whose hyperlinks, bookmarks, comment ranges, preserved raw children, or
+inline controls differ, or that gains or loses a modeled field, is replaced
+whole: all its original paragraphs are deleted, then all its edited paragraphs
+are inserted. A field that spans those paragraphs, such as a rebuilt table of
+contents, then stays whole on each side, which Word needs to accept or reject
+it. A run whose two sides share a bookmark or comment range would hold it
+twice and keeps refusing. A whole deleted, inserted, or moved paragraph
+carries its hyperlinks, simple fields, bookmarks, and comment ranges inside
+its revision wrappers, and deleted content writes a field code as
 `w:delInstrText`, since Word refuses to open a deletion that holds
 `w:instrText`.
 Changed field results remain inside their field owner, while instruction or
