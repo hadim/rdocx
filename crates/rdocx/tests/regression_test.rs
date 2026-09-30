@@ -42112,11 +42112,12 @@ mod tab_stop_regressions {
                 baselines.insert(run.text.clone(), run.origin.y);
             }
         });
-        // Single-spaced 11 point lines are about 12.4 points apart, so the
-        // text is two lines below the start of the paragraph, not one.
+        // Calibri 11 lines at the default 259 line spacing are about 14.5
+        // points apart in Word, so the text is two lines below the start of
+        // the paragraph, not one.
         for (before, after) in [("B", "Body"), ("D", "Cell")] {
             let gap = baselines[after] - baselines[before];
-            assert!(gap > 22.0 && gap < 28.0, "{after} is {gap} below {before}");
+            assert!(gap > 25.0 && gap < 33.0, "{after} is {gap} below {before}");
         }
     }
 
