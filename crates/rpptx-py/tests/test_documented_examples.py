@@ -2137,6 +2137,216 @@ def test_shapes_and_slides_are_removed_and_reordered_with_stale_handles(tmp_path
     assert [len(slide.shapes) for slide in oracle.slides] == [2, 1]
 
 
+def test_slide_duplicate_inserts_after_the_source_with_its_notes(tmp_path):
+    import rpptx
+
+    prs = rpptx.Presentation()
+    for index in range(3):
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        slide.shapes.add_textbox(0, 0, 10, 10).text = f"slide {index}"
+    prs.slides[1].notes_text = "note 1"
+    source = prs.slides[1]
+    held = prs.slides[2].shapes[0]
+
+    duplicate = prs.slides.duplicate(source)
+    assert [slide.shapes[0].text for slide in prs.slides] == [
+        "slide 0",
+        "slide 1",
+        "slide 1",
+        "slide 2",
+    ]
+    assert [slide.notes_text for slide in prs.slides] == [None, "note 1", "note 1", None]
+    assert (duplicate.shapes[0].text, duplicate.notes_text) == ("slide 1", "note 1")
+    _assert_stale_after_exactly_one_bump(rpptx, lambda: held.text)
+    _assert_stale_after_exactly_one_bump(rpptx, lambda: source.notes_text)
+    duplicate.notes_text = "copy note"
+    assert [slide.notes_text for slide in prs.slides] == [None, "note 1", "copy note", None]
+
+    other = rpptx.Presentation()
+    other_slide = other.slides.add_slide(other.slide_layouts[6])
+    with pytest.raises(ValueError, match="slide is not in this collection"):
+        prs.slides.duplicate(other_slide)
+
+    prs.add_comment_author(
+        id="{11111111-1111-1111-1111-111111111111}",
+        name="Ada Lovelace",
+        user_id="ada@example.com",
+        provider_id="local",
+    )
+    prs.slides[0].add_comment(
+        id="{22222222-2222-2222-2222-222222222222}",
+        author_id="{11111111-1111-1111-1111-111111111111}",
+        created="2026-09-14T10:30:00Z",
+        text="Blocks duplication",
+    )
+    commented = prs.slides[0]
+    before = prs.to_bytes()
+    with pytest.raises(rpptx.RpptxError, match="modern comments"):
+        prs.slides.duplicate(commented)
+    assert prs.to_bytes() == before
+    assert (len(prs.slides), commented.shapes[0].text) == (4, "slide 0")
+
+    output = tmp_path / "duplicated.pptx"
+    prs.save(output)
+    pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
+    oracle = pptx.Presentation(output)
+    assert [slide.shapes[0].text for slide in oracle.slides] == [
+        "slide 0",
+        "slide 1",
+        "slide 1",
+        "slide 2",
+    ]
+    assert [
+        slide.notes_slide.notes_text_frame.text if slide.has_notes_slide else None
+        for slide in oracle.slides
+    ] == [None, "note 1", "copy note", None]
+
+
+def test_presentation_from_bytes_opens_like_a_path_and_rejects_other_bytes(tmp_path):
+    import rpptx
+
+    prs = _textbox_presentation(rpptx)
+    prs.slides[0].notes_text = "note"
+    path = tmp_path / "source.pptx"
+    prs.save(path)
+
+    reopened = rpptx.Presentation.from_bytes(path.read_bytes())
+    assert len(reopened.slides) == 1
+    assert (reopened.slides[0].shapes[0].text, reopened.slides[0].notes_text) == (
+        "hello",
+        "note",
+    )
+    assert reopened.to_bytes() == rpptx.Presentation(path).to_bytes()
+    with pytest.raises(rpptx.PackageError):
+        rpptx.Presentation.from_bytes(b"not a package")
+
+
+def test_try_replace_text_checks_the_expected_count_before_publishing():
+    import pickle
+
+    import rpptx
+
+    prs = _textbox_presentation(rpptx)
+    prs.slides[0].shapes[0].text = "NAME and NAME"
+    prs.slides[0].shapes.add_table(1, 1, 0, 0, 100, 100).table.cell(0, 0).text = "NAME"
+    prs.slides[0].notes_text = "Notes for NAME"
+    held = prs.slides[0].shapes[0]
+    before = prs.to_bytes()
+
+    with pytest.raises(rpptx.ReplacementCountError) as raised:
+        prs.try_replace_text("NAME", "Ada", expect=3)
+    error = raised.value
+    assert isinstance(error, rpptx.RpptxError)
+    assert str(error) == 'expected 3 replacement(s) of "NAME", found 4'
+    assert (error.expected, error.found) == (3, 4)
+    # Worker pools pickle exceptions, so the counts must survive the trip.
+    copied = pickle.loads(pickle.dumps(error))
+    assert (str(copied), copied.expected, copied.found) == (str(error), 3, 4)
+    assert prs.to_bytes() == before
+    assert held.text == "NAME and NAME"
+
+    assert prs.try_replace_text("MISSING", "x") == 0
+    assert prs.try_replace_text("MISSING", "x", expect=0) == 0
+    with pytest.raises(rpptx.ReplacementCountError, match="found 0"):
+        prs.try_replace_text("MISSING", "x", expect=1)
+    with pytest.raises(rpptx.RpptxError, match="placeholder must not be empty"):
+        prs.try_replace_text("", "x")
+    assert prs.to_bytes() == before
+    assert held.text == "NAME and NAME"
+
+    assert prs.try_replace_text("NAME", "Ada", expect=4) == 4
+    _assert_stale_after_exactly_one_bump(rpptx, lambda: held.text)
+    shapes = prs.slides[0].shapes
+    assert (shapes[0].text, shapes[1].table.cell(0, 0).text) == ("Ada and Ada", "Ada")
+    assert prs.slides[0].notes_text == "Notes for Ada"
+    held = prs.slides[0].shapes[0]
+    assert prs.try_replace_text("Ada", "Grace") == 4
+    _assert_stale_after_exactly_one_bump(rpptx, lambda: held.text)
+    assert prs.slides[0].shapes[0].text == "Grace and Grace"
+
+
+def test_slide_resolve_and_remove_comment_match_the_cli_operations():
+    import rpptx
+
+    author_id = "{11111111-1111-1111-1111-111111111111}"
+    comment_id = "{22222222-2222-2222-2222-222222222222}"
+    reply_id = "{33333333-3333-3333-3333-333333333333}"
+    second_id = "{55555555-5555-5555-5555-555555555555}"
+    unknown_id = "{99999999-9999-9999-9999-999999999999}"
+    created = "2026-09-14T10:30:00Z"
+    prs = rpptx.Presentation()
+    for _ in range(2):
+        prs.slides.add_slide(prs.slide_layouts[6])
+    prs.add_comment_author(
+        id=author_id, name="Ada Lovelace", user_id="ada@example.com", provider_id="local"
+    )
+    prs.slides[0].add_comment(id=comment_id, author_id=author_id, created=created, text="Thread")
+    prs.slides[0].reply_to_comment(
+        comment_id, id=reply_id, author_id=author_id, created=created, text="Reply"
+    )
+    prs.slides[0].add_comment(id=second_id, author_id=author_id, created=created, text="Second")
+
+    slide = prs.slides[0]
+    before = prs.to_bytes()
+    for operation, comment in (
+        (slide.resolve_comment, unknown_id),
+        (slide.resolve_comment, reply_id),
+        (slide.remove_comment, unknown_id),
+        (prs.slides[1].remove_comment, comment_id),
+    ):
+        with pytest.raises(rpptx.RpptxError, match="unknown comment id"):
+            operation(comment)
+    assert prs.to_bytes() == before
+    assert [comment.status for comment in slide.comments] == [None, None]
+
+    slide.resolve_comment(comment_id)
+    _assert_stale_after_exactly_one_bump(rpptx, lambda: slide.comments)
+    thread, second = prs.slides[0].comments
+    assert (thread.id, thread.status, second.status) == (comment_id, "resolved", None)
+    assert [(reply.id, reply.status) for reply in thread.replies] == [(reply_id, None)]
+
+    prs.slides[0].remove_comment(reply_id)
+    assert prs.slides[0].comments[0].replies == ()
+    prs.slides[0].remove_comment(comment_id)
+    assert [comment.id for comment in prs.slides[0].comments] == [second_id]
+    reopened = rpptx.Presentation.from_bytes(prs.to_bytes())
+    assert reopened.slides[0].comments == prs.slides[0].comments
+
+    # The facade keeps the emptied comments part, so duplicate still refuses.
+    prs.slides[0].remove_comment(second_id)
+    assert prs.slides[0].comments == ()
+    before = prs.to_bytes()
+    with pytest.raises(rpptx.RpptxError, match="modern comments"):
+        prs.slides.duplicate(prs.slides[0])
+    assert (prs.to_bytes(), len(prs.slides)) == (before, 2)
+
+
+def test_validate_returns_the_issues_the_cli_prints_as_frozen_snapshots(tmp_path):
+    import rpptx
+
+    prs = rpptx.Presentation()
+    assert prs.validate() == ()
+    prs.slides.add_slide(prs.slide_layouts[6])
+    for text in ("first", "second"):
+        prs.slides[0].shapes.add_textbox(0, 0, 10, 10).text = text
+    assert prs.validate() == ()
+    first, second = (shape.shape_id for shape in prs.slides[0].shapes)
+    source = tmp_path / "source.pptx"
+    broken = tmp_path / "broken.pptx"
+    prs.save(source)
+    _replace_in_slide(source, broken, f'id="{second}"', f'id="{first}"')
+
+    broken_deck = rpptx.Presentation(broken)
+    (issue,) = broken_deck.validate()
+    assert (issue.kind, issue.message) == (
+        "duplicate_shape_id",
+        f"DuplicateShapeId {{ slide: 0, id: {first} }}",
+    )
+    assert broken_deck.validate() == (issue,)
+    with pytest.raises(AttributeError):
+        issue.kind = "other"
+
+
 def test_add_shape_accepts_preset_names_and_every_mso_shape_member(tmp_path):
     import rpptx
     from rpptx.enum.shapes import MSO_AUTO_SHAPE_TYPE, MSO_CONNECTOR, MSO_CONNECTOR_TYPE, MSO_SHAPE, MSO_SHAPE_TYPE

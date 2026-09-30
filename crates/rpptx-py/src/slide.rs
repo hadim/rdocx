@@ -380,6 +380,30 @@ impl PySlide {
         Ok(())
     }
 
+    /// Marks one comment thread resolved. A reply id is an unknown id.
+    fn resolve_comment(&self, comment_id: &str, py: Python<'_>) -> PyResult<()> {
+        let index = self.validate(py)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        presentation
+            .inner
+            .resolve_comment(index, comment_id)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        presentation.revisions.bump();
+        Ok(())
+    }
+
+    /// Removes one comment thread with its replies, or one reply.
+    fn remove_comment(&self, comment_id: &str, py: Python<'_>) -> PyResult<()> {
+        let index = self.validate(py)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        presentation
+            .inner
+            .remove_comment(index, comment_id)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        presentation.revisions.bump();
+        Ok(())
+    }
+
     fn move_comment(&self, from_: usize, to: usize, py: Python<'_>) -> PyResult<()> {
         let index = self.validate(py)?;
         let mut presentation = self.presentation.borrow_mut(py);
@@ -501,6 +525,29 @@ impl PySlideCollection {
             .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
         presentation.revisions.bump();
         Ok(())
+    }
+
+    /// Duplicates one slide of this presentation with its notes right after
+    /// the source, and returns the new slide.
+    fn duplicate(&self, py: Python<'_>, slide: &Bound<'_, PyAny>) -> PyResult<Py<PySlide>> {
+        self.len(py)?;
+        let slide = slide.extract::<PyRef<'_, PySlide>>()?;
+        if !slide.presentation.is(&self.presentation) {
+            return Err(PyValueError::new_err("slide is not in this collection"));
+        }
+        let index = slide.validate(py)?;
+        let path = {
+            let mut presentation = self.presentation.borrow_mut(py);
+            presentation
+                .inner
+                .duplicate_slide(index)
+                .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+            presentation.revisions.bump();
+            presentation
+                .revisions
+                .capture(smallvec![PathSeg::Slide(index + 1)])
+        };
+        Py::new(py, PySlide::new(self.presentation.clone_ref(py), path))
     }
 
     /// Moves the slide at `from_` so that it ends up at index `to`.

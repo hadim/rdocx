@@ -282,9 +282,11 @@ document revision. A rejected image, filename, dimension pair, or stale path
 leaves package bytes and binding revisions unchanged.
 
 `rpptx` mirrors python-pptx through an unpublished mixed-layout `rpptx-py`
-crate. `Presentation` owns the Rust facade and one revision counter. Lazy
-layouts, slides, shapes, placeholders, text frames, paragraphs, runs, columns
-and cells store only a presentation reference and `ContentPath`. The bounded
+crate. `Presentation` owns the Rust facade and one revision counter.
+`Presentation(path)` opens a file and the static `Presentation.from_bytes`
+opens in-memory package bytes, as the rdocx `Document` does. Lazy layouts,
+slides, shapes, placeholders, text frames, paragraphs, runs, columns and cells
+store only a presentation reference and `ContentPath`. The bounded
 source-compatibility surface is the seven python-pptx 1.0.2 Getting Started
 workflows. They change the import namespace and re-fetch through the public
 path after each structural write, because strict global revision invalidation
@@ -309,6 +311,12 @@ live `FillFormat` over the direct background fill that never changes the slide
 when read, and `follow_master_background` reports and sets whether the slide
 has no `p:bg`. `SlideCollection.remove` and `SlideCollection.move(from_, to)`
 use the native staged slide operations and advance the revision once.
+`SlideCollection.duplicate(slide)` copies a slide of the same presentation,
+with its speaker notes, to the position right after it through the native
+staged `duplicate_slide`, advances the revision once, and returns the new slide
+captured at that revision. As in the facade, a slide that owns a modern
+comments part is refused, even when removing its last comment left that part
+empty, and the refusal leaves the package and the revision unchanged.
 
 `Shape` geometry, `name`, and `rotation` are writable without a revision bump.
 A missing partner coordinate becomes zero, as in python-pptx, and a negative
@@ -392,6 +400,23 @@ place and do not advance the revision. `rpptx` and `rpptx.enum.text` export
   value in place, keeping transforms such as `a:alpha`, replaces any other
   colour, and `None` removes the direct fill.
 
+`Presentation.try_replace_text(placeholder, replacement, *, expect=None)`
+runs the native staged literal replacement over slides and speaker notes with
+the GIL released and returns its count. When `expect` is given, the
+replacement runs on a clone, and a count that differs raises
+`ReplacementCountError`, an `RpptxError` subclass that carries `expected` and
+`found` and words its message like `rpptx replace --expect`. The presentation
+and its revision then stay unchanged. Otherwise the replacement is kept, and
+the revision advances once when the count is nonzero. Without `expect`, zero
+matches return zero rather than raise, as the rdocx `try_replace_text` does.
+Only the CLI refuses zero matches, because it would write an unchanged copy.
+
+`Presentation.validate()` runs the native `validate` with the GIL released and
+returns a tuple of frozen `ValidationIssue` snapshots in native order. Each
+carries a `kind` that names the native variant in snake_case, such as
+`duplicate_shape_id`, and a `message` equal to the line `rpptx validate`
+prints for that issue. A clean presentation returns an empty tuple.
+
 The presentation binding exposes `to_pdf`, `render_slide_to_png`,
 `render_all_slides`, `to_notes_pdf`, and `render_all_notes` through the native
 deterministic facade. Every render call releases the GIL.
@@ -417,7 +442,11 @@ snapshots. Each comment contains an ordered tuple of frozen `CommentReply`
 snapshots, and the presentation exposes an ordered tuple of frozen
 `CommentAuthor` snapshots.
 Author, comment, and reply additions accept native GUID and RFC 3339 strings.
-Comment and reply moves retain native final-position semantics. A successful
+Comment and reply moves retain native final-position semantics.
+`Slide.resolve_comment(comment_id)` marks a thread resolved and treats a reply
+id as unknown. `Slide.remove_comment(comment_id)` removes a thread with its
+replies, or one reply. Both use the native staged operations of
+`rpptx comment resolve` and `remove`. A successful
 collaboration operation advances the global revision once. Constructor or
 native validation failure publishes no candidate and leaves existing handles
 valid.
@@ -1597,10 +1626,11 @@ The additive methods are `comment_authors`, `add_comment_author`, `comments`,
 `add_comment`, `reply_to_comment`, `resolve_comment`, `remove_comment`,
 `move_comment`, `move_reply`, `sections`, `set_sections`,
 `notes_header_footer_mut`, and `handout_header_footer_mut`. Python exposes the
-comment snapshots, additions, and moves described with the presentation
-binding, and `rpptx comment` exposes the comment operations described under
-CLIs. WASM consumers gain no collaboration or navigation methods and continue
-to preserve these package parts through their existing `Presentation` owner.
+comment snapshots, additions, moves, resolution, and removal described with the
+presentation binding, and `rpptx comment` exposes the comment operations
+described under CLIs. WASM consumers gain no collaboration or navigation
+methods and continue to preserve these package parts through their existing
+`Presentation` owner.
 
 The low-level `rpptx-oxml` model adds the approved `comments` module and
 extends existing presentation, notes, slide, relationship, and content-type

@@ -51,8 +51,13 @@ with open("review.pdf", "wb") as output:
 - Slide layouts, slides, placeholders, shapes, text frames, paragraphs, runs,
   pictures, preset shapes, and tables.
 - Deterministic PDF and PNG output for slides and speaker notes.
-- Speaker-note text plus modern comment authors, threads, replies, and ordered
-  comment movement.
+- Formatting-preserving text replacement across slides and speaker notes,
+  with an optional expected count that leaves the deck unchanged on a
+  mismatch.
+- Package and PresentationML validation that returns the issues
+  `rpptx validate` reports as typed values.
+- Speaker-note text plus modern comment authors, threads, replies, thread
+  resolution and removal, and ordered comment movement.
 - Master, layout, placeholder, theme, shape, chart, media, and relationship
   state remains inside the native presentation engine during package edits.
 - Read speaker-note text and inspect or mutate modern comment threads.
