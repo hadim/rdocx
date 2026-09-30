@@ -8,10 +8,10 @@
     "contract:word/numbering.xml": "01d6cb0aa0ecc30b3d2a77c4df062b1c727d70ff9cbc0824910f049daf878a26",
     "contract:word/styles.xml": "0dc0b047b6019b798b83bfe4d66eb91d14b03caea3f6bdb0934d48fbb863fba4",
     "feature_showcase:page1.png": "6e88403fe63a789fd2ce6803029f67fcd45e00f2d13b9c13d5201a99eda0ada9",
-    "feature_showcase:pdf/bytes": "bf8a0c5bbd4ba70aba19b39e1a19bc1c78d19a12ac6f6324964628df5f78d410",
-    "feature_showcase:pdf/pages": "562b6508a015c227d598b408dfafaf2056cbba4e617e323b20ee39168ff64224",
+    "feature_showcase:pdf/bytes": "638cdcbe5494bb11f484d07af51e5d3cc57b26c277ef7084654fcfe02c39d62f",
+    "feature_showcase:pdf/pages": "8c9d24cc0e0debdf8a8a7d2acabfe9e425857782f7f90f277bbee97696c2a91c",
     "feature_showcase:pdf/resources": "e624cef80cac1f99ba398b0b0f8fc7986c0389cf12b6599f2a9bb187749bb797",
-    "feature_showcase:word/document.xml": "7bfdbc2740871b1b38314dc95b353237d18e49b56ea64fa7a4c6499e4d21c8d3",
+    "feature_showcase:word/document.xml": "f66778e685b306256ee58226a1bddb03eada249f4ace2430f9596baa22f6c6c4",
     "feature_showcase:word/numbering.xml": "2aa0599486d98573be0b7febb04ec63c08d3dfc5341b0f722b93cae113803bbc",
     "feature_showcase:word/styles.xml": "b815acd04cc89189d5b2b0caf822435d941c8cc70077f34932e4a2b3ce1b6595",
     "invoice:page1.png": "a209c0493bc90aae717e930b4466739212aaa4b646d1123a8a21c5e75b5c9644",
@@ -50,5 +50,5 @@
     "report:word/numbering.xml": "2aa0599486d98573be0b7febb04ec63c08d3dfc5341b0f722b93cae113803bbc",
     "report:word/styles.xml": "0dc0b047b6019b798b83bfe4d66eb91d14b03caea3f6bdb0934d48fbb863fba4"
   },
-  "reason": "Paragraph spacing keeps the larger of space after and space before and horizontal table borders take their width between rows, which moves the rendered PDF and PNG of six samples and no OOXML part"
+  "reason": "Cell::add_table now keeps the trailing cell paragraph Word requires after the nested table in feature_showcase"
 }
