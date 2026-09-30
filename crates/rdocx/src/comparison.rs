@@ -2445,12 +2445,18 @@ fn compare_body(
             (Some(left), None) => {
                 let content = &original.body.content[left];
                 if let Some(id) = moves.original[left] {
-                    if matches!(content, BodyContent::Paragraph(_)) && !next_is_paragraph {
-                        mark_previous_paragraph_with_id(&mut output, "moveFrom", id, metadata)?;
-                        output.push((
-                            EmittedOwner::of(content, content, None),
-                            moved_paragraph_content(content, "moveFrom", id, metadata)?,
-                        ));
+                    if let BodyContent::Paragraph(paragraph) = content
+                        && !next_is_paragraph
+                    {
+                        let merged =
+                            mark_previous_paragraph_with_id(&mut output, "moveFrom", id, metadata)?;
+                        output.push(final_paragraph(
+                            paragraph,
+                            "moveFrom",
+                            Some(id),
+                            merged,
+                            metadata,
+                        )?);
                     } else {
                         output.push((
                             EmittedOwner::of(content, content, None),
@@ -2461,7 +2467,7 @@ fn compare_body(
                     && !next_is_paragraph
                 {
                     let merged = mark_previous_paragraph(&mut output, "del", metadata)?;
-                    output.push(final_paragraph(paragraph, "del", merged, metadata)?);
+                    output.push(final_paragraph(paragraph, "del", None, merged, metadata)?);
                 } else {
                     output.push((
                         EmittedOwner::of(content, content, Some("del")),
@@ -2472,12 +2478,18 @@ fn compare_body(
             (None, Some(right)) => {
                 let content = &edited.body.content[right];
                 if let Some(id) = moves.edited[right] {
-                    if matches!(content, BodyContent::Paragraph(_)) && !next_is_paragraph {
-                        mark_previous_paragraph_with_id(&mut output, "moveTo", id, metadata)?;
-                        output.push((
-                            EmittedOwner::of(content, content, None),
-                            moved_paragraph_content(content, "moveTo", id, metadata)?,
-                        ));
+                    if let BodyContent::Paragraph(paragraph) = content
+                        && !next_is_paragraph
+                    {
+                        let merged =
+                            mark_previous_paragraph_with_id(&mut output, "moveTo", id, metadata)?;
+                        output.push(final_paragraph(
+                            paragraph,
+                            "moveTo",
+                            Some(id),
+                            merged,
+                            metadata,
+                        )?);
                     } else {
                         output.push((
                             EmittedOwner::of(content, content, None),
@@ -2499,6 +2511,7 @@ fn compare_body(
                         output.push(final_paragraph(
                             paragraph,
                             "ins",
+                            None,
                             trailing_merged,
                             metadata,
                         )?);
@@ -2507,7 +2520,7 @@ fn compare_body(
                     && !next_is_paragraph
                 {
                     let merged = mark_previous_paragraph(&mut output, "ins", metadata)?;
-                    output.push(final_paragraph(paragraph, "ins", merged, metadata)?);
+                    output.push(final_paragraph(paragraph, "ins", None, merged, metadata)?);
                 } else {
                     output.push((
                         EmittedOwner::of(content, content, Some("ins")),
@@ -2642,32 +2655,6 @@ fn moved_body_content(
             "comparison cannot move a content-control or opaque body node".to_owned(),
         )),
     }
-}
-
-fn moved_paragraph_content(
-    content: &BodyContent,
-    kind: &str,
-    id: i32,
-    metadata: &Metadata<'_>,
-) -> Result<String> {
-    let BodyContent::Paragraph(paragraph) = content else {
-        unreachable!("caller checked paragraph content")
-    };
-    let mut output = String::from("<w:p>");
-    if let Some(properties) = &paragraph.properties {
-        output.push_str(&property_xml(properties)?);
-    }
-    for run in &paragraph.runs {
-        output.push_str(&IdAllocator::revision_with_id(
-            kind,
-            metadata.author,
-            metadata.timestamp,
-            &run_xml(run)?,
-            id,
-        ));
-    }
-    output.push_str("</w:p>");
-    Ok(output)
 }
 
 fn moved_paragraph(
@@ -2875,24 +2862,32 @@ fn marked_paragraph_properties_xml(properties: &str, marker: &str) -> Result<Str
     append_word_child(properties, "pPr", &run_properties)
 }
 
-fn mark_previous_paragraph_with_id(
-    output: &mut [(EmittedOwner<'_>, String)],
+/// [`mark_previous_paragraph`] for a final moved paragraph, whose move
+/// pair shares `id`. The paragraph before must be the last owner emitted.
+fn mark_previous_paragraph_with_id<'a>(
+    output: &mut [(EmittedOwner<'a>, String)],
     kind: &str,
     id: i32,
     metadata: &Metadata<'_>,
-) -> Result<()> {
-    let Some((EmittedOwner::Paragraph { .. }, paragraph)) = output.last_mut() else {
+) -> Result<Option<&'a CT_PPr>> {
+    let Some((EmittedOwner::Paragraph { accepted, rejected }, paragraph)) = output.last_mut()
+    else {
         return Err(Error::Other(
             "comparison needs an adjacent paragraph for a final paragraph move".to_owned(),
         ));
     };
     let marker = IdAllocator::marker_with_id(kind, metadata.author, metadata.timestamp, id);
     *paragraph = marked_paragraph_xml(paragraph, &marker)?;
-    Ok(())
+    Ok(if kind == "moveFrom" {
+        *accepted
+    } else {
+        *rejected
+    })
 }
 
-/// A final inserted or deleted paragraph. Its own mark stays as the story
-/// terminator, and the mark of the paragraph before it carries the change.
+/// A final inserted, deleted or moved paragraph. Its own mark stays as the
+/// story terminator, and the mark of the paragraph before it carries the
+/// change. A move wraps the runs with the `move_id` of its pair.
 ///
 /// Removing that mark merges the paragraph before into this one, and the
 /// merged paragraph keeps these properties. `merged` holds the properties the
@@ -2902,11 +2897,12 @@ fn mark_previous_paragraph_with_id(
 fn final_paragraph<'a>(
     paragraph: &'a CT_P,
     kind: &str,
+    move_id: Option<i32>,
     merged: Option<&'a CT_PPr>,
     metadata: &mut Metadata<'_>,
 ) -> Result<(EmittedOwner<'a>, String)> {
     let own = paragraph.properties.as_ref();
-    let (accepted, rejected) = if kind == "del" {
+    let (accepted, rejected) = if matches!(kind, "del" | "moveFrom") {
         (merged, own)
     } else {
         (own, merged)
@@ -2921,11 +2917,14 @@ fn final_paragraph<'a>(
         } else {
             run_xml(run)?
         };
-        output.push_str(
-            &metadata
+        output.push_str(&match move_id {
+            Some(id) => {
+                IdAllocator::revision_with_id(kind, metadata.author, metadata.timestamp, &run, id)
+            }
+            None => metadata
                 .ids
                 .revision(kind, metadata.author, metadata.timestamp, &run)?,
-        );
+        });
     }
     output.push_str("</w:p>");
     Ok((EmittedOwner::Paragraph { accepted, rejected }, output))
@@ -5196,7 +5195,7 @@ fn compare_control_from_xml(
                     && !next_is_paragraph
                 {
                     let merged = mark_previous_paragraph(&mut content, "del", metadata)?;
-                    content.push(final_paragraph(paragraph, "del", merged, metadata)?);
+                    content.push(final_paragraph(paragraph, "del", None, merged, metadata)?);
                 } else {
                     content.push((
                         EmittedOwner::of_control(
@@ -5213,7 +5212,7 @@ fn compare_control_from_xml(
                     && !next_is_paragraph
                 {
                     let merged = mark_previous_paragraph(&mut content, "ins", metadata)?;
-                    content.push(final_paragraph(paragraph, "ins", merged, metadata)?);
+                    content.push(final_paragraph(paragraph, "ins", None, merged, metadata)?);
                 } else {
                     content.push((
                         EmittedOwner::of_control(edited_content[j], edited_content[j], Some("ins")),

@@ -959,17 +959,18 @@ which keeps its own properties. When the two resolutions need different
 properties there, the final paragraph carries the accepted paragraph
 properties with a `w:pPrChange` that holds the rejected ones, and its mark
 `w:rPr` ends with a `w:rPrChange` that holds the rejected mark formatting, as
-Word's own Compare writes them. An inserted paragraph therefore records the
-original properties of the paragraph before it, and a deleted one the edited
-properties of that paragraph.
+Word's own Compare writes them. An inserted or moved-in paragraph therefore
+records the original properties of the paragraph before it, and a deleted or
+moved-out one the edited properties of that paragraph.
 Comparison patches only owned source spans, preserves every unowned byte,
 stages the complete package, proves that acceptance matches the edited policy
 projection and rejection matches the original, then commits once.
 Alignment leaves paragraph properties out so that a paragraph whose
 properties changed still matches, but the accept and reject projection adds
 the modeled properties of every paragraph of each story, including those in
-tables and content controls, unless formatting is ignored. A resolution that loses
-paragraph or mark formatting therefore fails the postcondition.
+tables and content controls, unless formatting is ignored. A resolution that
+loses paragraph or mark formatting, apart from section breaks, therefore fails
+the postcondition.
 
 `rdocx-layout` owns the renderer-only revision projection. The
 `LayoutInput::revision_view` selector chooses an accepted or tracked view. The

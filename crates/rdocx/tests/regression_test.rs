@@ -39320,7 +39320,7 @@ fn without_revision_metadata(xml: &str) -> String {
     output
 }
 
-const FINAL_PARAGRAPH_PROPERTY_PAIRS: [(&[&str], &[&str]); 7] = [
+const FINAL_PARAGRAPH_PROPERTY_PAIRS: [(&[&str], &[&str]); 10] = [
     (&["A"], &["A", "b"]),
     (&["A"], &["A", "T", "b"]),
     (&["A", "b"], &["A"]),
@@ -39330,6 +39330,11 @@ const FINAL_PARAGRAPH_PROPERTY_PAIRS: [(&[&str], &[&str]); 7] = [
     (&["A", "b"], &["R"]),
     // Only the paragraph properties differ, and both marks are bold.
     (&["A"], &["A", "B"]),
+    // A paragraph moved to or from the end, and the last paragraph moved to
+    // the top. The body pairs them as moves.
+    (&["m", "A"], &["A", "m"]),
+    (&["A", "m"], &["m", "A"]),
+    (&["b", "A", "m"], &["m", "b", "A"]),
 ];
 
 #[test]
