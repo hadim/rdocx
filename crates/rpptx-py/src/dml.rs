@@ -16,6 +16,7 @@ const MAX_LINE_WIDTH_EMU: i64 = 20_116_800;
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyFillFormat>()?;
     module.add_class::<PyLineFormat>()?;
+    module.add_class::<PyLineEndFormat>()?;
     module.add_class::<PyColorFormat>()?;
     Ok(())
 }
@@ -103,6 +104,119 @@ fn write_fill(
     result.map_err(|error| rpptx_to_pyerr(py, error))
 }
 
+/// Changes the direct line of a shape. Without one, `a:ln` is created only
+/// when `create` is set, so a removal never adds an empty line.
+fn update_line(
+    py: Python<'_>,
+    presentation: &mut rpptx::Presentation,
+    path: &ContentPath,
+    create: bool,
+    change: impl FnOnce(&mut rpptx::CT_LineProperties),
+) -> PyResult<()> {
+    let missing = || PyIndexError::new_err("shape index out of range");
+    let line = shape_ref_at(presentation, path)
+        .ok_or_else(missing)?
+        .line()
+        .cloned();
+    let mut line = match line {
+        Some(line) => line,
+        None if create => rpptx::CT_LineProperties::default(),
+        None => return Ok(()),
+    };
+    change(&mut line);
+    shape_mut_at(presentation, path)
+        .ok_or_else(missing)?
+        .set_line(line)
+        .map_err(|error| rpptx_to_pyerr(py, error))
+}
+
+fn dml_enum(py: Python<'_>, name: &str, value: i32) -> PyResult<Py<PyAny>> {
+    py.import("rpptx.enum.dml")?
+        .getattr(name)?
+        .call1((value,))
+        .map(Bound::unbind)
+}
+
+/// `MSO_LINE_DASH_STYLE` values, with the python-pptx mapping for the nine
+/// members it shares.
+fn dash_value(dash: rpptx::ST_PresetLineDashVal) -> i32 {
+    use rpptx::ST_PresetLineDashVal as Dash;
+    match dash {
+        Dash::Solid => 1,
+        Dash::SystemDash => 2,
+        Dash::SystemDot => 3,
+        Dash::Dash => 4,
+        Dash::DashDot => 5,
+        Dash::LargeDashDotDot => 6,
+        Dash::LargeDash => 7,
+        Dash::LargeDashDot => 8,
+        Dash::SystemDashDot => 12,
+        Dash::Dot => 13,
+        Dash::SystemDashDotDot => 14,
+    }
+}
+
+fn dash_from_value(value: i32) -> PyResult<rpptx::ST_PresetLineDashVal> {
+    rpptx::ST_PresetLineDashVal::ALL
+        .into_iter()
+        .find(|dash| dash_value(*dash) == value)
+        .ok_or_else(|| {
+            PyValueError::new_err(
+                "dash style must be an MSO_LINE_DASH_STYLE member other than DASH_STYLE_MIXED",
+            )
+        })
+}
+
+/// `MSO_ARROWHEAD_STYLE` values, as `MsoArrowheadStyle` numbers them.
+fn end_type_value(kind: rpptx::LineEndType) -> i32 {
+    match kind {
+        rpptx::LineEndType::None => 1,
+        rpptx::LineEndType::Triangle => 2,
+        rpptx::LineEndType::Arrow => 3,
+        rpptx::LineEndType::Stealth => 4,
+        rpptx::LineEndType::Diamond => 5,
+        rpptx::LineEndType::Oval => 6,
+    }
+}
+
+fn end_type_from_value(value: i32) -> PyResult<rpptx::LineEndType> {
+    Ok(match value {
+        1 => rpptx::LineEndType::None,
+        2 => rpptx::LineEndType::Triangle,
+        3 => rpptx::LineEndType::Arrow,
+        4 => rpptx::LineEndType::Stealth,
+        5 => rpptx::LineEndType::Diamond,
+        6 => rpptx::LineEndType::Oval,
+        _ => {
+            return Err(PyValueError::new_err(
+                "line end type must be an MSO_ARROWHEAD_STYLE member",
+            ));
+        }
+    })
+}
+
+/// `MSO_ARROWHEAD_WIDTH` and `MSO_ARROWHEAD_LENGTH` share these values.
+fn end_size_value(size: rpptx::LineEndSize) -> i32 {
+    match size {
+        rpptx::LineEndSize::Small => 1,
+        rpptx::LineEndSize::Medium => 2,
+        rpptx::LineEndSize::Large => 3,
+    }
+}
+
+fn end_size_from_value(value: i32, name: &str) -> PyResult<rpptx::LineEndSize> {
+    Ok(match value {
+        1 => rpptx::LineEndSize::Small,
+        2 => rpptx::LineEndSize::Medium,
+        3 => rpptx::LineEndSize::Large,
+        _ => {
+            return Err(PyValueError::new_err(format!(
+                "line end size must be an {name} member"
+            )));
+        }
+    })
+}
+
 fn fill_type_name(fill: Option<&rpptx::Fill>) -> &'static str {
     match fill {
         None => "_NoneFill",
@@ -181,10 +295,7 @@ impl PyFillFormat {
             Some(rpptx::Fill::NoFill(_)) => 5,
             Some(rpptx::Fill::Blip(_)) => 6,
         };
-        py.import("rpptx.enum.dml")?
-            .getattr("MSO_FILL_TYPE")?
-            .call1((value,))
-            .map(|member| Some(member.unbind()))
+        dml_enum(py, "MSO_FILL_TYPE", value).map(Some)
     }
 
     /// Sets a solid fill, keeping an existing solid fill and its colour.
@@ -356,16 +467,183 @@ impl PyLineFormat {
             )));
         }
         let mut presentation = self.presentation.borrow_mut(py);
-        let missing = || PyIndexError::new_err("shape index out of range");
-        let mut line = shape_ref_at(&presentation.inner, &self.path)
-            .ok_or_else(missing)?
+        update_line(py, &mut presentation.inner, &self.path, true, |line| {
+            line.width = Some(width as u32);
+        })
+    }
+
+    /// Returns the preset dash, or `None` without one or with a custom dash.
+    #[getter]
+    fn dash_style(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.validate(py)?;
+        let dash = shape_ref_at(&self.presentation.borrow(py).inner, &self.path)
+            .ok_or_else(|| PyIndexError::new_err("shape index out of range"))?
             .line()
-            .cloned()
-            .unwrap_or_default();
-        line.width = Some(width as u32);
-        shape_mut_at(&mut presentation.inner, &self.path)
-            .ok_or_else(missing)?
-            .set_line(line)
-            .map_err(|error| rpptx_to_pyerr(py, error))
+            .and_then(|line| match &line.dash {
+                Some(rpptx::LineDash::Preset(dash)) => Some(dash.value),
+                _ => None,
+            });
+        dash.map(|dash| dml_enum(py, "MSO_LINE_DASH_STYLE", dash_value(dash)))
+            .transpose()
+    }
+
+    /// Writes `a:prstDash`. `None` removes a preset or custom dash.
+    #[setter]
+    fn set_dash_style(&self, py: Python<'_>, value: Option<i32>) -> PyResult<()> {
+        self.validate(py)?;
+        let dash = value.map(dash_from_value).transpose()?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        update_line(
+            py,
+            &mut presentation.inner,
+            &self.path,
+            dash.is_some(),
+            |line| {
+                line.dash = match (dash, line.dash.take()) {
+                    (None, _) => None,
+                    (Some(value), Some(rpptx::LineDash::Preset(mut preset))) => {
+                        preset.value = value;
+                        Some(rpptx::LineDash::Preset(preset))
+                    }
+                    (Some(value), _) => {
+                        Some(rpptx::LineDash::Preset(rpptx::PresetDash::new(value)))
+                    }
+                };
+            },
+        )
+    }
+
+    /// Returns the `a:headEnd`, the end at the first point of the line.
+    #[getter]
+    fn head_end(&self, py: Python<'_>) -> PyResult<Py<PyLineEndFormat>> {
+        self.line_end(py, false)
+    }
+
+    /// Returns the `a:tailEnd`, the end at the last point of the line.
+    #[getter]
+    fn tail_end(&self, py: Python<'_>) -> PyResult<Py<PyLineEndFormat>> {
+        self.line_end(py, true)
+    }
+}
+
+impl PyLineFormat {
+    fn line_end(&self, py: Python<'_>, tail: bool) -> PyResult<Py<PyLineEndFormat>> {
+        self.validate(py)?;
+        Py::new(
+            py,
+            PyLineEndFormat {
+                presentation: self.presentation.clone_ref(py),
+                path: self.path.clone(),
+                tail,
+            },
+        )
+    }
+}
+
+/// A live view of one end of a line, its `a:headEnd` or `a:tailEnd`.
+///
+/// Each property is `None` when its attribute is absent. Assigning `None`
+/// removes the attribute, and an end left with no attribute is removed. An
+/// `a:ln` left empty is kept, as python-pptx keeps it.
+#[pyclass(name = "LineEndFormat")]
+pub struct PyLineEndFormat {
+    presentation: Py<PyPresentation>,
+    path: ContentPath,
+    tail: bool,
+}
+
+impl PyLineEndFormat {
+    fn end(&self, py: Python<'_>) -> PyResult<Option<rpptx::LineEnd>> {
+        let presentation = self.presentation.borrow(py);
+        let suffix = if self.tail {
+            ".line.tail_end"
+        } else {
+            ".line.head_end"
+        };
+        validate_path(py, &presentation, &self.path, "line end", suffix)?;
+        let line = shape_ref_at(&presentation.inner, &self.path)
+            .ok_or_else(|| PyIndexError::new_err("shape index out of range"))?
+            .line();
+        Ok(line.and_then(|line| {
+            if self.tail {
+                line.tail_end.clone()
+            } else {
+                line.head_end.clone()
+            }
+        }))
+    }
+
+    fn update(
+        &self,
+        py: Python<'_>,
+        create: bool,
+        change: impl FnOnce(&mut rpptx::LineEnd),
+    ) -> PyResult<()> {
+        self.end(py)?;
+        let tail = self.tail;
+        let mut presentation = self.presentation.borrow_mut(py);
+        update_line(py, &mut presentation.inner, &self.path, create, |line| {
+            let slot = if tail {
+                &mut line.tail_end
+            } else {
+                &mut line.head_end
+            };
+            if slot.is_none() && !create {
+                return;
+            }
+            let mut end = slot.take().unwrap_or_default();
+            change(&mut end);
+            *slot = (end != rpptx::LineEnd::default()).then_some(end);
+        })
+    }
+}
+
+#[pymethods]
+impl PyLineEndFormat {
+    #[getter(r#type)]
+    fn end_type(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.end(py)?
+            .and_then(|end| end.kind)
+            .map(|kind| dml_enum(py, "MSO_ARROWHEAD_STYLE", end_type_value(kind)))
+            .transpose()
+    }
+
+    /// Writes `type`. `NONE` writes `type="none"`, as PowerPoint scripting does.
+    #[setter(r#type)]
+    fn set_end_type(&self, py: Python<'_>, value: Option<i32>) -> PyResult<()> {
+        let kind = value.map(end_type_from_value).transpose()?;
+        self.update(py, kind.is_some(), |end| end.kind = kind)
+    }
+
+    #[getter]
+    fn width(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.end(py)?
+            .and_then(|end| end.width)
+            .map(|size| dml_enum(py, "MSO_ARROWHEAD_WIDTH", end_size_value(size)))
+            .transpose()
+    }
+
+    #[setter]
+    fn set_width(&self, py: Python<'_>, value: Option<i32>) -> PyResult<()> {
+        let size = value
+            .map(|value| end_size_from_value(value, "MSO_ARROWHEAD_WIDTH"))
+            .transpose()?;
+        self.update(py, size.is_some(), |end| end.width = size)
+    }
+
+    #[getter]
+    fn length(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.end(py)?
+            .and_then(|end| end.length)
+            .map(|size| dml_enum(py, "MSO_ARROWHEAD_LENGTH", end_size_value(size)))
+            .transpose()
+    }
+
+    #[setter]
+    fn set_length(&self, py: Python<'_>, value: Option<i32>) -> PyResult<()> {
+        let size = value
+            .map(|value| end_size_from_value(value, "MSO_ARROWHEAD_LENGTH"))
+            .transpose()?;
+        self.update(py, size.is_some(), |end| end.length = size)
     }
 }

@@ -28,7 +28,10 @@ pub use oxml_drawing::color::ColorChoice;
 use oxml_drawing::color::ColorMap;
 pub use oxml_drawing::fill::{Fill, NoFill, PatternFill, SolidFill};
 use oxml_drawing::geometry::{Guide, GuideOp, GuideOperand};
-pub use oxml_drawing::line::CT_LineProperties;
+pub use oxml_drawing::line::{
+    CT_LineProperties, LineDash, LineEnd, LineEndSize, LineEndType, PresetDash,
+    ST_PresetLineDashVal,
+};
 use oxml_drawing::namespace::A_NS;
 use oxml_drawing::shape_props::CT_ShapeProperties;
 #[cfg(feature = "render")]

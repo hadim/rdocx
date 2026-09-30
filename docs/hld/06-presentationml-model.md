@@ -317,7 +317,9 @@ children only. The selected `mc:Fallback` view remains read-only.
 Position, size, rotation, and name setters support ordinary shapes, pictures,
 graphic frames, groups, and connectors. Fill and line setters support ordinary
 shapes, pictures, and connectors because those kinds own typed shape
-properties. Adjustment mutation supports finite values on preset geometry.
+properties. `rpptx` re-exports the line dash and line end types, so a caller
+edits the dash or a head or tail end on a copy of `ShapeRef::line` and writes
+it back with `set_line`. Adjustment mutation supports finite values on preset geometry.
 Unsupported shape kinds and unsupported geometry return concrete facade
 errors. Indexed access remains total and returns `Option`.
 
