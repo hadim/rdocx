@@ -1691,6 +1691,11 @@ marker. Complex-field collapse and in-memory direct-run mutation preserve both
 coordinates. When two markers share one projected boundary, encounter order
 qualifies their direction before layout creates a bookmark target.
 
+A page field placeholder in text after a right, centre or decimal tab stop
+records where that text lies on its line. Once pagination gives the field its
+value, the text closes up around it and moves back by the share its stop
+aligns on, as far as the tab allows, so it stays on its stop as in Word.
+
 Only bookmarks named by a valid `PAGEREF` add a zero-width target marker to
 page output. After the document paginates once, the existing field substitution
 pass records the page containing each target, reshapes PAGE, NUMPAGES, and

@@ -259,6 +259,7 @@ mod tests {
             field_kind: None,
             field_source: None,
             note: None,
+            tab_aligned: None,
         })]);
         assert_eq!(
             render_to_pdf_with_options(&missing_font, PdfOptions::new(PdfConformance::PdfA2b)),

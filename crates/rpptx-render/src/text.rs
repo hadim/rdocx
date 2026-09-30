@@ -971,7 +971,7 @@ fn emit_line_items(
                 );
                 x += segment.width;
             }
-            LineItem::Tab { width, leader } => {
+            LineItem::Tab { width, leader, .. } => {
                 if let Some(segment) = leader {
                     emit_segment(
                         segment,
@@ -1048,6 +1048,7 @@ fn emit_segment(
         field_kind: segment.field_kind,
         field_source: segment.field_source,
         note: segment.note,
+        tab_aligned: None,
     }));
 
     if segment.underline.is_some() {

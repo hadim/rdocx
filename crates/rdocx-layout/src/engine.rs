@@ -5240,12 +5240,204 @@ fn extract_background_color(xml: &str) -> Option<Color> {
 }
 
 /// Replace field placeholder GlyphRuns with actual values.
+///
+/// Text aligned on a right, centre or decimal tab stop is then moved so it
+/// stays on its stop with the value in place of the placeholder.
 fn substitute_fields(
     elements: &mut Vec<PositionedElement>,
     page_number: usize,
     total_pages: usize,
     bookmark_pages: &HashMap<usize, usize>,
     fm: &mut FontManager,
+) {
+    let mut changes = Vec::new();
+    substitute_field_values(
+        elements,
+        page_number,
+        total_pages,
+        bookmark_pages,
+        fm,
+        &mut changes,
+    );
+    if !changes.is_empty() {
+        realign_tab_aligned_text(elements, &changes);
+    }
+}
+
+/// A tab-aligned field whose value is wider or narrower than its placeholder.
+struct FieldWidthChange {
+    aligned: oxml_layout::TabAlignedField,
+    baseline: f64,
+    /// Where the placeholder started.
+    x: f64,
+    delta: f64,
+}
+
+impl FieldWidthChange {
+    fn same_text(&self, other: &Self) -> bool {
+        (self.baseline - other.baseline).abs() < 0.01
+            && (self.aligned.start - other.aligned.start).abs() < 0.01
+    }
+}
+
+/// How far a position moves once the fields of tab-aligned text hold their
+/// values, or `None` outside such text.
+///
+/// Text after a right, centre or decimal tab moves back by the share of the
+/// changes its stop aligns on, as far as its tab allows, and past each field
+/// before the position by that field's change. A tab with no width left
+/// starts its text where the text before it now ends.
+fn realigned_offset(changes: &[FieldWidthChange], x: f64, baseline: f64) -> Option<f64> {
+    let mut starts = changes
+        .iter()
+        .filter(|change| (change.baseline - baseline).abs() < 0.01)
+        .collect::<Vec<_>>();
+    starts.sort_by(|a, b| a.aligned.start.total_cmp(&b.aligned.start));
+    starts.dedup_by(|a, b| a.same_text(b));
+    // Where the previous aligned text ended, and how far that end moved.
+    let mut carry = None::<(f64, f64)>;
+    for first in starts {
+        let aligned = first.aligned;
+        let fields = changes.iter().filter(|change| change.same_text(first));
+        let shift: f64 = fields
+            .clone()
+            .map(|change| change.aligned.shift * change.delta)
+            .sum();
+        let old_width = aligned.gap.max(0.0);
+        let moved = carry
+            .filter(|(end, _)| (aligned.start - old_width - end).abs() < 0.01)
+            .map_or(0.0, |(_, moved)| moved);
+        let start = moved + (aligned.gap - moved - shift).max(0.0) - old_width;
+        if x > aligned.start - 0.01 && x < aligned.end - 0.001 {
+            return Some(
+                start
+                    + fields
+                        .filter(|change| change.x < x - 0.001)
+                        .map(|change| change.delta)
+                        .sum::<f64>(),
+            );
+        }
+        carry = Some((
+            aligned.end,
+            start + fields.map(|change| change.delta).sum::<f64>(),
+        ));
+    }
+    None
+}
+
+fn realign_tab_aligned_text(elements: &mut [PositionedElement], changes: &[FieldWidthChange]) {
+    for element in elements.iter_mut() {
+        match element {
+            PositionedElement::Text(run) => {
+                if let Some(offset) = realigned_offset(changes, run.origin.x, run.origin.y) {
+                    run.origin.x += offset;
+                } else {
+                    realign_tab_leader(run, changes);
+                }
+            }
+            PositionedElement::MultilingualText(run) => {
+                if let Some(offset) = realigned_offset(changes, run.origin.x, run.origin.y) {
+                    run.origin.x += offset;
+                }
+            }
+            PositionedElement::Line { start, end, .. } => {
+                // An underline or a strike sits within a line height of the
+                // text it marks.
+                if let Some(offset) = changes
+                    .iter()
+                    .filter(|change| (start.y - change.baseline).abs() < 12.0)
+                    .find_map(|change| realigned_offset(changes, start.x, change.baseline))
+                {
+                    start.x += offset;
+                    end.x += offset;
+                }
+            }
+            PositionedElement::FilledRect { rect, .. }
+            | PositionedElement::LinkAnnotation { rect, .. } => {
+                if let Some(offset) = changes
+                    .iter()
+                    .filter(|change| {
+                        rect.y <= change.baseline && change.baseline <= rect.y + rect.height
+                    })
+                    .find_map(|change| realigned_offset(changes, rect.x, change.baseline))
+                {
+                    rect.x += offset;
+                }
+            }
+            PositionedElement::MarkedContent { children, .. } => {
+                realign_tab_aligned_text(children, changes)
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Lengthen or shorten a tab leader that ends where tab-aligned text starts,
+/// so it still reaches the text once the text moves.
+fn realign_tab_leader(run: &mut GlyphRun, changes: &[FieldWidthChange]) {
+    let end = run.origin.x + run.advances.iter().sum::<f64>();
+    // Leader glyphs step evenly, and the last one has no spacing after it,
+    // so a leader stops short of its tab's end by less than two steps.
+    let last = run.advances.last().copied().unwrap_or(0.0);
+    let step = if run.advances.len() > 1 {
+        run.advances[0]
+    } else {
+        last
+    };
+    if step <= 0.0 {
+        return;
+    }
+    let Some(change) = changes.iter().find(|change| {
+        (run.origin.y - change.baseline).abs() < 0.01
+            && end < change.aligned.start + 0.01
+            && change.aligned.start - end < 2.0 * step
+    }) else {
+        return;
+    };
+    let Some(&glyph) = run.glyph_ids.first() else {
+        return;
+    };
+    let Some(ch) = run.text.chars().next() else {
+        return;
+    };
+    if run.glyph_ids.iter().any(|id| *id != glyph)
+        || run.text.chars().any(|other| other != ch)
+        || run.text.chars().count() != run.glyph_ids.len()
+    {
+        return;
+    }
+    let Some(offset) = realigned_offset(changes, change.aligned.start, change.baseline) else {
+        return;
+    };
+    let target = change.aligned.start + offset;
+    let mut end = end;
+    while end > target + 0.01 && run.glyph_ids.len() > 1 {
+        run.glyph_ids.pop();
+        run.advances.pop();
+        run.text.pop();
+        if let Some(previous) = run.advances.last_mut() {
+            *previous = last;
+        }
+        end -= step;
+    }
+    while end + step <= target + 0.01 {
+        if let Some(previous) = run.advances.last_mut() {
+            *previous = step;
+        }
+        run.glyph_ids.push(glyph);
+        run.advances.push(last);
+        run.text.push(ch);
+        end += step;
+    }
+}
+
+fn substitute_field_values(
+    elements: &mut Vec<PositionedElement>,
+    page_number: usize,
+    total_pages: usize,
+    bookmark_pages: &HashMap<usize, usize>,
+    fm: &mut FontManager,
+    changes: &mut Vec<FieldWidthChange>,
 ) {
     for element in elements.iter_mut() {
         match element {
@@ -5266,9 +5458,21 @@ fn substitute_fields(
                     FieldKind::Target(_) => continue,
                 };
                 if let Ok(shaped) = fm.shape_text(run.font_id, &value, run.font_size) {
+                    let placeholder: f64 = run.advances.iter().sum();
                     run.text = value;
                     run.glyph_ids = shaped.glyph_ids;
                     run.advances = shaped.advances;
+                    let delta = run.advances.iter().sum::<f64>() - placeholder;
+                    if let Some(aligned) = run.tab_aligned
+                        && delta.abs() > 1e-9
+                    {
+                        changes.push(FieldWidthChange {
+                            aligned,
+                            baseline: run.origin.y,
+                            x: run.origin.x,
+                            delta,
+                        });
+                    }
                 }
             }
             PositionedElement::MultilingualText(run) => {
@@ -5343,9 +5547,14 @@ fn substitute_fields(
                 bookmark_pages,
                 fm,
             ),
-            PositionedElement::MarkedContent { children, .. } => {
-                substitute_fields(children, page_number, total_pages, bookmark_pages, fm)
-            }
+            PositionedElement::MarkedContent { children, .. } => substitute_field_values(
+                children,
+                page_number,
+                total_pages,
+                bookmark_pages,
+                fm,
+                changes,
+            ),
             _ => {}
         }
     }
@@ -8451,6 +8660,7 @@ fn layout_watermark(
                 field_kind: None,
                 field_source: None,
                 note: None,
+                tab_aligned: None,
             })]
         }
         VmlWatermark::Image {
@@ -8914,6 +9124,7 @@ fn push_east_asian_layout_text(
             field_kind: None,
             field_source: None,
             note: None,
+            tab_aligned: None,
         })
     };
 
@@ -9186,6 +9397,7 @@ fn push_emphasis_marked_text(
             field_kind: None,
             field_source: None,
             note: None,
+            tab_aligned: None,
         }));
         push_annotation_decorations(&mut children, base, baseline, shaped.width, ascent, descent);
 
@@ -9220,6 +9432,7 @@ fn push_emphasis_marked_text(
                     field_kind: None,
                     field_source: None,
                     note: None,
+                    tab_aligned: None,
                 }));
             }
             x += advance;
@@ -9330,6 +9543,7 @@ fn measure_annotation_line(
             field_kind: None,
             field_source: None,
             note: None,
+            tab_aligned: None,
         });
         line.width += shaped.width;
     }

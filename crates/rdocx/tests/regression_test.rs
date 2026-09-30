@@ -39176,5 +39176,54 @@ mod tab_stop_regressions {
         let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
         assert_at(run(&reopened, "Scope").0, 114.0, "numbered entry title");
         assert_at(run(&reopened, "Plain").0, 90.0, "unnumbered entry title");
+        // The page number ends on the style's right stop at 8640 twips, as in
+        // Word, not where the wider page placeholder ended.
+        assert_at(run(&reopened, "1").1, 522.0, "page number");
+    }
+
+    /// Page fields take their value after pagination, in place of a wider
+    /// placeholder. Word 16 ends "Page 1 of 1" on the right stop, and
+    /// centres "C 1" on the centre stop. Layout left both where the
+    /// placeholders put them, 6 points short of the right stop.
+    #[test]
+    fn page_fields_after_a_right_or_centre_stop_align_on_it() {
+        let field = |instruction: &str| {
+            format!(
+                r#"<w:fldSimple w:instr=" {instruction} "><w:r><w:t>1</w:t></w:r></w:fldSimple>"#
+            )
+        };
+        let document = document(&[format!(
+            r#"<w:p><w:pPr>{}</w:pPr><w:r><w:t>Left</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t xml:space="preserve">C </w:t></w:r>{}<w:r><w:tab/></w:r><w:r><w:t xml:space="preserve">Page </w:t></w:r>{}<w:r><w:t xml:space="preserve"> of </w:t></w:r>{}</w:p>"#,
+            stops(&[("center", 4320, "none"), ("right", 8640, "dot")]),
+            field("PAGE"),
+            field("PAGE"),
+            field("NUMPAGES"),
+        )]);
+        let layout = document.layout_deterministic().unwrap();
+        let mut runs = Vec::new();
+        oxml_layout::walk(&layout.layout.pages[0].elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element
+                && !run.text.starts_with('.')
+            {
+                runs.push((
+                    run.text.clone(),
+                    run.origin.x,
+                    run.origin.x + run.advances.iter().sum::<f64>(),
+                ));
+            }
+        });
+        let texts = runs.iter().map(|run| run.0.as_str()).collect::<Vec<_>>();
+        assert_eq!(texts, ["Left", "C ", "1", "Page ", "1", " ", "of ", "1"]);
+        // "C 1" is centred on x 306, and each run follows the one before.
+        assert_at((runs[1].1 + runs[2].2) / 2.0, 306.0, "centred text");
+        assert_at(runs[2].1, runs[1].2, "centred page field");
+        for pair in runs[3..].windows(2) {
+            assert_at(
+                pair[1].1,
+                pair[0].2,
+                &format!("{} after {}", pair[1].0, pair[0].0),
+            );
+        }
+        assert_at(runs[7].2, 522.0, "right-aligned page count");
     }
 }

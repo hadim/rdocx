@@ -189,6 +189,13 @@ pub enum LineItem {
         width: f64,
         /// Pre-shaped leader text to fill the tab gap (e.g., dots, hyphens).
         leader: Option<TextSegment>,
+        /// The stop's alignment. Text after a right, centre or decimal stop
+        /// is aligned on it up to the next tab or the end of the line.
+        align: TabAlign,
+        /// The width the tab would take if the text after it could start
+        /// before it. It is below `width` only when that text is too wide to
+        /// align on its stop.
+        gap: f64,
     },
     Image {
         width: f64,
@@ -657,13 +664,20 @@ impl LineState {
             self.items.push(LineItem::Tab {
                 width: 0.0,
                 leader: None,
+                align: tab.align,
+                gap: 0.0,
             });
         } else {
             let width = (stop - start).max(0.0);
             let leader = tab
                 .leader
                 .and_then(|ch| shape_leader(fm, font_ctx, ch, width));
-            self.items.push(LineItem::Tab { width, leader });
+            self.items.push(LineItem::Tab {
+                width,
+                leader,
+                align: TabAlign::Left,
+                gap: width,
+            });
             self.width += width;
         }
     }
@@ -675,7 +689,12 @@ impl LineState {
             let leader = tab
                 .leader
                 .and_then(|ch| shape_leader(fm, tab.font_ctx, ch, width));
-            self.items[tab.index] = LineItem::Tab { width, leader };
+            self.items[tab.index] = LineItem::Tab {
+                width,
+                leader,
+                align: tab.align,
+                gap: tab.gap(),
+            };
         }
     }
 
@@ -764,6 +783,11 @@ impl PendingTab {
     /// The tab's width, which never goes negative: text too wide to end at
     /// its stop starts where the tab does.
     fn width(&self) -> f64 {
+        self.gap().max(0.0)
+    }
+
+    /// The tab's width before it is kept from going negative.
+    fn gap(&self) -> f64 {
         let before_stop = match self.align {
             TabAlign::Center => self.following / 2.0,
             TabAlign::Decimal => self.aligned,
@@ -773,7 +797,7 @@ impl PendingTab {
         if let Some(limit) = self.shift_limit {
             width = width.min(limit - self.start - self.following);
         }
-        width.max(0.0)
+        width
     }
 }
 
@@ -1481,6 +1505,8 @@ fn inline_to_line_item(item: &InlineItem) -> LineItem {
         InlineItem::Tab => LineItem::Tab {
             width: 0.0,
             leader: None,
+            align: TabAlign::Left,
+            gap: 0.0,
         },
         InlineItem::Image {
             width,
@@ -1514,6 +1540,8 @@ fn inline_to_line_item(item: &InlineItem) -> LineItem {
         InlineItem::LineBreak | InlineItem::PageBreak | InlineItem::ColumnBreak => LineItem::Tab {
             width: 0.0,
             leader: None,
+            align: TabAlign::Left,
+            gap: 0.0,
         },
     }
 }
@@ -2276,6 +2304,7 @@ mod tests {
             field_kind: segment.field_kind,
             field_source: segment.field_source,
             note: segment.note,
+            tab_aligned: None,
         };
     }
 
@@ -2593,6 +2622,8 @@ mod tests {
         let LineItem::Tab {
             width,
             leader: Some(leader),
+            align: TabAlign::Right,
+            ..
         } = &lines[0].items[1]
         else {
             panic!("a right stop with a dot leader shapes its leader");

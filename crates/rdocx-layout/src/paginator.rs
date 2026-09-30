@@ -15,7 +15,8 @@ use oxml_layout::TextDirection;
 use oxml_layout::{
     Align, Color, FontManager, ForcedBreakKind, GlyphRun, GroupElement, LayoutLine, LineItem,
     MediaId, MultilingualGlyphRun, NoteRef, NoteStream, OutlineEntry, PageFrame, Path, Point,
-    PositionedElement, Rect, Transform, Underline, break_into_lines, break_multilingual_into_lines,
+    PositionedElement, Rect, TabAlign, TabAlignedField, Transform, Underline, break_into_lines,
+    break_multilingual_into_lines,
 };
 
 use rdocx_oxml::borders::{CT_BorderEdge, CT_PBdr};
@@ -1935,6 +1936,7 @@ impl<'a> Pager<'a> {
                 field_kind: None,
                 field_source: None,
                 note: None,
+                tab_aligned: None,
             }));
         }
         if !children.is_empty() {
@@ -2556,6 +2558,7 @@ fn draw_note(
             field_kind: None,
             field_source: None,
             note: None,
+            tab_aligned: None,
         }));
     }
 
@@ -3499,6 +3502,56 @@ struct ReflowTabProvenance {
     visual_item: usize,
 }
 
+/// For each item of a line, where a field placeholder sits in the text after
+/// a right, centre or decimal tab, measured from the start of the line.
+fn tab_aligned_fields(items: &[LineItem]) -> Vec<Option<TabAlignedField>> {
+    let mut fields = vec![None; items.len()];
+    let mut x = 0.0;
+    let mut index = 0;
+    while index < items.len() {
+        x += items[index].width();
+        let LineItem::Tab { align, gap, .. } = items[index] else {
+            index += 1;
+            continue;
+        };
+        index += 1;
+        if !matches!(
+            align,
+            TabAlign::Right | TabAlign::Center | TabAlign::Decimal
+        ) {
+            continue;
+        }
+        let end_index = items[index..]
+            .iter()
+            .position(|item| matches!(item, LineItem::Tab { .. }))
+            .map_or(items.len(), |offset| index + offset);
+        let segment = &items[index..end_index];
+        let start = x;
+        let end = start + segment.iter().map(LineItem::width).sum::<f64>();
+        let mut before_point = true;
+        for (offset, item) in segment.iter().enumerate() {
+            let LineItem::Text(text) = item else {
+                continue;
+            };
+            if text.field_kind.is_some() {
+                fields[index + offset] = Some(TabAlignedField {
+                    start,
+                    end,
+                    shift: match align {
+                        TabAlign::Center => 0.5,
+                        TabAlign::Decimal if !before_point => 0.0,
+                        _ => 1.0,
+                    },
+                    gap,
+                });
+            } else if text.text.contains('.') {
+                before_point = false;
+            }
+        }
+    }
+    fields
+}
+
 fn render_paragraph_lines(
     lines: &[LayoutLine],
     para: ParagraphView<'_>,
@@ -3553,6 +3606,7 @@ fn render_paragraph_lines(
 
         let mut x = x_offset;
         let mut _accumulated_extra = 0.0;
+        let tab_aligned = tab_aligned_fields(&line.items);
 
         for (visual_item, item) in line.items.iter().enumerate() {
             match item {
@@ -3618,6 +3672,11 @@ fn render_paragraph_lines(
                             None => seg.field_source,
                         },
                         note: seg.note,
+                        tab_aligned: tab_aligned[visual_item].map(|mut field| {
+                            field.start += x_offset;
+                            field.end += x_offset;
+                            field
+                        }),
                     }));
                     text_provenance.push(ReflowTextProvenance {
                         element_position: elements.len() - 1,
@@ -3753,7 +3812,7 @@ fn render_paragraph_lines(
                         kind: ReflowTextProvenanceKind::Multilingual,
                     });
                 }
-                LineItem::Tab { width, leader } => {
+                LineItem::Tab { width, leader, .. } => {
                     if let Some(leader_seg) = leader {
                         // Render the pre-shaped leader text
                         let baseline_y = geometry.margin_top + y + line.ascent;
@@ -3771,6 +3830,7 @@ fn render_paragraph_lines(
                             field_kind: None,
                             field_source: None,
                             note: None,
+                            tab_aligned: None,
                         }));
                         text_provenance.push(ReflowTextProvenance {
                             element_position: elements.len() - 1,
@@ -5385,6 +5445,8 @@ mod tests {
             LineItem::Tab {
                 width: leader.width,
                 leader: Some(leader),
+                align: oxml_layout::TabAlign::Left,
+                gap: 0.0,
             },
             LineItem::Marker(marker.clone()),
         ];
@@ -5477,6 +5539,8 @@ mod tests {
                 LineItem::Tab {
                     width: leader.width,
                     leader: Some(leader.clone()),
+                    align: oxml_layout::TabAlign::Left,
+                    gap: 0.0,
                 },
                 LineItem::Text(hebrew.clone()),
             ];
@@ -5578,6 +5642,8 @@ mod tests {
             LineItem::Tab {
                 width: leader.width,
                 leader: Some(leader),
+                align: oxml_layout::TabAlign::Left,
+                gap: 0.0,
             },
             LineItem::Text(hebrew.clone()),
         ];
@@ -5700,6 +5766,8 @@ mod tests {
                 visual_items.push(LineItem::Tab {
                     width: leader.width,
                     leader: Some(leader.clone()),
+                    align: oxml_layout::TabAlign::Left,
+                    gap: 0.0,
                 });
             }
             visual_items.push(LineItem::Text(field.clone()));
@@ -5903,16 +5971,22 @@ mod tests {
             LineItem::Tab {
                 width: dashes.width,
                 leader: Some(dashes),
+                align: oxml_layout::TabAlign::Left,
+                gap: 0.0,
             },
             LineItem::Text(c.clone()),
             LineItem::Tab {
                 width: dots.width,
                 leader: Some(dots),
+                align: oxml_layout::TabAlign::Left,
+                gap: 0.0,
             },
             LineItem::Text(b.clone()),
             LineItem::Tab {
                 width: 12.0,
                 leader: None,
+                align: oxml_layout::TabAlign::Left,
+                gap: 0.0,
             },
             LineItem::Text(a.clone()),
         ];

@@ -501,6 +501,7 @@ fn layout_text(
                 field_kind: None,
                 field_source: None,
                 note: None,
+                tab_aligned: None,
             })]),
         },
         MATH_TEXT_X_SCALE,

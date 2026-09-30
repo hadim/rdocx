@@ -8660,6 +8660,7 @@ fn handout_slide_number(
         field_kind: None,
         field_source: None,
         note: None,
+        tab_aligned: None,
     }))
 }
 
@@ -9276,6 +9277,7 @@ fn render_media_placeholder(
             field_kind: None,
             field_source: None,
             note: None,
+            tab_aligned: None,
         })],
     })
 }
