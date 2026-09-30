@@ -1454,8 +1454,9 @@ as a new canonical style completing a dangling producer link into a one-way
 link, and it rejects the rebuild. Defects are counted, so a second instance of
 a defect the source has, such as another style inheriting an existing cycle,
 is also introduced. Public style mutation (`add_style`, `set_style`,
-`set_default_style`, `remove_style` and the numbering links) compares the
-styles before and after the same way. It resolves a repeated id
+`set_default_style`, `remove_style` and the numbering links) and the style
+merge of `append`, `insert_document` and fragment insertion compare the
+destination styles before and after the same way. It resolves a repeated id
 to its first definition, `remove_style` removes every definition of the id,
 and `validate_style_graph` still reports each retained defect. An id that
 already exists is refused by `add_style`.

@@ -21221,13 +21221,17 @@ impl Document {
     }
 
     /// Merge styles from another document, avoiding duplicates.
+    ///
+    /// A defect the destination styles already have is retained. Only a
+    /// defect the merged styles introduce rejects the merge.
     fn merge_styles(&mut self, other: &Document) -> Result<()> {
+        let source = self.styles.clone();
         for style in &other.styles.styles {
             if self.styles.get_by_id(&style.style_id).is_none() {
                 self.styles.styles.push(style.clone());
             }
         }
-        style::validate_style_graph(&self.styles)
+        style::validate_style_graph_change(&source, &self.styles).map(|_| ())
     }
 
     pub(crate) fn equivalent_numbering_dependency_id(

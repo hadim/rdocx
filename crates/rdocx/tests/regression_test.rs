@@ -9819,6 +9819,44 @@ fn style_mutations_reject_a_defect_they_introduce_behind_repeated_style_ids() {
 }
 
 #[test]
+fn appending_into_repeated_style_ids_retains_them_and_rejects_a_new_defect() {
+    let mut imported = Document::new();
+    imported
+        .add_style(StyleBuilder::paragraph("Imported", "Imported").based_on("Normal"))
+        .unwrap();
+    imported.add_paragraph("imported").style("Imported");
+
+    let mut appended = document_with_producer_styles(ONE_HEADING_TOC_BODY, REPEATED_STYLE_IDS);
+    appended.append(&imported);
+    let mut inserted = document_with_producer_styles(ONE_HEADING_TOC_BODY, REPEATED_STYLE_IDS);
+    inserted.insert_document(0, &imported);
+    for document in [&appended, &inserted] {
+        assert!(document.style("Imported").is_some());
+        assert_eq!(definitions(document, "Normal").len(), 2);
+        assert_eq!(
+            document.validate_style_graph().unwrap_err().to_string(),
+            "invalid style graph: duplicate style ID 'Normal'"
+        );
+    }
+
+    // A second default paragraph style is new to the destination.
+    let mut conflicting = Document::new();
+    conflicting
+        .add_style(StyleBuilder::paragraph("SourceDefault", "Source Default"))
+        .unwrap();
+    conflicting
+        .set_default_style(StyleType::Paragraph, "SourceDefault")
+        .unwrap();
+    let mut document = document_with_producer_styles(ONE_HEADING_TOC_BODY, REPEATED_STYLE_IDS);
+    let before = document.to_bytes().unwrap();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        document.append(&conflicting);
+    }));
+    assert!(result.is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
 fn numbered_toc_entries_reuse_the_visible_layout_marker() {
     let body = r#"
         <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \o "1-1"</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
