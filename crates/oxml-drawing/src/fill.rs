@@ -287,8 +287,12 @@ pub enum GradientGeometry {
 /// Linear gradient angle and scaling behavior.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct LinearGradient {
+    /// `@ang`. The schema makes it optional without a default, and a missing
+    /// angle reads as 0, a left to right axis, as in LibreOffice's import.
     pub angle: Angle,
     pub scaled: Option<bool>,
+    /// The source had no `@ang`, so a zero angle is written without one.
+    angle_omitted: bool,
     raw_children: OrderedRawChildren,
 }
 
@@ -322,8 +326,12 @@ impl PathGradientKind {
 /// Path gradient shape and optional focal rectangle.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PathGradient {
+    /// `@path`. The schema makes it optional without a default, and a missing
+    /// path reads as `rect`, as in LibreOffice's import.
     pub kind: PathGradientKind,
     pub fill_to_rect: Option<RelativeRect>,
+    /// The source had no `@path`, so a `rect` path is written without one.
+    kind_omitted: bool,
     raw_children: OrderedRawChildren,
 }
 
@@ -1035,9 +1043,11 @@ fn push_raw_attributes(start: &mut BytesStart<'_>, attributes: &[(String, String
 
 fn parse_linear(start: &BytesStart<'_>) -> Result<LinearGradient> {
     reject_conflicting_a_prefix(start)?;
+    let angle = optional_parse::<i32>(start, b"ang")?;
     Ok(LinearGradient {
-        angle: Angle(required_i32(start, b"ang")?),
+        angle: Angle(angle.unwrap_or(0)),
         scaled: optional_bool(start, b"scaled")?,
+        angle_omitted: angle.is_none(),
         raw_children: OrderedRawChildren::default(),
     })
 }
@@ -1053,11 +1063,17 @@ fn parse_linear_element(
 
 fn parse_empty_path(start: &BytesStart<'_>) -> Result<PathGradient> {
     reject_conflicting_a_prefix(start)?;
-    let value = required_attr(start, b"path")?;
-    let kind = PathGradientKind::parse(&value).ok_or_else(|| invalid(start, b"path", value))?;
+    let (kind, kind_omitted) = match get_attr(start, b"path") {
+        Some(value) => (
+            PathGradientKind::parse(&value).ok_or_else(|| invalid(start, b"path", value))?,
+            false,
+        ),
+        None => (PathGradientKind::Rectangle, true),
+    };
     Ok(PathGradient {
         kind,
         fill_to_rect: None,
+        kind_omitted,
         raw_children: OrderedRawChildren::default(),
     })
 }
@@ -1099,7 +1115,9 @@ fn write_geometry<W: Write>(writer: &mut Writer<W>, geometry: &GradientGeometry)
         GradientGeometry::Linear(linear) => {
             let angle = linear.angle.0.to_string();
             let mut start = BytesStart::new("a:lin");
-            start.push_attribute(("ang", angle.as_str()));
+            if !linear.angle_omitted || linear.angle.0 != 0 {
+                start.push_attribute(("ang", angle.as_str()));
+            }
             if let Some(scaled) = linear.scaled.map(bool_text) {
                 start.push_attribute(("scaled", scaled));
             }
@@ -1112,7 +1130,9 @@ fn write_geometry<W: Write>(writer: &mut Writer<W>, geometry: &GradientGeometry)
         }
         GradientGeometry::Path(path) => {
             let mut start = BytesStart::new("a:path");
-            start.push_attribute(("path", path.kind.as_str()));
+            if !path.kind_omitted || path.kind != PathGradientKind::Rectangle {
+                start.push_attribute(("path", path.kind.as_str()));
+            }
             if path.fill_to_rect.is_none() && path.raw_children.is_empty() {
                 return write_empty(writer, start);
             }
@@ -1486,7 +1506,9 @@ fn write_end<W: Write>(writer: &mut Writer<W>, name: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{Fill, FillError, GradientGeometry};
+    use super::{
+        Angle, Fill, FillError, GradientFill, GradientGeometry, LinearGradient, PathGradientKind,
+    };
 
     #[test]
     fn every_fill_form_round_trips_and_gradient_stops_keep_document_order() {
@@ -1521,6 +1543,66 @@ mod tests {
             gradient.geometry,
             Some(GradientGeometry::Linear(_))
         ));
+    }
+
+    #[test]
+    fn gradient_geometry_without_angle_or_path_round_trips_without_adding_them() {
+        let cases: &[&[u8]] = &[
+            br#"<a:gradFill><a:lin scaled="0"/></a:gradFill>"#,
+            br#"<a:gradFill><a:lin/></a:gradFill>"#,
+            br#"<a:gradFill><a:path/></a:gradFill>"#,
+            br#"<a:gradFill><a:path><a:fillToRect l="50000" t="50000" r="50000" b="50000"/></a:path></a:gradFill>"#,
+        ];
+        for xml in cases {
+            let parsed = Fill::from_xml(xml).unwrap();
+            assert_eq!(parsed.to_xml().unwrap(), *xml);
+        }
+
+        // A missing angle reads as 0 and a missing path as rect. Another value
+        // assigned to either is written, since the default no longer holds.
+        let Fill::Gradient(mut gradient) = Fill::from_xml(cases[0]).unwrap() else {
+            panic!("expected gradient")
+        };
+        let Some(GradientGeometry::Linear(linear)) = &mut gradient.geometry else {
+            panic!("expected linear geometry")
+        };
+        assert_eq!(linear.angle, Angle(0));
+        assert_eq!(linear.scaled, Some(false));
+        linear.angle = Angle(5_400_000);
+        assert_eq!(
+            Fill::Gradient(gradient).to_xml().unwrap(),
+            br#"<a:gradFill><a:lin ang="5400000" scaled="0"/></a:gradFill>"#
+        );
+
+        let Fill::Gradient(mut gradient) = Fill::from_xml(cases[3]).unwrap() else {
+            panic!("expected gradient")
+        };
+        let Some(GradientGeometry::Path(path)) = &mut gradient.geometry else {
+            panic!("expected path geometry")
+        };
+        assert_eq!(path.kind, PathGradientKind::Rectangle);
+        assert!(path.fill_to_rect.is_some());
+        path.kind = PathGradientKind::Circle;
+        assert_eq!(
+            Fill::Gradient(gradient).to_xml().unwrap(),
+            br#"<a:gradFill><a:path path="circle"><a:fillToRect l="50000" t="50000" r="50000" b="50000"/></a:path></a:gradFill>"#
+        );
+
+        // Explicit defaults, and a value built in code, keep their attribute.
+        for xml in [
+            br#"<a:gradFill><a:lin ang="0" scaled="0"/></a:gradFill>"#.as_slice(),
+            br#"<a:gradFill><a:path path="rect"/></a:gradFill>"#,
+        ] {
+            assert_eq!(Fill::from_xml(xml).unwrap().to_xml().unwrap(), xml);
+        }
+        let built = GradientFill {
+            geometry: Some(GradientGeometry::Linear(LinearGradient::default())),
+            ..GradientFill::default()
+        };
+        assert_eq!(
+            Fill::Gradient(built).to_xml().unwrap(),
+            br#"<a:gradFill><a:lin ang="0"/></a:gradFill>"#
+        );
     }
 
     #[test]

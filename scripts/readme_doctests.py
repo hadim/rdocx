@@ -382,7 +382,7 @@ ARCHIVE_MEASUREMENTS = {
     "oxml-chart": (102_042, 659_367, 6),
     "oxml-cli-support": (8_614, 30_840, 6),
     "oxml-core": (20_677, 100_124, 15),
-    "oxml-drawing": (161_119, 1_128_372, 24),
+    "oxml-drawing": (161_853, 1_131_956, 24),
     "oxml-layout": (4_623_324, 9_227_483, 51),
     "oxml-media": (12_252, 50_992, 6),
     "oxml-opc": (96_731, 373_059, 12),
