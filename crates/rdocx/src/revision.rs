@@ -447,6 +447,13 @@ impl<'a> XmlTree<'a> {
         promoted_namespaces: &[(String, String)],
     ) -> Result<Vec<u8>> {
         let element = &self.elements[index];
+        // Rejected deleted text reads as text again, and a deleted field
+        // instruction as an instruction.
+        let restored_local = match element.local.as_str() {
+            "delText" if convert_deleted_text && element.word => Some("t"),
+            "delInstrText" if convert_deleted_text && element.word => Some("instrText"),
+            _ => None,
+        };
         if element.empty {
             let raw = &self.source[element.start..element.end];
             let raw = inject_namespace_declarations(
@@ -454,13 +461,10 @@ impl<'a> XmlTree<'a> {
                 &element.namespace_declarations,
                 promoted_namespaces,
             );
-            return Ok(
-                if convert_deleted_text && element.word && element.local == "delText" {
-                    rename_element(&raw, &element.name, "t")
-                } else {
-                    raw
-                },
-            );
+            return Ok(match restored_local {
+                Some(local) => rename_element(&raw, &element.name, local),
+                None => raw,
+            });
         }
 
         let resolves_paragraph_property_change = element.word
@@ -493,15 +497,15 @@ impl<'a> XmlTree<'a> {
             &element.namespace_declarations,
             promoted_namespaces,
         );
-        if convert_deleted_text && element.word && element.local == "delText" {
-            output.extend_from_slice(&rename_element(&open, &element.name, "t"));
+        if let Some(local) = restored_local {
+            output.extend_from_slice(&rename_element(&open, &element.name, local));
         } else {
             output.extend_from_slice(&open);
         }
         output.extend_from_slice(&inner);
         let close = &self.source[element.close_start..element.end];
-        if convert_deleted_text && element.word && element.local == "delText" {
-            output.extend_from_slice(&rename_element(close, &element.name, "t"));
+        if let Some(local) = restored_local {
+            output.extend_from_slice(&rename_element(close, &element.name, local));
         } else {
             output.extend_from_slice(close);
         }

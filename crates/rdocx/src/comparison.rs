@@ -2641,15 +2641,15 @@ fn moved_paragraph_content(
     if let Some(properties) = &paragraph.properties {
         output.push_str(&property_xml(properties)?);
     }
-    for run in &paragraph.runs {
-        output.push_str(&IdAllocator::revision_with_id(
+    output.push_str(&wrapped_paragraph_children(paragraph, false, |content| {
+        Ok(IdAllocator::revision_with_id(
             kind,
             metadata.author,
             metadata.timestamp,
-            &run_xml(run)?,
+            content,
             id,
-        ));
-    }
+        ))
+    })?);
     output.push_str("</w:p>");
     Ok(output)
 }
@@ -2672,15 +2672,15 @@ fn moved_paragraph(
         properties = append_word_child(&properties, "pPr", &format!("<w:rPr>{marker}</w:rPr>"))?;
     }
     let mut output = format!("<w:p>{properties}");
-    for run in &paragraph.runs {
-        output.push_str(&IdAllocator::revision_with_id(
+    output.push_str(&wrapped_paragraph_children(paragraph, false, |content| {
+        Ok(IdAllocator::revision_with_id(
             kind,
             metadata.author,
             metadata.timestamp,
-            &run_xml(run)?,
+            content,
             id,
-        ));
-    }
+        ))
+    })?);
     output.push_str("</w:p>");
     Ok(output)
 }
@@ -2797,15 +2797,11 @@ fn deleted_paragraph_content(content: &BodyContent, metadata: &mut Metadata<'_>)
     if let Some(properties) = &paragraph.properties {
         output.push_str(&property_xml(properties)?);
     }
-    for run in &paragraph.runs {
-        let run = deleted_run_xml(run)?;
-        output.push_str(&metadata.ids.revision(
-            "del",
-            metadata.author,
-            metadata.timestamp,
-            &run,
-        )?);
-    }
+    output.push_str(&wrapped_paragraph_children(paragraph, true, |content| {
+        metadata
+            .ids
+            .revision("del", metadata.author, metadata.timestamp, content)
+    })?);
     output.push_str("</w:p>");
     Ok(output)
 }
@@ -2821,15 +2817,11 @@ fn inserted_paragraph_content(
     if let Some(properties) = &paragraph.properties {
         output.push_str(&property_xml(properties)?);
     }
-    for run in &paragraph.runs {
-        let run = run_xml(run)?;
-        output.push_str(&metadata.ids.revision(
-            "ins",
-            metadata.author,
-            metadata.timestamp,
-            &run,
-        )?);
-    }
+    output.push_str(&wrapped_paragraph_children(paragraph, false, |content| {
+        metadata
+            .ids
+            .revision("ins", metadata.author, metadata.timestamp, content)
+    })?);
     output.push_str("</w:p>");
     Ok(output)
 }
@@ -4359,15 +4351,11 @@ fn deleted_paragraph(paragraph: &CT_P, metadata: &mut Metadata<'_>) -> Result<St
         "del",
         metadata,
     )?);
-    for run in &paragraph.runs {
-        let run = deleted_run_xml(run)?;
-        output.push_str(&metadata.ids.revision(
-            "del",
-            metadata.author,
-            metadata.timestamp,
-            &run,
-        )?);
-    }
+    output.push_str(&wrapped_paragraph_children(paragraph, true, |content| {
+        metadata
+            .ids
+            .revision("del", metadata.author, metadata.timestamp, content)
+    })?);
     output.push_str("</w:p>");
     Ok(output)
 }
@@ -4379,17 +4367,69 @@ fn inserted_paragraph(paragraph: &CT_P, metadata: &mut Metadata<'_>) -> Result<S
         "ins",
         metadata,
     )?);
-    for run in &paragraph.runs {
-        let run = run_xml(run)?;
-        output.push_str(&metadata.ids.revision(
-            "ins",
-            metadata.author,
-            metadata.timestamp,
-            &run,
-        )?);
-    }
+    output.push_str(&wrapped_paragraph_children(paragraph, false, |content| {
+        metadata
+            .ids
+            .revision("ins", metadata.author, metadata.timestamp, content)
+    })?);
     output.push_str("</w:p>");
     Ok(output)
+}
+
+/// The children of a whole deleted, inserted or moved paragraph after its
+/// properties, each group inside the wrapper that `wrap` writes.
+///
+/// Hyperlinks, simple fields, bookmarks and comment ranges go inside the
+/// wrappers with the runs, so resolving the revision removes or keeps them
+/// with the text. A range or proofing marker shares the wrapper of the
+/// content after it, or of the content before it at the end of the
+/// paragraph, so a paragraph of runs alone keeps one wrapper per run.
+fn wrapped_paragraph_children(
+    paragraph: &CT_P,
+    deleted: bool,
+    mut wrap: impl FnMut(&str) -> Result<String>,
+) -> Result<String> {
+    let mut children = paragraph.clone();
+    children.properties = None;
+    if deleted {
+        children.runs = children.runs.iter().map(deleted_run).collect();
+    }
+    let xml = paragraph_xml(&children)?;
+    let mut groups: Vec<(String, bool)> = Vec::new();
+    for span in direct_element_spans(&xml)? {
+        let child = &xml[span];
+        let name_end = child
+            .find(|character: char| {
+                character.is_ascii_whitespace() || matches!(character, '/' | '>')
+            })
+            .unwrap_or(child.len());
+        let local = child[1..name_end].rsplit(':').next().unwrap_or_default();
+        let marker = matches!(
+            local,
+            "bookmarkStart" | "bookmarkEnd" | "commentRangeStart" | "commentRangeEnd" | "proofErr"
+        );
+        // Runs already hold deleted text, as `deleted_run_xml` writes them.
+        // Field results, hyperlink runs and other owners are renamed whole.
+        let child = match (deleted, local) {
+            (true, "r") => renamed_word_elements(child, "w:instrText", "w:delInstrText"),
+            (true, _) => deleted_text_xml(child),
+            (false, _) => child.to_owned(),
+        };
+        match groups.last_mut() {
+            Some((group, has_content)) if !*has_content => {
+                group.push_str(&child);
+                *has_content = !marker;
+            }
+            _ => groups.push((child, !marker)),
+        }
+    }
+    if groups.len() > 1
+        && let Some((markers, false)) = groups.pop_if(|(_, has_content)| !*has_content)
+        && let Some((group, _)) = groups.last_mut()
+    {
+        group.push_str(&markers);
+    }
+    groups.iter().map(|(group, _)| wrap(group)).collect()
 }
 
 fn paragraph_mark_properties(
@@ -4910,6 +4950,18 @@ fn compare_control_from_xml(
         &original_content,
         &edited_content,
     );
+    let trailing_paragraph_insert_start = aligned
+        .iter()
+        .enumerate()
+        .rev()
+        .take_while(|(_, (left, right))| {
+            left.is_none()
+                && right
+                    .and_then(|index| edited_content.get(index))
+                    .is_some_and(|content| matches!(content, SdtContent::Paragraph(_)))
+        })
+        .map(|(position, _)| position)
+        .last();
     let content_spans = direct_word_element_spans(original_xml, "sdtContent")?;
     let content_span = content_spans.first().ok_or_else(|| {
         Error::Other(format!(
@@ -4978,7 +5030,26 @@ fn compare_control_from_xml(
                 }
             }
             (None, Some(j)) => {
-                if matches!(edited_content[j], SdtContent::Paragraph(_)) && !next_is_paragraph {
+                if matches!(edited_content[j], SdtContent::Paragraph(_))
+                    && trailing_paragraph_insert_start.is_some_and(|start| position >= start)
+                {
+                    // As in the main story: the paragraph before the run is
+                    // marked once and the last inserted mark ends the control.
+                    if trailing_paragraph_insert_start == Some(position) {
+                        mark_previous_paragraph(&mut content, "ins", metadata)?;
+                    }
+                    content.push((
+                        true,
+                        marked_control_content(
+                            edited_content[j],
+                            "ins",
+                            next_is_paragraph,
+                            metadata,
+                        )?,
+                    ));
+                } else if matches!(edited_content[j], SdtContent::Paragraph(_))
+                    && !next_is_paragraph
+                {
                     mark_previous_paragraph(&mut content, "ins", metadata)?;
                     content.push((
                         true,
@@ -5429,18 +5500,29 @@ fn tracked_field_result(
     Ok(format!("{deleted}{inserted}"))
 }
 
-/// Rename each `w:t` element to `w:delText`, and no other element whose
-/// name starts the same way, such as `w:tab`.
+/// Rename each `w:t` element to `w:delText` and each `w:instrText` to
+/// `w:delInstrText`, and no other element whose name starts the same way,
+/// such as `w:tab`. Word refuses to open a deletion that holds `w:instrText`.
 fn deleted_text_xml(xml: &str) -> String {
+    renamed_word_elements(
+        &renamed_word_elements(xml, "w:t", "w:delText"),
+        "w:instrText",
+        "w:delInstrText",
+    )
+}
+
+/// Rename each `from` element to `to`, and no other element whose name
+/// starts the same way.
+fn renamed_word_elements(xml: &str, from: &str, to: &str) -> String {
     let mut output = String::with_capacity(xml.len());
     let mut rest = xml;
-    while let Some(at) = rest.find("w:t") {
+    while let Some(at) = rest.find(from) {
         let (before, after) = rest.split_at(at);
-        let after = &after["w:t".len()..];
+        let after = &after[from.len()..];
         let is_tag = (before.ends_with('<') || before.ends_with("</"))
             && after.starts_with(|next: char| matches!(next, '>' | '/') || next.is_whitespace());
         output.push_str(before);
-        output.push_str(if is_tag { "w:delText" } else { "w:t" });
+        output.push_str(if is_tag { to } else { from });
         rest = after;
     }
     output.push_str(rest);
@@ -6530,14 +6612,24 @@ fn validate_field_alignment(
     Ok(())
 }
 
+/// A run as deleted content. The field instruction of a field that spans
+/// paragraphs is a preserved child, so it is renamed in the written run.
 fn deleted_run_xml(run: &CT_R) -> Result<String> {
+    Ok(renamed_word_elements(
+        &run_xml(&deleted_run(run))?,
+        "w:instrText",
+        "w:delInstrText",
+    ))
+}
+
+fn deleted_run(run: &CT_R) -> CT_R {
     let mut deleted = run.clone();
     for content in &mut deleted.content {
         if let RunContent::Text(text) = content {
             *content = RunContent::DeletedText(text.clone());
         }
     }
-    run_xml(&deleted)
+    deleted
 }
 
 fn table_xml(table: &CT_Tbl) -> Result<String> {
@@ -7084,6 +7176,13 @@ mod tests {
                 r#"<w:r><w:t>a</w:t><w:tab/><w:t xml:space="preserve"> b </w:t><w:t/><w:br w:type="page"/></w:r><w:ffData><w:textInput><w:maxLength w:val="4"/></w:textInput></w:ffData>"#
             ),
             r#"<w:r><w:delText>a</w:delText><w:tab/><w:delText xml:space="preserve"> b </w:delText><w:delText/><w:br w:type="page"/></w:r><w:ffData><w:textInput><w:maxLength w:val="4"/></w:textInput></w:ffData>"#
+        );
+        // Word refuses to open a deletion that holds `w:instrText`.
+        assert_eq!(
+            deleted_text_xml(
+                r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText xml:space="preserve"> TOC </w:instrText><w:instrTextual/></w:r>"#
+            ),
+            r#"<w:r><w:fldChar w:fldCharType="begin"/><w:delInstrText xml:space="preserve"> TOC </w:delInstrText><w:instrTextual/></w:r>"#
         );
     }
 

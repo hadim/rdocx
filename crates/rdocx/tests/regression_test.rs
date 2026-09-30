@@ -17009,6 +17009,32 @@ fn resolving_a_modeled_hyperlink_keeps_unreported_raw_children() {
 }
 
 #[test]
+fn rejecting_a_deleted_field_code_restores_its_instruction_text() {
+    // Word writes a deleted field code as `w:delInstrText`, and rejecting
+    // the deletion must give `w:instrText` back, as `w:delText` gives `w:t`.
+    let xml = wrap_word_body(concat!(
+        r#"<w:p><w:del w:id="1" w:author="Ada"><w:r><w:fldChar w:fldCharType="begin"/>"#,
+        r#"<w:delInstrText xml:space="preserve"> PAGE </w:delInstrText>"#,
+        r#"<w:fldChar w:fldCharType="separate"/></w:r><w:r><w:delText>7</w:delText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="end"/></w:r></w:del><w:r><w:t>kept</w:t></w:r></w:p>"#,
+    ));
+    let mut rejected = document_with_content_controls(&xml);
+    assert_eq!(rejected.reject_all().unwrap(), 1);
+    let rejected = document_xml(&mut rejected);
+    assert!(
+        rejected.contains(r#"<w:instrText xml:space="preserve"> PAGE </w:instrText>"#),
+        "{rejected}"
+    );
+    assert!(!rejected.contains("delInstrText"), "{rejected}");
+
+    let mut accepted = document_with_content_controls(&xml);
+    assert_eq!(accepted.accept_all().unwrap(), 1);
+    let accepted = document_xml(&mut accepted);
+    assert!(!accepted.contains("instrText"), "{accepted}");
+    assert!(accepted.contains("<w:t>kept</w:t>"), "{accepted}");
+}
+
+#[test]
 fn malformed_revision_wrappers_are_opaque_to_every_resolution_scope() {
     let malformed = r#"<w:ins w:id="bad"><w:del w:id="51" w:author="Ada" w:date="2026-08-17T10:00:00Z"><w:r><w:delText>hidden</w:delText></w:r></w:del></w:ins>"#;
     let xml = wrap_word_body(&format!(
@@ -20949,6 +20975,107 @@ fn comparison_appends_multiple_terminal_paragraphs_without_residue() {
         let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
         assert!(xml.contains("AUTHOR"), "{xml}");
         assert!(xml.contains("<w:drawing"), "{xml}");
+    }
+}
+
+/// Compare, then check that accepting every revision gives the edited
+/// document and rejecting every one gives the original. Returns the tracked
+/// main story.
+fn compare_and_resolve(
+    original_bytes: &[u8],
+    edited_bytes: &[u8],
+    options: &rdocx::ComparisonOptions,
+) -> String {
+    let original = Document::from_bytes(original_bytes).unwrap();
+    let edited = Document::from_bytes(edited_bytes).unwrap();
+    let mut compared = Document::from_bytes(original_bytes).unwrap();
+    let diagnostics = compared
+        .compare_with_options(&edited, "Ada", "2026-09-30T09:30:00Z", options)
+        .unwrap_or_else(|error| panic!("{options:?}: {error}"));
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    assert!(!compared.revisions().is_empty());
+    let tracked = compared.to_bytes().unwrap();
+
+    let mut accepted = Document::from_bytes(&tracked).unwrap();
+    accepted.accept_all().unwrap();
+    assert_eq!(accepted.text(), edited.text());
+    assert!(
+        accepted
+            .compare(&edited, "postcondition", "2026-09-30T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+    let mut rejected = Document::from_bytes(&tracked).unwrap();
+    rejected.reject_all().unwrap();
+    assert_eq!(rejected.text(), original.text());
+    assert!(
+        rejected
+            .compare(&original, "postcondition", "2026-09-30T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+    document_xml(&mut compared)
+}
+
+#[test]
+fn comparison_keeps_the_inline_structures_of_whole_paragraph_changes() {
+    // A whole inserted, deleted or moved paragraph kept only its runs, so a
+    // hyperlink, simple field or bookmark in it failed the acceptance or
+    // rejection check.
+    let plain = r#"<w:p><w:r><w:t>Alpha</w:t></w:r></w:p>"#;
+    let last = r#"<w:p><w:r><w:t>Omega</w:t></w:r></w:p>"#;
+    let structured = r#"<w:p><w:bookmarkStart w:id="5" w:name="target"/><w:hyperlink w:anchor="target"><w:r><w:t>Linked</w:t></w:r></w:hyperlink><w:r><w:tab/></w:r><w:fldSimple w:instr=" PAGE "><w:r><w:t>1</w:t></w:r></w:fldSimple><w:bookmarkEnd w:id="5"/></w:p>"#;
+    let moved = r#"<w:p><w:hyperlink w:anchor="elsewhere"><w:r><w:t>Moved link</w:t></w:r></w:hyperlink></w:p>"#;
+    let control = |content: &str| {
+        format!(
+            r#"<w:sdt><w:sdtPr><w:tag w:val="kept"/></w:sdtPr><w:sdtContent>{content}</w:sdtContent></w:sdt>{last}"#
+        )
+    };
+    let cases = [
+        (
+            "inserted",
+            format!("{plain}{last}"),
+            format!("{plain}{structured}{last}"),
+        ),
+        (
+            "appended",
+            format!("{plain}{last}"),
+            format!("{plain}{last}{structured}"),
+        ),
+        (
+            "deleted",
+            format!("{plain}{structured}{last}"),
+            format!("{plain}{last}"),
+        ),
+        (
+            "moved",
+            format!("{moved}{plain}{last}"),
+            format!("{plain}{last}{moved}"),
+        ),
+        (
+            "two paragraphs appended to a control",
+            control(plain),
+            control(&format!("{plain}{structured}{moved}")),
+        ),
+    ];
+    for (name, original_body, edited_body) in cases {
+        let original_bytes = document_with_content_controls(&wrap_word_body(&original_body))
+            .to_bytes()
+            .unwrap();
+        let edited_bytes = document_with_content_controls(&wrap_word_body(&edited_body))
+            .to_bytes()
+            .unwrap();
+        for granularity in [
+            rdocx::ComparisonGranularity::Run,
+            rdocx::ComparisonGranularity::Word,
+        ] {
+            let options = rdocx::ComparisonOptions {
+                granularity,
+                ..Default::default()
+            };
+            let xml = compare_and_resolve(&original_bytes, &edited_bytes, &options);
+            assert!(xml.contains("<w:hyperlink"), "{name}: {xml}");
+        }
     }
 }
 
