@@ -841,6 +841,121 @@ impl<'a> Paragraph<'a> {
         self.inner.accepted_text()
     }
 
+    /// Replace the paragraph content with one run holding `text`, as
+    /// python-docx's `Paragraph.text` setter does.
+    ///
+    /// The paragraph keeps its properties (`w:pPr`), with its paragraph mark
+    /// formatting and any section break, and the attributes of `w:p` itself.
+    /// Every run, hyperlink, field, picture, content control, tracked change
+    /// and other inline child is replaced by one run without direct
+    /// formatting. A tab becomes `w:tab` and a line feed or a carriage return
+    /// becomes `w:br`, as in python-docx. Empty text leaves no run, like
+    /// [`crate::Document::add_paragraph`] with empty text.
+    ///
+    /// Comment ranges, bookmarks and permission ranges are kept, wherever they
+    /// sit in the paragraph. Their starts move before the new run, their ends
+    /// after it, and each comment reference follows in its own run. A range
+    /// inside the paragraph then covers the new text, and one that crosses the
+    /// paragraph edge keeps its far end, so no anchor loses its partner.
+    ///
+    /// Two cases are rejected, because dropping part of them would leave the
+    /// rest of the document unbalanced. One is a paragraph whose field
+    /// characters and field code do not balance within it, such as one
+    /// paragraph of a table of contents. The other is a paragraph holding only
+    /// one end of a tracked move range or of a custom XML revision range. When
+    /// both ends of such a range are in the paragraph, both go with the
+    /// tracked change they mark. On error the paragraph is unchanged.
+    pub fn set_text(&mut self, text: &str) -> crate::Result<()> {
+        let anchors = RangeAnchors::scan(self.inner)?;
+        let mut paragraph = CT_P::new();
+        paragraph.properties = self.inner.properties.clone();
+        paragraph.extra_xml = self
+            .inner
+            .extra_xml
+            .iter()
+            .filter(|(position, raw)| CT_P::raw_is_root_attributes(*position, raw))
+            .cloned()
+            .collect();
+        if !text.is_empty() {
+            let mut inner = CT_R::new("");
+            inner.content.clear();
+            let mut run = Run { inner: &mut inner };
+            let mut pending = String::new();
+            for character in text.chars() {
+                if !matches!(character, '\t' | '\n' | '\r') {
+                    pending.push(character);
+                    continue;
+                }
+                if !pending.is_empty() {
+                    run.add_text(&pending);
+                    pending.clear();
+                }
+                if character == '\t' {
+                    run.add_tab();
+                } else {
+                    run.add_break(crate::BreakKind::Line);
+                }
+            }
+            if !pending.is_empty() {
+                run.add_text(&pending);
+            }
+            paragraph.runs.push(inner);
+        }
+
+        let end = paragraph.runs.len();
+        for id in &anchors.comment_starts {
+            paragraph.comment_ranges.push(CommentRangeMarker::Start {
+                id: *id,
+                run_index: 0,
+                raw_before: 0,
+                has_child_content: false,
+            });
+        }
+        for (id, name) in &anchors.bookmark_starts {
+            if !paragraph.insert_bookmark_start(0, *id, name) {
+                return Err(crate::Error::Other(format!(
+                    "bookmark {name} could not be kept in the paragraph"
+                )));
+            }
+        }
+        for raw in &anchors.permission_starts {
+            paragraph.extra_xml.push((0, raw.clone()));
+        }
+        for id in &anchors.bookmark_ends {
+            if !paragraph.insert_bookmark_end(end, *id) {
+                return Err(crate::Error::Other(format!(
+                    "bookmark end {id} could not be kept in the paragraph"
+                )));
+            }
+        }
+        for raw in &anchors.permission_ends {
+            paragraph.extra_xml.push((end, raw.clone()));
+        }
+        let raw_before = paragraph
+            .extra_xml
+            .iter()
+            .filter(|(position, _)| *position == end)
+            .count();
+        for id in &anchors.comment_ends {
+            paragraph.comment_ranges.push(CommentRangeMarker::End {
+                id: *id,
+                run_index: end,
+                raw_before,
+                has_child_content: false,
+            });
+        }
+        for id in &anchors.comment_references {
+            let mut reference = CT_R::new("");
+            reference.content = vec![RunContent::CommentReference {
+                id: *id,
+                raw_before: 0,
+            }];
+            paragraph.runs.push(reference);
+        }
+        *self.inner = paragraph;
+        Ok(())
+    }
+
     /// Iterate over typed equations in paragraph source order.
     pub fn equations(&self) -> impl Iterator<Item = &OfficeMath> {
         self.inner.equations.iter().map(|(_, _, equation)| equation)
@@ -2200,6 +2315,183 @@ impl<'a> Paragraph<'a> {
     }
 }
 
+/// The comment, bookmark and permission boundaries anywhere in one
+/// paragraph, which [`Paragraph::set_text`] carries over.
+///
+/// Each list keeps source order without repeats, since a text box written
+/// once as an `mc:AlternateContent` choice and once as its fallback holds its
+/// markers twice. Permission markers are kept as their source XML.
+#[derive(Default)]
+struct RangeAnchors {
+    comment_starts: Vec<i32>,
+    comment_ends: Vec<i32>,
+    comment_references: Vec<i32>,
+    bookmark_starts: Vec<(i32, String)>,
+    bookmark_ends: Vec<i32>,
+    permission_starts: Vec<Vec<u8>>,
+    permission_ends: Vec<Vec<u8>>,
+}
+
+/// Tracked-change range markers that [`Paragraph::set_text`] drops with the
+/// change they mark, which it can do only when both ends are in the paragraph.
+const PAIRED_RANGES: [&str; 6] = [
+    "moveFromRange",
+    "moveToRange",
+    "customXmlInsRange",
+    "customXmlDelRange",
+    "customXmlMoveFromRange",
+    "customXmlMoveToRange",
+];
+
+impl RangeAnchors {
+    /// Collect the boundaries from the serialized paragraph, and reject a
+    /// paragraph holding part of a field or of a tracked range whose rest lies
+    /// in another paragraph.
+    ///
+    /// Elements are matched on their local name and their attributes on the
+    /// element's own prefix, because a preserved subtree does not always carry
+    /// the binding that named its prefix.
+    fn scan(paragraph: &CT_P) -> crate::Result<Self> {
+        let spans_paragraphs = || {
+            crate::Error::Other(
+                "the paragraph holds part of a field that spans several paragraphs".to_owned(),
+            )
+        };
+        let mut xml = Vec::new();
+        paragraph.to_xml(&mut quick_xml::Writer::new(&mut xml))?;
+        let mut reader = quick_xml::Reader::from_reader(xml.as_slice());
+        let mut anchors = Self::default();
+        // One entry per open field, true once its separator has been seen.
+        let mut fields: Vec<bool> = Vec::new();
+        let mut ranges: Vec<(&str, bool, Option<String>)> = Vec::new();
+        let mut buffer = Vec::new();
+        let mut skipped = Vec::new();
+        loop {
+            let before = reader.buffer_position() as usize;
+            let (element, empty) = match reader.read_event_into(&mut buffer) {
+                Ok(quick_xml::events::Event::Start(element)) => (element, false),
+                Ok(quick_xml::events::Event::Empty(element)) => (element, true),
+                Ok(quick_xml::events::Event::Eof) => break,
+                Ok(_) => {
+                    buffer.clear();
+                    continue;
+                }
+                Err(error) => {
+                    return Err(crate::Error::Other(format!(
+                        "paragraph anchor scan failed: {error}"
+                    )));
+                }
+            };
+            let prefix = element.name().prefix().map(|prefix| prefix.into_inner());
+            let attribute = |local: &[u8]| {
+                element.attributes().flatten().find_map(|attribute| {
+                    (attribute.key.local_name().as_ref() == local
+                        && attribute.key.prefix().map(|prefix| prefix.into_inner()) == prefix)
+                        .then(|| {
+                            attribute
+                                .decoded_and_normalized_value(
+                                    quick_xml::XmlVersion::Implicit1_0,
+                                    element.decoder(),
+                                )
+                                .ok()
+                                .map(|value| value.into_owned())
+                        })
+                        .flatten()
+                })
+            };
+            let id = attribute(b"id").and_then(|value| value.parse::<i32>().ok());
+            let push = |list: &mut Vec<i32>| {
+                if let Some(id) = id
+                    && !list.contains(&id)
+                {
+                    list.push(id);
+                }
+            };
+            let local = element.local_name().as_ref().to_vec();
+            match local.as_slice() {
+                b"commentRangeStart" => push(&mut anchors.comment_starts),
+                b"commentRangeEnd" => push(&mut anchors.comment_ends),
+                b"commentReference" => push(&mut anchors.comment_references),
+                b"bookmarkEnd" => push(&mut anchors.bookmark_ends),
+                b"bookmarkStart" => {
+                    if let (Some(id), Some(name)) = (id, attribute(b"name"))
+                        && !anchors
+                            .bookmark_starts
+                            .iter()
+                            .any(|(known, _)| *known == id)
+                    {
+                        anchors.bookmark_starts.push((id, name));
+                    }
+                }
+                b"permStart" | b"permEnd" => {
+                    if !empty {
+                        reader
+                            .read_to_end_into(element.name(), &mut skipped)
+                            .map_err(|error| {
+                                crate::Error::Other(format!(
+                                    "paragraph anchor scan failed: {error}"
+                                ))
+                            })?;
+                        skipped.clear();
+                    }
+                    let raw = xml[before..reader.buffer_position() as usize].to_vec();
+                    let list = if local == b"permStart" {
+                        &mut anchors.permission_starts
+                    } else {
+                        &mut anchors.permission_ends
+                    };
+                    if !list.contains(&raw) {
+                        list.push(raw);
+                    }
+                }
+                b"fldChar" => match attribute(b"fldCharType").as_deref() {
+                    Some("begin") => fields.push(false),
+                    Some("separate") => {
+                        *fields.last_mut().ok_or_else(spans_paragraphs)? = true;
+                    }
+                    Some("end") => {
+                        fields.pop().ok_or_else(spans_paragraphs)?;
+                    }
+                    _ => {}
+                },
+                b"instrText" | b"delInstrText" if fields.is_empty() => {
+                    return Err(spans_paragraphs());
+                }
+                _ => {
+                    let name = String::from_utf8_lossy(&local);
+                    let range = PAIRED_RANGES.iter().find_map(|family| {
+                        let end = name.strip_prefix(family)?;
+                        matches!(end, "Start" | "End").then_some((*family, end == "Start"))
+                    });
+                    if let Some((family, start)) = range {
+                        ranges.push((family, start, attribute(b"id")));
+                    }
+                }
+            }
+            buffer.clear();
+        }
+        if !fields.is_empty() {
+            return Err(spans_paragraphs());
+        }
+        for family in PAIRED_RANGES {
+            let ids = |start: bool| {
+                ranges
+                    .iter()
+                    .filter(|(known, is_start, _)| *known == family && *is_start == start)
+                    .map(|(_, _, id)| id)
+                    .collect::<std::collections::BTreeSet<_>>()
+            };
+            if ids(true) != ids(false) {
+                return Err(crate::Error::Other(format!(
+                    "the paragraph holds one end of a w:{family} range whose other end lies \
+                     in another paragraph"
+                )));
+            }
+        }
+        Ok(anchors)
+    }
+}
+
 /// Section break type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SectionBreak {
@@ -2952,5 +3244,211 @@ mod tests {
         assert_eq!(border.size_eighths_pt(), Some(14));
         assert_eq!(border.space_points(), Some(6));
         assert_eq!(border.color(), Some("auto"));
+    }
+
+    const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+    fn fragment(children: &str) -> CT_P {
+        CT_P::from_xml_fragment(format!(r#"<w:p xmlns:w="{W}">{children}</w:p>"#).as_bytes())
+            .unwrap()
+    }
+
+    fn serialized(paragraph: &CT_P) -> String {
+        let mut xml = Vec::new();
+        paragraph
+            .to_xml(&mut quick_xml::Writer::new(&mut xml))
+            .unwrap();
+        String::from_utf8(xml).unwrap()
+    }
+
+    #[test]
+    fn set_text_keeps_properties_and_moves_every_anchor_to_the_new_run() {
+        let mut inner = fragment(concat!(
+            r#"<w:pPr><w:pStyle w:val="Heading1"/><w:jc w:val="center"/></w:pPr>"#,
+            r#"<w:bookmarkStart w:id="1" w:name="_Toc1"/>"#,
+            r#"<w:hyperlink w:anchor="x"><w:commentRangeStart w:id="7"/>"#,
+            r#"<w:r><w:rPr><w:b/></w:rPr><w:t>old</w:t></w:r></w:hyperlink>"#,
+            r#"<w:r><w:t xml:space="preserve"> text</w:t></w:r>"#,
+            r#"<w:commentRangeEnd w:id="7"/><w:r><w:commentReference w:id="7"/></w:r>"#,
+            r#"<w:bookmarkEnd w:id="1"/><w:proofErr w:type="spellStart"/>"#,
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            r#"<w:r><w:instrText> PAGE </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+            r#"<w:r><w:t>1</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        ));
+        let mut paragraph = Paragraph { inner: &mut inner };
+
+        paragraph.set_text("new\ttext\nline").unwrap();
+
+        assert_eq!(paragraph.text(), "new\ttext\nline");
+        assert_eq!(paragraph.run_count(), 2);
+        let xml = serialized(&inner);
+        let children = xml
+            .split_once("</w:pPr>")
+            .and_then(|(_, rest)| rest.strip_suffix("</w:p>"))
+            .unwrap();
+        assert_eq!(
+            children,
+            concat!(
+                r#"<w:commentRangeStart w:id="7"/><w:bookmarkStart w:id="1" w:name="_Toc1"/>"#,
+                r#"<w:r><w:t>new</w:t><w:tab/><w:t>text</w:t><w:br/><w:t>line</w:t></w:r>"#,
+                r#"<w:bookmarkEnd w:id="1"/><w:commentRangeEnd w:id="7"/>"#,
+                r#"<w:r><w:commentReference w:id="7"/></w:r>"#,
+            )
+        );
+        assert!(xml.contains(r#"<w:pStyle w:val="Heading1"/><w:jc w:val="center"/>"#));
+        assert!(inner.hyperlinks.is_empty());
+    }
+
+    #[test]
+    fn set_text_with_empty_text_leaves_no_run_and_a_carriage_return_breaks() {
+        let mut inner = fragment(r#"<w:r><w:t>old</w:t></w:r>"#);
+        let mut paragraph = Paragraph { inner: &mut inner };
+        paragraph.set_text("").unwrap();
+        assert_eq!(paragraph.run_count(), 0);
+        assert_eq!(serialized(&inner), "<w:p/>");
+
+        let mut paragraph = Paragraph { inner: &mut inner };
+        paragraph.set_text(" a\r\nb ").unwrap();
+        assert_eq!(paragraph.text(), " a\n\nb ");
+        assert_eq!(
+            serialized(&inner),
+            concat!(
+                r#"<w:p><w:r><w:t xml:space="preserve"> a</w:t><w:br/><w:br/>"#,
+                r#"<w:t xml:space="preserve">b </w:t></w:r></w:p>"#,
+            )
+        );
+    }
+
+    #[test]
+    fn set_text_rejects_one_end_of_a_field_that_spans_paragraphs() {
+        for children in [
+            concat!(
+                r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+                r#"<w:r><w:instrText> TOC \o "1-3" </w:instrText></w:r>"#,
+                r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>Entry</w:t></w:r>"#,
+            ),
+            r#"<w:r><w:t>Entry</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+            concat!(
+                r#"<w:r><w:instrText> \h </w:instrText></w:r>"#,
+                r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>Entry</w:t></w:r>"#,
+            ),
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>Entry</w:t></w:r>"#,
+            r#"<w:r><w:instrText> \z </w:instrText></w:r>"#,
+            concat!(
+                r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+                r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            ),
+        ] {
+            let mut inner = fragment(children);
+            let before = serialized(&inner);
+
+            let error = Paragraph { inner: &mut inner }
+                .set_text("replaced")
+                .unwrap_err();
+
+            assert!(error.to_string().contains("field"), "{error}");
+            assert_eq!(serialized(&inner), before);
+        }
+    }
+
+    #[test]
+    fn set_text_keeps_permission_ranges_and_drops_only_paired_revision_ranges() {
+        let mut inner = fragment(concat!(
+            r#"<w:permStart w:id="5" w:edGrp="everyone"/><w:r><w:t>open</w:t></w:r>"#,
+            r#"<w:permEnd w:id="4"/>"#,
+            r#"<w:moveFromRangeStart w:id="8" w:author="Ada" w:name="move1"/>"#,
+            r#"<w:moveFrom w:id="9" w:author="Ada"><w:r><w:t>moved</w:t></w:r></w:moveFrom>"#,
+            r#"<w:moveFromRangeEnd w:id="8"/>"#,
+        ));
+        let mut paragraph = Paragraph { inner: &mut inner };
+
+        paragraph.set_text("typed").unwrap();
+
+        let xml = serialized(&inner);
+        let children = xml
+            .strip_prefix("<w:p>")
+            .and_then(|rest| rest.strip_suffix("</w:p>"))
+            .unwrap();
+        assert_eq!(
+            children,
+            concat!(
+                r#"<w:permStart w:id="5" w:edGrp="everyone"/>"#,
+                r#"<w:r><w:t>typed</w:t></w:r><w:permEnd w:id="4"/>"#,
+            )
+        );
+
+        for children in [
+            r#"<w:moveToRangeStart w:id="3" w:author="Ada" w:name="move1"/><w:r><w:t>a</w:t></w:r>"#,
+            r#"<w:r><w:t>a</w:t></w:r><w:moveFromRangeEnd w:id="3"/>"#,
+            r#"<w:customXmlInsRangeStart w:id="6" w:author="Ada"/><w:r><w:t>a</w:t></w:r>"#,
+        ] {
+            let mut inner = fragment(children);
+            let before = serialized(&inner);
+
+            let error = Paragraph { inner: &mut inner }
+                .set_text("replaced")
+                .unwrap_err();
+
+            assert!(error.to_string().contains("range"), "{error}");
+            assert_eq!(serialized(&inner), before);
+        }
+    }
+
+    #[test]
+    fn set_text_keeps_comments_and_bookmarks_through_a_package_round_trip() {
+        use crate::{RunPosition, RunRange};
+
+        let position = |body_index, run_index| RunPosition {
+            body_index,
+            run_index,
+        };
+        let mut document = crate::Document::new();
+        document.add_paragraph("Review ").add_run("this sentence.");
+        document.add_paragraph("Second paragraph.");
+        let range = |start, end| RunRange { start, end };
+        document
+            .add_comment(range(position(0, 1), position(0, 2)), "Ada", None, "inside")
+            .unwrap();
+        document
+            .add_comment(range(position(0, 1), position(1, 1)), "Ada", None, "across")
+            .unwrap();
+        document
+            .add_bookmark("target", range(position(0, 0), position(0, 2)))
+            .unwrap();
+
+        document
+            .paragraph_mut(0)
+            .unwrap()
+            .set_text("Rewritten")
+            .unwrap();
+
+        let reopened = crate::Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.paragraph(0).unwrap().text(), "Rewritten");
+        assert_eq!(reopened.paragraph(1).unwrap().text(), "Second paragraph.");
+        let comments = reopened
+            .comments()
+            .iter()
+            .map(|comment| comment.text())
+            .collect::<Vec<_>>();
+        assert_eq!(comments, ["inside", "across"]);
+        let bookmarks = reopened.bookmarks();
+        assert_eq!(bookmarks.len(), 1);
+        assert_eq!(bookmarks[0].name(), Some("target"));
+        assert_eq!(bookmarks[0].issue(), None);
+        assert_eq!(
+            bookmarks[0].range(),
+            Some(range(position(0, 0), position(0, 1)))
+        );
+        let body = serialized(reopened.paragraph(0).unwrap().inner);
+        for anchor in [
+            "commentRangeStart",
+            "commentRangeEnd",
+            "commentReference",
+            "bookmarkStart",
+            "bookmarkEnd",
+        ] {
+            assert!(body.contains(anchor), "{anchor} missing from {body}");
+        }
     }
 }

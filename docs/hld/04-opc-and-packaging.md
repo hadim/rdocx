@@ -367,7 +367,15 @@ content-type override. A package that creates metadata without an existing
 relationship uses `/docProps/core.xml` and adds the missing package
 relationship. If that conventional part name is already occupied without the
 core-properties relationship, serialization returns an error before changing
-the package.
+the package. `CoreProperties` models all fifteen elements of the core-properties
+schema, from title, subject, creator, keywords, description, last modified by,
+created and modified to category, content status, identifier, language, last
+printed, revision and version, each as text. A rewrite after one
+change therefore keeps every other property. Unset values are not written, so
+a part holding only the original eight serializes byte for byte as before. The
+Word `Document` and the layout engine context it holds twice keep the model
+behind a `Box`, so the larger model does not grow `Document` against the debug
+test-thread stack budget that `CT_PPr` boxing also protects.
 
 The Word facade applies the same package-level ownership rule to application
 and custom properties. New property families reserve collision-safe part and

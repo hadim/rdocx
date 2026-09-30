@@ -51,6 +51,13 @@ degrees, direct autofit mode, paragraphs, table size, and children. A
 placeholder that inherits its geometry from its layout reports `null` geometry,
 and a placeholder without an explicit type reports a `null` type.
 
+Both inspection forms report every core property the deck sets. Beside title,
+creator, subject, description, keywords, last modified by, created and
+modified, they report category, content status, identifier, language, last
+printed, revision and version, which `inspect --json` adds to its `metadata`
+object. Human-readable inspection prints `(none)` when the deck sets no core
+property.
+
 `text --json` reports each slide's one-based number, slide id, paragraphs, and
 speaker notes, or `null` notes when the slide has no notes part. Each paragraph
 has a typed zero-based `path` of shape, table row, table cell, and paragraph

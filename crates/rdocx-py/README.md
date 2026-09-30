@@ -43,6 +43,12 @@ with open("report.pdf", "wb") as output:
 
 - File and byte-based DOCX input and output.
 - Paragraphs, runs, fonts, tables, rows, cells, sections, and styles.
+- Paragraph text replacement that keeps paragraph formatting, comments, and
+  bookmarks.
+- Paragraph style assignment by style ID or name, checked against the styles
+  the document defines.
+- Core document properties such as title, author, and revision, read and
+  written through `Document.core_properties` under python-docx's names.
 - Rich per-section headers and footers, related stories, and resolved
   hyperlinks.
 - Complete paragraph and run formatting, multilingual and vertical typography,

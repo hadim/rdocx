@@ -649,6 +649,26 @@ fn inspect_and_text_report_presentation_order() {
         "first slide\nsecond slide\n"
     );
 
+    let mut presentation = Presentation::open(&deck).unwrap();
+    *presentation.core_properties_mut() = rpptx::CoreProperties {
+        category: Some("Reports".to_owned()),
+        revision: Some("7".to_owned()),
+        ..Default::default()
+    };
+    presentation.save(&deck).unwrap();
+    let inspected = cli(&["inspect", deck.to_str().unwrap()]);
+    assert!(inspected.status.success());
+    let inspected = String::from_utf8(inspected.stdout).unwrap();
+    assert!(
+        inspected.contains("Metadata:\n  Category: Reports\n  Revision: 7\n\n"),
+        "{inspected}"
+    );
+    let inspected = cli(&["inspect", deck.to_str().unwrap(), "--json"]);
+    let value: serde_json::Value = serde_json::from_slice(&inspected.stdout).unwrap();
+    assert_eq!(value["metadata"]["category"], "Reports");
+    assert_eq!(value["metadata"]["revision"], "7");
+    assert!(value["metadata"]["title"].is_null());
+
     let help = cli(&["--help"]);
     assert!(help.status.success());
     let help = String::from_utf8(help.stdout).unwrap();

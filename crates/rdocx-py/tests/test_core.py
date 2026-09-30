@@ -2500,3 +2500,247 @@ def test_python_round_three_authoring_and_inspection_is_typed_and_lossless():
     assert b"pixel.png" not in xml
     assert f'w:id="{comment_id}"'.encode() in xml
     assert b"cell text" in xml
+
+
+def test_paragraph_text_setter_replaces_runs_and_keeps_format_and_comments():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("Alpha ")
+    document.paragraphs[0].add_run("beta").font.bold = True
+    document.paragraphs[0].style = "Heading1"
+    document.paragraphs[0].alignment = rdocx.WD_ALIGN_PARAGRAPH.CENTER
+    comment_id = document.add_comment(
+        rdocx.RunRange(
+            start=rdocx.RunPosition(body_index=0, run_index=1),
+            end=rdocx.RunPosition(body_index=0, run_index=2),
+        ),
+        author="Ada",
+        text="Bold?",
+    )
+    paragraph = document.paragraphs[0]
+    run = paragraph.runs[0]
+
+    paragraph.text = "Omega\tone\ntwo"
+
+    for stale in (lambda: paragraph.text, lambda: run.text):
+        with pytest.raises(rdocx.StaleElementError):
+            stale()
+    paragraph = document.paragraphs[0]
+    assert paragraph.text == "Omega\tone\ntwo"
+    assert paragraph.style == "Heading1"
+    assert paragraph.alignment == rdocx.WD_ALIGN_PARAGRAPH.CENTER
+    assert paragraph.runs[0].text == "Omega\tone\ntwo"
+    assert paragraph.runs[0].font.bold is None
+    xml = re.sub(r">\s+<", "><", _document_xml(document).decode())
+    assert "<w:t>Omega</w:t><w:tab/><w:t>one</w:t><w:br/><w:t>two</w:t>" in xml
+    start = xml.index(f'<w:commentRangeStart w:id="{comment_id}"/>')
+    end = xml.index(f'<w:commentRangeEnd w:id="{comment_id}"/>')
+    assert start < xml.index("Omega") < end
+    assert f'<w:commentReference w:id="{comment_id}"/>' in xml[end:]
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert [comment.text for comment in reopened.comments] == ["Bold?"]
+
+    reopened.paragraphs[0].text = None
+    assert reopened.paragraphs[0].text == ""
+
+    document.add_table(1, 1)
+    document.tables[0].rows[0].cells[0].paragraphs[0].text = "cell"
+    assert document.tables[0].rows[0].cells[0].text == "cell"
+
+
+def test_paragraph_text_setter_rejects_every_paragraph_of_a_multi_paragraph_field():
+    import rdocx
+
+    document = _replace_document_body(
+        rdocx.Document(),
+        '<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        '<w:r><w:instrText xml:space="preserve"> TOC \\o "1-3"</w:instrText></w:r></w:p>'
+        '<w:p><w:r><w:instrText xml:space="preserve"> \\h </w:instrText></w:r>'
+        '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+        "<w:r><w:t>Entry</w:t></w:r></w:p>"
+        "<w:p><w:r><w:t>Last entry</w:t></w:r>"
+        '<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>',
+    )
+    held = list(document.paragraphs)
+    texts = [paragraph.text for paragraph in held]
+    before = document.to_bytes()
+
+    for paragraph in held:
+        with pytest.raises(rdocx.RdocxError, match="field"):
+            paragraph.text = "Rewritten"
+
+    assert document.to_bytes() == before
+    assert [paragraph.text for paragraph in held] == texts
+
+
+_CORE_RELATIONSHIP = (
+    "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties"
+)
+
+
+def _rewrite_package(document, rewrite):
+    source = io.BytesIO(document.to_bytes())
+    result = io.BytesIO()
+    with zipfile.ZipFile(source) as source_zip:
+        with zipfile.ZipFile(result, "w") as result_zip:
+            for info in source_zip.infolist():
+                data = rewrite(info.filename, source_zip.read(info.filename))
+                if data is not None:
+                    result_zip.writestr(info, data)
+    return type(document).from_bytes(result.getvalue())
+
+
+def _package_part(document, name):
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as archive:
+        return archive.read(name).decode()
+
+
+def test_core_properties_use_python_docx_names_and_round_trip(tmp_path):
+    import datetime
+
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("body")
+    held = document.paragraphs[0]
+    core = document.core_properties
+    assert (core.title, core.author, core.revision, core.created) == ("", "", 0, None)
+
+    utc = datetime.timezone.utc
+    plus_two = datetime.timezone(datetime.timedelta(hours=2))
+    texts = {
+        "author": "Ada",
+        "category": "Reports",
+        "comments": "Reviewed twice",
+        "content_status": "Draft",
+        "identifier": "DOC-7",
+        "keywords": "alpha, beta",
+        "language": "en-GB",
+        "last_modified_by": "Grace",
+        "subject": "Quarterly figures",
+        "title": "A title",
+        "version": "1.4",
+    }
+    for name, value in texts.items():
+        setattr(core, name, value)
+    core.revision = 3
+    core.created = datetime.datetime(2026, 9, 1, 10, 0, 0, tzinfo=plus_two)
+    core.modified = datetime.datetime(2026, 9, 2, 8, 30, 0)
+    core.last_printed = datetime.datetime(2026, 9, 3, 7, 0, 0, tzinfo=utc)
+    assert held.text == "body"
+
+    path = tmp_path / "core.docx"
+    document.save(path)
+    reopened = rdocx.Document(path).core_properties
+    for name, value in texts.items():
+        assert getattr(reopened, name) == value, name
+    assert reopened.revision == 3
+    assert reopened.created == datetime.datetime(2026, 9, 1, 8, 0, 0, tzinfo=utc)
+    assert reopened.modified == datetime.datetime(2026, 9, 2, 8, 30, 0, tzinfo=utc)
+    assert reopened.last_printed == datetime.datetime(2026, 9, 3, 7, 0, 0, tzinfo=utc)
+    xml = _package_part(document, "docProps/core.xml")
+    assert '<dcterms:created xsi:type="dcterms:W3CDTF">2026-09-01T08:00:00Z<' in xml
+    assert "<cp:lastPrinted>2026-09-03T07:00:00Z</cp:lastPrinted>" in xml
+
+    docx = pytest.importorskip("docx")
+    oracle = docx.Document(str(path)).core_properties
+    for name, value in texts.items():
+        assert getattr(oracle, name) == value, name
+    assert oracle.revision == 3
+    assert oracle.created == reopened.created
+
+    core.title = None
+    core.comments = ""
+    core.revision = None
+    core.created = None
+    assert (core.title, core.comments, core.revision, core.created) == ("", "", 0, None)
+    xml = _package_part(document, "docProps/core.xml")
+    for element in ("dc:title", "dc:description", "cp:revision", "dcterms:created"):
+        assert element not in xml, element
+
+
+def test_core_properties_reject_bad_values_without_changing_the_document():
+    import datetime
+
+    import rdocx
+
+    document = rdocx.Document()
+    document.core_properties.title = "Kept"
+    before = document.to_bytes()
+    for name, value, error in (
+        ("revision", 0, ValueError),
+        ("title", "x" * 256, ValueError),
+        ("created", "2026-09-01", TypeError),
+        ("last_printed", datetime.date(2026, 9, 1), TypeError),
+    ):
+        with pytest.raises(error):
+            setattr(document.core_properties, name, value)
+    assert document.to_bytes() == before
+    document.core_properties.title = "x" * 255
+    assert len(document.core_properties.title) == 255
+
+
+def test_core_properties_read_w3cdtf_dates_like_python_docx():
+    import datetime
+
+    import rdocx
+
+    def with_core(created, modified, last_printed):
+        def core_xml(name, data):
+            if name != "docProps/core.xml":
+                return data
+            return (
+                '<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/'
+                '2006/metadata/core-properties" xmlns:dcterms="http://purl.org/dc/terms/" '
+                'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">'
+                f'<dcterms:created xsi:type="dcterms:W3CDTF">{created}</dcterms:created>'
+                f'<dcterms:modified xsi:type="dcterms:W3CDTF">{modified}</dcterms:modified>'
+                f"<cp:lastPrinted>{last_printed}</cp:lastPrinted>"
+                "<cp:revision>seven</cp:revision>"
+                "</cp:coreProperties>"
+            ).encode()
+
+        return _rewrite_package(rdocx.Document(), core_xml).core_properties
+
+    utc = datetime.timezone.utc
+    core = with_core("2024-01-15T10:30:00-05:30", "2024-02", "not a date")
+    assert core.created == datetime.datetime(2024, 1, 15, 16, 0, 0, tzinfo=utc)
+    assert core.modified == datetime.datetime(2024, 2, 1, tzinfo=utc)
+    assert core.last_printed is None
+    assert core.revision == 0
+
+    core = with_core(
+        "2024-01-15T10:30:00+99:99", "0001-01-01T00:30:00+01:00", "2024-13-01"
+    )
+    assert (core.created, core.modified, core.last_printed) == (None, None, None)
+
+
+def test_core_properties_create_a_missing_part_with_its_relationship():
+    import rdocx
+
+    def drop_core(name, data):
+        if name == "docProps/core.xml":
+            return None
+        if name == "_rels/.rels":
+            return re.sub(
+                rb'<Relationship [^>]*metadata/core-properties"[^>]*/>', b"", data
+            )
+        if name == "[Content_Types].xml":
+            return re.sub(rb'<Override PartName="/docProps/core.xml"[^>]*/>', b"", data)
+        return data
+
+    document = _rewrite_package(rdocx.Document(), drop_core)
+    assert _CORE_RELATIONSHIP not in _package_part(document, "_rels/.rels")
+    assert document.core_properties.title == ""
+
+    document.core_properties.title = "Created"
+
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert reopened.core_properties.title == "Created"
+    relationships = _package_part(document, "_rels/.rels")
+    assert f'Type="{_CORE_RELATIONSHIP}" Target="docProps/core.xml"' in relationships
+    assert (
+        '<Override PartName="/docProps/core.xml" '
+        'ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>'
+    ) in _package_part(document, "[Content_Types].xml")
