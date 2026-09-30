@@ -78,6 +78,7 @@ def exercise_rdocx_types(path: Path) -> None:
     package_bytes: bytes = loaded.to_bytes()
     pdf_bytes: bytes = opened.to_pdf()
     tracked_pdf: bytes = opened.to_pdf(revision_view="tracked")
+    tracked_pages: list[bytes] | bytes = opened.render_pages(revision_view="tracked")
     pages: list[bytes] = opened.render_all_pages()
     maybe_page: bytes | None = opened.render_page_to_png(0)
     document.save(path)

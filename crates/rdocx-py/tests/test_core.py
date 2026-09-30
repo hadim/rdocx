@@ -142,6 +142,19 @@ def test_render_methods_select_the_revision_view_by_keyword():
         document.to_pdf("tracked")
 
 
+def test_render_pages_counts_the_pages_of_the_selected_view():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("OLDWORD " * 1500)
+    edited = rdocx.Document()
+    edited.add_paragraph("NEWWORD " * 1500)
+    document.compare(edited, "Reviewer", "2026-09-30T12:00:00Z")
+    tracked = document.render_pages(dpi=24.0, revision_view="tracked")
+    all_tracked = document.render_all_pages(24.0, revision_view="tracked")
+    assert len(tracked) == len(all_tracked) > len(document.render_pages(dpi=24.0))
+
+
 @pytest.mark.skipif(shutil.which("pdftotext") is None, reason="needs pdftotext")
 def test_tracked_pdf_shows_both_sides_of_a_redline(tmp_path):
     document = _redline_document()

@@ -1228,13 +1228,34 @@ fn convert_and_render_select_the_revision_view() {
         .render_page_to_png_deterministic_with_options(0, 24.0, tracked)
         .unwrap()
         .unwrap();
+    let font_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../oxml-layout/fonts");
+    let font_files = Document::load_fonts_from_dir(&font_dir);
+    let font_refs: Vec<(&str, &[u8])> = font_files
+        .iter()
+        .map(|font| (font.family.as_str(), font.data.as_slice()))
+        .collect();
+    let accepted_font_pdf = redline_doc.to_pdf_with_fonts(&font_refs).unwrap();
+    let tracked_font_pdf = redline_doc
+        .to_pdf_with_fonts_and_options(&font_refs, tracked)
+        .unwrap();
     assert_ne!(accepted_pdf, tracked_pdf);
     assert_ne!(accepted_png, tracked_png);
+    assert_ne!(accepted_font_pdf, tracked_font_pdf);
 
-    for (view, expected_pdf, expected_png) in [
-        (None, &accepted_pdf, &accepted_png),
-        (Some("accepted"), &accepted_pdf, &accepted_png),
-        (Some("tracked"), &tracked_pdf, &tracked_png),
+    for (view, expected_pdf, expected_font_pdf, expected_png) in [
+        (None, &accepted_pdf, &accepted_font_pdf, &accepted_png),
+        (
+            Some("accepted"),
+            &accepted_pdf,
+            &accepted_font_pdf,
+            &accepted_png,
+        ),
+        (
+            Some("tracked"),
+            &tracked_pdf,
+            &tracked_font_pdf,
+            &tracked_png,
+        ),
     ] {
         let label = view.unwrap_or("default");
         let flag = view
@@ -1249,6 +1270,26 @@ fn convert_and_render_select_the_revision_view() {
         .concat());
         assert_success(&converted, &format!("convert {label}"));
         assert_eq!(&fs::read(&pdf).unwrap(), expected_pdf, "{label}");
+
+        let font_pdf = temp.path.join(format!("{label}-fonts.pdf"));
+        let converted = cli(&[
+            &["convert", path_text(&redline), "--to", "pdf", "--font-dir"][..],
+            &[path_text(&font_dir), "-o", path_text(&font_pdf)],
+            &flag,
+        ]
+        .concat());
+        assert_success(&converted, &format!("convert --font-dir {label}"));
+        assert_eq!(&fs::read(&font_pdf).unwrap(), expected_font_pdf, "{label}");
+
+        let png = temp.path.join(format!("{label}.png"));
+        let converted = cli(&[
+            &["convert", path_text(&redline), "--to", "png", "--dpi", "24"][..],
+            &["-o", path_text(&png)],
+            &flag,
+        ]
+        .concat());
+        assert_success(&converted, &format!("convert --to png {label}"));
+        assert_eq!(&fs::read(&png).unwrap(), expected_png, "{label}");
 
         let out_dir = temp.path.join(label);
         let rendered = cli(&[
@@ -1296,6 +1337,63 @@ fn convert_and_render_select_the_revision_view() {
     }
     assert!(!unknown_pdf.exists());
     assert!(!temp.path.join("redline_page1.png").exists());
+
+    for (to, extension) in [("html", "html"), ("md", "md")] {
+        let output = temp.path.join(format!("redline.{extension}"));
+        let base = [
+            "convert",
+            path_text(&redline),
+            "--to",
+            to,
+            "-o",
+            path_text(&output),
+            "--revision-view",
+        ];
+        let refused = cli(&[&base[..], &["tracked"]].concat());
+        assert_eq!(refused.status.code(), Some(1), "{to}");
+        assert_eq!(
+            String::from_utf8_lossy(&refused.stderr),
+            "Error: --revision-view tracked applies only to PDF and image output\n"
+        );
+        assert!(!output.exists(), "{to}");
+        assert_success(&cli(&[&base[..], &["accepted"]].concat()), to);
+        assert!(output.exists(), "{to}");
+    }
+}
+
+#[test]
+fn render_counts_the_pages_of_the_selected_revision_view() {
+    let temp = TempWorkspace::new("revision-view-pages");
+    let redline = temp.path.join("long.docx");
+    let mut document = fixture_document(&[&"OLDWORD ".repeat(1500)]);
+    document
+        .compare(
+            &fixture_document(&[&"NEWWORD ".repeat(1500)]),
+            "Reviewer",
+            "2026-09-30T12:00:00Z",
+        )
+        .unwrap();
+    document.save(&redline).unwrap();
+
+    let base = [
+        "render",
+        path_text(&redline),
+        "--dpi",
+        "24",
+        "--pages",
+        "5",
+        "--output-dir",
+        path_text(&temp.path),
+    ];
+    let accepted = cli(&base);
+    assert_eq!(accepted.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&accepted.stderr),
+        "Error: page 5 is out of range for 4 pages\n"
+    );
+    let tracked = cli(&[&base[..], &["--revision-view", "tracked"]].concat());
+    assert_success(&tracked, "render tracked page 5");
+    assert!(temp.path.join("long_page5.png").exists());
 }
 
 #[test]

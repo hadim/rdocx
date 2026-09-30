@@ -92,7 +92,8 @@ usage error, a repeated story fails, and neither creates the output. The
 default, as if every tracked change were accepted. `--revision-view tracked`
 draws both sides of each tracked change instead, with deletions struck through,
 insertions underlined, and a change bar in the margin. An unknown view is a
-usage error. The flag does not apply to HTML and Markdown conversion.
+usage error. HTML and Markdown conversion refuse `--revision-view tracked`
+without creating the output.
 
 Revision `list` reports the main story. Revision `accept` and `reject` operate
 across every supported story and accept at most one selector: `--id`,

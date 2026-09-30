@@ -62,7 +62,7 @@ enum Command {
         /// Directory containing font files (.ttf/.otf) to use for PDF rendering
         #[arg(long)]
         font_dir: Option<PathBuf>,
-        /// Revision view for PDF and image output: accepted or tracked
+        /// Revision view: accepted or tracked (tracked is refused for HTML and Markdown)
         #[arg(
             long,
             value_name = "VIEW",

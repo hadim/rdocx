@@ -405,6 +405,10 @@ pub fn convert(
         }
     };
 
+    if revision_view == RevisionView::Tracked && matches!(default_ext, "html" | "md") {
+        return Err("--revision-view tracked applies only to PDF and image output".into());
+    }
+
     let output_path = match output {
         Some(p) => p.to_path_buf(),
         None => default_output_path(file, default_ext),
