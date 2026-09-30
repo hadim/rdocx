@@ -42993,3 +42993,301 @@ fn a_plain_line_lets_the_space_after_its_last_word_hang() {
         assert!((ink - 223.2).abs() < 0.01, "{text:?} ends at {ink}");
     }
 }
+
+const ISSUE_254_RED: &[u8] = b"\x89PNG\r\n\x1a\nred figure";
+const ISSUE_254_BLUE: &[u8] = b"\x89PNG\r\n\x1a\nblue figure";
+
+/// A figure between two paragraphs, with an optional header picture.
+fn issue_254_document(
+    image: &[u8],
+    caption: &str,
+    size: (f64, f64),
+    header_image: Option<&[u8]>,
+) -> Document {
+    let mut document = Document::new();
+    document.add_paragraph("Before the figure.");
+    document.add_picture(
+        image,
+        "figure1.png",
+        Length::inches(size.0),
+        Length::inches(size.1),
+    );
+    document.add_paragraph(caption);
+    if let Some(header_image) = header_image {
+        document.set_header("Header");
+        let header = f254_story(&document, StoryKind::Header);
+        document
+            .add_picture_to_story(
+                &header,
+                header_image,
+                "logo.png",
+                Length::inches(0.5),
+                Length::inches(0.5),
+            )
+            .unwrap();
+    }
+    document
+}
+
+/// The main story part and the part of its only header, if any.
+fn issue_254_story_parts(package: &oxml_opc::OpcPackage) -> (String, Option<String>) {
+    let main = "/word/document.xml".to_owned();
+    let header = package
+        .get_part_rels(&main)
+        .unwrap()
+        .items
+        .iter()
+        .find(|relationship| relationship.rel_type == oxml_opc::relationship::rel_types::HEADER)
+        .map(|relationship| oxml_opc::OpcPackage::resolve_rel_target(&main, &relationship.target));
+    (main, header)
+}
+
+/// The images one story's drawings show, in document order, with their
+/// extents.
+fn issue_254_pictures(bytes: &[u8], header: bool) -> Vec<(Vec<u8>, String)> {
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let (main, header_part) = issue_254_story_parts(&package);
+    let owner = if header { header_part.unwrap() } else { main };
+    let xml = std::str::from_utf8(package.get_part(&owner).unwrap()).unwrap();
+    let relationships = package.get_part_rels(&owner).unwrap();
+    let mut pictures = Vec::new();
+    for (index, _) in xml.match_indices("<w:drawing") {
+        let drawing = &xml[index..index + xml[index..].find("</w:drawing>").unwrap()];
+        let attribute = |marker: &str| {
+            let start = drawing.find(marker).unwrap() + marker.len();
+            drawing[start..start + drawing[start..].find('"').unwrap()].to_owned()
+        };
+        let relationship = relationships.get_by_id(&attribute("r:embed=\"")).unwrap();
+        let target = oxml_opc::OpcPackage::resolve_rel_target(&owner, &relationship.target);
+        pictures.push((
+            package.get_part(&target).unwrap().to_vec(),
+            format!("{}x{}", attribute("cx=\""), attribute("cy=\"")),
+        ));
+    }
+    pictures
+}
+
+fn issue_254_story_xml(bytes: &[u8], header: bool) -> String {
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let (main, header_part) = issue_254_story_parts(&package);
+    let owner = if header { header_part.unwrap() } else { main };
+    std::str::from_utf8(package.get_part(&owner).unwrap())
+        .unwrap()
+        .to_owned()
+}
+
+/// Accept and reject a saved redline, returning each view's saved bytes.
+fn issue_254_resolved(tracked: &[u8]) -> [Vec<u8>; 2] {
+    [true, false].map(|accept| {
+        let mut resolved = Document::from_bytes(tracked).unwrap();
+        if accept {
+            resolved.accept_all().unwrap();
+        } else {
+            resolved.reject_all().unwrap();
+        }
+        let bytes = resolved.to_bytes().unwrap();
+        Document::from_bytes(&bytes).unwrap();
+        bytes
+    })
+}
+
+fn issue_254_images(pictures: Vec<(Vec<u8>, String)>) -> Vec<Vec<u8>> {
+    pictures.into_iter().map(|(image, _)| image).collect()
+}
+
+#[test]
+fn issue_254_comparison_records_a_picture_whose_image_changed() {
+    let (red, blue) = (ISSUE_254_RED, ISSUE_254_BLUE);
+    let original = || issue_254_document(red, "Figure 1. Caption.", (1.0, 0.66), None);
+    let original_size = issue_254_pictures(&original().to_bytes().unwrap(), false)[0]
+        .1
+        .clone();
+    for granularity in [
+        rdocx::ComparisonGranularity::Run,
+        rdocx::ComparisonGranularity::Word,
+    ] {
+        for (case, caption, size) in [
+            ("image only", "Figure 1. Caption.", (1.0, 0.66)),
+            ("image and caption", "Figure 1. New caption.", (1.0, 0.66)),
+            ("image and size", "Figure 1. Caption.", (1.2, 0.8)),
+        ] {
+            let mut edited = issue_254_document(blue, caption, size, None);
+            let edited_size = issue_254_pictures(&edited.to_bytes().unwrap(), false)[0]
+                .1
+                .clone();
+            let mut compared = original();
+            compared
+                .compare_with_options(
+                    &edited,
+                    "Reviewer",
+                    "2026-09-30T12:00:00Z",
+                    &rdocx::ComparisonOptions {
+                        granularity,
+                        ..Default::default()
+                    },
+                )
+                .unwrap_or_else(|error| panic!("{granularity:?} {case}: {error}"));
+            assert!(
+                !compared.revisions().is_empty(),
+                "{granularity:?} {case}: no revision"
+            );
+            let tracked = compared.to_bytes().unwrap();
+            assert_eq!(
+                issue_254_images(issue_254_pictures(&tracked, false)),
+                [red, blue],
+                "{granularity:?} {case}"
+            );
+            let xml = issue_254_story_xml(&tracked, false);
+            assert!(
+                xml.contains("<w:del ") && xml.contains("<w:ins "),
+                "{granularity:?} {case}: {xml}"
+            );
+            let [accepted, rejected] = issue_254_resolved(&tracked);
+            for (bytes, image, caption, size) in [
+                (&accepted, blue, caption, &edited_size),
+                (&rejected, red, "Figure 1. Caption.", &original_size),
+            ] {
+                assert_eq!(
+                    issue_254_pictures(bytes, false),
+                    [(image.to_vec(), size.clone())],
+                    "{granularity:?} {case}"
+                );
+                let text = f_x093_visible_text(&issue_254_story_xml(bytes, false));
+                assert!(text.contains(caption), "{granularity:?} {case}: {text}");
+            }
+        }
+    }
+}
+
+#[test]
+fn issue_254_comparison_records_a_header_picture_whose_image_changed() {
+    let (red, blue) = (ISSUE_254_RED, ISSUE_254_BLUE);
+    for (case, caption) in [
+        ("header image only", "Figure 1. Caption."),
+        ("header image and body text", "Figure 1. New caption."),
+    ] {
+        let mut compared = issue_254_document(red, "Figure 1. Caption.", (1.0, 0.66), Some(red));
+        compared
+            .compare(
+                &issue_254_document(red, caption, (1.0, 0.66), Some(blue)),
+                "Reviewer",
+                "2026-09-30T12:00:00Z",
+            )
+            .unwrap_or_else(|error| panic!("{case}: {error}"));
+        let tracked = compared.to_bytes().unwrap();
+        let header = issue_254_story_xml(&tracked, true);
+        assert!(
+            header.contains("<w:del ") && header.contains("<w:ins "),
+            "{case}: {header}"
+        );
+        assert_eq!(
+            issue_254_images(issue_254_pictures(&tracked, true)),
+            [red, blue],
+            "{case}"
+        );
+        assert_eq!(
+            issue_254_images(issue_254_pictures(&tracked, false)),
+            [red],
+            "{case}"
+        );
+        let [accepted, rejected] = issue_254_resolved(&tracked);
+        for (bytes, image, caption) in [
+            (&accepted, blue, caption),
+            (&rejected, red, "Figure 1. Caption."),
+        ] {
+            assert_eq!(
+                issue_254_images(issue_254_pictures(bytes, true)),
+                [image],
+                "{case}"
+            );
+            assert_eq!(
+                issue_254_images(issue_254_pictures(bytes, false)),
+                [red],
+                "{case}"
+            );
+            let text = f_x093_visible_text(&issue_254_story_xml(bytes, false));
+            assert!(text.contains(caption), "{case}: {text}");
+        }
+    }
+}
+
+#[test]
+fn issue_254_an_ignored_story_keeps_the_original_package_bytes() {
+    let (red, blue) = (ISSUE_254_RED, ISSUE_254_BLUE);
+    for kind in [
+        rdocx::ComparisonStoryKind::Main,
+        rdocx::ComparisonStoryKind::Header,
+    ] {
+        let mut compared = issue_254_document(red, "Figure 1. Caption.", (1.0, 0.66), Some(red));
+        let before = compared.to_bytes().unwrap();
+        let edited = if kind == rdocx::ComparisonStoryKind::Main {
+            issue_254_document(blue, "Figure 1. Caption.", (1.0, 0.66), Some(red))
+        } else {
+            issue_254_document(red, "Figure 1. Caption.", (1.0, 0.66), Some(blue))
+        };
+        compared
+            .compare_with_options(
+                &edited,
+                "Reviewer",
+                "2026-09-30T12:00:00Z",
+                &rdocx::ComparisonOptions {
+                    ignored_stories: vec![kind],
+                    ..Default::default()
+                },
+            )
+            .unwrap_or_else(|error| panic!("{kind:?}: {error}"));
+        assert!(compared.revisions().is_empty(), "{kind:?}");
+        assert_eq!(compared.to_bytes().unwrap(), before, "{kind:?}");
+    }
+}
+
+#[test]
+fn issue_254_comparison_inserts_a_new_picture_and_a_repeated_one() {
+    let (red, blue) = (ISSUE_254_RED, ISSUE_254_BLUE);
+    let mut without = Document::new();
+    without.add_paragraph("Before the figure.");
+    without.add_paragraph("Figure 1. Caption.");
+    for (case, mut compared, edited, inserted) in [
+        (
+            "new picture",
+            without,
+            issue_254_document(blue, "Figure 1. Caption.", (1.0, 0.66), None),
+            vec![blue],
+        ),
+        (
+            "repeated picture",
+            issue_254_document(red, "Figure 1. Caption.", (1.0, 0.66), None),
+            {
+                let mut edited = issue_254_document(red, "Figure 1. Caption.", (1.0, 0.66), None);
+                edited.add_picture(red, "again.png", Length::inches(1.0), Length::inches(0.66));
+                edited
+            },
+            vec![red, red],
+        ),
+    ] {
+        let before = issue_254_images(issue_254_pictures(&compared.to_bytes().unwrap(), false));
+        compared
+            .compare(&edited, "Reviewer", "2026-09-30T12:00:00Z")
+            .unwrap_or_else(|error| panic!("{case}: {error}"));
+        assert!(!compared.revisions().is_empty(), "{case}");
+        let tracked = compared.to_bytes().unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&tracked)).unwrap();
+        let media = package
+            .parts
+            .keys()
+            .filter(|part| part.starts_with("/word/media/"))
+            .count();
+        assert_eq!(media, 1, "{case}: one media part per distinct image");
+        let [accepted, rejected] = issue_254_resolved(&tracked);
+        assert_eq!(
+            issue_254_images(issue_254_pictures(&accepted, false)),
+            inserted,
+            "{case}"
+        );
+        assert_eq!(
+            issue_254_images(issue_254_pictures(&rejected, false)),
+            before,
+            "{case}"
+        );
+    }
+}
