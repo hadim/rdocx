@@ -254,7 +254,12 @@ than two lines of spacing opens. A typed `all_caps` replaces a preserved
 `cap="small"` on write, so a character-property element never carries two
 `cap` attributes. `CT_TextBodyProperties` writes a preserved `a:prstTxWarp`,
 `a:scene3d`, 3D, or extension child at its schema slot, so an autofit choice
-added after parsing still precedes a preserved scene or extension.
+added after parsing still precedes a preserved scene or extension. It types
+only the insets, `anchor`, `wrap`, `vert` and `spcFirstLastPara`, and keeps
+every other `a:bodyPr` attribute, such as `rot`, `numCol`, `spcCol` or
+`anchorCtr`, verbatim in source order after the typed ones. Editing any shape
+of a slide therefore leaves the columns and text rotation of every text body
+on it unchanged, although the renderer still draws one upright column.
 
 The presentation facade projects direct shape offset and extent, non-visual id
 and name, and the text body's explicit autofit choice through borrowed handles.

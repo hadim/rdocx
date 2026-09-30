@@ -14793,6 +14793,99 @@ fn text_mutation_preserves_unmodelled_xml_and_schema_order() {
 }
 
 #[test]
+fn editing_a_shape_keeps_every_body_property_attribute_on_its_slide() {
+    const SLIDE: &str = "/ppt/slides/slide1.xml";
+    // Every CT_TextBodyProperties attribute the model does not type, then
+    // the columns and rotation that must also survive an edit of their shape.
+    const UNMODELLED: &str = r#" rot="5400000" vertOverflow="clip" horzOverflow="clip" numCol="2" spcCol="91440" rtlCol="1" fromWordArt="1" anchorCtr="0" forceAA="1" upright="1" compatLnSpc="0""#;
+    const COLUMNS: &str = r#" numCol="3" spcCol="45720" rot="-600000""#;
+
+    fn body_properties(bytes: &[u8]) -> Vec<String> {
+        let package = open_opc(bytes, "bodyPr attribute deck");
+        let xml = String::from_utf8(package.get_part(SLIDE).unwrap().to_vec()).unwrap();
+        xml.match_indices("<a:bodyPr")
+            .map(|(start, _)| {
+                let end = start + xml[start..].find('>').unwrap();
+                xml[start..end].to_owned()
+            })
+            .collect()
+    }
+
+    fn assert_carries(body_properties: &str, attributes: &str) {
+        for attribute in attributes.split_whitespace() {
+            assert!(
+                body_properties.contains(attribute),
+                "{attribute} missing from {body_properties}"
+            );
+        }
+    }
+
+    let mut presentation = Presentation::new().unwrap();
+    // The sixth layout of the default template is Blank, so the slide holds
+    // only the three text boxes.
+    presentation.add_slide(6).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    for (index, text) in ["all", "columns", "edited"].into_iter().enumerate() {
+        let offset = Emu(914_400 * (index as i64 + 1));
+        slide
+            .add_textbox(offset, offset, Emu(2_286_000), Emu(914_400))
+            .unwrap()
+            .set_text(text)
+            .unwrap();
+    }
+    let mut package = open_opc(
+        &presentation.to_bytes().unwrap(),
+        "bodyPr attribute fixture",
+    );
+    let original = String::from_utf8(package.get_part(SLIDE).unwrap().to_vec()).unwrap();
+    assert_eq!(original.matches("<a:bodyPr").count(), 3);
+    let (head, rest) = original.split_once("<a:bodyPr").unwrap();
+    let (middle, tail) = rest.split_once("<a:bodyPr").unwrap();
+    let marked =
+        format!(r#"{head}<a:bodyPr vert="vert270"{UNMODELLED}{middle}<a:bodyPr{COLUMNS}{tail}"#);
+    package.set_part(SLIDE, marked.into_bytes());
+    let source = package_bytes(package);
+    let before = body_properties(&source);
+
+    let mut presentation = Presentation::from_bytes(&source).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    let mut edited = slide.shape_mut(2).unwrap();
+    edited
+        .set_position(Emu(914_400 * 3 + 12_700), Emu(914_400 * 3))
+        .unwrap();
+    let moved = presentation.to_bytes().unwrap();
+    let after = body_properties(&moved);
+    assert_eq!(after.len(), 3);
+    assert_carries(&after[0], UNMODELLED);
+    assert_carries(&after[0], r#"vert="vert270""#);
+    assert_carries(&after[1], COLUMNS);
+    // The shapes the caller did not touch keep their text bodies unchanged.
+    assert_eq!(after[..2], before[..2]);
+
+    let mut presentation = Presentation::from_bytes(&moved).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    let mut columns = slide.shape_mut(1).unwrap();
+    columns.set_text("rewritten").unwrap();
+    columns.set_position(Emu(0), Emu(0)).unwrap();
+    columns.set_rotation(Angle(1_800_000)).unwrap();
+    let rewritten = presentation.to_bytes().unwrap();
+    let after = body_properties(&rewritten);
+    assert_carries(&after[1], COLUMNS);
+    assert_carries(&after[0], UNMODELLED);
+    let reopened = Presentation::from_bytes(&rewritten).unwrap();
+    assert_eq!(
+        reopened
+            .slide(0)
+            .unwrap()
+            .shape(1)
+            .unwrap()
+            .text()
+            .as_deref(),
+        Some("rewritten")
+    );
+}
+
+#[test]
 fn text_mutation_indices_and_shape_kinds_are_total() {
     let mut presentation = Presentation::from_bytes(&mutation_fixture_bytes()).unwrap();
     let mut slide = presentation.slide_mut(0).unwrap();
