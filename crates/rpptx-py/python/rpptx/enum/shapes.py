@@ -198,6 +198,18 @@ class MSO_SHAPE(IntEnum):
         """The DrawingML preset name, such as `roundRect`."""
         return _PRESETS[self.value]
 
+    @classmethod
+    def from_xml(cls, xml_value: str) -> "MSO_SHAPE":
+        """The member for a DrawingML preset name, like python-pptx.
+
+        Where two members share a preset name the first one in definition
+        order wins, which is the member python-pptx returns.
+        """
+        for member in cls:
+            if xml_value and member.xml_value == xml_value:
+                return member
+        raise ValueError(f"{cls.__name__} has no XML mapping for {xml_value!r}")
+
 
 _PRESETS: dict[int, str] = {
     129: "actionButtonBackPrevious",

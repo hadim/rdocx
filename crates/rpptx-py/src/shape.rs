@@ -67,6 +67,20 @@ fn image_bytes(image_file: &Bound<'_, PyAny>) -> PyResult<(Vec<u8>, String)> {
     Ok((bytes, filename))
 }
 
+/// Reads an `MSO_SHAPE` member, its integer value, or a DrawingML preset name.
+fn preset_name(py: Python<'_>, shape_type: &Bound<'_, PyAny>) -> PyResult<String> {
+    if shape_type.is_instance_of::<PyString>() {
+        return shape_type.extract::<String>();
+    }
+    let value = shape_type.extract::<i64>()?;
+    py.import("rpptx.enum.shapes")?
+        .getattr("MSO_SHAPE")?
+        .call1((value,))
+        .map_err(|_| PyValueError::new_err("unsupported MSO_SHAPE value"))?
+        .getattr("xml_value")?
+        .extract::<String>()
+}
+
 fn check_coordinate(name: &str, value: i64, minimum: i64) -> PyResult<()> {
     if (minimum..=MAX_COORDINATE).contains(&value) {
         Ok(())
@@ -327,6 +341,41 @@ impl PyShape {
             .getattr("MSO_SHAPE_TYPE")?
             .call1((value,))
             .map(|member| Some(member.unbind()))
+    }
+
+    /// The `MSO_SHAPE` member of an auto shape's preset geometry.
+    ///
+    /// A picture reports its mask, or `None` without a preset. Any other
+    /// shape raises `ValueError`, as python-pptx does.
+    #[getter]
+    fn auto_shape_type(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        let (kind, preset) = self.read(py, |shape| {
+            (shape.kind(), shape.auto_shape_type().map(str::to_owned))
+        })?;
+        match (kind, preset) {
+            (_, Some(preset)) => py
+                .import("rpptx.enum.shapes")?
+                .getattr("MSO_SHAPE")?
+                .call_method1("from_xml", (preset,))
+                .map(|member| Some(member.unbind())),
+            (rpptx::ShapeKind::Picture, None) => Ok(None),
+            _ => Err(PyValueError::new_err("shape is not an auto shape")),
+        }
+    }
+
+    /// Replaces the preset geometry and resets its adjustments to defaults.
+    #[setter]
+    fn set_auto_shape_type(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let refused = self.read(py, |shape| match shape.kind() {
+            rpptx::ShapeKind::Shape => shape.shape_type() == Some(rpptx::ShapeType::TextBox),
+            rpptx::ShapeKind::Picture => false,
+            _ => true,
+        })?;
+        if refused {
+            return Err(PyValueError::new_err("shape is not an auto shape"));
+        }
+        let preset = preset_name(py, value)?;
+        self.edit(py, |shape| shape.set_auto_shape_type(&preset))
     }
 
     #[getter]
@@ -654,17 +703,7 @@ impl PyShapeCollection {
         height: i64,
     ) -> PyResult<Py<PyShape>> {
         self.require_slide_root()?;
-        let preset = if shape_type.is_instance_of::<PyString>() {
-            shape_type.extract::<String>()?
-        } else {
-            let value = shape_type.extract::<i64>()?;
-            py.import("rpptx.enum.shapes")?
-                .getattr("MSO_SHAPE")?
-                .call1((value,))
-                .map_err(|_| PyValueError::new_err("unsupported MSO_SHAPE value"))?
-                .getattr("xml_value")?
-                .extract::<String>()?
-        };
+        let preset = preset_name(py, shape_type)?;
         let slide_index = self.validate(py)?;
         let index = self.len(py)?;
         self.presentation
