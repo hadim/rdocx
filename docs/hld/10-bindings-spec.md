@@ -1930,9 +1930,14 @@ Native Word rendering exposes `rdocx::RevisionView` and the concrete
 `rdocx::RenderOptions`, whose default selects the accepted view. Additive
 option-taking counterparts cover PDF bytes and files, single-page and all-page
 raster output, page layout, deterministic rendering, and caller-supplied font
-paths. The existing methods keep their accepted default. Python, WASM, and CLI
-surfaces do not implicitly expose the selector and retain their existing
-rendering behavior.
+paths. The existing methods keep their accepted default. Python `to_pdf`,
+`render_page_to_png`, `render_all_pages`, and `render_pages` take a
+keyword-only `revision_view` of `"accepted"`, the default, or `"tracked"`, and
+any other value raises `ValueError`. The CLI `convert` PDF and image outputs
+and `render` take `--revision-view accepted` or `--revision-view tracked`, with
+`accepted` as the default, and an unknown value is a usage error. HTML and
+Markdown conversion refuse `tracked` without creating output. WASM does not
+expose the selector and retains its existing rendering behavior.
 Native selected-image rendering adds zero-based page-list entry points that
 share `rdocx::RasterFormat`, `rdocx::RasterOptions` and
 `rdocx::RasterOutput` with `oxml-pdf`. The existing PNG methods remain
