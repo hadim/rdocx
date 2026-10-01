@@ -6899,17 +6899,26 @@ fn layout_paragraph_with_source_and_table(
     line_params.ind_right = ind_right;
     line_params.jc = jc;
 
-    let legacy_empty_line = if attributed_empty_paragraph
-        && direct_ppr
-            .and_then(|properties| properties.rpr.as_ref())
-            .is_none()
-    {
-        let mut lines = break_into_lines(&[], &line_params, fm)?;
-        convert::restore_word_line_heights(&mut lines, &effective_ppr, grid_line_pitch_pt);
-        lines.pop()
-    } else {
-        None
+    // A line holding only inline objects takes its proportional spacing from
+    // the paragraph mark, whose run properties `equation_rpr` already are. A
+    // mark whose font does not resolve adds none rather than failing a
+    // paragraph whose runs all resolved.
+    let paragraph_mark = {
+        let family = resolve_font_family(&equation_rpr, input.theme.as_ref(), WordFontSlot::Ascii);
+        fm.resolve_font_for_metrics(
+            family.as_deref(),
+            equation_rpr.bold.unwrap_or(false),
+            equation_rpr.italic.unwrap_or(false),
+        )
+        .and_then(|font_id| {
+            fm.word_line_metrics(font_id, equation_rpr.sz.map_or(11.0, |hp| hp.to_pt()))
+        })
+        .ok()
     };
+    // An exact `w:lineRule` is an author's absolute height and stays off the
+    // grid, which is what Word does with the two together.
+    let grid_line_pitch_pt =
+        grid_line_pitch_pt.filter(|_| effective_ppr.line_rule.as_deref() != Some("exact"));
 
     let uses_multilingual_layout = base_direction != TextDirection::Auto
         || multilingual_styles
@@ -6937,13 +6946,13 @@ fn layout_paragraph_with_source_and_table(
     } else {
         break_into_lines(&inline_items, &line_params, fm)?
     };
-    convert::restore_word_line_heights(&mut lines, &effective_ppr, grid_line_pitch_pt);
-    if let (Some(line), Some(legacy)) = (lines.first_mut(), legacy_empty_line) {
-        line.ascent = legacy.ascent;
-        line.descent = legacy.descent;
-        line.line_gap = legacy.line_gap;
-        line.height = legacy.height;
-    }
+    convert::restore_word_line_heights(
+        &mut lines,
+        line_params.line_spacing,
+        grid_line_pitch_pt,
+        fm,
+        paragraph_mark,
+    );
 
     let mut result = block::build_paragraph_block(
         lines,
@@ -6970,8 +6979,8 @@ fn layout_paragraph_with_source_and_table(
     result.reflow = Some(Box::new(block::ParagraphReflow {
         items: inline_items,
         params: line_params,
-        grid_line_pitch_pt: grid_line_pitch_pt
-            .filter(|_| effective_ppr.line_rule.as_deref() != Some("exact")),
+        grid_line_pitch_pt,
+        paragraph_mark,
     }));
     Ok(result)
 }
@@ -14525,7 +14534,9 @@ mod tests {
         let mut engine = Engine::new_deterministic().expect("bundled fonts load");
         let result = engine.layout(&input).expect("page-spanning prose layout");
 
-        assert_eq!(result.pages.len(), 16, "Issue 67 source page count");
+        // Word 16 lays this document out on 19 pages, and so does the layout
+        // since a Calibri line takes its 2500/2048 em.
+        assert_eq!(result.pages.len(), 19, "Issue 67 source page count");
         assert_eq!(engine.paragraph_cache.len(), 175);
         assert!(
             engine
@@ -14552,15 +14563,17 @@ mod tests {
             boundaries,
             [
                 (0, 0),
-                (23, 2),
-                (46, 4),
-                (69, 6),
-                (92, 8),
-                (115, 10),
-                (138, 12),
-                (161, 14),
+                (19, 2),
+                (38, 4),
+                (57, 6),
+                (76, 8),
+                (95, 10),
+                (114, 12),
+                (133, 14),
+                (152, 16),
+                (171, 18),
             ],
-            "the first page ends inside paragraph 11, so its first eligible complete boundary is block 23 after page 2"
+            "the first page ends inside paragraph 9, so its first eligible complete boundary is block 19 after page 2"
         );
     }
 
@@ -14655,7 +14668,7 @@ mod tests {
         use rdocx_oxml::header_footer::{CT_HdrFtr, HdrFtrRef};
 
         let mut input = page_spanning_prose_restart_input(175);
-        let BodyContent::Paragraph(split) = &mut input.document.body.content[11] else {
+        let BodyContent::Paragraph(split) = &mut input.document.body.content[9] else {
             panic!("split body entry is a paragraph");
         };
         let mut marker = CT_R::new("");
@@ -14693,10 +14706,10 @@ mod tests {
             .restart_cache
             .as_ref()
             .expect("clean complete boundaries retain restart state");
-        assert!(page_text(&initial.pages[0]).contains("Paragraph  11:"));
+        assert!(page_text(&initial.pages[0]).contains("Paragraph  9:"));
         assert!(
             page_text(&initial.pages[1]).starts_with("Waltz"),
-            "page 2 must begin with paragraph 11's split continuation"
+            "page 2 must begin with paragraph 9's split continuation"
         );
         let first_complete = retained
             .checkpoints
@@ -14704,7 +14717,7 @@ mod tests {
             .find(|checkpoint| checkpoint.page_count > 0)
             .expect("a clean boundary follows the split paragraph");
         assert!(
-            first_complete.page_count > 1 && first_complete.next_block_index > 11,
+            first_complete.page_count > 1 && first_complete.next_block_index > 9,
             "no boundary may be retained inside the split note-bearing paragraph"
         );
         for page in &initial.pages {
@@ -16469,6 +16482,7 @@ mod tests {
             items: vec![InlineItem::Text(retained)],
             params: oxml_layout::LineBreakParams::default(),
             grid_line_pitch_pt: None,
+            paragraph_mark: None,
         }));
         let BodyContent::Paragraph(paragraph) = &input.document.body.content[0] else {
             panic!("body paragraph");

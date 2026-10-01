@@ -2,8 +2,8 @@
 
 use crate::table::TableBlock;
 use oxml_layout::{
-    Align, Color, GroupElement, InlineItem, LayoutLine, LineBreakParams, MediaId, SourceNodeId,
-    StructureId, TextDirection,
+    Align, Color, FontMetrics, GroupElement, InlineItem, LayoutLine, LineBreakParams, MediaId,
+    SourceNodeId, StructureId, TextDirection,
 };
 use rdocx_oxml::borders::CT_PBdr;
 use rdocx_oxml::drawing::{
@@ -389,6 +389,9 @@ pub struct ParagraphReflow {
     /// grid, including one on an exact `w:lineRule`, so an ungridded reflow
     /// takes the arithmetic it always took.
     pub grid_line_pitch_pt: Option<f64>,
+    /// Word's measure of the paragraph mark, which a re-broken line holding
+    /// only inline objects takes its proportional spacing from.
+    pub paragraph_mark: Option<FontMetrics>,
 }
 
 /// A laid-out paragraph with its lines and spacing.
