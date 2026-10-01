@@ -226,11 +226,17 @@ or `a:buSzPts`, and `a:buClr`.
 `CT_TextBody` maintains at least one paragraph. Its minimal constructor creates
 one empty paragraph, and whole-frame text replacement retains body properties,
 the optional list style, and the first paragraph's formatting and end
-properties while replacing the ordered text choices with one regular run.
-Clearing text therefore leaves one empty paragraph rather than an invalid empty
-body. Paragraph and run append operations preserve caller order. Fields and
-line breaks remain in place unless the caller explicitly replaces that
-paragraph's text.
+properties while replacing the ordered text choices with one regular run per
+line. Clearing text therefore leaves one empty paragraph rather than an invalid
+empty body. As in python-pptx, each line feed starts a paragraph and each
+vertical tab becomes an `a:br` carrying the run's formatting. Every new
+paragraph takes the first paragraph's properties, end properties and first run
+formatting, so each line looks as the replaced first line did, while preserved
+paragraph content stays with the first. The `rpptx` paragraph handle turns
+both a line feed and a vertical tab into an `a:br`, and run text stays literal.
+Paragraph and run append operations preserve caller order. Fields and line
+breaks remain in place unless the caller explicitly replaces that paragraph's
+text.
 
 Typed content transfer moves a non-empty body's paragraphs into another text
 body without flattening runs, fields, bullets, or formatting. The source keeps
