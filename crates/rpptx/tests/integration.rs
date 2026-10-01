@@ -16233,9 +16233,16 @@ fn removing_a_jump_target_turns_its_links_into_no_action_like_powerpoint() {
     let relationships = package.get_or_create_part_rels(slide_part);
     let run_jump = relationships.add(rel_types::SLIDE, "slide3.xml");
     let hover_jump = relationships.add(rel_types::SLIDE, "slide3.xml");
+    // The run jump plays a click sound, whose relationship and media part
+    // only that jump names.
+    let sound = relationships.add(rel_types::AUDIO, "../media/click.wav");
     let run = format!(
-        r#"<p:sp><p:nvSpPr><p:cNvPr id="60" name="Run jump"><a:hlinkHover r:id="{hover_jump}" action="ppaction://hlinksldjump"/></p:cNvPr><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US"><a:hlinkClick r:id="{run_jump}" action="ppaction://hlinksldjump" tooltip="Go"/></a:rPr><a:t>run to 3</a:t></a:r></a:p></p:txBody></p:sp>"#
+        r#"<p:sp><p:nvSpPr><p:cNvPr id="60" name="Run jump"><a:hlinkHover r:id="{hover_jump}" action="ppaction://hlinksldjump"/></p:cNvPr><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="en-US"><a:hlinkClick r:id="{run_jump}" action="ppaction://hlinksldjump" tooltip="Go"><a:snd r:embed="{sound}" name="click"/></a:hlinkClick></a:rPr><a:t>run to 3</a:t></a:r></a:p></p:txBody></p:sp>"#
     );
+    package.set_part("/ppt/media/click.wav", b"RIFF".to_vec());
+    package
+        .content_types
+        .add_override("/ppt/media/click.wav", "audio/wav");
     let xml = String::from_utf8(package.get_part(slide_part).unwrap().to_vec())
         .unwrap()
         .replacen("</p:spTree>", &format!("{run}</p:spTree>"), 1);
@@ -16280,6 +16287,9 @@ fn removing_a_jump_target_turns_its_links_into_no_action_like_powerpoint() {
         first_slide_relationships(&presentation, rel_types::HYPERLINK),
         ["https://example.com/kept"]
     );
+    assert!(first_slide_relationships(&presentation, rel_types::AUDIO).is_empty());
+    assert!(package.get_part("/ppt/media/click.wav").is_none());
+    assert!(!xml.contains("a:snd"), "{xml}");
     assert_eq!(first_slide_click(&presentation, ids[0]), (None, None));
     assert_eq!(presentation.shape_target_slide(0, ids[1]).unwrap(), Some(1));
     Presentation::from_bytes(&saved).unwrap();

@@ -272,8 +272,9 @@ On every other slide, each `a:hlinkClick`, `a:hlinkHover`, or
 `a:hlinkMouseOver` that names a relationship to the removed part, on a shape or
 on a text run, keeps its name with an empty `r:id` and the action
 `ppaction://noaction`, which is what PowerPoint writes when it deletes the
-target of a slide jump or hover. The relationship goes once no `r:` attribute
-of that slide names it.
+target of a slide jump or hover. A relationship that only a released element
+named goes, a click sound included, and so does a media part nothing else
+reaches.
 
 Duplication also stages a complete graph. It allocates a new slide part,
 producer slide id, presentation relationship, and destination relationship

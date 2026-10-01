@@ -2829,8 +2829,8 @@ impl Presentation {
                 message: error.to_string(),
             })?;
 
-        self.release_slide_jumps_to(&record.part_name)?;
         let mut media_candidates = HashSet::new();
+        self.release_slide_jumps_to(&record.part_name, &mut media_candidates)?;
         collect_media_targets(&self.package, &record.part_name, &mut media_candidates);
         if let Some(notes) = &record.notes {
             collect_media_targets(&self.package, &notes.part_name, &mut media_candidates);
@@ -2868,9 +2868,14 @@ impl Presentation {
     ///
     /// Every `a:hlinkClick`, `a:hlinkHover`, or `a:hlinkMouseOver` that
     /// named it, on a shape or a text run, keeps an empty `r:id` and the
-    /// action `ppaction://noaction`. A released relationship goes once no
-    /// `r:` attribute of the slide names it any more.
-    fn release_slide_jumps_to(&mut self, slide_part: &str) -> Result<()> {
+    /// action `ppaction://noaction`. Every relationship that the slide named
+    /// only inside a released element goes, a click sound included, and the
+    /// internal targets of those relationships join `candidates` for pruning.
+    fn release_slide_jumps_to(
+        &mut self,
+        slide_part: &str,
+        candidates: &mut HashSet<String>,
+    ) -> Result<()> {
         for record in &mut self.slides {
             let Some(relationships) = self.package.get_part_rels_mut(&record.part_name) else {
                 continue;
@@ -2892,14 +2897,28 @@ impl Presentation {
                 part_name: record.part_name.clone(),
                 message: error.to_string(),
             };
-            let xml = record.slide.to_xml().map_err(malformed)?;
-            let xml = release_hyperlinks(&xml, &released).map_err(malformed)?;
-            let referenced: HashSet<String> = relationship_ids(&xml)
+            let original = record.slide.to_xml().map_err(malformed)?;
+            let xml = release_hyperlinks(&original, &released).map_err(malformed)?;
+            let before: HashSet<String> = relationship_ids(&original)
+                .map_err(malformed)?
+                .into_iter()
+                .collect();
+            let after: HashSet<String> = relationship_ids(&xml)
                 .map_err(malformed)?
                 .into_iter()
                 .collect();
             relationships.items.retain(|relationship| {
-                !released.contains(&relationship.id) || referenced.contains(&relationship.id)
+                let dropped = (released.contains(&relationship.id)
+                    || before.contains(&relationship.id))
+                    && !after.contains(&relationship.id);
+                if dropped && !relationship_is_external(relationship) {
+                    let target =
+                        OpcPackage::resolve_rel_target(&record.part_name, &relationship.target);
+                    if target != slide_part {
+                        candidates.insert(target);
+                    }
+                }
+                !dropped
             });
             record.slide = CT_Slide::from_xml(&xml).map_err(malformed)?;
         }
