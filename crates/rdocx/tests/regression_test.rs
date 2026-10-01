@@ -43801,9 +43801,7 @@ mod tab_stop_regressions {
             .add_numbering_definition(&[ListLevel::decimal()])
             .unwrap();
         let instance = document.add_numbering_instance(definition, &[]).unwrap();
-        document
-            .add_style(StyleBuilder::paragraph("ListParagraph", "List Paragraph"))
-            .unwrap();
+        // A new document already defines Word's List Paragraph style.
         document
             .link_style_to_numbering("ListParagraph", instance, 0)
             .unwrap();
