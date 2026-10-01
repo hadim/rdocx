@@ -1,5 +1,6 @@
 //! Text content elements: `CT_P` (paragraph), `CT_R` (run), `CT_Text`.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -4267,6 +4268,112 @@ impl CT_P {
         let mut text = String::new();
         append_accepted_text(self, &mut text);
         text
+    }
+
+    /// Return the accepted view as a paragraph of plain runs, for the
+    /// exporters: the runs whose text [`Self::accepted_text`] reads, in
+    /// document order. Those of content controls, tracked insertions and
+    /// moves in, smart tags, inline custom XML elements and simple fields
+    /// are included, deleted and moved-away runs are left out, and the
+    /// hyperlink spans cover the same runs as in the source. Content
+    /// controls, revisions, wrappers and markers are not kept. Borrowed when
+    /// the paragraph holds none of them, since its runs are then the view.
+    #[doc(hidden)]
+    pub fn accepted_view(&self) -> Cow<'_, CT_P> {
+        if self.content_controls.is_empty()
+            && self.revisions.is_empty()
+            && !self.extra_xml.iter().any(|(_, raw)| is_run_wrapper(raw))
+            && !self
+                .runs
+                .iter()
+                .any(|run| simple_field_source(run).is_some())
+        {
+            return Cow::Borrowed(self);
+        }
+        let mut runs = Vec::new();
+        // The index into `self.hyperlinks` of the hyperlink each run is in.
+        let mut links = Vec::new();
+        for boundary in 0..=self.runs.len() {
+            for owner in boundary_owners(self, boundary) {
+                let mut owned = Vec::new();
+                let link = match owner {
+                    BoundaryOwner::ContentControl(index) => {
+                        append_accepted_control_runs(&self.content_controls[index].3, &mut owned);
+                        None
+                    }
+                    BoundaryOwner::Revision(index) => {
+                        let (_, slot, revision) = &self.revisions[index];
+                        append_accepted_revision_runs(revision, &mut owned);
+                        hyperlink_revision_index(*slot)
+                    }
+                    BoundaryOwner::Wrapper(index) => {
+                        if let Some(content) =
+                            run_wrapper_paragraph(&self.extra_xml[index].1, &["w".to_owned()])
+                        {
+                            let view = content.accepted_view().into_owned();
+                            links.extend(std::iter::repeat_n(None, view.runs.len()));
+                            runs.extend(view.runs);
+                        }
+                        continue;
+                    }
+                };
+                links.extend(std::iter::repeat_n(link, owned.len()));
+                runs.extend(owned.into_iter().cloned());
+            }
+            if let Some(run) = self.runs.get(boundary) {
+                let link = self.hyperlinks.iter().position(|hyperlink| {
+                    hyperlink.run_start <= boundary && boundary < hyperlink.run_end
+                });
+                // A simple field reads as the runs of its result, as in
+                // `Self::accepted_text`, so a revision inside it is resolved.
+                let field = simple_field_source(run)
+                    .and_then(|(raw, prefixes)| run_wrapper_paragraph(raw, prefixes));
+                match field {
+                    Some(content) => {
+                        let view = content.accepted_view().into_owned();
+                        links.extend(std::iter::repeat_n(link, view.runs.len()));
+                        runs.extend(view.runs);
+                    }
+                    None => {
+                        runs.push(run.clone());
+                        links.push(link);
+                    }
+                }
+            }
+        }
+        let mut hyperlinks = Vec::new();
+        let mut start = 0;
+        while start < runs.len() {
+            let mut end = start + 1;
+            while end < runs.len() && links[end] == links[start] {
+                end += 1;
+            }
+            if let Some(link) = links[start] {
+                hyperlinks.push(HyperlinkSpan {
+                    run_start: start,
+                    run_end: end,
+                    ..self.hyperlinks[link].clone()
+                });
+            }
+            start = end;
+        }
+        Cow::Owned(CT_P {
+            properties: self.properties.clone(),
+            runs,
+            hyperlinks,
+            ..CT_P::new()
+        })
+    }
+
+    /// Return the content of a preserved smart tag or inline custom XML
+    /// element, which [`Self::accepted_view`] reads in place. None for any
+    /// other raw paragraph child.
+    #[doc(hidden)]
+    pub fn raw_run_wrapper_content(raw: &[u8]) -> Option<CT_P> {
+        if !is_run_wrapper(raw) {
+            return None;
+        }
+        run_wrapper_paragraph(raw, &["w".to_owned()])
     }
 
     /// Return accepted-view runs in the same order as bookmark projections.

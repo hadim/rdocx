@@ -1,5 +1,6 @@
 //! Bounded OpenDocument Text import and export for the native Word document model.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write as _;
 use std::io::{Cursor, Read, Write};
@@ -24,7 +25,9 @@ use zip::ZipWriter;
 use zip::read::ZipArchive;
 use zip::write::SimpleFileOptions;
 
+use crate::document::{ExportItem, body_export_items};
 use crate::paragraph::{Alignment, Paragraph};
+use crate::revision::{raw_is_typed_revision, revision_removes_text};
 use crate::run::Run;
 use crate::{Document, Error, Length, ListLevel, PackageReadLimits, Result};
 
@@ -203,8 +206,9 @@ impl<'a> OdtWriter<'a> {
 
     fn write(mut self) -> Result<OdtWriteResult> {
         self.scan_document_losses()?;
-        for (index, content) in self.document.document.body.content.iter().enumerate() {
-            self.scan_body(content, &format!("body[{index}]"))?;
+        // What block content controls wrap is exported in place.
+        for (item, path) in &body_export_items(&self.document.document.body.content) {
+            self.scan_body(item, path)?;
         }
 
         let content = self.content_xml()?;
@@ -276,15 +280,24 @@ impl<'a> OdtWriter<'a> {
         })
     }
 
-    fn scan_body(&mut self, content: &BodyContent, path: &str) -> Result<()> {
+    fn scan_body(&mut self, item: &ExportItem<'_>, path: &str) -> Result<()> {
         self.reserve_output(64)?;
-        match content {
-            BodyContent::Paragraph(paragraph) => self.scan_paragraph(paragraph, path),
-            BodyContent::Table(table) => self.scan_table(table, path),
-            BodyContent::ContentControl(_) => {
-                self.diagnose(path, "body content control was dropped during ODT export")
+        match item {
+            ExportItem::Paragraph(paragraph) => self.scan_paragraph(paragraph, path),
+            ExportItem::Table(table) => {
+                // An owned table is one whose content controls were unwrapped.
+                if matches!(**table, Cow::Owned(_)) {
+                    self.diagnose(
+                        &format!("{path}/content-controls"),
+                        "table content controls were flattened during ODT export",
+                    )?;
+                }
+                self.scan_table(table, path)
             }
-            BodyContent::RawXml(_) => {
+            ExportItem::ContentControl => {
+                self.diagnose(path, "body content control was flattened during ODT export")
+            }
+            ExportItem::RawXml => {
                 self.diagnose(path, "unmodelled body XML was dropped during ODT export")
             }
         }
@@ -320,12 +333,6 @@ impl<'a> OdtWriter<'a> {
                 "unmodelled table XML was dropped during ODT export",
             )?;
         }
-        if !table.content_controls.is_empty() {
-            self.diagnose(
-                &format!("{path}/content-controls"),
-                "table row content controls were dropped during ODT export",
-            )?;
-        }
         for (row_index, row) in table.rows.iter().enumerate() {
             self.output_rows = self
                 .output_rows
@@ -347,12 +354,6 @@ impl<'a> OdtWriter<'a> {
                 self.diagnose(
                     &format!("{row_path}/raw[{index}]"),
                     "unmodelled table-row XML was dropped during ODT export",
-                )?;
-            }
-            if !row.content_controls.is_empty() {
-                self.diagnose(
-                    &format!("{row_path}/content-controls"),
-                    "table cell content controls were dropped during ODT export",
                 )?;
             }
             for (cell_index, cell) in row.cells.iter().enumerate() {
@@ -417,10 +418,8 @@ impl<'a> OdtWriter<'a> {
                             &content_path,
                             "nested table was dropped during ODT export",
                         )?,
-                        CellContent::ContentControl(_) => self.diagnose(
-                            &content_path,
-                            "table-cell content control was dropped during ODT export",
-                        )?,
+                        // Unwrapped by `unwrap_table_controls`.
+                        CellContent::ContentControl(_) => {}
                     }
                 }
             }
@@ -457,7 +456,8 @@ impl<'a> OdtWriter<'a> {
         }
         let mut trailing_text_style = None;
         let mut projected_runs = 0_usize;
-        for (run_index, run) in paragraph.runs.iter().enumerate() {
+        // The runs of the accepted view are exported, see `write_runs`.
+        for (run_index, run) in paragraph.accepted_view().runs.iter().enumerate() {
             self.reserve_output(192)?;
             let run_path = format!("{path}/run[{run_index}]");
             let run_properties = self.effective_run_properties(paragraph, run);
@@ -698,25 +698,45 @@ impl<'a> OdtWriter<'a> {
                 "distributed paragraph alignment was simplified to justify during ODT export",
             )?;
         }
-        for (index, raw) in &paragraph.extra_xml {
-            if CT_P::raw_is_root_attributes(*index, raw) {
+        for (raw_index, (index, raw)) in paragraph.extra_xml.iter().enumerate() {
+            if CT_P::raw_is_root_attributes(*index, raw)
+                || raw_is_typed_revision(paragraph, raw_index)
+            {
                 continue;
             }
             self.diagnose(
                 &format!("{path}/raw[{index}]"),
-                "unmodelled paragraph XML was dropped during ODT export",
+                if CT_P::raw_run_wrapper_content(raw).is_some() {
+                    "smart tag or custom XML wrapper was flattened during ODT export"
+                } else {
+                    "unmodelled paragraph XML was dropped during ODT export"
+                },
             )?;
         }
         if !paragraph.content_controls.is_empty() {
             self.diagnose(
                 &format!("{path}/content-controls"),
-                "run content controls were dropped during ODT export",
+                "run content controls were flattened during ODT export",
             )?;
         }
-        if !paragraph.revisions.is_empty() {
+        if paragraph
+            .revisions
+            .iter()
+            .any(|(_, _, revision)| !revision_removes_text(revision))
+        {
             self.diagnose(
                 &format!("{path}/revisions"),
                 "paragraph revisions were flattened during ODT export",
+            )?;
+        }
+        if paragraph
+            .revisions
+            .iter()
+            .any(|(_, _, revision)| revision_removes_text(revision))
+        {
+            self.diagnose(
+                &format!("{path}/revisions"),
+                "deleted or moved-away revision content was dropped during ODT export",
             )?;
         }
         if !paragraph.comment_ranges.is_empty() {
@@ -1353,61 +1373,69 @@ impl<'a> OdtWriter<'a> {
             output.push_str("</text:list-style>");
         }
         output.push_str("</office:automatic-styles><office:body><office:text>");
+        // A list continues through the content controls it runs into.
+        let items = body_export_items(&self.document.document.body.content)
+            .into_iter()
+            .filter(|(item, _)| !matches!(item, ExportItem::ContentControl))
+            .collect::<Vec<_>>();
         let mut index = 0_usize;
         let mut written_lists = BTreeSet::new();
-        while index < self.document.document.body.content.len() {
-            let content = &self.document.document.body.content[index];
-            if let BodyContent::Paragraph(paragraph) = content
+        while index < items.len() {
+            let (item, path) = &items[index];
+            if let ExportItem::Paragraph(paragraph) = item
                 && let Some((num_id, _)) = self.paragraph_numbering(paragraph)
             {
                 let start = index;
-                while index < self.document.document.body.content.len()
+                while index < items.len()
                     && matches!(
-                        &self.document.document.body.content[index],
-                        BodyContent::Paragraph(candidate)
+                        &items[index].0,
+                        ExportItem::Paragraph(candidate)
                             if self.paragraph_numbering(candidate).is_some_and(|(candidate_id, _)| candidate_id == num_id)
                     )
                 {
                     index += 1;
                 }
                 let continue_numbering = !written_lists.insert(num_id);
-                self.write_list(&mut output, start, index, num_id, continue_numbering)?;
+                self.write_list(
+                    &mut output,
+                    &items[start..index],
+                    num_id,
+                    continue_numbering,
+                )?;
                 continue;
             }
-            self.write_body(&mut output, content, &format!("body[{index}]"))?;
+            self.write_body(&mut output, item, path)?;
             index += 1;
         }
         output.push_str("</office:text></office:body></office:document-content>");
         Ok(output)
     }
 
-    fn write_body(&self, output: &mut String, content: &BodyContent, path: &str) -> Result<()> {
-        match content {
-            BodyContent::Paragraph(paragraph) => self.write_paragraph(output, paragraph, path),
-            BodyContent::Table(table) => self.write_table(output, table, path),
-            BodyContent::ContentControl(_) | BodyContent::RawXml(_) => Ok(()),
+    fn write_body(&self, output: &mut String, item: &ExportItem<'_>, path: &str) -> Result<()> {
+        match item {
+            ExportItem::Paragraph(paragraph) => self.write_paragraph(output, paragraph, path),
+            ExportItem::Table(table) => self.write_table(output, table, path),
+            ExportItem::ContentControl | ExportItem::RawXml => Ok(()),
         }
     }
 
     fn write_list(
         &self,
         output: &mut String,
-        start: usize,
-        end: usize,
+        list: &[(ExportItem<'_>, String)],
         num_id: u32,
         continue_numbering: bool,
     ) -> Result<()> {
         let style = self.list_styles.get(&num_id).expect("scanned list style");
-        let mut items = Vec::with_capacity(end - start);
-        for index in start..end {
-            let BodyContent::Paragraph(paragraph) = &self.document.document.body.content[index]
-            else {
+        let mut items = Vec::with_capacity(list.len());
+        for (item, path) in list {
+            let ExportItem::Paragraph(paragraph) = item else {
                 unreachable!();
             };
             let (_, level) = self
                 .paragraph_numbering(paragraph)
                 .expect("scanned list paragraph");
-            items.push((paragraph, format!("body[{index}]"), level as usize));
+            items.push((*paragraph, path.clone(), level as usize));
         }
         write_list_level(self, output, &items, 0, style, continue_numbering)?;
         Ok(())
@@ -1502,6 +1530,7 @@ impl<'a> OdtWriter<'a> {
                             }
                             wrote_paragraph = true;
                         }
+                        // Content controls are unwrapped by `unwrap_table_controls`.
                         CellContent::Table(_) | CellContent::ContentControl(_) => {
                             content_index += 1;
                         }
@@ -1547,7 +1576,9 @@ impl<'a> OdtWriter<'a> {
     }
 
     fn write_runs(&self, output: &mut String, paragraph: &CT_P, path: &str) -> Result<()> {
-        for (run_index, run) in paragraph.runs.iter().enumerate() {
+        // The runs the text readers read, those of content controls, tracked
+        // insertions, smart tags and custom XML included, deleted ones left out.
+        for (run_index, run) in paragraph.accepted_view().runs.iter().enumerate() {
             let run_path = format!("{path}/run[{run_index}]");
             let properties = self.effective_run_properties(paragraph, run);
             let style_xml = text_style_xml(&properties);
@@ -7074,7 +7105,7 @@ mod tests {
             ),
             (
                 "body[1]/content-controls",
-                "run content controls were dropped during ODT export",
+                "run content controls were flattened during ODT export",
             ),
             (
                 "body[1]/comments",
@@ -7089,64 +7120,60 @@ mod tests {
                 "hyperlink wrappers were flattened during ODT export",
             ),
             (
-                "body[1]/run[0]/rPr",
+                "body[1]/run[1]/rPr",
                 "unsupported run properties were dropped during ODT export",
             ),
             (
-                "body[1]/run[0]/rPr/rStyle",
+                "body[1]/run[1]/rPr/rStyle",
                 "run style identity was materialized and dropped during ODT export",
             ),
             (
-                "body[1]/run[0]/raw",
+                "body[1]/run[1]/raw",
                 "unmodelled run XML was dropped during ODT export",
             ),
             (
-                "body[1]/run[0]/rPr/color",
+                "body[1]/run[1]/rPr/color",
                 "unsupported run color was dropped during ODT export",
             ),
             (
-                "body[1]/run[0]/rPr/shading-pattern",
+                "body[1]/run[1]/rPr/shading-pattern",
                 "run shading pattern was simplified during ODT export",
             ),
             (
-                "body[1]/run[0]/rPr/shading-color",
+                "body[1]/run[1]/rPr/shading-color",
                 "run shading foreground color was dropped during ODT export",
             ),
             (
-                "body[1]/run[0]/rPr/highlight",
+                "body[1]/run[1]/rPr/highlight",
                 "run highlight was replaced by shading fill during ODT export",
             ),
             (
-                "body[1]/run[0]/content[1]",
+                "body[1]/run[1]/content[1]",
                 "deleted text was flattened during ODT export",
             ),
             (
-                "body[1]/run[0]/content[2]",
+                "body[1]/run[1]/content[2]",
                 "unsupported break type was dropped during ODT export",
             ),
             (
-                "body[1]/run[0]/content[3]",
+                "body[1]/run[1]/content[3]",
                 "unsupported break type was dropped during ODT export",
-            ),
-            (
-                "body[1]/run[1]/content[0]",
-                "field was flattened during ODT export",
             ),
             (
                 "body[1]/run[2]/content[0]",
-                "footnote reference was dropped during ODT export",
+                "field was flattened during ODT export",
             ),
             (
                 "body[1]/run[3]/content[0]",
-                "endnote reference was dropped during ODT export",
+                "footnote reference was dropped during ODT export",
             ),
             (
                 "body[1]/run[4]/content[0]",
-                "comment reference was dropped during ODT export",
+                "endnote reference was dropped during ODT export",
             ),
             (
-                "body[2]/raw[0]",
-                "unmodelled paragraph XML was dropped during ODT export",
+                "body[1]/run[5]/content[0]",
+                "comment reference was dropped during ODT export",
             ),
             (
                 "body[2]/revisions",
@@ -7158,7 +7185,11 @@ mod tests {
             ),
             (
                 "body[4]",
-                "body content control was dropped during ODT export",
+                "body content control was flattened during ODT export",
+            ),
+            (
+                "body[5]/content-controls",
+                "table content controls were flattened during ODT export",
             ),
             (
                 "body[5]/tblPr",
@@ -7173,20 +7204,12 @@ mod tests {
                 "unmodelled table XML was dropped during ODT export",
             ),
             (
-                "body[5]/content-controls",
-                "table row content controls were dropped during ODT export",
-            ),
-            (
                 "body[5]/row[0]/trPr",
                 "table-row properties were dropped during ODT export",
             ),
             (
                 "body[5]/row[0]/raw[0]",
                 "unmodelled table-row XML was dropped during ODT export",
-            ),
-            (
-                "body[5]/row[0]/content-controls",
-                "table cell content controls were dropped during ODT export",
             ),
             (
                 "body[5]/row[0]/cell[0]/tcPr",

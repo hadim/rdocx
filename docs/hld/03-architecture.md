@@ -1434,8 +1434,14 @@ Nested tables and the content controls at every level contribute their
 paragraphs in place. `Document::images` and `Document::word_count` reach the
 same content. `Document::headings` and `Document::links` read the body
 paragraphs and those that body-level content controls wrap, and do not search
-table cells. MHTML export sizes its images from the paragraphs the HTML emitter
-reaches, which leaves content controls out.
+table cells. The Markdown, HTML, MHTML, EPUB, ODT and RTF exporters write
+what the text readers read: what content controls wrap in place, as if the
+control were not there, tracked insertions and moves in, and the runs of smart
+tags and inline custom XML, while deleted and moved-away text stays out.
+MHTML sizes and EPUB packages the pictures of that same view, in document
+order. Each exporter that reports losses notes every control, revision and
+wrapper it flattens or leaves out, and reports the losses of the content it
+writes as it does outside them.
 Each paragraph contributes the same accepted-view text as paragraph text, so
 tracked insertions are included and tracked deletions are left out.
 The WASM binding uses `Document::text` for its existing `getText` method and

@@ -1258,7 +1258,11 @@ new parent. A numbered heading remains a heading inside its list item and owns
 the navigation anchor. Custom marker text, marker styling, marker alignment,
 and list semantics inside a table cell are diagnosed when EPUB list semantics
 cannot preserve them. Supported image descriptions become XHTML alternative
-text. Heading and navigation labels use only bounded direct projected runs.
+text. Heading and navigation labels use only bounded projected runs, those of
+content controls and tracked insertions included. A content control, a tracked
+insertion or move in, a smart tag and inline custom XML are flattened: what
+they hold is exported in place and the wrapper is diagnosed. Deleted and
+moved-away text is left out and diagnosed.
 Only structurally validated byte-sniffed PNG, JPEG, and GIF media referenced by
 surviving body drawings is packaged. Extension fallback is forbidden, and SVG
 is diagnosed and omitted. Drawing names, extents, preserved drawing XML,

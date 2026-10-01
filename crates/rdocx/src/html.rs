@@ -9,22 +9,27 @@ use std::path::Path;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::BodyContent;
 use rdocx_oxml::table::{
-    CT_Row, CT_Tbl, CT_TblGrid, CT_TblGridCol, CT_TblPr, CT_TblWidth, CT_Tc, CellContent, VMerge,
+    CT_Row, CT_Tbl, CT_TblGrid, CT_TblGridCol, CT_TblPr, CT_TblWidth, CT_Tc, VMerge,
 };
 use rdocx_oxml::text::{CT_P, RunContent};
 use rdocx_oxml::units::Twips;
 use scraper::{ElementRef, Html, Node, Selector};
 use sha2::{Digest, Sha256};
 
+use crate::document::visit_accepted_drawings;
 use crate::paragraph::{Alignment, Paragraph};
+use crate::revision::{accepted_revision_content, revision_removes_text};
 use crate::run::{DrawingKind, DrawingRelationshipKind, Run};
 use crate::table::Cell;
 use crate::{
-    BodyItemRef, CellItemRef, Document, Error, HyperlinkItemRef, HyperlinkRef, Length, ListLevel,
-    ParagraphItemRef, ParagraphRef, Result, RunItemRef, RunRef, StoryId, TableRef,
+    BodyItemRef, CellItemRef, CellRef, Document, Error, HyperlinkItemRef, HyperlinkRef, Length,
+    ListLevel, ParagraphItemRef, ParagraphRef, Result, RowRef, RunItemRef, RunRef, StoryId,
+    TableRef,
 };
+use rdocx_oxml::CT_Revision;
 
 const MAX_INPUT_BYTES: usize = 64 * 1024 * 1024;
 const MAX_MHTML_PARTS: usize = 1_024;
@@ -617,58 +622,27 @@ fn base64_lines(bytes: &[u8]) -> String {
     output
 }
 
-/// Collect the body paragraphs, table cell paragraphs and nested table
-/// paragraphs in document order, leaving content controls out as the
-/// rdocx-html emitter does. This is the reach [`Document::images`] had before
-/// it read content controls, so the emitter's `<img>` tags still pair with the
-/// pictures of these paragraphs by position.
-fn emitted_paragraphs(content: &[BodyContent]) -> Vec<&CT_P> {
-    let mut paragraphs = Vec::new();
-    for item in content {
-        match item {
-            BodyContent::Paragraph(paragraph) => paragraphs.push(paragraph),
-            BodyContent::Table(table) => collect_emitted_table_paragraphs(table, &mut paragraphs),
-            BodyContent::ContentControl(_) | BodyContent::RawXml(_) => {}
-        }
-    }
-    paragraphs
-}
-
-fn collect_emitted_table_paragraphs<'a>(table: &'a CT_Tbl, paragraphs: &mut Vec<&'a CT_P>) {
-    for cell in table.rows.iter().flat_map(|row| &row.cells) {
-        for item in &cell.content {
-            match item {
-                CellContent::Paragraph(paragraph) => paragraphs.push(paragraph),
-                CellContent::Table(nested) => collect_emitted_table_paragraphs(nested, paragraphs),
-                CellContent::ContentControl(_) => {}
-            }
-        }
-    }
-}
-
 fn mhtml_export_html(document: &Document) -> Result<(String, Vec<MhtmlResource>)> {
     let html = document.to_html();
+    // The HTML emitter writes the pictures in the order this visitor reaches
+    // them, those of content controls, tracked insertions, smart tags and
+    // custom XML included.
     let mut image_sizes = Vec::new();
-    for paragraph in emitted_paragraphs(&document.document.body.content) {
-        for content in paragraph.runs.iter().flat_map(|run| &run.content) {
-            let RunContent::Drawing(drawing) = content else {
-                continue;
-            };
-            let inline = drawing
-                .inline
-                .as_ref()
-                .map(|image| (&image.embed_id, image.extent_cx.0, image.extent_cy.0));
-            let anchor = drawing
-                .anchor
-                .as_ref()
-                .map(|image| (&image.embed_id, image.extent_cx.0, image.extent_cy.0));
-            for (embed_id, width_emu, height_emu) in inline.into_iter().chain(anchor) {
-                if !embed_id.is_empty() && document.image_data(embed_id).is_some() {
-                    image_sizes.push((width_emu, height_emu));
-                }
+    visit_accepted_drawings(&document.document.body.content, &mut |drawing| {
+        let inline = drawing
+            .inline
+            .as_ref()
+            .map(|image| (&image.embed_id, image.extent_cx.0, image.extent_cy.0));
+        let anchor = drawing
+            .anchor
+            .as_ref()
+            .map(|image| (&image.embed_id, image.extent_cx.0, image.extent_cy.0));
+        for (embed_id, width_emu, height_emu) in inline.into_iter().chain(anchor) {
+            if !embed_id.is_empty() && document.image_data(embed_id).is_some() {
+                image_sizes.push((width_emu, height_emu));
             }
         }
-    }
+    });
     let mut image_size_index = 0_usize;
     let mut output = String::with_capacity(html.len());
     let mut remainder = html.as_str();
@@ -826,13 +800,50 @@ fn paragraph_mhtml_losses(
                 continue;
             }
             ParagraphItemRef::Equation(_) => "dropped Word equation",
-            ParagraphItemRef::ContentControl(_) => "dropped Word paragraph content control",
-            ParagraphItemRef::Revision(_) => "dropped Word revision",
+            ParagraphItemRef::ContentControl(control) => {
+                let location = format!("{location}/item[{index}]");
+                push_mhtml_loss(
+                    diagnostics,
+                    location.clone(),
+                    "flattened Word paragraph content control",
+                )?;
+                control_mhtml_losses(document, control.inner, &location, diagnostics)?;
+                continue;
+            }
+            ParagraphItemRef::Revision(revision) => {
+                let location = format!("{location}/item[{index}]");
+                revision_mhtml_losses(
+                    document,
+                    revision.inner,
+                    &location,
+                    "flattened Word revision",
+                    "dropped Word revision",
+                    diagnostics,
+                )?;
+                continue;
+            }
             ParagraphItemRef::CommentRangeStart { .. } => "dropped Word comment range start",
             ParagraphItemRef::CommentRangeEnd { .. } => "dropped Word comment range end",
             ParagraphItemRef::BookmarkStart { .. } => "dropped Word bookmark start",
             ParagraphItemRef::BookmarkEnd { .. } => "dropped Word bookmark end",
-            ParagraphItemRef::UnsupportedXml(_) => "dropped unsupported Word paragraph XML",
+            ParagraphItemRef::UnsupportedXml(raw) => match CT_P::raw_run_wrapper_content(raw) {
+                Some(content) => {
+                    let location = format!("{location}/item[{index}]");
+                    push_mhtml_loss(
+                        diagnostics,
+                        location.clone(),
+                        "flattened Word smart tag or custom XML element",
+                    )?;
+                    paragraph_mhtml_losses(
+                        document,
+                        ParagraphRef { inner: &content },
+                        &format!("{location}/paragraph"),
+                        diagnostics,
+                    )?;
+                    continue;
+                }
+                None => "dropped unsupported Word paragraph XML",
+            },
         };
         push_mhtml_loss(diagnostics, format!("{location}/item[{index}]"), message)?;
     }
@@ -926,11 +937,17 @@ fn hyperlink_mhtml_losses(
                 &format!("{location}/item[{index}]/run"),
                 diagnostics,
             )?,
-            HyperlinkItemRef::Revision(_) => push_mhtml_loss(
-                diagnostics,
-                format!("{location}/item[{index}]"),
-                "dropped Word hyperlink revision",
-            )?,
+            HyperlinkItemRef::Revision(revision) => {
+                let location = format!("{location}/item[{index}]");
+                revision_mhtml_losses(
+                    document,
+                    revision.inner,
+                    &location,
+                    "flattened Word hyperlink revision",
+                    "dropped Word hyperlink revision",
+                    diagnostics,
+                )?;
+            }
             HyperlinkItemRef::UnsupportedXml(_) => push_mhtml_loss(
                 diagnostics,
                 format!("{location}/item[{index}]"),
@@ -947,52 +964,218 @@ fn table_mhtml_losses(
     location: &str,
     diagnostics: &mut Vec<MhtmlDiagnostic>,
 ) -> Result<()> {
-    if table.has_unsupported_content() {
+    if !table.inner.extra_xml.is_empty() {
         push_mhtml_loss(
             diagnostics,
             format!("{location}/content"),
             "dropped unsupported Word table content",
         )?;
     }
-    for row_index in 0..table.row_count() {
-        let row = table.row(row_index).expect("bounded table row index");
-        if row.has_unsupported_content() {
+    // Rows that content controls wrap are reported in document order.
+    for row_index in 0..=table.row_count() {
+        for (control_index, (_, _, control)) in table
+            .inner
+            .content_controls
+            .iter()
+            .enumerate()
+            .filter(|(_, (at, _, _))| *at == row_index)
+        {
+            let control_location = format!("{location}/content-control[{control_index}]");
             push_mhtml_loss(
                 diagnostics,
-                format!("{location}/row[{row_index}]/content"),
-                "dropped unsupported Word table row content",
+                control_location.clone(),
+                "flattened Word table row content control",
+            )?;
+            control_mhtml_losses(document, control, &control_location, diagnostics)?;
+        }
+        if let Some(row) = table.row(row_index) {
+            row_mhtml_losses(
+                document,
+                row,
+                &format!("{location}/row[{row_index}]"),
+                diagnostics,
             )?;
         }
-        for cell_index in 0..row.cell_count() {
-            let cell = row.cell(cell_index).expect("bounded table cell index");
-            let cell_location = format!("{location}/row[{row_index}]/cell[{cell_index}]");
-            for (item_index, item) in cell.items().enumerate() {
-                match item {
-                    CellItemRef::Paragraph(paragraph) => paragraph_mhtml_losses(
-                        document,
-                        paragraph,
-                        &format!("{cell_location}/paragraph[{item_index}]"),
-                        diagnostics,
-                    )?,
-                    CellItemRef::Table(table) => table_mhtml_losses(
-                        document,
-                        table,
-                        &format!("{cell_location}/table[{item_index}]"),
-                        diagnostics,
-                    )?,
-                    CellItemRef::ContentControl(_) => push_mhtml_loss(
-                        diagnostics,
-                        format!("{cell_location}/item[{item_index}]"),
-                        "dropped Word table cell content control",
-                    )?,
-                    CellItemRef::UnsupportedXml(_) => push_mhtml_loss(
-                        diagnostics,
-                        format!("{cell_location}/item[{item_index}]"),
-                        "dropped unsupported Word table cell XML",
-                    )?,
-                }
-            }
+    }
+    Ok(())
+}
+
+fn row_mhtml_losses(
+    document: &Document,
+    row: RowRef<'_>,
+    location: &str,
+    diagnostics: &mut Vec<MhtmlDiagnostic>,
+) -> Result<()> {
+    if row
+        .inner
+        .extra_xml
+        .iter()
+        .any(|(position, raw)| !CT_Row::raw_is_root_attributes(*position, raw))
+    {
+        push_mhtml_loss(
+            diagnostics,
+            format!("{location}/content"),
+            "dropped unsupported Word table row content",
+        )?;
+    }
+    // Cells that content controls wrap are reported in document order.
+    for cell_index in 0..=row.cell_count() {
+        for (control_index, (_, _, control)) in row
+            .inner
+            .content_controls
+            .iter()
+            .enumerate()
+            .filter(|(_, (at, _, _))| *at == cell_index)
+        {
+            let control_location = format!("{location}/content-control[{control_index}]");
+            push_mhtml_loss(
+                diagnostics,
+                control_location.clone(),
+                "flattened Word table cell content control",
+            )?;
+            control_mhtml_losses(document, control, &control_location, diagnostics)?;
         }
+        if let Some(cell) = row.cell(cell_index) {
+            cell_mhtml_losses(
+                document,
+                cell,
+                &format!("{location}/cell[{cell_index}]"),
+                diagnostics,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn cell_mhtml_losses(
+    document: &Document,
+    cell: CellRef<'_>,
+    location: &str,
+    diagnostics: &mut Vec<MhtmlDiagnostic>,
+) -> Result<()> {
+    for (item_index, item) in cell.items().enumerate() {
+        match item {
+            CellItemRef::Paragraph(paragraph) => paragraph_mhtml_losses(
+                document,
+                paragraph,
+                &format!("{location}/paragraph[{item_index}]"),
+                diagnostics,
+            )?,
+            CellItemRef::Table(table) => table_mhtml_losses(
+                document,
+                table,
+                &format!("{location}/table[{item_index}]"),
+                diagnostics,
+            )?,
+            CellItemRef::ContentControl(control) => {
+                let control_location = format!("{location}/item[{item_index}]");
+                push_mhtml_loss(
+                    diagnostics,
+                    control_location.clone(),
+                    "flattened Word table cell content control",
+                )?;
+                control_mhtml_losses(document, control.inner, &control_location, diagnostics)?;
+            }
+            CellItemRef::UnsupportedXml(_) => push_mhtml_loss(
+                diagnostics,
+                format!("{location}/item[{item_index}]"),
+                "dropped unsupported Word table cell XML",
+            )?,
+        }
+    }
+    Ok(())
+}
+
+/// Record the losses of what a content control wraps. The HTML emitter
+/// writes that content in place, as if the control were not there.
+fn control_mhtml_losses(
+    document: &Document,
+    control: &CT_Sdt,
+    location: &str,
+    diagnostics: &mut Vec<MhtmlDiagnostic>,
+) -> Result<()> {
+    for (index, item) in control.content.iter().enumerate() {
+        let item_location = format!("{location}/item[{index}]");
+        match item {
+            SdtContent::Paragraph(paragraph) => paragraph_mhtml_losses(
+                document,
+                ParagraphRef { inner: paragraph },
+                &format!("{item_location}/paragraph"),
+                diagnostics,
+            )?,
+            SdtContent::Table(table) => table_mhtml_losses(
+                document,
+                TableRef { inner: table },
+                &format!("{item_location}/table"),
+                diagnostics,
+            )?,
+            SdtContent::Row(row) => row_mhtml_losses(
+                document,
+                RowRef { inner: row },
+                &format!("{item_location}/row"),
+                diagnostics,
+            )?,
+            SdtContent::Cell(cell) => cell_mhtml_losses(
+                document,
+                CellRef { inner: cell },
+                &format!("{item_location}/cell"),
+                diagnostics,
+            )?,
+            SdtContent::Run(run) => run_mhtml_losses(
+                document,
+                RunRef { inner: run },
+                &format!("{item_location}/run"),
+                diagnostics,
+            )?,
+            SdtContent::ContentControl(nested) => {
+                push_mhtml_loss(
+                    diagnostics,
+                    item_location.clone(),
+                    "flattened nested Word content control",
+                )?;
+                control_mhtml_losses(document, nested, &item_location, diagnostics)?;
+            }
+            SdtContent::RawXml(_) => push_mhtml_loss(
+                diagnostics,
+                item_location,
+                "dropped unsupported Word content control XML",
+            )?,
+        }
+    }
+    for (index, (_, revision)) in control.revisions().iter().enumerate() {
+        revision_mhtml_losses(
+            document,
+            revision,
+            &format!("{location}/revision[{index}]"),
+            "flattened Word revision",
+            "dropped Word revision",
+            diagnostics,
+        )?;
+    }
+    Ok(())
+}
+
+/// Record a tracked revision: an insertion or a move in is written in place
+/// and its losses are recorded, a deletion or a move away is left out.
+fn revision_mhtml_losses(
+    document: &Document,
+    revision: &CT_Revision,
+    location: &str,
+    flattened: &'static str,
+    dropped: &'static str,
+    diagnostics: &mut Vec<MhtmlDiagnostic>,
+) -> Result<()> {
+    if revision_removes_text(revision) {
+        return push_mhtml_loss(diagnostics, location.to_owned(), dropped);
+    }
+    push_mhtml_loss(diagnostics, location.to_owned(), flattened)?;
+    if let Some(content) = accepted_revision_content(revision) {
+        paragraph_mhtml_losses(
+            document,
+            ParagraphRef { inner: content },
+            &format!("{location}/paragraph"),
+            diagnostics,
+        )?;
     }
     Ok(())
 }
@@ -1013,11 +1196,15 @@ fn mhtml_write_diagnostics(document: &Document) -> Result<Vec<MhtmlDiagnostic>> 
                 &format!("body[{index}]/table"),
                 &mut diagnostics,
             )?,
-            BodyItemRef::ContentControl(_) => push_mhtml_loss(
-                &mut diagnostics,
-                format!("body[{index}]"),
-                "dropped Word body content control",
-            )?,
+            BodyItemRef::ContentControl(control) => {
+                let location = format!("body[{index}]");
+                push_mhtml_loss(
+                    &mut diagnostics,
+                    location.clone(),
+                    "flattened Word body content control",
+                )?;
+                control_mhtml_losses(document, control.inner, &location, &mut diagnostics)?;
+            }
             BodyItemRef::UnsupportedXml(_) => push_mhtml_loss(
                 &mut diagnostics,
                 format!("body[{index}]"),
@@ -4042,7 +4229,7 @@ mod tests {
     }
 
     #[test]
-    fn mhtml_writer_sizes_only_the_pictures_the_html_emitter_serializes() {
+    fn mhtml_writer_sizes_the_pictures_content_controls_wrap() {
         let mut document = Document::new();
         for (name, width, height) in [
             ("body-control.png", 9_525, 9_525),
@@ -4084,7 +4271,7 @@ mod tests {
 
         let written = document
             .to_mhtml_bytes()
-            .expect("pictures in content controls are dropped, not refused");
+            .expect("pictures in content controls are exported in place");
         assert_eq!(
             written
                 .diagnostics
@@ -4092,10 +4279,10 @@ mod tests {
                 .map(|diagnostic| (diagnostic.location.as_str(), diagnostic.message.as_str()))
                 .collect::<Vec<_>>(),
             vec![
-                ("body[0]", "dropped Word body content control"),
+                ("body[0]", "flattened Word body content control"),
                 (
                     "body[2]/paragraph/item[0]",
-                    "dropped Word paragraph content control"
+                    "flattened Word paragraph content control"
                 ),
             ]
         );
@@ -4107,7 +4294,7 @@ mod tests {
                 .iter()
                 .map(|image| (image.width_emu, image.height_emu))
                 .collect::<Vec<_>>(),
-            [(19_050, 28_575)]
+            [(9_525, 9_525), (19_050, 28_575), (9_525, 9_525)]
         );
     }
 
@@ -4203,7 +4390,7 @@ mod tests {
                 ),
                 (
                     "body[0]/paragraph/item[12]/hyperlink/item[1]",
-                    "dropped Word hyperlink revision",
+                    "flattened Word hyperlink revision",
                 ),
                 (
                     "body[0]/paragraph/item[12]/hyperlink/item[2]/run/item[1]",

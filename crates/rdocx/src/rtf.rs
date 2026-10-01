@@ -6,13 +6,14 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use encoding_rs::Encoding;
-use rdocx_oxml::document::BodyContent;
 use rdocx_oxml::numbering::ST_NumberFormat;
 use rdocx_oxml::properties::{CT_PPr, CT_RPr};
 use rdocx_oxml::shared::ST_Jc;
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_TblPr, CT_TblWidth, CT_TcPr, CT_TrPr, CellContent};
 use rdocx_oxml::text::{BreakType, CT_P, CT_R, RunContent, SpecialCharacter};
 
+use crate::document::{ExportItem, body_export_items};
+use crate::revision::{raw_is_typed_revision, revision_removes_text};
 use crate::{Alignment, Document, Error, Length, ListLevel, ListNumberFormat, Result};
 
 const MAX_INPUT_BYTES: usize = 64 * 1024 * 1024;
@@ -198,8 +199,10 @@ impl<'a> RtfWriter<'a> {
     }
 
     fn write(mut self) -> Result<RtfWriteResult> {
-        for (index, content) in self.document.document.body.content.iter().enumerate() {
-            self.scan_body_content(content, format!("body[{index}]"));
+        // What block content controls wrap is exported in place.
+        let items = body_export_items(&self.document.document.body.content);
+        for (item, location) in &items {
+            self.scan_body_item(item, location.clone());
         }
 
         let mut output = BoundedOutput::new(self.output_limit);
@@ -208,8 +211,8 @@ impl<'a> RtfWriter<'a> {
         self.write_color_table(&mut output)?;
         self.write_list_tables(&mut output)?;
 
-        for (index, content) in self.document.document.body.content.iter().enumerate() {
-            self.write_body_content(&mut output, content, &format!("body[{index}]"))?;
+        for (item, location) in &items {
+            self.write_body_item(&mut output, item, location)?;
         }
         output.push(b'}')?;
         let output = output.into_vec();
@@ -219,15 +222,24 @@ impl<'a> RtfWriter<'a> {
         })
     }
 
-    fn scan_body_content(&mut self, content: &BodyContent, location: String) {
-        match content {
-            BodyContent::Paragraph(paragraph) => self.scan_paragraph(paragraph, location),
-            BodyContent::Table(table) => self.scan_table(table, location),
-            BodyContent::ContentControl(_) => self.diagnose(
+    fn scan_body_item(&mut self, item: &ExportItem<'_>, location: String) {
+        match item {
+            ExportItem::Paragraph(paragraph) => self.scan_paragraph(paragraph, location),
+            ExportItem::Table(table) => {
+                // An owned table is one whose content controls were unwrapped.
+                if matches!(**table, Cow::Owned(_)) {
+                    self.diagnose(
+                        &format!("{location}/content-controls"),
+                        "table content controls were flattened during RTF export",
+                    );
+                }
+                self.scan_table(table, location)
+            }
+            ExportItem::ContentControl => self.diagnose(
                 &location,
-                "body content control was dropped during RTF export",
+                "body content control was flattened during RTF export",
             ),
-            BodyContent::RawXml(_) => self.diagnose(
+            ExportItem::RawXml => self.diagnose(
                 &location,
                 "unmodelled body XML was dropped during RTF export",
             ),
@@ -286,10 +298,8 @@ impl<'a> RtfWriter<'a> {
                         }
                         CellContent::Table(_) => self
                             .diagnose(&cell_location, "nested table was dropped during RTF export"),
-                        CellContent::ContentControl(_) => self.diagnose(
-                            &cell_location,
-                            "table-cell content control was dropped during RTF export",
-                        ),
+                        // Unwrapped by `unwrap_table_controls`.
+                        CellContent::ContentControl(_) => {}
                     }
                 }
             }
@@ -549,11 +559,18 @@ impl<'a> RtfWriter<'a> {
             self.scan_paragraph_properties(properties, &location);
         }
         let marker_raw_positions = paragraph_marker_raw_positions(paragraph);
-        for (index, raw) in &paragraph.extra_xml {
+        for (raw_index, (index, raw)) in paragraph.extra_xml.iter().enumerate() {
             if CT_P::raw_is_root_attributes(*index, raw) {
                 continue;
             }
-            if marker_raw_positions.contains(index) {
+            if marker_raw_positions.contains(index) || raw_is_typed_revision(paragraph, raw_index) {
+                continue;
+            }
+            if CT_P::raw_run_wrapper_content(raw).is_some() {
+                self.diagnose(
+                    &format!("{location}/raw[{index}]"),
+                    "smart tag or custom XML wrapper was flattened during RTF export",
+                );
                 continue;
             }
             self.diagnose(
@@ -564,13 +581,17 @@ impl<'a> RtfWriter<'a> {
         for (index, _, _, _) in &paragraph.content_controls {
             self.diagnose(
                 &format!("{location}/content-control[{index}]"),
-                "run content control was dropped during RTF export",
+                "run content control was flattened during RTF export",
             );
         }
-        for (index, _, _) in &paragraph.revisions {
+        for (index, _, revision) in &paragraph.revisions {
             self.diagnose(
                 &format!("{location}/revision[{index}]"),
-                "paragraph revision wrapper was flattened during RTF export",
+                if revision_removes_text(revision) {
+                    "deleted or moved-away revision content was dropped during RTF export"
+                } else {
+                    "paragraph revision wrapper was flattened during RTF export"
+                },
             );
         }
         for marker in &paragraph.comment_ranges {
@@ -591,7 +612,8 @@ impl<'a> RtfWriter<'a> {
                 "hyperlink wrapper was flattened during RTF export",
             );
         }
-        for (index, run) in paragraph.runs.iter().enumerate() {
+        // The runs of the accepted view are exported, see `write_runs`.
+        for (index, run) in paragraph.accepted_view().runs.iter().enumerate() {
             self.scan_run(run, format!("{location}/run[{index}]"));
         }
     }
@@ -942,16 +964,16 @@ impl<'a> RtfWriter<'a> {
         Ok(())
     }
 
-    fn write_body_content(
+    fn write_body_item(
         &mut self,
         output: &mut BoundedOutput,
-        content: &BodyContent,
+        item: &ExportItem<'_>,
         location: &str,
     ) -> Result<()> {
-        match content {
-            BodyContent::Paragraph(paragraph) => self.write_paragraph(output, paragraph, location),
-            BodyContent::Table(table) => self.write_table(output, table, location),
-            BodyContent::ContentControl(_) | BodyContent::RawXml(_) => Ok(()),
+        match item {
+            ExportItem::Paragraph(paragraph) => self.write_paragraph(output, paragraph, location),
+            ExportItem::Table(table) => self.write_table(output, table, location),
+            ExportItem::ContentControl | ExportItem::RawXml => Ok(()),
         }
     }
 
@@ -1000,7 +1022,7 @@ impl<'a> RtfWriter<'a> {
     ) -> Result<()> {
         write!(output, "\\pard")?;
         self.write_paragraph_format(output, paragraph.properties.as_ref(), paragraph)?;
-        self.write_runs(output, &paragraph.runs, location)?;
+        self.write_runs(output, &paragraph.accepted_view().runs, location)?;
         writeln!(output, "\\par")?;
         Ok(())
     }
@@ -1013,7 +1035,7 @@ impl<'a> RtfWriter<'a> {
     ) -> Result<()> {
         write!(output, "\\pard\\intbl")?;
         self.write_paragraph_format(output, paragraph.properties.as_ref(), paragraph)?;
-        self.write_runs(output, &paragraph.runs, location)
+        self.write_runs(output, &paragraph.accepted_view().runs, location)
     }
 
     fn write_paragraph_format(
@@ -1623,9 +1645,13 @@ mod writer_tests {
         let mut document = Document::new();
         document.document.body.content.clear();
         for index in 0..(MAX_DIAGNOSTICS + 1) {
-            document.document.body.content.push(BodyContent::RawXml(
-                format!("<p:item id=\"{index}\"/>").into_bytes(),
-            ));
+            document
+                .document
+                .body
+                .content
+                .push(rdocx_oxml::document::BodyContent::RawXml(
+                    format!("<p:item id=\"{index}\"/>").into_bytes(),
+                ));
         }
 
         let written = document.to_rtf_bytes().unwrap();

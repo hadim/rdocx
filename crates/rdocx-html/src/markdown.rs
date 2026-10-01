@@ -2,12 +2,14 @@
 
 use std::collections::HashMap;
 
-use rdocx_oxml::document::{BodyContent, CT_Body};
+use rdocx_oxml::document::CT_Body;
 use rdocx_oxml::numbering::CT_Numbering;
 use rdocx_oxml::properties::CT_PPr;
 use rdocx_oxml::styles::CT_Styles;
-use rdocx_oxml::table::{CT_Tbl, CellContent};
+use rdocx_oxml::table::CT_Tbl;
 use rdocx_oxml::text::{BreakType, CT_P, CT_R, RunContent, SpecialCharacter};
+
+use crate::{Block, body_blocks, cell_blocks};
 
 /// Emit the full body content as Markdown.
 pub(crate) fn emit_markdown(
@@ -18,16 +20,14 @@ pub(crate) fn emit_markdown(
 ) -> String {
     let mut out = String::new();
 
-    for content in &body.content {
-        match content {
-            BodyContent::Paragraph(p) => {
+    for block in body_blocks(&body.content) {
+        match block {
+            Block::Paragraph(p) => {
                 emit_paragraph(&mut out, p, styles, numbering, hyperlink_urls);
             }
-            BodyContent::Table(tbl) => {
+            Block::Table(tbl) => {
                 emit_table(&mut out, tbl, hyperlink_urls);
             }
-            BodyContent::ContentControl(_) => {}
-            BodyContent::RawXml(_) => {}
         }
     }
 
@@ -146,9 +146,14 @@ fn emit_paragraph(
     }
 }
 
-/// Collect all text from a paragraph, applying inline formatting.
+/// Collect all text from the accepted view of a paragraph, applying inline
+/// formatting.
 fn collect_paragraph_text(para: &CT_P, hyperlink_urls: &HashMap<String, String>) -> String {
     let mut out = String::new();
+
+    // The runs the text readers read, those of content controls, tracked
+    // insertions, smart tags and custom XML included, deleted ones left out.
+    let para = &para.accepted_view();
 
     // Build hyperlink map
     let mut hyperlink_map: HashMap<usize, &str> = HashMap::new();
@@ -290,9 +295,10 @@ fn emit_table(out: &mut String, tbl: &CT_Tbl, hyperlink_urls: &HashMap<String, S
     let mut rows: Vec<Vec<String>> = Vec::new();
     let mut max_cols = 0;
 
-    for row in &tbl.rows {
+    // Rows and cells that content controls wrap are written in place.
+    for row in tbl.rows() {
         let mut cells: Vec<String> = Vec::new();
-        for cell in &row.cells {
+        for cell in row.cells() {
             let text = collect_cell_text(cell, hyperlink_urls);
             cells.push(text);
         }
@@ -346,19 +352,18 @@ fn collect_cell_text(
 ) -> String {
     let mut parts = Vec::new();
 
-    for content in &cell.content {
-        match content {
-            CellContent::Paragraph(p) => {
+    for block in cell_blocks(cell) {
+        match block {
+            Block::Paragraph(p) => {
                 let text = collect_paragraph_text(p, hyperlink_urls);
                 let trimmed = text.trim().to_string();
                 if !trimmed.is_empty() {
                     parts.push(trimmed);
                 }
             }
-            CellContent::Table(_) => {
+            Block::Table(_) => {
                 parts.push("(nested table)".to_string());
             }
-            CellContent::ContentControl(_) => {}
         }
     }
 
