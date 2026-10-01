@@ -2089,6 +2089,11 @@ impl Engine {
                         }
                     }
                 }
+                // Accepting every tracked change removes a table whose rows
+                // are all deleted, so it leaves no block or spacing behind.
+                MainStoryLayoutItem::Table(tbl, _)
+                    if input.revision_view == RevisionView::Accepted
+                        && tbl.accepted_view_removes() => {}
                 MainStoryLayoutItem::Table(tbl, path) => {
                     let sect_pr_for_layout = current_sect_pr.as_ref().unwrap_or(&final_sect_pr);
                     let geometry = sect_pr_to_geometry(sect_pr_for_layout);

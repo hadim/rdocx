@@ -17,7 +17,7 @@ use crate::block::{
     TableSemantics,
 };
 use crate::engine::SourceRegistry;
-use crate::input::{LayoutInput, MediaRegistry};
+use crate::input::{LayoutInput, MediaRegistry, RevisionView};
 use crate::style_resolver::NumberingState;
 use oxml_layout::{Color, Diagnostic, FontManager, Result, StructureId};
 
@@ -44,6 +44,21 @@ pub(crate) fn layout_table_rows<'a>(
             row_path.push(boundary);
             rows.push((row, row_path));
         }
+    }
+    rows
+}
+
+/// The rows [`layout_table_rows`] returns, less those that accepting every
+/// tracked change removes when the accepted view is laid out. The rows that
+/// remain keep their source paths.
+fn accepted_table_rows<'a>(
+    table: &'a CT_Tbl,
+    path: &[usize],
+    input: &LayoutInput,
+) -> Vec<(&'a CT_Row, Vec<usize>)> {
+    let mut rows = layout_table_rows(table, path);
+    if input.revision_view == RevisionView::Accepted {
+        rows.retain(|(row, _)| !row.accepted_view_removes());
     }
     rows
 }
@@ -487,7 +502,7 @@ fn layout_table_inner(
     }
     resolved_table.properties = Some(resolved_properties);
     let tbl = &resolved_table;
-    let source_rows = layout_table_rows(tbl, path);
+    let source_rows = accepted_table_rows(tbl, path, input);
     let bidi_visual = tbl
         .properties
         .as_ref()
@@ -1353,7 +1368,7 @@ fn autofit_column_widths(
         return Ok(None);
     }
 
-    let source_rows = layout_table_rows(tbl, path);
+    let source_rows = accepted_table_rows(tbl, path, input);
     let column_count = tbl
         .grid
         .as_ref()
@@ -1680,6 +1695,9 @@ fn layout_cell_content(
                     reflow_direction,
                 }));
             }
+            CellContent::Table(tbl)
+                if input.revision_view == RevisionView::Accepted && tbl.accepted_view_removes() => {
+            }
             CellContent::Table(tbl) => {
                 // Recursively lay out the nested table
                 let (nested, nested_semantics) = layout_table_inner(
@@ -1783,6 +1801,9 @@ fn layout_control_cell_content(
                     reflow_direction,
                 }));
             }
+            SdtContent::Table(table)
+                if input.revision_view == RevisionView::Accepted
+                    && table.accepted_view_removes() => {}
             SdtContent::Table(table) => {
                 let (nested, nested_semantics) = layout_table_inner(
                     table,

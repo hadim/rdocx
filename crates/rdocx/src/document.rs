@@ -9439,70 +9439,75 @@ fn insert_html_content_into_cell(
 fn visit_body_paragraphs(content: &[BodyContent], visitor: &mut impl FnMut(&CT_P)) {
     for item in content {
         match item {
-            BodyContent::Paragraph(paragraph) => visit_paragraph(paragraph, visitor),
-            BodyContent::Table(table) => visit_table(table, visitor),
-            BodyContent::ContentControl(control) => visit_sdt(control, visitor),
+            BodyContent::Paragraph(paragraph) => visit_paragraph(paragraph, false, visitor),
+            BodyContent::Table(table) => visit_table(table, false, visitor),
+            BodyContent::ContentControl(control) => visit_sdt(control, false, visitor),
             BodyContent::RawXml(_) => {}
         }
     }
 }
 
-fn visit_paragraph(paragraph: &CT_P, visitor: &mut impl FnMut(&CT_P)) {
+// With `accepted`, the visitors leave out the rows that accepting every
+// tracked change removes, as `CT_Row::accepted_view_removes` reports them.
+fn visit_paragraph(paragraph: &CT_P, accepted: bool, visitor: &mut impl FnMut(&CT_P)) {
     visitor(paragraph);
     for (_, _, _, control) in &paragraph.content_controls {
-        visit_sdt(control, visitor);
+        visit_sdt(control, accepted, visitor);
     }
 }
 
-fn visit_table(table: &CT_Tbl, visitor: &mut impl FnMut(&CT_P)) {
+fn visit_table(table: &CT_Tbl, accepted: bool, visitor: &mut impl FnMut(&CT_P)) {
     for index in 0..=table.rows.len() {
         for (_, _, control) in table
             .content_controls
             .iter()
             .filter(|(at, _, _)| *at == index)
         {
-            visit_sdt(control, visitor);
+            visit_sdt(control, accepted, visitor);
         }
         if let Some(row) = table.rows.get(index) {
-            visit_row(row, visitor);
+            visit_row(row, accepted, visitor);
         }
     }
 }
 
-fn visit_row(row: &CT_Row, visitor: &mut impl FnMut(&CT_P)) {
+fn visit_row(row: &CT_Row, accepted: bool, visitor: &mut impl FnMut(&CT_P)) {
+    if accepted && row.accepted_view_removes() {
+        return;
+    }
     for index in 0..=row.cells.len() {
         for (_, _, control) in row
             .content_controls
             .iter()
             .filter(|(at, _, _)| *at == index)
         {
-            visit_sdt(control, visitor);
+            visit_sdt(control, accepted, visitor);
         }
         if let Some(cell) = row.cells.get(index) {
-            visit_cell(cell, visitor);
+            visit_cell(cell, accepted, visitor);
         }
     }
 }
 
-fn visit_cell(cell: &CT_Tc, visitor: &mut impl FnMut(&CT_P)) {
+fn visit_cell(cell: &CT_Tc, accepted: bool, visitor: &mut impl FnMut(&CT_P)) {
     for item in &cell.content {
         match item {
-            CellContent::Paragraph(paragraph) => visit_paragraph(paragraph, visitor),
-            CellContent::Table(table) => visit_table(table, visitor),
-            CellContent::ContentControl(control) => visit_sdt(control, visitor),
+            CellContent::Paragraph(paragraph) => visit_paragraph(paragraph, accepted, visitor),
+            CellContent::Table(table) => visit_table(table, accepted, visitor),
+            CellContent::ContentControl(control) => visit_sdt(control, accepted, visitor),
         }
     }
 }
 
-fn visit_sdt(control: &CT_Sdt, visitor: &mut impl FnMut(&CT_P)) {
+fn visit_sdt(control: &CT_Sdt, accepted: bool, visitor: &mut impl FnMut(&CT_P)) {
     for item in &control.content {
         match item {
-            SdtContent::Paragraph(paragraph) => visit_paragraph(paragraph, visitor),
-            SdtContent::Table(table) => visit_table(table, visitor),
-            SdtContent::Row(row) => visit_row(row, visitor),
-            SdtContent::Cell(cell) => visit_cell(cell, visitor),
+            SdtContent::Paragraph(paragraph) => visit_paragraph(paragraph, accepted, visitor),
+            SdtContent::Table(table) => visit_table(table, accepted, visitor),
+            SdtContent::Row(row) => visit_row(row, accepted, visitor),
+            SdtContent::Cell(cell) => visit_cell(cell, accepted, visitor),
             SdtContent::Run(_) | SdtContent::RawXml(_) => {}
-            SdtContent::ContentControl(nested) => visit_sdt(nested, visitor),
+            SdtContent::ContentControl(nested) => visit_sdt(nested, accepted, visitor),
         }
     }
 }
@@ -9567,7 +9572,12 @@ fn push_table_text(table: &CT_Tbl, text: &mut String) {
 /// Append a row to [`Document::text`] as one line in which every paragraph of
 /// its cells ends with a tab, cell controls and nested tables included.
 fn push_row_text(row: &CT_Row, text: &mut String) {
-    visit_row(row, &mut |paragraph| push_cell_paragraph(paragraph, text));
+    if row.accepted_view_removes() {
+        return;
+    }
+    visit_row(row, true, &mut |paragraph| {
+        push_cell_paragraph(paragraph, text)
+    });
     text.push('\n');
 }
 
@@ -9584,7 +9594,9 @@ fn push_control_text(control: &CT_Sdt, text: &mut String) {
             SdtContent::Table(table) => push_table_text(table, text),
             SdtContent::Row(row) => push_row_text(row, text),
             SdtContent::Cell(cell) => {
-                visit_cell(cell, &mut |paragraph| push_cell_paragraph(paragraph, text));
+                visit_cell(cell, true, &mut |paragraph| {
+                    push_cell_paragraph(paragraph, text)
+                });
             }
             SdtContent::Run(_) | SdtContent::RawXml(_) => {}
             SdtContent::ContentControl(nested) => push_control_text(nested, text),
@@ -14964,7 +14976,9 @@ impl Document {
     /// rows and cells they wrap at the position they occupy.
     /// Each paragraph contributes its accepted-view text, the same text as
     /// [`ParagraphRef::text`]: tracked insertions are included and tracked
-    /// deletions are left out.
+    /// deletions are left out. A table row that accepting removes, as
+    /// `CT_Row::accepted_view_removes` reports it, contributes no line, so a
+    /// table whose rows are all deleted contributes nothing.
     pub fn text(&self) -> String {
         let mut result = String::new();
         for content in &self.document.body.content {

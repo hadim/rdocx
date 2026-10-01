@@ -38929,3 +38929,96 @@ fn issue_159_content_control_identity_only_comparison_has_no_revision() {
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     assert!(compared.revisions().is_empty());
 }
+
+/// Accepting every tracked change removes a deleted table row, and a table
+/// whose rows are all deleted. The accepted text, HTML, Markdown and layout
+/// leave them out as `accept_all` does, while the model keeps them.
+#[test]
+fn accepted_view_leaves_out_deleted_table_rows() {
+    let build = |rows: &[&str]| {
+        let mut document = Document::new();
+        document.add_paragraph("a");
+        if !rows.is_empty() {
+            let mut table = document.add_table(rows.len(), 1);
+            for (index, text) in rows.iter().enumerate() {
+                table.cell(index, 0).unwrap().set_text(text);
+            }
+        }
+        document.add_paragraph("b");
+        document
+    };
+    let fragments = |document: &Document, view: RevisionView| {
+        let layout = document
+            .layout_deterministic_with_options(RenderOptions {
+                revision_view: view,
+            })
+            .unwrap();
+        (0..document.body_items().count())
+            .map(|index| {
+                layout
+                    .body_layout_fragments(index)
+                    .unwrap()
+                    .iter()
+                    .map(|fragment| (fragment.y * 100.0).round() / 100.0)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // A deleted row, the shape compare() writes.
+    let mut redline = build(&["KEEP", "GONE"]);
+    redline
+        .compare(&build(&["KEEP"]), "Ada", "2026-09-30T00:00:00Z")
+        .unwrap();
+    assert_eq!(redline.text(), "a\nKEEP\t\nb\n");
+    assert_eq!(redline.to_markdown(), "a\n\n| KEEP |\n| --- |\n\nb\n\n");
+    assert!(!redline.to_html().contains("GONE"));
+    assert_eq!(
+        fragments(&redline, RevisionView::Accepted),
+        [vec![72.0], vec![91.87], vec![111.74]]
+    );
+    assert_eq!(
+        fragments(&redline, RevisionView::Tracked),
+        [vec![72.0], vec![91.87], vec![131.61]]
+    );
+    // The model and its indices are unchanged.
+    assert_eq!(redline.table(0).unwrap().row_count(), 2);
+
+    // A deleted table.
+    let mut redline = build(&["KEEP"]);
+    redline
+        .compare(&build(&[]), "Ada", "2026-09-30T00:00:00Z")
+        .unwrap();
+    assert_eq!(redline.text(), "a\nb\n");
+    assert_eq!(redline.to_markdown(), "a\n\nb\n\n");
+    assert_eq!(redline.to_html_fragment(), "<p>a</p>\n<p>b</p>\n");
+    assert_eq!(
+        fragments(&redline, RevisionView::Accepted),
+        [vec![72.0], vec![], vec![91.87]]
+    );
+    assert_eq!(redline.body_items().count(), 3);
+
+    // The shape Word writes, with the deleted text inside the row too, a
+    // header row, a vertical merge continuing into the deleted row, and a
+    // nested table with a deleted row.
+    let mut word = document_with_content_controls(&wrap_word_body(
+        r#"<w:p><w:r><w:t>a</w:t></w:r></w:p><w:tbl><w:tblPr><w:tblW w:w="4000" w:type="dxa"/></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:trPr><w:tblHeader/></w:trPr><w:tc><w:p><w:r><w:t>H1</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>H2</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:tcPr><w:vMerge w:val="restart"/></w:tcPr><w:p><w:r><w:t>MERGED</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>KEEP</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:trPr><w:del w:id="1" w:author="Ada"/></w:trPr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc><w:tc><w:p><w:del w:id="2" w:author="Ada"><w:r><w:delText>GONE</w:delText></w:r></w:del></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>LAST</w:t></w:r></w:p></w:tc><w:tc><w:tbl><w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>NEST</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:trPr><w:del w:id="3" w:author="Ada"/></w:trPr><w:tc><w:p><w:r><w:t>NESTGONE</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/></w:tc></w:tr></w:tbl><w:p><w:r><w:t>b</w:t></w:r></w:p>"#,
+    ));
+    let mut resolved = Document::from_bytes(&word.to_bytes().unwrap()).unwrap();
+    resolved.accept_all().unwrap();
+    assert_eq!(
+        word.text(),
+        "a\nH1\tH2\t\nMERGED\tKEEP\t\nLAST\tNEST\t\t\nb\n"
+    );
+    assert_eq!(word.text(), resolved.text());
+    assert_eq!(word.to_markdown(), resolved.to_markdown());
+    assert_eq!(word.to_html(), resolved.to_html());
+    assert_eq!(
+        fragments(&word, RevisionView::Accepted),
+        fragments(&resolved, RevisionView::Accepted)
+    );
+    assert_ne!(
+        fragments(&word, RevisionView::Tracked),
+        fragments(&resolved, RevisionView::Accepted)
+    );
+}

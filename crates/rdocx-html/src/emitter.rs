@@ -448,6 +448,11 @@ fn emit_table(
     hyperlink_urls: &HashMap<String, String>,
     options: &HtmlOptions,
 ) {
+    // Accepting every tracked change removes a table whose rows are all
+    // deleted, and each deleted row of the others.
+    if tbl.accepted_view_removes() {
+        return;
+    }
     let mut table_style = String::new();
 
     if let Some(props) = &tbl.properties {
@@ -482,7 +487,7 @@ fn emit_table(
         ));
     }
 
-    for row in &tbl.rows {
+    for row in tbl.rows.iter().filter(|row| !row.accepted_view_removes()) {
         out.push_str("<tr>\n");
         for cell in &row.cells {
             // Skip vmerge continue cells
@@ -595,7 +600,12 @@ fn count_vmerge_span(
     };
 
     let mut span = 1;
-    for row in tbl.rows.iter().skip(row_idx + 1) {
+    for row in tbl
+        .rows
+        .iter()
+        .skip(row_idx + 1)
+        .filter(|row| !row.accepted_view_removes())
+    {
         if let Some(next_cell) = row.cells.get(col_idx)
             && let Some(props) = &next_cell.properties
             && matches!(props.v_merge, Some(VMerge::Continue))

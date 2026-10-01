@@ -290,7 +290,8 @@ fn emit_table(out: &mut String, tbl: &CT_Tbl, hyperlink_urls: &HashMap<String, S
     let mut rows: Vec<Vec<String>> = Vec::new();
     let mut max_cols = 0;
 
-    for row in &tbl.rows {
+    // Accepting every tracked change removes each deleted row.
+    for row in tbl.rows.iter().filter(|row| !row.accepted_view_removes()) {
         let mut cells: Vec<String> = Vec::new();
         for cell in &row.cells {
             let text = collect_cell_text(cell, hyperlink_urls);

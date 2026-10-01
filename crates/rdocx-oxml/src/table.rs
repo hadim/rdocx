@@ -4,7 +4,7 @@ use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
 use crate::borders::CT_BorderEdge;
-use crate::content_control::{CT_Sdt, SdtOwner};
+use crate::content_control::{CT_Sdt, SdtContent, SdtOwner};
 use crate::drawing::AnchorAlignH;
 use crate::error::{OxmlError, Result};
 use crate::namespace::matches_local_name;
@@ -2215,6 +2215,30 @@ impl CT_Row {
         }
     }
 
+    /// Whether accepting every tracked change removes this row, which is the
+    /// row rule of `Document::accept_all`: its `w:trPr` carries a `w:del`
+    /// marker, or a `w:moveFrom` marker kept as preserved XML.
+    #[doc(hidden)]
+    pub fn accepted_view_removes(&self) -> bool {
+        let Some(properties) = self.properties.as_ref() else {
+            return false;
+        };
+        properties
+            .revision_markers
+            .iter()
+            .any(|marker| marker.kind() == RevisionKind::Deletion)
+            || properties.extra_xml.iter().any(|(_, raw)| {
+                let mut reader = Reader::from_reader(raw.as_slice());
+                matches!(
+                    reader.read_event(),
+                    Ok(Event::Start(start) | Event::Empty(start))
+                        if word_prefixes_at(&start, &["w".to_owned()]).is_ok_and(|prefixes| {
+                            is_word_element(start.name().as_ref(), b"moveFrom", &prefixes)
+                        })
+                )
+            })
+    }
+
     /// Report whether one raw row carrier retains root attributes.
     #[doc(hidden)]
     pub fn raw_is_root_attributes(position: usize, raw: &[u8]) -> bool {
@@ -2484,6 +2508,28 @@ impl CT_Tbl {
             extra_xml: Vec::new(),
             content_controls: Vec::new(),
         }
+    }
+
+    /// Whether accepting every tracked change removes this whole table, as
+    /// `Document::accept_all` does: it has a row, and every row it owns, rows
+    /// inside its row-level content controls included, is removed by
+    /// [`CT_Row::accepted_view_removes`]. Rows of nested tables do not count.
+    #[doc(hidden)]
+    pub fn accepted_view_removes(&self) -> bool {
+        fn control_rows<'a>(control: &'a CT_Sdt, rows: &mut Vec<&'a CT_Row>) {
+            for content in &control.content {
+                match content {
+                    SdtContent::Row(row) => rows.push(row),
+                    SdtContent::ContentControl(nested) => control_rows(nested, rows),
+                    _ => {}
+                }
+            }
+        }
+        let mut rows = self.rows.iter().collect::<Vec<_>>();
+        for (_, _, control) in &self.content_controls {
+            control_rows(control, &mut rows);
+        }
+        !rows.is_empty() && rows.iter().all(|row| row.accepted_view_removes())
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
