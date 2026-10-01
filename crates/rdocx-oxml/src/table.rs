@@ -1265,6 +1265,10 @@ pub struct CT_TrPr {
     pub revision_xml_positions: Vec<usize>,
     /// Other row properties retained at their schema insertion slots.
     pub extra_xml: Vec<(usize, Vec<u8>)>,
+    /// Whether `extra_xml` holds a Word `w:moveFrom` marker with an id and an
+    /// author, which `Document::accept_all` removes the row for.
+    #[doc(hidden)]
+    pub moved_away: bool,
 }
 
 #[allow(non_snake_case)]
@@ -1349,13 +1353,13 @@ impl CT_TrPr {
                             pr.revision_xml_positions.push(at);
                         }
                     } else {
-                        pr.extra_xml.push((
-                            at,
-                            crate::text::raw_with_external_bindings(
-                                &capture_empty_element(e)?,
-                                owner_bindings,
-                            )?,
-                        ));
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_empty_element(e)?,
+                            owner_bindings,
+                        )?;
+                        pr.moved_away |= is_word_element(name.as_ref(), b"moveFrom", &prefixes)
+                            && CT_Revision::from_raw(raw.clone(), &prefixes).is_some();
+                        pr.extra_xml.push((at, raw));
                     }
                     boundary = next;
                 }
@@ -1385,13 +1389,13 @@ impl CT_TrPr {
                             pr.revision_xml_positions.push(at);
                         }
                     } else {
-                        pr.extra_xml.push((
-                            at,
-                            crate::text::raw_with_external_bindings(
-                                &capture_element(reader, e)?,
-                                owner_bindings,
-                            )?,
-                        ));
+                        let raw = crate::text::raw_with_external_bindings(
+                            &capture_element(reader, e)?,
+                            owner_bindings,
+                        )?;
+                        pr.moved_away |= is_word_element(e.name().as_ref(), b"moveFrom", &prefixes)
+                            && CT_Revision::from_raw(raw.clone(), &prefixes).is_some();
+                        pr.extra_xml.push((at, raw));
                     }
                     boundary = next;
                 }
@@ -2217,26 +2221,17 @@ impl CT_Row {
 
     /// Whether accepting every tracked change removes this row, which is the
     /// row rule of `Document::accept_all`: its `w:trPr` carries a `w:del`
-    /// marker, or a `w:moveFrom` marker kept as preserved XML.
+    /// marker, or a `w:moveFrom` marker with an id and an author kept as
+    /// preserved XML ([`CT_TrPr::moved_away`]).
     #[doc(hidden)]
     pub fn accepted_view_removes(&self) -> bool {
-        let Some(properties) = self.properties.as_ref() else {
-            return false;
-        };
-        properties
-            .revision_markers
-            .iter()
-            .any(|marker| marker.kind() == RevisionKind::Deletion)
-            || properties.extra_xml.iter().any(|(_, raw)| {
-                let mut reader = Reader::from_reader(raw.as_slice());
-                matches!(
-                    reader.read_event(),
-                    Ok(Event::Start(start) | Event::Empty(start))
-                        if word_prefixes_at(&start, &["w".to_owned()]).is_ok_and(|prefixes| {
-                            is_word_element(start.name().as_ref(), b"moveFrom", &prefixes)
-                        })
-                )
-            })
+        self.properties.as_ref().is_some_and(|properties| {
+            properties.moved_away
+                || properties
+                    .revision_markers
+                    .iter()
+                    .any(|marker| marker.kind() == RevisionKind::Deletion)
+        })
     }
 
     /// Report whether one raw row carrier retains root attributes.

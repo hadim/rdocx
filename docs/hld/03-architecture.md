@@ -1416,12 +1416,14 @@ table cells. MHTML export sizes its images from the paragraphs the HTML emitter
 reaches, which leaves content controls out.
 Each paragraph contributes the same accepted-view text as paragraph text, so
 tracked insertions are included and tracked deletions are left out.
-A table row whose `w:trPr` carries `w:del`, or a preserved `w:moveFrom`, is
-the row `Document::accept_all` removes. `CT_Row::accepted_view_removes` and
+A table row whose `w:trPr` carries `w:del`, or a Word `w:moveFrom` with an id
+and an author that the parser flags in `CT_TrPr::moved_away`, is the row
+`Document::accept_all` removes. `CT_Row::accepted_view_removes` and
 `CT_Tbl::accepted_view_removes` own that rule, and a table goes when every row
 it owns goes, rows in its row-level content controls included. The text reader,
-`rdocx text --json`, HTML, Markdown and MHTML export and the accepted layout
-leave such rows and tables out at every nesting level. The model keeps them, so
+`word_count`, `rdocx text --json`, HTML, Markdown and MHTML export, the
+accepted layout and its PAGEREF and REF bookmark lookups leave such rows and
+tables out at every nesting level. The model keeps them, so
 table, row and paragraph indices in the editing APIs and the JSON paths are
 unchanged.
 The WASM binding uses `Document::text` for its existing `getText` method and

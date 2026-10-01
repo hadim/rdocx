@@ -6041,7 +6041,7 @@ fn reject_section_owning_content_fragment(fragment: &ContentFragment) -> Result<
     wrapped.extend_from_slice(b"</w:body></w:document>");
     let document = CT_Document::from_xml(&wrapped)?;
     let mut owns_section = false;
-    visit_body_paragraphs(&document.body.content, &mut |paragraph| {
+    visit_body_paragraphs(&document.body.content, false, &mut |paragraph| {
         owns_section |= paragraph
             .properties
             .as_ref()
@@ -9436,12 +9436,12 @@ fn insert_html_content_into_cell(
     Ok(())
 }
 
-fn visit_body_paragraphs(content: &[BodyContent], visitor: &mut impl FnMut(&CT_P)) {
+fn visit_body_paragraphs(content: &[BodyContent], accepted: bool, visitor: &mut impl FnMut(&CT_P)) {
     for item in content {
         match item {
-            BodyContent::Paragraph(paragraph) => visit_paragraph(paragraph, false, visitor),
-            BodyContent::Table(table) => visit_table(table, false, visitor),
-            BodyContent::ContentControl(control) => visit_sdt(control, false, visitor),
+            BodyContent::Paragraph(paragraph) => visit_paragraph(paragraph, accepted, visitor),
+            BodyContent::Table(table) => visit_table(table, accepted, visitor),
+            BodyContent::ContentControl(control) => visit_sdt(control, accepted, visitor),
             BodyContent::RawXml(_) => {}
         }
     }
@@ -9449,6 +9449,7 @@ fn visit_body_paragraphs(content: &[BodyContent], visitor: &mut impl FnMut(&CT_P
 
 // With `accepted`, the visitors leave out the rows that accepting every
 // tracked change removes, as `CT_Row::accepted_view_removes` reports them.
+// `visit_row` itself visits the row it is given.
 fn visit_paragraph(paragraph: &CT_P, accepted: bool, visitor: &mut impl FnMut(&CT_P)) {
     visitor(paragraph);
     for (_, _, _, control) in &paragraph.content_controls {
@@ -9465,16 +9466,15 @@ fn visit_table(table: &CT_Tbl, accepted: bool, visitor: &mut impl FnMut(&CT_P)) 
         {
             visit_sdt(control, accepted, visitor);
         }
-        if let Some(row) = table.rows.get(index) {
+        if let Some(row) = table.rows.get(index)
+            && !(accepted && row.accepted_view_removes())
+        {
             visit_row(row, accepted, visitor);
         }
     }
 }
 
 fn visit_row(row: &CT_Row, accepted: bool, visitor: &mut impl FnMut(&CT_P)) {
-    if accepted && row.accepted_view_removes() {
-        return;
-    }
     for index in 0..=row.cells.len() {
         for (_, _, control) in row
             .content_controls
@@ -9504,6 +9504,7 @@ fn visit_sdt(control: &CT_Sdt, accepted: bool, visitor: &mut impl FnMut(&CT_P)) 
         match item {
             SdtContent::Paragraph(paragraph) => visit_paragraph(paragraph, accepted, visitor),
             SdtContent::Table(table) => visit_table(table, accepted, visitor),
+            SdtContent::Row(row) if accepted && row.accepted_view_removes() => {}
             SdtContent::Row(row) => visit_row(row, accepted, visitor),
             SdtContent::Cell(cell) => visit_cell(cell, accepted, visitor),
             SdtContent::Run(_) | SdtContent::RawXml(_) => {}
@@ -10704,7 +10705,7 @@ impl Document {
 
     fn canonicalize_bookmark_ids(&mut self) -> Result<()> {
         let mut semantic = Vec::new();
-        visit_body_paragraphs(&self.document.body.content, &mut |paragraph| {
+        visit_body_paragraphs(&self.document.body.content, false, &mut |paragraph| {
             for marker in &paragraph.bookmark_markers {
                 if marker.is_start()
                     && let Some(id) = marker.id()
@@ -10735,7 +10736,7 @@ impl Document {
 
     fn canonicalize_toc_bookmark_ids(&mut self) -> Result<()> {
         let mut semantic = Vec::new();
-        visit_body_paragraphs(&self.document.body.content, &mut |paragraph| {
+        visit_body_paragraphs(&self.document.body.content, false, &mut |paragraph| {
             for marker in &paragraph.bookmark_markers {
                 if marker.is_start()
                     && let Some(id) = marker.id()
@@ -10789,7 +10790,7 @@ impl Document {
             return Ok(());
         };
         let mut semantic_nums = Vec::new();
-        visit_body_paragraphs(&self.document.body.content, &mut |paragraph| {
+        visit_body_paragraphs(&self.document.body.content, false, &mut |paragraph| {
             if let Some(id) = paragraph
                 .properties
                 .as_ref()
@@ -21428,7 +21429,7 @@ impl Document {
         let mut identifiers = self.identifiers.clone();
         let mut duplicate_typed_id = false;
         let mut typed_ids = HashSet::new();
-        visit_body_paragraphs(&self.document.body.content, &mut |paragraph| {
+        visit_body_paragraphs(&self.document.body.content, false, &mut |paragraph| {
             for marker in &paragraph.bookmark_markers {
                 if marker.is_start()
                     && let Some(id) = marker.id()
@@ -21576,7 +21577,7 @@ impl Document {
     /// Numeric `_TocN` bookmark suffixes already present in the body.
     fn toc_bookmark_suffixes(&self) -> HashSet<u64> {
         let mut suffixes = HashSet::new();
-        visit_body_paragraphs(&self.document.body.content, &mut |p| {
+        visit_body_paragraphs(&self.document.body.content, false, &mut |p| {
             for marker in &p.bookmark_markers {
                 let Some(name) = marker.name() else {
                     continue;
@@ -21815,7 +21816,7 @@ impl Document {
                 }
             }
         };
-        visit_body_paragraphs(&self.document.body.content, &mut |paragraph| {
+        visit_body_paragraphs(&self.document.body.content, false, &mut |paragraph| {
             if let Some(section) = paragraph
                 .properties
                 .as_ref()
@@ -23291,10 +23292,12 @@ impl Document {
     /// Count the number of words in the document.
     ///
     /// Counts whitespace-separated tokens across all paragraphs (including
-    /// paragraphs inside table cells and content controls).
+    /// paragraphs inside table cells and content controls), leaving out the
+    /// table rows that accepting every tracked change removes, as
+    /// [`Self::text`] does.
     pub fn word_count(&self) -> usize {
         let mut count = 0;
-        visit_body_paragraphs(&self.document.body.content, &mut |paragraph| {
+        visit_body_paragraphs(&self.document.body.content, true, &mut |paragraph| {
             count += paragraph.text().split_whitespace().count();
         });
         count

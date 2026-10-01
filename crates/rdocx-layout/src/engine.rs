@@ -3626,6 +3626,9 @@ fn table_is_cache_safe(table: &CT_Tbl, styles: &CT_Styles) -> bool {
                 .iter()
                 .all(|(position, raw)| CT_Row::raw_is_root_attributes(*position, raw))
                 && row.content_controls.is_empty()
+                // A row the accepted view leaves out has no block row to
+                // pair with on a cache hit.
+                && !row.accepted_view_removes()
                 && row.properties.as_ref().is_none_or(|properties| {
                     properties.revision_markers.is_empty() && properties.revision_xml.is_empty()
                 })
@@ -7184,56 +7187,62 @@ fn document_has_page_ref(input: &LayoutInput, name: &str) -> bool {
     page_ref_id(input, name).is_some()
 }
 
+/// Visit every paragraph of the main story. The accepted view leaves out the
+/// rows that `CT_Row::accepted_view_removes` reports, as accepting does.
 fn visit_document_paragraphs<'a>(input: &'a LayoutInput, visit: &mut impl FnMut(&'a CT_P)) {
+    let accepted = input.revision_view == RevisionView::Accepted;
     for content in &input.document.body.content {
         match content {
             BodyContent::Paragraph(paragraph) => visit(paragraph),
-            BodyContent::Table(table) => visit_table_paragraphs(table, visit),
+            BodyContent::Table(table) => visit_table_paragraphs(table, accepted, visit),
             BodyContent::ContentControl(control) => {
-                visit_control_paragraphs(control, BlockControlOwner::Body, visit)
+                visit_control_paragraphs(control, BlockControlOwner::Body, accepted, visit)
             }
             BodyContent::RawXml(_) => {}
         }
     }
 }
 
-fn visit_table_paragraphs<'a>(table: &'a CT_Tbl, visit: &mut impl FnMut(&'a CT_P)) {
+fn visit_table_paragraphs<'a>(table: &'a CT_Tbl, accepted: bool, visit: &mut impl FnMut(&'a CT_P)) {
     for boundary in 0..=table.rows.len() {
         for (_, _, control) in table
             .content_controls
             .iter()
             .filter(|(position, _, _)| *position == boundary)
         {
-            visit_control_paragraphs(control, BlockControlOwner::Table, visit);
+            visit_control_paragraphs(control, BlockControlOwner::Table, accepted, visit);
         }
         if let Some(row) = table.rows.get(boundary) {
-            visit_row_paragraphs(row, visit);
+            visit_row_paragraphs(row, accepted, visit);
         }
     }
 }
 
-fn visit_row_paragraphs<'a>(row: &'a CT_Row, visit: &mut impl FnMut(&'a CT_P)) {
+fn visit_row_paragraphs<'a>(row: &'a CT_Row, accepted: bool, visit: &mut impl FnMut(&'a CT_P)) {
+    if accepted && row.accepted_view_removes() {
+        return;
+    }
     for boundary in 0..=row.cells.len() {
         for (_, _, control) in row
             .content_controls
             .iter()
             .filter(|(position, _, _)| *position == boundary)
         {
-            visit_control_paragraphs(control, BlockControlOwner::Row, visit);
+            visit_control_paragraphs(control, BlockControlOwner::Row, accepted, visit);
         }
         if let Some(cell) = row.cells.get(boundary) {
-            visit_cell_paragraphs(cell, visit);
+            visit_cell_paragraphs(cell, accepted, visit);
         }
     }
 }
 
-fn visit_cell_paragraphs<'a>(cell: &'a CT_Tc, visit: &mut impl FnMut(&'a CT_P)) {
+fn visit_cell_paragraphs<'a>(cell: &'a CT_Tc, accepted: bool, visit: &mut impl FnMut(&'a CT_P)) {
     for content in &cell.content {
         match content {
             CellContent::Paragraph(paragraph) => visit(paragraph),
-            CellContent::Table(table) => visit_table_paragraphs(table, visit),
+            CellContent::Table(table) => visit_table_paragraphs(table, accepted, visit),
             CellContent::ContentControl(control) => {
-                visit_control_paragraphs(control, BlockControlOwner::Cell, visit)
+                visit_control_paragraphs(control, BlockControlOwner::Cell, accepted, visit)
             }
         }
     }
@@ -7242,6 +7251,7 @@ fn visit_cell_paragraphs<'a>(cell: &'a CT_Tc, visit: &mut impl FnMut(&'a CT_P)) 
 fn visit_control_paragraphs<'a>(
     control: &'a CT_Sdt,
     owner: BlockControlOwner,
+    accepted: bool,
     visit: &mut impl FnMut(&'a CT_P),
 ) {
     for content in &control.content {
@@ -7251,12 +7261,16 @@ fn visit_control_paragraphs<'a>(
                 SdtContent::Paragraph(paragraph),
             ) => visit(paragraph),
             (BlockControlOwner::Body | BlockControlOwner::Cell, SdtContent::Table(table)) => {
-                visit_table_paragraphs(table, visit)
+                visit_table_paragraphs(table, accepted, visit)
             }
-            (BlockControlOwner::Table, SdtContent::Row(row)) => visit_row_paragraphs(row, visit),
-            (BlockControlOwner::Row, SdtContent::Cell(cell)) => visit_cell_paragraphs(cell, visit),
+            (BlockControlOwner::Table, SdtContent::Row(row)) => {
+                visit_row_paragraphs(row, accepted, visit)
+            }
+            (BlockControlOwner::Row, SdtContent::Cell(cell)) => {
+                visit_cell_paragraphs(cell, accepted, visit)
+            }
             (_, SdtContent::ContentControl(control)) => {
-                visit_control_paragraphs(control, owner, visit)
+                visit_control_paragraphs(control, owner, accepted, visit)
             }
             _ => {}
         }

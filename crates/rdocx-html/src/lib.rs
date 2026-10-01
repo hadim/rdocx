@@ -150,7 +150,7 @@ mod tests {
     #[test]
     fn html_and_markdown_leave_out_deleted_table_rows() {
         let document = CT_Document::from_xml(
-            br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:tbl><w:tr><w:tc><w:p><w:r><w:t>KEEP</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:trPr><w:del w:id="1" w:author="A"/></w:trPr><w:tc><w:p><w:r><w:t>GONE</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:tbl><w:tr><w:trPr><w:del w:id="2" w:author="A"/></w:trPr><w:tc><w:p><w:del w:id="3" w:author="A"><w:r><w:delText>DROPPED</w:delText></w:r></w:del></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>b</w:t></w:r></w:p></w:body></w:document>"#,
+            br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:tbl><w:tr><w:tc><w:p><w:r><w:t>KEEP</w:t></w:r></w:p><w:tbl><w:tr><w:trPr><w:del w:id="4" w:author="A"/></w:trPr><w:tc><w:p><w:r><w:t>NESTED</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/></w:tc></w:tr><w:tr><w:trPr><w:del w:id="1" w:author="A"/></w:trPr><w:tc><w:p><w:r><w:t>GONE</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:tbl><w:tr><w:trPr><w:del w:id="2" w:author="A"/></w:trPr><w:tc><w:p><w:del w:id="3" w:author="A"><w:r><w:delText>DROPPED</w:delText></w:r></w:del></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>b</w:t></w:r></w:p></w:body></w:document>"#,
         )
         .unwrap();
         let input = HtmlInput {
@@ -163,7 +163,7 @@ mod tests {
 
         assert_eq!(
             to_html_fragment(&input, &HtmlOptions::default()),
-            "<table>\n<tr>\n<td><p>KEEP</p>\n</td>\n</tr>\n</table>\n<p>b</p>\n"
+            "<table>\n<tr>\n<td><p>KEEP</p>\n<p></p>\n</td>\n</tr>\n</table>\n<p>b</p>\n"
         );
         assert_eq!(to_markdown(&input), "| KEEP |\n| --- |\n\nb\n\n");
     }

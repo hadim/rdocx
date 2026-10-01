@@ -356,6 +356,9 @@ fn collect_cell_text(
                     parts.push(trimmed);
                 }
             }
+            // Accepting every tracked change removes a nested table whose
+            // rows are all deleted.
+            CellContent::Table(table) if table.accepted_view_removes() => {}
             CellContent::Table(_) => {
                 parts.push("(nested table)".to_string());
             }

@@ -528,7 +528,7 @@ fn layout_table_inner(
         doc_grid,
     )? {
         Some(widths) => widths,
-        None => compute_column_widths(tbl.grid.as_ref(), available_width, tbl, path),
+        None => compute_column_widths(tbl.grid.as_ref(), available_width, tbl, &source_rows),
     };
     let table_width: f64 = col_widths.iter().sum();
 
@@ -1593,7 +1593,7 @@ fn compute_column_widths(
     grid: Option<&CT_TblGrid>,
     available_width: f64,
     table: &CT_Tbl,
-    path: &[usize],
+    rows: &[(&CT_Row, Vec<usize>)],
 ) -> Vec<f64> {
     let requested_width = table
         .properties
@@ -1624,7 +1624,7 @@ fn compute_column_widths(
         }
         _ => {
             // No grid defined — infer column count from the first row
-            let num_cols = layout_table_rows(table, path)
+            let num_cols = rows
                 .first()
                 .map(|(row, path)| {
                     layout_row_cells(row, path)
@@ -2331,7 +2331,7 @@ mod tests {
         row.cells.push(CT_Tc::new());
         row.cells.push(CT_Tc::new());
         tbl.rows.push(row);
-        let widths = compute_column_widths(None, 300.0, &tbl, &[]);
+        let widths = compute_column_widths(None, 300.0, &tbl, &layout_table_rows(&tbl, &[]));
         assert_eq!(widths.len(), 3);
         for w in &widths {
             assert!((w - 100.0).abs() < 0.01);
