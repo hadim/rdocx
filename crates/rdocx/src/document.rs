@@ -26585,7 +26585,7 @@ mod tests {
     const WORD_VERSION: &str = "16.104";
     const WORD_BUILD: &str = "16.104.25121423";
     const WORD_CHART_CANDIDATE_SHA256: &str =
-        "79e9b9ff9e7557dbd09a365bb8c189806e700ed48ca768b27d7158cf2b41370b";
+        "904e718b1fe0e524be7df75430705a8a70e03089ed96460ad008c4016c36ad3d";
     const FX087_WORD_VERSION: &str = "16.112.3";
     const FX087_WORD_BUILD: &str = "16.112.26083020";
     const FX087_PAGES_VERSION: &str = "15.1.1";
@@ -30935,7 +30935,7 @@ mod tests {
         const CROP_WIDTH: &str = "750";
         const CROP_HEIGHT: &str = "450";
         const WORD_SHA256: &str =
-            "9acea62539e90e39078a3502c2f2a109073d60497a50db89bac065bd2b4785cf";
+            "5046f7a0f2305518ec8a0c439b2df482790f29c05e41f6f5ef1d49dbb5473348";
         const POWERPOINT_SHA256: &str =
             "8edda1371d1da30b937108fc1cfa3366467c9dbeb90934391c160b532781eef1";
 
@@ -34902,7 +34902,7 @@ mod tests {
             + "</w:numPr>".len();
         assert_eq!(
             &unlinked[num_pr_start..num_pr_end],
-            "<w:numPr xmlns:ext=\"urn:producer\" ext:root=\"a&#x20;b\"><ext:before/><w:ilvl ext:leaf=\"level\"><ext:level-child/></w:ilvl><w:numId ext:leaf=\"id\"><ext:id-child/></w:numId><ext:after/>\n      </w:numPr>"
+            "<w:numPr xmlns:ext=\"urn:producer\" ext:root=\"a&#x20;b\"><ext:before/><w:ilvl ext:leaf=\"level\"><ext:level-child/></w:ilvl><w:numId ext:leaf=\"id\"><ext:id-child/></w:numId><ext:after/></w:numPr>"
         );
     }
 

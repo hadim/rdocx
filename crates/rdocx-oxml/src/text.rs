@@ -167,8 +167,14 @@ pub(crate) fn push_root_attribute_record(
         // `w14` is bound by the part root that owns the element, the same
         // assumption the authored `w14:paraId` write already makes. Rebinding
         // it here would make a reopened save differ from the save it came
-        // from, purely by a declaration that changes nothing.
-        if name == b"xmlns:w14" && attribute.value.as_ref() == W14_NS.as_bytes() {
+        // from, purely by a declaration that changes nothing. `w` is in scope
+        // already, since the element's own `w:` name needs it, and a writer
+        // that shadows it declares it on the element first. Word writes
+        // `w:rsid*` on nearly every paragraph and run, so repeating `w` here
+        // repeated it hundreds of times in an edited part.
+        if (name == b"xmlns:w14" && attribute.value.as_ref() == W14_NS.as_bytes())
+            || (name == b"xmlns:w" && attribute.value.as_ref() == crate::namespace::W_NS.as_bytes())
+        {
             continue;
         }
         if !namespace_declaration(name)
@@ -10852,6 +10858,48 @@ mod tests {
         assert!(
             error.to_string().contains("prefix `x` is unbound"),
             "{error}"
+        );
+    }
+
+    #[test]
+    fn a_retained_record_declares_only_a_binding_the_written_element_lacks() {
+        // The written element's own `w:` name needs the canonical `w` binding
+        // in scope, so repeating it on every element with a `w:rsid*`
+        // attribute only grew the part. An alias prefix and a foreign prefix
+        // still need their declaration.
+        let w_ns = crate::namespace::W_NS;
+        let written = |attributes: &str, prefixes: &[String]| {
+            let source = BytesStart::from_content(format!("w:p {attributes}"), "w:p".len());
+            let record = capture_root_attribute_record(&source, prefixes)
+                .unwrap()
+                .unwrap();
+            let mut start = BytesStart::new("w:p");
+            push_root_attribute_record(&mut start, &record, None).unwrap();
+            let mut output = Vec::new();
+            Writer::new(&mut output)
+                .write_event(Event::Empty(start))
+                .unwrap();
+            String::from_utf8(output).unwrap()
+        };
+        let word = format!("\0w\0{w_ns}");
+
+        assert_eq!(
+            written(r#"w:rsidR="00A1B2C3""#, std::slice::from_ref(&word)),
+            r#"<w:p w:rsidR="00A1B2C3"/>"#
+        );
+        assert_eq!(
+            written(
+                r#"q:rsidR="00A1B2C3""#,
+                &[word.clone(), format!("\0q\0{w_ns}")]
+            ),
+            format!(r#"<w:p q:rsidR="00A1B2C3" xmlns:q="{w_ns}"/>"#)
+        );
+        assert_eq!(
+            written(
+                r#"w:rsidR="00A1B2C3" x:keep="yes""#,
+                &[word.clone(), "\0x\0urn:producer".to_owned()]
+            ),
+            r#"<w:p w:rsidR="00A1B2C3" x:keep="yes" xmlns:x="urn:producer"/>"#
         );
     }
 
