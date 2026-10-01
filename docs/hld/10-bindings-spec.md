@@ -2725,7 +2725,19 @@ opens, so a malformed styles, numbering, or settings part is named in the
 report beside the open failure it causes. `layout --json` uses
 bundled deterministic fonts and reports every direct body item. Its point-space
 fragments carry one-based physical and displayed page numbers, and preserved
-unlaid items retain an empty fragment list. `replace --expect N` checks the
+unlaid items retain an empty fragment list. `diff` compares accepted-view
+paragraph text story by story: the body paragraphs, the body's table cells
+through the `text --json` traversal, and every other story through
+`Document::story_item_snapshots`, reading only the direct paragraphs and block
+content controls that `StoryItemSnapshot::is_direct_child` marks. Headers and
+footers pair by type and the first section that references them, and every
+other part pairs by kind. Each story is one sequence matched by a Myers
+linear-space shortest edit script, in O((N+M)D) time and O(N+M) memory, and
+removed and added paragraphs between two matches pair in order as changed
+paragraphs. The text form keeps the `[i]` body lines and adds
+bracketed story locations, a story that cannot be read is reported as not
+compared, `--json` emits a schema-1 record, and `--exit-code` exits with 1 for
+a difference and 2 for an error. `replace --expect N` checks the
 run-aware replacement count before staged publication. A mismatch creates no
 output and leaves an existing destination untouched. Both the selected page
 and all-page `render` paths use bundled deterministic fonts. The compiled
