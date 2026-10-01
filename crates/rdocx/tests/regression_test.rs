@@ -10782,7 +10782,22 @@ fn link_and_template_accept_a_numbering_level_without_an_instance() {
         r#"<w:p><w:r><w:t>{% endfor %}</w:t></w:r></w:p>"#,
         r#"<w:p><w:pPr><w:pStyle w:val="Subtitle"/></w:pPr><w:r><w:t>Subtitle</w:t></w:r></w:p>"#,
     );
-    let mut document = document_with_producer_styles(body, producer_styles);
+    let mut source = document_with_producer_styles(body, producer_styles);
+    // A new document defines Word's own Subtitle, so the producer's Subtitle
+    // replaces it rather than repeating its style ID.
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap()))
+            .unwrap();
+    let styles = String::from_utf8(package.get_part("/word/styles.xml").unwrap().to_vec()).unwrap();
+    let own = styles.find(r#"w:styleId="Subtitle""#).unwrap();
+    let own_start = styles[..own].rfind("<w:style ").unwrap();
+    let own_end = own + styles[own..].find("</w:style>").unwrap() + "</w:style>".len();
+    let styles = format!("{}{}", &styles[..own_start], &styles[own_end..]);
+    assert_eq!(styles.matches(r#"w:styleId="Subtitle""#).count(), 1);
+    package.set_part("/word/styles.xml", styles.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
     let levels = [
         ListLevel::decimal().level_text("%1."),
         ListLevel::decimal().level_text("%1.%2)"),
