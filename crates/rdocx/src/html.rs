@@ -11,10 +11,11 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::BodyContent;
+use rdocx_oxml::revision::RevisionKind;
 use rdocx_oxml::table::{
     CT_Row, CT_Tbl, CT_TblGrid, CT_TblGridCol, CT_TblPr, CT_TblWidth, CT_Tc, VMerge,
 };
-use rdocx_oxml::text::{CT_P, RunContent};
+use rdocx_oxml::text::{CT_P, CT_R, RunContent};
 use rdocx_oxml::units::Twips;
 use scraper::{ElementRef, Html, Node, Selector};
 use sha2::{Digest, Sha256};
@@ -4295,6 +4296,66 @@ mod tests {
                 .map(|image| (image.width_emu, image.height_emu))
                 .collect::<Vec<_>>(),
             [(9_525, 9_525), (19_050, 28_575), (9_525, 9_525)]
+        );
+    }
+
+    #[test]
+    fn mhtml_writer_sizes_the_pictures_of_insertions_and_not_of_deletions() {
+        let mut document = Document::new();
+        for (name, width, height) in [
+            ("deleted.png", 9_525, 9_525),
+            ("kept.png", 19_050, 28_575),
+            ("inserted.png", 38_100, 47_625),
+        ] {
+            document.add_picture(
+                &one_pixel_png(),
+                name,
+                Length::emu(width),
+                Length::emu(height),
+            );
+        }
+        let mut package =
+            OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let xml =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        // The first picture run becomes a tracked deletion and the last one a
+        // tracked insertion.
+        let xml = xml.replacen("<w:r>", r#"<w:del w:id="1" w:author="Ada"><w:r>"#, 1);
+        let xml = xml.replacen("</w:r>", "</w:r></w:del>", 1);
+        let run_start = xml.rfind("<w:r>").unwrap();
+        let run_end = xml.rfind("</w:r>").unwrap() + "</w:r>".len();
+        let xml = format!(
+            r#"{}<w:ins w:id="2" w:author="Ada">{}</w:ins>{}"#,
+            &xml[..run_start],
+            &xml[run_start..run_end],
+            &xml[run_end..]
+        );
+        // The emitter drops the first paragraph, whose mark and picture are
+        // deleted, and merges the second, whose mark alone is deleted, into
+        // the third.
+        let xml = xml.replacen(
+            "<w:p>",
+            r#"<w:p><w:pPr><w:rPr><w:del w:id="3" w:author="Ada"/></w:rPr></w:pPr>"#,
+            2,
+        );
+        package.set_part("/word/document.xml", xml.into_bytes());
+        let mut saved = Cursor::new(Vec::new());
+        package.write_to(&mut saved).unwrap();
+        let document = Document::from_bytes(saved.get_ref()).unwrap();
+        assert_eq!(document.to_html_fragment().matches("<p>").count(), 1);
+
+        let written = document
+            .to_mhtml_bytes()
+            .expect("an inserted picture pairs with its HTML image");
+        let reopened = Document::from_mhtml_bytes(&written.bytes).unwrap();
+        assert_eq!(
+            reopened
+                .document
+                .images()
+                .iter()
+                .map(|image| (image.width_emu, image.height_emu))
+                .collect::<Vec<_>>(),
+            [(19_050, 28_575), (38_100, 47_625)]
         );
     }
 

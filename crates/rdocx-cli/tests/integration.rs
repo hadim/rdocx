@@ -3256,6 +3256,44 @@ fn compare_accept_and_reject_reproduce_each_input() {
     );
 }
 
+#[test]
+fn convert_exports_the_accepted_view_of_a_redline() {
+    let temp = TempWorkspace::new("convert-redline");
+    let original = temp.path.join("original.docx");
+    let edited = temp.path.join("edited.docx");
+    let redline = temp.path.join("redline.docx");
+    write_document(&original, &["Keep OLDWORD here."]);
+    write_document(&edited, &["Keep NEWWORD here."]);
+    let compared = cli(&[
+        "compare",
+        path_text(&original),
+        path_text(&edited),
+        "--author",
+        "Alice",
+        "--timestamp",
+        "2026-09-30T12:00:00Z",
+        "--output",
+        path_text(&redline),
+    ]);
+    assert_success(&compared, "compare");
+
+    for to in ["html", "md"] {
+        let output = temp.path.join(format!("redline.{to}"));
+        let converted = cli(&[
+            "convert",
+            path_text(&redline),
+            "--to",
+            to,
+            "--output",
+            path_text(&output),
+        ]);
+        assert_success(&converted, &format!("convert {to}"));
+        let text = fs::read_to_string(&output).unwrap();
+        assert!(text.contains("Keep NEWWORD here."), "{to}: {text}");
+        assert!(!text.contains("OLDWORD"), "{to}: {text}");
+    }
+}
+
 const COMPARE_TIMESTAMP: &str = "2026-09-29T12:00:00Z";
 
 /// Run `rdocx compare --json` and return its record.
