@@ -104,7 +104,9 @@ use rpptx_oxml::placeholder::PlaceholderKey;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType};
 pub use rpptx_oxml::presentation::Section;
 use rpptx_oxml::presentation::{CT_Presentation, CT_SlideId, custom_show_relationship_ids};
-use rpptx_oxml::relmap::{relationship_ids, rewrite_exact_rel_ids, rewrite_rel_ids};
+use rpptx_oxml::relmap::{
+    relationship_ids, release_hyperlinks, rewrite_exact_rel_ids, rewrite_rel_ids,
+};
 use rpptx_oxml::shape_tree::{
     CT_GroupShape, CT_Shape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild, rewrite_shape_ids,
 };
@@ -2932,6 +2934,7 @@ impl Presentation {
             })?;
 
         let mut media_candidates = HashSet::new();
+        self.release_slide_jumps_to(&record.part_name, &mut media_candidates)?;
         collect_media_targets(&self.package, &record.part_name, &mut media_candidates);
         if let Some(notes) = &record.notes {
             collect_media_targets(&self.package, &notes.part_name, &mut media_candidates);
@@ -2960,6 +2963,69 @@ impl Presentation {
         self.slides.remove(index);
         prune_unreachable_parts(&mut self.package, &media_candidates);
         self.media_store = MediaStore::scan(&self.package);
+        Ok(())
+    }
+
+    /// Makes every hyperlink of another slide that jumps to `slide_part` do
+    /// nothing and removes its relationship, as PowerPoint does when the
+    /// target slide is deleted.
+    ///
+    /// Every `a:hlinkClick`, `a:hlinkHover`, or `a:hlinkMouseOver` that
+    /// named it, on a shape or a text run, keeps an empty `r:id` and the
+    /// action `ppaction://noaction`. Every relationship that the slide named
+    /// only inside a released element goes, a click sound included, and the
+    /// internal targets of those relationships join `candidates` for pruning.
+    fn release_slide_jumps_to(
+        &mut self,
+        slide_part: &str,
+        candidates: &mut HashSet<String>,
+    ) -> Result<()> {
+        for record in &mut self.slides {
+            let Some(relationships) = self.package.get_part_rels_mut(&record.part_name) else {
+                continue;
+            };
+            let released: HashSet<String> = relationships
+                .items
+                .iter()
+                .filter(|relationship| {
+                    !relationship_is_external(relationship)
+                        && OpcPackage::resolve_rel_target(&record.part_name, &relationship.target)
+                            == slide_part
+                })
+                .map(|relationship| relationship.id.clone())
+                .collect();
+            if released.is_empty() || record.part_name == slide_part {
+                continue;
+            }
+            let malformed = |error: OxmlError| Error::MalformedPart {
+                part_name: record.part_name.clone(),
+                message: error.to_string(),
+            };
+            let original = record.slide.to_xml().map_err(malformed)?;
+            let xml = release_hyperlinks(&original, &released).map_err(malformed)?;
+            let before: HashSet<String> = relationship_ids(&original)
+                .map_err(malformed)?
+                .into_iter()
+                .collect();
+            let after: HashSet<String> = relationship_ids(&xml)
+                .map_err(malformed)?
+                .into_iter()
+                .collect();
+            relationships.items.retain(|relationship| {
+                let dropped = (released.contains(&relationship.id)
+                    || before.contains(&relationship.id))
+                    && !after.contains(&relationship.id);
+                if dropped && !relationship_is_external(relationship) {
+                    let target =
+                        OpcPackage::resolve_rel_target(&record.part_name, &relationship.target);
+                    if target != slide_part {
+                        candidates.insert(target);
+                    }
+                }
+                !dropped
+            });
+            record.slide = CT_Slide::from_xml(&xml).map_err(malformed)?;
+        }
         Ok(())
     }
 
@@ -3629,32 +3695,69 @@ impl Presentation {
         slide_index: usize,
         shape_id: u32,
     ) -> Result<Option<&str>> {
-        const OPERATION: &str = "shape hyperlink";
-        self.require_slide_index(slide_index)?;
-        let record = &self.slides[slide_index];
-        if shape_id_count(
-            &record.slide.common_slide_data.shape_tree.children,
-            shape_id,
-        ) != 1
-        {
-            return Err(invalid_shape_mutation(
-                OPERATION,
-                "shape id is missing or ambiguous",
-            ));
-        }
-        let xml = record
-            .slide
-            .to_xml()
-            .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()))?;
-        let location = locate_shape_hyperlink(&xml, shape_id)?
-            .ok_or_else(|| invalid_shape_mutation(OPERATION, "shape has no p:cNvPr"))?;
+        let (_, location) = self.locate_shape_click("shape hyperlink", slide_index, shape_id)?;
         Ok(location
             .relationship_id
             .as_deref()
             .and_then(|id| self.hyperlink_address(slide_index, id)))
     }
 
+    /// Returns the zero-based index of the slide that the click action of one
+    /// slide shape jumps to, as python-pptx `click_action.target_slide` does.
+    ///
+    /// The shape is found by its non-visual id as for
+    /// [`Self::shape_hyperlink_address`]. A named slide jump,
+    /// `ppaction://hlinksldjump`, returns the slide its relationship targets.
+    /// A `ppaction://hlinkshowjump` to the first, last, next, or previous
+    /// slide returns that slide, counted from `slide_index`. Any other click
+    /// action, or none, returns `None`, and so does a jump that names no slide
+    /// of the presentation, such as a next-slide jump on the last slide, where
+    /// python-pptx raises `ValueError`.
+    pub fn shape_target_slide(&self, slide_index: usize, shape_id: u32) -> Result<Option<usize>> {
+        let (_, location) = self.locate_shape_click("shape target slide", slide_index, shape_id)?;
+        let Some(action) = location.action.as_deref() else {
+            return Ok(None);
+        };
+        let (verb, query) = action.split_once('?').unwrap_or((action, ""));
+        Ok(match verb {
+            SLIDE_JUMP_ACTION => {
+                let part_name = &self.slides[slide_index].part_name;
+                location
+                    .relationship_id
+                    .as_deref()
+                    .and_then(|id| self.package.get_part_rels(part_name)?.get_by_id(id))
+                    .filter(|relationship| !relationship_is_external(relationship))
+                    .and_then(|relationship| {
+                        let target =
+                            OpcPackage::resolve_rel_target(part_name, &relationship.target);
+                        self.slides
+                            .iter()
+                            .position(|slide| slide.part_name == target)
+                    })
+            }
+            SHOW_JUMP_ACTION => {
+                match query
+                    .split('&')
+                    .find_map(|field| field.strip_prefix("jump="))
+                {
+                    Some("firstslide") => Some(0),
+                    Some("lastslide") => self.slides.len().checked_sub(1),
+                    Some("nextslide") => {
+                        Some(slide_index + 1).filter(|next| *next < self.slides.len())
+                    }
+                    Some("previousslide") => slide_index.checked_sub(1),
+                    _ => None,
+                }
+            }
+            _ => None,
+        })
+    }
+
     /// Sets or clears the external click hyperlink of one slide shape atomically.
+    ///
+    /// A new address replaces any other click action of the shape, such as a
+    /// slide jump, and keeps the other attributes and children of an existing
+    /// `a:hlinkClick`.
     pub fn set_shape_hyperlink(
         &mut self,
         slide_index: usize,
@@ -3674,6 +3777,49 @@ impl Presentation {
                 "a hyperlink address must be non-empty text without control characters",
             ));
         }
+        self.set_shape_click_action(
+            OPERATION,
+            slide_index,
+            shape_id,
+            address.map(ShapeClickTarget::Address),
+        )
+    }
+
+    /// Makes the click action of one slide shape jump to the slide at
+    /// `target_slide_index`, or clears it with `None`, as python-pptx
+    /// `click_action.target_slide` does.
+    ///
+    /// The shape is found as for [`Self::set_shape_hyperlink`]. Its
+    /// `a:hlinkClick` gets the action `ppaction://hlinksldjump` and names the
+    /// slide's relationship to the target slide, which is reused when the
+    /// slide has one. Jumping to the current target changes nothing, and a
+    /// relationship that only the old click action named is removed.
+    pub fn set_shape_target_slide(
+        &mut self,
+        slide_index: usize,
+        shape_id: u32,
+        target_slide_index: Option<usize>,
+    ) -> Result<()> {
+        if let Some(target) = target_slide_index {
+            self.require_slide_index(target)?;
+        }
+        self.set_shape_click_action(
+            "set shape target slide",
+            slide_index,
+            shape_id,
+            target_slide_index.map(ShapeClickTarget::Slide),
+        )
+    }
+
+    /// Serializes one slide and finds the `p:cNvPr` of its single child or
+    /// group member whose id is `shape_id`, with its click action.
+    fn locate_shape_click(
+        &self,
+        operation: &'static str,
+        slide_index: usize,
+        shape_id: u32,
+    ) -> Result<(Vec<u8>, ShapeHyperlinkLocation)> {
+        self.require_slide_index(slide_index)?;
         let record = &self.slides[slide_index];
         if shape_id_count(
             &record.slide.common_slide_data.shape_tree.children,
@@ -3681,17 +3827,28 @@ impl Presentation {
         ) != 1
         {
             return Err(invalid_shape_mutation(
-                OPERATION,
+                operation,
                 "shape id is missing or ambiguous",
             ));
         }
         let xml = record
             .slide
             .to_xml()
-            .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()))?;
+            .map_err(|error| invalid_shape_mutation(operation, error.to_string()))?;
         let location = locate_shape_hyperlink(&xml, shape_id)?
-            .ok_or_else(|| invalid_shape_mutation(OPERATION, "shape has no p:cNvPr"))?;
-        let part_name = record.part_name.clone();
+            .ok_or_else(|| invalid_shape_mutation(operation, "shape has no p:cNvPr"))?;
+        Ok((xml, location))
+    }
+
+    fn set_shape_click_action(
+        &mut self,
+        operation: &'static str,
+        slide_index: usize,
+        shape_id: u32,
+        target: Option<ShapeClickTarget<'_>>,
+    ) -> Result<()> {
+        let (xml, location) = self.locate_shape_click(operation, slide_index, shape_id)?;
+        let part_name = self.slides[slide_index].part_name.clone();
         let mut relationships = self
             .package
             .get_part_rels(&part_name)
@@ -3700,33 +3857,66 @@ impl Presentation {
         let current = location
             .relationship_id
             .as_deref()
-            .and_then(|id| relationships.get_by_id(id))
-            .filter(|relationship| {
-                relationship.rel_type == rel_types::HYPERLINK
-                    && relationship_is_external(relationship)
-            })
-            .map(|relationship| relationship.target.as_str());
-        if (address.is_none() && location.click.is_none())
-            || (address.is_some() && current == address)
-        {
-            return Ok(());
-        }
-        let new_id = address.map(|address| {
-            relationships
-                .items
-                .iter()
-                .find(|relationship| {
-                    relationship.rel_type == rel_types::HYPERLINK
-                        && relationship_is_external(relationship)
-                        && relationship.target == address
-                })
-                .map(|relationship| relationship.id.clone())
-                .unwrap_or_else(|| relationships.add_external(rel_types::HYPERLINK, address))
-        });
-        let rewritten = rewrite_shape_hyperlink(&xml, &location, new_id.as_deref())?;
+            .and_then(|id| relationships.get_by_id(id));
+        let action = location.action.as_deref();
+        let link = match target {
+            None if location.click.is_none() => return Ok(()),
+            None => None,
+            Some(ShapeClickTarget::Address(address)) => {
+                if action.is_none()
+                    && current.is_some_and(|relationship| {
+                        relationship.rel_type == rel_types::HYPERLINK
+                            && relationship_is_external(relationship)
+                            && relationship.target == address
+                    })
+                {
+                    return Ok(());
+                }
+                let id = relationships
+                    .items
+                    .iter()
+                    .find(|relationship| {
+                        relationship.rel_type == rel_types::HYPERLINK
+                            && relationship_is_external(relationship)
+                            && relationship.target == address
+                    })
+                    .map(|relationship| relationship.id.clone())
+                    .unwrap_or_else(|| relationships.add_external(rel_types::HYPERLINK, address));
+                Some((id, None))
+            }
+            Some(ShapeClickTarget::Slide(index)) => {
+                let target_part = &self.slides[index].part_name;
+                let is_target = |relationship: &Relationship| {
+                    relationship.rel_type == rel_types::SLIDE
+                        && !relationship_is_external(relationship)
+                        && OpcPackage::resolve_rel_target(&part_name, &relationship.target)
+                            == *target_part
+                };
+                if action == Some(SLIDE_JUMP_ACTION) && current.is_some_and(is_target) {
+                    return Ok(());
+                }
+                let id = relationships
+                    .items
+                    .iter()
+                    .find(|relationship| is_target(relationship))
+                    .map(|relationship| relationship.id.clone())
+                    .unwrap_or_else(|| {
+                        relationships.add(
+                            rel_types::SLIDE,
+                            &relative_part_target(&part_name, target_part),
+                        )
+                    });
+                Some((id, Some(SLIDE_JUMP_ACTION)))
+            }
+        };
+        let rewritten = rewrite_shape_hyperlink(
+            &xml,
+            &location,
+            link.as_ref().map(|(id, action)| (id.as_str(), *action)),
+        )?;
         let slide = CT_Slide::from_xml(&rewritten)
-            .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()))?;
-        let before = slide_relationship_ids(&record.slide)?;
+            .map_err(|error| invalid_shape_mutation(operation, error.to_string()))?;
+        let before = slide_relationship_ids(&self.slides[slide_index].slide)?;
         let after = slide_relationship_ids(&slide)?;
         relationships.items.retain(|relationship| {
             !before.contains(&relationship.id) || after.contains(&relationship.id)
@@ -4719,6 +4909,23 @@ struct ShapeHyperlinkLocation {
     click: Option<(usize, usize, usize, bool)>,
     relationship_id: Option<String>,
     relationship_attribute: Option<Vec<u8>>,
+    action: Option<String>,
+}
+
+/// The action verb of a click action that jumps to one named slide.
+const SLIDE_JUMP_ACTION: &str = "ppaction://hlinksldjump";
+
+/// The action verb of a click action that jumps within the slide show, such
+/// as to the next slide.
+const SHOW_JUMP_ACTION: &str = "ppaction://hlinkshowjump";
+
+/// What a click action set on a slide shape opens.
+#[derive(Clone, Copy)]
+enum ShapeClickTarget<'a> {
+    /// An external hyperlink address.
+    Address(&'a str),
+    /// The zero-based index of a slide of the presentation.
+    Slide(usize),
 }
 
 fn xml_local_name(name: &[u8]) -> &[u8] {
@@ -4792,6 +4999,7 @@ fn locate_shape_hyperlink(xml: &[u8], shape_id: u32) -> Result<Option<ShapeHyper
                         click: None,
                         relationship_id: None,
                         relationship_attribute: None,
+                        action: None,
                     });
                     if empty {
                         return Ok(location);
@@ -4814,6 +5022,8 @@ fn locate_shape_hyperlink(xml: &[u8], shape_id: u32) -> Result<Option<ShapeHyper
                         found.relationship_id = Some(id);
                         found.relationship_attribute = Some(attribute);
                     }
+                    found.action = shape_xml_attribute(&reader, &start, None, b"action")?
+                        .map(|(action, _)| action);
                     found.click = Some((start_offset, end_offset, end_offset, empty));
                     if !empty {
                         click_depth = Some(depth + 1);
@@ -4843,12 +5053,17 @@ fn locate_shape_hyperlink(xml: &[u8], shape_id: u32) -> Result<Option<ShapeHyper
     }
 }
 
+/// Rewrites the located `a:hlinkClick` to name `link`, a relationship id
+/// and an optional action, or removes it for `None`.
+///
+/// An existing element keeps its other attributes and children, and loses
+/// its action when `link` has none.
 fn rewrite_shape_hyperlink(
     xml: &[u8],
     location: &ShapeHyperlinkLocation,
-    relationship_id: Option<&str>,
+    link: Option<(&str, Option<&str>)>,
 ) -> Result<Vec<u8>> {
-    let Some(id) = relationship_id else {
+    let Some((id, action)) = link else {
         let Some((start, _, end, _)) = location.click else {
             return Ok(xml.to_vec());
         };
@@ -4877,6 +5092,7 @@ fn rewrite_shape_hyperlink(
             .to_owned();
         let mut replacement = XmlBytesStart::new(name);
         let mut replaced = false;
+        let mut action_written = false;
         for attribute in original.attributes().with_checks(false) {
             let attribute = attribute
                 .map_err(|error| invalid_shape_mutation("shape hyperlink", error.to_string()))?;
@@ -4886,6 +5102,11 @@ fn rewrite_shape_hyperlink(
                 })?;
                 replacement.push_attribute((key, id));
                 replaced = true;
+            } else if attribute.key.as_ref() == b"action" {
+                if let Some(action) = action {
+                    replacement.push_attribute(("action", action));
+                    action_written = true;
+                }
             } else {
                 replacement.push_attribute(attribute);
             }
@@ -4893,6 +5114,9 @@ fn rewrite_shape_hyperlink(
         if !replaced {
             replacement.push_attribute(("xmlns:r", R_NS));
             replacement.push_attribute(("r:id", id));
+        }
+        if let Some(action) = action.filter(|_| !action_written) {
+            replacement.push_attribute(("action", action));
         }
         let mut writer = XmlWriter::new(Vec::new());
         writer
@@ -4909,7 +5133,10 @@ fn rewrite_shape_hyperlink(
         rewritten.extend_from_slice(&xml[head_end..]);
         return Ok(rewritten);
     }
-    let click = format!(r#"<a:hlinkClick xmlns:a="{A_NS}" xmlns:r="{R_NS}" r:id="{id}"/>"#);
+    let action = action
+        .map(|action| format!(r#" action="{action}""#))
+        .unwrap_or_default();
+    let click = format!(r#"<a:hlinkClick xmlns:a="{A_NS}" xmlns:r="{R_NS}" r:id="{id}"{action}/>"#);
     let mut rewritten = Vec::with_capacity(xml.len() + click.len() + location.root_name.len() + 3);
     if location.empty_root {
         let head = &xml[location.root_start..location.root_head_end];
