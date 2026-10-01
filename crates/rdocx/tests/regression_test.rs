@@ -44647,3 +44647,217 @@ fn accepted_view_keeps_a_deleted_paragraph_that_holds_a_bookmark() {
         1
     );
 }
+
+/// Accepting every tracked change removes a deleted table row, and a table
+/// whose rows are all deleted. The accepted text, HTML, Markdown and layout
+/// leave them out as `accept_all` does, while the model keeps them.
+#[test]
+fn accepted_view_leaves_out_deleted_table_rows() {
+    let build = |rows: &[&str]| {
+        let mut document = Document::new();
+        document.add_paragraph("a");
+        if !rows.is_empty() {
+            let mut table = document.add_table(rows.len(), 1);
+            for (index, text) in rows.iter().enumerate() {
+                table.cell(index, 0).unwrap().set_text(text);
+            }
+        }
+        document.add_paragraph("b");
+        document
+    };
+    let fragments = |document: &Document, view: RevisionView| {
+        let layout = document
+            .layout_deterministic_with_options(RenderOptions {
+                revision_view: view,
+            })
+            .unwrap();
+        (0..document.body_items().count())
+            .map(|index| {
+                layout
+                    .body_layout_fragments(index)
+                    .unwrap()
+                    .iter()
+                    .map(|fragment| (fragment.y * 100.0).round() / 100.0)
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    };
+
+    // A deleted row, the shape compare() writes.
+    let mut redline = build(&["KEEP", "GONE"]);
+    redline
+        .compare(&build(&["KEEP"]), "Ada", "2026-09-30T00:00:00Z")
+        .unwrap();
+    assert_eq!(redline.text(), "a\nKEEP\t\nb\n");
+    assert_eq!(redline.to_markdown(), "a\n\n| KEEP |\n| --- |\n\nb\n\n");
+    assert!(!redline.to_html().contains("GONE"));
+    assert_eq!(
+        fragments(&redline, RevisionView::Accepted),
+        [vec![72.0], vec![91.87], vec![111.74]]
+    );
+    assert_eq!(
+        fragments(&redline, RevisionView::Tracked),
+        [vec![72.0], vec![91.87], vec![131.61]]
+    );
+    // The model and its indices are unchanged.
+    assert_eq!(redline.table(0).unwrap().row_count(), 2);
+    assert_eq!(redline.word_count(), 3);
+
+    // A deleted table.
+    let mut redline = build(&["KEEP"]);
+    redline
+        .compare(&build(&[]), "Ada", "2026-09-30T00:00:00Z")
+        .unwrap();
+    assert_eq!(redline.text(), "a\nb\n");
+    assert_eq!(redline.to_markdown(), "a\n\nb\n\n");
+    assert_eq!(redline.to_html_fragment(), "<p>a</p>\n<p>b</p>\n");
+    assert_eq!(
+        fragments(&redline, RevisionView::Accepted),
+        [vec![72.0], vec![], vec![91.87]]
+    );
+    assert_eq!(redline.body_items().count(), 3);
+
+    // The shape Word writes, with the deleted text inside the row too, a
+    // header row, a vertical merge continuing into the deleted row, and a
+    // nested table with a deleted row.
+    let mut word = document_with_content_controls(&wrap_word_body(
+        r#"<w:p><w:r><w:t>a</w:t></w:r></w:p><w:tbl><w:tblPr><w:tblW w:w="4000" w:type="dxa"/></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:trPr><w:tblHeader/></w:trPr><w:tc><w:p><w:r><w:t>H1</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>H2</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:tcPr><w:vMerge w:val="restart"/></w:tcPr><w:p><w:r><w:t>MERGED</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>KEEP</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:trPr><w:del w:id="1" w:author="Ada"/></w:trPr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc><w:tc><w:p><w:del w:id="2" w:author="Ada"><w:r><w:delText>GONE</w:delText></w:r></w:del></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>LAST</w:t></w:r></w:p></w:tc><w:tc><w:tbl><w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>NEST</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:trPr><w:del w:id="3" w:author="Ada"/></w:trPr><w:tc><w:p><w:r><w:t>NESTGONE</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/></w:tc></w:tr></w:tbl><w:p><w:r><w:t>b</w:t></w:r></w:p>"#,
+    ));
+    let mut resolved = Document::from_bytes(&word.to_bytes().unwrap()).unwrap();
+    resolved.accept_all().unwrap();
+    assert_eq!(
+        word.text(),
+        "a\nH1\tH2\t\nMERGED\tKEEP\t\nLAST\tNEST\t\t\nb\n"
+    );
+    assert_eq!(word.text(), resolved.text());
+    assert_eq!(word.to_markdown(), resolved.to_markdown());
+    assert_eq!(word.to_html(), resolved.to_html());
+    assert_eq!(
+        fragments(&word, RevisionView::Accepted),
+        fragments(&resolved, RevisionView::Accepted)
+    );
+    assert_ne!(
+        fragments(&word, RevisionView::Tracked),
+        fragments(&resolved, RevisionView::Accepted)
+    );
+}
+
+/// The positioned text of every page with the source path of each run, from
+/// the reusable layout engine.
+fn rows_layout_text(document: &Document) -> Vec<(String, Option<Vec<usize>>)> {
+    let result = document.layout().unwrap();
+    let mut text = Vec::new();
+    for page in &result.layout.pages {
+        oxml_layout::walk(&page.elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element
+                && !run.text.trim().is_empty()
+            {
+                text.push((
+                    run.text.trim().to_owned(),
+                    run.source
+                        .and_then(|span| result.source_node(span.node))
+                        .map(|path| path.children.clone()),
+                ));
+            }
+        });
+    }
+    text
+}
+
+/// A row moved away (`w:moveFrom` in `w:trPr`) is left out of the accepted
+/// layout, and a warm relayout keeps the remaining rows on their own source
+/// paths, also when the removed row holds a nested table.
+#[test]
+fn accepted_view_rows_moved_away_survive_a_warm_layout() {
+    for nested in [
+        "",
+        r#"<w:tbl><w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>INNER</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+    ] {
+        let mut document = document_with_content_controls(&wrap_word_body(&format!(
+            r#"<w:p><w:r><w:t>a</w:t></w:r></w:p><w:tbl><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:trPr><w:moveFrom w:id="1" w:author="Ada"/></w:trPr><w:tc>{nested}<w:p><w:r><w:t>MOVED</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>K</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>b</w:t></w:r></w:p>"#
+        )));
+        assert_eq!(document.text(), "a\nK\t\nb\n");
+        let expected = |tail: bool| {
+            let mut expected = vec![
+                ("a".to_owned(), Some(vec![0])),
+                ("K".to_owned(), Some(vec![1, 1, 0, 0])),
+                ("b".to_owned(), Some(vec![2])),
+            ];
+            if tail {
+                expected.push(("tail".to_owned(), Some(vec![3])));
+            }
+            expected
+        };
+        assert_eq!(rows_layout_text(&document), expected(false), "{nested}");
+        document.add_paragraph("tail");
+        assert_eq!(rows_layout_text(&document), expected(true), "{nested}");
+    }
+
+    // Only a Word w:moveFrom with an id and an author removes the row, as
+    // accept_all requires, whatever prefix the Word namespace has.
+    let mut document = document_with_content_controls(&format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><x:document xmlns:x="{W_NS}" xmlns:w="urn:not-word"><x:body><x:tbl><x:tblGrid><x:gridCol x:w="4000"/></x:tblGrid><x:tr><x:trPr><x:moveFrom x:id="1" x:author="Ada"/></x:trPr><x:tc><x:p><x:r><x:t>WORD</x:t></x:r></x:p></x:tc></x:tr><x:tr><x:trPr><w:moveFrom x:id="2" x:author="Ada"/></x:trPr><x:tc><x:p><x:r><x:t>FOREIGN</x:t></x:r></x:p></x:tc></x:tr><x:tr><x:trPr><x:moveFrom/></x:trPr><x:tc><x:p><x:r><x:t>BARE</x:t></x:r></x:p></x:tc></x:tr></x:tbl><x:p/></x:body></x:document>"#
+    ));
+    let text = document.text();
+    let mut resolved = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    resolved.accept_all().unwrap();
+    assert_eq!(text, "FOREIGN\t\nBARE\t\n\n");
+    assert_eq!(text, resolved.text());
+}
+
+/// PAGEREF and REF to a bookmark inside a deleted row find no bookmark in
+/// the accepted layout, as after accept_all.
+#[test]
+fn accepted_view_fields_do_not_reach_a_bookmark_in_a_deleted_row() {
+    let body = r#"<w:p><w:r><w:t xml:space="preserve">See page </w:t></w:r><w:fldSimple w:instr=" PAGEREF bm \h "><w:r><w:t>stale</w:t></w:r></w:fldSimple><w:r><w:t xml:space="preserve"> and </w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> REF bm </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>stored text</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p><w:tbl><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>KEEP</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:trPr><w:del w:id="1" w:author="Ada"/></w:trPr><w:tc><w:p><w:bookmarkStart w:id="5" w:name="bm"/><w:r><w:t>GONE</w:t></w:r><w:bookmarkEnd w:id="5"/></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>b</w:t></w:r></w:p>"#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let mut resolved = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    resolved.accept_all().unwrap();
+    let texts = |document: &Document| {
+        rows_layout_text(document)
+            .into_iter()
+            .map(|(text, _)| text)
+            .collect::<Vec<_>>()
+    };
+    let accepted = texts(&document);
+    assert!(
+        !accepted.iter().any(|text| text == "GONE" || text == "99"),
+        "{accepted:?}"
+    );
+    assert_eq!(accepted, texts(&resolved));
+    assert_eq!(
+        document
+            .update_layout_backed_fields()
+            .unwrap()
+            .page_reference_fields,
+        resolved
+            .update_layout_backed_fields()
+            .unwrap()
+            .page_reference_fields
+    );
+}
+
+/// Without a declared grid, the column count comes from the first row the
+/// accepted view keeps, as after accept_all.
+#[test]
+fn accepted_view_infers_columns_from_the_first_kept_row() {
+    let mut document = document_with_content_controls(&wrap_word_body(
+        r#"<w:tbl><w:tr><w:trPr><w:del w:id="1" w:author="Ada"/></w:trPr><w:tc><w:p><w:r><w:t>D1</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>D2</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>D3</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>K1</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>K2</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/>"#,
+    ));
+    let mut resolved = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    resolved.accept_all().unwrap();
+    let x_of = |document: &Document, wanted: &str| {
+        let result = document.layout_deterministic().unwrap();
+        let mut x = None;
+        oxml_layout::walk(&result.layout.pages[0].elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element
+                && run.text.trim() == wanted
+            {
+                x = Some((run.origin.x * 100.0).round() / 100.0);
+            }
+        });
+        x
+    };
+    assert!(x_of(&document, "K2").is_some());
+    assert_eq!(x_of(&document, "K2"), x_of(&resolved, "K2"));
+}
