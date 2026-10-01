@@ -1872,7 +1872,7 @@ fn projected_paragraph_text(paragraph: &CT_P) -> String {
 
 fn referenced_drawing_ids(content: &[BodyContent]) -> Vec<String> {
     let mut ids = Vec::new();
-    visit_accepted_drawings(content, &mut |drawing| {
+    visit_accepted_drawings(content, false, &mut |drawing| {
         if let Some(id) = drawing
             .inline
             .as_ref()
@@ -1887,7 +1887,7 @@ fn referenced_drawing_ids(content: &[BodyContent]) -> Vec<String> {
 
 fn referenced_hyperlink_ids(content: &[BodyContent]) -> Vec<String> {
     let mut ids = Vec::new();
-    visit_body_paragraphs(content, &mut |paragraph| {
+    visit_body_paragraphs(content, false, &mut |paragraph| {
         ids.extend(
             paragraph
                 .hyperlinks
@@ -2866,7 +2866,7 @@ fn supported_image_occurrences(
     // The emitter writes the pictures of the projected block, that is of the
     // accepted view of its paragraphs, in the order this visitor reaches them.
     let mut occurrences = Vec::new();
-    visit_accepted_drawings(std::slice::from_ref(content), &mut |drawing| {
+    visit_accepted_drawings(std::slice::from_ref(content), false, &mut |drawing| {
         let source = drawing
             .inline
             .as_ref()
