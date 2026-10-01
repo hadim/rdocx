@@ -18622,14 +18622,21 @@ impl Document {
             let Some(properties) = style.ppr.as_ref() else {
                 continue;
             };
-            let Some(num_id) = properties.num_id else {
-                if properties.num_ilvl.is_some() {
-                    return Err(Error::Other(format!(
-                        "style '{}' has a numbering level without an instance",
-                        style.style_id
-                    )));
+            // A `w:ilvl` without a `w:numId` is schema-valid. The style takes
+            // the instance of its `basedOn` chain, as layout and Word resolve
+            // it, and is not numbered when the chain has none. It owns no link
+            // of its own, so only a level that names it back records one.
+            let (num_id, inherited) = match properties.num_id {
+                Some(num_id) => (num_id, false),
+                None if properties.num_ilvl.is_some() => {
+                    match style::resolve_paragraph_properties(Some(&style.style_id), &self.styles)
+                        .num_id
+                    {
+                        Some(num_id) => (num_id, true),
+                        None => continue,
+                    }
                 }
-                continue;
+                None => continue,
             };
             if num_id == 0 {
                 continue;
@@ -18667,6 +18674,9 @@ impl Document {
                 .and_then(|value| value.level.as_ref())
                 .unwrap_or(base);
             if effective.p_style.as_deref() != Some(style.style_id.as_str()) {
+                if inherited {
+                    continue;
+                }
                 return Err(Error::Other(format!(
                     "style '{}' and numbering instance {num_id} level {level} are not reciprocally linked",
                     style.style_id
@@ -18875,7 +18885,8 @@ impl Document {
     /// Both the style's paragraph properties and the numbering level's
     /// paragraph-style link are published together. Existing links must either
     /// match this exact tuple or the operation fails without changing the
-    /// document.
+    /// document. A style `w:numPr` holding a `w:ilvl` and no `w:numId` is not
+    /// a link, and the new link replaces its level.
     pub fn link_style_to_numbering(
         &mut self,
         style_id: &str,
@@ -18932,7 +18943,8 @@ impl Document {
             .as_ref()
             .map(|properties| (properties.num_id, properties.num_ilvl))
             .unwrap_or((None, None));
-        if style_numbering != (None, None) && style_numbering != (Some(num_id), Some(level)) {
+        // A `w:ilvl` without a `w:numId` owns no link, so the link replaces it.
+        if style_numbering.0.is_some() && style_numbering != (Some(num_id), Some(level)) {
             return Err(Error::Other(format!(
                 "style '{style_id}' already references a different numbering level"
             )));
@@ -19011,6 +19023,13 @@ impl Document {
     }
 
     /// Atomically remove one exact paragraph-style numbering association.
+    ///
+    /// Unlinking removes the style's `w:numId` and `w:ilvl` together, so a
+    /// style that held only a `w:ilvl` before it was linked does not get it
+    /// back. A style that holds only a `w:ilvl`, takes its instance from its
+    /// `basedOn` chain and is named back by the level loses only that name
+    /// and keeps its level. A style holding only a `w:ilvl` that no level
+    /// names is not linked, and unlinking it changes nothing.
     pub fn unlink_style_from_numbering(
         &mut self,
         style_id: &str,
@@ -19073,10 +19092,17 @@ impl Document {
             .unwrap_or(&numbering.abstract_nums[definition_index].levels[definition_level_index])
             .p_style
             .as_deref();
-        if style_numbering == (None, None) && target_style.is_none() {
+        if style_numbering.0.is_none() && target_style.is_none() {
             return Ok(());
         }
-        if style_numbering != (Some(num_id), Some(level)) || target_style != Some(style_id) {
+        // A level may name back a style that takes its instance from its
+        // `basedOn` chain, which is the link recorded for it.
+        let inherited = style_numbering == (None, Some(level))
+            && style::resolve_paragraph_properties(Some(style_id), &candidate.styles).num_id
+                == Some(num_id);
+        if (style_numbering != (Some(num_id), Some(level)) && !inherited)
+            || target_style != Some(style_id)
+        {
             return Err(Error::Other(format!(
                 "style '{style_id}' and numbering instance {num_id} level {level} are not linked"
             )));
@@ -19088,8 +19114,10 @@ impl Document {
             .ppr
             .as_mut()
             .expect("the exact style link was validated above");
-        properties.num_id = None;
-        properties.num_ilvl = None;
+        if !inherited {
+            properties.num_id = None;
+            properties.num_ilvl = None;
+        }
         let numbering = candidate
             .numbering
             .as_mut()

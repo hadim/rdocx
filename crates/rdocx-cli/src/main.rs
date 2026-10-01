@@ -204,12 +204,28 @@ enum CommentCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Add a comment over a zero-based half-open body run range
+    /// Add a comment over a zero-based half-open body run range, or on a
+    /// piece of text with --anchor
     Add {
         /// Path to the DOCX file
         file: PathBuf,
         #[command(flatten)]
         range: CommentRangeArgs,
+        /// Anchor the comment on this literal, case-sensitive text of the
+        /// main story instead of a run range
+        #[arg(
+            long,
+            conflicts_with_all = ["start_paragraph", "start_run", "end_paragraph", "end_run"]
+        )]
+        anchor: Option<String>,
+        /// Zero-based occurrence of the --anchor text in document order,
+        /// 0 when absent
+        #[arg(
+            long,
+            requires = "anchor",
+            conflicts_with_all = ["start_paragraph", "start_run", "end_paragraph", "end_run"]
+        )]
+        occurrence: Option<usize>,
         /// Comment author
         #[arg(long)]
         author: String,
@@ -285,19 +301,19 @@ enum CommentCommand {
 #[derive(Args)]
 struct CommentRangeArgs {
     /// Zero-based body paragraph index at the inclusive start
-    #[arg(long)]
-    start_paragraph: usize,
+    #[arg(long, required_unless_present = "anchor")]
+    start_paragraph: Option<usize>,
     /// Zero-based run boundary at the inclusive start, counting the runs that
     /// `text --json` lists
-    #[arg(long)]
-    start_run: usize,
+    #[arg(long, required_unless_present = "anchor")]
+    start_run: Option<usize>,
     /// Zero-based body paragraph index at the exclusive end
-    #[arg(long)]
-    end_paragraph: usize,
+    #[arg(long, required_unless_present = "anchor")]
+    end_paragraph: Option<usize>,
     /// Zero-based run boundary at the exclusive end, counting the runs that
     /// `text --json` lists
-    #[arg(long)]
-    end_run: usize,
+    #[arg(long, required_unless_present = "anchor")]
+    end_run: Option<usize>,
 }
 
 #[derive(Subcommand)]
@@ -450,6 +466,8 @@ fn main() {
             CommentCommand::Add {
                 file,
                 range,
+                anchor,
+                occurrence,
                 author,
                 initials,
                 text,
@@ -458,15 +476,34 @@ fn main() {
                 json,
             } => commands::comment_add(
                 &file,
-                rdocx::RunRange {
-                    start: rdocx::RunPosition {
-                        body_index: range.start_paragraph,
-                        run_index: range.start_run,
+                match (
+                    anchor.as_deref(),
+                    range.start_paragraph,
+                    range.start_run,
+                    range.end_paragraph,
+                    range.end_run,
+                ) {
+                    (Some(anchor), ..) => commands::CommentAnchor::Text {
+                        text: anchor,
+                        occurrence: occurrence.unwrap_or(0),
                     },
-                    end: rdocx::RunPosition {
-                        body_index: range.end_paragraph,
-                        run_index: range.end_run,
-                    },
+                    (
+                        None,
+                        Some(start_paragraph),
+                        Some(start_run),
+                        Some(end_paragraph),
+                        Some(end_run),
+                    ) => commands::CommentAnchor::Range(rdocx::RunRange {
+                        start: rdocx::RunPosition {
+                            body_index: start_paragraph,
+                            run_index: start_run,
+                        },
+                        end: rdocx::RunPosition {
+                            body_index: end_paragraph,
+                            run_index: end_run,
+                        },
+                    }),
+                    (None, ..) => unreachable!("clap requires the range without --anchor"),
                 },
                 &author,
                 initials.as_deref(),

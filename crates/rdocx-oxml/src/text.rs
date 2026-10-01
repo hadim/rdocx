@@ -5002,6 +5002,235 @@ impl CT_P {
         }
     }
 
+    /// Remove one accepted-view run.
+    ///
+    /// The comment, bookmark and permission markers and the other preserved
+    /// children around the run stay where they are. A run inside a
+    /// hyperlink, an inline content control or a tracked insertion is removed
+    /// inside it. A hyperlink or a tracked insertion left with nothing in it
+    /// goes too, while a content control stays with its properties, as Word
+    /// keeps an emptied control to show its placeholder. A run holding a
+    /// comment, footnote or endnote reference, part of a complex field whose
+    /// other parts are in other runs, or part of a tracked move destination
+    /// is refused, since the note, the field or the move would lose its
+    /// balance. On
+    /// error the paragraph is unchanged.
+    #[doc(hidden)]
+    pub fn remove_accepted_run(&mut self, path: &AcceptedRunPath) -> Result<()> {
+        let stale = || OxmlError::InvalidValue("accepted run path is stale".to_owned());
+        let run = self.accepted_run(path).ok_or_else(stale)?;
+        if let Some(id) = run.content.iter().find_map(|content| match content {
+            RunContent::CommentReference { id, .. } => Some(*id),
+            _ => None,
+        }) {
+            return Err(OxmlError::InvalidValue(format!(
+                "it holds the reference of comment {id}, which removing the comment removes"
+            )));
+        }
+        if let Some((kind, id)) = run.content.iter().find_map(|content| match content {
+            RunContent::FootnoteRef { id } => Some(("footnote", *id)),
+            RunContent::EndnoteRef { id } => Some(("endnote", *id)),
+            _ => None,
+        }) {
+            return Err(OxmlError::InvalidValue(format!(
+                "it holds the reference of {kind} {id}, which would be left without one"
+            )));
+        }
+        if run
+            .extra_xml
+            .iter()
+            .any(|raw| raw_is_complex_field_part(raw))
+        {
+            return Err(OxmlError::InvalidValue(
+                "it holds part of a complex field whose other parts are in other runs".to_owned(),
+            ));
+        }
+        let mut paragraph = self.clone();
+        if !paragraph.remove_accepted_run_segments(path.segments())? {
+            return Err(stale());
+        }
+        // Accepted run indexes after the run moved down by one.
+        let _ = paragraph.refresh_bookmark_projection();
+        *self = paragraph;
+        Ok(())
+    }
+
+    /// Remove the accepted-view run at `path`, and a tracked insertion left
+    /// with nothing in it. Returns false for a stale path.
+    pub(crate) fn remove_accepted_run_segments(
+        &mut self,
+        path: &[AcceptedRunPathSegment],
+    ) -> Result<bool> {
+        let Some((first, rest)) = path.split_first() else {
+            return Ok(false);
+        };
+        match *first {
+            AcceptedRunPathSegment::Run(index) if rest.is_empty() => {
+                if index >= self.runs.len() {
+                    return Ok(false);
+                }
+                let mut removed = vec![false; self.runs.len()];
+                removed[index] = true;
+                self.remove_runs(&removed);
+                Ok(true)
+            }
+            AcceptedRunPathSegment::ContentControl(index) => {
+                let Some((_, _, _, control)) = self.content_controls.get_mut(index) else {
+                    return Ok(false);
+                };
+                control.remove_accepted_run_segments(rest)
+            }
+            AcceptedRunPathSegment::Revision(index) => {
+                let Some((_, _, revision)) = self.revisions.get_mut(index) else {
+                    return Ok(false);
+                };
+                match revision.remove_accepted_run_segments(rest)? {
+                    None => Ok(false),
+                    Some(emptied) => {
+                        if emptied {
+                            self.remove_revision(index);
+                        }
+                        Ok(true)
+                    }
+                }
+            }
+            AcceptedRunPathSegment::Run(_) => Ok(false),
+        }
+    }
+
+    /// Whether the paragraph has no child at all, attributes aside.
+    pub(crate) fn has_no_children(&self) -> bool {
+        self.runs.is_empty()
+            && self.hyperlinks.is_empty()
+            && self.comment_ranges.is_empty()
+            && self.bookmark_markers.is_empty()
+            && self.content_controls.is_empty()
+            && self.revisions.is_empty()
+            && self.equations.is_empty()
+            && self.rubies.is_empty()
+            && self
+                .extra_xml
+                .iter()
+                .all(|(position, raw)| Self::raw_is_root_attributes(*position, raw))
+    }
+
+    /// Remove the revision wrapper at `index` with the placeholder that holds
+    /// its place among the paragraph children, or its place inside a
+    /// hyperlink, and the hyperlink when nothing else is left in it.
+    fn remove_revision(&mut self, index: usize) {
+        let (boundary, slot, _) = self.revisions.remove(index);
+        let Some(hyperlink_index) = hyperlink_revision_index(slot) else {
+            self.remove_boundary_raw(boundary, slot);
+            return;
+        };
+        // The children of a hyperlink count the revisions written before them.
+        let position = self.revisions[..index]
+            .iter()
+            .filter(|(at, other, _)| *at == boundary && *other == slot)
+            .count();
+        let Some(hyperlink) = self.hyperlinks.get_mut(hyperlink_index) else {
+            return;
+        };
+        let relative = boundary.saturating_sub(hyperlink.run_start);
+        for (at, revisions_before, _) in &mut hyperlink.extra_xml {
+            if *at == relative && *revisions_before > position {
+                *revisions_before -= 1;
+            }
+        }
+        let emptied = hyperlink.run_start == hyperlink.run_end
+            && hyperlink.extra_xml.is_empty()
+            && !self.revisions.iter().any(|(_, other, _)| *other == slot);
+        if !emptied {
+            return;
+        }
+        let hyperlink = self.hyperlinks.remove(hyperlink_index);
+        for (_, other, _) in &mut self.revisions {
+            if let Some(later) = hyperlink_revision_index(*other)
+                && later > hyperlink_index
+            {
+                *other = hyperlink_revision_slot(later - 1);
+            }
+        }
+        if let Some(raw_before) = hyperlink.preserved_raw_before {
+            self.remove_boundary_raw(hyperlink.run_start, raw_before);
+        }
+    }
+
+    /// Remove the preserved child at `slot` among those at run `boundary`,
+    /// and move every projection that counts the children before it. The
+    /// children on both sides of it then share one slot, where those that
+    /// came before it stay first.
+    fn remove_boundary_raw(&mut self, boundary: usize, slot: usize) {
+        let Some(position) = self
+            .extra_xml
+            .iter()
+            .enumerate()
+            .filter(|(_, (at, _))| *at == boundary)
+            .nth(slot)
+            .map(|(position, _)| position)
+        else {
+            return;
+        };
+        self.extra_xml.remove(position);
+        self.comment_ranges
+            .sort_by_key(|marker| (marker.run_index(), marker.raw_before()));
+        let merged_markers = self
+            .comment_ranges
+            .iter()
+            .filter(|marker| marker.run_index() == boundary && marker.raw_before() == slot)
+            .count();
+        let shift = |before: &mut usize| {
+            if *before > slot {
+                *before -= 1;
+            }
+        };
+        for marker in &mut self.comment_ranges {
+            match marker {
+                CommentRangeMarker::Start {
+                    run_index,
+                    raw_before,
+                    ..
+                }
+                | CommentRangeMarker::End {
+                    run_index,
+                    raw_before,
+                    ..
+                } if *run_index == boundary => shift(raw_before),
+                _ => {}
+            }
+        }
+        for (at, raw_before, markers_before, _) in &mut self.content_controls {
+            if *at == boundary {
+                if *raw_before == slot + 1 {
+                    *markers_before += merged_markers;
+                }
+                shift(raw_before);
+            }
+        }
+        for marker in &mut self.bookmark_markers {
+            if marker.run_index == boundary {
+                shift(&mut marker.raw_before);
+            }
+        }
+        for (at, other, _) in &mut self.revisions {
+            if *at == boundary && hyperlink_revision_index(*other).is_none() {
+                shift(other);
+            }
+        }
+        for (at, other, _) in &mut self.equations {
+            if *at == boundary {
+                shift(other);
+            }
+        }
+        for hyperlink in &mut self.hyperlinks {
+            if hyperlink.run_start == boundary
+                && let Some(raw_before) = hyperlink.preserved_raw_before.as_mut()
+            {
+                shift(raw_before);
+            }
+        }
+    }
+
     /// Add a run with the given text.
     pub fn add_run(&mut self, text: &str) -> &mut CT_R {
         self.runs.push(CT_R::new(text));
@@ -5243,7 +5472,8 @@ impl CT_P {
     /// projection onto the boundary that remains. Raw children, comment
     /// markers, bookmarks and controls of the boundaries that collapse into
     /// one keep their order, and a hyperlink or a ruby annotation left
-    /// without runs is dropped.
+    /// without runs is dropped. A hyperlink that still holds a marker or a
+    /// tracked change stays where it was, after the children at its start.
     pub(crate) fn remove_runs(&mut self, removed: &[bool]) {
         let removed_run_addresses = self
             .runs
@@ -5262,6 +5492,35 @@ impl CT_P {
             .collect::<Vec<_>>();
 
         let old_run_count = self.runs.len();
+        // A hyperlink keeping no run is written in place of a raw child at its
+        // boundary. Its placeholder goes after the children at its start, so
+        // the children at its end stay after it.
+        let collapsed = (0..self.hyperlinks.len())
+            .filter(|&index| {
+                let hyperlink = &self.hyperlinks[index];
+                hyperlink.preserved_raw_before.is_none()
+                    && hyperlink.run_start < hyperlink.run_end
+                    && hyperlink.run_end <= old_run_count
+                    && removed[hyperlink.run_start..hyperlink.run_end]
+                        .iter()
+                        .all(|remove| *remove)
+                    && (!hyperlink.extra_xml.is_empty()
+                        || self
+                            .revisions
+                            .iter()
+                            .any(|(_, slot, _)| hyperlink_revision_index(*slot) == Some(index)))
+            })
+            .collect::<Vec<_>>();
+        for index in &collapsed {
+            let start = self.hyperlinks[*index].run_start;
+            let slot = self
+                .extra_xml
+                .iter()
+                .filter(|(position, _)| *position == start)
+                .count();
+            self.extra_xml.push((start, Vec::new()));
+            self.hyperlinks[*index].preserved_raw_before = Some(slot);
+        }
         let boundary_map = (0..=old_run_count)
             .map(|boundary| {
                 boundary
@@ -5450,6 +5709,42 @@ impl CT_P {
             .zip(removed)
             .filter_map(|(run, remove)| (!*remove).then_some(run))
             .collect();
+        for old_index in collapsed {
+            let Some(index) = hyperlink_map[old_index] else {
+                continue;
+            };
+            let hyperlink = &self.hyperlinks[index];
+            let (boundary, slot) = (
+                hyperlink.run_start,
+                hyperlink.preserved_raw_before.unwrap_or_default(),
+            );
+            let mut raw = Vec::new();
+            let mut writer = Writer::new(&mut raw);
+            let written = write_hyperlink_start(&mut writer, hyperlink)
+                .and_then(|()| {
+                    write_hyperlink_boundary(
+                        &mut writer,
+                        &self.revisions,
+                        index,
+                        hyperlink,
+                        boundary,
+                    )
+                })
+                .and_then(|()| {
+                    writer
+                        .write_event(Event::End(BytesEnd::new(hyperlink_qname(hyperlink))))
+                        .map_err(Into::into)
+                });
+            if written.is_ok()
+                && let Some((_, placeholder)) = self
+                    .extra_xml
+                    .iter_mut()
+                    .filter(|(position, _)| *position == boundary)
+                    .nth(slot)
+            {
+                *placeholder = raw;
+            }
+        }
         let _ = self.refresh_bookmark_projection();
     }
 
@@ -6218,6 +6513,20 @@ impl CT_P {
                         let parsed = parse_hyperlink_children(&raw, &prefixes)?;
                         let run_start = runs.len();
                         if parsed.runs.is_empty() && parsed.revisions.is_empty() {
+                            // A hyperlink with no run stays raw, and its
+                            // bookmarks still count where it sits.
+                            append_nested_bookmark_projection(
+                                &mut bookmark_markers,
+                                &mut projected_run_count,
+                                &mut tracked_run_count,
+                                AcceptedBookmarkProjection {
+                                    markers: parsed.bookmark_markers,
+                                    projected_run_count: 0,
+                                    tracked_run_count: 0,
+                                },
+                                run_start,
+                                raw_xml_count_at(&extra_xml, run_start),
+                            );
                             extra_xml.push((run_start, raw));
                         } else {
                             append_nested_bookmark_projection(
@@ -9078,6 +9387,26 @@ pub(crate) fn remap_authored_bookmark_marker(
     replaced.extend_from_slice(updated.to_string().as_bytes());
     replaced.extend_from_slice(&raw[value_end..]);
     *raw = replaced;
+}
+
+/// Whether a preserved run child is a field character or field code, which
+/// a run keeps as raw XML when the rest of its complex field lies in other
+/// runs.
+fn raw_is_complex_field_part(raw: &[u8]) -> bool {
+    let mut reader = Reader::from_reader(raw);
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element) | Event::Empty(element)) => {
+                return [b"fldChar".as_slice(), b"instrText", b"delInstrText"]
+                    .iter()
+                    .any(|local| matches_local_name(element.name().as_ref(), local));
+            }
+            Ok(Event::Eof) | Err(_) => return false,
+            _ => {}
+        }
+        buffer.clear();
+    }
 }
 
 /// Return the id of a preserved comment range marker, or `None` for any

@@ -786,8 +786,11 @@ impl Document {
             );
         });
         anchored.ok_or_else(|| {
+            // Every paragraph was searched, so `remaining` counts past them all.
+            let found = occurrence - remaining;
+            let times = if found == 1 { "time" } else { "times" };
             Error::Other(format!(
-                "comment anchor text {anchor:?} has no occurrence {occurrence}"
+                "comment anchor text {anchor:?} has no occurrence {occurrence}: it occurs {found} {times} in the main story"
             ))
         })??;
         self.push_comment_definition(id, author, initials, text, date)?;

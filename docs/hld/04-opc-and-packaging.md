@@ -432,6 +432,15 @@ writes the style's `w:numPr` and the effective definition or replacement
 level's `w:pStyle` on a staged document, validates both style and numbering
 graphs, serializes the candidate, and then publishes it. Unlinking requires the
 same exact style, instance, and level tuple and removes both edges together.
+A style `w:numPr` that holds a `w:ilvl` and no `w:numId`, as python-docx's
+default `Subtitle` does, owns no link. It takes the instance of its `basedOn`
+chain, as layout and Word do, and has no numbering when the chain has none.
+Linking such a style replaces its level, and unlinking it later removes its
+`w:numPr` rather than restoring the level. When a numbering level names such a
+style back, unlinking removes only that name. Unlinking one that no level names
+changes nothing. A paragraph `w:ilvl` without a
+`w:numId` takes the instance of its style chain in the same way, which is how a
+repeated template paragraph is checked.
 
 Numbering parsers retain namespace declarations and compatibility attributes
 from modelled containers. Unknown level and override children use their schema

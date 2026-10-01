@@ -806,6 +806,51 @@ impl CT_Sdt {
         }
     }
 
+    /// Remove the accepted-view run at `path`, and a tracked insertion left
+    /// with nothing in it. An emptied nested control stays. Returns false for
+    /// a stale path.
+    pub(crate) fn remove_accepted_run_segments(
+        &mut self,
+        path: &[AcceptedRunPathSegment],
+    ) -> Result<bool> {
+        let Some((first, rest)) = path.split_first() else {
+            return Ok(false);
+        };
+        match *first {
+            AcceptedRunPathSegment::Run(index) if rest.is_empty() => {
+                if !matches!(self.content.get(index), Some(SdtContent::Run(_))) {
+                    return Ok(false);
+                }
+                self.remove_content(index);
+                Ok(true)
+            }
+            AcceptedRunPathSegment::ContentControl(index) => {
+                let Some(SdtContent::ContentControl(control)) = self.content.get_mut(index) else {
+                    return Ok(false);
+                };
+                control.remove_accepted_run_segments(rest)
+            }
+            AcceptedRunPathSegment::Revision(index) => {
+                let Some((_, revision)) = self.revisions.get_mut(index) else {
+                    return Ok(false);
+                };
+                match revision.remove_accepted_run_segments(rest)? {
+                    None => Ok(false),
+                    Some(emptied) => {
+                        if emptied {
+                            // The revision is written in place of the raw
+                            // child at its boundary, which goes with it.
+                            let (boundary, _) = self.revisions.remove(index);
+                            self.remove_content(boundary);
+                        }
+                        Ok(true)
+                    }
+                }
+            }
+            AcceptedRunPathSegment::Run(_) => Ok(false),
+        }
+    }
+
     /// Insert direct `w:sdtContent` children before `index`, keeping the
     /// revision and retained run source positions after it aligned.
     pub(crate) fn insert_content(&mut self, index: usize, children: Vec<SdtContent>) -> bool {

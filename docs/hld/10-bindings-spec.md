@@ -1493,12 +1493,26 @@ text length return the existing boundary without mutation. Interior success
 returns the new continuation index. Python exposes the same method and also
 accepts a `Paragraph` handle in place of the index, which reaches paragraphs
 inside block content controls. A table cell paragraph handle is refused. The
-binding revision advances only when a continuation is created. `CommentRef` exposes
+binding revision advances only when a continuation is created.
+`Paragraph::remove_run` removes one run at the index `Paragraph::run` counts,
+and Python exposes it as `Run.remove()`. The comment, bookmark, and permission
+markers around the run stay in place. A run inside a hyperlink, an inline
+content control, or a tracked insertion is removed inside it. A hyperlink or
+a tracked insertion left with nothing in it is removed too. An emptied content
+control stays with its properties, as Word keeps it to show its placeholder,
+and a removed hyperlink leaves its relationship in place. A run holding a
+comment, footnote, or endnote reference, part of a complex field whose other
+parts are in other runs, or part of a tracked move destination is refused
+without change. A field whose parts are all in the
+paragraph is one run and is removed whole. A removal advances the binding
+revision. `CommentRef` exposes
 comment metadata, text, parent identity, and resolved state without permitting
 part-local mutation. `rdocx-cli comment` lists, adds, replies to, resolves, and
 removes comments. Add ranges use explicit zero-based, half-open body paragraph
 and run coordinates, and the run coordinates count the runs that `text --json`
-lists. Every mutation publishes a complete validated document
+lists. `comment add --anchor TEXT`, with an optional zero-based
+`--occurrence`, replaces those coordinates with `add_comment_on_text` and keeps
+its refusals. Every mutation publishes a complete validated document
 to an explicit output. Python and WASM keep their package-preserving owners.
 
 Native Word callers remove one exact non-empty literal with
