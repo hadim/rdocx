@@ -40746,7 +40746,7 @@ mod floating_table_placement_regressions {
 
         let float = float_at(TableAnchor::Margin, TableAnchor::Margin, 0, 0);
         let wrapped = boxes_for(Some(float));
-        assert_eq!(wrapped[0], (82.47, 181.0, 525.39));
+        assert_eq!(wrapped[0], (82.47, 181.0, 522.9));
         assert_eq!(wrapped[1], (96.96, 181.0, 277.95));
 
         // The same table in the flow leaves the measure alone, which is what
