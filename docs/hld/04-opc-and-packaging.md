@@ -460,7 +460,7 @@ in their original namespace and schema positions. Typed `w:ilvl` and `w:numId`
 updates remain before retained `w:numberingChange` and insertion properties.
 Self-closing `w:numPr` carriers copy any inherited namespace binding required
 by a retained root attribute onto the serialized carrier.
-An unchanged plain numeric leaf may use the typed serializer's indentation,
+An unchanged plain numeric leaf may use the typed serializer's layout,
 while malformed or extended source leaves remain byte-exact.
 
 Every standard `w:numFmt` token has a typed representation. Producer-defined
@@ -479,7 +479,10 @@ safely, leaving the opened package bytes authoritative.
 The main document, header, and footer roots also retain their other
 attributes, such as `mc:Ignorable`, in source order. A typed rewrite writes
 them after every namespace declaration it keeps, so a compatibility attribute
-survives the rewrite and every prefix it lists stays declared.
+survives the rewrite and every prefix it lists stays declared. The typed part
+serializers write no indentation, as Word and python-docx do, so a rewritten
+part keeps a Word part's compact layout and whitespace-only text between
+elements is never added.
 
 Modeled paragraph, run, table-row, and section-property owners retain every
 ordered root attribute, including producer identity, revision-session, foreign,
@@ -501,9 +504,11 @@ only when a retained attribute uses its prefix, because the alias machinery
 already materializes a binding onto every element that needs one, and recording
 a declaration a child carries for itself would emit it twice. A root carrying
 nothing but declarations retains no record at all. On the way back out, the
-canonical `w14` binding is not copied onto the written element, since the part
-root that owns the element declares it in what Word and python-docx write, and
-the authored identity write makes the same assumption. Together these keep a
+canonical `w` and `w14` bindings are not copied onto the written element, since
+the part root that owns the element declares them in what Word and python-docx
+write, and the element's own `w:` name and the authored identity write make the
+same assumption. Every other recorded declaration is still copied, an alias
+such as `ns0` for the WordprocessingML URI included. Together these keep a
 reopened save byte identical to the save it was read from. A part root that
 does not declare `w14`, such as one rdocx wrote or one under an element that
 declared the prefix itself, gains the canonical declaration when the written
