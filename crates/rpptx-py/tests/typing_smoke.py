@@ -225,6 +225,10 @@ def exercise_rpptx_types(path: Path) -> None:
     shape.rotation = 15.0
     rotation: float = shape.rotation
     shape_type: MSO_SHAPE_TYPE | None = shape.shape_type
+    shape.auto_shape_type = MSO_SHAPE.ROUNDED_RECTANGLE
+    shape.auto_shape_type = "chevron"
+    auto_shape_type: MSO_SHAPE | None = shape.auto_shape_type
+    member: MSO_SHAPE = MSO_SHAPE.from_xml("roundRect")
     adjustments: AdjustmentCollection = shape.adjustments
     adjustments[0] = 0.25
     first_adjustment: float = adjustments[0]
@@ -331,6 +335,8 @@ def exercise_rpptx_types(path: Path) -> None:
         follows_master,
         rotation,
         shape_type,
+        auto_shape_type,
+        member,
         first_adjustment,
         all_adjustments,
         fill_type,

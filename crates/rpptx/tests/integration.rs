@@ -24855,6 +24855,128 @@ fn adjustments_start_from_preset_defaults_and_follow_explicit_values() {
 }
 
 #[test]
+fn auto_shape_type_reads_and_replaces_the_preset_keeping_the_shape() {
+    use rpptx::ShapeType;
+
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide
+            .add_shape("roundRect", Emu(1), Emu(2), Emu(30), Emu(40))
+            .unwrap();
+        shape.set_text("Keep me").unwrap();
+        shape
+            .set_fill(
+                Fill::from_xml(
+                    br#"<a:solidFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:srgbClr val="112233"/></a:solidFill>"#,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        shape.set_adjust_value("adj", 30_000.0).unwrap();
+        slide.add_textbox(Emu(1), Emu(1), Emu(10), Emu(10)).unwrap();
+        slide
+            .add_connector(ConnectorType::Straight, Emu(1), Emu(1), Emu(10), Emu(10))
+            .unwrap();
+        slide.add_group_shape().unwrap();
+    }
+    presentation
+        .add_picture(
+            0,
+            &valid_one_pixel_png(),
+            "pixel.png",
+            Emu(1),
+            Emu(1),
+            None,
+            None,
+        )
+        .unwrap();
+    let freeform = r#"<p:sp><p:nvSpPr><p:cNvPr id="90" name="Freeform"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="10" cy="10"/></a:xfrm><a:custGeom><a:avLst/><a:gdLst/><a:ahLst/><a:cxnLst/><a:rect l="0" t="0" r="r" b="b"/><a:pathLst><a:path w="10" h="10"><a:moveTo><a:pt x="0" y="0"/></a:moveTo><a:lnTo><a:pt x="10" y="10"/></a:lnTo></a:path></a:pathLst></a:custGeom><a:solidFill><a:srgbClr val="445566"/></a:solidFill></p:spPr></p:sp>"#;
+    let mut presentation = with_first_slide_children(&presentation, freeform, &[]);
+    let slide = presentation.slide(0).unwrap();
+    let preset = |index| slide.shape(index).unwrap().auto_shape_type();
+    assert_eq!(
+        (0..6).map(preset).collect::<Vec<_>>(),
+        [Some("roundRect"), None, None, None, None, None]
+    );
+    let before = slide.shape(0).unwrap().non_visual_id();
+
+    let mut slide = presentation.slide_mut(0).unwrap();
+    slide
+        .shape_mut(0)
+        .unwrap()
+        .set_auto_shape_type("ellipse")
+        .unwrap();
+    slide
+        .shape_mut(4)
+        .unwrap()
+        .set_auto_shape_type("star5")
+        .unwrap();
+    slide
+        .shape_mut(5)
+        .unwrap()
+        .set_auto_shape_type("rect")
+        .unwrap();
+    for (index, kind) in [(2, ShapeKind::Connector), (3, ShapeKind::Group)] {
+        assert!(matches!(
+            slide.shape_mut(index).unwrap().set_auto_shape_type("rect"),
+            Err(Error::UnsupportedShapeMutation {
+                operation: "set auto shape type",
+                shape_kind,
+            }) if shape_kind == kind
+        ));
+    }
+    for (index, preset) in [(1, "rect"), (0, "upArrow"), (0, "")] {
+        assert!(matches!(
+            slide.shape_mut(index).unwrap().set_auto_shape_type(preset),
+            Err(Error::InvalidShapeMutation {
+                operation: "set auto shape type",
+                ..
+            })
+        ));
+    }
+
+    let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
+    let slide = reopened.slide(0).unwrap();
+    let shape = slide.shape(0).unwrap();
+    assert_eq!(
+        (
+            shape.auto_shape_type(),
+            shape.shape_type(),
+            shape.non_visual_id(),
+            shape.text().as_deref(),
+            shape.position(),
+            shape.size(),
+        ),
+        (
+            Some("ellipse"),
+            Some(ShapeType::AutoShape),
+            before,
+            Some("Keep me"),
+            Some((Emu(1), Emu(2))),
+            Some((Emu(30), Emu(40))),
+        )
+    );
+    assert!(shape.adjustments().unwrap().is_empty());
+    let xml = String::from_utf8(shape.xml().unwrap()).unwrap();
+    assert!(xml.contains(r#"<a:prstGeom prst="ellipse"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="112233"/>"#));
+    assert_eq!(slide.shape(4).unwrap().auto_shape_type(), Some("star5"));
+    assert_eq!(
+        slide.shape(4).unwrap().shape_type(),
+        Some(ShapeType::Picture)
+    );
+    let freeform = slide.shape(5).unwrap();
+    assert_eq!(
+        (freeform.auto_shape_type(), freeform.shape_type()),
+        (Some("rect"), Some(ShapeType::AutoShape))
+    );
+    let xml = String::from_utf8(freeform.xml().unwrap()).unwrap();
+    assert!(!xml.contains("custGeom"));
+    assert!(xml.contains(r#"</a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="445566"/>"#));
+}
+
+#[test]
 fn slide_layout_index_follows_the_slide_layout_relationship() {
     let mut presentation = Presentation::new().unwrap();
     presentation.add_slide(3).unwrap();
