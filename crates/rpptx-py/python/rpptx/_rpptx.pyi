@@ -3,7 +3,13 @@ from collections.abc import Iterator as _Iterator
 from typing import IO as _IO, NoReturn as _Never, final as _final, overload as _overload
 
 from .dml.color import RGBColor as _RGBColor
-from .enum.dml import MSO_FILL_TYPE as _MSO_FILL_TYPE
+from .enum.dml import (
+    MSO_ARROWHEAD_LENGTH as _MSO_ARROWHEAD_LENGTH,
+    MSO_ARROWHEAD_STYLE as _MSO_ARROWHEAD_STYLE,
+    MSO_ARROWHEAD_WIDTH as _MSO_ARROWHEAD_WIDTH,
+    MSO_FILL_TYPE as _MSO_FILL_TYPE,
+    MSO_LINE_DASH_STYLE as _MSO_LINE_DASH_STYLE,
+)
 from .enum.shapes import (
     MSO_CONNECTOR_TYPE as _MSO_CONNECTOR_TYPE,
     MSO_SHAPE as _MSO_SHAPE,
@@ -24,7 +30,8 @@ __all__ = [
     "BoundingBox", "TextLineLayout", "TextFrameLayout", "ValidationIssue",
     "SlideLayout", "SlideLayoutCollection", "Slide", "Background",
     "SlideCollection", "Shape", "ShapeCollection", "PlaceholderCollection",
-    "Image", "AdjustmentCollection", "FillFormat", "LineFormat", "ColorFormat",
+    "Image", "AdjustmentCollection", "FillFormat", "LineFormat", "LineEndFormat",
+    "ColorFormat",
     "TextFrame", "Paragraph", "ParagraphCollection", "Run", "RunCollection",
     "Hyperlink", "ShapeClickAction", "ShapeHyperlink", "Font", "Table", "Column", "ColumnCollection", "Row",
     "RowCollection", "Cell",
@@ -440,6 +447,31 @@ class LineFormat:
     def width(self) -> _Length: ...
     @width.setter
     def width(self, value: int | None) -> None: ...
+    @property
+    def dash_style(self) -> _MSO_LINE_DASH_STYLE | None: ...
+    @dash_style.setter
+    def dash_style(self, value: _MSO_LINE_DASH_STYLE | None) -> None: ...
+    @property
+    def head_end(self) -> LineEndFormat: ...
+    @property
+    def tail_end(self) -> LineEndFormat: ...
+
+
+@_final
+class LineEndFormat:
+    def __new__(cls, *, _private: _Never) -> LineEndFormat: ...
+    @property
+    def type(self) -> _MSO_ARROWHEAD_STYLE | None: ...
+    @type.setter
+    def type(self, value: _MSO_ARROWHEAD_STYLE | None) -> None: ...
+    @property
+    def width(self) -> _MSO_ARROWHEAD_WIDTH | None: ...
+    @width.setter
+    def width(self, value: _MSO_ARROWHEAD_WIDTH | None) -> None: ...
+    @property
+    def length(self) -> _MSO_ARROWHEAD_LENGTH | None: ...
+    @length.setter
+    def length(self, value: _MSO_ARROWHEAD_LENGTH | None) -> None: ...
 
 
 @_final

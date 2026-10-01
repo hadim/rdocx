@@ -346,8 +346,10 @@ shapes, pictures, and connectors because those kinds own typed shape
 properties. `ShapeMut::set_crop(left, top, right, bottom)` writes the
 `a:srcRect` of a picture between its blip and fill mode. It keeps the stored
 attribute of an unchanged edge, drops a changed edge of zero, and adds no
-element when a picture without one gets four zero insets. Adjustment mutation
-supports finite values on preset geometry.
+element when a picture without one gets four zero insets. `rpptx` re-exports
+the line dash and line end types, so a caller edits the dash or a head or tail
+end on a copy of `ShapeRef::line` and writes it back with `set_line`.
+Adjustment mutation supports finite values on preset geometry.
 Unsupported shape kinds and unsupported geometry return concrete facade
 errors. Indexed access remains total and returns `Option`.
 

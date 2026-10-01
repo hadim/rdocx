@@ -460,7 +460,20 @@ sRGB colour as `RGBColor`, or `None` for any other colour, and writing it keeps
 the transforms of an existing sRGB colour. Reading `LineFormat.color` changes
 nothing, and assigning its `rgb` makes the line fill solid. `LineFormat.width`
 reads zero without a width, writes `None` as zero, and rejects values above
-the `ST_LineWidth` maximum. `adjustments` is a live `AdjustmentCollection` of
+the `ST_LineWidth` maximum. `LineFormat.dash_style` reads the `a:prstDash`
+value as an `MSO_LINE_DASH_STYLE` member, or `None` without one or with a
+custom dash, and assigning `None` removes either dash. Its members keep the
+python-pptx values and XML values, and `DOT`, `SYSTEM_DASH_DOT` and
+`SYSTEM_DASH_DOT_DOT` read the three presets python-pptx cannot, all three of
+which PowerPoint for Mac's scripting interface writes. `head_end` and
+`tail_end` are live `LineEndFormat` views whose `type`, `width` and `length`
+read and write `a:headEnd` or `a:tailEnd` as `MSO_ARROWHEAD_STYLE`,
+`MSO_ARROWHEAD_WIDTH` and `MSO_ARROWHEAD_LENGTH` members, numbered as the
+Office enumerations of the same names. `NONE` writes `type="none"`, as
+PowerPoint for Mac's scripting interface does when an arrow is removed. `None`
+removes one attribute, and an end left without attributes is removed. An
+`a:ln` left empty is kept, as python-pptx keeps it. A removal never creates an
+`a:ln`. `adjustments` is a live `AdjustmentCollection` of
 the effective preset adjustments, normalized so that 1.0 is 100000, and
 assignment truncates as python-pptx does. `xml` returns the element serialized
 on its own as bytes. A picture's `image` is a frozen `Image` snapshot with

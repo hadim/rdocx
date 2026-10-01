@@ -2520,6 +2520,120 @@ def test_table_rows_and_columns_are_added_and_removed_like_python_pptx_add_tr(tm
     assert oracle.cell(1, 2).is_spanned and not oracle.cell(2, 0).is_spanned
 
 
+def test_line_dash_style_and_ends_write_what_python_pptx_reads(tmp_path):
+    import rpptx
+    from rpptx.dml.color import RGBColor
+    from rpptx.enum.dml import (
+        MSO_ARROWHEAD_LENGTH,
+        MSO_ARROWHEAD_STYLE,
+        MSO_ARROWHEAD_WIDTH,
+        MSO_LINE,
+        MSO_LINE_DASH_STYLE,
+    )
+    from rpptx.enum.shapes import MSO_CONNECTOR
+
+    pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
+    assert MSO_LINE is MSO_LINE_DASH_STYLE
+    for member in pptx.enum.dml.MSO_LINE:
+        assert MSO_LINE[member.name] == member.value
+
+    prs = rpptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    plain = slide.shapes.add_shape("rect", 0, 0, 100, 100)
+    plain.line.dash_style = None
+    plain.line.tail_end.type = None
+    plain.line.head_end.width = None
+    assert b"<a:ln" not in plain.xml
+
+    prs.slides[0].shapes.add_connector(MSO_CONNECTOR.STRAIGHT, 0, 0, rpptx.Inches(2), 0)
+    connector = prs.slides[0].shapes[1]
+    line = connector.line
+    line.color.rgb = RGBColor(0x00, 0x00, 0x00)
+    line.width = rpptx.Pt(2)
+    tail = line.tail_end
+    assert line.dash_style is None
+    assert (tail.type, tail.width, tail.length) == (None, None, None)
+    line.dash_style = MSO_LINE.DASH_DOT_DOT
+    tail.type = MSO_ARROWHEAD_STYLE.TRIANGLE
+    tail.width = MSO_ARROWHEAD_WIDTH.WIDE
+    tail.length = MSO_ARROWHEAD_LENGTH.LONG
+    line.head_end.type = MSO_ARROWHEAD_STYLE.OVAL
+    assert (
+        b'<a:ln w="25400"><a:solidFill><a:srgbClr val="000000"/></a:solidFill>'
+        b'<a:prstDash val="lgDashDotDot"/><a:headEnd type="oval"/>'
+        b'<a:tailEnd type="triangle" w="lg" len="lg"/></a:ln>'
+    ) in connector.xml
+    assert line.dash_style is MSO_LINE.DASH_DOT_DOT
+    assert (tail.type, tail.width, tail.length) == (
+        MSO_ARROWHEAD_STYLE.TRIANGLE,
+        MSO_ARROWHEAD_WIDTH.WIDE,
+        MSO_ARROWHEAD_LENGTH.LONG,
+    )
+    with pytest.raises(ValueError, match="other than DASH_STYLE_MIXED"):
+        line.dash_style = MSO_LINE.DASH_STYLE_MIXED
+    with pytest.raises(ValueError, match="MSO_ARROWHEAD_WIDTH"):
+        tail.width = 7
+
+    for member, value in (
+        (MSO_LINE.SQUARE_DOT, "sysDash"),
+        (MSO_LINE.ROUND_DOT, "sysDot"),
+        (MSO_LINE.DOT, "dot"),
+        (MSO_LINE.SYSTEM_DASH_DOT, "sysDashDot"),
+        (MSO_LINE.SYSTEM_DASH_DOT_DOT, "sysDashDotDot"),
+    ):
+        line.dash_style = member
+        assert f'<a:prstDash val="{value}"/>'.encode() in connector.xml
+        assert line.dash_style is member
+    line.dash_style = MSO_LINE.LONG_DASH
+
+    output = tmp_path / "lines.pptx"
+    prs.save(output)
+    oracle = pptx.Presentation(output).slides[0].shapes[1]
+    assert oracle.line.dash_style == pptx.enum.dml.MSO_LINE.LONG_DASH
+    a = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    oracle_ln = oracle._element.spPr.find(a + "ln")
+    assert dict(oracle_ln.find(a + "tailEnd").attrib) == {"type": "triangle", "w": "lg", "len": "lg"}
+    assert dict(oracle_ln.find(a + "headEnd").attrib) == {"type": "oval"}
+
+    # PowerPoint scripting writes type="none" and keeps the size when an arrow is removed.
+    tail.type = MSO_ARROWHEAD_STYLE.NONE
+    assert b'<a:tailEnd type="none" w="lg" len="lg"/>' in connector.xml
+    tail.type = None
+    tail.width = None
+    assert b'<a:tailEnd len="lg"/>' in connector.xml
+    tail.length = None
+    line.head_end.type = None
+    line.dash_style = None
+    assert b"<a:prstDash" not in connector.xml
+    assert b"End" not in connector.xml
+    assert b'<a:ln w="25400"><a:solidFill>' in connector.xml
+
+    held = line.tail_end
+    prs.slides.add_slide(prs.slide_layouts[6])
+    with pytest.raises(rpptx.StaleElementError, match=r"shapes\[1\]\.line\.tail_end"):
+        _ = held.type
+
+    # A custom dash reads as None, and a preset or None replaces it.
+    deck = pptx.Presentation()
+    shape = deck.slides.add_slide(deck.slide_layouts[6]).shapes.add_shape(
+        pptx.enum.shapes.MSO_SHAPE.RECTANGLE, 0, 0, 10, 10
+    )
+    shape.line.width = rpptx.Pt(1)
+    shape.line._get_or_add_ln().append(
+        pptx.oxml.parse_xml(
+            '<a:custDash xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">'
+            '<a:ds d="100000" sp="50000"/></a:custDash>'
+        )
+    )
+    source = tmp_path / "custom.pptx"
+    deck.save(source)
+    custom = rpptx.Presentation(source).slides[0].shapes[0]
+    assert custom.line.dash_style is None
+    custom.line.dash_style = None
+    assert b"custDash" not in custom.xml
+    assert custom.line.width == rpptx.Pt(1)
+
+
 def test_colour_edits_keep_python_pptx_brightness_transforms(tmp_path):
     import rpptx
     from rpptx.dml.color import RGBColor
