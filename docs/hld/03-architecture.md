@@ -889,7 +889,8 @@ content wrappers, property owners, paragraph boundaries, and table rows across
 the main document, deduplicated headers and footers, comments, normal
 footnotes, endnotes, and text boxes nested in those stories.
 Accepting keeps insertions and move destinations, while rejecting keeps
-deletions and move sources and converts deleted text to ordinary text.
+deletions and move sources and converts deleted text and deleted field codes
+(`w:delText` and `w:delInstrText`) back to ordinary text and field codes.
 Property rejection restores exactly one namespace-correct prior property
 value. Contextual markers act on their owning run, paragraph mark, numbering
 property, or row. Resolution stages every affected package part, resolves
@@ -908,7 +909,25 @@ left-biased ignores for formatting, textual whitespace, fields, comments, and
 selected story categories. Selected categories leave the original story bytes
 untouched and are excluded before shell checks and revision-id allocation.
 Non-text content remains atomic. Unmatched identical owners become move pairs
-only within one story.
+only within one story. A changed run of consecutive paragraphs that holds a
+pair whose hyperlinks, bookmarks, comment ranges, preserved raw children, or
+inline controls differ, that gains or loses a modeled field, or that holds a
+hyperlink or simple field, is replaced whole: all its original paragraphs are
+deleted, then all its edited paragraphs are inserted. The run grows over its
+neighbouring paragraphs until each side holds every complex field it begins or
+ends, so a table of contents, whose end Word writes in a paragraph of its own,
+is deleted and inserted whole, which Word needs to accept or reject it. A
+whole deleted, inserted, or moved paragraph carries its bookmarks and comment
+ranges inside its revision wrappers, and its hyperlinks and simple fields only
+inside a complex field deleted or inserted whole with it, since neither may
+sit in a revision wrapper and Word reads each as a field whose codes stay
+untracked. Comparison refuses otherwise, and when the two sides of such a run
+share a bookmark or comment range, or a moved paragraph holds one, since the
+redline would hold it twice. Deleted content writes a field code as
+`w:delInstrText`, since Word refuses to open a deletion that holds
+`w:instrText`. A carried hyperlink whose target only the edited side has gets
+its relationship in the redline, and a paragraph mark lists its revision
+markers in schema order before its formatting.
 Changed field results remain inside their field owner, while instruction or
 form changes replace that complete owner. Supported run, paragraph, table, and
 section properties emit property revisions that retain the original property
@@ -933,13 +952,13 @@ between them, such as before a hyperlink that opens its paragraph, has no
 original bytes to go between and refuses the pair. When every run of a
 paragraph matches, the runs stay whole and only the differing inline
 controls are compared.
-When a main story gains a trailing run of paragraphs, comparison marks the
-original final paragraph boundary once, marks each intermediate inserted
-paragraph boundary once, and leaves the final inserted paragraph mark as the
-story terminator. A self-closing original final paragraph expands around its
-marker without creating a raw sibling. This ownership lets acceptance retain
-every appended paragraph and rejection reconstruct the original without an
-empty terminal residue.
+When a main story or a content control gains a trailing run of paragraphs,
+comparison marks the original final paragraph boundary once, marks each
+intermediate inserted paragraph boundary once, and leaves the final inserted
+paragraph mark as the story or control terminator. A self-closing original
+final paragraph expands around its marker without creating a raw sibling. This
+ownership lets acceptance retain every appended paragraph and rejection
+reconstruct the original without an empty terminal residue.
 Comparison patches only owned source spans, preserves every unowned byte,
 stages the complete package, proves that acceptance matches the edited policy
 projection and rejection matches the original, then commits once.

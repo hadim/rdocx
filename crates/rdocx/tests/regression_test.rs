@@ -17825,6 +17825,32 @@ fn resolving_a_modeled_hyperlink_keeps_unreported_raw_children() {
 }
 
 #[test]
+fn rejecting_a_deleted_field_code_restores_its_instruction_text() {
+    // Word writes a deleted field code as `w:delInstrText`, and rejecting
+    // the deletion must give `w:instrText` back, as `w:delText` gives `w:t`.
+    let xml = wrap_word_body(concat!(
+        r#"<w:p><w:del w:id="1" w:author="Ada"><w:r><w:fldChar w:fldCharType="begin"/>"#,
+        r#"<w:delInstrText xml:space="preserve"> PAGE </w:delInstrText>"#,
+        r#"<w:fldChar w:fldCharType="separate"/></w:r><w:r><w:delText>7</w:delText></w:r>"#,
+        r#"<w:r><w:fldChar w:fldCharType="end"/></w:r></w:del><w:r><w:t>kept</w:t></w:r></w:p>"#,
+    ));
+    let mut rejected = document_with_content_controls(&xml);
+    assert_eq!(rejected.reject_all().unwrap(), 1);
+    let rejected = document_xml(&mut rejected);
+    assert!(
+        rejected.contains(r#"<w:instrText xml:space="preserve"> PAGE </w:instrText>"#),
+        "{rejected}"
+    );
+    assert!(!rejected.contains("delInstrText"), "{rejected}");
+
+    let mut accepted = document_with_content_controls(&xml);
+    assert_eq!(accepted.accept_all().unwrap(), 1);
+    let accepted = document_xml(&mut accepted);
+    assert!(!accepted.contains("instrText"), "{accepted}");
+    assert!(accepted.contains("<w:t>kept</w:t>"), "{accepted}");
+}
+
+#[test]
 fn malformed_revision_wrappers_are_opaque_to_every_resolution_scope() {
     let malformed = r#"<w:ins w:id="bad"><w:del w:id="51" w:author="Ada" w:date="2026-08-17T10:00:00Z"><w:r><w:delText>hidden</w:delText></w:r></w:del></w:ins>"#;
     let xml = wrap_word_body(&format!(
@@ -21766,6 +21792,355 @@ fn comparison_appends_multiple_terminal_paragraphs_without_residue() {
         assert!(xml.contains("AUTHOR"), "{xml}");
         assert!(xml.contains("<w:drawing"), "{xml}");
     }
+}
+
+/// Compare, then check that accepting every revision gives the edited
+/// document and rejecting every one gives the original. Returns the tracked
+/// main story.
+fn compare_and_resolve(
+    original_bytes: &[u8],
+    edited_bytes: &[u8],
+    options: &rdocx::ComparisonOptions,
+) -> String {
+    let original = Document::from_bytes(original_bytes).unwrap();
+    let edited = Document::from_bytes(edited_bytes).unwrap();
+    let mut compared = Document::from_bytes(original_bytes).unwrap();
+    let diagnostics = compared
+        .compare_with_options(&edited, "Ada", "2026-09-30T09:30:00Z", options)
+        .unwrap_or_else(|error| panic!("{options:?}: {error}"));
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    assert!(!compared.revisions().is_empty());
+    let tracked = compared.to_bytes().unwrap();
+
+    let mut accepted = Document::from_bytes(&tracked).unwrap();
+    accepted.accept_all().unwrap();
+    assert_eq!(accepted.text(), edited.text());
+    assert!(
+        accepted
+            .compare(&edited, "postcondition", "2026-09-30T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+    let mut rejected = Document::from_bytes(&tracked).unwrap();
+    rejected.reject_all().unwrap();
+    assert_eq!(rejected.text(), original.text());
+    assert!(
+        rejected
+            .compare(&original, "postcondition", "2026-09-30T09:31:00Z")
+            .unwrap()
+            .is_empty()
+    );
+    document_xml(&mut compared)
+}
+
+#[test]
+fn comparison_tracks_a_rebuilt_table_of_contents() {
+    // The rebuild moves the field begin into a paragraph of its own, writes
+    // each entry with a PAGEREF field, as a hyperlink under `\h`, and
+    // bookmarks each heading. Each of those paragraphs refused the pair as a
+    // paragraph boundary or modeled field change. Word writes the field end
+    // in a paragraph of its own, which the rebuild keeps unchanged.
+    let titles = [
+        ("Heading1", "Chapter 1"),
+        ("Heading2", "Section 1.1"),
+        ("Heading1", "Chapter 2"),
+    ];
+    for (switches, own_end_paragraph) in [
+        (r#""1-3" \h \z \u"#, false),
+        (r#""1-3" \z \u"#, false),
+        (r#""1-3" \h \z \u"#, true),
+    ] {
+        let mut entries = String::new();
+        for (index, (_, title)) in titles.iter().enumerate() {
+            entries.push_str(r#"<w:p><w:pPr><w:pStyle w:val="TOC1"/></w:pPr>"#);
+            if index == 0 {
+                entries.push_str(&format!(
+                    r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText xml:space="preserve"> TOC \o {switches} </w:instrText><w:fldChar w:fldCharType="separate"/></w:r>"#
+                ));
+            }
+            entries.push_str(&format!(
+                "<w:r><w:t>{title}</w:t><w:tab/><w:t>9</w:t></w:r>"
+            ));
+            if index + 1 == titles.len() && !own_end_paragraph {
+                entries.push_str(r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#);
+            }
+            entries.push_str("</w:p>");
+        }
+        if own_end_paragraph {
+            entries.push_str(
+                r#"<w:p><w:r><w:rPr><w:b/><w:noProof/></w:rPr><w:fldChar w:fldCharType="end"/></w:r></w:p>"#,
+            );
+        }
+        let mut body = format!(
+            r#"<w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="Table of Contents"/><w:docPartUnique/></w:docPartObj></w:sdtPr><w:sdtContent><w:p><w:pPr><w:pStyle w:val="TOCHeading"/></w:pPr><w:r><w:t>Contents</w:t></w:r></w:p>{entries}</w:sdtContent></w:sdt>"#
+        );
+        for (style, title) in titles {
+            body.push_str(&format!(
+                r#"<w:p><w:pPr><w:pStyle w:val="{style}"/></w:pPr><w:r><w:t>{title}</w:t></w:r></w:p><w:p><w:r><w:t>Body text.</w:t></w:r></w:p>"#
+            ));
+        }
+        let label = format!("{switches}, end in its own paragraph: {own_end_paragraph}");
+        let original_bytes = document_with_field_parts(&wrap_word_body(&body), None, None)
+            .to_bytes()
+            .unwrap();
+        let mut edited = Document::from_bytes(&original_bytes).unwrap();
+        assert_eq!(edited.rebuild_toc().unwrap().entry_count, 3, "{label}");
+        let edited_bytes = edited.to_bytes().unwrap();
+
+        for granularity in [
+            rdocx::ComparisonGranularity::Run,
+            rdocx::ComparisonGranularity::Word,
+        ] {
+            let options = rdocx::ComparisonOptions {
+                granularity,
+                ..Default::default()
+            };
+            let xml = compare_and_resolve(&original_bytes, &edited_bytes, &options);
+            // Every cached entry, and the field end, is deleted before any
+            // rebuilt entry is inserted, so each side keeps one whole TOC
+            // field, and the deleted field code is Word's `w:delInstrText`.
+            let control =
+                &xml[xml.find("<w:sdtContent>").unwrap()..xml.find("</w:sdtContent>").unwrap()];
+            assert!(
+                control.rfind("<w:delText").unwrap() < control.find("PAGEREF").unwrap(),
+                "{label}: {control}"
+            );
+            assert_eq!(
+                control.matches("<w:delInstrText").count(),
+                1,
+                "{label}: {control}"
+            );
+            assert_eq!(
+                control.matches("<w:instrText").count(),
+                1,
+                "{label}: {control}"
+            );
+            for character in ["begin", "separate", "end"] {
+                let character = format!(r#"w:fldCharType="{character}""#);
+                assert_eq!(control.matches(&character).count(), 2, "{label}: {control}");
+            }
+            // A paragraph mark both deleted and inserted lists `w:ins`
+            // first, as the schema orders them.
+            for properties in xml.split("<w:rPr>").skip(1) {
+                let properties = &properties[..properties.find("</w:rPr>").unwrap_or(0)];
+                if let (Some(inserted), Some(deleted)) =
+                    (properties.find("<w:ins "), properties.find("<w:del "))
+                {
+                    assert!(inserted < deleted, "{label}: {properties}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn comparison_carries_bookmarks_and_whole_fields_in_whole_paragraph_changes() {
+    // A whole inserted, deleted or moved paragraph kept only its runs, so a
+    // bookmark in it failed the acceptance or rejection check, and so did a
+    // field that spans whole inserted or deleted paragraphs.
+    let plain = r#"<w:p><w:r><w:t>Alpha</w:t></w:r></w:p>"#;
+    let last = r#"<w:p><w:r><w:t>Omega</w:t></w:r></w:p>"#;
+    let bookmarked = r#"<w:p><w:bookmarkStart w:id="5" w:name="target"/><w:r><w:t>Marked</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>text</w:t></w:r><w:bookmarkEnd w:id="5"/></w:p>"#;
+    let moved = r#"<w:p><w:r><w:t>Moved text</w:t></w:r></w:p>"#;
+    let begin = r#"<w:p><w:r><w:fldChar w:fldCharType="begin"/><w:instrText xml:space="preserve"> TOC \o "1-3" \h </w:instrText><w:fldChar w:fldCharType="separate"/></w:r>"#;
+    let end = r#"<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#;
+    // A field inserted whole, with a hyperlink and a simple field inside.
+    let field = format!(
+        r#"{begin}<w:hyperlink w:anchor="target"><w:r><w:t>Entry</w:t></w:r></w:hyperlink><w:r><w:tab/></w:r><w:fldSimple w:instr=" PAGEREF target \h "><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p><w:p>{end}"#
+    );
+    // A cached field whose first entry becomes a hyperlink, with its end in
+    // a paragraph the edit leaves unchanged.
+    let cached =
+        |first: &str| format!(r#"{begin}{first}</w:p><w:p><w:r><w:t>Entry two</w:t></w:r>{end}"#);
+    let control = |content: &str| {
+        format!(
+            r#"<w:sdt><w:sdtPr><w:tag w:val="kept"/></w:sdtPr><w:sdtContent>{content}</w:sdtContent></w:sdt>{last}"#
+        )
+    };
+    let cases = [
+        (
+            "inserted",
+            format!("{plain}{last}"),
+            format!("{plain}{bookmarked}{last}"),
+        ),
+        (
+            "appended",
+            format!("{plain}{last}"),
+            format!("{plain}{last}{bookmarked}"),
+        ),
+        (
+            "deleted",
+            format!("{plain}{bookmarked}{last}"),
+            format!("{plain}{last}"),
+        ),
+        (
+            "moved",
+            format!("{moved}{plain}{last}"),
+            format!("{plain}{last}{moved}"),
+        ),
+        (
+            "whole field inserted",
+            format!("{plain}{last}"),
+            format!("{plain}{field}{last}"),
+        ),
+        (
+            "whole field deleted",
+            format!("{plain}{field}{last}"),
+            format!("{plain}{last}"),
+        ),
+        (
+            "field entry becomes a hyperlink",
+            format!(
+                r#"{plain}{}{last}"#,
+                cached("<w:r><w:t>Entry one</w:t></w:r>")
+            ),
+            format!(
+                r#"{plain}{}{last}"#,
+                cached(
+                    r#"<w:hyperlink w:anchor="a"><w:r><w:t>Entry one</w:t></w:r></w:hyperlink>"#
+                )
+            ),
+        ),
+        (
+            "two paragraphs appended to a control",
+            control(plain),
+            control(&format!("{plain}{bookmarked}{moved}")),
+        ),
+    ];
+    for (name, original_body, edited_body) in cases {
+        let original_bytes = document_with_content_controls(&wrap_word_body(&original_body))
+            .to_bytes()
+            .unwrap();
+        let edited_bytes = document_with_content_controls(&wrap_word_body(&edited_body))
+            .to_bytes()
+            .unwrap();
+        for granularity in [
+            rdocx::ComparisonGranularity::Run,
+            rdocx::ComparisonGranularity::Word,
+        ] {
+            let options = rdocx::ComparisonOptions {
+                granularity,
+                ..Default::default()
+            };
+            let xml = compare_and_resolve(&original_bytes, &edited_bytes, &options);
+            assert!(
+                xml.contains("<w:bookmarkStart")
+                    || xml.contains("fldCharType")
+                    || xml.contains("<w:moveTo "),
+                "{name}: {xml}"
+            );
+            // Each side keeps its complex fields whole, so a field ended in
+            // an unchanged paragraph is deleted and inserted with it.
+            assert_eq!(
+                xml.matches(r#"w:fldCharType="begin""#).count(),
+                xml.matches(r#"w:fldCharType="end""#).count(),
+                "{name}: {xml}"
+            );
+        }
+    }
+}
+
+#[test]
+fn comparison_refuses_whole_paragraph_structures_word_cannot_resolve() {
+    // A hyperlink or simple field may not sit in a revision wrapper. Word
+    // reads either as a field whose codes stay untracked, so accepting a
+    // deleted one or rejecting an inserted one leaves an empty field, unless
+    // a field deleted or inserted whole around it goes with it. A moved
+    // paragraph's bookmark would be held by both ends of the move.
+    let plain = r#"<w:p><w:r><w:t>Alpha</w:t></w:r></w:p>"#;
+    let last = r#"<w:p><w:r><w:t>Omega</w:t></w:r></w:p>"#;
+    let linked = r#"<w:p><w:r><w:t xml:space="preserve">See </w:t></w:r><w:hyperlink w:anchor="elsewhere"><w:r><w:t>there</w:t></w:r></w:hyperlink></w:p>"#;
+    let paged = r#"<w:p><w:r><w:t xml:space="preserve">Page </w:t></w:r><w:fldSimple w:instr=" PAGE "><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p>"#;
+    let bookmarked = r#"<w:p><w:bookmarkStart w:id="5" w:name="target"/><w:r><w:t>Moved text</w:t></w:r><w:bookmarkEnd w:id="5"/></w:p>"#;
+    let cases = [
+        (
+            "hyperlink inserted",
+            format!("{plain}{last}"),
+            format!("{plain}{linked}{last}"),
+            "hyperlink or simple field outside a field",
+        ),
+        (
+            "simple field deleted",
+            format!("{plain}{paged}{last}"),
+            format!("{plain}{last}"),
+            "hyperlink or simple field outside a field",
+        ),
+        (
+            "paragraph gains a hyperlink",
+            format!("{plain}{last}"),
+            format!("{linked}{last}"),
+            "paragraph boundary structures",
+        ),
+        (
+            "bookmarked paragraph moved",
+            format!("{bookmarked}{plain}{last}"),
+            format!("{plain}{last}{bookmarked}"),
+            "cannot move a paragraph that holds a bookmark",
+        ),
+    ];
+    for (name, original_body, edited_body, message) in cases {
+        let edited = document_with_content_controls(&wrap_word_body(&edited_body));
+        let mut compared = document_with_content_controls(&wrap_word_body(&original_body));
+        let before = compared.to_bytes().unwrap();
+        let error = compared
+            .compare(&edited, "Ada", "2026-09-30T09:30:00Z")
+            .expect_err(name);
+        assert!(error.to_string().contains(message), "{name}: {error}");
+        assert_eq!(compared.to_bytes().unwrap(), before, "{name}");
+    }
+}
+
+#[test]
+fn comparison_carries_the_relationship_of_an_inserted_external_hyperlink() {
+    // The redline is staged on the original package, so an inserted table
+    // kept the edited hyperlink's r:id without its relationship, and Word
+    // refused to open the result.
+    let mut original = Document::new();
+    original.add_paragraph("Alpha");
+    original.add_paragraph("Omega");
+    let original_bytes = original.to_bytes().unwrap();
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(original_bytes.clone())).unwrap();
+    let id = package
+        .get_or_create_part_rels("/word/document.xml")
+        .add_external(
+            oxml_opc::relationship::rel_types::HYPERLINK,
+            "https://example.com/new",
+        );
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let table = format!(
+        r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc><w:p><w:hyperlink xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="{id}"><w:r><w:t>link</w:t></w:r></w:hyperlink></w:p></w:tc></w:tr></w:tbl>"#
+    );
+    let at = xml.find("<w:p").unwrap();
+    let at = at + xml[at..].find("</w:p>").unwrap() + "</w:p>".len();
+    package.set_part(
+        "/word/document.xml",
+        format!("{}{table}{}", &xml[..at], &xml[at..]).into_bytes(),
+    );
+    let mut edited_bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut edited_bytes).unwrap();
+    let edited_bytes = edited_bytes.into_inner();
+
+    compare_and_resolve(&original_bytes, &edited_bytes, &Default::default());
+    let edited = Document::from_bytes(&edited_bytes).unwrap();
+    let mut compared = Document::from_bytes(&original_bytes).unwrap();
+    compared
+        .compare(&edited, "Ada", "2026-09-30T09:30:00Z")
+        .unwrap();
+    let tracked =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(compared.to_bytes().unwrap()))
+            .unwrap();
+    let xml = std::str::from_utf8(tracked.get_part("/word/document.xml").unwrap()).unwrap();
+    let linked = &xml[xml.find("<w:hyperlink").unwrap()..];
+    let linked = &linked[linked.find("r:id=\"").unwrap() + 6..];
+    let linked = &linked[..linked.find('"').unwrap()];
+    let relationship = tracked
+        .get_part_rels("/word/document.xml")
+        .unwrap()
+        .get_by_id(linked)
+        .unwrap_or_else(|| panic!("{linked} has no relationship"));
+    assert_eq!(relationship.target, "https://example.com/new");
+    assert_eq!(relationship.target_mode.as_deref(), Some("External"));
 }
 
 #[test]

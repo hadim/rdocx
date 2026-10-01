@@ -261,7 +261,7 @@ impl Document {
                 "document comparison requires identical related-story shells".to_owned(),
             ));
         }
-        remap_equivalent_story_relationships(
+        let carried_links = remap_equivalent_story_relationships(
             &original,
             &mut edited,
             &original_stories,
@@ -389,6 +389,22 @@ impl Document {
                 &mut diagnostics,
             )?;
             candidate.package.set_part(&story.part_name, tracked_story);
+        }
+        // A hyperlink that only the edited side targets arrives with the
+        // edited content that holds it.
+        for (owner, relationship) in carried_links {
+            let holds = candidate.package.get_part(&owner).is_some_and(|xml| {
+                let quoted = format!("\"{}\"", relationship.id);
+                xml.windows(quoted.len())
+                    .any(|window| window == quoted.as_bytes())
+            });
+            if holds {
+                candidate
+                    .package
+                    .get_or_create_part_rels(&owner)
+                    .items
+                    .push(relationship);
+            }
         }
         candidate = reopen_staged(candidate)?;
         #[cfg(test)]
@@ -614,22 +630,38 @@ fn story_xml<'a>(document: &'a Document, story: &StoryPart) -> Result<&'a [u8]> 
     })
 }
 
+/// Give each edited image and hyperlink relationship the id of its
+/// equivalent in the original. A hyperlink with no equivalent gets a fresh
+/// id, and is returned with the original owner it belongs to, for the
+/// redline to add when edited content carries it.
 fn remap_equivalent_story_relationships(
     original: &Document,
     edited: &mut Document,
     original_stories: &[StoryPart],
     edited_stories: &[StoryPart],
-) -> Result<()> {
-    remap_equivalent_owner_relationships(
+) -> Result<Vec<(String, Relationship)>> {
+    let mut carried = remap_equivalent_owner_relationships(
         original,
         edited,
         &original.doc_part_name,
         &edited.doc_part_name.clone(),
-    )?;
+    )?
+    .into_iter()
+    .map(|relationship| (original.doc_part_name.clone(), relationship))
+    .collect::<Vec<_>>();
     for (left, right) in original_stories.iter().zip(edited_stories) {
-        remap_equivalent_owner_relationships(original, edited, &left.part_name, &right.part_name)?;
+        carried.extend(
+            remap_equivalent_owner_relationships(
+                original,
+                edited,
+                &left.part_name,
+                &right.part_name,
+            )?
+            .into_iter()
+            .map(|relationship| (left.part_name.clone(), relationship)),
+        );
     }
-    Ok(())
+    Ok(carried)
 }
 
 fn remap_equivalent_owner_relationships(
@@ -637,7 +669,7 @@ fn remap_equivalent_owner_relationships(
     edited: &mut Document,
     original_owner: &str,
     edited_owner: &str,
-) -> Result<()> {
+) -> Result<Vec<Relationship>> {
     let original_relationships = original
         .package
         .get_part_rels(original_owner)
@@ -650,8 +682,9 @@ fn remap_equivalent_owner_relationships(
         .unwrap_or_default();
     let mut used = HashSet::new();
     let mut remap = HashMap::new();
+    let mut unmatched_links = Vec::new();
     for right in &edited_relationships.items {
-        if right.rel_type != rel_types::IMAGE {
+        if right.rel_type != rel_types::IMAGE && right.rel_type != rel_types::HYPERLINK {
             continue;
         }
         let right_payload = relationship_payload(edited, edited_owner, right);
@@ -667,6 +700,9 @@ fn remap_equivalent_owner_relationships(
                         && relationship_payload(original, original_owner, left) == right_payload
                 })
         else {
+            if right.rel_type == rel_types::HYPERLINK {
+                unmatched_links.push(right.clone());
+            }
             continue;
         };
         used.insert(index);
@@ -674,15 +710,27 @@ fn remap_equivalent_owner_relationships(
             remap.insert(right.id.clone(), left.id.clone());
         }
     }
-    if remap.is_empty() {
-        return Ok(());
-    }
     let mut occupied = edited_relationships
         .items
         .iter()
+        .chain(&original_relationships.items)
         .map(|relationship| relationship.id.clone())
         .chain(remap.values().cloned())
         .collect::<HashSet<_>>();
+    // The redline allocates a carried hyperlink's id the way the original's
+    // relationships do, which is the id staging keeps when it reopens it.
+    let mut allocator = original_relationships.clone();
+    let mut carried = Vec::with_capacity(unmatched_links.len());
+    for mut link in unmatched_links {
+        let fresh = allocator.add_external(&link.rel_type, &link.target);
+        occupied.insert(fresh.clone());
+        remap.insert(link.id.clone(), fresh.clone());
+        link.id = fresh;
+        carried.push(link);
+    }
+    if remap.is_empty() {
+        return Ok(carried);
+    }
     let mut collision_remap = HashMap::new();
     let remapped_sources = remap.keys().cloned().collect::<HashSet<_>>();
     for target in remap.values() {
@@ -722,7 +770,7 @@ fn remap_equivalent_owner_relationships(
         }
         relationships.to_xml()?;
     }
-    Ok(())
+    Ok(carried)
 }
 
 fn relationship_payload(
@@ -2388,11 +2436,33 @@ fn compare_body(
         .iter()
         .map(|content| body_signature_with_options(content, metadata.options))
         .collect::<Vec<_>>();
-    let aligned = expand_body_alignment(
+    fn paragraphs(content: &[BodyContent]) -> Vec<Option<&CT_P>> {
+        content
+            .iter()
+            .map(|content| match content {
+                BodyContent::Paragraph(paragraph) => Some(paragraph),
+                _ => None,
+            })
+            .collect()
+    }
+    let original_paragraphs = paragraphs(&original.body.content);
+    let edited_paragraphs = paragraphs(&edited.body.content);
+    let (replaced, carried) = replace_changed_paragraph_runs(
         align(&original_signatures, &edited_signatures),
-        &original.body.content,
-        &edited.body.content,
-    );
+        &original_paragraphs,
+        &edited_paragraphs,
+        &original_signatures,
+        &edited_signatures,
+        metadata.options,
+    )?;
+    let aligned = expand_body_alignment(replaced, &original.body.content, &edited.body.content);
+    refuse_uncarried_field_owners(
+        &aligned,
+        &original_paragraphs,
+        &edited_paragraphs,
+        &carried,
+        location,
+    )?;
     let moves = pair_moves(
         &aligned,
         &original_signatures,
@@ -2653,19 +2723,20 @@ fn moved_paragraph_content(
     let BodyContent::Paragraph(paragraph) = content else {
         unreachable!("caller checked paragraph content")
     };
+    refuse_moved_markers(paragraph)?;
     let mut output = String::from("<w:p>");
     if let Some(properties) = &paragraph.properties {
         output.push_str(&property_xml(properties)?);
     }
-    for run in &paragraph.runs {
-        output.push_str(&IdAllocator::revision_with_id(
+    output.push_str(&wrapped_paragraph_children(paragraph, false, |content| {
+        Ok(IdAllocator::revision_with_id(
             kind,
             metadata.author,
             metadata.timestamp,
-            &run_xml(run)?,
+            content,
             id,
-        ));
-    }
+        ))
+    })?);
     output.push_str("</w:p>");
     Ok(output)
 }
@@ -2676,29 +2747,41 @@ fn moved_paragraph(
     id: i32,
     metadata: &Metadata<'_>,
 ) -> Result<String> {
+    refuse_moved_markers(paragraph)?;
     let marker = IdAllocator::marker_with_id(kind, metadata.author, metadata.timestamp, id);
     let mut properties = paragraph.properties.clone().unwrap_or_default();
     properties.rpr = Some(properties.rpr.take().unwrap_or_default());
     let mut properties = property_xml(&properties)?;
     let run_properties = direct_word_element_spans(&properties, "rPr")?;
     if let Some(span) = run_properties.first() {
-        let updated = append_word_child(&properties[span.clone()], "rPr", &marker)?;
+        let updated = with_mark_revision(&properties[span.clone()], &marker)?;
         properties.replace_range(span.clone(), &updated);
     } else {
         properties = append_word_child(&properties, "pPr", &format!("<w:rPr>{marker}</w:rPr>"))?;
     }
     let mut output = format!("<w:p>{properties}");
-    for run in &paragraph.runs {
-        output.push_str(&IdAllocator::revision_with_id(
+    output.push_str(&wrapped_paragraph_children(paragraph, false, |content| {
+        Ok(IdAllocator::revision_with_id(
             kind,
             metadata.author,
             metadata.timestamp,
-            &run_xml(run)?,
+            content,
             id,
-        ));
-    }
+        ))
+    })?);
     output.push_str("</w:p>");
     Ok(output)
+}
+
+/// Both ends of a move would hold the paragraph's bookmarks and comment
+/// ranges, and each may appear once.
+fn refuse_moved_markers(paragraph: &CT_P) -> Result<()> {
+    if paragraph.bookmark_markers.is_empty() && paragraph.comment_ranges.is_empty() {
+        return Ok(());
+    }
+    Err(Error::Other(
+        "comparison cannot move a paragraph that holds a bookmark or comment range".to_owned(),
+    ))
 }
 
 fn moved_table(table: &CT_Tbl, kind: &str, id: i32, metadata: &Metadata<'_>) -> Result<String> {
@@ -2756,7 +2839,7 @@ fn marked_paragraph_xml(paragraph: &str, marker: &str) -> Result<String> {
         let run_properties = direct_word_element_spans(properties, "rPr")?;
         let updated = if let Some(run_span) = run_properties.first() {
             let run_properties = &properties[run_span.clone()];
-            let updated_run = append_word_child(run_properties, "rPr", marker)?;
+            let updated_run = with_mark_revision(run_properties, marker)?;
             let mut updated = properties.to_owned();
             updated.replace_range(run_span.clone(), &updated_run);
             updated
@@ -2813,15 +2896,11 @@ fn deleted_paragraph_content(content: &BodyContent, metadata: &mut Metadata<'_>)
     if let Some(properties) = &paragraph.properties {
         output.push_str(&property_xml(properties)?);
     }
-    for run in &paragraph.runs {
-        let run = deleted_run_xml(run)?;
-        output.push_str(&metadata.ids.revision(
-            "del",
-            metadata.author,
-            metadata.timestamp,
-            &run,
-        )?);
-    }
+    output.push_str(&wrapped_paragraph_children(paragraph, true, |content| {
+        metadata
+            .ids
+            .revision("del", metadata.author, metadata.timestamp, content)
+    })?);
     output.push_str("</w:p>");
     Ok(output)
 }
@@ -2837,15 +2916,11 @@ fn inserted_paragraph_content(
     if let Some(properties) = &paragraph.properties {
         output.push_str(&property_xml(properties)?);
     }
-    for run in &paragraph.runs {
-        let run = run_xml(run)?;
-        output.push_str(&metadata.ids.revision(
-            "ins",
-            metadata.author,
-            metadata.timestamp,
-            &run,
-        )?);
-    }
+    output.push_str(&wrapped_paragraph_children(paragraph, false, |content| {
+        metadata
+            .ids
+            .revision("ins", metadata.author, metadata.timestamp, content)
+    })?);
     output.push_str("</w:p>");
     Ok(output)
 }
@@ -3120,23 +3195,12 @@ fn compare_granular_paragraph(
     metadata: &mut Metadata<'_>,
     diagnostics: &mut Vec<ComparisonDiagnostic>,
 ) -> Result<String> {
-    let control_slots = |paragraph: &CT_P| {
-        paragraph
-            .content_controls
-            .iter()
-            .map(|(_, raw_before, markers_before, _)| (*raw_before, *markers_before))
-            .collect::<Vec<_>>()
-    };
     let boundary_error = || {
         Error::Other(format!(
             "comparison cannot revise paragraph boundary structures at {location}"
         ))
     };
-    if hyperlink_shells(original, metadata.options) != hyperlink_shells(edited, metadata.options)
-        || (!metadata.options.ignore_comments && original.comment_ranges != edited.comment_ranges)
-        || original.bookmark_markers != edited.bookmark_markers
-        || control_slots(original) != control_slots(edited)
-    {
+    if paragraph_boundaries_differ(original, edited, metadata.options) {
         return Err(boundary_error());
     }
     let original_boundaries = shell_run_boundaries(original);
@@ -4017,18 +4081,7 @@ fn compare_complex_paragraph(
             .map(str::to_owned)
             .map_or_else(|| paragraph_xml(original), Ok);
     }
-    if original.hyperlinks != edited.hyperlinks
-        || (!metadata.options.ignore_comments && original.comment_ranges != edited.comment_ranges)
-        || original.bookmark_markers != edited.bookmark_markers
-        || original
-            .extra_xml
-            .iter()
-            .filter(|(position, raw)| !CT_P::raw_is_root_attributes(*position, raw))
-            .ne(edited
-                .extra_xml
-                .iter()
-                .filter(|(position, raw)| !CT_P::raw_is_root_attributes(*position, raw)))
-        || paragraph_control_boundaries(original) != paragraph_control_boundaries(edited)
+    if paragraph_boundaries_differ(original, edited, metadata.options)
         || (!metadata.options.ignore_formatting
             && paragraph_properties_differ(
                 original.properties.as_ref(),
@@ -4172,6 +4225,45 @@ fn paragraph_control_boundaries(paragraph: &CT_P) -> Vec<(usize, usize, usize)> 
         .iter()
         .map(|(at, raw_before, markers_before, _)| (*at, *raw_before, *markers_before))
         .collect()
+}
+
+/// Whether two paragraphs differ in an inline structure that revising the
+/// paragraph in place cannot express: a hyperlink, comment range, bookmark,
+/// preserved raw child or inline content control.
+///
+/// The word and character paths follow a hyperlink or control through the
+/// text alignment, so only the shells and their slots count there.
+fn paragraph_boundaries_differ(
+    original: &CT_P,
+    edited: &CT_P,
+    options: &ComparisonOptions,
+) -> bool {
+    if (!options.ignore_comments && original.comment_ranges != edited.comment_ranges)
+        || original.bookmark_markers != edited.bookmark_markers
+    {
+        return true;
+    }
+    if uses_attributed_run_path(options) {
+        let control_slots = |paragraph: &CT_P| {
+            paragraph
+                .content_controls
+                .iter()
+                .map(|(_, raw_before, markers_before, _)| (*raw_before, *markers_before))
+                .collect::<Vec<_>>()
+        };
+        return hyperlink_shells(original, options) != hyperlink_shells(edited, options)
+            || control_slots(original) != control_slots(edited);
+    }
+    original.hyperlinks != edited.hyperlinks
+        || original
+            .extra_xml
+            .iter()
+            .filter(|(position, raw)| !CT_P::raw_is_root_attributes(*position, raw))
+            .ne(edited
+                .extra_xml
+                .iter()
+                .filter(|(position, raw)| !CT_P::raw_is_root_attributes(*position, raw)))
+        || paragraph_control_boundaries(original) != paragraph_control_boundaries(edited)
 }
 
 fn paragraph_properties_xml(
@@ -4375,15 +4467,11 @@ fn deleted_paragraph(paragraph: &CT_P, metadata: &mut Metadata<'_>) -> Result<St
         "del",
         metadata,
     )?);
-    for run in &paragraph.runs {
-        let run = deleted_run_xml(run)?;
-        output.push_str(&metadata.ids.revision(
-            "del",
-            metadata.author,
-            metadata.timestamp,
-            &run,
-        )?);
-    }
+    output.push_str(&wrapped_paragraph_children(paragraph, true, |content| {
+        metadata
+            .ids
+            .revision("del", metadata.author, metadata.timestamp, content)
+    })?);
     output.push_str("</w:p>");
     Ok(output)
 }
@@ -4395,17 +4483,64 @@ fn inserted_paragraph(paragraph: &CT_P, metadata: &mut Metadata<'_>) -> Result<S
         "ins",
         metadata,
     )?);
-    for run in &paragraph.runs {
-        let run = run_xml(run)?;
-        output.push_str(&metadata.ids.revision(
-            "ins",
-            metadata.author,
-            metadata.timestamp,
-            &run,
-        )?);
-    }
+    output.push_str(&wrapped_paragraph_children(paragraph, false, |content| {
+        metadata
+            .ids
+            .revision("ins", metadata.author, metadata.timestamp, content)
+    })?);
     output.push_str("</w:p>");
     Ok(output)
+}
+
+/// The children of a whole deleted, inserted or moved paragraph after its
+/// properties, each group inside the wrapper that `wrap` writes.
+///
+/// Hyperlinks, simple fields, bookmarks and comment ranges go inside the
+/// wrappers with the runs, so resolving the revision removes or keeps them
+/// with the text. A range or proofing marker shares the wrapper of the
+/// content after it, or of the content before it at the end of the
+/// paragraph, so a paragraph of runs alone keeps one wrapper per run.
+fn wrapped_paragraph_children(
+    paragraph: &CT_P,
+    deleted: bool,
+    mut wrap: impl FnMut(&str) -> Result<String>,
+) -> Result<String> {
+    let mut children = paragraph.clone();
+    children.properties = None;
+    if deleted {
+        children.runs = children.runs.iter().map(deleted_run).collect();
+    }
+    let xml = paragraph_xml(&children)?;
+    let mut groups: Vec<(String, bool)> = Vec::new();
+    for span in direct_element_spans(&xml)? {
+        let child = &xml[span];
+        let local = element_local_name(child);
+        let marker = matches!(
+            local,
+            "bookmarkStart" | "bookmarkEnd" | "commentRangeStart" | "commentRangeEnd" | "proofErr"
+        );
+        // Runs already hold deleted text, as `deleted_run_xml` writes them.
+        // Field results, hyperlink runs and other owners are renamed whole.
+        let child = match (deleted, local) {
+            (true, "r") => renamed_word_elements(child, "w:instrText", "w:delInstrText"),
+            (true, _) => deleted_text_xml(child),
+            (false, _) => child.to_owned(),
+        };
+        match groups.last_mut() {
+            Some((group, has_content)) if !*has_content => {
+                group.push_str(&child);
+                *has_content = !marker;
+            }
+            _ => groups.push((child, !marker)),
+        }
+    }
+    if groups.len() > 1
+        && let Some((markers, false)) = groups.pop_if(|(_, has_content)| !*has_content)
+        && let Some((group, _)) = groups.last_mut()
+    {
+        group.push_str(&markers);
+    }
+    groups.iter().map(|(group, _)| wrap(group)).collect()
 }
 
 fn paragraph_mark_properties(
@@ -4421,7 +4556,7 @@ fn paragraph_mark_properties(
     let mut xml = property_xml(&properties)?;
     let run_properties = direct_word_element_spans(&xml, "rPr")?;
     if let Some(run_span) = run_properties.first() {
-        let updated = append_word_child(&xml[run_span.clone()], "rPr", &marker)?;
+        let updated = with_mark_revision(&xml[run_span.clone()], &marker)?;
         xml.replace_range(run_span.clone(), &updated);
         Ok(xml)
     } else {
@@ -4921,11 +5056,45 @@ fn compare_control_from_xml(
         .iter()
         .map(|content| control_content_signature_with_options(content, metadata.options))
         .collect::<Vec<_>>();
-    let aligned = expand_control_alignment(
+    fn paragraphs<'a>(content: &[&'a SdtContent]) -> Vec<Option<&'a CT_P>> {
+        content
+            .iter()
+            .map(|content| match content {
+                SdtContent::Paragraph(paragraph) => Some(paragraph),
+                _ => None,
+            })
+            .collect()
+    }
+    let original_paragraphs = paragraphs(&original_content);
+    let edited_paragraphs = paragraphs(&edited_content);
+    let (replaced, carried) = replace_changed_paragraph_runs(
         align(&original_signatures, &edited_signatures),
-        &original_content,
-        &edited_content,
-    );
+        &original_paragraphs,
+        &edited_paragraphs,
+        &original_signatures,
+        &edited_signatures,
+        metadata.options,
+    )?;
+    let aligned = expand_control_alignment(replaced, &original_content, &edited_content);
+    refuse_uncarried_field_owners(
+        &aligned,
+        &original_paragraphs,
+        &edited_paragraphs,
+        &carried,
+        location,
+    )?;
+    let trailing_paragraph_insert_start = aligned
+        .iter()
+        .enumerate()
+        .rev()
+        .take_while(|(_, (left, right))| {
+            left.is_none()
+                && right
+                    .and_then(|index| edited_content.get(index))
+                    .is_some_and(|content| matches!(content, SdtContent::Paragraph(_)))
+        })
+        .map(|(position, _)| position)
+        .last();
     let content_spans = direct_word_element_spans(original_xml, "sdtContent")?;
     let content_span = content_spans.first().ok_or_else(|| {
         Error::Other(format!(
@@ -4994,7 +5163,26 @@ fn compare_control_from_xml(
                 }
             }
             (None, Some(j)) => {
-                if matches!(edited_content[j], SdtContent::Paragraph(_)) && !next_is_paragraph {
+                if matches!(edited_content[j], SdtContent::Paragraph(_))
+                    && trailing_paragraph_insert_start.is_some_and(|start| position >= start)
+                {
+                    // As in the main story: the paragraph before the run is
+                    // marked once and the last inserted mark ends the control.
+                    if trailing_paragraph_insert_start == Some(position) {
+                        mark_previous_paragraph(&mut content, "ins", metadata)?;
+                    }
+                    content.push((
+                        true,
+                        marked_control_content(
+                            edited_content[j],
+                            "ins",
+                            next_is_paragraph,
+                            metadata,
+                        )?,
+                    ));
+                } else if matches!(edited_content[j], SdtContent::Paragraph(_))
+                    && !next_is_paragraph
+                {
                     mark_previous_paragraph(&mut content, "ins", metadata)?;
                     content.push((
                         true,
@@ -5445,18 +5633,29 @@ fn tracked_field_result(
     Ok(format!("{deleted}{inserted}"))
 }
 
-/// Rename each `w:t` element to `w:delText`, and no other element whose
-/// name starts the same way, such as `w:tab`.
+/// Rename each `w:t` element to `w:delText` and each `w:instrText` to
+/// `w:delInstrText`, and no other element whose name starts the same way,
+/// such as `w:tab`. Word refuses to open a deletion that holds `w:instrText`.
 fn deleted_text_xml(xml: &str) -> String {
+    renamed_word_elements(
+        &renamed_word_elements(xml, "w:t", "w:delText"),
+        "w:instrText",
+        "w:delInstrText",
+    )
+}
+
+/// Rename each `from` element to `to`, and no other element whose name
+/// starts the same way.
+fn renamed_word_elements(xml: &str, from: &str, to: &str) -> String {
     let mut output = String::with_capacity(xml.len());
     let mut rest = xml;
-    while let Some(at) = rest.find("w:t") {
+    while let Some(at) = rest.find(from) {
         let (before, after) = rest.split_at(at);
-        let after = &after["w:t".len()..];
+        let after = &after[from.len()..];
         let is_tag = (before.ends_with('<') || before.ends_with("</"))
             && after.starts_with(|next: char| matches!(next, '>' | '/') || next.is_whitespace());
         output.push_str(before);
-        output.push_str(if is_tag { "w:delText" } else { "w:t" });
+        output.push_str(if is_tag { to } else { from });
         rest = after;
     }
     output.push_str(rest);
@@ -5687,6 +5886,309 @@ fn align(original: &[String], edited: &[String]) -> Vec<(Option<usize>, Option<u
         right = matched_right.saturating_add(1);
     }
     result
+}
+
+/// Replace each changed run of paragraphs that revising in place cannot
+/// express, and name the paragraphs whose hyperlinks and simple fields a
+/// whole-paragraph revision may carry.
+///
+/// A run is the consecutive changed entries of paragraphs only, between
+/// unchanged owners, tables or controls. When one of its pairs differs in
+/// its inline boundary structures, or gains or loses a modeled field, or
+/// when it holds a hyperlink or simple field, the run becomes all its
+/// original paragraphs deleted, then all its edited paragraphs inserted. The
+/// run grows over its neighbouring paragraphs until each side holds every
+/// complex field it begins or ends, so a table of contents whose end sits
+/// in an unchanged paragraph is still deleted and inserted whole. Word then
+/// removes the whole field on each side, with the hyperlinks and simple
+/// fields inside it.
+///
+/// A run keeps its pairs, and their refusal, when a side cannot be closed
+/// that way, when one of its hyperlinks or simple fields lies outside such a
+/// field, or when both sides share a bookmark or comment range, which the
+/// replacement would hold twice.
+fn replace_changed_paragraph_runs(
+    aligned: Vec<(Option<usize>, Option<usize>)>,
+    original: &[Option<&CT_P>],
+    edited: &[Option<&CT_P>],
+    original_signatures: &[String],
+    edited_signatures: &[String],
+    options: &ComparisonOptions,
+) -> Result<(Alignment, CarriedParagraphs)> {
+    fn markers<'a>(paragraphs: impl Iterator<Item = &'a CT_P>) -> HashSet<String> {
+        let mut markers = HashSet::new();
+        for paragraph in paragraphs {
+            for marker in &paragraph.bookmark_markers {
+                markers.extend(marker.id().map(|id| format!("bookmark id {id}")));
+                markers.extend(marker.name().map(|name| format!("bookmark {name}")));
+            }
+            for marker in &paragraph.comment_ranges {
+                let (CommentRangeMarker::Start { id, .. } | CommentRangeMarker::End { id, .. }) =
+                    marker;
+                markers.insert(format!("comment {id}"));
+            }
+        }
+        markers
+    }
+    let changed = |(left, right): &(Option<usize>, Option<usize>)| match (left, right) {
+        (Some(i), Some(j)) => original_signatures[*i] != edited_signatures[*j],
+        _ => true,
+    };
+    // In-place revision refuses a modeled field it cannot pair with one on
+    // the other side.
+    let fields = |paragraph: &CT_P| {
+        paragraph
+            .runs
+            .iter()
+            .filter(|run| run_is_field(run))
+            .count()
+    };
+    let paragraphs_only = |(left, right): &(Option<usize>, Option<usize>)| {
+        left.is_none_or(|i| original[i].is_some()) && right.is_none_or(|j| edited[j].is_some())
+    };
+    let sides = |range: &Range<usize>| {
+        let entries = &aligned[range.clone()];
+        (
+            entries
+                .iter()
+                .filter_map(|(left, _)| left.and_then(|i| original[i]))
+                .collect::<Vec<_>>(),
+            entries
+                .iter()
+                .filter_map(|(_, right)| right.and_then(|j| edited[j]))
+                .collect::<Vec<_>>(),
+        )
+    };
+    // Grow a run until both sides hold their complex fields whole.
+    let close = |mut range: Range<usize>| -> Result<Option<Range<usize>>> {
+        loop {
+            let (originals, edits) = sides(&range);
+            let balances = [field_balance(&originals)?, field_balance(&edits)?];
+            if balances.contains(&FieldBalance::Closes) {
+                if range.start == 0 || !paragraphs_only(&aligned[range.start - 1]) {
+                    return Ok(None);
+                }
+                range.start -= 1;
+            } else if balances.contains(&FieldBalance::Opens) {
+                if range.end == aligned.len() || !paragraphs_only(&aligned[range.end]) {
+                    return Ok(None);
+                }
+                range.end += 1;
+            } else if balances.contains(&FieldBalance::Uncarried)
+                || !markers(originals.into_iter()).is_disjoint(&markers(edits.into_iter()))
+            {
+                return Ok(None);
+            } else {
+                return Ok(Some(range));
+            }
+        }
+    };
+    let mut accepted: Vec<Range<usize>> = Vec::new();
+    let mut start = 0;
+    for run in aligned.chunk_by(|first, second| {
+        (changed(first), paragraphs_only(first)) == (changed(second), paragraphs_only(second))
+    }) {
+        let range = start..start + run.len();
+        start = range.end;
+        if !changed(&run[0]) || !paragraphs_only(&run[0]) {
+            continue;
+        }
+        let inexpressible = run.iter().any(|(left, right)| {
+            matches!(
+                (left.and_then(|i| original[i]), right.and_then(|j| edited[j])),
+                (Some(left), Some(right)) if paragraph_boundaries_differ(left, right, options)
+                    || (!options.ignore_fields && fields(left) != fields(right))
+            )
+        });
+        let (originals, edits) = sides(&range);
+        let mut owners = false;
+        for paragraph in originals.iter().chain(&edits) {
+            owners |= paragraph_field_events(paragraph)?.contains(&FieldEvent::Owner);
+        }
+        if !inexpressible && !owners {
+            continue;
+        }
+        let Some(mut range) = close(range)? else {
+            continue;
+        };
+        // A grown run that reaches an accepted one replaces both together.
+        while let Some(last) = accepted.last()
+            && last.end > range.start
+        {
+            let merged = last.start.min(range.start)..last.end.max(range.end);
+            match close(merged)? {
+                Some(merged) => {
+                    accepted.pop();
+                    range = merged;
+                }
+                None => break,
+            }
+        }
+        if accepted.last().is_none_or(|last| last.end <= range.start) {
+            accepted.push(range);
+        }
+    }
+    let mut replaced = Vec::with_capacity(aligned.len());
+    let mut carried = CarriedParagraphs::default();
+    let mut ranges = accepted.into_iter().peekable();
+    let mut index = 0;
+    while index < aligned.len() {
+        let Some(range) = ranges.next_if(|range| range.start == index) else {
+            replaced.push(aligned[index]);
+            index += 1;
+            continue;
+        };
+        let entries = &aligned[range.clone()];
+        for (left, _) in entries {
+            if let Some(i) = *left {
+                carried.original.insert(i);
+                replaced.push((Some(i), None));
+            }
+        }
+        for (_, right) in entries {
+            if let Some(j) = *right {
+                carried.edited.insert(j);
+                replaced.push((None, Some(j)));
+            }
+        }
+        index = range.end;
+    }
+    Ok((replaced, carried))
+}
+
+/// Aligned original and edited owner indices.
+type Alignment = Vec<(Option<usize>, Option<usize>)>;
+
+/// The paragraphs, by index on each side, that a replaced run deletes or
+/// inserts whole inside the complex fields that enclose their hyperlinks
+/// and simple fields.
+#[derive(Default)]
+struct CarriedParagraphs {
+    original: HashSet<usize>,
+    edited: HashSet<usize>,
+}
+
+/// Refuse a whole deleted, inserted or moved paragraph that holds a
+/// hyperlink or simple field outside a complex field carried with it.
+///
+/// Neither may sit inside a revision wrapper, and Word reads each as a field
+/// whose codes stay untracked, so accepting or rejecting the paragraph in
+/// Word would leave an empty field behind.
+fn refuse_uncarried_field_owners(
+    aligned: &[(Option<usize>, Option<usize>)],
+    original: &[Option<&CT_P>],
+    edited: &[Option<&CT_P>],
+    carried: &CarriedParagraphs,
+    location: &str,
+) -> Result<()> {
+    for (left, right) in aligned {
+        let paragraph = match (left, right) {
+            (Some(i), None) if !carried.original.contains(i) => original[*i],
+            (None, Some(j)) if !carried.edited.contains(j) => edited[*j],
+            _ => None,
+        };
+        if let Some(paragraph) = paragraph
+            && paragraph_field_events(paragraph)?.contains(&FieldEvent::Owner)
+        {
+            return Err(Error::Other(format!(
+                "comparison cannot track a whole paragraph's hyperlink or simple field outside a field it replaces at {location}"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// A complex field character or a field owner of a paragraph.
+#[derive(Clone, Copy, PartialEq)]
+enum FieldEvent {
+    Begin,
+    End,
+    /// A hyperlink or simple field, which a revision wrapper may not hold.
+    Owner,
+}
+
+/// The complex field characters and field owners of a paragraph in
+/// document order.
+fn paragraph_field_events(paragraph: &CT_P) -> Result<Vec<FieldEvent>> {
+    let xml = paragraph_xml(paragraph)?;
+    let mut reader = Reader::from_reader(xml.as_bytes());
+    let mut events = Vec::new();
+    let mut depth = 0usize;
+    let mut buffer = Vec::new();
+    loop {
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("comparison XML scan failed: {error}")))?;
+        let (element, empty) = match &event {
+            Event::Start(element) => (element, false),
+            Event::Empty(element) => (element, true),
+            Event::End(_) => {
+                depth = depth.saturating_sub(1);
+                buffer.clear();
+                continue;
+            }
+            Event::Eof => break,
+            _ => {
+                buffer.clear();
+                continue;
+            }
+        };
+        match element.local_name().as_ref() {
+            b"hyperlink" | b"fldSimple" if depth == 1 => events.push(FieldEvent::Owner),
+            b"fldChar" => {
+                let kind = element
+                    .attributes()
+                    .flatten()
+                    .find(|attribute| attribute.key.local_name().as_ref() == b"fldCharType")
+                    .map(|attribute| attribute.value.into_owned());
+                match kind.as_deref() {
+                    Some(b"begin") => events.push(FieldEvent::Begin),
+                    Some(b"end") => events.push(FieldEvent::End),
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+        if !empty {
+            depth += 1;
+        }
+        buffer.clear();
+    }
+    Ok(events)
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum FieldBalance {
+    /// Every complex field begun is ended, and every owner lies inside one.
+    Whole,
+    /// A complex field begun here ends after the paragraphs.
+    Opens,
+    /// A complex field ended here begins before the paragraphs.
+    Closes,
+    /// The fields are whole, but an owner lies outside all of them.
+    Uncarried,
+}
+
+fn field_balance(paragraphs: &[&CT_P]) -> Result<FieldBalance> {
+    let mut depth = 0usize;
+    let mut uncarried = false;
+    for paragraph in paragraphs {
+        for event in paragraph_field_events(paragraph)? {
+            match event {
+                FieldEvent::Begin => depth += 1,
+                FieldEvent::End if depth == 0 => return Ok(FieldBalance::Closes),
+                FieldEvent::End => depth -= 1,
+                FieldEvent::Owner => uncarried |= depth == 0,
+            }
+        }
+    }
+    Ok(if depth > 0 {
+        FieldBalance::Opens
+    } else if uncarried {
+        FieldBalance::Uncarried
+    } else {
+        FieldBalance::Whole
+    })
 }
 
 fn expand_body_alignment(
@@ -6546,14 +7048,24 @@ fn validate_field_alignment(
     Ok(())
 }
 
+/// A run as deleted content. The field instruction of a field that spans
+/// paragraphs is a preserved child, so it is renamed in the written run.
 fn deleted_run_xml(run: &CT_R) -> Result<String> {
+    Ok(renamed_word_elements(
+        &run_xml(&deleted_run(run))?,
+        "w:instrText",
+        "w:delInstrText",
+    ))
+}
+
+fn deleted_run(run: &CT_R) -> CT_R {
     let mut deleted = run.clone();
     for content in &mut deleted.content {
         if let RunContent::Text(text) = content {
             *content = RunContent::DeletedText(text.clone());
         }
     }
-    run_xml(&deleted)
+    deleted
 }
 
 fn table_xml(table: &CT_Tbl) -> Result<String> {
@@ -6651,6 +7163,45 @@ fn append_word_child(xml: &str, local: &str, addition: &str) -> Result<String> {
         &xml[..slash],
         &xml[slash + 2..]
     ))
+}
+
+/// Add a revision marker to the `w:rPr` of a paragraph mark in schema
+/// order: `w:ins`, `w:del`, `w:moveFrom` and `w:moveTo` come first, in that
+/// order, before any formatting.
+fn with_mark_revision(run_properties: &str, marker: &str) -> Result<String> {
+    const ORDER: [&str; 4] = ["ins", "del", "moveFrom", "moveTo"];
+    let rank = |xml: &str| {
+        ORDER
+            .iter()
+            .position(|local| *local == element_local_name(xml))
+    };
+    let children = direct_element_spans(run_properties)?;
+    let (Some(marker_rank), Some(open)) = (rank(marker), run_properties.find('>')) else {
+        return append_word_child(run_properties, "rPr", marker);
+    };
+    if children.is_empty() {
+        return append_word_child(run_properties, "rPr", marker);
+    }
+    let at = children
+        .iter()
+        .take_while(|span| {
+            rank(&run_properties[(*span).clone()]).is_some_and(|rank| rank <= marker_rank)
+        })
+        .last()
+        .map_or(open + 1, |span| span.end);
+    let mut marked = run_properties.to_owned();
+    marked.insert_str(at, marker);
+    Ok(marked)
+}
+
+/// The local name of the element that `xml` starts with.
+fn element_local_name(xml: &str) -> &str {
+    let name_end = xml
+        .find(|character: char| character.is_ascii_whitespace() || matches!(character, '/' | '>'))
+        .unwrap_or(xml.len());
+    xml.get(1..name_end)
+        .and_then(|name| name.rsplit(':').next())
+        .unwrap_or_default()
 }
 
 fn direct_word_element_spans(xml: &str, local: &str) -> Result<Vec<Range<usize>>> {
@@ -7100,6 +7651,13 @@ mod tests {
                 r#"<w:r><w:t>a</w:t><w:tab/><w:t xml:space="preserve"> b </w:t><w:t/><w:br w:type="page"/></w:r><w:ffData><w:textInput><w:maxLength w:val="4"/></w:textInput></w:ffData>"#
             ),
             r#"<w:r><w:delText>a</w:delText><w:tab/><w:delText xml:space="preserve"> b </w:delText><w:delText/><w:br w:type="page"/></w:r><w:ffData><w:textInput><w:maxLength w:val="4"/></w:textInput></w:ffData>"#
+        );
+        // Word refuses to open a deletion that holds `w:instrText`.
+        assert_eq!(
+            deleted_text_xml(
+                r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText xml:space="preserve"> TOC </w:instrText><w:instrTextual/></w:r>"#
+            ),
+            r#"<w:r><w:fldChar w:fldCharType="begin"/><w:delInstrText xml:space="preserve"> TOC </w:delInstrText><w:instrTextual/></w:r>"#
         );
     }
 
