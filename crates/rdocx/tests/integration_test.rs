@@ -1712,6 +1712,77 @@ mod fresh_word_package_profile_tests {
     }
 
     #[test]
+    fn word_compatible_profiles_stamp_an_app_version_word_opens() {
+        // Word refuses a package whose AppVersion is not XX.YYYY (ECMA-376 Part 1, 22.2.2.3).
+        for class in all_classes() {
+            let package = package_from_profile(WordCreationProfile::WordCompatible(class));
+            let app = std::str::from_utf8(package.get_part("/docProps/app.xml").unwrap()).unwrap();
+            let version = app
+                .split_once("<AppVersion>")
+                .and_then(|(_, rest)| rest.split_once("</AppVersion>"))
+                .map(|(version, _)| version)
+                .expect("fresh app properties carry AppVersion");
+            let (major, minor) = version.split_once('.').expect("AppVersion has one dot");
+            assert!(
+                major.len() == 2
+                    && minor.len() == 4
+                    && major
+                        .bytes()
+                        .chain(minor.bytes())
+                        .all(|b| b.is_ascii_digit()),
+                "AppVersion {version:?} is not XX.YYYY"
+            );
+        }
+    }
+
+    #[test]
+    fn saving_repairs_only_an_app_version_word_refuses() {
+        fn app_xml(application: &str, version: &str) -> Vec<u8> {
+            format!(
+                r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>{application}</Application><AppVersion>{version}</AppVersion></Properties>"#
+            )
+            .into_bytes()
+        }
+        fn resave(app: Vec<u8>) -> (OpcPackage, OpcPackage) {
+            let mut package = package_from_profile(WordCreationProfile::WordCompatible(
+                WordPackageClass::Document,
+            ));
+            package.set_part("/docProps/app.xml", app);
+            let bytes = package_bytes(&package);
+            let saved = Document::from_bytes(&bytes).unwrap().to_bytes().unwrap();
+            let saved = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+            (package, saved)
+        }
+        fn app_version(package: &OpcPackage) -> Option<String> {
+            let app = std::str::from_utf8(package.get_part("/docProps/app.xml").unwrap()).unwrap();
+            app.split_once("<AppVersion>")
+                .and_then(|(_, rest)| rest.split_once("</AppVersion>"))
+                .map(|(version, _)| version.to_owned())
+        }
+
+        // What rdocx 0.14.0 wrote: rewritten to the version rdocx stamps now.
+        let (_, saved) = resave(app_xml("rdocx", "0.14.0"));
+        let fresh = package_from_profile(WordCreationProfile::WordCompatible(
+            WordPackageClass::Document,
+        ));
+        assert_eq!(app_version(&saved), app_version(&fresh));
+        assert_ne!(app_version(&saved).as_deref(), Some("0.14.0"));
+
+        // Another producer's invalid value is dropped, its Application kept.
+        let (_, saved) = resave(app_xml("Producer", "2.1"));
+        assert_eq!(app_version(&saved), None);
+        let app = std::str::from_utf8(saved.get_part("/docProps/app.xml").unwrap()).unwrap();
+        assert!(app.contains("<Application>Producer</Application>"));
+
+        // A valid foreign value keeps its part byte-identical.
+        let (original, saved) = resave(app_xml("Microsoft Office Word", "16.0000"));
+        assert_eq!(
+            saved.get_part("/docProps/app.xml"),
+            original.get_part("/docProps/app.xml")
+        );
+    }
+
+    #[test]
     fn document_new_uses_the_word_compatible_docx_profile() {
         let default = Document::new().to_bytes().unwrap();
         let compatible = Document::new_with_profile(WordCreationProfile::WordCompatible(
@@ -2453,7 +2524,7 @@ mod settings_and_properties_tests {
         application.pages = Some(7);
         application.words = Some(420);
         application.application = Some("rdocx test".to_owned());
-        application.application_version = Some("1.0".to_owned());
+        application.application_version = Some("01.0000".to_owned());
         document
             .set_application_properties(application.clone())
             .unwrap();
@@ -2739,6 +2810,30 @@ mod settings_and_properties_tests {
     }
 
     #[test]
+    fn application_version_outside_the_word_form_is_refused() {
+        let mut document = Document::new();
+        let before = document.to_bytes().unwrap();
+        for version in ["0.14.0", "1.0", "test", "1.0000", "01.000", "01.00a0", ""] {
+            let mut application = AppProperties::default();
+            application.application_version = Some(version.to_owned());
+            let error = document
+                .set_application_properties(application)
+                .expect_err(version);
+            assert!(error.to_string().contains("XX.YYYY"), "{error}");
+            assert_eq!(document.to_bytes().unwrap(), before);
+        }
+        let mut application = AppProperties::default();
+        application.application_version = Some("16.0000".to_owned());
+        document.set_application_properties(application).unwrap();
+        assert_eq!(
+            document
+                .application_properties()
+                .and_then(|properties| properties.application_version.as_deref()),
+            Some("16.0000")
+        );
+    }
+
+    #[test]
     fn fresh_property_output_has_no_clock_or_host_input() {
         fn authored() -> Vec<u8> {
             let mut document = Document::new_with_profile(WordCreationProfile::Minimal(
@@ -2752,7 +2847,7 @@ mod settings_and_properties_tests {
                 .unwrap();
             let mut application = AppProperties::default();
             application.application = Some("rdocx".to_owned());
-            application.application_version = Some("test".to_owned());
+            application.application_version = Some("00.0001".to_owned());
             document.set_application_properties(application).unwrap();
             document.to_bytes().unwrap()
         }
@@ -12135,9 +12230,28 @@ fn nested_table_round_trip() {
     assert_eq!(tbl2.cell(0, 1).unwrap().text(), "Outer A2");
     assert_eq!(tbl2.cell(1, 1).unwrap().text(), "Outer B2");
 
-    // Cell (1,0) should have paragraph text (nested table text excluded from text())
+    // Cell (1,0) should have paragraph text (nested table text excluded from text()),
+    // then the empty trailing paragraph that follows the nested table.
     let cell_b1_ref = tbl2.cell(1, 0).unwrap();
-    assert_eq!(cell_b1_ref.text(), "Before nested");
+    assert_eq!(cell_b1_ref.text(), "Before nested\n");
+}
+
+#[test]
+fn nested_table_keeps_the_trailing_cell_paragraph_word_requires() {
+    // Word refuses a package whose w:tc ends with a w:tbl.
+    let mut doc = Document::new();
+    let mut table = doc.add_table(1, 1);
+    let mut cell = table.cell(0, 0).unwrap();
+    cell.set_text("Nested table below:");
+    cell.add_table(1, 1).cell(0, 0).unwrap().set_text("Inner");
+    let package = OpcPackage::from_reader(std::io::Cursor::new(doc.to_bytes().unwrap())).unwrap();
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let nested_end = xml.find("</w:tbl>").expect("nested table closes first") + "</w:tbl>".len();
+    let after_nested = xml[nested_end..].trim_start();
+    assert!(
+        after_nested.starts_with("<w:p>") || after_nested.starts_with("<w:p/>"),
+        "outer cell must end with a paragraph after the nested table: {after_nested:.40}"
+    );
 }
 
 #[test]

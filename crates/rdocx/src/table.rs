@@ -1914,7 +1914,8 @@ impl<'a> Cell<'a> {
         self.ensure_tc_pr().cnf_style = Some(regions.to_value());
     }
 
-    /// Add a nested table inside this cell.
+    /// Add a nested table inside this cell, followed by the trailing cell
+    /// paragraph Word requires.
     pub fn add_table(&mut self, rows: usize, cols: usize) -> Table<'_> {
         use rdocx_oxml::table::{
             CT_Row, CT_Tbl, CT_TblGrid, CT_TblGridCol, CT_TblPr, CT_TblWidth, CT_Tc, CellContent,
@@ -1947,9 +1948,13 @@ impl<'a> Cell<'a> {
             tbl.rows.push(row);
         }
 
+        // Word refuses a cell whose last child is a table, so keep the
+        // trailing paragraph the schema requires after the nested table.
+        let table_index = self.inner.content.len();
         self.inner.content.push(CellContent::Table(tbl));
-        match self.inner.content.last_mut().unwrap() {
-            CellContent::Table(t) => Table { inner: t },
+        self.inner.content.push(CellContent::Paragraph(CT_P::new()));
+        match self.inner.content.get_mut(table_index) {
+            Some(CellContent::Table(t)) => Table { inner: t },
             _ => unreachable!(),
         }
     }
