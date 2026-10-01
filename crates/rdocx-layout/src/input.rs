@@ -162,6 +162,9 @@ pub struct LayoutInput {
     ///
     /// `None` reproduces Word's half-inch default.
     pub default_tab_stop: Option<Twips>,
+    /// Whether the document's `w:compatibilityMode` is 15 or later, where Word
+    /// moves a tab stop past the right margin to the end of its line.
+    pub clamp_tabs_past_margin: bool,
     /// Whether `w:mirrorMargins` makes even displayed pages swap their inside
     /// and outside margins.
     pub mirror_margins: bool,

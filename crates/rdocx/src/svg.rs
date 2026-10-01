@@ -1102,6 +1102,7 @@ mod tests {
             field_kind: None,
             field_source: None,
             note: None,
+            tab_aligned: None,
         })
     }
 
@@ -2163,6 +2164,7 @@ mod tests {
                 field_kind: None,
                 field_source: None,
                 note: None,
+                tab_aligned: None,
             }),
             font,
         )

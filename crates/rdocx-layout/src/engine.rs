@@ -920,6 +920,7 @@ struct ReusableEngineContext {
     gutter_at_top: bool,
     do_not_use_html_paragraph_auto_spacing: bool,
     default_tab_stop: Option<rdocx_oxml::units::Twips>,
+    clamp_tabs_past_margin: bool,
     math_properties: Option<rdocx_oxml::math::MathProperties>,
     has_wrapping_drawing: bool,
     styles: CT_Styles,
@@ -1018,6 +1019,7 @@ impl ReusableEngineContext {
             gutter_at_top: input.gutter_at_top,
             do_not_use_html_paragraph_auto_spacing: input.do_not_use_html_paragraph_auto_spacing,
             default_tab_stop: input.default_tab_stop,
+            clamp_tabs_past_margin: input.clamp_tabs_past_margin,
             math_properties: input.math_properties.clone(),
             has_wrapping_drawing,
             styles: input.styles.clone(),
@@ -1095,6 +1097,7 @@ impl ReusableEngineContext {
             && self.do_not_use_html_paragraph_auto_spacing
                 == input.do_not_use_html_paragraph_auto_spacing
             && self.default_tab_stop == input.default_tab_stop
+            && self.clamp_tabs_past_margin == input.clamp_tabs_past_margin
             && self.math_properties == input.math_properties
             && self.has_wrapping_drawing == has_wrapping_drawing
             && self.styles == input.styles
@@ -5245,12 +5248,225 @@ fn extract_background_color(xml: &str) -> Option<Color> {
 }
 
 /// Replace field placeholder GlyphRuns with actual values.
+///
+/// Text aligned on a right, centre or decimal tab stop is then moved so it
+/// stays on its stop with the value in place of the placeholder.
 fn substitute_fields(
     elements: &mut Vec<PositionedElement>,
     page_number: usize,
     total_pages: usize,
     bookmark_pages: &HashMap<usize, usize>,
     fm: &mut FontManager,
+) {
+    let mut changes = Vec::new();
+    substitute_field_values(
+        elements,
+        page_number,
+        total_pages,
+        bookmark_pages,
+        fm,
+        &mut changes,
+    );
+    if !changes.is_empty() {
+        realign_tab_aligned_text(elements, &changes);
+    }
+}
+
+/// A tab-aligned field whose value is wider or narrower than its placeholder.
+struct FieldWidthChange {
+    aligned: oxml_layout::TabAlignedField,
+    baseline: f64,
+    font_size: f64,
+    /// Where the placeholder started.
+    x: f64,
+    delta: f64,
+}
+
+impl FieldWidthChange {
+    fn same_text(&self, other: &Self) -> bool {
+        (self.baseline - other.baseline).abs() < 0.01
+            && (self.aligned.start - other.aligned.start).abs() < 0.01
+    }
+}
+
+/// How far a position moves once the fields of tab-aligned text hold their
+/// values, or `None` outside such text.
+///
+/// Text after a right, centre or decimal tab moves back by the share of the
+/// changes its stop aligns on, as far as its tab allows, and past each field
+/// before the position by that field's change. A tab with no width left
+/// starts its text where the text before it now ends.
+fn realigned_offset(changes: &[FieldWidthChange], x: f64, baseline: f64) -> Option<f64> {
+    let mut starts = changes
+        .iter()
+        .filter(|change| (change.baseline - baseline).abs() < 0.01)
+        .collect::<Vec<_>>();
+    starts.sort_by(|a, b| a.aligned.start.total_cmp(&b.aligned.start));
+    starts.dedup_by(|a, b| a.same_text(b));
+    // Where the previous aligned text ended, and how far that end moved.
+    let mut carry = None::<(f64, f64)>;
+    for first in starts {
+        let aligned = first.aligned;
+        let fields = changes.iter().filter(|change| change.same_text(first));
+        let shift: f64 = fields
+            .clone()
+            .map(|change| change.aligned.shift * change.delta)
+            .sum();
+        let old_width = aligned.gap.max(0.0);
+        let moved = carry
+            .filter(|(end, _)| (aligned.start - old_width - end).abs() < 0.01)
+            .map_or(0.0, |(_, moved)| moved);
+        let start = moved + (aligned.gap - moved - shift).max(0.0) - old_width;
+        if x > aligned.start - 0.01 && x < aligned.end - 0.001 {
+            return Some(
+                start
+                    + fields
+                        .filter(|change| change.x < x - 0.001)
+                        .map(|change| change.delta)
+                        .sum::<f64>(),
+            );
+        }
+        carry = Some((
+            aligned.end,
+            start + fields.map(|change| change.delta).sum::<f64>(),
+        ));
+    }
+    None
+}
+
+fn realign_tab_aligned_text(elements: &mut [PositionedElement], changes: &[FieldWidthChange]) {
+    for element in elements.iter_mut() {
+        match element {
+            PositionedElement::Text(run) => {
+                if let Some(offset) = realigned_offset(changes, run.origin.x, run.origin.y) {
+                    run.origin.x += offset;
+                } else {
+                    realign_tab_leader(run, changes);
+                }
+            }
+            PositionedElement::MultilingualText(run) => {
+                if let Some(offset) = realigned_offset(changes, run.origin.x, run.origin.y) {
+                    run.origin.x += offset;
+                }
+            }
+            PositionedElement::Line { start, end, .. } => {
+                // An underline or a strike lies between the ascent and the
+                // descent of the text it marks.
+                let marks = |change: &&FieldWidthChange| {
+                    start.y > change.baseline - change.font_size
+                        && start.y < change.baseline + change.font_size / 2.0
+                };
+                if let Some(offset) = changes
+                    .iter()
+                    .filter(marks)
+                    .find_map(|change| realigned_offset(changes, start.x, change.baseline))
+                {
+                    end.x += offset + own_width_change(changes, start.x, marks);
+                    start.x += offset;
+                }
+            }
+            PositionedElement::FilledRect { rect, .. }
+            | PositionedElement::LinkAnnotation { rect, .. } => {
+                let covers = |change: &&FieldWidthChange| {
+                    rect.y <= change.baseline && change.baseline <= rect.y + rect.height
+                };
+                if let Some(offset) = changes
+                    .iter()
+                    .filter(covers)
+                    .find_map(|change| realigned_offset(changes, rect.x, change.baseline))
+                {
+                    rect.width += own_width_change(changes, rect.x, covers);
+                    rect.x += offset;
+                }
+            }
+            PositionedElement::MarkedContent { children, .. } => {
+                realign_tab_aligned_text(children, changes)
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The change in width of the field that starts where a mark starts, so a
+/// field's own highlight or underline takes its new width.
+fn own_width_change(
+    changes: &[FieldWidthChange],
+    x: f64,
+    on_line: impl Fn(&&FieldWidthChange) -> bool,
+) -> f64 {
+    changes
+        .iter()
+        .filter(on_line)
+        .find(|change| (change.x - x).abs() < 0.01)
+        .map_or(0.0, |change| change.delta)
+}
+
+/// Lengthen or shorten a tab leader that ends where tab-aligned text starts,
+/// so it still reaches the text once the text moves.
+fn realign_tab_leader(run: &mut GlyphRun, changes: &[FieldWidthChange]) {
+    let end = run.origin.x + run.advances.iter().sum::<f64>();
+    // Leader glyphs step evenly, and the last one has no spacing after it,
+    // so a leader stops short of its tab's end by less than two steps.
+    let last = run.advances.last().copied().unwrap_or(0.0);
+    let step = if run.advances.len() > 1 {
+        run.advances[0]
+    } else {
+        last
+    };
+    if step <= 0.0 {
+        return;
+    }
+    let Some(change) = changes.iter().find(|change| {
+        (run.origin.y - change.baseline).abs() < 0.01
+            && end < change.aligned.start + 0.01
+            && change.aligned.start - end < 2.0 * step
+    }) else {
+        return;
+    };
+    let Some(&glyph) = run.glyph_ids.first() else {
+        return;
+    };
+    let Some(ch) = run.text.chars().next() else {
+        return;
+    };
+    if run.glyph_ids.iter().any(|id| *id != glyph)
+        || run.text.chars().any(|other| other != ch)
+        || run.text.chars().count() != run.glyph_ids.len()
+    {
+        return;
+    }
+    let Some(offset) = realigned_offset(changes, change.aligned.start, change.baseline) else {
+        return;
+    };
+    let target = change.aligned.start + offset;
+    let mut end = end;
+    while end > target + 0.01 && run.glyph_ids.len() > 1 {
+        run.glyph_ids.pop();
+        run.advances.pop();
+        run.text.pop();
+        if let Some(previous) = run.advances.last_mut() {
+            *previous = last;
+        }
+        end -= step;
+    }
+    while end + step <= target + 0.01 {
+        if let Some(previous) = run.advances.last_mut() {
+            *previous = step;
+        }
+        run.glyph_ids.push(glyph);
+        run.advances.push(last);
+        run.text.push(ch);
+        end += step;
+    }
+}
+
+fn substitute_field_values(
+    elements: &mut Vec<PositionedElement>,
+    page_number: usize,
+    total_pages: usize,
+    bookmark_pages: &HashMap<usize, usize>,
+    fm: &mut FontManager,
+    changes: &mut Vec<FieldWidthChange>,
 ) {
     for element in elements.iter_mut() {
         match element {
@@ -5271,11 +5487,28 @@ fn substitute_fields(
                     FieldKind::Target(_) => continue,
                 };
                 if let Ok(shaped) = fm.shape_text(run.font_id, &value, run.font_size) {
+                    let placeholder: f64 = run.advances.iter().sum();
                     run.text = value;
                     run.glyph_ids = shaped.glyph_ids;
                     run.advances = shaped.advances;
+                    let delta = run.advances.iter().sum::<f64>() - placeholder;
+                    if let Some(aligned) = run.tab_aligned
+                        && delta.abs() > 1e-9
+                    {
+                        changes.push(FieldWidthChange {
+                            aligned,
+                            baseline: run.origin.y,
+                            font_size: run.font_size,
+                            x: run.origin.x,
+                            delta,
+                        });
+                    }
                 }
             }
+            // A field shaped as rich text takes its value without moving
+            // the tab-aligned text around it: `MultilingualGlyphRun` carries
+            // no `tab_aligned`, so such text stays where its placeholder
+            // put it.
             PositionedElement::MultilingualText(run) => {
                 let Some(fk) = run.field_kind else {
                     continue;
@@ -5348,9 +5581,14 @@ fn substitute_fields(
                 bookmark_pages,
                 fm,
             ),
-            PositionedElement::MarkedContent { children, .. } => {
-                substitute_fields(children, page_number, total_pages, bookmark_pages, fm)
-            }
+            PositionedElement::MarkedContent { children, .. } => substitute_field_values(
+                children,
+                page_number,
+                total_pages,
+                bookmark_pages,
+                fm,
+                changes,
+            ),
             _ => {}
         }
     }
@@ -6895,6 +7133,7 @@ fn layout_paragraph_with_source_and_table(
     // Line breaking
     let mut line_params =
         convert::line_break_params(&effective_ppr, available_width, input.default_tab_stop);
+    line_params.clamp_tabs_past_margin = input.clamp_tabs_past_margin;
     line_params.ind_left = ind_left;
     line_params.ind_right = ind_right;
     line_params.jc = jc;
@@ -7617,9 +7856,7 @@ fn merge_direct_ppr(effective: &mut CT_PPr, direct: &CT_PPr) {
     if direct.borders.is_some() {
         effective.borders = direct.borders.clone();
     }
-    if direct.tabs.is_some() {
-        effective.tabs = direct.tabs.clone();
-    }
+    style_resolver::merge_tab_stops(&mut effective.tabs, direct.tabs.as_ref());
     if direct.shading.is_some() {
         effective.shading = direct.shading.clone();
     }
@@ -8466,6 +8703,7 @@ fn layout_watermark(
                 field_kind: None,
                 field_source: None,
                 note: None,
+                tab_aligned: None,
             })]
         }
         VmlWatermark::Image {
@@ -8929,6 +9167,7 @@ fn push_east_asian_layout_text(
             field_kind: None,
             field_source: None,
             note: None,
+            tab_aligned: None,
         })
     };
 
@@ -9201,6 +9440,7 @@ fn push_emphasis_marked_text(
             field_kind: None,
             field_source: None,
             note: None,
+            tab_aligned: None,
         }));
         push_annotation_decorations(&mut children, base, baseline, shaped.width, ascent, descent);
 
@@ -9235,6 +9475,7 @@ fn push_emphasis_marked_text(
                     field_kind: None,
                     field_source: None,
                     note: None,
+                    tab_aligned: None,
                 }));
             }
             x += advance;
@@ -9345,6 +9586,7 @@ fn measure_annotation_line(
             field_kind: None,
             field_source: None,
             note: None,
+            tab_aligned: None,
         });
         line.width += shaped.width;
     }
@@ -10818,6 +11060,7 @@ mod tests {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -16525,8 +16768,10 @@ mod tests {
         let mut paragraph = CT_P::new();
         paragraph.properties = Some(CT_PPr {
             tabs: Some(CT_Tabs {
+                // Distinct positions, since stops at one position replace
+                // each other as Word merges them.
                 tabs: (0..stop_count)
-                    .map(|_| CT_TabStop::new(ST_TabJc::Left, Twips(720)))
+                    .map(|index| CT_TabStop::new(ST_TabJc::Left, Twips(720 + index as i32)))
                     .collect(),
             }),
             ..CT_PPr::default()
@@ -17227,6 +17472,7 @@ mod tests {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -17756,6 +18002,7 @@ mod tests {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -17823,6 +18070,7 @@ mod tests {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -17908,6 +18156,7 @@ mod tests {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -18089,6 +18338,7 @@ mod tests {
                 gutter_at_top: false,
                 do_not_use_html_paragraph_auto_spacing: false,
                 default_tab_stop: None,
+                clamp_tabs_past_margin: false,
                 math_properties: None,
                 document: doc,
                 styles: CT_Styles::new_default(),
@@ -18222,6 +18472,7 @@ mod tests {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -18519,6 +18770,7 @@ mod tests {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -18667,6 +18919,7 @@ mod tests {
                 gutter_at_top: false,
                 do_not_use_html_paragraph_auto_spacing: false,
                 default_tab_stop: None,
+                clamp_tabs_past_margin: false,
                 math_properties: None,
                 document: doc,
                 styles: CT_Styles::new_default(),
@@ -18799,6 +19052,7 @@ mod tests {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -19133,6 +19387,7 @@ mod tests {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -19221,6 +19476,7 @@ mod tests {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -19329,6 +19585,7 @@ mod tests {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -19529,6 +19786,7 @@ mod tests {
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
+            clamp_tabs_past_margin: false,
             math_properties: None,
             document: doc,
             styles: CT_Styles::new_default(),
@@ -20056,6 +20314,58 @@ mod tests {
         let text = output_text(&output);
         assert!(text.iter().any(|value| value == "2"), "{text:?}");
         assert!(!text.iter().any(|value| value == "cached"), "{text:?}");
+    }
+
+    #[test]
+    fn a_page_field_on_a_right_stop_takes_its_marks_along() {
+        let aligned = oxml_layout::TabAlignedField {
+            start: 100.0,
+            end: 112.0,
+            shift: 1.0,
+            gap: 50.0,
+        };
+        // "99" became "1", six points narrower.
+        let changes = [FieldWidthChange {
+            aligned,
+            baseline: 100.0,
+            font_size: 12.0,
+            x: 100.0,
+            delta: -6.0,
+        }];
+        let line = |y: f64| PositionedElement::Line {
+            start: Point { x: 100.0, y },
+            end: Point { x: 112.0, y },
+            width: 0.5,
+            color: Color::BLACK,
+            dash_pattern: None,
+        };
+        let mut elements = vec![
+            PositionedElement::FilledRect {
+                rect: oxml_layout::Rect {
+                    x: 100.0,
+                    y: 90.0,
+                    width: 12.0,
+                    height: 14.0,
+                },
+                color: Color::BLACK,
+            },
+            line(102.0),
+            // A rule a line below is not the field's underline.
+            line(130.0),
+        ];
+        realign_tab_aligned_text(&mut elements, &changes);
+        let PositionedElement::FilledRect { rect, .. } = &elements[0] else {
+            panic!("highlight");
+        };
+        assert_eq!((rect.x, rect.width), (106.0, 6.0));
+        let PositionedElement::Line { start, end, .. } = &elements[1] else {
+            panic!("underline");
+        };
+        assert_eq!((start.x, end.x), (106.0, 112.0));
+        let PositionedElement::Line { start, end, .. } = &elements[2] else {
+            panic!("rule");
+        };
+        assert_eq!((start.x, end.x), (100.0, 112.0));
     }
 
     #[test]
