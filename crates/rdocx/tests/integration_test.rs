@@ -21013,7 +21013,8 @@ mod floating_table_placement_and_wrap {
     /// sit on the left, so the lines beside them start at 181 points, which is
     /// the left margin plus the 100 point table plus its 9 point right
     /// clearance. The page float sits on the right, so the lines beside it keep
-    /// their left edge and lose their right.
+    /// their left edge and lose their right. A box ends at the ink, since the
+    /// space after the last word of a wrapped line hangs past it.
     #[test]
     fn floating_tables_match_reviewed_word_page_geometry_and_pagination() {
         let mut document = Document::new();
@@ -21050,27 +21051,27 @@ mod floating_table_placement_and_wrap {
         assert_eq!(
             boxes_in_band(first, 68.0, 120.98),
             [
-                (82.47, 181.0, 525.39),
+                (82.47, 181.0, 522.9),
                 (96.96, 181.0, 277.95),
-                (119.46, 181.0, 525.39),
+                (119.46, 181.0, 522.9),
             ],
             "margin-anchored float geometry moved"
         );
         assert_eq!(
             boxes_in_band(first, 321.89, 374.87),
             [
-                (336.36, 181.0, 525.39),
+                (336.36, 181.0, 522.9),
                 (350.85, 181.0, 277.95),
-                (373.34, 181.0, 525.39),
+                (373.34, 181.0, 522.9),
             ],
             "text-anchored float geometry moved"
         );
         assert_eq!(
             boxes_in_band(first, 446.0, 498.98),
             [
-                (455.31, 72.0, 343.91),
+                (455.31, 72.0, 341.42),
                 (469.8, 72.0, 241.43),
-                (492.29, 72.0, 343.91),
+                (492.29, 72.0, 341.42),
             ],
             "page-anchored float geometry moved"
         );
