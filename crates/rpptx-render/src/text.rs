@@ -13,6 +13,11 @@ use crate::TextLineLayout;
 
 const DEFAULT_FONT_SIZE: f64 = 18.0;
 
+/// PowerPoint's single line spacing, in ems of the largest run on the line.
+///
+/// It is the same for every font, whatever its ascent, descent and line gap.
+const SINGLE_SPACING_EM: f64 = 1.2;
+
 struct AutoNumberSequence {
     scheme: String,
     next: u32,
@@ -616,16 +621,18 @@ fn stack_shaped_text(
             y += paragraph_spacing(paragraph.space_before.as_ref(), font_size);
         }
         let items = scaled_inline_items(shaped_items, font_scale, paragraph.indent);
-        let params = line_break_params(paragraph, content.width, text.wrap);
-        let mut lines =
-            break_multilingual_into_lines(&items, &params, font_manager, *base_direction)?;
-        if let Some(reduction) = line_spacing_reduction {
-            reduce_line_spacing(&mut lines, paragraph.line_spacing.as_ref(), reduction);
-        }
+        let params = line_break_params(
+            paragraph,
+            content.width,
+            text.wrap,
+            line_spacing_reduction.unwrap_or(0.0),
+        );
+        let lines = break_multilingual_into_lines(&items, &params, font_manager, *base_direction)?;
 
         for line in &lines {
-            width_fits &= line.width <= line.available_width + 0.01;
-            let baseline = y + line.baseline_offset();
+            width_fits &= ink_width(line) <= line.available_width + 0.01;
+            let line_size = line_font_size(line).unwrap_or(font_size);
+            let baseline = y + baseline_offset(line, SINGLE_SPACING_EM * line_size);
             let element_start = elements.len();
             let (start_x, occupied_width) = emit_line_items(
                 line,
@@ -645,7 +652,7 @@ fn stack_shaped_text(
                     height: line.height,
                 },
                 baseline,
-                font_size: line_font_size(line).unwrap_or(font_size),
+                font_size: line_size,
             });
             width = width.max(occupied_width);
             y += line.height;
@@ -693,6 +700,24 @@ fn line_text(line: &LayoutLine) -> String {
         .collect::<Vec<_>>();
     spans.sort_by_key(|(order, _)| *order);
     spans.into_iter().map(|(_, text)| text).collect()
+}
+
+/// Returns the widths of the spaces hanging off a line's visual left and
+/// right, which alignment and the fit test leave out.
+fn hanging_widths(line: &LayoutLine) -> (f64, f64) {
+    let (start, end) = line.hanging_space_counts();
+    let left = line.items[..start].iter().map(LineItem::width).sum();
+    let right = line.items[line.items.len() - end..]
+        .iter()
+        .map(LineItem::width)
+        .sum();
+    (left, right)
+}
+
+/// Returns a line's width without the spaces hanging off either side.
+fn ink_width(line: &LayoutLine) -> f64 {
+    let (left, right) = hanging_widths(line);
+    line.width - left - right
 }
 
 /// Returns the largest scaled run size on a line, ignoring its marker.
@@ -777,17 +802,25 @@ fn scale_segment(segment: &mut TextSegment, scale: f64) {
     }
 }
 
-fn reduce_line_spacing(
-    lines: &mut [LayoutLine],
-    spacing: Option<&ResolvedTextSpacing>,
-    reduction: f64,
-) {
-    if !matches!(spacing, Some(ResolvedTextSpacing::Percent(_))) {
-        return;
-    }
-    let factor = (1.0 - reduction).max(0.0);
-    for line in lines {
-        line.height *= factor;
+/// Distance from a line box's top to its baseline, where PowerPoint puts it.
+///
+/// A line taller than single spacing puts its baseline three quarters of the
+/// way down, or at the font's ascent share of the line when that is smaller. A
+/// line no taller than single spacing puts its descent at the bottom of the
+/// line, so it gives up space above the glyphs first, unless that lifts the
+/// baseline above the same share.
+fn baseline_offset(line: &LayoutLine, single_height: f64) -> f64 {
+    let glyph_height = line.ascent + line.descent;
+    let share = if glyph_height > 0.0 {
+        (line.ascent / glyph_height).min(0.75)
+    } else {
+        0.75
+    };
+    let proportional = line.height * share;
+    if line.height > single_height + 0.01 {
+        proportional
+    } else {
+        proportional.max(line.height - line.descent)
     }
 }
 
@@ -842,10 +875,13 @@ fn translate_element_y(element: &mut PositionedElement, offset: f64) {
     }
 }
 
+/// `line_spacing_reduction` is a stored `a:normAutofit/@lnSpcReduction`. It
+/// comes off the percentage, and omitted spacing counts as 100 percent.
 fn line_break_params(
     paragraph: &ResolvedParagraph,
     available_width: f64,
     wrap: bool,
+    line_spacing_reduction: f64,
 ) -> LineBreakParams {
     let (ind_first_line, ind_hanging) = if paragraph.indent < 0.0 {
         (0.0, -paragraph.indent)
@@ -863,9 +899,13 @@ fn line_break_params(
         ind_hanging,
         tab_stops: Vec::new(),
         line_spacing: match paragraph.line_spacing.as_ref() {
-            Some(ResolvedTextSpacing::Percent(factor)) => LineSpacing::Multiple(*factor),
+            Some(ResolvedTextSpacing::Percent(factor)) => LineSpacing::Multiple(
+                SINGLE_SPACING_EM * (factor - line_spacing_reduction).max(0.0),
+            ),
             Some(ResolvedTextSpacing::Points(points)) => LineSpacing::Exact(*points),
-            None => LineSpacing::Single,
+            None => {
+                LineSpacing::Multiple(SINGLE_SPACING_EM * (1.0 - line_spacing_reduction).max(0.0))
+            }
         },
         jc: Some(paragraph_align(paragraph.alignment)),
         wrap,
@@ -898,15 +938,17 @@ fn first_run_font_size(paragraph: &ResolvedParagraph) -> f64 {
         .unwrap_or_else(|| paragraph.end_style.font_size.unwrap_or(DEFAULT_FONT_SIZE))
 }
 
+/// A percentage is a share of single spacing, as for line spacing.
 fn paragraph_spacing(spacing: Option<&ResolvedTextSpacing>, font_size: f64) -> f64 {
     match spacing {
-        Some(ResolvedTextSpacing::Percent(factor)) => font_size * factor,
+        Some(ResolvedTextSpacing::Percent(factor)) => SINGLE_SPACING_EM * font_size * factor,
         Some(ResolvedTextSpacing::Points(points)) => *points,
         None => 0.0,
     }
 }
 
-/// Emits one line and returns its start x and the width its items occupy.
+/// Emits one line and returns its start x and the width its items occupy,
+/// hanging spaces included.
 fn emit_line_items(
     line: &LayoutLine,
     alignment: ParagraphAlignment,
@@ -915,7 +957,8 @@ fn emit_line_items(
     elements: &mut Vec<PositionedElement>,
 ) -> (f64, f64) {
     let element_start = elements.len();
-    let remaining = line.available_width - line.width;
+    let (hanging_left, _) = hanging_widths(line);
+    let remaining = line.available_width - ink_width(line);
     let distribute = match alignment {
         ParagraphAlignment::Justified if !line.is_last => {
             let gaps = word_gap_count(&line.items);
@@ -932,7 +975,8 @@ fn emit_line_items(
         ParagraphAlignment::Right => remaining,
         _ => 0.0,
     };
-    let mut x = content_x + line.indent_left + alignment_offset;
+    // Spaces hanging off the visual left sit outside the aligned ink.
+    let mut x = content_x + line.indent_left + alignment_offset - hanging_left;
     let start_x = x;
     let mut distributed_gaps = distribute
         .filter(|(_, every_glyph)| *every_glyph)
@@ -1953,9 +1997,12 @@ mod tests {
         .expect("stack spaced paragraphs");
         let runs = glyph_runs(&stacked.elements);
 
+        // Half of single spacing at 20 points is 12 points. PowerPoint lays
+        // spcBef or spcAft of 50, 100 and 200 % at 12, 24 and 48 points for
+        // 20 pt Arial.
         assert_eq!(runs.len(), 2);
-        assert_close(runs[1].origin.y - runs[0].origin.y, 37.0);
-        assert_close(stacked.height, 61.0);
+        assert_close(runs[1].origin.y - runs[0].origin.y, 24.0 + 12.0 + 3.0);
+        assert_close(stacked.height, 24.0 + 12.0 + 3.0 + 24.0);
     }
 
     #[test]
@@ -2023,14 +2070,17 @@ mod tests {
             ..ResolvedParagraph::default()
         };
 
-        let params = line_break_params(&paragraph, 80.0, false);
+        let params = line_break_params(&paragraph, 80.0, false, 0.0);
 
         assert_eq!(params.available_width, 80.0);
         assert_eq!(params.ind_left, 12.0);
         assert_eq!(params.ind_right, 7.0);
         assert_eq!(params.ind_first_line, 0.0);
         assert_eq!(params.ind_hanging, 5.0);
-        assert_eq!(params.line_spacing, LineSpacing::Multiple(1.25));
+        assert_eq!(
+            params.line_spacing,
+            LineSpacing::Multiple(SINGLE_SPACING_EM * 1.25)
+        );
         assert_eq!(params.jc, Some(Align::End));
         assert!(!params.wrap);
     }
@@ -2065,18 +2115,229 @@ mod tests {
         )
         .expect("stack percentage-spaced line");
 
-        assert_close(stacked.height, 24.0);
+        assert_close(stacked.height, 1.2 * SINGLE_SPACING_EM * 20.0);
+    }
+
+    /// Lays out `lines` paragraphs of `runs`, each a typeface and a size, and
+    /// returns the first baseline under the content top and the average pitch.
+    fn pitch_and_first_baseline(
+        fonts: &mut FontManager,
+        runs: &[(&str, f64)],
+        spacing: Option<ResolvedTextSpacing>,
+        lines: usize,
+    ) -> (f64, f64) {
+        let paragraph = ResolvedParagraph {
+            line_spacing: spacing,
+            runs: runs
+                .iter()
+                .map(|(typeface, size)| ResolvedTextRun::Text {
+                    text: "Hxgj ".to_owned(),
+                    style: ResolvedRunStyle {
+                        font_size: Some(*size),
+                        latin_typeface: Some((*typeface).to_owned()),
+                        ..ResolvedRunStyle::default()
+                    },
+                })
+                .collect(),
+            ..ResolvedParagraph::default()
+        };
+        let body = ResolvedTextBody {
+            paragraphs: vec![paragraph; lines],
+            ..text_body(TextInsets::default())
+        };
+        let stacked = stack_text(fonts, test_content_box(400.0), &body).expect("stack lines");
+        let first = stacked.lines[0].baseline;
+        let last = stacked.lines[lines - 1].baseline;
+        (first, (last - first) / (lines - 1) as f64)
     }
 
     #[test]
-    fn empty_paragraph_uses_end_style_metrics_and_size_for_spacing() {
+    fn line_pitch_and_first_baseline_match_powerpoint() {
+        use ResolvedTextSpacing::{Percent, Points};
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+
+        // PowerPoint for Mac, average pitch over 24 lines of 14 points: single
+        // spacing is 1.2 em for every font, percentages multiply it, and a
+        // line takes the pitch of its largest run.
+        let pitches = [
+            ("Arial", 28.0, None, 33.64),
+            ("Arial", 14.0, None, 16.79),
+            ("Arial", 14.0, Some(Percent(1.0)), 16.79),
+            ("Arial", 14.0, Some(Percent(1.5)), 25.21),
+            ("Arial", 14.0, Some(Percent(0.8)), 13.43),
+            ("Arial", 14.0, Some(Points(20.0)), 20.0),
+            ("Calibri", 14.0, Some(Percent(1.0)), 16.83),
+            ("Times New Roman", 14.0, Some(Percent(1.0)), 16.79),
+            ("Courier New", 14.0, Some(Percent(1.0)), 16.82),
+        ];
+        for (typeface, size, spacing, expected) in pitches {
+            let runs = [(typeface, 14.0), (typeface, size)];
+            let (_, pitch) = pitch_and_first_baseline(&mut fonts, &runs, spacing.clone(), 24);
+            assert!(
+                (pitch - expected).abs() < 0.06,
+                "{typeface} {size} {spacing:?}: pitch {pitch}, PowerPoint {expected}"
+            );
+        }
+
+        // First baseline under the top inset at 30 points, averaged over eight
+        // boxes. PowerPoint puts baselines on whole points.
+        let firsts = [
+            ("Arial", Some(Percent(1.0)), 29.0),
+            ("Arial", Some(Percent(1.5)), 41.0),
+            ("Arial", Some(Percent(0.8)), 22.0),
+            ("Arial", Some(Points(50.0)), 38.0),
+            ("Calibri", None, 28.0),
+            ("Calibri", Some(Percent(1.5)), 41.0),
+            ("Calibri", Some(Percent(0.8)), 22.0),
+            ("Times New Roman", Some(Percent(1.0)), 29.0),
+            ("Times New Roman", Some(Points(50.0)), 38.0),
+            ("Courier New", Some(Percent(1.0)), 26.0),
+            ("Courier New", Some(Percent(1.5)), 40.0),
+            ("Courier New", Some(Percent(0.8)), 21.0),
+        ];
+        for (typeface, spacing, expected) in firsts {
+            let (first, _) =
+                pitch_and_first_baseline(&mut fonts, &[(typeface, 30.0)], spacing.clone(), 2);
+            assert!(
+                (first - expected).abs() <= 1.0,
+                "{typeface} {spacing:?}: first baseline {first}, PowerPoint {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_space_hanging_past_the_frame_does_not_shrink_normal_autofit_text() {
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let mut body = autofit_body(
+            ResolvedAutofit::Normal {
+                font_scale: None,
+                line_spacing_reduction: None,
+            },
+            20.0,
+            "still in service, or later",
+        );
+        body.wrap = true;
+        let style = first_run_style(&body.paragraphs[0]).clone();
+        let ink = shape_run(&mut fonts, "still in service,", &style)
+            .expect("shape first line")
+            .width;
+        let content = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: ink + 1.0,
+            height: 400.0,
+        };
+
+        // python-pptx text styles set the paragraph direction, which takes the
+        // rich line path.
+        let stacked = stack_text_for_page_with_directions(
+            &mut fonts,
+            content,
+            &body,
+            1,
+            &[oxml_layout::TextDirection::LeftToRight],
+        )
+        .expect("stack directed paragraph");
+
+        assert_eq!(stacked.font_scale, 1.0);
+        assert_eq!(
+            stacked
+                .lines
+                .iter()
+                .map(|line| line.text.as_str())
+                .collect::<Vec<_>>(),
+            ["still in service, ", "or later"]
+        );
+    }
+
+    #[test]
+    fn spaces_hang_off_the_visual_end_of_directed_lines() {
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let cases = [
+            (
+                "שלום עולם זה טקסט ארוך בעברית שנשבר לכמה שורות בתוך התיבה",
+                ParagraphAlignment::Left,
+                oxml_layout::TextDirection::RightToLeft,
+            ),
+            (
+                "Repainted in 3 weeks while still in service, or re-coated next spring",
+                ParagraphAlignment::Right,
+                oxml_layout::TextDirection::LeftToRight,
+            ),
+        ];
+        for (text, alignment, direction) in cases {
+            for width in (100..240).step_by(2) {
+                let body = ResolvedTextBody {
+                    paragraphs: vec![ResolvedParagraph {
+                        alignment,
+                        runs: vec![ResolvedTextRun::Text {
+                            text: text.to_owned(),
+                            style: ResolvedRunStyle {
+                                font_size: Some(14.0),
+                                latin_typeface: Some("Arial".to_owned()),
+                                ..ResolvedRunStyle::default()
+                            },
+                        }],
+                        ..ResolvedParagraph::default()
+                    }],
+                    ..text_body(TextInsets::default())
+                };
+                let content = test_content_box(f64::from(width));
+                let stacked = stack_text_for_page_with_directions(
+                    &mut fonts,
+                    content,
+                    &body,
+                    1,
+                    &[direction],
+                )
+                .expect("stack directed paragraph");
+                let ink = stacked
+                    .elements
+                    .iter()
+                    .filter_map(|element| match element {
+                        PositionedElement::MultilingualText(run)
+                            if run.logical_text.trim() != "" =>
+                        {
+                            Some((
+                                run.origin.y,
+                                run.origin.x,
+                                run.origin.x + run.x_advances.iter().sum::<f64>(),
+                            ))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let last_baseline = ink.iter().map(|(y, _, _)| *y).fold(f64::MIN, f64::max);
+                for (baseline, left, right) in &ink {
+                    assert!(
+                        *left >= -0.01 && *right <= content.width + 0.01,
+                        "{width}: ink {left}..{right} leaves the frame"
+                    );
+                    // Right-aligned wrapped lines end flush, as in PowerPoint.
+                    if alignment == ParagraphAlignment::Right && *baseline < last_baseline {
+                        let line_right = ink
+                            .iter()
+                            .filter(|(y, _, _)| y == baseline)
+                            .map(|(_, _, right)| *right)
+                            .fold(f64::MIN, f64::max);
+                        assert!(
+                            (line_right - content.width).abs() < 0.01,
+                            "{width}: {line_right}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn empty_paragraph_uses_end_style_size_for_line_and_spacing() {
         let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
         let end_style = ResolvedRunStyle {
             font_size: Some(30.0),
             latin_typeface: Some("Carlito".to_owned()),
             ..ResolvedRunStyle::default()
         };
-        let expected = shape_run(&mut fonts, "", &end_style).expect("shape empty metrics");
         let body = ResolvedTextBody {
             space_first_last_paragraph: true,
             paragraphs: vec![ResolvedParagraph {
@@ -2100,10 +2361,7 @@ mod tests {
         .expect("stack empty paragraph");
 
         assert!(stacked.elements.is_empty());
-        assert_close(
-            stacked.height,
-            expected.ascent + expected.descent + expected.line_gap + 15.0,
-        );
+        assert_close(stacked.height, SINGLE_SPACING_EM * 30.0 * 1.5);
     }
 
     #[test]
@@ -2114,7 +2372,6 @@ mod tests {
             latin_typeface: Some("Carlito".to_owned()),
             ..ResolvedRunStyle::default()
         };
-        let expected = shape_run(&mut fonts, "", &end_style).expect("shape empty metrics");
         let body = ResolvedTextBody {
             paragraphs: vec![ResolvedParagraph {
                 bullet: Some(ResolvedBullet::Character {
@@ -2132,10 +2389,7 @@ mod tests {
         let stacked = stack_text(&mut fonts, test_content_box(100.0), &body)
             .expect("stack empty bullet paragraph");
         assert!(stacked.elements.is_empty());
-        assert_close(
-            stacked.height,
-            expected.ascent + expected.descent + expected.line_gap,
-        );
+        assert_close(stacked.height, SINGLE_SPACING_EM * 30.0);
     }
 
     #[test]
@@ -2356,18 +2610,9 @@ mod tests {
             baselines.push(glyph_runs(&stacked.elements)[0].origin.y);
         }
 
-        let expected = shape_run(
-            &mut fonts,
-            "anchor",
-            &ResolvedRunStyle {
-                font_size: Some(12.0),
-                latin_typeface: Some("Carlito".to_owned()),
-                ..ResolvedRunStyle::default()
-            },
-        )
-        .expect("shape anchor metrics");
-        let half_leading = (20.0 - expected.ascent - expected.descent) / 2.0;
-        assert_close(baselines[0], content.y + expected.ascent + half_leading);
+        // A 20 point line is taller than single spacing at 12 points, so its
+        // baseline sits three quarters of the way down.
+        assert_close(baselines[0], content.y + 0.75 * 20.0);
         assert_close(baselines[1] - baselines[0], 40.0);
         assert_close(baselines[2] - baselines[0], 80.0);
     }
@@ -2396,7 +2641,7 @@ mod tests {
                 x: 0.0,
                 y: 0.0,
                 width: 10.0,
-                height: 5.0,
+                height: 2.0,
             },
             ResolvedGeometry::Rectangle,
         );
@@ -2520,8 +2765,7 @@ mod tests {
         let content_width = 120.0 - insets.left - insets.right;
         let content_height = 80.0 - insets.top - insets.bottom;
         let expected_x = insets.left + (content_width - expected.width) / 2.0;
-        let half_leading = (20.0 - expected.ascent - expected.descent) / 2.0;
-        let expected_y = insets.top + (content_height - 20.0) + expected.ascent + half_leading;
+        let expected_y = insets.top + (content_height - 20.0) + 0.75 * 20.0;
         let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
 
         let page = layout_slide_with_fonts(&input, 0, &mut fonts).expect("layout anchored text");
@@ -2974,28 +3218,28 @@ mod tests {
     }
 
     #[test]
-    fn stored_line_spacing_reduction_applies_to_percentage_not_point_spacing() {
+    fn stored_line_spacing_reduction_comes_off_the_percentage_not_point_spacing() {
+        // PowerPoint, lnSpcReduction="20000" on 20 pt Arial: omitted spacing
+        // and 100 % lay lines 19.2 points apart, 150 % lays them 31.2 apart
+        // (130 %, not 120 %), and 30 points stays 30 points.
         let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
         let mut body = autofit_body(
             ResolvedAutofit::Normal {
                 font_scale: Some(1.0),
-                line_spacing_reduction: Some(0.75),
+                line_spacing_reduction: Some(0.2),
             },
             20.0,
             "leading",
         );
-        let segment = shape_run(&mut fonts, "leading", first_run_style(&body.paragraphs[0]))
-            .expect("shape natural line");
-        let natural_height = segment.ascent + segment.descent + segment.line_gap;
 
         let single =
-            stack_text(&mut fonts, test_content_box(200.0), &body).expect("stack natural single");
-        assert_close(single.height, natural_height);
+            stack_text(&mut fonts, test_content_box(200.0), &body).expect("stack reduced single");
+        assert_close(single.height, 19.2);
 
         body.paragraphs[0].line_spacing = Some(ResolvedTextSpacing::Percent(1.5));
         let percentage = stack_text(&mut fonts, test_content_box(200.0), &body)
             .expect("stack reduced percentage");
-        assert_close(percentage.height, 20.0 * 1.5 * 0.25);
+        assert_close(percentage.height, 31.2);
 
         body.paragraphs[0].line_spacing = Some(ResolvedTextSpacing::Points(30.0));
         let points =

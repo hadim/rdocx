@@ -39555,6 +39555,52 @@ mod f266a_script_and_font_slot_regressions {
         run.set_language_bidi_value(Some("ar-SA"));
     }
 
+    /// A space that ends a wrapped right-to-left line hangs off its visual
+    /// left. Drawing it inside the line pushed the ink up to a space width
+    /// past the right margin.
+    #[test]
+    fn a_wrapped_right_to_left_line_keeps_its_ink_inside_the_margins() {
+        const TEXT: &str =
+            "שלום עולם זה טקסט ארוך בעברית שנשבר לכמה שורות בתוך התיבה הזאת היום ועוד";
+        let mut document = Document::new();
+        {
+            let mut section = document.section_mut(0).unwrap();
+            section
+                .set_page_size(Length::pt(612.0), Length::pt(792.0))
+                .unwrap();
+            section
+                .set_margins(
+                    Length::pt(72.0),
+                    Length::pt(72.0),
+                    Length::pt(72.0),
+                    Length::pt(72.0),
+                )
+                .unwrap();
+        }
+        for step in 0..70 {
+            let mut paragraph = document
+                .add_paragraph("")
+                .right_to_left(true)
+                .alignment(rdocx::paragraph::Alignment::Left)
+                .indent_left(Length::pt(100.0 + 2.0 * f64::from(step)));
+            style_hebrew(&mut paragraph.add_run(TEXT));
+        }
+
+        let result = document
+            .layout_deterministic()
+            .expect("deterministic right-to-left layout");
+        let runs = rich_runs(&result);
+        assert!(runs.len() > 70);
+        for run in runs.iter().filter(|run| run.logical_text.trim() != "") {
+            let right = run.origin.x + run.x_advances.iter().sum::<f64>();
+            assert!(
+                right <= 540.01,
+                "{:?} ends at {right}, past the 540 pt margin",
+                run.logical_text
+            );
+        }
+    }
+
     #[test]
     fn a_right_to_left_paragraph_keeps_logical_order_in_extracted_text() {
         let mut document = Document::new();
