@@ -776,6 +776,14 @@ carries the `p:style` python-pptx writes after its `p:spPr`: `a:lnRef idx="2"`,
 `a:fillRef idx="0"`, and `a:effectRef idx="1"` in `accent1`, and
 `a:fontRef idx="minor"` in `tx1`. PowerPoint draws no line for a connector with
 neither a style nor a direct `a:ln`, so the style gives it the theme's line.
+`ShapeMut::set_theme_effect_index` changes the `a:effectRef` index of an
+ordinary shape or a connector that has a typed style, and
+`ShapeRef::theme_effect_index` reads it. Index 0 removes the theme effect,
+which in the bundled theme is a soft shadow under the connector. PowerPoint,
+LibreOffice, and the renderer all draw no shadow for index 0, while an empty
+direct `a:effectLst` removes it in PowerPoint and the renderer but not in
+LibreOffice. A connector's style is rewritten from its typed view only when
+this index changes.
 
 A constructed table uses a canonical `p:graphicFrame` with deterministic name
 `Table {id}`, a typed transform, the DrawingML table URI, and a rectangular

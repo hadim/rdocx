@@ -148,6 +148,26 @@ impl CT_ConnectionShape {
         Ok(())
     }
 
+    /// Sets the `idx` of the typed style's `a:effectRef`, the theme effect
+    /// style the connector draws. Index 0 references no theme effect.
+    ///
+    /// The preserved `p:style` is rewritten from the typed view only when the
+    /// index changes. Returns `false` and changes nothing when the connector
+    /// has no typed style.
+    pub fn set_effect_reference_index(&mut self, index: u32) -> Result<bool> {
+        let Some(style) = self.raw.typed_style.as_deref() else {
+            return Ok(false);
+        };
+        if style.effect_reference.index == index {
+            return Ok(true);
+        }
+        let mut style = style.clone();
+        style.effect_reference.index = index;
+        self.raw.style = Some(style.to_fragment()?);
+        self.raw.typed_style = Some(Box::new(style));
+        Ok(true)
+    }
+
     /// Returns the typed format-scheme references of `p:style`.
     ///
     /// A style that does not carry `a:lnRef`, `a:fillRef`, `a:effectRef`,
@@ -1016,5 +1036,49 @@ mod constructor_tests {
             r#"</p:spPr><p:style><a:lnRef idx="2"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="0"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="1"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"><a:schemeClr val="tx1"/></a:fontRef></p:style></p:cxnSp>"#
         ));
         assert_eq!(CT_ConnectionShape::from_xml(&xml).unwrap(), connector);
+    }
+
+    #[test]
+    fn effect_reference_index_rewrites_only_the_effect_reference() {
+        let mut connector = CT_ConnectionShape::new_free_standing(
+            2,
+            "Connector 2",
+            "line",
+            CT_Transform2D::default(),
+        )
+        .unwrap();
+        assert!(!connector.set_effect_reference_index(0).unwrap());
+        assert!(connector.style().is_none());
+
+        connector.set_default_style().unwrap();
+        assert!(connector.set_effect_reference_index(0).unwrap());
+
+        assert_eq!(connector.style().unwrap().effect_reference.index, 0);
+        let xml = connector.to_xml().unwrap();
+        let text = String::from_utf8(xml.clone()).unwrap();
+        assert!(text.contains(
+            r#"</p:spPr><p:style><a:lnRef idx="2"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="0"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="0"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"><a:schemeClr val="tx1"/></a:fontRef></p:style></p:cxnSp>"#
+        ));
+        assert_eq!(CT_ConnectionShape::from_xml(&xml).unwrap(), connector);
+    }
+
+    #[test]
+    fn unchanged_effect_reference_index_keeps_the_style_bytes() {
+        let xml = format!(
+            r#"<q:cxnSp xmlns:q="{}" xmlns:d="{}"><q:nvCxnSpPr><q:cNvPr name="Elbow" id="7"/><q:cNvCxnSpPr/><q:nvPr/></q:nvCxnSpPr><q:spPr><d:prstGeom prst="bentConnector3"><d:avLst/></d:prstGeom></q:spPr><q:style><d:lnRef idx="1"><d:schemeClr val="accent1"><d:shade val="95000"/><d:satMod val="105000"/></d:schemeClr></d:lnRef><d:fillRef idx="0"><d:schemeClr val="accent1"/></d:fillRef><d:effectRef idx="0"><d:schemeClr val="accent1"/></d:effectRef><d:fontRef idx="minor"><d:schemeClr val="tx1"/></d:fontRef></q:style></q:cxnSp>"#,
+            super::P_NS,
+            super::A_NS
+        );
+        let mut connector = CT_ConnectionShape::from_xml(xml.as_bytes()).unwrap();
+        let before = connector.to_xml().unwrap();
+        assert_eq!(connector.style().unwrap().effect_reference.index, 0);
+
+        assert!(connector.set_effect_reference_index(0).unwrap());
+
+        assert_eq!(connector.to_xml().unwrap(), before);
+        let text = String::from_utf8(before).unwrap();
+        assert!(text.contains(
+            r#"<q:style><d:lnRef idx="1"><d:schemeClr val="accent1"><d:shade val="95000"/>"#
+        ));
     }
 }
