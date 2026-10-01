@@ -339,6 +339,65 @@ fn text_prints_body_and_table_content_in_document_order() {
     );
 }
 
+/// Give the integer after the first `marker` in `part` a decimal part.
+fn add_decimal_part(package: &mut OpcPackage, part: &str, marker: &str, decimals: &str) {
+    let mut xml = String::from_utf8(package.get_part(part).unwrap().to_vec()).unwrap();
+    let start = xml.find(marker).expect("marker is present") + marker.len();
+    let end = start + xml[start..].find('"').expect("attribute value ends");
+    xml.insert_str(end, decimals);
+    package.set_part(part, xml.into_bytes());
+}
+
+/// #246: Google Docs writes integer measurements with a decimal part, and
+/// every command refused such a file, read-only ones included.
+#[test]
+fn text_and_validate_read_decimal_measurements_and_name_a_refused_one() {
+    let temp = TempWorkspace::new("decimal-measurements");
+    let input = temp.path.join("decimal.docx");
+    let refused = temp.path.join("refused.docx");
+    let mut document = fixture_document(&["Body first"]);
+    {
+        let mut table = document.add_table(1, 2);
+        table.cell(0, 0).unwrap().set_text("Left cell");
+        table.cell(0, 1).unwrap().set_text("Right cell");
+    }
+    document.save(&input).unwrap();
+
+    let mut package = OpcPackage::open(&input).unwrap();
+    let body = package.main_document_part().unwrap();
+    add_decimal_part(&mut package, &body, r#"<w:gridCol w:w=""#, ".0000000000005");
+    add_decimal_part(&mut package, &body, r#"<w:pgSz w:w=""#, ".0");
+    add_decimal_part(&mut package, &body, r#"w:top=""#, ".0");
+    add_decimal_part(&mut package, "/word/styles.xml", r#"<w:sz w:val=""#, ".0");
+    add_decimal_part(&mut package, "/word/styles.xml", r#"w:after=""#, ".0");
+    package.save(&input).unwrap();
+
+    let output = cli(&["text", path_text(&input)]);
+    assert_success(&output, "text");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        "Body first\nLeft cell\tRight cell\t\n"
+    );
+    let output = cli(&["validate", path_text(&input)]);
+    assert_success(&output, "validate");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("OK — no issues found in {}\n", input.display())
+    );
+
+    add_decimal_part(&mut package, &body, r#"<w:pgSz w:w=""#, "e4");
+    package.save(&refused).unwrap();
+    for command in ["text", "validate"] {
+        let output = cli(&[command, path_text(&refused)]);
+        assert_eq!(output.status.code(), Some(1), "{command}");
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(
+            stderr.contains(r#"w:pgSz/@w:w "12240.0e4" is not an integer measurement"#),
+            "{command}: {stderr}"
+        );
+    }
+}
+
 #[test]
 fn printing_commands_end_cleanly_when_the_reader_closes_stdout() {
     let temp = TempWorkspace::new("closed-stdout");
