@@ -2,6 +2,7 @@ use std::io::Write;
 
 use oxml_core::OxmlError;
 use oxml_core::raw_xml::{capture_element, capture_empty_element};
+use oxml_core::xml::reject_non_xml_characters;
 use oxml_drawing::namespace::A_NS;
 use oxml_drawing::order::OrderedRawChildren;
 use oxml_drawing::text::CT_TextBody;
@@ -39,12 +40,17 @@ impl CommentAuthor {
     ) -> Result<Self> {
         let id = id.into();
         validate_guid("comment author", &id)?;
+        let (name, user_id, provider_id) = (name.into(), user_id.into(), provider_id.into());
+        reject_non_xml_characters("comment author name", &name)?;
+        reject_non_xml_characters("comment author initials", initials.unwrap_or_default())?;
+        reject_non_xml_characters("comment author user id", &user_id)?;
+        reject_non_xml_characters("comment author provider id", &provider_id)?;
         Ok(Self {
             id,
-            name: name.into(),
+            name,
             initials: initials.map(str::to_owned),
-            user_id: user_id.into(),
-            provider_id: provider_id.into(),
+            user_id,
+            provider_id,
             raw_attributes: Vec::new(),
             raw_children: OrderedRawChildren::default(),
         })

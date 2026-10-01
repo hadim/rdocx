@@ -22664,16 +22664,28 @@ impl Document {
     ///
     /// A `replacement` that contains `placeholder` is substituted once, not
     /// repeatedly.
+    ///
+    /// A `replacement` holding a character XML 1.0 cannot carry is accepted
+    /// here and refused when the document is saved. [`Self::try_replace_text`]
+    /// refuses it at once.
     pub fn replace_text(&mut self, placeholder: &str, replacement: &str) -> usize {
-        self.try_replace_text(placeholder, replacement)
-            .expect("text replacement package preflight failed")
+        let mut candidate = self.clone_for_staging();
+        let count = candidate
+            .replace_batch(&[(placeholder, replacement)])
+            .expect("text replacement package preflight failed");
+        self.commit_staged_mutation(candidate);
+        count
     }
 
     /// Fallible twin of [`Self::replace_text`].
     ///
     /// The complete replacement is staged, serialized, and reopened before it
     /// replaces the live document. A preflight failure leaves `self` unchanged.
+    /// A `replacement` holding a character XML 1.0 cannot carry, such as
+    /// U+0001, is refused with an error naming it and its position, as
+    /// python-docx refuses such text.
     pub fn try_replace_text(&mut self, placeholder: &str, replacement: &str) -> Result<usize> {
+        oxml_core::xml::reject_non_xml_characters("replacement text", replacement)?;
         let mut candidate = self.clone_for_staging();
         let count = candidate.replace_batch(&[(placeholder, replacement)])?;
         self.commit_staged_mutation(candidate);
@@ -22934,6 +22946,7 @@ impl Document {
     /// of them and the text of tracked insertions. Returns the total number of replacements made, or an error if the
     /// regex is invalid.
     pub fn replace_regex(&mut self, pattern: &str, replacement: &str) -> Result<usize> {
+        oxml_core::xml::reject_non_xml_characters("replacement text", replacement)?;
         let re =
             regex::Regex::new(pattern).map_err(|e| Error::Other(format!("invalid regex: {e}")))?;
         let mut candidate = self.clone_for_staging();
@@ -22944,6 +22957,9 @@ impl Document {
 
     /// Replace multiple regex patterns at once. Returns total replacements.
     pub fn replace_all_regex(&mut self, patterns: &[(String, String)]) -> Result<usize> {
+        for (_, replacement) in patterns {
+            oxml_core::xml::reject_non_xml_characters("replacement text", replacement)?;
+        }
         let compiled = patterns
             .iter()
             .map(|(pattern, replacement)| {

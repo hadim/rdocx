@@ -26,6 +26,7 @@ pub use paragraph::{
     CT_RegularTextRun, CT_TextCharacterProperties, CT_TextField, CT_TextLineBreak,
     CT_TextParagraph, CT_TextParagraphProperties, TextAlignment, TextFont, TextHyperlink,
     TextPointValue, TextRun, TextSpace, TextSpacing, TextStrike, TextUnderline, TextValue,
+    escape_invalid_xml_characters,
 };
 
 use body::{Result, missing_end};
