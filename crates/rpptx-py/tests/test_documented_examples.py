@@ -418,11 +418,18 @@ def test_run_text_replaces_in_place_and_keeps_every_handle_live():
     first, second = runs[0], runs[1]
     font = first.font
 
-    for value in ("HELLO", "line\nfeed", "vertical\vtab", "tab\tstop", ""):
+    # A vertical tab in run text is stored as `_x000B_`, as python-pptx does.
+    for value, stored in (
+        ("HELLO", "HELLO"),
+        ("line\nfeed", "line\nfeed"),
+        ("vertical\vtab", "vertical_x000B_tab"),
+        ("tab\tstop", "tab\tstop"),
+        ("", ""),
+    ):
         first.text = value
-        assert first.text == value
+        assert first.text == stored
         assert second.text == " world"
-        assert paragraph.text == frame.text == shape.text == value + " world"
+        assert paragraph.text == frame.text == shape.text == stored + " world"
         assert len(runs) == 2
         assert shape.left == left
         assert len(slides) == len(shapes) == len(slide.shapes) == 1
