@@ -33,6 +33,7 @@ from rpptx._rpptx import (
     Font,
     Hyperlink,
     Image,
+    LineEndFormat,
     LineFormat,
     Paragraph,
     ParagraphCollection,
@@ -50,7 +51,13 @@ from rpptx._rpptx import (
     Table,
     TextFrame,
 )
-from rpptx.enum.dml import MSO_FILL_TYPE
+from rpptx.enum.dml import (
+    MSO_ARROWHEAD_LENGTH,
+    MSO_ARROWHEAD_STYLE,
+    MSO_ARROWHEAD_WIDTH,
+    MSO_FILL_TYPE,
+    MSO_LINE_DASH_STYLE,
+)
 from rpptx.enum.shapes import MSO_CONNECTOR, MSO_SHAPE_TYPE
 
 
@@ -233,6 +240,16 @@ def exercise_rpptx_types(path: Path) -> None:
     line_width: Length = line.width
     line.color.rgb = RGBColor.from_string("FF0000")
     line_fill: FillFormat = line.fill
+    line.dash_style = MSO_LINE_DASH_STYLE.DASH
+    line.dash_style = None
+    dash_style: MSO_LINE_DASH_STYLE | None = line.dash_style
+    tail_end: LineEndFormat = line.tail_end
+    tail_end.type = MSO_ARROWHEAD_STYLE.TRIANGLE
+    tail_end.width = MSO_ARROWHEAD_WIDTH.WIDE
+    tail_end.length = None
+    end_type: MSO_ARROWHEAD_STYLE | None = line.head_end.type
+    end_width: MSO_ARROWHEAD_WIDTH | None = tail_end.width
+    end_length: MSO_ARROWHEAD_LENGTH | None = tail_end.length
     shape_xml: bytes = shape.xml
     connector: Shape = presentation.slides[0].shapes.add_connector(
         MSO_CONNECTOR.STRAIGHT, 0, 0, Inches(1), Inches(1)
@@ -442,6 +459,7 @@ if TYPE_CHECKING:
     FillFormat()  # type: ignore[call-arg]
     Image()  # type: ignore[call-arg]
     LineFormat()  # type: ignore[call-arg]
+    LineEndFormat()  # type: ignore[call-arg]
     Comment()  # type: ignore[call-arg]
     CommentAuthor()  # type: ignore[call-arg]
     CommentReply()  # type: ignore[call-arg]
