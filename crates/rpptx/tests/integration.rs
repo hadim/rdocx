@@ -7885,10 +7885,11 @@ use oxml_opc::{OpcPackage, content_types};
 use rpptx::{
     Angle, CT_LineProperties, CT_TextCharacterProperties, CT_TextParagraphProperties, CellBorder,
     ChartData, ChartKind, ConnectorType, EmbeddedContentKind, EmbeddedMediaInput,
-    EmbeddedMutationPolicy, EmbeddedSignatureState, Emu, Error, Fill, HandoutLayout,
-    MediaDiagnostic, MediaFallbackPolicy, MediaKind, MediaPlaybackPhase, MediaPlaybackSettings,
-    MediaPoster, MediaSourceInput, Percent1000, Presentation, PresentationPackageClass, ShapeKind,
-    ShapeRef, TextBullet, TextBulletCharacter, TextBulletChoice, TextFont, TimelinePosition,
+    EmbeddedMutationPolicy, EmbeddedSignatureState, Emu, Error, Fill, HandoutLayout, LineDash,
+    LineEnd, LineEndSize, LineEndType, MediaDiagnostic, MediaFallbackPolicy, MediaKind,
+    MediaPlaybackPhase, MediaPlaybackSettings, MediaPoster, MediaSourceInput, Percent1000,
+    Presentation, PresentationPackageClass, PresetDash, ST_PresetLineDashVal, ShapeKind, ShapeRef,
+    TextBullet, TextBulletCharacter, TextBulletChoice, TextFont, TimelinePosition,
 };
 use rpptx_layout::{
     FlattenedItem, ResolveCtx, ResolvedContent, ResolvedSlide, ResolvedTextBody, ResolvedTextRun,
@@ -17721,6 +17722,81 @@ fn shape_mutation_setters_survive_save_and_reload() {
     );
     let xml = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
     assert!(xml.contains("name=\"A &amp; B &quot;quoted&quot;\""));
+}
+
+#[test]
+fn line_dash_and_ends_are_written_in_schema_order_and_removed() {
+    fn line_xml(presentation: &Presentation) -> String {
+        let slide = presentation.slide(0).unwrap();
+        let shape = slide.shapes().last().unwrap();
+        let xml = String::from_utf8(shape.xml().unwrap()).unwrap();
+        let start = xml.find("<a:ln").unwrap();
+        let end = xml.find("</a:ln>").unwrap() + "</a:ln>".len();
+        xml[start..end].to_owned()
+    }
+
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(0).unwrap();
+    let mut line = CT_LineProperties::from_xml(
+        br#"<a:ln w="12700"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill><a:custDash><a:ds d="100000" sp="50000"/></a:custDash><a:round/><a:extLst><a:ext uri="{X}"/></a:extLst></a:ln>"#,
+    )
+    .unwrap();
+    line.dash = Some(LineDash::Preset(PresetDash::new(
+        ST_PresetLineDashVal::LargeDashDot,
+    )));
+    let mut head = LineEnd::default();
+    head.kind = Some(LineEndType::Oval);
+    let mut tail = LineEnd::default();
+    tail.kind = Some(LineEndType::Triangle);
+    tail.width = Some(LineEndSize::Large);
+    tail.length = Some(LineEndSize::Small);
+    line.head_end = Some(head);
+    line.tail_end = Some(tail);
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .add_shape("rect", Emu(0), Emu(0), Emu(914_400), Emu(914_400))
+        .unwrap()
+        .set_line(line)
+        .unwrap();
+
+    let mut reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
+    assert_eq!(
+        line_xml(&reopened),
+        concat!(
+            r#"<a:ln w="12700"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>"#,
+            r#"<a:prstDash val="lgDashDot"/><a:round/><a:headEnd type="oval"/>"#,
+            r#"<a:tailEnd type="triangle" w="lg" len="sm"/>"#,
+            r#"<a:extLst><a:ext uri="{X}"/></a:extLst></a:ln>"#,
+        )
+    );
+
+    let index = reopened.slide(0).unwrap().shapes().len() - 1;
+    let mut line = reopened
+        .slide(0)
+        .unwrap()
+        .shape(index)
+        .unwrap()
+        .line()
+        .unwrap()
+        .clone();
+    line.dash = None;
+    line.head_end = None;
+    line.tail_end = None;
+    reopened
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(index)
+        .unwrap()
+        .set_line(line)
+        .unwrap();
+    assert_eq!(
+        line_xml(&reopened),
+        concat!(
+            r#"<a:ln w="12700"><a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>"#,
+            r#"<a:round/><a:extLst><a:ext uri="{X}"/></a:extLst></a:ln>"#,
+        )
+    );
 }
 
 #[test]

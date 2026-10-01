@@ -177,7 +177,8 @@ impl ST_PresetLineDashVal {
     pub const fn dash_array(self) -> &'static [u16] {
         match self {
             Self::Solid => &[],
-            Self::Dot | Self::SystemDot => &[1, 1],
+            Self::Dot => &[1, 3],
+            Self::SystemDot => &[1, 1],
             Self::Dash => &[4, 3],
             Self::SystemDash => &[3, 1],
             Self::LargeDash => &[8, 3],
@@ -482,12 +483,14 @@ impl CT_LineProperties {
                     line.tail_end = Some(parse_empty_line_end(&element)?);
                     boundary = 5;
                 }
-                Event::Start(element) => line
-                    .raw_children
-                    .push(boundary, capture_element(reader, &element)?),
-                Event::Empty(element) => line
-                    .raw_children
-                    .push(boundary, capture_empty_element(&element)?),
+                Event::Start(element) => line.raw_children.push(
+                    raw_boundary(element.name().as_ref(), boundary),
+                    capture_element(reader, &element)?,
+                ),
+                Event::Empty(element) => line.raw_children.push(
+                    raw_boundary(element.name().as_ref(), boundary),
+                    capture_empty_element(&element)?,
+                ),
                 Event::End(element) if matches_local_name(element.name().as_ref(), b"ln") => break,
                 Event::Eof => return Err(missing_end("ln")),
                 _ => {}
@@ -752,6 +755,16 @@ fn capture_all_children(reader: &mut Reader<&[u8]>, end_name: &[u8]) -> Result<O
     Ok(raw_children)
 }
 
+/// Keeps `a:extLst` last, after a head or tail end added later, as
+/// `CT_LineProperties` requires. Other raw children stay where they were read.
+fn raw_boundary(name: &[u8], boundary: usize) -> usize {
+    if matches_local_name(name, b"extLst") {
+        5
+    } else {
+        boundary
+    }
+}
+
 fn is_fill(name: &[u8]) -> bool {
     matches!(
         local_name(name),
@@ -917,15 +930,15 @@ fn write_end<W: Write>(writer: &mut Writer<W>, name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CT_LineProperties, LineCap, LineDash, LineEndSize, LineEndType, LineError, LineJoin,
-        ST_PresetLineDashVal,
+        CT_LineProperties, LineCap, LineDash, LineEnd, LineEndSize, LineEndType, LineError,
+        LineJoin, ST_PresetLineDashVal,
     };
 
     #[test]
     fn every_preset_line_dash_value_maps_to_a_dash_array() {
         let expected: &[(&str, &[u16])] = &[
             ("solid", &[]),
-            ("dot", &[1, 1]),
+            ("dot", &[1, 3]),
             ("sysDot", &[1, 1]),
             ("dash", &[4, 3]),
             ("sysDash", &[3, 1]),
@@ -989,6 +1002,22 @@ mod tests {
         let written = CT_LineProperties::from_xml(xml).unwrap().to_xml().unwrap();
 
         assert_eq!(written, br#"<a:ln w="25400"><x:before x:id="1"/><a:solidFill><a:srgbClr val="102030"/></a:solidFill><x:afterFill><x:item>one &amp; two</x:item><!--note--></x:afterFill><a:prstDash val="lgDashDot"><x:dashExt x:v="kept"/></a:prstDash><x:afterDash/><a:round><x:joinExt/></a:round><a:headEnd type="arrow"><x:headExt/></a:headEnd><x:betweenEnds/><a:tailEnd type="diamond"/><x:after/></a:ln>"#);
+    }
+
+    #[test]
+    fn line_extension_list_stays_last_when_ends_are_added() {
+        let xml = br#"<a:ln><a:noFill/><a:bevel/><a:extLst><a:ext uri="{X}"/></a:extLst></a:ln>"#;
+        let mut line = CT_LineProperties::from_xml(xml).unwrap();
+        line.head_end = Some(LineEnd::default());
+        line.tail_end = Some(LineEnd {
+            kind: Some(LineEndType::Stealth),
+            ..LineEnd::default()
+        });
+
+        assert_eq!(
+            line.to_xml().unwrap(),
+            br#"<a:ln><a:noFill/><a:bevel/><a:headEnd/><a:tailEnd type="stealth"/><a:extLst><a:ext uri="{X}"/></a:extLst></a:ln>"#
+        );
     }
 
     #[test]
