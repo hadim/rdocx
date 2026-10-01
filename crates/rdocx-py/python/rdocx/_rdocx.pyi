@@ -15,6 +15,7 @@ _BorderEdge = _Literal["top", "bottom", "left", "right", "insideH", "insideV"]
 _Margins = tuple[
     _shared.Length | None, _shared.Length | None, _shared.Length | None, _shared.Length | None
 ]
+_RevisionView = _Literal["accepted", "tracked"]
 __all__ = [
     "Bookmark", "BoundingBox", "Cell", "CellCollection", "CellParagraphCollection",
     "Comment", "ComparisonDiagnostic", "ContentFragment", "CoreProperties", "Document", "Font",
@@ -599,6 +600,7 @@ class Document:
         *,
         fonts: _Sequence[tuple[str, bytes]] | None = None,
         font_dir: _Path | None = None,
+        revision_view: _RevisionView = "accepted",
     ) -> bytes:
         """Render the document to PDF bytes.
 
@@ -607,14 +609,19 @@ class Document:
         their family. When either is given, layout uses only those fonts, as
         ``rdocx convert --font-dir`` does, so a family they do not provide
         raises ``LayoutError``. A missing ``font_dir`` raises
-        ``FileNotFoundError``.
+        ``FileNotFoundError``. ``revision_view="tracked"`` draws both sides of
+        each tracked change instead of the accepted view.
         """
     def to_pdfa_deterministic(
         self, profile: _Literal["pdfa-2b", "pdfa-3b"] = "pdfa-2b"
     ) -> bytes: ...
-    def render_page_to_png(self, page_index: int, dpi: float = 150.0) -> bytes | None: ...
+    def render_page_to_png(
+        self, page_index: int, dpi: float = 150.0, *, revision_view: _RevisionView = "accepted"
+    ) -> bytes | None: ...
     def render_page_to_svg(self, page_index: int) -> SvgRenderResult | None: ...
-    def render_all_pages(self, dpi: float = 150.0) -> list[bytes]: ...
+    def render_all_pages(
+        self, dpi: float = 150.0, *, revision_view: _RevisionView = "accepted"
+    ) -> list[bytes]: ...
     def render_pages(
         self,
         *,
@@ -623,6 +630,7 @@ class Document:
         quality: int = 90,
         transparent: bool = False,
         pages: list[int] | None = None,
+        revision_view: _RevisionView = "accepted",
     ) -> list[bytes] | bytes: ...
     def compare(
         self,
