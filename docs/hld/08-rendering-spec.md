@@ -1435,7 +1435,9 @@ box, including empty and image-bearing lines. Table fragments use the union of
 the rows placed on that page, including repeated header rows. A page-spanning
 item therefore owns one fragment on every occupied page. Body-level content
 controls aggregate the blocks projected from that direct body owner. Preserved
-unlaid content remains addressable through an empty fragment slice.
+unlaid content remains addressable through an empty fragment slice, and so does
+a paragraph that the accepted view drops because its mark is deleted or moved
+away and it has no accepted content.
 
 The body owner is a private result-local overlay on shared layout blocks.
 `PositionedElement` and the renderer input remain unchanged. Recorded restart
@@ -1457,7 +1459,17 @@ Block-shaped paragraph, table, row, and cell children below an inline content
 control remain raw and do not enter accepted or tracked layout. The
 same projection applies to body, table, header, footer, footnote, and endnote
 paragraphs. Accepted layout includes insertions and move
-destinations and omits deletions and move sources. Tracked layout includes both
+destinations and omits deletions and move sources. A body paragraph whose mark
+is deleted or moved away produces no block when
+`CT_Body::accepted_paragraph_joins_next` says it joins the next paragraph and
+its accepted view is blank, so it leaves no line, spacing, list number, heading
+outline entry or page break. Blank means no text, tab, break, picture, field,
+symbol, special character, note reference or equation, and no bookmark start.
+A bookmark start keeps the paragraph, because PAGEREF and REF read the page,
+number and text of the paragraph that holds it, and accepting moves it onto
+the next paragraph, which layout does not model. A paragraph that keeps
+accepted content is still laid out as its own paragraph rather than at the
+start of the next one. Tracked layout includes both
 sides. It forces single underline on insertion and move destination text and
 single strike on deletion and move source text while retaining the remaining
 resolved formatting.

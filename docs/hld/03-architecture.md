@@ -1534,8 +1534,17 @@ deleted or moved away. Such a paragraph joins the next paragraph, which keeps
 its own properties, and a paragraph left without content is dropped with no
 empty block, heading or list item. Before a table and at the end of the body
 or of a cell, a paragraph that keeps content stays its own block.
-`Document::text` and the accepted PDF render still keep every such paragraph
-as its own line.
+A body paragraph whose mark is deleted or moved away joins the next body
+paragraph without a newline, as accepting it in Word does, so one without
+accepted text leaves no line. `CT_Body::accepted_paragraph_joins_next` owns
+that rule for the text reader and the accepted layout. The next body item must
+be a paragraph, the adjacency `Document::accept_all` requires before it merges
+paragraphs. `accept_all` refuses a removed mark before a table, a content
+control, preserved XML or the end of the body, and those paragraphs keep their
+marks. A paragraph that ends a section also keeps its mark, although
+`accept_all` merges its section break away. Paragraphs in cells and content
+controls keep their marks too. Paragraph text, paragraph indices and the
+editing APIs are unchanged.
 The WASM binding uses `Document::text` for its existing `getText` method and
 otherwise owns one complete `Document`. It never reaches into
 `rdocx-oxml` or maintains a second package representation.
