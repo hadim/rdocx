@@ -23426,12 +23426,19 @@ impl Document {
     }
 
     /// Render the selected revision view to PDF with user-provided fonts.
+    ///
+    /// The caller fonts are added to the fonts `to_pdf` resolves from, in the
+    /// order [`Self::to_pdf_with_fonts`] lists. [`Self::layout_with_fonts`] is
+    /// the layout limited to the caller and embedded fonts.
     pub fn to_pdf_with_fonts_and_options(
         &self,
         font_files: &[(&str, &[u8])],
         options: RenderOptions,
     ) -> Result<Vec<u8>> {
-        let layout = self.layout_with_fonts_and_options(font_files, options)?;
+        let input = self.build_layout_input_with_fonts(font_files, options);
+        #[cfg(test)]
+        record_layout_invocation();
+        let layout = rdocx_layout::layout_document_with_provenance(&input)?;
         Ok(oxml_pdf::render_to_pdf(&layout.layout))
     }
 
@@ -28700,6 +28707,45 @@ mod tests {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .is_none()
+        );
+    }
+
+    /// `to_pdf_with_fonts` documents caller fonts over the fonts `to_pdf`
+    /// uses. It rendered through the caller-only layout instead, so a family
+    /// that neither the caller nor the document supplies failed the render.
+    #[test]
+    fn pdf_with_caller_fonts_falls_back_to_the_fonts_to_pdf_uses() {
+        let (caller_family, caller_bytes) = caller_only_font();
+        let mut document = Document::new();
+        document.add_paragraph("Calibri resolves as to_pdf resolves it");
+        document
+            .add_paragraph("")
+            .add_run("a family nobody supplies")
+            .font("Unobtainium Sans");
+        document
+            .add_paragraph("")
+            .add_run("caller face must win")
+            .font(caller_family);
+
+        assert_eq!(
+            document
+                .to_pdf_with_fonts(&[])
+                .expect("an empty caller set renders like to_pdf"),
+            document.to_pdf().unwrap()
+        );
+        let pdf = document
+            .to_pdf_with_fonts(&[(caller_family, &caller_bytes)])
+            .expect("missing families fall back past the caller set");
+        assert!(
+            pdf.windows(caller_family.len())
+                .any(|window| window == caller_family.as_bytes()),
+            "the caller face is embedded"
+        );
+        assert!(
+            document
+                .layout_with_fonts(&[(caller_family, &caller_bytes)])
+                .is_err(),
+            "the caller-only layout stays strict"
         );
     }
 
