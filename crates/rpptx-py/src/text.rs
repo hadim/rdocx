@@ -11,6 +11,7 @@ use rpptx::{
 
 use crate::normalize_index;
 use crate::presentation::PyPresentation;
+use crate::replacement_count_to_pyerr;
 use crate::rpptx_to_pyerr;
 use crate::shape::{shape_mut_at, shape_ref_at, slide_index};
 use crate::validate_path;
@@ -237,6 +238,37 @@ impl PyTextFrame {
             py,
             PyParagraphCollection::new(self.presentation.clone_ref(py), self.path.clone()),
         )
+    }
+
+    /// Replaces literal text in this text frame only and returns the count.
+    ///
+    /// The contract is `Presentation.try_replace_text` restricted to this
+    /// frame: with `expect`, the replacement runs on a copy of the text body,
+    /// a count that differs raises and leaves the presentation and its
+    /// revision as they were, and the revision advances once only when
+    /// something was replaced.
+    #[pyo3(signature = (placeholder, replacement, *, expect = None))]
+    fn try_replace_text(
+        &self,
+        py: Python<'_>,
+        placeholder: &str,
+        replacement: &str,
+        expect: Option<usize>,
+    ) -> PyResult<usize> {
+        self.validate(py)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        let count = shape_mut_at(&mut presentation.inner, &self.path)
+            .and_then(rpptx::ShapeMut::into_text_frame)
+            .ok_or_else(|| PyValueError::new_err("shape has no text frame"))?
+            .try_replace_text(placeholder, replacement, expect)
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        if let Some(expected) = expect.filter(|&expected| expected != count) {
+            return Err(replacement_count_to_pyerr(py, placeholder, expected, count));
+        }
+        if count > 0 {
+            presentation.revisions.bump();
+        }
+        Ok(count)
     }
 
     fn add_paragraph(&self, py: Python<'_>) -> PyResult<Py<PyParagraph>> {
