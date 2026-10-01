@@ -1233,9 +1233,12 @@ The `rpptx` facade owns formatting-preserving presentation text replacement.
 `Presentation::replace_text` applies literal, non-recursive replacement across
 contiguous regular runs in ordinary shapes, nested groups, table cells, and
 speaker notes. `Presentation::try_replace_text` stages that complete mutation,
-serializes the candidate, and publishes it only after validation. Fields,
-breaks, and selected alternate-content fallbacks remain traversal boundaries
-so the facade preserves their unmodelled or separately typed XML.
+serializes the candidate, and publishes it only after validation.
+`Presentation::try_replace_slide_text` and `TextFrame::try_replace_text` run
+the same engine over one slide, with or without its notes, or over one text
+body, without copying the rest of the deck. Fields, breaks, and selected
+alternate-content fallbacks remain traversal boundaries so the facade
+preserves their unmodelled or separately typed XML.
 
 The facade also owns modern PresentationML package identity. The exact main
 part content type distinguishes PPTX, PPTM, POTX, POTM, PPSX, and PPSM. Byte

@@ -80,6 +80,7 @@ Presentation::set_slide_size(&mut self, width: Emu, height: Emu) -> Result<()>;
 Presentation::core_properties(&self) -> Option<&CoreProperties>;
 Presentation::core_properties_mut(&mut self) -> &mut CoreProperties;
 Presentation::replace_text(&mut self, placeholder: &str, value: &str) -> usize;
+Presentation::try_replace_slide_text(&mut self, slide_index: usize, placeholder: &str, value: &str, notes: bool, expect: Option<usize>) -> Result<usize>;
 Presentation::package_class(&self) -> Result<PresentationPackageClass>;
 Presentation::to_bytes_as(&self, class: PresentationPackageClass) -> Result<Vec<u8>>;
 Presentation::to_bytes_for_path(&self, path: impl AsRef<Path>) -> Result<Vec<u8>>;
@@ -241,6 +242,20 @@ the first matched run's formatting and leaves an unmatched suffix in the last
 matched run's formatting. Fields, breaks, and selected alternate-content
 fallbacks are boundaries. An empty placeholder changes nothing and returns
 zero. The returned count is the number of replaced matches.
+
+Two scoped forms run the same traversal over less of the deck.
+`try_replace_slide_text` covers one slide's shapes, groups and table cells,
+plus its speaker notes when `notes` is true. It replaces on a copy of that
+slide record and publishes the copy only after the slide, and the notes when
+included, serialize. It does not stage the whole package, so a broken part
+elsewhere still surfaces on save. `TextFrame::try_replace_text` covers one
+text body and replaces in place, or on a copy of the body when `expect` is
+given. It serializes nothing, because replacing run text cannot make a body
+fail to serialize. With `expect`, both forms keep the copy only when the
+count matches, and otherwise return the count with nothing changed for the
+caller to refuse. Both reject an empty placeholder before anything changes, and
+the slide form also rejects an unknown slide index. Neither reaches SmartArt
+data or chart text, which the presentation-wide form does not reach either.
 
 The public facade also exposes total title and placeholder lookup and immutable
 text-frame, paragraph and regular-run handles. Repeatable shape lookup covers
@@ -411,6 +426,7 @@ ShapeMut::set_text(&mut self, text: &str) -> Result<()>;
 ShapeMut::text_frame(&mut self) -> Option<TextFrame<'_>>;
 TextFrame::paragraph_mut(&mut self, index: usize) -> Option<TextParagraphMut<'_>>;
 TextFrame::add_paragraph(&mut self) -> TextParagraphMut<'_>;
+TextFrame::try_replace_text(&mut self, placeholder: &str, value: &str, expect: Option<usize>) -> Result<usize>;
 TextParagraphMut::add_run(&mut self, text: &str) -> TextRunMut<'_>;
 ```
 
