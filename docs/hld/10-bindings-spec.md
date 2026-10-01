@@ -771,8 +771,10 @@ generated documentation but are still additive public Rust APIs.
 `WordBodyLayoutFragment` and `WordLayoutResult::body_layout_fragments` add a
 public pre-1.0 point-space extent lookup for each direct main-body item. The
 record uses one-based physical and displayed page numbers. Preserved unlaid
-content resolves to an empty slice, while an invalid body index resolves to
-`None`.
+content resolves to an empty slice, as does a paragraph that the accepted view
+drops, while an invalid body index resolves to `None`. `rdocx layout` reports
+such a paragraph with zero fragments, and the Python `layout()` records omit
+it.
 
 Native Rust also exposes `WordPackageClass` for DOCX, DOCM, DOTX, and DOTM.
 `Document::package_class` reads the exact main-part override. `to_bytes_as` and
