@@ -375,12 +375,13 @@ fill or line form that the neutral paint model cannot render remains typed and
 produces a stable resolver diagnostic.
 
 `CT_TableStyleList` models the optional default style id and the ordered style
-records. Each style can expose whole-table, band, edge, and corner regions. A
-region models its cell fill or fill reference, text bold and italic state,
-theme font reference, text colour, outer borders, and inside horizontal and
-vertical borders. Producer wrapper elements such as `a:fill`, `a:tcBdr`, and
-its edge children remain part of the modelled schema path. Empty wrappers and
-unmodelled siblings retain their original form.
+records. Each style can expose its table background fill or fill reference,
+keeping the background effect as XML, and its whole-table, band, edge, and
+corner regions. A region models its cell fill or fill reference, text bold
+and italic state, theme font reference, text colour, outer borders, and inside
+horizontal and vertical borders. Producer wrapper elements such as `a:fill`,
+`a:tcBdr`, and its edge children remain part of the modelled schema path.
+Empty wrappers and unmodelled siblings retain their original form.
 The model does not insert definitions for Office's built-in table styles into
 `ppt/tableStyles.xml`. Resolution supplies those definitions when a table names
 a known built-in ID and the package has no matching style record.
