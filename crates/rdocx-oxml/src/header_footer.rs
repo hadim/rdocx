@@ -277,8 +277,12 @@ impl CT_HdrFtr {
                             let is_namespace = key.starts_with(b"xmlns:") || key == b"xmlns";
                             if is_namespace && !known_ns.contains(&key) {
                                 let key_str = std::str::from_utf8(key).unwrap_or("").to_string();
-                                let val_str =
-                                    std::str::from_utf8(&attr.value).unwrap_or("").to_string();
+                                let val_str = attr
+                                    .decoded_and_normalized_value(
+                                        XmlVersion::Implicit1_0,
+                                        e.decoder(),
+                                    )?
+                                    .into_owned();
                                 extra_namespaces.push((key_str, val_str));
                             } else if !is_namespace {
                                 root_attributes.push((
@@ -1628,6 +1632,35 @@ mod tests {
         let reparsed = CT_HdrFtr::from_xml(written.as_bytes()).unwrap();
         assert_eq!(reparsed.root_attributes, parsed.root_attributes);
         assert_eq!(reparsed.to_xml_footer().unwrap(), written.as_bytes());
+    }
+
+    /// A declaration value is read unescaped, as `CT_Document` reads its own,
+    /// so a rewrite escapes it once and still binds the same namespace.
+    #[test]
+    fn root_namespace_values_are_unescaped_once_through_a_rewrite() {
+        let xml = format!(
+            r#"<w:hdr xmlns:w="{W_NS}" xmlns:x="urn:a&amp;b?c=&quot;1&quot;" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" mc:Ignorable="x"><w:p><w:r><w:t>Header</w:t></w:r></w:p></w:hdr>"#
+        );
+        let parsed = CT_HdrFtr::from_xml(xml.as_bytes()).unwrap();
+        assert!(
+            parsed
+                .extra_namespaces
+                .contains(&("xmlns:x".to_owned(), r#"urn:a&b?c="1""#.to_owned())),
+            "{:?}",
+            parsed.extra_namespaces
+        );
+        let written = String::from_utf8(parsed.to_xml_header().unwrap()).unwrap();
+        assert!(
+            written.contains(r#" xmlns:x="urn:a&amp;b?c=&quot;1&quot;""#),
+            "{written}"
+        );
+        let reparsed = CT_HdrFtr::from_xml(written.as_bytes()).unwrap();
+        assert!(
+            reparsed
+                .extra_namespaces
+                .contains(&("xmlns:x".to_owned(), r#"urn:a&b?c="1""#.to_owned()))
+        );
+        assert_eq!(reparsed.to_xml_header().unwrap(), written.as_bytes());
     }
 
     #[test]

@@ -954,7 +954,8 @@ pub(crate) fn resolved_cell_edge<'a>(
         Some(edge) => edge,
         None => table_edge?,
     };
-    (!edge.val.is_none()).then_some(edge)
+    // A picture border has no line to draw, so that side draws none.
+    (!edge.val.is_none() && !matches!(edge.val, ST_Border::Art(_))).then_some(edge)
 }
 
 /// The height in points a horizontal border takes between two rows. A double
