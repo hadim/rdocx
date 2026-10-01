@@ -25518,7 +25518,7 @@ fn auto_shape_type_reads_and_replaces_the_preset_keeping_the_shape() {
     let preset = |index| slide.shape(index).unwrap().auto_shape_type();
     assert_eq!(
         (0..6).map(preset).collect::<Vec<_>>(),
-        [Some("roundRect"), None, None, None, None, None]
+        [Some("roundRect"), None, None, None, Some("rect"), None]
     );
     let before = slide.shape(0).unwrap().non_visual_id();
 
