@@ -697,18 +697,21 @@ pub(crate) fn validate_style_graph(styles: &CT_Styles) -> Result<()> {
 /// left invalid.
 ///
 /// Each defect `staged` shares with `source` is returned once, in check order,
-/// for the caller to report. A defect only `staged` has was introduced by the
-/// change and rejects it.
+/// for the caller to report. Defects are counted, so a defect `staged` has more
+/// often than `source` was introduced by the change and rejects it, even when
+/// the source already had the same one, such as a shadowed definition of a
+/// repeated ID or another style inheriting an existing cycle.
 pub(crate) fn validate_style_graph_change(
     source: &CT_Styles,
     staged: &CT_Styles,
 ) -> Result<Vec<String>> {
-    let source_defects = style_graph_defects(source);
+    let mut source_defects = style_graph_defects(source);
     let mut retained = Vec::new();
     for defect in style_graph_defects(staged) {
-        if !source_defects.contains(&defect) {
+        let Some(index) = source_defects.iter().position(|known| *known == defect) else {
             return Err(style_graph_error(defect));
-        }
+        };
+        source_defects.swap_remove(index);
         if !retained.contains(&defect) {
             retained.push(defect);
         }
