@@ -44485,16 +44485,16 @@ fn accepted_view_joins_paragraphs_whose_mark_is_deleted() {
     assert_eq!(
         lines(&redline, RevisionView::Tracked),
         [
-            ("Alpha", 80.25),
-            ("Gone", 100.12),
-            ("OLDHEAD", 127.74),
-            ("Omega", 141.26),
-            ("1.", 162.84),
-            ("One", 162.84),
-            ("2.", 184.55),
-            ("OLDITEM", 184.55),
-            ("3.", 206.27),
-            ("Two", 206.27),
+            ("Alpha", 82.47),
+            ("Gone", 104.96),
+            ("OLDHEAD", 136.22),
+            ("Omega", 152.53),
+            ("1.", 175.02),
+            ("One", 175.02),
+            ("2.", 197.51),
+            ("OLDITEM", 197.51),
+            ("3.", 220.0),
+            ("Two", 220.0),
         ]
         .map(|(text, y)| (text.to_owned(), y))
     );
@@ -44508,7 +44508,7 @@ fn accepted_view_joins_paragraphs_whose_mark_is_deleted() {
     assert_eq!(joined.text(), "Alpha\nJoined Omega\n");
     assert_eq!(
         lines(&joined, RevisionView::Accepted),
-        [("Alpha", 80.25), ("Joined", 100.12), ("Omega", 119.99)]
+        [("Alpha", 82.47), ("Joined", 104.96), ("Omega", 127.46)]
             .map(|(text, y)| (text.to_owned(), y))
     );
     assert_eq!(
@@ -44548,7 +44548,7 @@ fn accepted_view_joins_paragraphs_whose_mark_is_deleted() {
     assert_eq!(accepted.layout.pages.len(), 1);
     assert_eq!(
         lines(&breaks, RevisionView::Accepted),
-        [("Alpha", 80.25), ("Omega", 100.12)].map(|(text, y)| (text.to_owned(), y))
+        [("Alpha", 82.47), ("Omega", 104.96)].map(|(text, y)| (text.to_owned(), y))
     );
     let tracked = breaks
         .layout_deterministic_with_options(RenderOptions {
@@ -44647,11 +44647,11 @@ fn accepted_view_leaves_out_deleted_table_rows() {
     assert!(!redline.to_html().contains("GONE"));
     assert_eq!(
         fragments(&redline, RevisionView::Accepted),
-        [vec![72.0], vec![91.87], vec![111.74]]
+        [vec![72.0], vec![94.49], vec![116.98]]
     );
     assert_eq!(
         fragments(&redline, RevisionView::Tracked),
-        [vec![72.0], vec![91.87], vec![131.61]]
+        [vec![72.0], vec![94.49], vec![139.47]]
     );
     // The model and its indices are unchanged.
     assert_eq!(redline.table(0).unwrap().row_count(), 2);
@@ -44667,7 +44667,7 @@ fn accepted_view_leaves_out_deleted_table_rows() {
     assert_eq!(redline.to_html_fragment(), "<p>a</p>\n<p>b</p>\n");
     assert_eq!(
         fragments(&redline, RevisionView::Accepted),
-        [vec![72.0], vec![], vec![91.87]]
+        [vec![72.0], vec![], vec![94.49]]
     );
     assert_eq!(redline.body_items().count(), 3);
 
