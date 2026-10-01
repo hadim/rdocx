@@ -17,7 +17,7 @@ use crate::block::{
     TableSemantics,
 };
 use crate::engine::SourceRegistry;
-use crate::input::{LayoutInput, MediaRegistry};
+use crate::input::{LayoutInput, MediaRegistry, RevisionView};
 use crate::style_resolver::NumberingState;
 use oxml_layout::{Color, Diagnostic, FontManager, Result, StructureId};
 
@@ -44,6 +44,21 @@ pub(crate) fn layout_table_rows<'a>(
             row_path.push(boundary);
             rows.push((row, row_path));
         }
+    }
+    rows
+}
+
+/// The rows [`layout_table_rows`] returns, less those that accepting every
+/// tracked change removes when the accepted view is laid out. The rows that
+/// remain keep their source paths.
+fn accepted_table_rows<'a>(
+    table: &'a CT_Tbl,
+    path: &[usize],
+    input: &LayoutInput,
+) -> Vec<(&'a CT_Row, Vec<usize>)> {
+    let mut rows = layout_table_rows(table, path);
+    if input.revision_view == RevisionView::Accepted {
+        rows.retain(|(row, _)| !row.accepted_view_removes());
     }
     rows
 }
@@ -491,7 +506,7 @@ fn layout_table_inner(
     }
     resolved_table.properties = Some(resolved_properties);
     let tbl = &resolved_table;
-    let source_rows = layout_table_rows(tbl, path);
+    let source_rows = accepted_table_rows(tbl, path, input);
     let bidi_visual = tbl
         .properties
         .as_ref()
@@ -517,7 +532,7 @@ fn layout_table_inner(
         doc_grid,
     )? {
         Some(widths) => widths,
-        None => compute_column_widths(tbl.grid.as_ref(), available_width, tbl, path),
+        None => compute_column_widths(tbl.grid.as_ref(), available_width, tbl, &source_rows),
     };
     let table_width: f64 = col_widths.iter().sum();
 
@@ -1359,7 +1374,7 @@ fn autofit_column_widths(
         return Ok(None);
     }
 
-    let source_rows = layout_table_rows(tbl, path);
+    let source_rows = accepted_table_rows(tbl, path, input);
     let column_count = tbl
         .grid
         .as_ref()
@@ -1584,7 +1599,7 @@ fn compute_column_widths(
     grid: Option<&CT_TblGrid>,
     available_width: f64,
     table: &CT_Tbl,
-    path: &[usize],
+    rows: &[(&CT_Row, Vec<usize>)],
 ) -> Vec<f64> {
     let requested_width = table
         .properties
@@ -1615,7 +1630,7 @@ fn compute_column_widths(
         }
         _ => {
             // No grid defined — infer column count from the first row
-            let num_cols = layout_table_rows(table, path)
+            let num_cols = rows
                 .first()
                 .map(|(row, path)| {
                     layout_row_cells(row, path)
@@ -1685,6 +1700,9 @@ fn layout_cell_content(
                     structure_id: None,
                     reflow_direction,
                 }));
+            }
+            CellContent::Table(tbl)
+                if input.revision_view == RevisionView::Accepted && tbl.accepted_view_removes() => {
             }
             CellContent::Table(tbl) => {
                 // Recursively lay out the nested table
@@ -1789,6 +1807,9 @@ fn layout_control_cell_content(
                     reflow_direction,
                 }));
             }
+            SdtContent::Table(table)
+                if input.revision_view == RevisionView::Accepted
+                    && table.accepted_view_removes() => {}
             SdtContent::Table(table) => {
                 let (nested, nested_semantics) = layout_table_inner(
                     table,
@@ -2317,7 +2338,7 @@ mod tests {
         row.cells.push(CT_Tc::new());
         row.cells.push(CT_Tc::new());
         tbl.rows.push(row);
-        let widths = compute_column_widths(None, 300.0, &tbl, &[]);
+        let widths = compute_column_widths(None, 300.0, &tbl, &layout_table_rows(&tbl, &[]));
         assert_eq!(widths.len(), 3);
         for w in &widths {
             assert!((w - 100.0).abs() < 0.01);
