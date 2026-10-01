@@ -5405,7 +5405,7 @@ fn compare_control_from_xml(
                         mark_previous_paragraph(&mut content, "ins", metadata)?;
                     }
                     content.push((
-                        true,
+                        EmittedOwner::Paragraph,
                         marked_control_content(
                             edited_content[j],
                             "ins",
