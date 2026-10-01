@@ -443,6 +443,11 @@ staged `duplicate_slide`, advances the revision once, and returns the new slide
 captured at that revision. As in the facade, a slide that owns a modern
 comments part is refused, even when removing its last comment left that part
 empty, and the refusal leaves the package and the revision unchanged.
+`SlideCollection.import_slide(slide, layout=None, index=None)` wraps the native
+import. `layout` must be a layout of the destination. `index` is an insertion
+position counted from the end when negative, and one outside the collection is
+an `IndexError`. A slide of the same presentation is imported from a snapshot
+and keeps its own layout unless `layout` is given.
 
 `Shape` geometry, `name`, and `rotation` are writable without a revision bump.
 Assigning one coordinate or the rotation of a placeholder first copies the

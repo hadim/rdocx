@@ -552,6 +552,79 @@ impl PySlideCollection {
         Py::new(py, PySlide::new(self.presentation.clone_ref(py), path))
     }
 
+    /// Imports a slide of another presentation, using this presentation's theme.
+    ///
+    /// The copy takes `layout` when given. Otherwise a slide of this
+    /// presentation keeps its own layout, and a slide of another presentation
+    /// takes this presentation's first layout named like its layout. It is
+    /// inserted before `index` as by `list.insert`, counted from the end when
+    /// negative, or appended when that is `None`. An index outside the
+    /// collection raises `IndexError`.
+    #[pyo3(signature = (slide, layout=None, index=None))]
+    fn import_slide(
+        &self,
+        py: Python<'_>,
+        slide: &Bound<'_, PyAny>,
+        layout: Option<&Bound<'_, PyAny>>,
+        index: Option<isize>,
+    ) -> PyResult<Py<PySlide>> {
+        let len = self.len(py)?;
+        let slide = slide.extract::<PyRef<'_, PySlide>>()?;
+        let source_index = slide.validate(py)?;
+        let layout_index = match layout {
+            Some(layout) => {
+                let layout = layout.extract::<PyRef<'_, PySlideLayout>>()?;
+                if !layout.presentation.is(&self.presentation) {
+                    return Err(PyValueError::new_err(
+                        "layout is not a layout of this presentation",
+                    ));
+                }
+                layout.validate(py)?;
+                Some(layout.index)
+            }
+            None => None,
+        };
+        let inserted = match index {
+            None => len,
+            Some(index) => {
+                let normalized = if index < 0 {
+                    len as isize + index
+                } else {
+                    index
+                };
+                if normalized < 0 || normalized > len as isize {
+                    return Err(PyIndexError::new_err("slide index out of range"));
+                }
+                normalized as usize
+            }
+        };
+        let source = slide.presentation.clone_ref(py);
+        drop(slide);
+        let path = {
+            let mut presentation = self.presentation.borrow_mut(py);
+            let result = if source.is(&self.presentation) {
+                let copy = presentation.inner.clone();
+                let layout_index = layout_index.or_else(|| copy.slide_layout_index(source_index));
+                presentation
+                    .inner
+                    .import_slide(&copy, source_index, layout_index, Some(inserted))
+                    .map(|_| ())
+            } else {
+                let source = source.borrow(py);
+                presentation
+                    .inner
+                    .import_slide(&source.inner, source_index, layout_index, Some(inserted))
+                    .map(|_| ())
+            };
+            result.map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+            presentation.revisions.bump();
+            presentation
+                .revisions
+                .capture(smallvec![PathSeg::Slide(inserted)])
+        };
+        Py::new(py, PySlide::new(self.presentation.clone_ref(py), path))
+    }
+
     /// Removes one slide of this presentation with its notes and owned media.
     fn remove(&self, py: Python<'_>, slide: &Bound<'_, PyAny>) -> PyResult<()> {
         self.len(py)?;

@@ -2829,6 +2829,96 @@ impl Presentation {
             })
     }
 
+    /// Imports one slide of another presentation, using this presentation's theme.
+    ///
+    /// The copy takes the layout at `layout_index` when one is given, and
+    /// otherwise the first layout of this presentation named like the source
+    /// slide's layout. It is inserted at `insert_index`, or appended when that
+    /// is `None`. Shapes, placeholders, the slide background, speaker notes and
+    /// SmartArt graphs are copied, and every relationship attribute is rebound
+    /// to the new relationship scope. Pictures, audio and video reuse equal
+    /// media parts of this presentation. External relationships such as
+    /// hyperlinks keep their targets. A slide with comments, a chart, an
+    /// embedded object, a jump to another slide, or any other internal
+    /// relationship type is rejected without mutation. A notes jump to another
+    /// slide is rejected too. Jumps that name no relationship, such as a
+    /// `ppaction://customshow` action, are carried unchanged and may name a
+    /// custom show this presentation lacks. The name match takes the first
+    /// layout of that name, so a copy inside one multi-master deck should pass
+    /// the source slide's own layout index.
+    pub fn import_slide(
+        &mut self,
+        source: &Presentation,
+        index: usize,
+        layout_index: Option<usize>,
+        insert_index: Option<usize>,
+    ) -> Result<SlideRef<'_>> {
+        const OPERATION: &str = "import slide";
+        let record = source.slides.get(index).ok_or(Error::UnknownSlideIndex {
+            index,
+            slide_count: source.slides.len(),
+        })?;
+        let inserted = insert_index.unwrap_or(self.slides.len());
+        if inserted > self.slides.len() {
+            return Err(Error::UnknownSlideIndex {
+                index: inserted,
+                slide_count: self.slides.len(),
+            });
+        }
+        let layout_index = match layout_index {
+            Some(layout_index) if layout_index >= self.layouts.len() => {
+                return Err(Error::UnknownLayoutIndex {
+                    index: layout_index,
+                    layout_count: self.layouts.len(),
+                });
+            }
+            Some(layout_index) => layout_index,
+            None => {
+                let name = source
+                    .slide_layout_index(index)
+                    .and_then(|layout| source.layout_name(layout))
+                    .ok_or_else(|| {
+                        invalid_presentation_mutation(
+                            OPERATION,
+                            "the source slide's layout has no name, pass the destination layout"
+                                .to_owned(),
+                        )
+                    })?;
+                (0..self.layouts.len())
+                    .find(|&layout| self.layout_name(layout) == Some(name))
+                    .ok_or_else(|| {
+                        invalid_presentation_mutation(
+                            OPERATION,
+                            format!(
+                                "this presentation has no layout named {name:?}, pass the destination layout"
+                            ),
+                        )
+                    })?
+            }
+        };
+        let layout_part = self.layouts[layout_index].part_name.clone();
+        preflight_slide_import(&source.package, record)?;
+        let mut staged = self.clone();
+        if record.notes.is_some() && staged.notes_master.is_none() {
+            staged.add_default_notes_master_in_place()?;
+        }
+        staged.copy_slide_from_in_place(
+            &source.package,
+            record.clone(),
+            inserted,
+            OPERATION,
+            Some(&layout_part),
+        )?;
+        self.commit_candidate(staged)?;
+        self.slides
+            .get(inserted)
+            .map(slide_ref)
+            .ok_or(Error::UnknownSlideIndex {
+                index: inserted,
+                slide_count: self.slides.len(),
+            })
+    }
+
     fn remove_slide_in_place(&mut self, index: usize) -> Result<()> {
         let record = self.slides[index].clone();
         self.presentation.remove_slide_from_sections(record.id);
@@ -2935,6 +3025,7 @@ impl Presentation {
                     slide: Some(&slide_part),
                     notes: None,
                     layout: None,
+                    notes_master: self.notes_master_part.as_deref(),
                 },
             )?;
             relationships
@@ -2944,14 +3035,12 @@ impl Presentation {
                 rel_types::SLIDE,
                 &relative_part_target(notes_part, &slide_part),
             );
-            let mut back_relationship_map = HashMap::new();
             for relationship in source_relationships
                 .items
                 .iter()
                 .filter(|relationship| relationship.rel_type == rel_types::SLIDE)
             {
                 relationship_map.insert(relationship.id.clone(), back_relationship_id.clone());
-                back_relationship_map.insert(relationship.id.clone(), back_relationship_id.clone());
             }
             let xml = source_notes
                 .notes
@@ -2960,12 +3049,9 @@ impl Presentation {
                     part_name: source_notes.part_name.clone(),
                     message: error.to_string(),
                 })?;
-            let xml =
-                rewrite_rel_ids(&xml, &relationship_map).map_err(|error| Error::MalformedPart {
-                    part_name: source_notes.part_name.clone(),
-                    message: error.to_string(),
-                })?;
-            let xml = rewrite_exact_rel_ids(&xml, &back_relationship_map).map_err(|error| {
+            // One exact pass over the complete map: a second pass would
+            // re-map ids the first one had just produced.
+            let xml = rewrite_exact_rel_ids(&xml, &relationship_map).map_err(|error| {
                 Error::MalformedPart {
                     part_name: source_notes.part_name.clone(),
                     message: error.to_string(),
@@ -3009,6 +3095,7 @@ impl Presentation {
                 slide: None,
                 notes: notes_part.as_deref(),
                 layout: layout_target,
+                notes_master: None,
             },
         )?;
         let slide_xml = source
@@ -5263,6 +5350,7 @@ struct RelationshipScopeTargets<'a> {
     slide: Option<&'a str>,
     notes: Option<&'a str>,
     layout: Option<&'a str>,
+    notes_master: Option<&'a str>,
 }
 
 fn preflight_cross_presentation_transfer(
@@ -5362,24 +5450,133 @@ fn preflight_cross_presentation_transfer(
         let resolved = OpcPackage::resolve_rel_target(&source.part_name, &relationship.target);
         required_part(source_package, &resolved)?;
         if relationship.rel_type == rel_types::IMAGE {
-            preflight_internal_transfer_image(source_package, &resolved)?;
+            preflight_internal_transfer_image(
+                source_package,
+                &resolved,
+                "transfer SmartArt slide",
+            )?;
         } else if is_diagram_relationship(&relationship.rel_type) {
-            preflight_diagram_part_graph(source_package, &resolved, &mut visited_diagram_parts)?;
+            preflight_diagram_part_graph(
+                source_package,
+                &resolved,
+                &mut visited_diagram_parts,
+                "transfer SmartArt slide",
+            )?;
         }
     }
     Ok(())
 }
 
-fn preflight_internal_transfer_image(source_package: &OpcPackage, image_part: &str) -> Result<()> {
+fn preflight_slide_import(source_package: &OpcPackage, source: &SlideRecord) -> Result<()> {
+    const OPERATION: &str = "import slide";
+    if source.comments.is_some() {
+        return Err(invalid_presentation_mutation(
+            OPERATION,
+            "the slide has comments, which are not carried".to_owned(),
+        ));
+    }
+    let mut smartart_frames = Vec::new();
+    collect_smartart_frames(
+        &source.slide.common_slide_data.shape_tree.children,
+        &mut smartart_frames,
+    );
+    for (frame, _) in smartart_frames {
+        if let GraphicDataPayload::SmartArt(relationship_ids) = frame.graphic_data.payload() {
+            validate_smartart_relationship_roles(
+                source_package,
+                &source.part_name,
+                relationship_ids,
+            )?;
+        }
+    }
+    preflight_import_scope(source_package, &source.part_name, None)?;
+    if let Some(notes) = &source.notes {
+        preflight_import_scope(source_package, &notes.part_name, Some(&source.part_name))?;
+    }
+    Ok(())
+}
+
+/// Accepts the internal relationships a slide import rebinds or copies.
+///
+/// A slide scope, whose `notes_of` is `None`, may relate to its layout, its
+/// notes, images, audio, video and SmartArt graphs. A notes scope may relate to
+/// its notes master, the slide named by `notes_of`, images, audio and video. The
+/// copy rebinds every notes slide relationship to the imported slide, so one
+/// that targets another slide is a jump and is refused. External relationships
+/// are always carried.
+fn preflight_import_scope(
+    source_package: &OpcPackage,
+    part: &str,
+    notes_of: Option<&str>,
+) -> Result<()> {
+    let slide = notes_of.is_none();
+    const OPERATION: &str = "import slide";
+    let relationships = source_package
+        .get_part_rels(part)
+        .cloned()
+        .unwrap_or_default();
+    let mut visited_diagram_parts = HashSet::new();
+    for relationship in &relationships.items {
+        if relationship_is_external(relationship) {
+            continue;
+        }
+        let resolved = OpcPackage::resolve_rel_target(part, &relationship.target);
+        let rel_type = relationship.rel_type.as_str();
+        match rel_type {
+            rel_types::SLIDE_LAYOUT | rel_types::NOTES_SLIDE if slide => {}
+            rel_types::NOTES_MASTER if !slide => {}
+            rel_types::SLIDE if notes_of == Some(resolved.as_str()) => {}
+            rel_types::IMAGE => {
+                preflight_internal_transfer_image(source_package, &resolved, OPERATION)?;
+            }
+            _ if is_audio_video_relationship(rel_type) => {
+                required_part(source_package, &resolved)?;
+            }
+            _ if slide && is_diagram_relationship(rel_type) => {
+                preflight_diagram_part_graph(
+                    source_package,
+                    &resolved,
+                    &mut visited_diagram_parts,
+                    OPERATION,
+                )?;
+            }
+            _ => {
+                let what = match rel_type {
+                    rel_types::CHART => "a chart".to_owned(),
+                    rel_types::OLE_OBJECT | rel_types::STRICT_OLE_OBJECT | rel_types::PACKAGE => {
+                        "an embedded object".to_owned()
+                    }
+                    rel_types::COMMENTS | rel_types::POWERPOINT_COMMENTS => "comments".to_owned(),
+                    rel_types::SLIDE => {
+                        "a hyperlink that jumps to another slide of the source presentation"
+                            .to_owned()
+                    }
+                    _ => format!("an internal relationship of type {rel_type}"),
+                };
+                return Err(invalid_presentation_mutation(
+                    OPERATION,
+                    format!("{part} has {what}, which is not carried"),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn preflight_internal_transfer_image(
+    source_package: &OpcPackage,
+    image_part: &str,
+    operation: &'static str,
+) -> Result<()> {
     required_part(source_package, image_part)?;
     if source_package
         .get_part_rels(image_part)
         .is_some_and(|relationships| !relationships.items.is_empty())
     {
         return Err(invalid_presentation_mutation(
-            "transfer SmartArt slide",
+            operation,
             format!(
-                "image part {image_part} owns relationships outside the bounded SmartArt transfer"
+                "image part {image_part} owns relationships outside the bounded cross-presentation transfer"
             ),
         ));
     }
@@ -5390,13 +5587,14 @@ fn preflight_diagram_part_graph(
     source_package: &OpcPackage,
     source_part: &str,
     visited: &mut HashSet<String>,
+    operation: &'static str,
 ) -> Result<()> {
     if visited.contains(source_part) {
         return Ok(());
     }
     if visited.len() >= MAX_SMARTART_TRANSFER_DIAGRAM_PARTS {
         return Err(invalid_presentation_mutation(
-            "transfer SmartArt slide",
+            operation,
             format!(
                 "diagram graph exceeds the {MAX_SMARTART_TRANSFER_DIAGRAM_PARTS}-part transfer bound"
             ),
@@ -5415,14 +5613,14 @@ fn preflight_diagram_part_graph(
         let resolved = OpcPackage::resolve_rel_target(source_part, &relationship.target);
         required_part(source_package, &resolved)?;
         if relationship.rel_type == rel_types::IMAGE {
-            preflight_internal_transfer_image(source_package, &resolved)?;
+            preflight_internal_transfer_image(source_package, &resolved, operation)?;
         } else if is_diagram_relationship(&relationship.rel_type) {
-            preflight_diagram_part_graph(source_package, &resolved, visited)?;
+            preflight_diagram_part_graph(source_package, &resolved, visited, operation)?;
         } else {
             return Err(invalid_presentation_mutation(
-                "transfer SmartArt slide",
+                operation,
                 format!(
-                    "diagram part {source_part} owns internal relationship type {} outside the bounded SmartArt transfer",
+                    "diagram part {source_part} owns internal relationship type {} outside the bounded cross-presentation transfer",
                     relationship.rel_type
                 ),
             ));
@@ -5457,11 +5655,33 @@ fn duplicate_relationship_scope(
                 rel_types::SLIDE_LAYOUT => targets.layout.map(str::to_owned).unwrap_or_else(|| {
                     OpcPackage::resolve_rel_target(source_part, &relationship.target)
                 }),
+                rel_types::NOTES_MASTER => {
+                    targets.notes_master.map(str::to_owned).unwrap_or_else(|| {
+                        OpcPackage::resolve_rel_target(source_part, &relationship.target)
+                    })
+                }
                 _ => OpcPackage::resolve_rel_target(source_part, &relationship.target),
             };
             let resolved = if relationship.rel_type == rel_types::IMAGE {
                 let bytes = required_part(source_package, &resolved)?.to_vec();
                 media_store.insert(destination_package, &bytes, &resolved)
+            } else if is_audio_video_relationship(&relationship.rel_type) {
+                let bytes = required_part(source_package, &resolved)?;
+                if destination_package.get_part(&resolved) == Some(bytes) {
+                    // A duplicate inside one deck keeps sharing its media
+                    // part, wherever that part is stored.
+                    resolved
+                } else {
+                    let format = resolve(bytes, &resolved);
+                    let extension = resolved
+                        .rsplit_once('.')
+                        .map_or_else(|| format.extension(), |(_, extension)| extension);
+                    let content_type = source_package
+                        .content_types
+                        .content_type_for(&resolved)
+                        .unwrap_or_else(|| format.content_type());
+                    media_store.insert_explicit(destination_package, bytes, extension, content_type)
+                }
             } else if is_diagram_relationship(&relationship.rel_type) {
                 duplicate_diagram_part_graph(
                     source_package,
@@ -5583,12 +5803,7 @@ fn duplicate_diagram_part_graph(
         }
         relationship_map.insert(relationship.id.clone(), id);
     }
-    let rewritten =
-        rewrite_rel_ids(&source_xml, &relationship_map).map_err(|error| Error::MalformedPart {
-            part_name: source_part.to_owned(),
-            message: error.to_string(),
-        })?;
-    let rewritten = rewrite_exact_rel_ids(&rewritten, &relationship_map).map_err(|error| {
+    let rewritten = rewrite_exact_rel_ids(&source_xml, &relationship_map).map_err(|error| {
         Error::MalformedPart {
             part_name: source_part.to_owned(),
             message: error.to_string(),
@@ -5613,6 +5828,13 @@ fn fresh_related_part_name(package: &OpcPackage, source_part: &str) -> String {
         package.parts.keys().map(String::as_str),
     )
     .next_part_name(extension)
+}
+
+fn is_audio_video_relationship(relationship_type: &str) -> bool {
+    matches!(
+        relationship_type,
+        rel_types::AUDIO | rel_types::VIDEO | rel_types::POWERPOINT_MEDIA
+    )
 }
 
 fn is_diagram_relationship(relationship_type: &str) -> bool {
