@@ -475,7 +475,21 @@ removes one attribute, and an end left without attributes is removed. An
 `a:ln` left empty is kept, as python-pptx keeps it. A removal never creates an
 `a:ln`. `adjustments` is a live `AdjustmentCollection` of
 the effective preset adjustments, normalized so that 1.0 is 100000, and
-assignment truncates as python-pptx does. `xml` returns the element serialized
+assignment truncates as python-pptx does. `auto_shape_type` reads the
+`MSO_SHAPE` member of the preset like python-pptx, through
+`MSO_SHAPE.from_xml`, which picks the first member in definition order where
+two share a preset. A picture reports its mask or `None`, and any other shape
+without an auto-shape preset raises `ValueError`. Custom geometry raises too,
+as python-pptx does, although issue #217 asked for `None`. A shape with
+`prst="upArrow"` also raises `ValueError`, where python-pptx returns
+`UP_ARROW`. This is a known gap: the ECMA `presetShapeDefinitions.xml` the
+preset table is generated from has no `upArrow`. python-pptx has no setter for
+an auto shape. rpptx accepts an `MSO_SHAPE` member or a preset name and applies
+the native `set_auto_shape_type`, so the live `adjustments` then follow the
+new preset's defaults. It raises `ValueError` for a text box, a connector, a
+graphic frame, a group and alternate content, and `RpptxError` for an unknown
+preset name, as `add_shape` does. On a picture it empties `a:avLst`, where the
+python-pptx picture setter keeps it. `xml` returns the element serialized
 on its own as bytes. A picture's `image` is a frozen `Image` snapshot with
 `blob`, `content_type`, and the python-pptx `ext`, and `replace_image` changes
 only that picture through the native staged replacement. `crop_left`,

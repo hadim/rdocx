@@ -29,7 +29,7 @@ pub use oxml_drawing::color::{ColorChoice, ColorTransform};
 pub use oxml_drawing::effect::{CT_EffectList, CT_OuterShadowEffect, RectAlignment};
 use oxml_drawing::fill::RelativeRect;
 pub use oxml_drawing::fill::{Fill, NoFill, PatternFill, SolidFill};
-use oxml_drawing::geometry::{Guide, GuideOp, GuideOperand};
+use oxml_drawing::geometry::{CT_PresetGeometry2D, Guide, GuideOp, GuideOperand};
 pub use oxml_drawing::line::{
     CT_LineProperties, LineDash, LineEnd, LineEndSize, LineEndType, PresetDash,
     ST_PresetLineDashVal,
@@ -7487,6 +7487,36 @@ impl<'a> ShapeMut<'a> {
             })
     }
 
+    /// Replaces the geometry of an auto shape or a picture mask with a preset.
+    ///
+    /// `preset` is a DrawingML preset name such as `roundRect`. A custom
+    /// geometry is replaced in the same schema slot, and the adjustments
+    /// restart from the preset's defaults with an empty `a:avLst`. Text,
+    /// fill, line, effects, identity and z-order are kept. A text box, a
+    /// connector, a graphic frame, a group and alternate content are refused.
+    pub fn set_auto_shape_type(&mut self, preset: &str) -> Result<()> {
+        const OPERATION: &str = "set auto shape type";
+        let properties = match self.child {
+            ShapeTreeChild::Shape(shape) if shape.is_textbox() => {
+                return Err(Error::InvalidShapeMutation {
+                    operation: OPERATION,
+                    message: "a text box is not an auto shape".to_owned(),
+                });
+            }
+            ShapeTreeChild::Shape(shape) => &mut shape.shape_properties,
+            ShapeTreeChild::Picture(picture) => &mut picture.shape_properties,
+            _ => return Err(self.unsupported(OPERATION)),
+        };
+        let geometry =
+            CT_PresetGeometry2D::new(preset).map_err(|error| Error::InvalidShapeMutation {
+                operation: OPERATION,
+                message: error.to_string(),
+            })?;
+        properties.custom_geometry = None;
+        properties.preset_geometry = Some(geometry);
+        Ok(())
+    }
+
     /// Replaces ordinary shape text without changing placeholder identity,
     /// one paragraph per line as [`CT_TextBody::set_text`] describes.
     pub fn set_text(&mut self, text: &str) -> Result<()> {
@@ -8924,6 +8954,24 @@ impl<'a> ShapeRef<'a> {
                 Some((default.name, value))
             })
             .collect())
+    }
+
+    /// Returns the preset geometry name of an auto shape or a picture mask.
+    ///
+    /// Like python-pptx, an ordinary shape is an auto shape when it carries
+    /// `a:prstGeom` and is not a text box, and a picture reports the preset
+    /// that masks it. Custom geometry, inherited geometry and every other
+    /// shape kind report `None`.
+    pub fn auto_shape_type(&self) -> Option<&'a str> {
+        let properties = match self.child {
+            ShapeTreeChild::Shape(shape) if !shape.is_textbox() => &shape.shape_properties,
+            ShapeTreeChild::Picture(picture) => &picture.shape_properties,
+            _ => return None,
+        };
+        properties
+            .preset_geometry
+            .as_ref()
+            .map(|geometry| geometry.preset.as_str())
     }
 
     /// Returns the direct clockwise rotation, or `None` without a transform.
