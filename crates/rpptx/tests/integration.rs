@@ -17494,6 +17494,295 @@ placeholder-layout-color	exact cyan on black, RGBA #00FFFF
 bug58144-headers-footers-2007	Slide footer once
 "#;
 
+fn outer_shadow(blur: i64, distance: i64, direction: i32) -> rpptx::CT_OuterShadowEffect {
+    let mut shadow = rpptx::CT_OuterShadowEffect::default();
+    shadow.blur_radius = Some(blur);
+    shadow.distance = Some(distance);
+    shadow.direction = Some(Angle(direction));
+    shadow.alignment = Some(rpptx::RectAlignment::TopLeft);
+    shadow.rotate_with_shape = Some(false);
+    shadow.color = Some(rpptx::ColorChoice::Srgb {
+        value: rpptx::RgbColor::new(0, 0, 0),
+        transforms: vec![rpptx::ColorTransform::Alpha(rpptx::Percent1000(40_000))],
+        raw_children: Default::default(),
+    });
+    shadow
+}
+
+fn element_xml<'a>(xml: &'a str, open: &str, close: &str, occurrence: usize) -> &'a str {
+    let mut start = 0;
+    for _ in 0..=occurrence {
+        start += xml[start..].find(open).expect("element start") + 1;
+    }
+    start -= 1;
+    let end = start + xml[start..].find(close).expect("element end") + close.len();
+    &xml[start..end]
+}
+
+#[test]
+fn outer_shadow_is_written_in_schema_order_beside_kept_effects_and_3d() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(6).expect("add blank slide");
+    let mut slide = presentation.slide_mut(0).unwrap();
+    slide
+        .add_shape("rect", Emu(100), Emu(200), Emu(300), Emu(400))
+        .unwrap();
+    slide
+        .add_shape("rect", Emu(500), Emu(600), Emu(700), Emu(800))
+        .unwrap();
+    let bytes = presentation.to_bytes().unwrap();
+    let mut package = open_opc(&bytes, "shadow fixture");
+    let xml = String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec())
+        .unwrap()
+        .replacen(
+            "</a:prstGeom></p:spPr>",
+            r#"</a:prstGeom><a:ln w="12700"/><a:effectLst><a:glow rad="63500"><a:srgbClr val="FF0000"/></a:glow><a:reflection blurRad="6350"/></a:effectLst><a:scene3d><a:camera prst="orthographicFront"/><a:lightRig rig="threePt" dir="t"/></a:scene3d></p:spPr>"#,
+            1,
+        )
+        .replacen(
+            "</a:prstGeom></p:spPr>",
+            r#"</a:prstGeom><a:scene3d><a:camera prst="orthographicFront"/><a:lightRig rig="threePt" dir="t"/></a:scene3d><a:sp3d/></p:spPr>"#,
+            1,
+        );
+    package.set_part("/ppt/slides/slide1.xml", xml.into_bytes());
+    let mut patched = Vec::new();
+    package.write_to(Cursor::new(&mut patched)).unwrap();
+
+    let mut presentation = Presentation::from_bytes(&patched).unwrap();
+    let kept = presentation
+        .slide(0)
+        .unwrap()
+        .shape(0)
+        .unwrap()
+        .effects()
+        .cloned();
+    let mut kept = kept.expect("the glow list is read");
+    assert!(kept.outer_shadow.is_none());
+    kept.outer_shadow = Some(outer_shadow(50_800, 38_100, 2_700_000));
+    let mut slide = presentation.slide_mut(0).unwrap();
+    slide.shape_mut(0).unwrap().set_effects(Some(kept)).unwrap();
+    let mut added = rpptx::CT_EffectList::default();
+    added.outer_shadow = Some(outer_shadow(0, 12_700, 5_400_000));
+    slide
+        .shape_mut(1)
+        .unwrap()
+        .set_effects(Some(added))
+        .unwrap();
+
+    let saved = presentation.to_bytes().unwrap();
+    let package = open_opc(&saved, "shadow written");
+    let xml =
+        String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec()).unwrap();
+    assert_eq!(
+        element_xml(&xml, "<p:spPr>", "</p:spPr>", 0),
+        r#"<p:spPr><a:xfrm><a:off x="100" y="200"/><a:ext cx="300" cy="400"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:ln w="12700"/><a:effectLst><a:glow rad="63500"><a:srgbClr val="FF0000"/></a:glow><a:outerShdw blurRad="50800" dist="38100" dir="2700000" algn="tl" rotWithShape="0"><a:srgbClr val="000000"><a:alpha val="40000"/></a:srgbClr></a:outerShdw><a:reflection blurRad="6350"/></a:effectLst><a:scene3d><a:camera prst="orthographicFront"/><a:lightRig rig="threePt" dir="t"/></a:scene3d></p:spPr>"#
+    );
+    assert_eq!(
+        element_xml(&xml, "<p:spPr>", "</p:spPr>", 1),
+        r#"<p:spPr><a:xfrm><a:off x="500" y="600"/><a:ext cx="700" cy="800"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:effectLst><a:outerShdw blurRad="0" dist="12700" dir="5400000" algn="tl" rotWithShape="0"><a:srgbClr val="000000"><a:alpha val="40000"/></a:srgbClr></a:outerShdw></a:effectLst><a:scene3d><a:camera prst="orthographicFront"/><a:lightRig rig="threePt" dir="t"/></a:scene3d><a:sp3d/></p:spPr>"#
+    );
+    let reopened = Presentation::from_bytes(&saved).unwrap();
+    assert!(reopened.validate().is_empty());
+    let shadow = reopened
+        .slide(0)
+        .unwrap()
+        .shape(0)
+        .unwrap()
+        .effects()
+        .unwrap();
+    assert_eq!(
+        shadow.outer_shadow,
+        Some(outer_shadow(50_800, 38_100, 2_700_000))
+    );
+}
+
+#[test]
+fn effect_lists_are_set_cleared_and_inherited_on_every_shape_kind_with_properties() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(6).expect("add blank slide");
+    presentation
+        .add_picture(
+            0,
+            &valid_one_pixel_png(),
+            "dot.png",
+            Emu(0),
+            Emu(0),
+            None,
+            None,
+        )
+        .unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    slide
+        .add_textbox(Emu(10), Emu(20), Emu(30), Emu(40))
+        .unwrap();
+    slide
+        .add_connector(ConnectorType::Straight, Emu(1), Emu(2), Emu(3), Emu(4))
+        .unwrap();
+    slide.add_group_shape().unwrap();
+    let mut shadow = rpptx::CT_EffectList::default();
+    shadow.outer_shadow = Some(outer_shadow(50_800, 38_100, 2_700_000));
+    for index in 0..4 {
+        let mut shape = slide.shape_mut(index).unwrap();
+        shape.set_effects(Some(shadow.clone())).unwrap();
+    }
+    slide
+        .shape_mut(3)
+        .unwrap()
+        .set_position(Emu(5), Emu(6))
+        .unwrap();
+
+    let saved = presentation.to_bytes().unwrap();
+    let written_shadow = r#"<a:effectLst><a:outerShdw blurRad="50800" dist="38100" dir="2700000" algn="tl" rotWithShape="0"><a:srgbClr val="000000"><a:alpha val="40000"/></a:srgbClr></a:outerShdw></a:effectLst>"#;
+    let xml = String::from_utf8(
+        open_opc(&saved, "shadow kinds")
+            .get_part("/ppt/slides/slide1.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    for (open, close) in [
+        ("<p:pic>", "</p:pic>"),
+        ("<p:sp>", "</p:sp>"),
+        ("<p:cxnSp>", "</p:cxnSp>"),
+    ] {
+        let element = element_xml(&xml, open, close, 0);
+        let properties = element_xml(element, "<p:spPr", "</p:spPr>", 0);
+        assert!(
+            properties.ends_with(&format!("{written_shadow}</p:spPr>")),
+            "{properties}"
+        );
+    }
+    assert!(xml.contains(&format!(
+        r#"<p:grpSpPr><a:xfrm><a:off x="5" y="6"/></a:xfrm>{written_shadow}</p:grpSpPr>"#
+    )));
+
+    let mut reopened = Presentation::from_bytes(&saved).unwrap();
+    assert!(reopened.validate().is_empty());
+    for index in 0..4 {
+        let shape = reopened.slide(0).unwrap().shape(index).unwrap();
+        assert_eq!(shape.effects(), Some(&shadow), "shape {index}");
+    }
+    let mut slide = reopened.slide_mut(0).unwrap();
+    slide
+        .shape_mut(0)
+        .unwrap()
+        .set_effects(Some(rpptx::CT_EffectList::default()))
+        .unwrap();
+    slide.shape_mut(3).unwrap().set_effects(None).unwrap();
+    let xml = String::from_utf8(
+        open_opc(&reopened.to_bytes().unwrap(), "shadow cleared")
+            .get_part("/ppt/slides/slide1.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(
+        element_xml(&xml, "<p:pic>", "</p:pic>", 0).contains("<a:effectLst/></p:spPr>"),
+        "an empty list suppresses the theme effect"
+    );
+    assert!(xml.contains(r#"<p:grpSpPr><a:xfrm><a:off x="5" y="6"/></a:xfrm></p:grpSpPr>"#));
+    assert!(
+        reopened
+            .slide(0)
+            .unwrap()
+            .shape(3)
+            .unwrap()
+            .effects()
+            .is_none()
+    );
+    assert!(reopened.slide(0).unwrap().shape(4).is_none());
+}
+
+#[test]
+fn effect_lists_that_cannot_be_written_are_refused_without_mutation() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(6).expect("add blank slide");
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .add_shape("rect", Emu(1), Emu(2), Emu(3), Emu(4))
+        .unwrap();
+    let bytes = presentation.to_bytes().unwrap();
+    let mut package = open_opc(&bytes, "effect dag fixture");
+    let xml = String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec())
+        .unwrap()
+        .replacen(
+            "</a:prstGeom></p:spPr>",
+            r#"</a:prstGeom><a:effectDag type="sib"><a:blur rad="10"/></a:effectDag></p:spPr>"#,
+            1,
+        );
+    package.set_part("/ppt/slides/slide1.xml", xml.into_bytes());
+    let mut patched = Vec::new();
+    package.write_to(Cursor::new(&mut patched)).unwrap();
+    let mut presentation = Presentation::from_bytes(&patched).unwrap();
+
+    let mut slide = presentation.slide_mut(0).unwrap();
+    let mut shape = slide.shape_mut(0).unwrap();
+    let error = shape
+        .set_effects(Some(rpptx::CT_EffectList::default()))
+        .unwrap_err();
+    assert!(error.to_string().contains("a:effectDag"), "{error}");
+    let mut invalid = rpptx::CT_EffectList::default();
+    invalid.outer_shadow = Some(outer_shadow(0, 0, 21_600_000));
+    assert!(matches!(
+        shape.set_effects(Some(invalid)),
+        Err(Error::InvalidShapeMutation { .. })
+    ));
+    assert_eq!(presentation.to_bytes().unwrap(), {
+        let reopened = Presentation::from_bytes(&patched).unwrap();
+        reopened.to_bytes().unwrap()
+    });
+}
+
+#[test]
+fn an_authored_outer_shadow_is_drawn_below_and_right_of_its_shape() {
+    let mut presentation = Presentation::new().expect("open bundled template");
+    presentation.add_slide(6).expect("add blank slide");
+    let mut slide = presentation.slide_mut(0).unwrap();
+    // A 100 pt square at 100 pt, with a hard black shadow 20 pt away at 45 degrees.
+    let mut shape = slide
+        .add_shape(
+            "rect",
+            Emu(1_270_000),
+            Emu(1_270_000),
+            Emu(1_270_000),
+            Emu(1_270_000),
+        )
+        .unwrap();
+    let mut fill = rpptx::SolidFill::default();
+    fill.color = Some(rpptx::ColorChoice::srgb(rpptx::RgbColor::new(0xFF, 0, 0)));
+    shape.set_fill(Fill::Solid(fill)).unwrap();
+    let mut shadow = outer_shadow(0, 254_000, 2_700_000);
+    shadow.color = Some(rpptx::ColorChoice::srgb(rpptx::RgbColor::new(0, 0, 0)));
+    let mut effects = rpptx::CT_EffectList::default();
+    effects.outer_shadow = Some(shadow);
+    shape.set_effects(Some(effects)).unwrap();
+
+    let png = presentation
+        .slide_png_deterministic(0, 72.0)
+        .unwrap()
+        .unwrap();
+    let pixmap = tiny_skia::Pixmap::decode_png(&png).unwrap();
+    let rgb = |x: u32, y: u32| {
+        let pixel = pixmap.pixel(x, y).unwrap();
+        (pixel.red(), pixel.green(), pixel.blue())
+    };
+    // The shadow offset is 20 pt * cos 45 = 14.1 pt on each axis.
+    assert_eq!(rgb(205, 205), (0, 0, 0), "shadow below right of the corner");
+    assert_eq!(rgb(205, 120), (0, 0, 0), "shadow right of the shape");
+    assert_eq!(rgb(120, 205), (0, 0, 0), "shadow below the shape");
+    assert_eq!(
+        rgb(205, 105),
+        (0xFF, 0xFF, 0xFF),
+        "no shadow above its offset"
+    );
+    assert_eq!(
+        rgb(95, 205),
+        (0xFF, 0xFF, 0xFF),
+        "no shadow left of its offset"
+    );
+}
+
 #[test]
 fn four_appended_shapes_have_unique_ids_and_reopen() {
     let mut presentation = Presentation::new().expect("open bundled template");
