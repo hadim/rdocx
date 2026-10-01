@@ -1197,6 +1197,36 @@ impl<'a> Paragraph<'a> {
         Ok(boundary)
     }
 
+    /// Remove the run at `run_index`, counted as [`Self::run`] counts runs.
+    ///
+    /// Comment ranges, bookmarks, permission ranges and the other markers
+    /// next to the run stay where they are. A run inside a hyperlink, an
+    /// inline content control or a tracked insertion is removed inside it. A
+    /// hyperlink or a tracked insertion left with nothing in it is removed
+    /// too, while a content control stays with its properties, empty, as Word
+    /// keeps it to show its placeholder. A run that holds a comment, footnote
+    /// or endnote reference, part of a complex field whose other parts are in
+    /// other runs, or part of a tracked move destination is refused, since
+    /// the note, the field or the move would lose its balance. A
+    /// field whose parts are all in the paragraph is one run, removed whole.
+    /// On error the paragraph is unchanged.
+    pub fn remove_run(&mut self, run_index: usize) -> crate::Result<()> {
+        let run_paths = self.inner.accepted_run_paths();
+        let path = run_paths.get(run_index).ok_or_else(|| {
+            crate::Error::Other(format!(
+                "run index {run_index} is out of range for a paragraph with {} runs",
+                run_paths.len()
+            ))
+        })?;
+        self.inner.remove_accepted_run(path).map_err(|error| {
+            let reason = match error {
+                rdocx_oxml::OxmlError::InvalidValue(reason) => reason,
+                other => other.to_string(),
+            };
+            crate::Error::Other(format!("run {run_index} cannot be removed: {reason}"))
+        })
+    }
+
     /// Get an iterator over immutable run references.
     pub fn runs(&self) -> impl Iterator<Item = RunRef<'_>> {
         self.inner

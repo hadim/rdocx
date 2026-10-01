@@ -128,6 +128,39 @@ impl PyRun {
         Ok(())
     }
 
+    /// Remove this run from its paragraph, keeping the markers around it.
+    fn remove(&self, py: Python<'_>) -> PyResult<()> {
+        let (location, run_index) = self.validate(py)?;
+        let mut document = self.document.borrow_mut(py);
+        let removed = match location {
+            ParagraphLocation::Body(index) => document
+                .inner
+                .paragraph_mut(index)
+                .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
+                .remove_run(run_index),
+            ParagraphLocation::Cell {
+                table,
+                row,
+                cell,
+                paragraph,
+            } => {
+                let mut table = document
+                    .inner
+                    .table_mut(table)
+                    .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
+                let mut cell = table
+                    .cell(row, cell)
+                    .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?;
+                cell.paragraph_mut(paragraph)
+                    .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
+                    .remove_run(run_index)
+            }
+        };
+        removed.map_err(|error| crate::rdocx_to_pyerr(py, error))?;
+        document.revisions.bump();
+        Ok(())
+    }
+
     #[getter]
     fn font(&self, py: Python<'_>) -> PyResult<Py<crate::formatting::PyFont>> {
         self.validate(py)?;
