@@ -41565,6 +41565,71 @@ fn issue_159_content_control_identity_only_comparison_has_no_revision() {
     assert!(compared.revisions().is_empty());
 }
 
+/// A redline converted to HTML or Markdown shows its accepted view, as its
+/// text does: the inserted words and paragraphs, not the deleted ones. A
+/// deleted heading, list item or paragraph leaves no empty block behind, and
+/// the list around a deleted item stays one list.
+#[test]
+fn a_compare_redline_exports_its_accepted_view_to_html_and_markdown() {
+    let document = |edited: bool| {
+        let mut document = Document::new();
+        document.add_paragraph(if edited {
+            "Keep NEWWORD here."
+        } else {
+            "Keep OLDWORD here."
+        });
+        if !edited {
+            document.add_paragraph("OLDPARA");
+            document.add_paragraph("OLDHEAD").set_style("Heading1");
+        }
+        document.add_paragraph("Last");
+        if edited {
+            document.add_paragraph("NEWPARA");
+        }
+        document.add_numbered_list_item("One", 0);
+        if !edited {
+            document.add_numbered_list_item("OLDITEM", 0);
+        }
+        document.add_numbered_list_item("Two", 0);
+        document
+    };
+    let mut redline = document(false);
+    redline
+        .compare(&document(true), "Ada", "2026-09-30T00:00:00Z")
+        .unwrap();
+    assert!(!redline.revisions().is_empty());
+
+    for exported in [
+        redline.to_html(),
+        redline.to_html_fragment(),
+        redline.to_markdown(),
+    ] {
+        for present in ["Keep NEWWORD here.", "Last", "NEWPARA"] {
+            assert!(exported.contains(present), "{present}: {exported}");
+        }
+        for absent in ["OLDWORD", "OLDPARA", "OLDHEAD", "OLDITEM"] {
+            assert!(!exported.contains(absent), "{absent}: {exported}");
+        }
+    }
+    assert_eq!(
+        redline.to_html_fragment(),
+        "<p>Keep NEWWORD here.</p>\n<p>Last</p>\n<p>NEWPARA</p>\n\
+         <ol>\n<li>One</li>\n<li>Two</li>\n</ol>\n"
+    );
+    assert_eq!(
+        redline.to_markdown(),
+        "Keep NEWWORD here.\n\nLast\n\nNEWPARA\n\n1. One\n1. Two\n"
+    );
+
+    // Deleting only a paragraph mark joins the paragraph to the next one,
+    // which keeps its own properties.
+    let joined = document_with_content_controls(&wrap_word_body(
+        r#"<w:p><w:pPr><w:rPr><w:del w:id="1" w:author="Ada"/></w:rPr></w:pPr><w:r><w:t xml:space="preserve">Joined </w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:t>heading</w:t></w:r></w:p>"#,
+    ));
+    assert_eq!(joined.to_html_fragment(), "<h2>Joined heading</h2>\n");
+    assert_eq!(joined.to_markdown(), "## Joined heading\n\n");
+}
+
 const ISSUE_254_RED: &[u8] = b"\x89PNG\r\n\x1a\nred figure";
 const ISSUE_254_BLUE: &[u8] = b"\x89PNG\r\n\x1a\nblue figure";
 
