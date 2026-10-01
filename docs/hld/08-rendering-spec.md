@@ -1469,7 +1469,11 @@ A bookmark start keeps the paragraph, because PAGEREF and REF read the page,
 number and text of the paragraph that holds it, and accepting moves it onto
 the next paragraph, which layout does not model. A paragraph that keeps
 accepted content is still laid out as its own paragraph rather than at the
-start of the next one. Tracked layout includes both
+start of the next one. Accepted layout also omits the table
+rows that `CT_Row::accepted_view_removes` reports and, when every row goes, the
+whole table with its spacing. The rows that remain keep their source paths,
+and vertical merges, header rows and table-style regions apply to them as they
+do after `Document::accept_all`. Tracked layout includes both
 sides. It forces single underline on insertion and move destination text and
 single strike on deletion and move source text while retaining the remaining
 resolved formatting.

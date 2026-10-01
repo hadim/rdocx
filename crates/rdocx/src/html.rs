@@ -629,7 +629,7 @@ fn mhtml_export_html(document: &Document) -> Result<(String, Vec<MhtmlResource>)
     // them, those of content controls, tracked insertions, smart tags and
     // custom XML included.
     let mut image_sizes = Vec::new();
-    visit_accepted_drawings(&document.document.body.content, &mut |drawing| {
+    visit_accepted_drawings(&document.document.body.content, true, &mut |drawing| {
         let inline = drawing
             .inline
             .as_ref()
@@ -4356,6 +4356,49 @@ mod tests {
                 .map(|image| (image.width_emu, image.height_emu))
                 .collect::<Vec<_>>(),
             [(19_050, 28_575), (38_100, 47_625)]
+        );
+    }
+
+    #[test]
+    fn mhtml_writer_leaves_out_the_pictures_of_deleted_table_rows() {
+        let mut document = Document::new();
+        for (name, width, height) in [("deleted.png", 9_525, 9_525), ("kept.png", 19_050, 28_575)] {
+            document.add_picture(
+                &one_pixel_png(),
+                name,
+                Length::emu(width),
+                Length::emu(height),
+            );
+        }
+        let mut package =
+            OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let xml =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+        // The first picture paragraph moves into a deleted table row.
+        let start = xml.find("<w:p>").unwrap();
+        let end = xml.find("</w:p>").unwrap() + "</w:p>".len();
+        let xml = format!(
+            r#"{}<w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:trPr><w:del w:id="1" w:author="Ada"/></w:trPr><w:tc>{}</w:tc></w:tr></w:tbl>{}"#,
+            &xml[..start],
+            &xml[start..end],
+            &xml[end..]
+        );
+        package.set_part("/word/document.xml", xml.into_bytes());
+        let mut saved = Cursor::new(Vec::new());
+        package.write_to(&mut saved).unwrap();
+        let document = Document::from_bytes(saved.get_ref()).unwrap();
+        assert!(!document.to_html().contains("<table"));
+
+        let written = document.to_mhtml_bytes().unwrap();
+        let reopened = Document::from_mhtml_bytes(&written.bytes).unwrap();
+        assert_eq!(
+            reopened
+                .document
+                .images()
+                .iter()
+                .map(|image| (image.width_emu, image.height_emu))
+                .collect::<Vec<_>>(),
+            [(19_050, 28_575)]
         );
     }
 

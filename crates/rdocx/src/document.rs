@@ -6225,7 +6225,7 @@ fn reject_section_owning_content_fragment(fragment: &ContentFragment) -> Result<
     wrapped.extend_from_slice(b"</w:body></w:document>");
     let document = CT_Document::from_xml(&wrapped)?;
     let mut owns_section = false;
-    visit_body_paragraphs(&document.body.content, &mut |paragraph| {
+    visit_body_paragraphs(&document.body.content, false, &mut |paragraph| {
         owns_section |= paragraph
             .properties
             .as_ref()
@@ -10119,73 +10119,83 @@ fn insert_html_content_into_cell(
     Ok(())
 }
 
-pub(crate) fn visit_body_paragraphs(content: &[BodyContent], visitor: &mut impl FnMut(&CT_P)) {
+pub(crate) fn visit_body_paragraphs(
+    content: &[BodyContent],
+    accepted: bool,
+    visitor: &mut impl FnMut(&CT_P),
+) {
     for item in content {
         match item {
-            BodyContent::Paragraph(paragraph) => visit_paragraph(paragraph, visitor),
-            BodyContent::Table(table) => visit_table(table, visitor),
-            BodyContent::ContentControl(control) => visit_sdt(control, visitor),
+            BodyContent::Paragraph(paragraph) => visit_paragraph(paragraph, accepted, visitor),
+            BodyContent::Table(table) => visit_table(table, accepted, visitor),
+            BodyContent::ContentControl(control) => visit_sdt(control, accepted, visitor),
             BodyContent::RawXml(_) => {}
         }
     }
 }
 
-fn visit_paragraph(paragraph: &CT_P, visitor: &mut impl FnMut(&CT_P)) {
+// With `accepted`, the visitors leave out the rows that accepting every
+// tracked change removes, as `CT_Row::accepted_view_removes` reports them.
+// `visit_row` itself visits the row it is given.
+fn visit_paragraph(paragraph: &CT_P, accepted: bool, visitor: &mut impl FnMut(&CT_P)) {
     visitor(paragraph);
     for (_, _, _, control) in &paragraph.content_controls {
-        visit_sdt(control, visitor);
+        visit_sdt(control, accepted, visitor);
     }
 }
 
-fn visit_table(table: &CT_Tbl, visitor: &mut impl FnMut(&CT_P)) {
+fn visit_table(table: &CT_Tbl, accepted: bool, visitor: &mut impl FnMut(&CT_P)) {
     for index in 0..=table.rows.len() {
         for (_, _, control) in table
             .content_controls
             .iter()
             .filter(|(at, _, _)| *at == index)
         {
-            visit_sdt(control, visitor);
+            visit_sdt(control, accepted, visitor);
         }
-        if let Some(row) = table.rows.get(index) {
-            visit_row(row, visitor);
+        if let Some(row) = table.rows.get(index)
+            && !(accepted && row.accepted_view_removes())
+        {
+            visit_row(row, accepted, visitor);
         }
     }
 }
 
-fn visit_row(row: &CT_Row, visitor: &mut impl FnMut(&CT_P)) {
+fn visit_row(row: &CT_Row, accepted: bool, visitor: &mut impl FnMut(&CT_P)) {
     for index in 0..=row.cells.len() {
         for (_, _, control) in row
             .content_controls
             .iter()
             .filter(|(at, _, _)| *at == index)
         {
-            visit_sdt(control, visitor);
+            visit_sdt(control, accepted, visitor);
         }
         if let Some(cell) = row.cells.get(index) {
-            visit_cell(cell, visitor);
+            visit_cell(cell, accepted, visitor);
         }
     }
 }
 
-fn visit_cell(cell: &CT_Tc, visitor: &mut impl FnMut(&CT_P)) {
+fn visit_cell(cell: &CT_Tc, accepted: bool, visitor: &mut impl FnMut(&CT_P)) {
     for item in &cell.content {
         match item {
-            CellContent::Paragraph(paragraph) => visit_paragraph(paragraph, visitor),
-            CellContent::Table(table) => visit_table(table, visitor),
-            CellContent::ContentControl(control) => visit_sdt(control, visitor),
+            CellContent::Paragraph(paragraph) => visit_paragraph(paragraph, accepted, visitor),
+            CellContent::Table(table) => visit_table(table, accepted, visitor),
+            CellContent::ContentControl(control) => visit_sdt(control, accepted, visitor),
         }
     }
 }
 
-fn visit_sdt(control: &CT_Sdt, visitor: &mut impl FnMut(&CT_P)) {
+fn visit_sdt(control: &CT_Sdt, accepted: bool, visitor: &mut impl FnMut(&CT_P)) {
     for item in &control.content {
         match item {
-            SdtContent::Paragraph(paragraph) => visit_paragraph(paragraph, visitor),
-            SdtContent::Table(table) => visit_table(table, visitor),
-            SdtContent::Row(row) => visit_row(row, visitor),
-            SdtContent::Cell(cell) => visit_cell(cell, visitor),
+            SdtContent::Paragraph(paragraph) => visit_paragraph(paragraph, accepted, visitor),
+            SdtContent::Table(table) => visit_table(table, accepted, visitor),
+            SdtContent::Row(row) if accepted && row.accepted_view_removes() => {}
+            SdtContent::Row(row) => visit_row(row, accepted, visitor),
+            SdtContent::Cell(cell) => visit_cell(cell, accepted, visitor),
             SdtContent::Run(_) | SdtContent::RawXml(_) => {}
-            SdtContent::ContentControl(nested) => visit_sdt(nested, visitor),
+            SdtContent::ContentControl(nested) => visit_sdt(nested, accepted, visitor),
         }
     }
 }
@@ -10250,7 +10260,12 @@ fn push_table_text(table: &CT_Tbl, text: &mut String) {
 /// Append a row to [`Document::text`] as one line in which every paragraph of
 /// its cells ends with a tab, cell controls and nested tables included.
 fn push_row_text(row: &CT_Row, text: &mut String) {
-    visit_row(row, &mut |paragraph| push_cell_paragraph(paragraph, text));
+    if row.accepted_view_removes() {
+        return;
+    }
+    visit_row(row, true, &mut |paragraph| {
+        push_cell_paragraph(paragraph, text)
+    });
     text.push('\n');
 }
 
@@ -10267,7 +10282,9 @@ fn push_control_text(control: &CT_Sdt, text: &mut String) {
             SdtContent::Table(table) => push_table_text(table, text),
             SdtContent::Row(row) => push_row_text(row, text),
             SdtContent::Cell(cell) => {
-                visit_cell(cell, &mut |paragraph| push_cell_paragraph(paragraph, text));
+                visit_cell(cell, true, &mut |paragraph| {
+                    push_cell_paragraph(paragraph, text)
+                });
             }
             SdtContent::Run(_) | SdtContent::RawXml(_) => {}
             SdtContent::ContentControl(nested) => push_control_text(nested, text),
@@ -11095,12 +11112,14 @@ fn push_control_cell_content(control: &CT_Sdt, content: &mut Vec<CellContent>) {
 
 /// Visit the drawings the exporters write, in the order they write them: those
 /// of the accepted view of every paragraph (see `CT_P::accepted_view`), in
-/// the paragraphs [`visit_body_paragraphs`] reaches.
+/// the paragraphs [`visit_body_paragraphs`] reaches. `accepted` leaves out the
+/// table rows that accepting removes, as the HTML emitter does.
 pub(crate) fn visit_accepted_drawings(
     content: &[BodyContent],
+    accepted: bool,
     visitor: &mut impl FnMut(&CT_Drawing),
 ) {
-    visit_body_paragraphs(content, &mut |paragraph| {
+    visit_body_paragraphs(content, accepted, &mut |paragraph| {
         for run in &paragraph.accepted_view().runs {
             visit_run_drawings(run, visitor);
         }
@@ -11528,7 +11547,7 @@ impl Document {
 
     fn canonicalize_bookmark_ids(&mut self) -> Result<()> {
         let mut semantic = Vec::new();
-        visit_body_paragraphs(&self.document.body.content, &mut |paragraph| {
+        visit_body_paragraphs(&self.document.body.content, false, &mut |paragraph| {
             for marker in &paragraph.bookmark_markers {
                 if marker.is_start()
                     && let Some(id) = marker.id()
@@ -11559,7 +11578,7 @@ impl Document {
 
     fn canonicalize_toc_bookmark_ids(&mut self) -> Result<()> {
         let mut semantic = Vec::new();
-        visit_body_paragraphs(&self.document.body.content, &mut |paragraph| {
+        visit_body_paragraphs(&self.document.body.content, false, &mut |paragraph| {
             for marker in &paragraph.bookmark_markers {
                 if marker.is_start()
                     && let Some(id) = marker.id()
@@ -11613,7 +11632,7 @@ impl Document {
             return Ok(());
         };
         let mut semantic_nums = Vec::new();
-        visit_body_paragraphs(&self.document.body.content, &mut |paragraph| {
+        visit_body_paragraphs(&self.document.body.content, false, &mut |paragraph| {
             if let Some(id) = paragraph
                 .properties
                 .as_ref()
@@ -15968,7 +15987,10 @@ impl Document {
     /// deletions are left out. A body paragraph whose mark is deleted or moved
     /// away joins the next body paragraph without a newline when
     /// `CT_Body::accepted_paragraph_joins_next` says so, as accepting it does,
-    /// so one with no accepted text leaves no line at all.
+    /// so one with no accepted text leaves no line at all. A table row that
+    /// accepting removes, as `CT_Row::accepted_view_removes` reports it,
+    /// contributes no line, so a table whose rows are all deleted contributes
+    /// nothing.
     pub fn text(&self) -> String {
         let mut result = String::new();
         for (index, content) in self.document.body.content.iter().enumerate() {
@@ -22583,7 +22605,7 @@ impl Document {
         let mut identifiers = self.identifiers.clone();
         let mut duplicate_typed_id = false;
         let mut typed_ids = HashSet::new();
-        visit_body_paragraphs(&self.document.body.content, &mut |paragraph| {
+        visit_body_paragraphs(&self.document.body.content, false, &mut |paragraph| {
             for marker in &paragraph.bookmark_markers {
                 if marker.is_start()
                     && let Some(id) = marker.id()
@@ -22758,7 +22780,7 @@ impl Document {
     /// Numeric `_TocN` bookmark suffixes already present in the body.
     fn toc_bookmark_suffixes(&self) -> HashSet<u64> {
         let mut suffixes = HashSet::new();
-        visit_body_paragraphs(&self.document.body.content, &mut |p| {
+        visit_body_paragraphs(&self.document.body.content, false, &mut |p| {
             for marker in &p.bookmark_markers {
                 let Some(name) = marker.name() else {
                     continue;
@@ -23046,7 +23068,7 @@ impl Document {
                 }
             }
         };
-        visit_body_paragraphs(&self.document.body.content, &mut |paragraph| {
+        visit_body_paragraphs(&self.document.body.content, false, &mut |paragraph| {
             if let Some(section) = paragraph
                 .properties
                 .as_ref()
@@ -24544,10 +24566,12 @@ impl Document {
     /// Count the number of words in the document.
     ///
     /// Counts whitespace-separated tokens across all paragraphs (including
-    /// paragraphs inside table cells and content controls).
+    /// paragraphs inside table cells and content controls), leaving out the
+    /// table rows that accepting every tracked change removes, as
+    /// [`Self::text`] does.
     pub fn word_count(&self) -> usize {
         let mut count = 0;
-        visit_body_paragraphs(&self.document.body.content, &mut |paragraph| {
+        visit_body_paragraphs(&self.document.body.content, true, &mut |paragraph| {
             count += paragraph.text().split_whitespace().count();
         });
         count
