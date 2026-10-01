@@ -44430,11 +44430,11 @@ fn accepted_view_leaves_out_deleted_table_rows() {
     assert!(!redline.to_html().contains("GONE"));
     assert_eq!(
         fragments(&redline, RevisionView::Accepted),
-        [vec![72.0], vec![91.87], vec![111.74]]
+        [vec![72.0], vec![94.49], vec![116.98]]
     );
     assert_eq!(
         fragments(&redline, RevisionView::Tracked),
-        [vec![72.0], vec![91.87], vec![131.61]]
+        [vec![72.0], vec![94.49], vec![139.47]]
     );
     // The model and its indices are unchanged.
     assert_eq!(redline.table(0).unwrap().row_count(), 2);
@@ -44450,7 +44450,7 @@ fn accepted_view_leaves_out_deleted_table_rows() {
     assert_eq!(redline.to_html_fragment(), "<p>a</p>\n<p>b</p>\n");
     assert_eq!(
         fragments(&redline, RevisionView::Accepted),
-        [vec![72.0], vec![], vec![91.87]]
+        [vec![72.0], vec![], vec![94.49]]
     );
     assert_eq!(redline.body_items().count(), 3);
 
