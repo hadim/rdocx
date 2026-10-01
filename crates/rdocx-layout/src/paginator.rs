@@ -3588,15 +3588,25 @@ fn render_paragraph_lines(
             .unwrap_or_default();
         let baseline_y = geometry.margin_top + y + line.ascent;
 
-        // Compute x offset based on justification
-        let text_width: f64 = line.items.iter().map(|item| item.width()).sum();
+        // Compute x offset based on justification. Rich text spaces that end
+        // the line hang off its visual side, outside the aligned width.
+        let (hang_start, hang_end) = line.hanging_space_counts();
+        let ink = hang_start..line.items.len() - hang_end;
+        let hanging_left: f64 = line.items[..ink.start]
+            .iter()
+            .map(|item| item.width())
+            .sum();
+        let text_width: f64 = line.items[ink.clone()]
+            .iter()
+            .map(|item| item.width())
+            .sum();
         let remaining_width = line.available_width - text_width;
 
         // For justified text (Both), compute extra space per gap
         let justify_extra =
             if para.jc == Some(Align::Justify) && !line.is_last && remaining_width > 0.0 {
                 // Count inter-word gaps: spaces between items + spaces within text segments
-                let gap_count = count_word_gaps(&line.items);
+                let gap_count = count_word_gaps(&line.items[ink.clone()]);
                 if gap_count > 0 {
                     remaining_width / gap_count as f64
                 } else {
@@ -3616,7 +3626,7 @@ fn render_paragraph_lines(
             _ => geometry.margin_left + line.indent_left,
         };
 
-        let mut x = x_offset;
+        let mut x = x_offset - hanging_left;
         let mut _accumulated_extra = 0.0;
 
         for (visual_item, item) in line.items.iter().enumerate() {
@@ -3805,7 +3815,11 @@ fn render_paragraph_lines(
                         geometry.margin_top + y,
                         line.height,
                         para.source_node(),
-                        justify_extra,
+                        if ink.contains(&visual_item) {
+                            justify_extra
+                        } else {
+                            0.0
+                        },
                     );
                     let element_position = (first..elements.len())
                         .find(|position| {

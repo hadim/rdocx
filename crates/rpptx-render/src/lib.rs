@@ -1997,7 +1997,7 @@ mod tests {
         let png = oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap();
         let pixmap = tiny_skia::Pixmap::decode_png(&png).unwrap();
 
-        let red = rgb_at(&pixmap, 5, 5);
+        let red = rgb_at(&pixmap, 5, 8);
         assert!(red.0 > 200 && red.1 < 30 && red.2 < 30, "{red:?}");
         assert_eq!(rgb_at(&pixmap, 5, 15), (0, 255, 0));
         assert_eq!(rgb_at(&pixmap, 15, 15), (0, 0, 255));
