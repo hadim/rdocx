@@ -42,7 +42,9 @@ pub(crate) fn tab_stops(values: &[CT_TabStop]) -> Vec<TabStop> {
                 ST_TabJc::Left => TabAlign::Left,
                 ST_TabJc::Center => TabAlign::Center,
                 ST_TabJc::Right => TabAlign::Right,
-                ST_TabJc::Decimal | ST_TabJc::Num => TabAlign::Decimal,
+                ST_TabJc::Decimal => TabAlign::Decimal,
+                // A list tab, which Word treats as a left stop.
+                ST_TabJc::Num => TabAlign::Left,
                 ST_TabJc::Bar => TabAlign::Bar,
                 ST_TabJc::Clear => return None,
             };
@@ -125,6 +127,7 @@ pub(crate) fn line_break_params(
         jc: alignment(properties.jc),
         wrap: true,
         default_tab_interval_pt: default_tab_interval_pt(default_tab_stop),
+        clamp_tabs_past_margin: false,
     }
 }
 
@@ -366,7 +369,7 @@ mod tests {
             (ST_TabJc::Right, TabAlign::Right),
             (ST_TabJc::Decimal, TabAlign::Decimal),
             (ST_TabJc::Bar, TabAlign::Bar),
-            (ST_TabJc::Num, TabAlign::Decimal),
+            (ST_TabJc::Num, TabAlign::Left),
         ];
         let leaders = [
             (ST_TabLeader::None, TabLeader::None),

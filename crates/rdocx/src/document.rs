@@ -24250,6 +24250,17 @@ impl Document {
                 .settings
                 .as_ref()
                 .and_then(CT_Settings::default_tab_stop),
+            clamp_tabs_past_margin: self.settings.as_ref().is_some_and(|settings| {
+                settings.compatibility_settings().iter().any(|setting| {
+                    setting.name == "compatibilityMode"
+                        && setting.uri == "http://schemas.microsoft.com/office/word"
+                        && setting
+                            .value
+                            .trim()
+                            .parse::<u32>()
+                            .is_ok_and(|mode| mode >= 15)
+                })
+            }),
             mirror_margins: self
                 .settings
                 .as_ref()
