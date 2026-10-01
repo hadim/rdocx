@@ -722,6 +722,18 @@ fn lower_table(
     let row_heights = table.rows.iter().map(|row| row.height).collect::<Vec<_>>();
     let row_offsets = cumulative_offsets(&row_heights);
     let mut fills = Vec::new();
+    if let Some(background) = &table.background {
+        fills.push(PositionedElement::Path(PathElement {
+            path: Path::rect(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: column_offsets.last().copied().unwrap_or(0.0),
+                height: row_offsets.last().copied().unwrap_or(0.0),
+            }),
+            fill: Some(background.clone()),
+            stroke: None,
+        }));
+    }
     let mut texts = Vec::new();
     let mut borders: HashMap<(bool, usize, usize), TableBorderCandidate> = HashMap::new();
     let mut cell_index = 0usize;
@@ -1962,6 +1974,7 @@ mod tests {
     fn banded_merged_table_renders_correct_fills_without_duplicated_borders() {
         let table = ResolvedTable {
             right_to_left: false,
+            background: None,
             column_widths: vec![10.0, 10.0],
             rows: vec![
                 ResolvedTableRow {
@@ -2038,6 +2051,7 @@ mod tests {
     fn merged_continuation_cells_do_not_render_fill_border_or_text_twice() {
         let table = ResolvedTable {
             right_to_left: false,
+            background: None,
             column_widths: vec![10.0, 10.0],
             rows: vec![ResolvedTableRow {
                 height: 10.0,
@@ -2069,6 +2083,7 @@ mod tests {
     fn right_to_left_table_keeps_unequal_logical_column_widths() {
         let table = ResolvedTable {
             right_to_left: true,
+            background: None,
             column_widths: vec![10.0, 20.0],
             rows: vec![ResolvedTableRow {
                 height: 10.0,
@@ -2104,6 +2119,7 @@ mod tests {
         };
         let table = ResolvedTable {
             right_to_left: false,
+            background: None,
             column_widths: vec![10.0, 10.0],
             rows: vec![ResolvedTableRow {
                 height: 10.0,
@@ -2147,9 +2163,60 @@ mod tests {
     }
 
     #[test]
+    fn table_background_is_painted_over_the_table_beneath_cell_fills() {
+        let table = ResolvedTable {
+            right_to_left: false,
+            background: Some(Paint::Solid(Color::from_hex("00FF00"))),
+            column_widths: vec![10.0, 10.0],
+            rows: vec![ResolvedTableRow {
+                height: 5.0,
+                cells: vec![
+                    ResolvedTableCell {
+                        fill: Some(Paint::Solid(Color::from_hex("FF0000"))),
+                        ..ResolvedTableCell::default()
+                    },
+                    ResolvedTableCell::default(),
+                ],
+            }],
+        };
+        let page = layout_slide(
+            &render_input(vec![slide((20.0, 5.0), vec![table_shape(table)])]),
+            0,
+        )
+        .unwrap();
+        let fills = only_group(&page.elements[0])
+            .children
+            .iter()
+            .filter_map(|element| match element {
+                PositionedElement::Path(path) => Some((path.path.bounds()?, path.fill.clone())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        let whole = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 20.0,
+            height: 5.0,
+        };
+        let first_cell = Rect {
+            width: 10.0,
+            ..whole
+        };
+        assert_eq!(
+            fills,
+            vec![
+                (whole, Some(Paint::Solid(Color::from_hex("00FF00")))),
+                (first_cell, Some(Paint::Solid(Color::from_hex("FF0000")))),
+            ]
+        );
+    }
+
+    #[test]
     fn table_cell_margins_place_text_in_the_fixed_content_box() {
         let table = ResolvedTable {
             right_to_left: false,
+            background: None,
             column_widths: vec![20.0],
             rows: vec![ResolvedTableRow {
                 height: 20.0,

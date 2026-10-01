@@ -141,13 +141,17 @@ shaping.
 
 Table resolution selects the explicit table style or the table style list's
 default. A known Office built-in ID without a package definition resolves from
-its built-in visual family and theme accent. A package definition of that ID
+its built-in visual family and theme accent. The Themed families carry the
+theme background fill and effect references PowerPoint paints behind the
+table. A package definition of that ID
 takes precedence, and an unknown ID follows the list default. Style lookup
 does not add a definition to the saved package. Resolution applies whole-table,
 row and column bands, first and last columns,
 first and last rows, then corner regions. Direct cell properties apply last.
 The result carries concrete fills, text styles, margins, four borders, spans,
-merge ownership, and right-to-left order. Border values retain region priority
+merge ownership, and right-to-left order, plus the style's background fill
+sized to the whole table. A background effect is ignored with a stable
+diagnostic. Border values retain region priority
 so the renderer can settle adjacent edge conflicts after all cells resolve.
 
 Table cell text always uses fixed-box layout. Cell autofit is ignored and
