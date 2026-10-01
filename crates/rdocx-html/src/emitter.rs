@@ -220,7 +220,6 @@ fn emit_paragraph_content(
     images: &HashMap<String, ImageData>,
     options: &HtmlOptions,
 ) {
-
     let mut current_link: Option<&str> = None;
 
     for (in_link, run) in runs {
