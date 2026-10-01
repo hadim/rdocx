@@ -4683,7 +4683,10 @@ impl CT_P {
             return Cow::Borrowed(self);
         }
         let mut runs = Vec::new();
-        // The index into `self.hyperlinks` of the hyperlink each run is in.
+        // The hyperlinks of the view: those of `self`, then those that
+        // tracked insertions hold.
+        let mut spans = self.hyperlinks.iter().collect::<Vec<_>>();
+        // The index into `spans` of the hyperlink each run is in.
         let mut links = Vec::new();
         for boundary in 0..=self.runs.len() {
             for owner in boundary_owners(self, boundary) {
@@ -4696,7 +4699,38 @@ impl CT_P {
                     BoundaryOwner::Revision(index) => {
                         let (_, slot, revision) = &self.revisions[index];
                         append_accepted_revision_runs(revision, &mut owned);
-                        hyperlink_revision_index(*slot)
+                        let enclosing = hyperlink_revision_index(*slot);
+                        // A direct run of a hyperlink inside the inserted
+                        // content is in that hyperlink.
+                        if let Some(content) = revision.content_paragraph()
+                            && !content.hyperlinks.is_empty()
+                        {
+                            for run in owned {
+                                let held = content.hyperlinks.iter().find(|hyperlink| {
+                                    content
+                                        .runs
+                                        .get(hyperlink.run_start..hyperlink.run_end)
+                                        .is_some_and(|held| {
+                                            held.iter().any(|held| std::ptr::eq(held, run))
+                                        })
+                                });
+                                let link = held.map_or(enclosing, |hyperlink| {
+                                    Some(
+                                        spans
+                                            .iter()
+                                            .position(|span| std::ptr::eq(*span, hyperlink))
+                                            .unwrap_or_else(|| {
+                                                spans.push(hyperlink);
+                                                spans.len() - 1
+                                            }),
+                                    )
+                                });
+                                links.push(link);
+                                runs.push(run.clone());
+                            }
+                            continue;
+                        }
+                        enclosing
                     }
                     BoundaryOwner::Wrapper(index) => {
                         if let Some(content) =
@@ -4744,7 +4778,7 @@ impl CT_P {
                 hyperlinks.push(HyperlinkSpan {
                     run_start: start,
                     run_end: end,
-                    ..self.hyperlinks[link].clone()
+                    ..spans[link].clone()
                 });
             }
             start = end;
