@@ -12,7 +12,8 @@ use crate::numbering::{
     local_namespace_overrides, merged_owner_bindings, namespace_bindings, word_prefixes_at,
 };
 use crate::properties::{
-    CT_Shd, get_word_val_attr, is_word_attribute, is_word_element, parse_word_toggle, write_toggle,
+    CT_Shd, get_word_val_attr, is_word_attribute, is_word_element, parse_integer_measurement,
+    parse_word_toggle, write_toggle,
 };
 use crate::raw_xml::{capture_element, capture_empty_element};
 use crate::revision::{CT_Revision, RevisionKind};
@@ -212,29 +213,13 @@ pub struct CT_TblCellMar {
     pub right: Option<Twips>,
 }
 
-fn parse_table_measurement(value: &str) -> Result<i32> {
-    let integer = if let Some((integer, fraction)) = value.split_once('.') {
-        if integer.is_empty() || fraction.is_empty() || !fraction.bytes().all(|byte| byte == b'0') {
-            return Err(OxmlError::InvalidValue(format!(
-                "unsupported table measurement: {value:?}"
-            )));
-        }
-        integer
-    } else {
-        value
-    };
-
-    integer
-        .parse::<i32>()
-        .map_err(|_| OxmlError::InvalidValue(format!("invalid table measurement: {value:?}")))
-}
-
 impl CT_TblCellMar {
     fn parse_edge(e: &BytesStart, word_prefixes: &[String]) -> Result<Option<Twips>> {
         for attr in e.attributes() {
             let attr = attr?;
             if is_word_attribute(attr.key.as_ref(), b"w", word_prefixes) {
-                let val = parse_table_measurement(std::str::from_utf8(&attr.value)?)?;
+                let value = std::str::from_utf8(&attr.value)?;
+                let val = parse_integer_measurement(e.name().as_ref(), attr.key.as_ref(), value)?;
                 return Ok(Some(Twips(val)));
             }
         }
@@ -372,7 +357,7 @@ impl CT_TblWidth {
             let key = attr.key.as_ref();
             let val = std::str::from_utf8(&attr.value)?;
             if is_word_attribute(key, b"w", word_prefixes) {
-                w = parse_table_measurement(val)?;
+                w = parse_integer_measurement(e.name().as_ref(), key, val)?;
             } else if is_word_attribute(key, b"type", word_prefixes) {
                 width_type = val.to_string();
             }
@@ -543,24 +528,25 @@ impl CT_TblPPr {
             let attr = attr?;
             let key = attr.key.as_ref();
             let value = std::str::from_utf8(&attr.value)?;
+            let measurement = || parse_integer_measurement(e.name().as_ref(), key, value);
             if is_word_attribute(key, b"leftFromText", word_prefixes) {
-                position.left_from_text = Some(Twips(parse_table_measurement(value)?));
+                position.left_from_text = Some(Twips(measurement()?));
             } else if is_word_attribute(key, b"rightFromText", word_prefixes) {
-                position.right_from_text = Some(Twips(parse_table_measurement(value)?));
+                position.right_from_text = Some(Twips(measurement()?));
             } else if is_word_attribute(key, b"topFromText", word_prefixes) {
-                position.top_from_text = Some(Twips(parse_table_measurement(value)?));
+                position.top_from_text = Some(Twips(measurement()?));
             } else if is_word_attribute(key, b"bottomFromText", word_prefixes) {
-                position.bottom_from_text = Some(Twips(parse_table_measurement(value)?));
+                position.bottom_from_text = Some(Twips(measurement()?));
             } else if is_word_attribute(key, b"horzAnchor", word_prefixes) {
                 position.horz_anchor = ST_TblAnchor::parse(value);
             } else if is_word_attribute(key, b"vertAnchor", word_prefixes) {
                 position.vert_anchor = ST_TblAnchor::parse(value);
             } else if is_word_attribute(key, b"tblpX", word_prefixes) {
-                position.tbl_p_x = Some(Twips(parse_table_measurement(value)?));
+                position.tbl_p_x = Some(Twips(measurement()?));
             } else if is_word_attribute(key, b"tblpXSpec", word_prefixes) {
                 position.tbl_p_x_spec = AnchorAlignH::parse(value);
             } else if is_word_attribute(key, b"tblpY", word_prefixes) {
-                position.tbl_p_y = Some(Twips(parse_table_measurement(value)?));
+                position.tbl_p_y = Some(Twips(measurement()?));
             } else if is_word_attribute(key, b"tblpYSpec", word_prefixes) {
                 position.tbl_p_y_spec = ST_YAlign::parse(value);
             }
@@ -1187,7 +1173,12 @@ impl CT_TblGrid {
         for attr in element.attributes() {
             let attr = attr?;
             if is_word_attribute(attr.key.as_ref(), b"w", word_prefixes) {
-                width = Twips(std::str::from_utf8(&attr.value)?.parse()?);
+                let value = std::str::from_utf8(&attr.value)?;
+                width = Twips(parse_integer_measurement(
+                    element.name().as_ref(),
+                    attr.key.as_ref(),
+                    value,
+                )?);
             }
         }
         Ok(CT_TblGridCol { width })
@@ -1301,7 +1292,11 @@ impl CT_TrPr {
                             let key = attr.key.as_ref();
                             let val = std::str::from_utf8(&attr.value)?;
                             if is_word_attribute(key, b"val", &prefixes) {
-                                pr.height = Some(Twips(val.parse()?));
+                                pr.height = Some(Twips(parse_integer_measurement(
+                                    name.as_ref(),
+                                    key,
+                                    val,
+                                )?));
                             } else if is_word_attribute(key, b"hRule", &prefixes) {
                                 pr.height_rule = Some(val.to_string());
                             }
@@ -2978,6 +2973,49 @@ mod tests {
     }
 
     #[test]
+    fn fractional_table_measurements_round_to_the_nearest_twip() {
+        let table = parse_table(
+            r#"<w:tblPr>
+                 <w:tblpPr w:tblpX="10.4" w:tblpY="-10.5"/>
+                 <w:tblW w:w="8639.999999999999" w:type="dxa"/>
+                 <w:tblInd w:w="-240.5" w:type="dxa"/>
+               </w:tblPr>
+               <w:tblGrid><w:gridCol w:w="2210.0000000000005"/><w:gridCol w:w="4319.5"/></w:tblGrid>
+               <w:tr><w:trPr><w:trHeight w:val="535.0000000000182"/></w:trPr><w:tc><w:tcPr><w:tcW w:w="4319.999999999999" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr>"#,
+        );
+
+        let properties = table.properties.as_ref().expect("table properties");
+        let position = properties
+            .float_position
+            .as_ref()
+            .expect("floating position");
+        assert_eq!(
+            (position.tbl_p_x, position.tbl_p_y),
+            (Some(Twips(10)), Some(Twips(-11)))
+        );
+        assert_eq!(properties.width.as_ref().map(|width| width.w), Some(8640));
+        assert_eq!(properties.indent.as_ref().map(|width| width.w), Some(-241));
+        let grid = table.grid.as_ref().expect("table grid");
+        let widths: Vec<_> = grid.columns.iter().map(|column| column.width).collect();
+        assert_eq!(widths, [Twips(2210), Twips(4320)]);
+        let row = &table.rows[0];
+        assert_eq!(
+            row.properties
+                .as_ref()
+                .and_then(|properties| properties.height),
+            Some(Twips(535))
+        );
+        assert_eq!(
+            row.cells[0]
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.width.as_ref())
+                .map(|width| width.w),
+            Some(4320)
+        );
+    }
+
+    #[test]
     fn table_measurement_attributes_are_namespace_aware() {
         let word_namespace = crate::namespace::W_NS;
         let table = parse_table(&format!(
@@ -3017,10 +3055,6 @@ mod tests {
     #[test]
     fn unsupported_or_malformed_table_measurements_fail() {
         let cases = [
-            (
-                "fractional",
-                r#"<w:tblPr><w:tblW w:w="9345.5" w:type="dxa"/></w:tblPr>"#,
-            ),
             (
                 "exponent",
                 r#"<w:tr><w:tc><w:tcPr><w:tcW w:w="1e3" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr>"#,
