@@ -918,7 +918,11 @@ deletions and move sources and converts deleted text and deleted field codes
 (`w:delText` and `w:delInstrText`) back to ordinary text and field codes.
 Property rejection restores exactly one namespace-correct prior property
 value. Contextual markers act on their owning run, paragraph mark, numbering
-property, or row. Resolution stages every affected package part, resolves
+property, or row. A removed paragraph mark merges with the next paragraph
+across a table that immediately follows it when every row of that table is
+removed by the same resolution. A removed paragraph mark inside content that
+the resolution removes, such as a cell paragraph of a removed row, needs no
+merge partner. Resolution stages every affected package part, resolves
 selected descendants before their enclosing subtree, reparses the complete
 candidate package, and commits once only after validation succeeds.
 
@@ -1000,6 +1004,15 @@ paragraph mark as the story or control terminator. A self-closing original
 final paragraph expands around its marker without creating a raw sibling. This
 ownership lets acceptance retain every appended paragraph and rejection
 reconstruct the original without an empty terminal residue.
+When an inserted or deleted table stands between that boundary and a final
+inserted or deleted paragraph, the paragraph mark before the table carries the
+boundary, because resolving that change removes every row of the table.
+An inserted or deleted row carries its marker in `w:trPr`, and every cell
+paragraph mark and every cell run carries one too, nested tables included, as
+Word's own Compare writes it. Without the cell marks Word merges the adjacent
+paragraph into the first cell.
+A paragraph-mark marker goes before any formatting in `w:rPr`, and a new
+`w:rPr` goes before `w:sectPr` and `w:pPrChange`, as the schema orders them.
 Comparison patches only owned source spans, preserves every unowned byte,
 stages the complete package, proves that acceptance matches the edited policy
 projection and rejection matches the original, then commits once.
