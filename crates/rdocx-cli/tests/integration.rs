@@ -2280,6 +2280,15 @@ fn render_counts_the_pages_of_the_selected_revision_view() {
         )
         .unwrap();
     document.save(&redline).unwrap();
+    // The page count follows the layout engine, so it is read, not pinned.
+    let accepted_pages = Document::open(&redline)
+        .unwrap()
+        .layout_deterministic()
+        .unwrap()
+        .layout
+        .pages
+        .len();
+    let first_extra = (accepted_pages + 1).to_string();
 
     let base = [
         "render",
@@ -2287,7 +2296,7 @@ fn render_counts_the_pages_of_the_selected_revision_view() {
         "--dpi",
         "24",
         "--pages",
-        "5",
+        &first_extra,
         "--output-dir",
         path_text(&temp.path),
     ];
@@ -2295,11 +2304,15 @@ fn render_counts_the_pages_of_the_selected_revision_view() {
     assert_eq!(accepted.status.code(), Some(1));
     assert_eq!(
         String::from_utf8_lossy(&accepted.stderr),
-        "Error: page 5 is out of range for 4 pages\n"
+        format!("Error: page {first_extra} is out of range for {accepted_pages} pages\n")
     );
     let tracked = cli(&[&base[..], &["--revision-view", "tracked"]].concat());
-    assert_success(&tracked, "render tracked page 5");
-    assert!(temp.path.join("long_page5.png").exists());
+    assert_success(&tracked, "render tracked page past the accepted view");
+    assert!(
+        temp.path
+            .join(format!("long_page{first_extra}.png"))
+            .exists()
+    );
 }
 
 #[test]
