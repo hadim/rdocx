@@ -488,6 +488,38 @@ def test_add_picture_beside_a_content_control_ignores_an_unused_root_default():
         assert positions == sorted(positions)
 
 
+def test_drawings_of_one_part_that_repeat_an_id_open_and_accept_a_new_picture():
+    docx = pytest.importorskip("docx")
+    import rdocx
+
+    wp = "{http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing}"
+    for repeated in ("0", "7"):
+        source = docx.Document()
+        for name in "AB":
+            source.add_paragraph(f"Picture {name}: ").add_run().add_picture(
+                io.BytesIO(_one_pixel_png()), width=914400
+            )
+        for doc_pr in source.element.body.iter(wp + "docPr"):
+            doc_pr.set("id", repeated)
+        buffer = io.BytesIO()
+        source.save(buffer)
+        with zipfile.ZipFile(buffer) as archive:
+            source_xml = archive.read("word/document.xml")
+
+        document = rdocx.Document.from_bytes(buffer.getvalue())
+        assert [p.text for p in document.paragraphs] == ["Picture A: ", "Picture B: "]
+        assert _document_xml(document) == source_xml
+
+        document.add_picture(_one_pixel_png(), "added.png", 12700, 12700)
+        saved = document.to_bytes()
+        rdocx.Document.from_bytes(saved)
+        with zipfile.ZipFile(io.BytesIO(saved)) as archive:
+            xml = archive.read("word/document.xml")
+        ids = re.findall(rb'<wp:docPr\b[^>]*?\bid="(\d+)"', xml)
+        assert ids[:2] == [repeated.encode()] * 2
+        assert len(ids) == 3 and ids[2] != repeated.encode()
+
+
 def _relationship_target(document, part_name, relationship_id):
     owner = part_name.lstrip("/")
     directory, filename = posixpath.split(owner)
