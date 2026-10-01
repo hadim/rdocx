@@ -435,6 +435,9 @@ pub struct ResolvedTable {
     pub right_to_left: bool,
     pub column_widths: Vec<f64>,
     pub rows: Vec<ResolvedTableRow>,
+    /// The table style's background, painted over the whole table box
+    /// beneath the cell fills.
+    pub background: Option<Paint>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

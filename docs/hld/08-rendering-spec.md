@@ -837,9 +837,10 @@ priority, then the wider stroke, then the deterministic side order top, left,
 bottom, right. This keeps shared borders stable across merge origins and table
 direction.
 
-Each table origin draws its fill before its text. The table's unique border
-segments draw after all cell fills and text so a neighbouring fill cannot cover
-them. Table cells do not use the shape autofit algorithm.
+A table style's background (`a:tblBg`) fills the whole table box first. Each
+table origin draws its fill over it, before its text. The table's unique
+border segments draw after all cell fills and text so a neighbouring fill
+cannot cover them. Table cells do not use the shape autofit algorithm.
 
 **Vertical Word text.** `w:tcPr/w:textDirection` and `w:sectPr/w:textDirection`
 lower onto the same transposed box and `Group` rotation the shape path uses.
