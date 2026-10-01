@@ -3877,3 +3877,72 @@ fn text_json_preserves_nested_paths_styles_numbering_and_run_formatting() {
         })
     );
 }
+
+#[test]
+fn text_leaves_out_the_table_rows_a_redline_deletes() {
+    let temp = TempWorkspace::new("text-deleted-rows");
+    let original = temp.path.join("original.docx");
+    let edited = temp.path.join("edited.docx");
+    let redline = temp.path.join("redline.docx");
+    let mut document = fixture_document(&["a"]);
+    let mut table = document.add_table(2, 1);
+    table.cell(0, 0).unwrap().set_text("KEEP");
+    table.cell(1, 0).unwrap().set_text("GONE");
+    document.add_paragraph("b");
+    document.save(&original).unwrap();
+    let mut document = fixture_document(&["a"]);
+    document
+        .add_table(1, 1)
+        .cell(0, 0)
+        .unwrap()
+        .set_text("KEEP");
+    document.add_paragraph("b");
+    document.save(&edited).unwrap();
+    let compared = cli(&[
+        "compare",
+        path_text(&original),
+        path_text(&edited),
+        "--author",
+        "Alice",
+        "--timestamp",
+        "2026-09-30T12:00:00Z",
+        "--output",
+        path_text(&redline),
+    ]);
+    assert_success(&compared, "compare");
+
+    let plain = cli(&["text", path_text(&redline)]);
+    assert_success(&plain, "text");
+    assert_eq!(String::from_utf8(plain.stdout).unwrap(), "a\nKEEP\t\nb\n");
+    let structured = cli(&["text", path_text(&redline), "--json"]);
+    assert_success(&structured, "text --json");
+    let value: Value = serde_json::from_slice(&structured.stdout).unwrap();
+    let paragraphs = value["paragraphs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|paragraph| {
+            (
+                paragraph["body_index"].as_u64().unwrap(),
+                paragraph["path"].clone(),
+                paragraph["text"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        paragraphs,
+        [
+            (0, json!([]), "a".to_owned()),
+            (
+                1,
+                json!([
+                    {"kind": "row", "index": 0},
+                    {"kind": "cell", "index": 0},
+                    {"kind": "paragraph", "index": 0}
+                ]),
+                "KEEP".to_owned()
+            ),
+            (2, json!([]), "b".to_owned()),
+        ]
+    );
+}

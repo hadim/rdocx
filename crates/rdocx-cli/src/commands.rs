@@ -536,7 +536,12 @@ fn collect_table_paragraphs(
     table: &CT_Tbl,
     output: &mut Vec<Value>,
 ) {
+    // A row that accepting removes has no accepted paragraphs. The others
+    // keep their source indices.
     for (row_index, row) in table.rows.iter().enumerate() {
+        if row.accepted_view_removes() {
+            continue;
+        }
         let mut row_path = path.to_vec();
         row_path.push(path_segment("row", row_index));
         collect_row_paragraphs(body_index, &row_path, row, output);
@@ -598,6 +603,7 @@ fn collect_control_paragraphs(
                 content_path.push(path_segment("table", content_index));
                 collect_table_paragraphs(body_index, &content_path, table, output);
             }
+            SdtContent::Row(row) if row.accepted_view_removes() => {}
             SdtContent::Row(row) => {
                 content_path.push(path_segment("row", content_index));
                 collect_row_paragraphs(body_index, &content_path, row, output);
