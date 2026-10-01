@@ -537,6 +537,14 @@ resolved-slide model. Its facade supplies that sidecar to the renderer, so an
 explicit DrawingML direction also controls numeric and Latin text on both
 sides of a forced line break.
 
+A separator stored inside one `a:t` is drawn as PowerPoint for Mac draws it.
+Each line feed and each carriage return breaks the line as an `a:br` does, so
+a CRLF pair leaves an empty line. U+0085, U+2028 and U+2029 show as a space.
+No Unicode paragraph separator therefore reaches the bidi pass, which reorders
+each line within one paragraph. A text layout failure names the slide and the
+shape's position in draw order, inherited layout and master shapes included.
+Slide text layout as data names the shape id instead.
+
 Word uses the same paragraph-wide rich shaping and line path when a paragraph
 contains Arabic, Hebrew, Devanagari, Thai, Hangul, Kana, or Han text. The Word
 projection selects the effective direct, bidirectional, or East Asian language

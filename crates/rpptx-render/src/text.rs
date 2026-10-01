@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use oxml_layout::{
     Align, Color, FieldKind, FontManager, GlyphRun, InlineItem, LayoutError, LayoutLine,
     LineBreakParams, LineItem, LineSpacing, MultilingualGlyphRun, Paint, Point, PositionedElement,
@@ -138,13 +140,9 @@ fn inline_items_cached(
     for run in &paragraph.runs {
         match run {
             ResolvedTextRun::Text { text, style } => {
-                if !text.is_empty() {
-                    items.push(InlineItem::Text(shaping_cache.shape(
-                        font_manager,
-                        text,
-                        style,
-                    )?));
-                }
+                push_displayed_text(&mut items, text, |line| {
+                    shaping_cache.shape(font_manager, line, style)
+                })?;
             }
             ResolvedTextRun::Field {
                 text,
@@ -159,18 +157,52 @@ fn inline_items_cached(
                 } else {
                     text.clone()
                 };
-                if !rendered.is_empty() {
-                    let mut segment = shaping_cache.shape(font_manager, &rendered, style)?;
+                push_displayed_text(&mut items, &rendered, |line| {
+                    let mut segment = shaping_cache.shape(font_manager, line, style)?;
                     if slide_number {
                         segment.field_kind = Some(FieldKind::Page);
                     }
-                    items.push(InlineItem::Text(segment));
-                }
+                    Ok(segment)
+                })?;
             }
             ResolvedTextRun::Break => items.push(InlineItem::LineBreak),
         }
     }
     Ok(items)
+}
+
+/// Pushes run text as PowerPoint displays it when `a:t` holds a line
+/// separator. Measured with PowerPoint for Mac, each line feed and each
+/// carriage return breaks the line as an `a:br` does, so a CRLF pair leaves an
+/// empty line, while U+0085, U+2028 and U+2029 show as a space. U+001C to
+/// U+001E, which only reach here from memory since XML cannot carry them, also
+/// show as a space. No Unicode paragraph separator reaches line layout, which
+/// reorders each line within one bidi paragraph.
+fn push_displayed_text(
+    items: &mut Vec<InlineItem>,
+    text: &str,
+    mut shape: impl FnMut(&str) -> Result<TextSegment, LayoutError>,
+) -> Result<(), LayoutError> {
+    let spaced = |character: char| {
+        matches!(
+            character,
+            '\u{1c}'..='\u{1e}' | '\u{85}' | '\u{2028}' | '\u{2029}'
+        )
+    };
+    let displayed = if text.contains(spaced) {
+        Cow::Owned(text.replace(spaced, " "))
+    } else {
+        Cow::Borrowed(text)
+    };
+    for (index, line) in displayed.split(['\n', '\r']).enumerate() {
+        if index > 0 {
+            items.push(InlineItem::LineBreak);
+        }
+        if !line.is_empty() {
+            items.push(InlineItem::Text(shape(line)?));
+        }
+    }
+    Ok(())
 }
 
 fn shape_run(
@@ -1791,6 +1823,84 @@ mod tests {
             layout_slide_with_fonts(&input, 0, &mut fonts).expect_err("missing font should fail");
 
         assert!(matches!(error, RenderInputError::TextLayout { .. }));
+        let error = crate::layout_presentation_with_font_manager(
+            &input,
+            FontManager::new_with_fonts(Vec::new()),
+        )
+        .expect_err("missing font should fail");
+        let RenderInputError::TextLayout { detail } = error else {
+            panic!("expected a text layout error, found {error:?}");
+        };
+        assert!(
+            detail.starts_with("slide 1, shape 1 in draw order: "),
+            "{detail}"
+        );
+    }
+
+    #[test]
+    fn line_separators_inside_run_text_display_as_breaks_or_spaces() {
+        let paragraph = ResolvedParagraph {
+            runs: vec![
+                ResolvedTextRun::Text {
+                    text: "a\nb\rc\r\nd\u{85}e\u{2028}f\u{2029}g\u{1e}h".to_owned(),
+                    style: style(),
+                },
+                ResolvedTextRun::Field {
+                    text: "\nfield".to_owned(),
+                    field_type: Some("datetime".to_owned()),
+                    style: style(),
+                },
+            ],
+            ..ResolvedParagraph::default()
+        };
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+
+        let items = inline_items(&mut fonts, &paragraph).expect("shape resolved runs");
+
+        let described = items
+            .iter()
+            .map(|item| match item {
+                InlineItem::Text(segment) => segment.text.clone(),
+                InlineItem::LineBreak => "|".to_owned(),
+                _ => panic!("unexpected inline item"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            described,
+            ["a", "|", "b", "|", "c", "|", "|", "d e f g h", "|", "field"]
+        );
+
+        // Each separator used to split the bidi paragraph and fail the slide.
+        let mut text_shape = shape(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 200.0,
+                height: 200.0,
+            },
+            ResolvedGeometry::Rectangle,
+        );
+        text_shape.content = ResolvedContent::Text(ResolvedTextBody {
+            insets: TextInsets::default(),
+            anchor: TextAnchor::Top,
+            wrap: true,
+            vertical: TextDirection::Horizontal,
+            space_first_last_paragraph: false,
+            autofit: ResolvedAutofit::None,
+            paragraphs: vec![paragraph],
+        });
+        let input = RenderInput {
+            slides: vec![ResolvedSlide {
+                size: (200.0, 200.0),
+                background: None,
+                shapes: vec![text_shape],
+                diagnostics: Vec::new(),
+            }],
+            media: HashMap::new(),
+            fonts: Vec::new(),
+            metadata: None,
+        };
+        layout_slide_with_fonts(&input, 0, &mut fonts).expect("separators lay out");
     }
 
     #[test]

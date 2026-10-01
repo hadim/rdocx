@@ -918,7 +918,7 @@ fn collect_node_text(node: &XmlNode, output: &mut String) {
         match child {
             XmlChild::Text(text) => output.push_str(text),
             XmlChild::Element(element) if element.is(TEXT_NS, "tab") => output.push('\t'),
-            XmlChild::Element(element) if element.is(TEXT_NS, "line-break") => output.push('\n'),
+            XmlChild::Element(element) if element.is(TEXT_NS, "line-break") => output.push('\u{b}'),
             XmlChild::Element(element) if element.is(TEXT_NS, "s") => {
                 let count = element
                     .attr(Some(TEXT_NS), "c")
