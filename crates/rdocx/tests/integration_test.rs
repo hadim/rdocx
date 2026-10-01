@@ -22230,3 +22230,207 @@ mod f266c_character_grid_and_vertical_text {
         );
     }
 }
+
+/// Replace the first `old` in a package part, which must hold it.
+fn replace_in_part(package: &mut OpcPackage, part: &str, old: &str, new: &str) {
+    let xml = std::str::from_utf8(package.get_part(part).unwrap()).unwrap();
+    assert!(xml.contains(old), "{part} holds {old}");
+    let xml = xml.replacen(old, new, 1);
+    package.set_part(part, xml.into_bytes());
+}
+
+/// #246: Google Docs writes integer measurements with a decimal part, as in
+/// `w:gridCol w:w="2210.0000000000005"`, in the body, styles, numbering and
+/// headers alike.
+fn decimal_measurement_package() -> Vec<u8> {
+    let mut seed = Document::new();
+    seed.set_header("Header");
+    seed.add_numbered_list_item("Item", 0);
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(seed.to_bytes().unwrap())).unwrap();
+    replace_in_part(
+        &mut package,
+        "/word/document.xml",
+        "<w:body>",
+        concat!(
+            r#"<w:body><w:p><w:pPr><w:pBdr><w:top w:val="single" w:sz="4.0" w:space="1.5"/></w:pBdr>"#,
+            r#"<w:tabs><w:tab w:val="left" w:pos="1440.0"/></w:tabs>"#,
+            r#"<w:spacing w:before="120.0" w:line="275.99999999999994" w:lineRule="auto"/>"#,
+            r#"<w:ind w:left="720.5" w:hanging="226.99999999999977"/></w:pPr><w:r><w:t>Indented paragraph</w:t></w:r></w:p>"#,
+            r#"<w:tbl><w:tblPr><w:tblW w:w="8639.999999999999" w:type="dxa"/></w:tblPr>"#,
+            r#"<w:tblGrid><w:gridCol w:w="4320.0"/><w:gridCol w:w="4319.999999999999"/></w:tblGrid>"#,
+            r#"<w:tr><w:trPr><w:trHeight w:val="535.0000000000182"/></w:trPr>"#,
+            r#"<w:tc><w:tcPr><w:tcW w:w="4319.999999999999" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>Cell A</w:t></w:r></w:p></w:tc>"#,
+            r#"<w:tc><w:tcPr><w:tcW w:w="4320.0" w:type="dxa"/></w:tcPr><w:p/></w:tc></w:tr></w:tbl>"#,
+        ),
+    );
+    replace_in_part(
+        &mut package,
+        "/word/document.xml",
+        r#"<w:pgSz w:w="12240""#,
+        r#"<w:pgSz w:w="12240.0""#,
+    );
+    replace_in_part(
+        &mut package,
+        "/word/document.xml",
+        r#"w:top="1440""#,
+        r#"w:top="1440.0""#,
+    );
+    replace_in_part(
+        &mut package,
+        "/word/styles.xml",
+        r#"w:after="160""#,
+        r#"w:after="159.5""#,
+    );
+    replace_in_part(
+        &mut package,
+        "/word/styles.xml",
+        r#"<w:sz w:val="22"/>"#,
+        r#"<w:sz w:val="22.0"/>"#,
+    );
+    replace_in_part(
+        &mut package,
+        "/word/numbering.xml",
+        r#"w:left="720" w:hanging="360""#,
+        r#"w:left="720.0" w:hanging="359.99999999999994""#,
+    );
+    replace_in_part(
+        &mut package,
+        "/word/header1.xml",
+        "<w:p>",
+        r#"<w:p><w:pPr><w:ind w:left="360.0"/></w:pPr>"#,
+    );
+    let mut bytes = Vec::new();
+    package
+        .write_to(&mut std::io::Cursor::new(&mut bytes))
+        .unwrap();
+    bytes
+}
+
+#[test]
+fn decimal_integer_measurements_round_to_the_nearest_integer() {
+    let source = decimal_measurement_package();
+    let mut document = Document::from_bytes(&source).expect("decimal measurements open");
+
+    let text = document.text();
+    assert!(
+        text.contains("Indented paragraph") && text.contains("Cell A"),
+        "{text}"
+    );
+    assert_eq!(document.header_text().as_deref(), Some("Header"));
+    let paragraph = &document.paragraphs()[0];
+    assert_eq!(paragraph.indent_left(), Some(Length::twips(721)));
+    assert_eq!(paragraph.space_before(), Some(Length::twips(120)));
+    let table = &document.tables()[0];
+    assert_eq!(
+        table.grid_widths(),
+        vec![Length::twips(4320), Length::twips(4320)]
+    );
+    assert_eq!(table.width(), Some(Length::twips(8640)));
+    assert_eq!(
+        table.row(0).unwrap().height(),
+        Some(RowHeight::AtLeast(Length::twips(535)))
+    );
+    let section = document.sections().last().unwrap();
+    assert_eq!(
+        section.page_size(),
+        Some((Length::twips(12240), Length::twips(15840)))
+    );
+    assert_eq!(section.margins().unwrap().0, Length::twips(1440));
+
+    // An untouched part keeps its bytes, decimals included.
+    let untouched =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let original = OpcPackage::from_reader(std::io::Cursor::new(&source)).unwrap();
+    for part in [
+        "/word/document.xml",
+        "/word/styles.xml",
+        "/word/numbering.xml",
+        "/word/header1.xml",
+    ] {
+        assert_eq!(untouched.get_part(part), original.get_part(part), "{part}");
+    }
+
+    // A re-serialized part writes the rounded integers.
+    document.add_paragraph("Edited");
+    let edited =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let body = std::str::from_utf8(edited.get_part("/word/document.xml").unwrap()).unwrap();
+    for expected in [
+        r#"w:sz="4""#,
+        r#"w:space="2""#,
+        r#"w:pos="1440""#,
+        r#"w:before="120""#,
+        r#"w:line="276""#,
+        r#"w:left="721""#,
+        r#"w:hanging="227""#,
+        r#"<w:tblW w:w="8640" w:type="dxa"/>"#,
+        r#"<w:trHeight w:val="535"/>"#,
+        r#"<w:pgSz w:w="12240" w:h="15840"/>"#,
+        r#"w:top="1440""#,
+    ] {
+        assert!(body.contains(expected), "{expected} in {body}");
+    }
+    assert_eq!(body.matches(r#"<w:gridCol w:w="4320"/>"#).count(), 2);
+    assert_eq!(
+        body.matches(r#"<w:tcW w:w="4320" w:type="dxa"/>"#).count(),
+        2
+    );
+    let styles = rdocx_oxml::CT_Styles::from_xml(original.get_part("/word/styles.xml").unwrap())
+        .unwrap()
+        .to_xml()
+        .unwrap();
+    let styles = String::from_utf8(styles).unwrap();
+    assert!(styles.contains(r#"w:after="160""#), "{styles}");
+    assert!(styles.contains(r#"<w:sz w:val="22"/>"#), "{styles}");
+    let numbering =
+        rdocx_oxml::CT_Numbering::from_xml(original.get_part("/word/numbering.xml").unwrap())
+            .unwrap()
+            .to_xml()
+            .unwrap();
+    let numbering = String::from_utf8(numbering).unwrap();
+    assert!(
+        numbering.contains(r#"<w:ind w:left="720" w:hanging="360"/>"#),
+        "{numbering}"
+    );
+    let header = CT_HdrFtr::from_xml(original.get_part("/word/header1.xml").unwrap())
+        .unwrap()
+        .to_xml_header()
+        .unwrap();
+    let header = String::from_utf8(header).unwrap();
+    assert!(header.contains(r#"<w:ind w:left="360"/>"#), "{header}");
+}
+
+#[test]
+fn a_refused_measurement_names_its_element_attribute_and_value() {
+    let seed = Document::new().to_bytes().unwrap();
+    for (old, new, message) in [
+        (
+            r#"<w:pgSz w:w="12240""#,
+            r#"<w:pgSz w:w="1.224e4""#,
+            r#"w:pgSz/@w:w "1.224e4" is not an integer measurement"#,
+        ),
+        (
+            r#"w:top="1440""#,
+            r#"w:top="NaN""#,
+            r#"w:pgMar/@w:top "NaN" is not an integer measurement"#,
+        ),
+        (
+            r#"<w:pgSz w:w="12240""#,
+            r#"<w:pgSz w:w="2147483647.5""#,
+            r#"w:pgSz/@w:w "2147483647.5" is out of range"#,
+        ),
+    ] {
+        let mut package = OpcPackage::from_reader(std::io::Cursor::new(&seed)).unwrap();
+        replace_in_part(&mut package, "/word/document.xml", old, new);
+        let mut bytes = Vec::new();
+        package
+            .write_to(&mut std::io::Cursor::new(&mut bytes))
+            .unwrap();
+        let Err(error) = Document::from_bytes(&bytes) else {
+            panic!("{new} opened");
+        };
+        let error = error.to_string();
+        assert!(error.contains(message), "{error}");
+    }
+}

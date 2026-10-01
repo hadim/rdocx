@@ -13,7 +13,7 @@ use crate::error::Result;
 use crate::namespace::matches_local_name;
 use crate::properties::{
     CT_Shd, append_modeled_toggle_attributes, get_word_val_attr, is_word_attribute,
-    is_word_element, parse_uchar_hex, parse_word_toggle, push_uchar_hex,
+    is_word_element, parse_integer_measurement, parse_uchar_hex, parse_word_toggle, push_uchar_hex,
     raw_is_modeled_attribute_carrier, raw_occurrence, record_modeled_toggle_candidate,
     remove_redundant_modeled_toggle_candidate, replay_modeled_toggle_raw,
     toggle_element_is_explicitly_empty, toggle_has_unsupported_attributes, word_prefixes_at,
@@ -276,7 +276,7 @@ impl CT_FitText {
             let key = attribute.key.as_ref();
             let value = std::str::from_utf8(&attribute.value)?;
             if is_word_attribute(key, b"val", prefixes) {
-                fit_text.val = Twips(value.parse()?);
+                fit_text.val = Twips(parse_integer_measurement(e.name().as_ref(), key, value)?);
                 width_seen = true;
             } else if is_word_attribute(key, b"id", prefixes) {
                 fit_text.id = Some(value.parse()?);
@@ -626,7 +626,11 @@ impl CT_RPr {
                             RPR_SIZE_SLOT,
                         );
                         if let Some(val) = get_word_val_attr(e, &prefixes)? {
-                            rpr.sz = Some(HalfPoint(val.parse()?));
+                            rpr.sz = Some(HalfPoint(parse_integer_measurement(
+                                name.as_ref(),
+                                b"w:val",
+                                &val,
+                            )?));
                         }
                     } else if is_word_element(name.as_ref(), b"szCs", &prefixes) {
                         record_rpr_modeled(
@@ -636,7 +640,11 @@ impl CT_RPr {
                             RPR_SIZE_CS_SLOT,
                         );
                         if let Some(val) = get_word_val_attr(e, &prefixes)? {
-                            rpr.sz_cs = Some(HalfPoint(val.parse()?));
+                            rpr.sz_cs = Some(HalfPoint(parse_integer_measurement(
+                                name.as_ref(),
+                                b"w:val",
+                                &val,
+                            )?));
                         }
                     } else if is_word_element(name.as_ref(), b"color", &prefixes) {
                         record_rpr_modeled(
@@ -714,7 +722,11 @@ impl CT_RPr {
                             RPR_SPACING_SLOT,
                         );
                         if let Some(val) = get_word_val_attr(e, &prefixes)? {
-                            rpr.spacing = Some(Twips(val.parse()?));
+                            rpr.spacing = Some(Twips(parse_integer_measurement(
+                                name.as_ref(),
+                                b"w:val",
+                                &val,
+                            )?));
                         }
                     } else if is_word_element(name.as_ref(), b"w", &prefixes) {
                         record_rpr_modeled(
@@ -734,7 +746,8 @@ impl CT_RPr {
                             RPR_POSITION_SLOT,
                         );
                         if let Some(val) = get_word_val_attr(e, &prefixes)? {
-                            rpr.position = Some(val.parse()?);
+                            rpr.position =
+                                Some(parse_integer_measurement(name.as_ref(), b"w:val", &val)?);
                         }
                     } else if is_word_element(name.as_ref(), b"shd", &prefixes) {
                         record_rpr_modeled(
@@ -772,7 +785,11 @@ impl CT_RPr {
                             &mut occurrences,
                             RPR_KERN_SLOT,
                         );
-                        rpr.kern = Some(HalfPoint(val.parse()?));
+                        rpr.kern = Some(HalfPoint(parse_integer_measurement(
+                            name.as_ref(),
+                            b"w:val",
+                            &val,
+                        )?));
                     } else if is_word_element(name.as_ref(), b"effect", &prefixes) {
                         record_rpr_modeled(
                             &mut rpr,
