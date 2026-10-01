@@ -11,11 +11,10 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::BodyContent;
-use rdocx_oxml::revision::RevisionKind;
 use rdocx_oxml::table::{
     CT_Row, CT_Tbl, CT_TblGrid, CT_TblGridCol, CT_TblPr, CT_TblWidth, CT_Tc, VMerge,
 };
-use rdocx_oxml::text::{CT_P, CT_R, RunContent};
+use rdocx_oxml::text::{CT_P, RunContent};
 use rdocx_oxml::units::Twips;
 use scraper::{ElementRef, Html, Node, Selector};
 use sha2::{Digest, Sha256};
