@@ -23,9 +23,10 @@ pub use oxml_chart::{ChartData, ChartKind, RgbColor};
 use oxml_core::OxmlError;
 pub use oxml_core::core_properties::CoreProperties;
 pub use oxml_core::units::{Angle, Emu, Percent1000};
-pub use oxml_drawing::color::ColorChoice;
 #[cfg(feature = "render")]
 use oxml_drawing::color::ColorMap;
+pub use oxml_drawing::color::{ColorChoice, ColorTransform};
+pub use oxml_drawing::effect::{CT_EffectList, CT_OuterShadowEffect, RectAlignment};
 use oxml_drawing::fill::RelativeRect;
 pub use oxml_drawing::fill::{Fill, NoFill, PatternFill, SolidFill};
 use oxml_drawing::geometry::{Guide, GuideOp, GuideOperand};
@@ -7432,6 +7433,35 @@ impl<'a> ShapeMut<'a> {
         Ok(())
     }
 
+    /// Replaces or removes the direct `a:effectLst` of a shape, picture,
+    /// connector, or group.
+    ///
+    /// `None` removes the list so the shape inherits its theme effect again,
+    /// and an empty list suppresses that effect. The list is written in its
+    /// schema place and keeps the unmodelled effects it carries. A shape with
+    /// an `a:effectDag` refuses a list, which the schema excludes beside it.
+    pub fn set_effects(&mut self, effects: Option<CT_EffectList>) -> Result<()> {
+        const OPERATION: &str = "set effects";
+        if let Some(list) = &effects {
+            list.to_xml()
+                .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()))?;
+        }
+        if let ShapeTreeChild::GroupShape(group) = self.child {
+            return group
+                .set_effects(effects)
+                .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()));
+        }
+        let properties = self.shape_properties_mut(OPERATION)?;
+        if effects.is_some() && properties.has_unmodelled_effect() {
+            return Err(invalid_shape_mutation(
+                OPERATION,
+                "the shape carries an a:effectDag, which excludes an a:effectLst",
+            ));
+        }
+        properties.effects = effects;
+        Ok(())
+    }
+
     /// Inserts or replaces one finite preset-geometry adjustment.
     pub fn set_adjust_value(&mut self, name: &str, value: f64) -> Result<()> {
         if !value.is_finite() {
@@ -8931,6 +8961,15 @@ impl<'a> ShapeRef<'a> {
                 rect.bottom.unwrap_or_default(),
             )
         }))
+    }
+
+    /// Returns the direct `a:effectLst` of a shape, picture, connector, or
+    /// group. `None` means the shape inherits its theme effect.
+    pub fn effects(&self) -> Option<&'a CT_EffectList> {
+        match self.child {
+            ShapeTreeChild::GroupShape(group) => group.effects(),
+            child => shape_properties(child)?.effects.as_ref(),
+        }
     }
 
     /// Serialises the child as a self-contained element.

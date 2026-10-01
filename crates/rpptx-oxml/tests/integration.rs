@@ -865,7 +865,7 @@ use rpptx_oxml::placeholder::{CT_Placeholder, PhType, PlaceholderKey};
 use rpptx_oxml::presentation::{CT_Presentation, CT_SlideId};
 use rpptx_oxml::relmap::{rewrite_exact_rel_ids, rewrite_rel_ids};
 use rpptx_oxml::shape_tree::{
-    CT_Shape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild, rewrite_shape_ids,
+    CT_GroupShape, CT_Shape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild, rewrite_shape_ids,
 };
 use rpptx_oxml::slide_parts::{
     BackgroundRendering, CT_Slide, CT_SlideLayout, CT_SlideMaster, ColorMapOverrideKind,
@@ -3348,6 +3348,49 @@ fn nested_group_shape_tree_round_trips_with_tree_shape_preserved() {
         count_groups(&reparsed.common_slide_data.shape_tree.children),
         2
     );
+}
+
+#[test]
+fn group_effect_list_is_read_with_any_prefix_and_written_before_3d_and_extensions() {
+    let group = CT_GroupShape::from_xml(
+        br#"<p:grpSp xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main"><p:nvGrpSpPr><p:cNvPr id="4" name="G"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><d:effectLst xmlns:x="urn:x"><x:kept/><d:glow rad="10"><d:srgbClr val="FF0000"/></d:glow><d:outerShdw dist="20" dir="5400000"><d:prstClr val="black"/></d:outerShdw></d:effectLst><d:scene3d><d:camera prst="orthographicFront"/><d:lightRig rig="threePt" dir="t"/></d:scene3d></p:grpSpPr></p:grpSp>"#,
+    )
+    .unwrap();
+    let effects = group.effects().unwrap();
+    assert_eq!(effects.outer_shadow.as_ref().unwrap().distance, Some(20));
+    assert!(String::from_utf8(group.to_xml().unwrap()).unwrap().contains(
+        r#"<a:effectLst xmlns:x="urn:x"><x:kept/><d:glow rad="10"><d:srgbClr val="FF0000"/></d:glow><a:outerShdw dist="20" dir="5400000"><a:prstClr val="black"/></a:outerShdw></a:effectLst><d:scene3d>"#
+    ));
+
+    let mut group = CT_GroupShape::from_xml(
+        br#"<p:grpSp xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:nvGrpSpPr><p:cNvPr id="4" name="G"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:noFill/><a:scene3d><a:camera prst="orthographicFront"/><a:lightRig rig="threePt" dir="t"/></a:scene3d><a:extLst/></p:grpSpPr></p:grpSp>"#,
+    )
+    .unwrap();
+    assert!(group.effects().is_none());
+    let inserted = oxml_drawing::effect::CT_EffectList::from_xml(
+        br#"<a:effectLst><a:glow rad="10"><a:srgbClr val="FF0000"/></a:glow><a:outerShdw dist="20" dir="5400000"><a:prstClr val="black"/></a:outerShdw></a:effectLst>"#,
+    )
+    .unwrap();
+    group.set_effects(Some(inserted)).unwrap();
+    group.group_transform_mut();
+    let written = String::from_utf8(group.to_xml().unwrap()).unwrap();
+    assert!(
+        written.contains(r#"<p:grpSpPr><a:xfrm/><a:noFill/><a:effectLst><a:glow rad="10"><a:srgbClr val="FF0000"/></a:glow><a:outerShdw dist="20" dir="5400000"><a:prstClr val="black"/></a:outerShdw></a:effectLst><a:scene3d><a:camera prst="orthographicFront"/><a:lightRig rig="threePt" dir="t"/></a:scene3d><a:extLst/></p:grpSpPr>"#),
+        "{written}"
+    );
+    group.set_effects(None).unwrap();
+    assert!(
+        String::from_utf8(group.to_xml().unwrap())
+            .unwrap()
+            .contains("<p:grpSpPr><a:xfrm/><a:noFill/><a:scene3d>")
+    );
+
+    let mut dag = CT_GroupShape::from_xml(
+        br#"<p:grpSp xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:nvGrpSpPr><p:cNvPr id="4" name="G"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:effectDag/></p:grpSpPr></p:grpSp>"#,
+    )
+    .unwrap();
+    assert!(dag.set_effects(Some(Default::default())).is_err());
+    assert!(dag.effects().is_none());
 }
 
 #[test]
