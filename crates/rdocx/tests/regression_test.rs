@@ -11561,7 +11561,7 @@ fn toc_rebuild_layouts_inline_control_text_before_resolving_later_pages() {
     assert_eq!(document.rebuild_toc().unwrap().entry_count, 2);
     let entries = toc_entry_signatures(&document_xml(&mut document));
     assert_eq!(entries[0].0, format!("{long_title}\t3"));
-    assert_eq!(entries[1].0, "Later heading\t6");
+    assert_eq!(entries[1].0, "Later heading\t7");
 }
 
 #[test]
@@ -12920,7 +12920,7 @@ fn toc_rebuild_layouts_controls_nested_inside_insertions() {
     assert_eq!(document.rebuild_toc().unwrap().entry_count, 2);
     let entries = toc_entry_signatures(&document_xml(&mut document));
     assert_eq!(entries[0].0, format!("{long_title}\t3"));
-    assert_eq!(entries[1].0, "Later nested heading\t5");
+    assert_eq!(entries[1].0, "Later nested heading\t6");
 }
 
 #[test]
@@ -26519,8 +26519,12 @@ fn empty_paragraph_uses_resolved_default_metrics() {
         assert_eq!(segment.ascent, resolved.ascent);
         assert_eq!(segment.descent, resolved.descent);
         if index == 0 {
-            assert_eq!(block.lines[0].ascent, resolved.ascent);
-            assert_eq!(block.lines[0].descent, resolved.descent);
+            // The line stands on Word's measure of the same resolved font.
+            let word = font_manager
+                .word_line_metrics(segment.font_id, segment.font_size)
+                .expect("carrier Word metrics resolve");
+            assert_eq!(block.lines[0].ascent, word.line_gap + word.ascent);
+            assert_eq!(block.lines[0].descent, word.descent);
         }
     }
 
@@ -26857,14 +26861,17 @@ fn dense_form_matches_reviewed_one_page_geometry() {
     // Horizontal borders fill the band below their row boundary, and the
     // bands are part of the row heights, so the nested table starts below
     // the 1 point band of its row and the last row carries the bottom one.
+    // The table starts below the 54 point margin, the heading and its 6
+    // points after. Word makes the heading's Carlito 10 line 2500/2048 em.
+    let top = 54.0 + 10.0 * 2500.0 / 2048.0 + 6.0;
     assert_eq!(table_lines.len(), 26, "table geometry: {table_lines:?}");
-    assert!(has_line(72.0, 70.5, 306.0, 70.5));
-    assert!(has_line(72.0, 70.0, 72.0, 109.0));
-    assert!(!has_line(72.0, 91.5, 306.0, 91.5));
-    assert!(has_line(72.0, 109.5, 306.0, 109.5));
-    assert!(has_line(311.4, 92.375, 421.4, 92.375));
-    assert!(has_line(421.4, 105.125, 531.4, 105.125));
-    assert!(has_line(306.0, 128.5, 540.0, 128.5));
+    assert!(has_line(72.0, top + 0.5, 306.0, top + 0.5));
+    assert!(has_line(72.0, top, 72.0, top + 39.0));
+    assert!(!has_line(72.0, top + 21.5, 306.0, top + 21.5));
+    assert!(has_line(72.0, top + 39.5, 306.0, top + 39.5));
+    assert!(has_line(311.4, top + 22.375, 421.4, top + 22.375));
+    assert!(has_line(421.4, top + 35.125, 531.4, top + 35.125));
+    assert!(has_line(306.0, top + 58.5, 540.0, top + 58.5));
 
     let pdf = document.to_pdf_deterministic().expect("dense form PDF");
     assert!(pdf.starts_with(b"%PDF-"));
@@ -26897,8 +26904,8 @@ fn dense_form_matches_reviewed_one_page_geometry() {
         .chunks_exact(4)
         .filter(|pixel| *pixel == [255, 215, 215, 255])
         .count();
-    assert_eq!(checksum, 0xc38a_0cf8_9243_98d1);
-    assert_eq!(non_white_pixels, 32_429);
+    assert_eq!(checksum, 0x2e8c_20b0_a765_ba65);
+    assert_eq!(non_white_pixels, 32_467);
     assert_eq!(
         behind_pixels, 0,
         "page-behind stamp is covered by cell shading"
@@ -39040,7 +39047,7 @@ mod floating_table_placement_regressions {
         // on the continuation, which is exactly what a float must not do.
         let build = |position: Option<TableFloatPosition>| {
             let mut document = Document::new();
-            prose(&mut document, 0, 30);
+            prose(&mut document, 0, 26);
             {
                 let mut table = document.add_table(6, 2);
                 table.set_column_width(0, Length::twips(1000));
@@ -39059,13 +39066,13 @@ mod floating_table_placement_regressions {
                     }
                 }
             }
-            prose(&mut document, 30, 34);
+            prose(&mut document, 26, 30);
             document.layout_deterministic().expect("document lays out")
         };
 
         let inline = build(None);
         assert!(
-            placed(&inline, 30).len() > 1,
+            placed(&inline, 26).len() > 1,
             "an inline table this tall is expected to split, which is what the float must not do"
         );
 
@@ -39075,7 +39082,7 @@ mod floating_table_placement_regressions {
         // One fragment, on the second page, at its full six-row height. A
         // split float would report two fragments, and a repeated header row
         // would make the continuation taller than the rows it carries.
-        assert_eq!(placed(&result, 30), [(2, 72.0, 72.0, 100.0, 119.23)]);
+        assert_eq!(placed(&result, 26), [(2, 72.0, 72.0, 100.0, 134.94)]);
 
         // The prose that follows shares the second page with the float and
         // flows beside it rather than under it, which is what tells the float
@@ -39118,13 +39125,13 @@ mod floating_table_placement_regressions {
         // The float sits 20 points above its own block, which is where the
         // flow left it. The second pass reflowed the line above it without
         // moving it, so the rect the first pass recorded still holds.
-        assert_eq!(placed(&result, 4), [(1, 72.0, 131.48, 100.0, 39.74)]);
+        assert_eq!(placed(&result, 4), [(1, 72.0, 141.96, 100.0, 44.98)]);
 
         // The neighbour above the float is the one the second pass reflowed.
         let boxes = body_line_boxes(&result.layout.pages[0]);
         assert_eq!(
             boxes[3],
-            (139.86, 181.0, 283.23),
+            (149.95, 181.0, 283.23),
             "the line above a text-anchored float was not pushed aside"
         );
         assert_eq!(boxes[2].1, MARGIN_LEFT, "the line clear of the float moved");
@@ -39151,8 +39158,8 @@ mod floating_table_placement_regressions {
 
         let float = float_at(TableAnchor::Margin, TableAnchor::Margin, 0, 0);
         let wrapped = boxes_for(Some(float));
-        assert_eq!(wrapped[0], (80.25, 181.0, 525.39));
-        assert_eq!(wrapped[1], (92.12, 181.0, 277.95));
+        assert_eq!(wrapped[0], (82.47, 181.0, 525.39));
+        assert_eq!(wrapped[1], (96.96, 181.0, 277.95));
 
         // The same table in the flow leaves the measure alone, which is what
         // makes the assertion above about the float and not about the table.
@@ -39187,16 +39194,16 @@ mod floating_table_placement_regressions {
         };
 
         // The first float keeps its anchor. The second drops to the bottom of
-        // the first one's keep-out band, which is 72 plus the 39.74 point
+        // the first one's keep-out band, which is 72 plus the 44.98 point
         // table plus the 4 point bottom clearance, plus its own 4 point top.
         let (first, second) = origins(Some(TableOverlap::Never));
-        assert_eq!(first, [(1, MARGIN_LEFT, MARGIN_TOP, 100.0, 39.74)]);
-        assert_eq!(second, [(1, 82.0, 119.74, 100.0, 39.74)]);
+        assert_eq!(first, [(1, MARGIN_LEFT, MARGIN_TOP, 100.0, 44.98)]);
+        assert_eq!(second, [(1, 82.0, 124.98, 100.0, 44.98)]);
 
         // Two floats that both allow the overlap are left intersecting.
         let (first, second) = origins(None);
-        assert_eq!(first, [(1, MARGIN_LEFT, MARGIN_TOP, 100.0, 39.74)]);
-        assert_eq!(second, [(1, 82.0, 82.0, 100.0, 39.74)]);
+        assert_eq!(first, [(1, MARGIN_LEFT, MARGIN_TOP, 100.0, 44.98)]);
+        assert_eq!(second, [(1, 82.0, 82.0, 100.0, 44.98)]);
     }
 }
 
@@ -40372,5 +40379,403 @@ mod row_minimum_height_split_regressions {
         assert_eq!(row_pages(&probe(Some(40.0))), vec![1, 2]);
         assert_eq!(row_pages(&probe(Some(44.0))), vec![2]);
         assert_eq!(row_pages(&probe(Some(100.0))), vec![2]);
+    }
+}
+
+/// Issue 162, Word's line height: the Windows extent and external leading of
+/// each font, and inline pictures under proportional spacing.
+///
+/// Every expected value was measured on a PDF that Microsoft Word 16 for Mac
+/// exported from the same content, laid out here in deterministic font mode,
+/// where Calibri, Arial, Times New Roman, Cambria and Courier New render with
+/// their metric-compatible bundled faces.
+mod word_line_height_regressions {
+    use rdocx::{Document, Length};
+
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\nline height probe";
+
+    /// Line pitch in points Word gives each Microsoft face at 10.5, 11 and 12
+    /// points (rows) and `w:line` 240, 264 and 360 auto (columns), measured
+    /// over 25 lines. Word draws on a quarter point grid, so a pitch measured
+    /// that way is good to 0.01 point.
+    const WORD_PITCHES: [(&str, &str, [[f64; 3]; 3]); 5] = [
+        (
+            "Calibri",
+            "Carlito",
+            [
+                [12.816, 14.108, 19.235],
+                [13.431, 14.776, 20.152],
+                [14.651, 16.120, 21.976],
+            ],
+        ),
+        (
+            "Arial",
+            "Liberation Sans",
+            [
+                [12.077, 13.285, 18.120],
+                [12.650, 13.920, 18.975],
+                [13.806, 15.182, 20.704],
+            ],
+        ),
+        (
+            "Times New Roman",
+            "Liberation Serif",
+            [
+                [12.077, 13.285, 18.120],
+                [12.650, 13.920, 18.975],
+                [13.806, 15.182, 20.704],
+            ],
+        ),
+        (
+            "Cambria",
+            "Caladea",
+            [
+                [12.316, 13.545, 18.475],
+                [12.900, 14.191, 19.350],
+                [14.077, 15.484, 21.111],
+            ],
+        ),
+        (
+            "Courier New",
+            "Liberation Mono",
+            [
+                [11.889, 13.087, 17.849],
+                [12.462, 13.712, 18.693],
+                [13.598, 14.963, 20.402],
+            ],
+        ),
+    ];
+    const SIZES: [f64; 3] = [10.5, 11.0, 12.0];
+    const LINES: [i32; 3] = [240, 264, 360];
+
+    /// A paragraph with no spacing before or after and `line` auto spacing.
+    fn spaced(paragraph: &mut rdocx::Paragraph<'_>, line: i32) {
+        paragraph.set_space_before(Length::pt(0.0));
+        paragraph.set_space_after(Length::pt(0.0));
+        paragraph.set_line_spacing_multiple(f64::from(line) / 240.0);
+    }
+
+    fn add_line(document: &mut Document, runs: &[(&str, &str, f64)], line: i32) {
+        let mut paragraph = document.add_paragraph("");
+        spaced(&mut paragraph, line);
+        for (text, font, size) in runs {
+            paragraph.add_run(text).font(font).size(*size);
+        }
+    }
+
+    /// The height of each body item's first fragment, in body order.
+    fn heights(document: &Document) -> Vec<f64> {
+        let result = document
+            .layout_deterministic()
+            .expect("document lays out in deterministic font mode");
+        (0..document.content_count())
+            .map(|index| {
+                result
+                    .body_layout_fragments(index)
+                    .expect("body index is in range")[0]
+                    .height
+            })
+            .collect()
+    }
+
+    /// Calibri was 11 points tall at 11 points, which is its `hhea` ascent
+    /// and descent without the 452 unit line gap, and Arial 1.117 em. Word
+    /// gives each face its OS/2 Windows extent plus the external leading.
+    #[test]
+    fn a_single_line_takes_the_word_pitch_of_every_bundled_face_and_its_microsoft_name() {
+        let mut document = Document::new();
+        let mut expected = Vec::new();
+        for (microsoft, bundled, pitches) in WORD_PITCHES {
+            for font in [microsoft, bundled] {
+                for (row, size) in SIZES.into_iter().enumerate() {
+                    for (column, line) in LINES.into_iter().enumerate() {
+                        add_line(&mut document, &[("Hxgp", font, size)], line);
+                        expected.push((font, size, line, pitches[row][column]));
+                    }
+                }
+            }
+        }
+        let mismatches = heights(&document)
+            .into_iter()
+            .zip(expected)
+            .filter(|(height, (.., word))| (height - word).abs() > 0.02)
+            .collect::<Vec<_>>();
+        assert!(
+            mismatches.is_empty(),
+            "pitches away from Word: {mismatches:?}"
+        );
+    }
+
+    /// Glyphs land on Word's baseline, the Windows ascent plus the external
+    /// leading below the line top. Word's first 48 point baseline, from the
+    /// top margin, on its quarter point grid.
+    #[test]
+    fn a_first_line_puts_its_baseline_where_word_draws_it() {
+        let cases = [
+            ("Calibri", 45.80),
+            ("Carlito", 45.80),
+            ("Arial", 45.05),
+            ("Liberation Sans", 45.05),
+            ("Times New Roman", 44.80),
+            ("Liberation Serif", 44.80),
+            ("Cambria", 45.55),
+            ("Caladea", 45.55),
+            ("Courier New", 40.03),
+            ("Liberation Mono", 40.03),
+        ];
+        let mut document = Document::new();
+        for (font, _) in cases {
+            let mut paragraph = document.add_paragraph("");
+            spaced(&mut paragraph, 240);
+            paragraph.set_page_break_before(true);
+            paragraph.add_run("Hxgp").font(font).size(48.0);
+        }
+        let result = document
+            .layout_deterministic()
+            .expect("document lays out in deterministic font mode");
+        assert_eq!(result.layout.pages.len(), cases.len());
+        for (page, (font, word)) in result.layout.pages.iter().zip(cases) {
+            let mut baseline = None;
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                if let oxml_layout::PositionedElement::Text(run) = element
+                    && baseline.is_none()
+                    && !run.text.trim().is_empty()
+                {
+                    baseline = Some(run.origin.y - 72.0);
+                }
+            });
+            let baseline = baseline.expect("the page paints its line");
+            assert!(
+                (baseline - word).abs() < 0.13,
+                "{font}: baseline {baseline} against Word's {word}"
+            );
+        }
+    }
+
+    /// A line mixing sizes takes the greater ascent and descent, and the
+    /// external leading of the smaller Arial run stays inside the larger
+    /// Calibri ascent. Word's pitch over 25 lines, and over 16 at 1.5.
+    #[test]
+    fn a_line_mixing_two_sizes_takes_the_word_pitch() {
+        let mut document = Document::new();
+        let cases = [
+            ("Calibri", 11.0, "Calibri", 24.0, 240, 29.307),
+            ("Calibri", 11.0, "Calibri", 24.0, 360, 43.961),
+            ("Arial", 12.0, "Calibri", 20.0, 240, 24.414),
+            ("Arial", 12.0, "Calibri", 20.0, 360, 36.628),
+        ];
+        for (small, small_size, big, big_size, line, _) in cases {
+            add_line(
+                &mut document,
+                &[
+                    ("Mixed ", small, small_size),
+                    ("BIG", big, big_size),
+                    (" small", small, small_size),
+                ],
+                line,
+            );
+        }
+        for (height, case) in heights(&document).into_iter().zip(cases) {
+            assert!((height - case.5).abs() < 0.02, "{case:?}: {height}");
+        }
+    }
+
+    /// A 400 point picture at 1.1 lines made a 440 point line, and Word
+    /// keeps 400 plus a tenth of the Calibri 11 paragraph mark's line. A
+    /// picture beside text keeps its own height and scales only the text.
+    #[test]
+    fn a_picture_line_scales_only_the_height_of_its_text() {
+        let mut document = Document::new();
+        let mut expected = Vec::new();
+        for (line, word) in [(240, 100.0), (264, 101.343), (360, 106.713), (480, 113.427)] {
+            let mut picture =
+                document.add_picture(PNG, "p.png", Length::pt(60.0), Length::pt(100.0));
+            spaced(&mut picture, line);
+            expected.push((line, "alone", word));
+        }
+        {
+            let mut picture =
+                document.add_picture(PNG, "p.png", Length::pt(300.0), Length::pt(400.0));
+            spaced(&mut picture, 264);
+            expected.push((264, "400 point", 401.343));
+        }
+        for (line, word) in [(240, 52.953), (264, 54.297), (360, 59.670)] {
+            let mut picture =
+                document.add_picture(PNG, "p.png", Length::pt(50.0), Length::pt(50.0));
+            spaced(&mut picture, line);
+            picture.add_run("Ab");
+            expected.push((line, "beside Calibri 11 text", word));
+        }
+        for (height, (line, case, word)) in heights(&document).into_iter().zip(expected) {
+            assert!(
+                (height - word).abs() < 0.01,
+                "{case} at w:line {line}: {height} against Word's {word}"
+            );
+        }
+    }
+
+    /// Ten lead lines, a 400 point figure and its caption at 1.5 lines fill
+    /// 628 of the 648 points of a page, which is where Word keeps them. The
+    /// figure line was 600 points and went to the next page on its own.
+    #[test]
+    fn a_figure_and_its_caption_share_the_page_word_puts_them_on() {
+        let mut document = Document::new();
+        for index in 0..10 {
+            add_line(
+                &mut document,
+                &[(&format!("Lead line {index:02}"), "Calibri", 11.0)],
+                360,
+            );
+        }
+        {
+            let mut picture =
+                document.add_picture(PNG, "p.png", Length::pt(300.0), Length::pt(400.0));
+            spaced(&mut picture, 360);
+        }
+        add_line(
+            &mut document,
+            &[("Figure 1. The caption", "Calibri", 11.0)],
+            360,
+        );
+        let result = document
+            .layout_deterministic()
+            .expect("document lays out in deterministic font mode");
+        let page_of = |index: usize| result.body_layout_fragments(index).unwrap()[0].physical_page;
+        assert_eq!((page_of(10), page_of(11)), (1, 1));
+    }
+
+    /// Calibri 11 as Word lays one line of it out, 2500/2048 em.
+    const CALIBRI_11: f64 = 11.0 * 2500.0 / 2048.0;
+    const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
+    /// A document whose body and header are the given raw XML, with Calibri 11
+    /// document defaults and every paragraph single spaced with no spacing.
+    fn raw_document(body: &str, header: &str) -> Document {
+        let styles = format!(
+            r#"<w:styles xmlns:w="{W}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri"/><w:sz w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults></w:styles>"#
+        );
+        let document_xml = format!(
+            r#"<w:document xmlns:w="{W}"><w:body>{body}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body></w:document>"#
+        );
+        let mut seed = Document::new();
+        let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(
+            seed.to_bytes().expect("seed package"),
+        ))
+        .expect("seed opens");
+        package.set_part("/word/document.xml", document_xml.into_bytes());
+        package.set_part("/word/styles.xml", styles.into_bytes());
+        let mut output = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut output).expect("probe package");
+        let mut document = Document::from_bytes(output.get_ref()).expect("probe reopens");
+        document.set_raw_header_with_images(
+            format!(r#"<w:hdr xmlns:w="{W}">{header}</w:hdr>"#).into_bytes(),
+            &[],
+            rdocx::HdrFtrType::Default,
+        );
+        document
+    }
+
+    /// Painted baselines of the first page whose text starts with `prefix`.
+    fn baselines_of(document: &Document, prefix: &str) -> Vec<f64> {
+        let result = document
+            .layout_deterministic()
+            .expect("document lays out in deterministic font mode");
+        let mut baselines = Vec::new();
+        oxml_layout::walk(&result.layout.pages[0].elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element
+                && run.text.starts_with(prefix)
+            {
+                baselines.push(run.origin.y);
+            }
+        });
+        baselines
+    }
+
+    /// A blank paragraph with no mark properties was a 12 point line, and an
+    /// empty line between two breaks fell to 12 points too. Word gives both
+    /// the line of their font: the paragraph mark's, through the style chain,
+    /// and the break run's. Word 16, Calibri 11 defaults: a line of text, two
+    /// blank paragraphs and a line of text span 40.52 points baseline to
+    /// baseline, text, two breaks and text 27.0, on its quarter point grid.
+    #[test]
+    fn a_blank_line_is_a_line_of_its_mark_or_break_font() {
+        let document = raw_document(
+            concat!(
+                r#"<w:p><w:r><w:t>Two</w:t></w:r></w:p><w:p/><w:p/>"#,
+                r#"<w:p><w:r><w:t>Three</w:t></w:r></w:p>"#,
+                r#"<w:p><w:pPr><w:rPr><w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:sz w:val="24"/></w:rPr></w:pPr></w:p>"#,
+                r#"<w:p><w:r><w:t>Four</w:t></w:r><w:r><w:br/></w:r><w:r><w:br/></w:r><w:r><w:t>Five</w:t></w:r></w:p>"#,
+                r#"<w:tbl><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid>"#,
+                r#"<w:tr><w:tc><w:p><w:r><w:t>CellOne</w:t></w:r></w:p></w:tc></w:tr>"#,
+                r#"<w:tr><w:tc><w:p/></w:tc></w:tr>"#,
+                r#"<w:tr><w:tc><w:p><w:r><w:t>CellThree</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+            ),
+            concat!(
+                r#"<w:p><w:r><w:t>HeaderOne</w:t></w:r></w:p><w:p/>"#,
+                r#"<w:p><w:r><w:t>HeaderThree</w:t></w:r></w:p>"#,
+            ),
+        );
+        let at = |prefix: &str| baselines_of(&document, prefix)[0];
+        let close = |actual: f64, expected: f64, case: &str| {
+            assert!(
+                (actual - expected).abs() < 1e-6,
+                "{case}: {actual} against {expected}"
+            );
+        };
+        // Two blank paragraphs of the Calibri 11 default mark.
+        close(
+            at("Three") - at("Two"),
+            3.0 * CALIBRI_11,
+            "blank paragraphs",
+        );
+        // A blank paragraph whose mark is Arial 12, 2355/2048 em.
+        close(
+            at("Four") - at("Three"),
+            CALIBRI_11 + 12.0 * 2355.0 / 2048.0,
+            "Arial 12 mark",
+        );
+        // The empty line between two breaks is a line of the break's font.
+        close(at("Five") - at("Four"), 2.0 * CALIBRI_11, "two breaks");
+        // A blank cell row and a blank header paragraph, the same rule.
+        close(
+            at("CellThree") - at("CellOne"),
+            2.0 * CALIBRI_11,
+            "blank cell row",
+        );
+        close(
+            at("HeaderThree") - at("HeaderOne"),
+            2.0 * CALIBRI_11,
+            "blank header paragraph",
+        );
+    }
+
+    /// A picture shorter than the paragraph mark still takes a whole line of
+    /// the mark, standing on its bottom. Word 16: a 5 point picture alone is
+    /// a 13.43 point line at `w:line` 240 and 20.14 at 360, its bottom 13.43
+    /// below the line top.
+    #[test]
+    fn a_small_picture_alone_takes_a_line_of_its_paragraph_mark() {
+        let mut document = Document::new();
+        for line in [240, 360] {
+            let mut picture = document.add_picture(PNG, "p.png", Length::pt(5.0), Length::pt(5.0));
+            spaced(&mut picture, line);
+        }
+        let heights = heights(&document);
+        assert!((heights[0] - 13.428).abs() < 0.01, "{heights:?}");
+        assert!((heights[1] - 20.142).abs() < 0.01, "{heights:?}");
+        let result = document.layout_deterministic().expect("lays out");
+        let mut bottom = None;
+        oxml_layout::walk(&result.layout.pages[0].elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Image { rect, .. } = element
+                && bottom.is_none()
+            {
+                bottom = Some(rect.y + rect.height);
+            }
+        });
+        let bottom = bottom.expect("the picture is painted");
+        assert!(
+            (bottom - 72.0 - CALIBRI_11).abs() < 1e-6,
+            "picture bottom {bottom}"
+        );
     }
 }
