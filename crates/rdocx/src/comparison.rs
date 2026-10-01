@@ -5177,11 +5177,35 @@ fn paragraph_properties_xml(
     if current_xml.is_empty() {
         current_xml.push_str("<w:pPr></w:pPr>");
     }
+    // `w:pPrChange` holds only the base properties, so the mark records its
+    // own change in a `w:rPrChange`, as Word writes it.
+    let (original_base, original_mark) = split_paragraph_mark(original_modeled);
+    let (edited_base, edited_mark) = split_paragraph_mark(edited_modeled);
+    if original_mark != edited_mark {
+        let previous = run_property_xml(original_mark.as_ref())?;
+        let change =
+            metadata
+                .ids
+                .revision("rPrChange", metadata.author, metadata.timestamp, &previous)?;
+        if let Some(span) = direct_word_element_spans(&current_xml, "rPr")?
+            .into_iter()
+            .next()
+        {
+            let updated = append_word_child(&current_xml[span.clone()], "rPr", &change)?;
+            current_xml.replace_range(span, &updated);
+        } else {
+            current_xml = inject_before_close(
+                &current_xml,
+                "</w:pPr>",
+                &format!("<w:rPr>{change}</w:rPr>"),
+            )?;
+        }
+    }
     if !tracked_section.is_empty() {
         current_xml = inject_before_close(&current_xml, "</w:pPr>", &tracked_section)?;
     }
-    if changed {
-        let previous = original_modeled
+    if original_base != edited_base {
+        let previous = original_base
             .as_ref()
             .map(property_xml)
             .transpose()?
@@ -5194,6 +5218,19 @@ fn paragraph_properties_xml(
         current_xml = inject_before_close(&current_xml, "</w:pPr>", &change)?;
     }
     Ok(current_xml)
+}
+
+/// Modeled paragraph properties without the paragraph mark, and the mark.
+fn split_paragraph_mark(
+    properties: Option<CT_PPr>,
+) -> (Option<CT_PPr>, Option<rdocx_oxml::properties::CT_RPr>) {
+    match properties {
+        Some(mut properties) => {
+            let mark = properties.rpr.take();
+            (nonempty_paragraph_properties(properties), mark)
+        }
+        None => (None, None),
+    }
 }
 
 fn modeled_paragraph_properties(properties: Option<&CT_PPr>) -> Option<CT_PPr> {
