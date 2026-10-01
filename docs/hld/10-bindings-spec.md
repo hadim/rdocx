@@ -508,6 +508,14 @@ outside the `ST_Percentage` range raises `ValueError`. Other shape kinds raise
 of the shape's non-visual properties. It shares relationship reuse and pruning
 with run hyperlinks, and a write does not advance the revision. `None` or an
 empty string clears it.
+`Shape.click_action.target_slide` reads the slide a named, first, last, next,
+or previous slide jump opens, or `None`, and assigning a `Slide` of the same
+presentation goes through the native `set_shape_target_slide`, while `None`
+removes the click action. A slide of another presentation raises `ValueError`.
+A group accepts a click action, where python-pptx raises `TypeError`, because
+PowerPoint honours it. Two current `Slide` handles compare equal when they name
+the same slide, so `target_slide == prs.slides[2]` holds, and like python-pptx a
+`Slide` is not hashable. No click action write advances the revision.
 
 `shadow` returns a live `ShadowFormat` for ordinary shapes, pictures,
 connectors, and groups, and raises `NotImplementedError` for a graphic frame

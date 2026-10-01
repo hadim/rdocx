@@ -2,6 +2,7 @@ import os as _os
 from collections.abc import Iterator as _Iterator
 from typing import (
     IO as _IO,
+    ClassVar as _ClassVar,
     Literal as _Literal,
     NoReturn as _Never,
     final as _final,
@@ -221,6 +222,8 @@ class SlideLayoutCollection:
 @_final
 class Slide:
     def __new__(cls, *, _private: _Never) -> Slide: ...
+    def __eq__(self, other: object, /) -> bool: ...
+    __hash__: _ClassVar[None]  # type: ignore[assignment]
     @property
     def shapes(self) -> ShapeCollection: ...
     @property
@@ -670,6 +673,10 @@ class ShapeClickAction:
     def __new__(cls, *, _private: _Never) -> ShapeClickAction: ...
     @property
     def hyperlink(self) -> ShapeHyperlink: ...
+    @property
+    def target_slide(self) -> Slide | None: ...
+    @target_slide.setter
+    def target_slide(self, value: Slide | None) -> None: ...
 
 
 @_final
