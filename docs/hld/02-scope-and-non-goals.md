@@ -25,7 +25,7 @@ its cost is recorded in `00-vision.md`.
 | `Presentation::new / open / from_bytes / save / to_bytes` | `new()` uses a bundled template |
 | Slide collection, iteration, indexing, lookup by id | |
 | `add_slide(layout)` | Synthesises placeholders, does not deep-copy |
-| `remove_slide`, `move_slide`, `duplicate_slide` | Beyond python-pptx |
+| `remove_slide`, `move_slide`, `duplicate_slide`, `import_slide` | Beyond python-pptx |
 | Slide size get and set | |
 | Slide masters and layouts, layout lookup by name | Read |
 | Core, app and custom properties | Shared with rdocx via `oxml-core` |
