@@ -1,9 +1,9 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
 use oxml_core::{OxmlError, Result};
 use quick_xml::events::{BytesStart, Event};
-use quick_xml::{Reader, XmlVersion};
+use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::namespace::{NamespaceBindings, R_NS};
 
@@ -162,6 +162,111 @@ fn rewrite_rel_ids_inner(
     splice_replacements(raw, replacements)
 }
 
+/// Turns every `hlinkClick`, `hlinkHover`, and `hlinkMouseOver` whose
+/// relationship id is in
+/// `relationship_ids` into a hyperlink that does nothing, as PowerPoint does
+/// when the slide a hyperlink jumps to is deleted.
+///
+/// Each such element, children included, becomes an empty element with an
+/// empty relationship id and the action `ppaction://noaction`. Every other
+/// byte of the payload is kept.
+pub fn release_hyperlinks(raw: &[u8], relationship_ids: &HashSet<String>) -> Result<Vec<u8>> {
+    let mut reader = Reader::from_reader(raw);
+    let mut buffer = Vec::new();
+    let mut scopes = vec![NamespaceBindings::default()];
+    let mut replacements = Vec::new();
+    // The start and markup of a released element whose end tag is pending,
+    // with the depth of its parent.
+    let mut open: Option<(usize, String, usize)> = None;
+    loop {
+        let event_start = reader.buffer_position() as usize;
+        let event = reader.read_event_into(&mut buffer)?;
+        let event_end = reader.buffer_position() as usize;
+        match event {
+            Event::Start(element) => {
+                let scope = scopes
+                    .last()
+                    .expect("the document namespace frame always exists")
+                    .with_start(&element)?;
+                if open.is_none()
+                    && let Some(markup) = released_hyperlink(&element, &scope, relationship_ids)?
+                {
+                    open = Some((event_start, markup, scopes.len()));
+                }
+                scopes.push(scope);
+            }
+            Event::Empty(element) => {
+                let scope = scopes
+                    .last()
+                    .expect("the document namespace frame always exists")
+                    .with_start(&element)?;
+                if open.is_none()
+                    && let Some(markup) = released_hyperlink(&element, &scope, relationship_ids)?
+                {
+                    replacements.push(Replacement {
+                        range: event_start..event_end,
+                        escaped_value: markup,
+                    });
+                }
+            }
+            Event::End(_) => {
+                scopes.pop();
+                if open
+                    .as_ref()
+                    .is_some_and(|(_, _, depth)| *depth == scopes.len())
+                    && let Some((start, markup, _)) = open.take()
+                {
+                    replacements.push(Replacement {
+                        range: start..event_end,
+                        escaped_value: markup,
+                    });
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    splice_replacements(raw, replacements)
+}
+
+/// Returns the markup that replaces `element` when it is a hyperlink naming
+/// one of `relationship_ids`.
+fn released_hyperlink(
+    element: &BytesStart<'_>,
+    scope: &NamespaceBindings,
+    relationship_ids: &HashSet<String>,
+) -> Result<Option<String>> {
+    if !matches!(
+        element.local_name().as_ref(),
+        b"hlinkClick" | b"hlinkHover" | b"hlinkMouseOver"
+    ) {
+        return Ok(None);
+    }
+    for attribute in element.attributes() {
+        let attribute = attribute?;
+        if scope.attribute_uri(attribute.key.as_ref()) != Some(R_NS)
+            || attribute.key.local_name().as_ref() != b"id"
+        {
+            continue;
+        }
+        let value =
+            attribute.decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())?;
+        if !relationship_ids.contains(value.as_ref()) {
+            return Ok(None);
+        }
+        let name = std::str::from_utf8(element.name().as_ref())?.to_owned();
+        let key = std::str::from_utf8(attribute.key.as_ref())?.to_owned();
+        let mut start = BytesStart::new(name);
+        start.push_attribute((key.as_str(), ""));
+        start.push_attribute(("action", "ppaction://noaction"));
+        let mut writer = Writer::new(Vec::new());
+        writer.write_event(Event::Empty(start))?;
+        return Ok(Some(std::str::from_utf8(&writer.into_inner())?.to_owned()));
+    }
+    Ok(None)
+}
+
 /// Collects every attribute value in the office relationship namespace.
 pub fn relationship_ids(raw: &[u8]) -> Result<Vec<String>> {
     let mut reader = Reader::from_reader(raw);
@@ -310,4 +415,22 @@ fn is_numeric_relationship_id(value: &str) -> bool {
 
 fn invalid_xml(message: &str) -> OxmlError {
     OxmlError::InvalidValue(message.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use super::release_hyperlinks;
+
+    #[test]
+    fn released_hyperlinks_do_nothing_and_keep_every_other_byte() {
+        let xml = br#"<p:sld xmlns:p="urn:p" xmlns:a="urn:a" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:cNvPr id="2"><a:hlinkClick r:id="rId3" action="ppaction://hlinksldjump" tooltip="Go"><a:snd r:embed="rId9"/></a:hlinkClick><a:hlinkHover r:id="rId3" action="ppaction://hlinksldjump"/></p:cNvPr><a:rPr lang="en-US"><a:hlinkClick r:id="rId3" action="ppaction://hlinksldjump"/><a:hlinkMouseOver r:id="rId3"/></a:rPr><a:rPr><a:hlinkClick r:id="rId4"/><x:hlinkClick xmlns:x="urn:x" x:id="rId3"/></a:rPr></p:sld>"#;
+        let ids = HashSet::from(["rId3".to_owned()]);
+        assert_eq!(
+            String::from_utf8(release_hyperlinks(xml, &ids).unwrap()).unwrap(),
+            r#"<p:sld xmlns:p="urn:p" xmlns:a="urn:a" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:cNvPr id="2"><a:hlinkClick r:id="" action="ppaction://noaction"/><a:hlinkHover r:id="" action="ppaction://noaction"/></p:cNvPr><a:rPr lang="en-US"><a:hlinkClick r:id="" action="ppaction://noaction"/><a:hlinkMouseOver r:id="" action="ppaction://noaction"/></a:rPr><a:rPr><a:hlinkClick r:id="rId4"/><x:hlinkClick xmlns:x="urn:x" x:id="rId3"/></a:rPr></p:sld>"#
+        );
+        assert_eq!(release_hyperlinks(xml, &HashSet::new()).unwrap(), xml);
+    }
 }
