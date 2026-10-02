@@ -231,6 +231,9 @@ struct RenderState<'a> {
     resolution: Resolution,
     scope: RevisionScope<'a>,
     resolved: HashSet<usize>,
+    /// True while rendering content that the resolution removes, such as a
+    /// removed row. Its paragraph marks need no merge partner.
+    discarded: bool,
 }
 
 impl Document {
@@ -298,6 +301,7 @@ impl Document {
             resolution,
             scope: scope.clone(),
             resolved: HashSet::new(),
+            discarded: false,
         };
         let mut output = Vec::with_capacity(source.len());
         output.extend_from_slice(&source[..tree.elements[tree.root].start]);
@@ -380,6 +384,7 @@ fn resolve_story_xml(
         resolution,
         scope,
         resolved: HashSet::new(),
+        discarded: false,
     };
     let mut output = Vec::with_capacity(source.len());
     output.extend_from_slice(&source[..tree.elements[tree.root].start]);
@@ -732,29 +737,44 @@ impl<'a> XmlTree<'a> {
             output.extend_from_slice(&self.source[cursor..child_element.start]);
             if child_element.word
                 && child_element.local == "p"
+                && !state.discarded
                 && self.paragraph_mark_removes(child, state)
             {
                 let mut paragraphs = vec![child];
+                // A table whose every row is removed is crossed, so the
+                // paragraphs on either side of it merge. Rendering it resolves
+                // its row markers and yields no bytes.
+                let mut siblings = vec![child];
                 let mut next_index = child_index + 1;
                 loop {
                     let next = element.children.get(next_index).copied().ok_or_else(|| {
                         Error::Other("cannot remove the final paragraph mark".to_owned())
                     })?;
+                    siblings.push(next);
+                    next_index += 1;
+                    if self.elements[next].word
+                        && self.elements[next].local == "tbl"
+                        && self.owned_rows_all_remove(next, state)
+                    {
+                        continue;
+                    }
                     if !self.elements[next].word || self.elements[next].local != "p" {
                         return Err(Error::Other(
                             "paragraph mark removal requires an adjacent paragraph".to_owned(),
                         ));
                     }
                     paragraphs.push(next);
-                    next_index += 1;
                     if !self.paragraph_mark_removes(next, state) {
                         break;
                     }
                 }
-                for pair in paragraphs.windows(2) {
+                for pair in siblings.windows(2) {
                     output.extend_from_slice(
                         &self.source[self.elements[pair[0]].end..self.elements[pair[1]].start],
                     );
+                    if self.elements[pair[1]].local == "tbl" {
+                        self.render(pair[1], state, false)?;
+                    }
                 }
                 output.extend_from_slice(&self.render_merged_paragraphs(&paragraphs, state)?);
                 cursor = self.elements[*paragraphs.last().expect("paragraph chain exists")].end;
@@ -1037,10 +1057,13 @@ impl<'a> XmlTree<'a> {
         index: usize,
         state: &mut RenderState<'_>,
     ) -> Result<()> {
-        for child in &self.elements[index].children {
-            self.render(*child, state, false)?;
-        }
-        Ok(())
+        let discarded = std::mem::replace(&mut state.discarded, true);
+        let validated = self.elements[index]
+            .children
+            .iter()
+            .try_for_each(|child| self.render(*child, state, false).map(drop));
+        state.discarded = discarded;
+        validated
     }
 
     fn paragraph_mark_removes(&self, index: usize, state: &RenderState<'_>) -> bool {
