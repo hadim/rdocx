@@ -7091,6 +7091,10 @@ impl<'a> SlideMut<'a> {
     }
 
     /// Appends an ordinary preset shape at the top of the slide's z-order.
+    ///
+    /// The shape carries the theme style python-pptx writes, so it shows the
+    /// theme's accent fill, line, and effect with light text until direct
+    /// properties replace them.
     pub fn add_shape(
         &mut self,
         preset: &str,
@@ -7101,6 +7105,23 @@ impl<'a> SlideMut<'a> {
     ) -> Result<ShapeMut<'_>> {
         append_new_member(self.shape_tree(), &[], |id| {
             preset_member(id, preset, left, top, width, height)
+        })
+    }
+
+    /// Appends a preset shape without the theme style. HTML and ODP import
+    /// map their source's own fill and line, so they omit the style that
+    /// would add an accent fill, line, or text colour the source never had.
+    pub(crate) fn add_unstyled_shape(
+        &mut self,
+        preset: &str,
+        left: Emu,
+        top: Emu,
+        width: Emu,
+        height: Emu,
+    ) -> Result<ShapeMut<'_>> {
+        append_new_member(self.shape_tree(), &[], |id| {
+            unstyled_preset_member(id, preset, left, top, width, height)
+                .map(ShapeTreeChild::Shape)
         })
     }
 
@@ -7285,6 +7306,7 @@ fn textbox_member(id: u32, left: Emu, top: Emu, width: Emu, height: Emu) -> Resu
     .map_err(|error| invalid_shape_construction("add textbox", error))
 }
 
+/// Builds a preset shape with the theme style python-pptx writes.
 fn preset_member(
     id: u32,
     preset: &str,
@@ -7293,13 +7315,27 @@ fn preset_member(
     width: Emu,
     height: Emu,
 ) -> Result<ShapeTreeChild> {
+    let mut shape = unstyled_preset_member(id, preset, left, top, width, height)?;
+    shape
+        .set_default_style()
+        .map_err(|error| invalid_shape_construction("add shape", error))?;
+    Ok(ShapeTreeChild::Shape(shape))
+}
+
+fn unstyled_preset_member(
+    id: u32,
+    preset: &str,
+    left: Emu,
+    top: Emu,
+    width: Emu,
+    height: Emu,
+) -> Result<CT_Shape> {
     CT_Shape::new_preset(
         id,
         &format!("Shape {id}"),
         preset,
         positioned_transform(left, top, width, height),
     )
-    .map(ShapeTreeChild::Shape)
     .map_err(|error| invalid_shape_construction("add shape", error))
 }
 
