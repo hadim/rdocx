@@ -66,7 +66,8 @@ with open("report.pdf", "wb") as output:
   resolution, and TOC insertion and rebuilding.
 - Deterministic layout fragments, page geometry, and PDF, PDF/A, SVG, PNG,
   JPEG, and TIFF output through the native document engine, with caller fonts
-  or a font directory for PDF.
+  or a font directory for PDF, and a keyword-only `revision_view="tracked"`
+  that shows the tracked changes.
 - Python collections with negative indexes, slices, iteration, and explicit
   stale-handle errors after structural changes.
 
