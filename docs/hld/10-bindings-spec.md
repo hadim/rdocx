@@ -884,7 +884,9 @@ key. Python, WASM, and CLI gain no new binding in this story.
 Native Rust re-exports `CoreProperties`, `AppProperties`, `CustomProperty`,
 `CustomPropertyValue`, `Twips`, and the bounded settings value types. `Document`
 provides borrowed readers, staged setters, selective removals, and whole-part
-removals for these property families. Document variables and compatibility
+removals for these property families. The application-properties setter
+refuses an AppVersion that is not `XX.YYYY`, since Word refuses such a package.
+Document variables and compatibility
 settings use stable string keys. Default tab stop retains exact integer twips.
 `Document::update_fields_on_open` and `set_update_fields_on_open` read, set, or
 remove the `w:updateFields` toggle that asks Word to update fields on open.

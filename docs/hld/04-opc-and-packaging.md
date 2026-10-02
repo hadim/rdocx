@@ -85,7 +85,11 @@ and application properties with exact content types and internal
 relationships. `Document::new()` selects Word-compatible DOCX. DOCM and DOTM
 declare macro-capable main-part identity without inventing a VBA project. Empty
 core properties omit created and modified timestamps, so equivalent fresh
-constructions remain byte-identical.
+constructions remain byte-identical. Fresh application properties stamp the
+crate major and minor version as an `XX.YYYY` AppVersion, the only form Word
+opens. Reading a package repairs any other AppVersion, so a save rewrites it to
+that stamp when the Application is `rdocx` and drops it otherwise, and a valid
+AppVersion leaves its part byte-identical.
 Word-compatible construction includes the common Word style definitions in its
 initial styles part. It does not add a template part or alter producer styles
 when opening an existing package.
@@ -1171,8 +1175,9 @@ Row and cell property readers select modeled elements and attributes by their
 bound WordprocessingML namespace. Foreign same-local children remain raw in
 their exact schema slots. Changed modeled children use canonical `w` prefixes
 and row or cell `xsd:sequence`, while unrelated row, cell, and border extension
-bytes remain exact. Checked nested tables are nonempty and retain the required
-trailing cell paragraph.
+bytes remain exact. Nested tables retain the required trailing cell paragraph,
+because Word refuses a cell that ends with a table, and checked nested tables
+are also nonempty.
 
 Paragraph property readers select every modeled `w:pPr` child and attribute by
 its bound WordprocessingML namespace, and a foreign same-local child stays
