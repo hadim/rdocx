@@ -6178,17 +6178,17 @@ fn animated_gif_and_motion_jpeg_avi_match_the_reviewed_two_machine_manifest() {
         AnimationGoldenManifest {
             timestamps: vec![0, 100, 200, 300, 400, 500],
             frame_hashes: vec![
-                4_894_345_659_775_260_357,
-                6_182_286_987_453_888_369,
-                13_510_962_248_632_293_461,
-                4_894_345_659_775_260_357,
-                4_350_559_588_561_512_901,
-                4_200_447_167_577_390_285,
+                17_556_814_090_165_878_936,
+                15_360_315_259_064_207_776,
+                3_087_000_066_843_575_397,
+                17_556_814_090_165_878_936,
+                8_655_552_810_443_283_030,
+                7_285_807_251_454_764_043,
             ],
             loop_repetitions: gif::Repeat::Finite(2),
             width: 96,
             height: 54,
-            container_hash: 5_365_094_422_666_602_990,
+            container_hash: 14_821_235_962_859_911_503,
         }
     );
 
@@ -8108,7 +8108,7 @@ const F124_ARTIFACT_SHA256: &str =
 const F116_ARTIFACT_SHA256: &str =
     "d36da6e8849eabd4487d2572baea19c3716ee7d0fe03aaa4714a28ce3c41de4f";
 const F116_CURRENT_ARTIFACT_SHA256: &str =
-    "4d469759c0539f1c7947389dc914298d10c984ad204becad26ea700a8bbd0f4b";
+    "f85098f013b90871a343d2da9b13d5bb3ab125788a7075cf2d423ac865efce08";
 const F116_FINAL_TITLES: [&str; 10] = [
     "F-116 slide 10",
     "F-116 slide 02",
