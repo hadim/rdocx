@@ -4,11 +4,11 @@
     "command": "pdftoppm",
     "version": "pdftoppm version 26.01.0"
   },
-  "reason": "F-X146 PR 237 reviewed list, tab, page-field, and TOC pixels after PR 225",
+  "reason": "Combined tree of main 57d5fbbd and open PRs #231-#263 for integration/open-prs-2026-10-02",
   "samples": {
     "contract": {
       "height": 1650,
-      "rgba_sha256": "0f34b5ae475dca439769ac4b5d6604aeb0897e967875be8e3819a12e369c51c1",
+      "rgba_sha256": "0e2f5b2c863ed5dbe7c014b7fbf85cd8c34e4d1945a3c47ed5c0d281e0c1841d",
       "width": 1275
     },
     "feature_showcase": {
@@ -18,7 +18,7 @@
     },
     "invoice": {
       "height": 1650,
-      "rgba_sha256": "1bd2c38b72e1495e1e6b8b998e10e6bb753b7d6a612ce23da4d2502a936214b7",
+      "rgba_sha256": "3c615dc63e5ca969418b75d99addd4a5742a3c8d7dcc85560619956c337fe4fa",
       "width": 1275
     },
     "letter": {
