@@ -12318,6 +12318,154 @@ fn facade_replacement_counts_same_run_cross_run_group_and_table_matches() {
     );
 }
 
+#[test]
+fn scoped_replacement_touches_one_slide_or_one_text_frame() {
+    let mut presentation = Presentation::from_bytes(&fixture_bytes()).unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide.shape_mut(0).unwrap();
+        shape.set_text("same tar").unwrap();
+        let mut frame = shape.text_frame().unwrap();
+        let mut paragraph = frame.paragraph_mut(0).unwrap();
+        paragraph.add_run("get and cross ");
+        paragraph.add_run("target");
+
+        let mut table = slide.shape_mut(2).unwrap().into_table_mut().unwrap();
+        table.cell_mut(0, 0).unwrap().set_text("table target");
+
+        let mut group = slide.shape_mut(3).unwrap();
+        group
+            .child_mut(0)
+            .unwrap()
+            .set_text("nested target")
+            .unwrap();
+    }
+    presentation.duplicate_slide(0).unwrap();
+    presentation.set_notes_text(0, "notes target").unwrap();
+    presentation.set_notes_text(1, "notes target").unwrap();
+    let texts = |presentation: &Presentation, index: usize| {
+        let slide = presentation.slide(index).unwrap();
+        (
+            slide.shape(0).unwrap().text().unwrap(),
+            slide
+                .shape(2)
+                .unwrap()
+                .table()
+                .unwrap()
+                .cell(0, 0)
+                .unwrap()
+                .text(),
+            slide.shape(3).unwrap().child(0).unwrap().text().unwrap(),
+            slide.notes_text().unwrap(),
+        )
+    };
+    let runs = |presentation: &Presentation, index: usize| {
+        let slide = presentation.slide(index).unwrap();
+        let shape = slide.shape(0).unwrap();
+        let paragraph = shape.text_frame().unwrap().paragraph(0).unwrap();
+        (0..paragraph.run_count())
+            .map(|run| paragraph.run(run).unwrap().text().to_owned())
+            .collect::<Vec<_>>()
+    };
+    let untouched = texts(&presentation, 1);
+    assert_eq!(untouched.0, "same target and cross target");
+    assert_eq!(
+        runs(&presentation, 1),
+        ["same tar", "get and cross ", "target"]
+    );
+
+    let before = presentation.to_bytes().unwrap();
+    let past_end = presentation.len();
+    assert!(
+        presentation
+            .try_replace_slide_text(0, "", "done", true, None)
+            .unwrap_err()
+            .to_string()
+            .contains("placeholder must not be empty")
+    );
+    assert!(matches!(
+        presentation.try_replace_slide_text(past_end, "target", "done", true, None),
+        Err(rpptx::Error::UnknownSlideIndex { .. })
+    ));
+    assert_eq!(
+        presentation
+            .try_replace_slide_text(0, "target", "done", true, Some(1))
+            .unwrap(),
+        5
+    );
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+
+    // One match spans the first two runs and lands in the first of them.
+    assert_eq!(
+        presentation
+            .try_replace_slide_text(0, "target", "done", false, Some(4))
+            .unwrap(),
+        4
+    );
+    assert_eq!(runs(&presentation, 0), ["same done", " and cross ", "done"]);
+    assert_eq!(
+        texts(&presentation, 0),
+        (
+            "same done and cross done".to_owned(),
+            "table done".to_owned(),
+            "nested done".to_owned(),
+            "notes target".to_owned(),
+        )
+    );
+    assert_eq!(
+        presentation
+            .try_replace_slide_text(0, "target", "done", true, None)
+            .unwrap(),
+        1
+    );
+    assert_eq!(texts(&presentation, 0).3, "notes done");
+    assert_eq!(texts(&presentation, 1), untouched);
+
+    {
+        let mut slide = presentation.slide_mut(1).unwrap();
+        let mut shape = slide.shape_mut(0).unwrap();
+        let mut frame = shape.text_frame().unwrap();
+        assert!(
+            frame
+                .try_replace_text("", "done", None)
+                .unwrap_err()
+                .to_string()
+                .contains("placeholder must not be empty")
+        );
+        assert_eq!(
+            frame.try_replace_text("target", "done", Some(1)).unwrap(),
+            2
+        );
+        assert_eq!(frame.text(), "same target and cross target");
+        assert_eq!(frame.try_replace_text("target", "done", None).unwrap(), 2);
+
+        let mut table = slide.shape_mut(2).unwrap().into_table_mut().unwrap();
+        let mut cell = table.cell_mut(0, 0).unwrap();
+        let mut cell_frame = cell.text_frame();
+        assert_eq!(
+            cell_frame
+                .try_replace_text("target", "done", Some(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(cell_frame.text(), "table target");
+        assert_eq!(
+            cell_frame
+                .try_replace_text("target", "cell", Some(1))
+                .unwrap(),
+            1
+        );
+    }
+    assert_eq!(runs(&presentation, 1), ["same done", " and cross ", "done"]);
+    let (frame_text, cell, nested, notes) = texts(&presentation, 1);
+    assert_eq!(frame_text, "same done and cross done");
+    assert_eq!(cell, "table cell");
+    assert_eq!((nested, notes), (untouched.2, untouched.3));
+    let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
+    assert_eq!(texts(&reopened, 1).0, "same done and cross done");
+    assert_eq!(texts(&reopened, 1).1, "table cell");
+}
+
 fn presentation_with_authored_chart() -> Presentation {
     let mut presentation = Presentation::new().expect("open bundled template");
     presentation.add_slide(0).expect("add chart slide");
