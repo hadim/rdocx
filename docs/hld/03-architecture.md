@@ -1502,6 +1502,16 @@ wrapper it flattens or leaves out, and reports the losses of the content it
 writes as it does outside them.
 Each paragraph contributes the same accepted-view text as paragraph text, so
 tracked insertions are included and tracked deletions are left out.
+HTML and Markdown export apply the same revision rule. They emit the runs of
+insertions and move destinations at their boundaries, inside the hyperlink that
+holds them or with the hyperlink they hold, and never the runs of deletions or
+move sources. They also follow Word in accepting a paragraph mark that is
+deleted or moved away. Such a paragraph joins the next paragraph, which keeps
+its own properties, and a paragraph left without content is dropped with no
+empty block, heading or list item. Before a table and at the end of the body
+or of a cell, a paragraph that keeps content stays its own block.
+`Document::text` and the accepted PDF render still keep every such paragraph
+as its own line.
 The WASM binding uses `Document::text` for its existing `getText` method and
 otherwise owns one complete `Document`. It never reaches into
 `rdocx-oxml` or maintains a second package representation.
