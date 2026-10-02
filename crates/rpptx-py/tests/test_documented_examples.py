@@ -2738,7 +2738,7 @@ def test_line_dash_style_and_ends_write_what_python_pptx_reads(tmp_path):
     plain.line.dash_style = None
     plain.line.tail_end.type = None
     plain.line.head_end.width = None
-    assert b"<a:ln" not in plain.xml
+    assert re.search(rb"<a:ln[ />]", plain.xml) is None
 
     prs.slides[0].shapes.add_connector(MSO_CONNECTOR.STRAIGHT, 0, 0, rpptx.Inches(2), 0)
     connector = prs.slides[0].shapes[1]
