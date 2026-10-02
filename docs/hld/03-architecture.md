@@ -917,12 +917,23 @@ Accepting keeps insertions and move destinations, while rejecting keeps
 deletions and move sources and converts deleted text and deleted field codes
 (`w:delText` and `w:delInstrText`) back to ordinary text and field codes.
 Property rejection restores exactly one namespace-correct prior property
-value. Contextual markers act on their owning run, paragraph mark, numbering
-property, or row. A removed paragraph mark merges with the next paragraph
-across a table that immediately follows it when every row of that table is
-removed by the same resolution. A removed paragraph mark inside content that
-the resolution removes, such as a cell paragraph of a removed row, needs no
-merge partner. Resolution stages every affected package part, resolves
+value. A `w:pPrChange` holds only the base paragraph properties, so rejecting
+it keeps the paragraph mark `w:rPr` and the `w:sectPr`, which resolve their
+own markers, `w:rPrChange`, and `w:sectPrChange`. Rejecting a mark
+`w:rPrChange` replaces the whole mark formatting, unmodelled children included,
+and keeps only the mark's markers. Redlines from rdocx 0.14 and earlier carry
+the prior mark formatting as a `w:rPr` in the prior properties, which then
+replaces the current mark formatting, and the current paragraph-mark markers
+that stay go first in it. A mark formatting change that stays cannot be kept in
+that form and is refused. When only the edited paragraph of such a redline had
+mark formatting, the prior holds no `w:rPr` and reads like Word's form, so
+rejecting it keeps the edited mark formatting. Contextual markers act on their
+owning run, paragraph mark, numbering property, or row. A removed paragraph
+mark merges with the next paragraph across a table that immediately follows it
+when every row of that table is removed by the same resolution. A removed
+paragraph mark inside content that the resolution removes, such as a cell
+paragraph of a removed row, needs no merge partner. Resolution stages every
+affected package part, resolves
 selected descendants before their enclosing subtree, reparses the complete
 candidate package, and commits once only after validation succeeds.
 
@@ -965,8 +976,11 @@ hyperlink outside a carried complex field still refuse the pair.
 Changed field results remain inside their field owner, while instruction or
 form changes replace that complete owner. Supported run, paragraph, table, and
 section properties emit property revisions that retain the original property
-sidecars. Unsupported formatting differences retain the original bytes and
-produce stable `ComparisonDiagnostic` values at the actual story path. Inputs
+sidecars. A changed paragraph records its prior base properties in
+`w:pPrChange` and its prior mark formatting in a `w:rPrChange` in the mark
+`w:rPr`, as Word's own Compare writes them. Unsupported formatting
+differences retain the original bytes and produce stable
+`ComparisonDiagnostic` values at the actual story path. Inputs
 with existing modeled revisions or differing story shells are rejected unless
 their story category is ignored. The root and owner start tags of a comment
 or note story compare as namespace-resolved trees, so a part written again
