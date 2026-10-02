@@ -10317,6 +10317,179 @@ fn toc_rebuild_rejects_a_defect_its_entry_style_introduces_behind_retained_ones(
     assert_eq!(document.to_bytes().unwrap(), before);
 }
 
+// Google Docs exports repeat style IDs and declare several defaults of one
+// type. Open, save and layout accept both, so the style mutations do too.
+const REPEATED_STYLE_IDS: &str = concat!(
+    r#"<w:style w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal Copy"/><w:pPr><w:jc w:val="center"/></w:pPr></w:style>"#,
+    r#"<w:style w:type="paragraph" w:styleId="Spare"><w:name w:val="Spare"/></w:style>"#,
+    r#"<w:style w:type="paragraph" w:styleId="Spare"><w:name w:val="Spare Copy"/></w:style>"#,
+    r#"<w:style w:type="table" w:default="1" w:styleId="TableNormalCopy"><w:name w:val="Normal Table Copy"/></w:style>"#,
+    r#"<w:style w:type="table" w:default="1" w:styleId="TableauNormal"><w:name w:val="Tableau Normal"/></w:style>"#,
+);
+
+fn definitions<'a>(document: &'a Document, style_id: &str) -> Vec<rdocx::Style<'a>> {
+    document
+        .styles()
+        .into_iter()
+        .filter(|style| style.style_id() == style_id)
+        .collect()
+}
+
+#[test]
+fn style_mutations_retain_repeated_style_ids_and_edit_the_first_definition() {
+    let mut document = document_with_producer_styles(ONE_HEADING_TOC_BODY, REPEATED_STYLE_IDS);
+    let defect = "invalid style graph: duplicate style ID 'Normal'";
+    assert_eq!(
+        document.validate_style_graph().unwrap_err().to_string(),
+        defect
+    );
+
+    document
+        .add_style(StyleBuilder::paragraph("NoteBox", "Note box").based_on("Normal"))
+        .unwrap();
+    document
+        .set_style(StyleBuilder::paragraph("Normal", "Normal").priority(7))
+        .unwrap();
+    let priorities = definitions(&document, "Normal")
+        .iter()
+        .map(|style| style.priority())
+        .collect::<Vec<_>>();
+    assert_eq!(priorities, [Some(7), None]);
+
+    document
+        .set_default_style(StyleType::Paragraph, "Spare")
+        .unwrap();
+    let defaults = definitions(&document, "Spare")
+        .iter()
+        .map(|style| style.is_default())
+        .collect::<Vec<_>>();
+    assert_eq!(defaults, [true, false]);
+    document
+        .set_default_style(StyleType::Paragraph, "Normal")
+        .unwrap();
+    assert!(document.remove_style("Spare").unwrap());
+    assert!(definitions(&document, "Spare").is_empty());
+
+    let definition = document
+        .add_numbering_definition(&[ListLevel::decimal()])
+        .unwrap();
+    let instance = document.add_numbering_instance(definition, &[]).unwrap();
+    document
+        .link_style_to_numbering("NoteBox", instance, 0)
+        .unwrap();
+    document
+        .unlink_style_from_numbering("NoteBox", instance, 0)
+        .unwrap();
+
+    assert_eq!(
+        document.validate_style_graph().unwrap_err().to_string(),
+        defect
+    );
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(definitions(&reopened, "Normal").len(), 2);
+    assert!(reopened.style("NoteBox").is_some());
+}
+
+#[test]
+fn style_mutations_reject_a_defect_they_introduce_behind_repeated_style_ids() {
+    let mut document = document_with_producer_styles(ONE_HEADING_TOC_BODY, REPEATED_STYLE_IDS);
+    let before = document.to_bytes().unwrap();
+
+    assert_eq!(
+        document
+            .add_style(StyleBuilder::paragraph("Normal", "Another Normal"))
+            .unwrap_err()
+            .to_string(),
+        "style 'Normal' already exists"
+    );
+    assert_eq!(
+        document
+            .add_style(StyleBuilder::paragraph("Orphan", "Orphan").based_on("Missing"))
+            .unwrap_err()
+            .to_string(),
+        "invalid style graph: style 'Orphan' is based on missing style 'Missing'"
+    );
+    assert_eq!(
+        document
+            .set_style(StyleBuilder::paragraph("Normal", "Normal").next_style("Missing"))
+            .unwrap_err()
+            .to_string(),
+        "invalid style graph: style 'Normal' names missing next style 'Missing'"
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+
+    // Defects are counted. The same defect on another definition, or on a
+    // new style inheriting an existing cycle, is still a new one.
+    let mut shadowed_orphan = document_with_producer_styles(
+        ONE_HEADING_TOC_BODY,
+        r#"<w:style w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal Copy"/><w:basedOn w:val="Missing"/></w:style>"#,
+    );
+    let before = shadowed_orphan.to_bytes().unwrap();
+    assert_eq!(
+        shadowed_orphan
+            .set_style(StyleBuilder::paragraph("Normal", "Normal").based_on("Missing"))
+            .unwrap_err()
+            .to_string(),
+        "invalid style graph: style 'Normal' is based on missing style 'Missing'"
+    );
+    assert_eq!(shadowed_orphan.to_bytes().unwrap(), before);
+
+    let mut cycle = document_with_producer_styles(
+        ONE_HEADING_TOC_BODY,
+        concat!(
+            r#"<w:style w:type="paragraph" w:styleId="CycleA"><w:name w:val="Cycle A"/><w:basedOn w:val="CycleB"/></w:style>"#,
+            r#"<w:style w:type="paragraph" w:styleId="CycleB"><w:name w:val="Cycle B"/><w:basedOn w:val="CycleA"/></w:style>"#,
+        ),
+    );
+    let before = cycle.to_bytes().unwrap();
+    assert_eq!(
+        cycle
+            .add_style(StyleBuilder::paragraph("CycleC", "Cycle C").based_on("CycleA"))
+            .unwrap_err()
+            .to_string(),
+        "invalid style graph: based-on cycle contains style 'CycleA'"
+    );
+    assert_eq!(cycle.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn appending_into_repeated_style_ids_retains_them_and_rejects_a_new_defect() {
+    let mut imported = Document::new();
+    imported
+        .add_style(StyleBuilder::paragraph("Imported", "Imported").based_on("Normal"))
+        .unwrap();
+    imported.add_paragraph("imported").style("Imported");
+
+    let mut appended = document_with_producer_styles(ONE_HEADING_TOC_BODY, REPEATED_STYLE_IDS);
+    appended.append(&imported);
+    let mut inserted = document_with_producer_styles(ONE_HEADING_TOC_BODY, REPEATED_STYLE_IDS);
+    inserted.insert_document(0, &imported);
+    for document in [&appended, &inserted] {
+        assert!(document.style("Imported").is_some());
+        assert_eq!(definitions(document, "Normal").len(), 2);
+        assert_eq!(
+            document.validate_style_graph().unwrap_err().to_string(),
+            "invalid style graph: duplicate style ID 'Normal'"
+        );
+    }
+
+    // A second default paragraph style is new to the destination.
+    let mut conflicting = Document::new();
+    conflicting
+        .add_style(StyleBuilder::paragraph("SourceDefault", "Source Default"))
+        .unwrap();
+    conflicting
+        .set_default_style(StyleType::Paragraph, "SourceDefault")
+        .unwrap();
+    let mut document = document_with_producer_styles(ONE_HEADING_TOC_BODY, REPEATED_STYLE_IDS);
+    let before = document.to_bytes().unwrap();
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        document.append(&conflicting);
+    }));
+    assert!(result.is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
 #[test]
 fn numbered_toc_entries_reuse_the_visible_layout_marker() {
     let body = r#"
