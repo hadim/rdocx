@@ -1550,6 +1550,16 @@ marks. A paragraph that ends a section also keeps its mark, although
 `accept_all` merges its section break away. Paragraphs in cells and content
 controls keep their marks too. Paragraph text, paragraph indices and the
 editing APIs are unchanged.
+A table row whose `w:trPr` carries `w:del`, or a Word `w:moveFrom` with an id
+and an author that the parser flags in `CT_TrPr::moved_away`, is the row
+`Document::accept_all` removes. `CT_Row::accepted_view_removes` and
+`CT_Tbl::accepted_view_removes` own that rule, and a table goes when every row
+it owns goes, rows in its row-level content controls included. The text reader,
+`word_count`, `rdocx text --json`, HTML, Markdown and MHTML export, the
+accepted layout and its PAGEREF and REF bookmark lookups leave such rows and
+tables out at every nesting level. The model keeps them, so
+table, row and paragraph indices in the editing APIs and the JSON paths are
+unchanged.
 The WASM binding uses `Document::text` for its existing `getText` method and
 otherwise owns one complete `Document`. It never reaches into
 `rdocx-oxml` or maintains a second package representation.
