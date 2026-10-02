@@ -623,6 +623,17 @@ struct StoryPart {
     part_name: String,
 }
 
+/// An image only the edited story shows. The edited story refers to it by
+/// `placeholder` during alignment, and the redline relates `owner` to a copy
+/// of it only when the tracked story still refers to that placeholder.
+struct EditedImage {
+    owner: String,
+    placeholder: String,
+    payload: Vec<u8>,
+    extension: String,
+    content_type: String,
+}
+
 #[derive(Default)]
 struct TextBoxMarkers {
     main: String,
@@ -826,7 +837,7 @@ impl Document {
                 "document comparison requires identical related-story shells".to_owned(),
             ));
         }
-        let carried_links = remap_equivalent_story_relationships(
+        let (carried_links, edited_images) = remap_equivalent_story_relationships(
             &original,
             &mut edited,
             &original_stories,
@@ -1014,6 +1025,7 @@ impl Document {
                     .push(relationship);
             }
         }
+        import_edited_images(&mut candidate, &edited_images)?;
         candidate = reopen_staged(candidate)?;
         #[cfg(test)]
         FAIL_AFTER_COMPARISON_STAGING.with(|fail| {
@@ -1256,21 +1268,29 @@ fn story_xml<'a>(document: &'a Document, story: &StoryPart) -> Result<&'a [u8]> 
     })
 }
 
+/// Hyperlink relationships carried into the redline, each with the part name
+/// of the original owner it belongs to.
+type CarriedLinks = Vec<(String, Relationship)>;
+
 /// Give each edited image and hyperlink relationship the id of its
 /// equivalent in the original. A hyperlink with no equivalent gets a fresh
 /// id, and is returned with the original owner it belongs to, for the
-/// redline to add when edited content carries it.
+/// redline to add when edited content carries it. An image with no
+/// equivalent gets a placeholder id, and is returned for the redline to
+/// import when its tracked story still refers to it.
 fn remap_equivalent_story_relationships(
     original: &Document,
     edited: &mut Document,
     original_stories: &[StoryPart],
     edited_stories: &[StoryPart],
-) -> Result<Vec<(String, Relationship)>> {
+) -> Result<(CarriedLinks, Vec<EditedImage>)> {
+    let mut images = Vec::new();
     let mut carried = remap_equivalent_owner_relationships(
         original,
         edited,
         &original.doc_part_name,
         &edited.doc_part_name.clone(),
+        &mut images,
     )?
     .into_iter()
     .map(|relationship| (original.doc_part_name.clone(), relationship))
@@ -1282,19 +1302,26 @@ fn remap_equivalent_story_relationships(
                 edited,
                 &left.part_name,
                 &right.part_name,
+                &mut images,
             )?
             .into_iter()
             .map(|relationship| (left.part_name.clone(), relationship)),
         );
     }
-    Ok(carried)
+    Ok((carried, images))
 }
 
+/// Give the edited story the original's id for every image both hold, and a
+/// placeholder id for every image only the edited story shows, such as a
+/// regenerated figure. A changed picture then aligns as a deleted drawing
+/// that keeps the original image and an inserted drawing that shows the
+/// edited one.
 fn remap_equivalent_owner_relationships(
     original: &Document,
     edited: &mut Document,
     original_owner: &str,
     edited_owner: &str,
+    images: &mut Vec<EditedImage>,
 ) -> Result<Vec<Relationship>> {
     let original_relationships = original
         .package
@@ -1306,11 +1333,27 @@ fn remap_equivalent_owner_relationships(
         .get_part_rels(edited_owner)
         .cloned()
         .unwrap_or_default();
+    let referenced = if edited_relationships
+        .items
+        .iter()
+        .any(|relationship| relationship.rel_type == rel_types::IMAGE)
+    {
+        edited
+            .package
+            .get_part(edited_owner)
+            .map(crate::document::xml_relationship_ids_in_order)
+            .transpose()?
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let mut used = HashSet::new();
     let mut remap = HashMap::new();
     let mut unmatched_links = Vec::new();
     for right in &edited_relationships.items {
-        if right.rel_type != rel_types::IMAGE && right.rel_type != rel_types::HYPERLINK {
+        let tracked = right.rel_type == rel_types::HYPERLINK
+            || (right.rel_type == rel_types::IMAGE && referenced.contains(&right.id));
+        if !tracked {
             continue;
         }
         let right_payload = relationship_payload(edited, edited_owner, right);
@@ -1328,6 +1371,39 @@ fn remap_equivalent_owner_relationships(
         else {
             if right.rel_type == rel_types::HYPERLINK {
                 unmatched_links.push(right.clone());
+            } else if let Some(payload) = right_payload
+                && crate::document::relationship_is_internal(right)
+            {
+                let target = OpcPackage::resolve_rel_target(edited_owner, &right.target);
+                let mut ordinal = images.len() + 1;
+                let placeholder = loop {
+                    let candidate = format!("rdocxComparisonImage{ordinal}");
+                    if original_relationships.get_by_id(&candidate).is_none()
+                        && edited_relationships.get_by_id(&candidate).is_none()
+                    {
+                        break candidate;
+                    }
+                    ordinal += 1;
+                };
+                remap.insert(right.id.clone(), placeholder.clone());
+                images.push(EditedImage {
+                    owner: original_owner.to_owned(),
+                    placeholder,
+                    extension: target
+                        .rsplit_once('.')
+                        .map_or("bin", |(_, extension)| extension)
+                        .to_owned(),
+                    content_type: edited
+                        .package
+                        .content_types
+                        .content_type_for(&target)
+                        .map_or_else(
+                            || oxml_media::resolve(&payload, &target).content_type(),
+                            |content_type| content_type,
+                        )
+                        .to_owned(),
+                    payload,
+                });
             }
             continue;
         };
@@ -1397,6 +1473,54 @@ fn remap_equivalent_owner_relationships(
         relationships.to_xml()?;
     }
     Ok(carried)
+}
+
+/// Relate each owner to the edited images its tracked story still refers
+/// to. An existing media part with the same bytes is shared rather than
+/// copied, and an image nothing refers to, such as one in an ignored story,
+/// leaves the package untouched.
+fn import_edited_images(candidate: &mut Document, images: &[EditedImage]) -> Result<()> {
+    for image in images {
+        let Some(source) = candidate.package.get_part(&image.owner) else {
+            continue;
+        };
+        if !crate::document::xml_relationship_ids_in_order(source)?.contains(&image.placeholder) {
+            continue;
+        }
+        let shared = candidate
+            .package
+            .parts
+            .iter()
+            .filter(|(part, bytes)| part.starts_with("/word/media/") && **bytes == image.payload)
+            .map(|(part, _)| part.clone())
+            .min();
+        let id = match shared {
+            Some(part) => candidate.add_relative_internal_relationship_checked(
+                &image.owner,
+                rel_types::IMAGE,
+                &part,
+            )?,
+            None => candidate.add_copied_image_relationship_checked(
+                &image.owner,
+                &image.payload,
+                &image.extension,
+                &image.content_type,
+            )?,
+        };
+        let source = candidate
+            .package
+            .get_part(&image.owner)
+            .ok_or_else(|| Error::Other(format!("missing comparison story {}", image.owner)))?;
+        let updated = crate::document::remap_xml_relationship_ids(
+            source,
+            &HashMap::from([(image.placeholder.clone(), id)]),
+        )?;
+        if image.owner == candidate.doc_part_name {
+            candidate.document = CT_Document::from_xml(&updated)?;
+        }
+        candidate.package.set_part(&image.owner, updated);
+    }
+    Ok(())
 }
 
 fn relationship_payload(
