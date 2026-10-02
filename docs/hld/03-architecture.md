@@ -113,12 +113,15 @@ relationship-target occupancy uses ASCII-case-insensitive package identity
 while package maps retain producer spelling. Facade operations reserve
 complete identifier bundles on staged state, while serialization derives
 authored identifiers from final recursive document order before publishing the
-candidate. Relationship identifiers remain scoped to their owning part, and
-producer drawing-definition uniqueness is also validated within each physical
-XML part. The union of every valid producer drawing value remains occupied for
-package-global authored allocation. Only identities captured at package open
-have preserved provenance. Current graph edges added later join authored
-semantic canonicalization even when no modeled `r:id` refers to them. Internal
+candidate. Relationship identifiers remain scoped to their owning part. A
+producer drawing id repeated within one physical XML part is accepted and its
+occurrences are counted, since LibreOffice opens such files. A staged edit may
+not exceed the per-part count captured at open, and copied or imported drawings
+each receive a fresh id even when their source repeats one. The union of every
+valid producer drawing value remains occupied for package-global authored
+allocation. Only identities captured at package open have preserved
+provenance. Current graph edges added later join authored semantic
+canonicalization even when no modeled `r:id` refers to them. Internal
 and external edges retain their targets and modes while receiving deterministic
 type-and-target order. Relationship attributes in retained body XML and raw
 drawing payloads are fixed occupants.

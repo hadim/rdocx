@@ -33,7 +33,7 @@ use rdocx_oxml::text::{
 
 pub use rdocx_oxml::text::{LegacyFormFieldKind, LegacyFormFieldValue};
 
-use crate::document::{DocumentIdentifiers, FragmentConflictPolicy};
+use crate::document::{DocumentIdentifiers, FragmentConflictPolicy, uniquify_drawing_ids_in_xml};
 use crate::{Document, Error, Result, style};
 
 /// One legacy form field and its stable story-part identity.
@@ -2060,7 +2060,12 @@ fn import_fragment_content_with_state(
     }
     let identity_remap =
         remap_body_identities(&mut fragment, &mut document.identifiers, identity_state)?;
-    fragment_xml = patch_body_identity_attributes(&fragment_xml, &identity_remap)?;
+    // `remap_body_identities` made the typed copy's drawing ids unique, and
+    // the same pass over the same drawings does it for the source XML.
+    fragment_xml = patch_body_identity_attributes(
+        &uniquify_drawing_ids_in_xml(&fragment_xml)?,
+        &identity_remap,
+    )?;
     let insert_at = document.document.body.content.len();
     let numbering_remap = document.insert_document_fragment_content_staged(
         insert_at,
@@ -7196,7 +7201,9 @@ fn remap_body_identities(
     identifiers: &mut DocumentIdentifiers,
     state: &mut BodyIdentityState,
 ) -> Result<BodyIdentityRemap> {
-    let xml = document.document.to_xml()?;
+    // The drawing remap is keyed by value, so a source that repeats a
+    // `wp:docPr/@id` is first made unique and every copy gets its own id.
+    let xml = uniquify_drawing_ids_in_xml(&document.document.to_xml()?)?;
     let values = body_identity_values(&xml)?;
     let mut remap = BodyIdentityRemap {
         drop_paragraph_identities: true,
@@ -7693,6 +7700,7 @@ pub(crate) fn freshen_content_fragment_identities(
     document: &mut Document,
     wrapped_fragment: &[u8],
 ) -> Result<Vec<u8>> {
+    let wrapped_fragment = &uniquify_drawing_ids_in_xml(wrapped_fragment)?;
     let values = body_identity_values(wrapped_fragment)?;
     let mut open_bookmarks = Vec::new();
     let mut seen_bookmarks = HashSet::new();
