@@ -515,6 +515,11 @@ fn emit_table(
     hyperlink_urls: &HashMap<String, String>,
     options: &HtmlOptions,
 ) {
+    // Accepting every tracked change removes a table whose rows are all
+    // deleted, and each deleted row of the others.
+    if tbl.accepted_view_removes() {
+        return;
+    }
     let mut table_style = String::new();
 
     if let Some(props) = &tbl.properties {
@@ -549,8 +554,13 @@ fn emit_table(
         ));
     }
 
-    // Rows and cells that content controls wrap are written in place.
-    let rows = tbl.rows();
+    // Rows and cells that content controls wrap are written in place, and
+    // accepting every tracked change removes each deleted row.
+    let rows: Vec<_> = tbl
+        .rows()
+        .into_iter()
+        .filter(|row| !row.accepted_view_removes())
+        .collect();
     for (row_idx, row) in rows.iter().enumerate() {
         out.push_str("<tr>\n");
         for (col_idx, cell) in row.cells().into_iter().enumerate() {

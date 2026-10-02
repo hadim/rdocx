@@ -284,8 +284,13 @@ fn emit_table(out: &mut String, tbl: &CT_Tbl, hyperlink_urls: &HashMap<String, S
     let mut rows: Vec<Vec<String>> = Vec::new();
     let mut max_cols = 0;
 
-    // Rows and cells that content controls wrap are written in place.
-    for row in tbl.rows() {
+    // Rows and cells that content controls wrap are written in place, and
+    // accepting every tracked change removes each deleted row.
+    for row in tbl
+        .rows()
+        .into_iter()
+        .filter(|row| !row.accepted_view_removes())
+    {
         let mut cells: Vec<String> = Vec::new();
         for cell in row.cells() {
             let text = collect_cell_text(cell, hyperlink_urls);
@@ -361,6 +366,9 @@ fn collect_cell_text(
                     parts.push(trimmed);
                 }
             }
+            // Accepting every tracked change removes a nested table whose
+            // rows are all deleted.
+            Block::Table(table) if table.accepted_view_removes() => {}
             Block::Table(_) => {
                 parts.push("(nested table)".to_string());
             }
