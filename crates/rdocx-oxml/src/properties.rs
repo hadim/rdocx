@@ -7,7 +7,7 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::QName;
 use quick_xml::{Reader, Writer, XmlVersion};
 
-use crate::error::Result;
+use crate::error::{OxmlError, Result};
 use crate::namespace::{W_NS, matches_local_name};
 use crate::run_properties::language_element_is_explicitly_empty;
 use crate::shared::ST_OnOff;
@@ -428,6 +428,61 @@ pub(crate) fn get_word_val_attr(
     Ok(None)
 }
 
+/// Parse an integer measurement attribute, such as an `ST_TwipsMeasure`,
+/// `ST_SignedTwipsMeasure` or `ST_HpsMeasure`, tolerating a decimal.
+///
+/// The schemas allow only an integer, but Google Docs writes a decimal part
+/// (`4320.0`, `2210.0000000000005`), and LibreOffice and Word open it. A
+/// decimal is read as the nearest integer, half away from zero, decided on
+/// the decimal digits themselves so no float rounding intervenes. An
+/// exponent, a non-finite spelling, a missing digit, or an exact value
+/// outside `T` is refused with an error naming the element, the attribute
+/// and the value.
+pub(crate) fn parse_integer_measurement<T: TryFrom<i64>>(
+    element: &[u8],
+    attribute: &[u8],
+    value: &str,
+) -> Result<T> {
+    let error = |problem: &str| {
+        OxmlError::InvalidValue(format!(
+            "{}/@{} {value:?} {problem}",
+            String::from_utf8_lossy(element),
+            String::from_utf8_lossy(attribute),
+        ))
+    };
+    let (negative, unsigned) = match value.as_bytes().first() {
+        Some(b'-') => (true, &value[1..]),
+        Some(b'+') => (false, &value[1..]),
+        _ => (false, value),
+    };
+    let (whole, fraction) = unsigned.split_once('.').unwrap_or((unsigned, "0"));
+    if whole.is_empty()
+        || fraction.is_empty()
+        || !whole.bytes().all(|byte| byte.is_ascii_digit())
+        || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(error("is not an integer measurement"));
+    }
+
+    // Eighteen digits cannot overflow an i64 and exceed every target type.
+    let whole = whole.trim_start_matches('0');
+    if whole.len() > 18 {
+        return Err(error("is out of range"));
+    }
+    let whole = whole
+        .bytes()
+        .fold(0i64, |sum, digit| sum * 10 + i64::from(digit - b'0'));
+    let signed = |magnitude: i64| if negative { -magnitude } else { magnitude };
+    // The exact value must be in range, not only its rounding, so a
+    // fraction counts as the next integer away from zero here.
+    let exceeds = whole + i64::from(fraction.bytes().any(|digit| digit != b'0'));
+    if T::try_from(signed(exceeds)).is_err() {
+        return Err(error("is out of range"));
+    }
+    let rounded = whole + i64::from(fraction.as_bytes()[0] >= b'5');
+    T::try_from(signed(rounded)).map_err(|_| error("is out of range"))
+}
+
 pub(crate) fn parse_word_toggle(e: &BytesStart, word_prefixes: &[String]) -> Result<bool> {
     let val = get_word_val_attr(e, word_prefixes)?;
     Ok(ST_OnOff::from_str_or_default(val.as_deref()).is_on())
@@ -453,6 +508,61 @@ pub(crate) fn write_toggle<W: std::io::Write>(
 mod tests {
     use super::*;
     use crate::shared::ST_Jc;
+
+    #[test]
+    fn integer_measurements_round_a_decimal_half_away_from_zero() {
+        for (value, expected) in [
+            ("4320", 4320),
+            ("+7", 7),
+            ("4320.0", 4320),
+            ("2210.0000000000005", 2210),
+            ("4319.999999999999", 4320),
+            ("720.5", 721),
+            ("-226.99999999999977", -227),
+            ("-720.5", -721),
+            ("-0.4", 0),
+            ("0012.50", 13),
+            ("2147483646.5", i32::MAX),
+            ("-2147483647.5", i32::MIN),
+        ] {
+            let parsed: i32 = parse_integer_measurement(b"w:ind", b"w:left", value).unwrap();
+            assert_eq!(parsed, expected, "{value}");
+        }
+        let size: u32 = parse_integer_measurement(b"w:sz", b"w:val", "22.0").unwrap();
+        assert_eq!(size, 22);
+    }
+
+    #[test]
+    fn a_refused_integer_measurement_names_element_attribute_and_value() {
+        for value in [
+            "", "-", "NaN", "inf", "1e3", ".5", "1.", "1.2.3", " 1", "1 ", "0x10", "--1",
+        ] {
+            let error = parse_integer_measurement::<i32>(b"w:gridCol", b"w:w", value)
+                .unwrap_err()
+                .to_string();
+            assert_eq!(
+                error,
+                format!("invalid value: w:gridCol/@w:w {value:?} is not an integer measurement")
+            );
+        }
+        for value in [
+            "2147483648",
+            "2147483647.5",
+            "2147483647.0000000000000000000000000000001",
+            "-2147483648.1",
+            "99999999999999999999.0",
+        ] {
+            let error = parse_integer_measurement::<i32>(b"w:pgSz", b"w:w", value)
+                .unwrap_err()
+                .to_string();
+            assert_eq!(
+                error,
+                format!("invalid value: w:pgSz/@w:w {value:?} is out of range")
+            );
+        }
+        assert!(parse_integer_measurement::<u32>(b"w:sz", b"w:val", "-0.5").is_err());
+        assert!(parse_integer_measurement::<u32>(b"w:sz", b"w:val", "-1").is_err());
+    }
 
     fn try_parse_ppr(xml: &str) -> Result<CT_PPr> {
         let full = format!("<w:pPr>{xml}</w:pPr>");
