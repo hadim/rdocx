@@ -3086,6 +3086,33 @@ impl PyDocument {
         Ok(())
     }
 
+    /// Replace literal text in one story item only, with the contract of
+    /// `try_replace_text`: a count that differs from `expect` raises and
+    /// changes nothing, and the revision advances once only when something
+    /// was replaced.
+    #[pyo3(signature = (item, placeholder, replacement, *, expect = None))]
+    fn replace_story_text(
+        &mut self,
+        py: Python<'_>,
+        item: PyRef<'_, PyStoryItem>,
+        placeholder: &str,
+        replacement: &str,
+        expect: Option<usize>,
+    ) -> PyResult<usize> {
+        let location = self.native_location(py, &item)?;
+        let count = py
+            .detach(|| {
+                self.inner
+                    .try_replace_story_text(&location, placeholder, replacement, expect)
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .map_err(|mismatch| crate::replacement_count_to_pyerr(py, &mismatch, false))?;
+        if count > 0 {
+            self.revisions.bump();
+        }
+        Ok(count)
+    }
+
     fn add_hyperlink_to_story(
         &mut self,
         py: Python<'_>,

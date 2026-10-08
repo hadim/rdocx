@@ -1071,6 +1071,35 @@ impl PyCell {
         document.revisions.bump();
         Ok(())
     }
+    /// Replace literal text in this cell only and return the count, with the
+    /// contract of `Paragraph.replace_text` over every paragraph of the cell.
+    #[pyo3(signature = (placeholder, replacement, *, expect = None))]
+    fn replace_text(
+        &self,
+        py: Python<'_>,
+        placeholder: &str,
+        replacement: &str,
+        expect: Option<usize>,
+    ) -> PyResult<usize> {
+        let (table, row, cell) = self.validate(py)?;
+        let mut document = self.document.borrow_mut(py);
+        let count = {
+            let mut table = document
+                .inner
+                .table_mut(table)
+                .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
+            table
+                .cell(row, cell)
+                .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?
+                .try_replace_text(placeholder, replacement, expect)
+                .map_err(|error| rdocx_to_pyerr(py, error))?
+                .map_err(|mismatch| crate::replacement_count_to_pyerr(py, &mismatch, false))?
+        };
+        if count > 0 {
+            document.revisions.bump();
+        }
+        Ok(count)
+    }
     #[getter]
     fn paragraphs(&self, py: Python<'_>) -> PyResult<Py<PyCellParagraphCollection>> {
         self.validate(py)?;

@@ -303,6 +303,60 @@ impl PyParagraph {
         Ok(())
     }
 
+    /// Replace literal text in this paragraph only and return the count. The
+    /// contract is `Document.try_replace_text` restricted to this paragraph:
+    /// with `expect`, a count that differs raises `ReplacementCountError` and
+    /// leaves the document and its revision as they were. The revision
+    /// advances once only when something was replaced, so every earlier
+    /// handle, this one included, is then stale.
+    #[pyo3(signature = (placeholder, replacement, *, expect = None))]
+    fn replace_text(
+        &self,
+        py: Python<'_>,
+        placeholder: &str,
+        replacement: &str,
+        expect: Option<usize>,
+    ) -> PyResult<usize> {
+        let location = self.validate(py)?;
+        let mut document = self.document.borrow_mut(py);
+        let replace = |mut paragraph: rdocx::Paragraph<'_>| {
+            paragraph.try_replace_text(placeholder, replacement, expect)
+        };
+        let result = match location {
+            ParagraphLocation::Body(index) => replace(
+                document
+                    .inner
+                    .paragraph_mut(index)
+                    .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?,
+            ),
+            ParagraphLocation::Cell {
+                table,
+                row,
+                cell,
+                paragraph,
+            } => {
+                let mut table = document
+                    .inner
+                    .table_mut(table)
+                    .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
+                let mut cell = table
+                    .cell(row, cell)
+                    .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?;
+                replace(
+                    cell.paragraph_mut(paragraph)
+                        .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?,
+                )
+            }
+        };
+        let count = result
+            .map_err(|error| crate::rdocx_to_pyerr(py, error))?
+            .map_err(|mismatch| crate::replacement_count_to_pyerr(py, &mismatch, false))?;
+        if count > 0 {
+            document.revisions.bump();
+        }
+        Ok(count)
+    }
+
     #[getter]
     fn runs(&self, py: Python<'_>) -> PyResult<Py<PyRunCollection>> {
         self.validate(py)?;

@@ -300,6 +300,125 @@ def test_counted_replacement_checks_expected_counts_before_publishing():
             document.replace_all(pairs)
 
 
+def test_paragraph_replacement_is_counted_scoped_and_keeps_formatting_and_anchors():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("Version is locked for the build tools.")
+    paragraph = document.add_paragraph("Note: ")
+    paragraph.runs[0].font.italic = True
+    document.paragraphs[1].add_run("Version is lo")
+    document.paragraphs[1].add_run("cked").font.bold = True
+    document.paragraphs[1].add_run(" for the test tools.").font.italic = True
+    run = lambda index: rdocx.RunPosition(body_index=1, run_index=index)  # noqa: E731
+    document.add_comment(
+        rdocx.RunRange(start=run(3), end=run(4)), author="Ada", text="check the pin"
+    )
+    document.add_bookmark("clause", rdocx.RunRange(start=run(0), end=run(1)))
+    with pytest.raises(rdocx.ReplacementCountError, match="found 2"):
+        document.try_replace_text("Version is locked", "Version is pinned", expect=1)
+
+    held = document.paragraphs[1]
+    before = document.to_bytes()
+    with pytest.raises(rdocx.ReplacementCountError) as raised:
+        held.replace_text("Version is locked", "Version is pinned", expect=2)
+    assert str(raised.value) == 'expected 2 replacement(s) of "Version is locked", found 1'
+    assert (raised.value.index, raised.value.expected, raised.value.found) == (None, 2, 1)
+    with pytest.raises(rdocx.RdocxError, match="U\\+0001"):
+        held.replace_text("Version", "\x01")
+    assert held.replace_text("missing", "x") == 0
+    assert held.replace_text("missing", "x", expect=0) == 0
+    assert document.to_bytes() == before
+    assert held.text == "Note: Version is locked for the test tools."
+
+    assert held.replace_text("Version is locked", "Version is pinned", expect=1) == 1
+    with pytest.raises(rdocx.StaleElementError):
+        held.text
+    first, second = document.paragraphs
+    assert first.text == "Version is locked for the build tools."
+    assert second.text == "Note: Version is pinned for the test tools."
+    runs = [(run.text, run.font.bold, run.font.italic) for run in second.runs if run.text]
+    assert runs == [
+        ("Note: ", None, True),
+        ("Version is pinned", None, None),
+        (" for the test tools.", None, True),
+    ]
+
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert [comment.text for comment in reopened.comments] == ["check the pin"]
+    assert [bookmark.name for bookmark in reopened.bookmarks] == ["clause"]
+    xml = _document_xml(reopened)
+    for anchor in (b"commentRangeStart", b"commentRangeEnd", b"commentReference", b"bookmarkStart"):
+        assert xml.count(anchor) == 1
+
+
+def test_cell_and_cell_paragraph_replacement_is_counted_and_scoped():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("Version is locked")
+    document.add_table(1, 2)
+    document.tables[0].cell(0, 0).text = "Version is locked"
+    document.tables[0].cell(0, 1).text = "Version is locked"
+    document.tables[0].cell(0, 1).add_paragraph("Version is locked again")
+    before = document.to_bytes()
+
+    cell = document.tables[0].cell(0, 1)
+    with pytest.raises(rdocx.ReplacementCountError) as raised:
+        cell.replace_text("locked", "pinned", expect=1)
+    assert str(raised.value) == 'expected 1 replacement(s) of "locked", found 2'
+    assert document.to_bytes() == before
+    assert cell.replace_text("Version", "Release", expect=2) == 2
+    with pytest.raises(rdocx.StaleElementError):
+        cell.text
+
+    held = document.tables[0].cell(0, 1).paragraphs[1]
+    assert held.replace_text("locked", "pinned", expect=1) == 1
+    with pytest.raises(rdocx.StaleElementError):
+        held.text
+    table = document.tables[0]
+    assert table.cell(0, 0).text == "Version is locked"
+    assert [paragraph.text for paragraph in table.cell(0, 1).paragraphs] == [
+        "Release is locked",
+        "Release is pinned again",
+    ]
+    assert document.paragraphs[0].text == "Version is locked"
+
+
+def test_story_item_replacement_changes_one_header_paragraph():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("Version is locked")
+    document.set_header("Version is locked")
+    document.set_footer("Version is locked")
+    header_item = next(
+        item
+        for item in document.story_items
+        if item.story.kind == "header" and item.kind == "paragraph"
+    )
+    before = document.to_bytes()
+
+    with pytest.raises(rdocx.ReplacementCountError) as raised:
+        document.replace_story_text(header_item, "Version is locked", "Version is pinned", expect=2)
+    assert str(raised.value) == 'expected 2 replacement(s) of "Version is locked", found 1'
+    assert document.replace_story_text(header_item, "missing", "x") == 0
+    assert document.to_bytes() == before
+
+    assert (
+        document.replace_story_text(header_item, "Version is locked", "Version is pinned", expect=1)
+        == 1
+    )
+    assert _story_paragraph_texts(document, "header") == ["Version is pinned"]
+    assert _story_paragraph_texts(document, "footer") == ["Version is locked"]
+    assert document.paragraphs[0].text == "Version is locked"
+    with pytest.raises(rdocx.StaleElementError, match="story item handle"):
+        document.replace_story_text(header_item, "Version", "Release")
+
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert _story_paragraph_texts(reopened, "header") == ["Version is pinned"]
+
+
 def test_update_fields_takes_a_keyword_context_and_counts_updates():
     import datetime
 

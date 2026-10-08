@@ -47,6 +47,9 @@ with open("report.pdf", "wb") as output:
   resolved, retargeted, or removed in any story.
 - Paragraph text replacement that keeps paragraph formatting, comments, and
   bookmarks.
+- Counted find-and-replace scoped to one paragraph, one table cell, or one
+  story item such as a header paragraph, keeping the formatting outside each
+  match, comments, and bookmarks.
 - Paragraph style assignment by style ID or name, checked against the styles
   the document defines.
 - New documents with Word's usual styles, such as `Heading 2`, `Title`,
