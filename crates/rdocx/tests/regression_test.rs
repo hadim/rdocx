@@ -2900,6 +2900,63 @@ mod block_control_comment_positions {
         }
     }
 
+    /// A paragraph handle inside a block content control maps to that exact
+    /// paragraph, never to a sibling (an empty `<w:p/>` included), and a
+    /// paragraph deeper than a
+    /// two-segment path reaches, in a nested control or a table of the
+    /// control, has no location.
+    #[test]
+    fn paragraph_locations_skip_what_a_two_segment_path_cannot_reach() {
+        const LAYOUT: &str = r#"<w:p><w:r><w:t>Alpha.</w:t></w:r></w:p><w:sdt><w:sdtPr><w:alias w:val="Block"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>p1</w:t></w:r></w:p><w:p/><w:sdt><w:sdtPr><w:alias w:val="Nested"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>p2</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>p3</w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>p5</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>Beta.</w:t></w:r></w:p>"#;
+        let mut document = super::document_with_content_controls(&super::wrap_word_body(LAYOUT));
+        let mut seen = Vec::new();
+        let mut index = 0;
+        while let Some(paragraph) = document.paragraph(index) {
+            let text = paragraph.text();
+            let location = document.paragraph_story_location(index).unwrap();
+            let resolved = location.map(|location| {
+                document
+                    .story_item_snapshot(&location)
+                    .unwrap()
+                    .text()
+                    .unwrap_or_default()
+                    .to_owned()
+            });
+            // Story-item text is `None` for a paragraph without text runs.
+            if let Some(resolved) = &resolved {
+                assert_eq!(resolved, &text, "paragraph {index}");
+            }
+            seen.push((text, resolved.is_some()));
+            index += 1;
+        }
+        assert_eq!(
+            seen,
+            [
+                ("Alpha.", true),
+                ("p1", true),
+                ("", true),
+                ("p2", false),
+                ("p3", true),
+                ("cell", false),
+                ("p5", true),
+                ("Beta.", true),
+            ]
+            .map(|(text, reachable)| (text.to_owned(), reachable))
+        );
+
+        // A comment through the handle of p3 lands on p3, not on p5.
+        let location = document.paragraph_story_location(4).unwrap().unwrap();
+        let id = comment_on(&mut document, &location).unwrap();
+        let xml = super::document_xml(&mut document);
+        let start = xml
+            .find(&format!(r#"<w:commentRangeStart w:id="{id}"/>"#))
+            .unwrap();
+        let end = xml
+            .find(&format!(r#"<w:commentRangeEnd w:id="{id}"/>"#))
+            .unwrap();
+        assert_eq!(super::f_x093_visible_text(&xml[start..end]), "p3");
+    }
+
     #[test]
     fn two_segment_positions_must_name_a_paragraph_of_a_block_control() {
         let mut document = super::document_with_content_controls(&super::wrap_word_body(BODY));

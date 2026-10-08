@@ -8487,7 +8487,9 @@ fn scan_story_control_paragraphs(xml: &[u8], control: &StoryItemSpan) -> Result<
         drop(namespace);
         let after = reader.buffer_position() as usize;
         match event {
-            Event::Start(element) => {
+            // An empty `<w:p/>` is a paragraph of the control too, so that
+            // the positions match the paragraphs of the document model.
+            Event::Start(ref element) | Event::Empty(ref element) => {
                 let name = element.local_name().as_ref().to_vec();
                 let direct_content = stack
                     .last()
@@ -8503,11 +8505,17 @@ fn scan_story_control_paragraphs(xml: &[u8], control: &StoryItemSpan) -> Result<
                     && direct_content
                     && owning_control.is_some_and(|(_, _, start)| *start == control.full.start)
                 {
-                    paragraphs.push(before..story_element_end(xml, before)?);
+                    let end = if matches!(event, Event::Empty(_)) {
+                        after
+                    } else {
+                        story_element_end(xml, before)?
+                    };
+                    paragraphs.push(before..end);
                 }
-                stack.push((is_word, name, before));
+                if matches!(event, Event::Start(_)) {
+                    stack.push((is_word, name, before));
+                }
             }
-            Event::Empty(_) => {}
             Event::End(_) => {
                 stack.pop();
             }
@@ -10357,6 +10365,37 @@ fn nth_paragraph_in_control<'a>(
         if paragraph.is_some() {
             return paragraph;
         }
+    }
+    None
+}
+
+/// Map the `index`-th paragraph of a block content control, counted
+/// recursively as [`paragraph_count_in_control`] counts them, to its position
+/// among the paragraphs placed directly in the control's content. A
+/// paragraph inside a nested control or a table of the control has no such
+/// position and returns `None`.
+fn direct_control_paragraph_ordinal(control: &CT_Sdt, index: usize) -> Option<usize> {
+    let mut remaining = index;
+    let mut ordinal = 0usize;
+    for child in &control.content {
+        let count = match child {
+            SdtContent::Paragraph(_) => {
+                if remaining == 0 {
+                    return Some(ordinal);
+                }
+                ordinal += 1;
+                1
+            }
+            SdtContent::Table(table) => paragraph_count_in_table(table),
+            SdtContent::Row(row) => paragraph_count_in_row(row),
+            SdtContent::Cell(cell) => paragraph_count_in_cell(cell),
+            SdtContent::ContentControl(control) => paragraph_count_in_control(control),
+            SdtContent::Run(_) | SdtContent::RawXml(_) => 0,
+        };
+        if remaining < count {
+            return None;
+        }
+        remaining -= count;
     }
     None
 }
@@ -15198,14 +15237,21 @@ impl Document {
             StoryKind::Body => {
                 match (self.document.body.content.get_mut(paragraph_slot), ordinal) {
                     (Some(BodyContent::Paragraph(paragraph)), None) => Ok(paragraph),
-                    (Some(BodyContent::ContentControl(control)), Some(mut remaining)) => {
-                        nth_paragraph_in_control(control, &mut remaining).ok_or_else(|| {
-                            Error::Other(format!(
-                                "comment content control has no paragraph {}",
-                                ordinal.unwrap_or_default()
-                            ))
+                    // The ordinal counts the paragraphs placed directly in
+                    // the control's content, as the story paths do.
+                    (Some(BodyContent::ContentControl(control)), Some(ordinal)) => control
+                        .content
+                        .iter_mut()
+                        .filter_map(|child| match child {
+                            SdtContent::Paragraph(paragraph) => Some(paragraph),
+                            _ => None,
                         })
-                    }
+                        .nth(ordinal)
+                        .ok_or_else(|| {
+                            Error::Other(format!(
+                                "comment content control has no paragraph {ordinal}"
+                            ))
+                        }),
                     _ => Err(Error::Other("comment body paragraph is missing".to_owned())),
                 }
             }
@@ -15795,9 +15841,11 @@ impl Document {
     /// Besides the one-segment paths of [`Self::story_item_snapshots`], this
     /// resolves the two-segment path `[control, paragraph]` of a paragraph
     /// inside a block content control, as [`Self::paragraph_story_location`]
-    /// and comment anchors return it. Such an item carries its accepted-view
-    /// text and exact XML like a direct paragraph, the direct body index of
-    /// its control, and is not a direct child of its owner.
+    /// and comment anchors return it. Such an item carries its story-item
+    /// text and exact XML as a direct paragraph item does (story-item text
+    /// leaves out tabs and breaks, so it can differ from `Paragraph::text`),
+    /// the direct body index of its control, and is not a direct child of
+    /// its owner.
     pub fn story_item_snapshot(&self, location: &ContentLocation) -> Result<StoryItemSnapshot> {
         if location.is_end {
             return Err(StoryError::InvalidPath {
@@ -18515,7 +18563,10 @@ impl Document {
     /// its own, has a two-segment path: the control's story item index, then
     /// the paragraph's position among the control's paragraphs. Only
     /// [`Self::add_story_comment`] accepts the two-segment form. Returns
-    /// `None` when the index is out of range.
+    /// `None` when the index is out of range, and for a paragraph that sits
+    /// deeper in a block content control than a two-segment path reaches,
+    /// such as one inside a nested content control or a table of the
+    /// control.
     pub fn paragraph_story_location(
         &self,
         paragraph_index: usize,
@@ -18529,7 +18580,15 @@ impl Document {
                 BodyContent::Table(_) | BodyContent::RawXml(_) => 0,
             };
             if remaining < count {
-                let ordinal = matches!(child, BodyContent::ContentControl(_)).then_some(remaining);
+                let ordinal = match child {
+                    BodyContent::ContentControl(control) => {
+                        match direct_control_paragraph_ordinal(control, remaining) {
+                            Some(ordinal) => Some(ordinal),
+                            None => return Ok(None),
+                        }
+                    }
+                    _ => None,
+                };
                 target = Some((slot, ordinal));
                 break;
             }

@@ -1857,7 +1857,12 @@ impl PyDocument {
             .inner
             .paragraph_story_location(paragraph_index)
             .map_err(|error| rdocx_to_pyerr(py, error))?
-            .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
+            .ok_or_else(|| {
+                PyIndexError::new_err(
+                    "paragraph has no story location: it sits in a content control or table \
+                     nested inside a block content control",
+                )
+            })?;
         document.story_item_snapshot(py, &location)
     }
 

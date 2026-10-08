@@ -390,10 +390,14 @@ at the revision of that listing: a later structural change makes the first
 access raise `StaleElementError`, and a document whose anchors cannot be read
 gives `None` rather than raising. A position inside a block content control
 has the two-segment path, the control's direct body index, and the
-paragraph's accepted-view text and XML, read through the Rust
-`Document::story_item_snapshot`, which resolves one location of either path
-length. `story_items` keeps listing the control, not its paragraphs: a
-`Paragraph` handle already reaches them through `StoryRunPosition`.
+paragraph's story-item text and XML, as a direct paragraph item has them,
+read through the Rust `Document::story_item_snapshot`, which resolves one
+location of either path length. `story_items` keeps listing the control, not
+its paragraphs: a `Paragraph` handle already reaches the paragraphs placed
+directly in the control through `StoryRunPosition`. A paragraph deeper in
+the control, in a nested content control or a table, has no story location:
+`Document::paragraph_story_location` returns `None` for it and
+`StoryRunPosition(paragraph=...)` raises `IndexError`.
 `Comment` equality covers the thread fields, not the anchor.
 `Document.move_comment` takes either range form and
 `Document.move_comment_to_text` mirrors `add_comment_on_text`. Both keep the

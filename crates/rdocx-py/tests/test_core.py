@@ -2952,6 +2952,49 @@ def test_nested_paragraph_story_items_carry_text_and_xml():
     assert b"Inside a block" in position.item.xml
 
 
+def test_paragraph_handle_comments_land_on_that_paragraph_of_a_block_control():
+    """A paragraph handle in a block content control maps to that exact
+    paragraph; one in a nested control or table has no story location."""
+    import rdocx
+
+    document = _replace_document_body(
+        rdocx.Document(),
+        "<w:p><w:r><w:t>Alpha.</w:t></w:r></w:p>"
+        "<w:sdt><w:sdtContent>"
+        "<w:p><w:r><w:t>p1</w:t></w:r></w:p>"
+        "<w:sdt><w:sdtContent><w:p><w:r><w:t>p2</w:t></w:r></w:p>"
+        "</w:sdtContent></w:sdt>"
+        "<w:p><w:r><w:t>p3</w:t></w:r></w:p>"
+        '<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid>'
+        "<w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+        "<w:p><w:r><w:t>p5</w:t></w:r></w:p>"
+        "</w:sdtContent></w:sdt>",
+    )
+    paragraphs = {paragraph.text: paragraph for paragraph in document.paragraphs}
+    for text in ("p2", "cell"):
+        with pytest.raises(IndexError, match="no story location"):
+            rdocx.StoryRunPosition(paragraph=paragraphs[text], run_index=0)
+    for text in ("p1", "p3", "p5"):
+        position = rdocx.StoryRunPosition(paragraph=paragraphs[text], run_index=0)
+        assert position.item.text == text
+    paragraph = paragraphs["p3"]
+    comment_id = document.add_comment(
+        rdocx.StoryRunRange(
+            start=rdocx.StoryRunPosition(paragraph=paragraph, run_index=0),
+            end=rdocx.StoryRunPosition(paragraph=paragraph, run_index=1),
+        ),
+        author="Ada",
+        text="Here",
+    )
+    xml = _document_xml(document).decode()
+    start = xml.index(f'commentRangeStart w:id="{comment_id}"')
+    end = xml.index(f'commentRangeEnd w:id="{comment_id}"')
+    assert re.findall(r"<w:t[^>]*>([^<]*)</w:t>", xml[start:end]) == ["p3"]
+    [comment] = rdocx.Document.from_bytes(document.to_bytes()).comments
+    assert comment.anchor_text == "p3"
+    assert comment.anchor.start.item.text == "p3"
+
+
 # GitHub issue #172: a run index read from Paragraph.runs anchors on that run,
 # including the runs inside an inline content control.
 _INLINE_CONTROL_PARAGRAPH = (
