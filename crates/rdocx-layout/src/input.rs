@@ -165,6 +165,10 @@ pub struct LayoutInput {
     /// Whether the document's `w:compatibilityMode` is 15 or later, where Word
     /// moves a tab stop past the right margin to the end of its line.
     pub clamp_tabs_past_margin: bool,
+    /// Whether the document's `w:compatibilityMode` is below 15 or absent,
+    /// where Word puts a top-level table's first cell text, not its edge, at
+    /// the table indent.
+    pub outdent_tables_by_cell_margin: bool,
     /// Whether `w:mirrorMargins` makes even displayed pages swap their inside
     /// and outside margins.
     pub mirror_margins: bool,

@@ -431,6 +431,7 @@ pub fn layout_table(
         &WordStory::Document,
         &[],
         doc_grid,
+        true,
     )
     .map(|(block, _)| block)
 }
@@ -462,6 +463,7 @@ pub(crate) fn layout_table_with_provenance(
         story,
         path,
         doc_grid,
+        true,
     )
 }
 
@@ -479,15 +481,12 @@ fn layout_table_inner(
     story: &WordStory,
     path: &[usize],
     doc_grid: Option<&CT_DocGrid>,
+    top_level: bool,
 ) -> Result<(TableBlock, TableSemantics)> {
     let direct_width = tbl
         .properties
         .as_ref()
         .is_some_and(|properties| properties.width.is_some());
-    let direct_alignment = tbl
-        .properties
-        .as_ref()
-        .is_some_and(|properties| properties.jc.is_some());
     let mut resolved_table = tbl.clone();
     let mut resolved_properties = resolve_base_table_properties(tbl, styles);
     // The authored width type, captured before the direct width is dropped
@@ -500,9 +499,6 @@ fn layout_table_inner(
         .map(|width| width.width_type.clone());
     if direct_width {
         resolved_properties.width = None;
-    }
-    if direct_alignment {
-        resolved_properties.jc = None;
     }
     resolved_table.properties = Some(resolved_properties);
     let tbl = &resolved_table;
@@ -575,16 +571,18 @@ fn layout_table_inner(
             None
         });
 
-    // Default cell margins
+    // Default cell margins. A side that neither the table nor its style
+    // chain sets has none: Word's usual 108 twips come from the `Normal
+    // Table` style a Word document carries, not from Word itself.
     let default_cell_margin = tbl.properties.as_ref().and_then(|p| p.cell_margin.as_ref());
     let cell_margin_left = default_cell_margin
         .and_then(|m| m.left)
         .map(|t| t.to_pt())
-        .unwrap_or(5.4); // Word default ~108 twips
+        .unwrap_or(0.0);
     let cell_margin_right = default_cell_margin
         .and_then(|m| m.right)
         .map(|t| t.to_pt())
-        .unwrap_or(5.4);
+        .unwrap_or(0.0);
     let cell_margin_top = default_cell_margin
         .and_then(|m| m.top)
         .map(|t| t.to_pt())
@@ -936,6 +934,21 @@ fn layout_table_inner(
         restart.border_band_bottom = table_bottom_band(last_row);
         restart.clip_content = required > restart.merged_height;
     }
+
+    // Before Word 2013 a table's first cell text, not its edge, sits at the
+    // indent, and a right-aligned table reaches past the margin by its last
+    // cell's right margin. A centred, nested or floating table does not move.
+    let outdent_row = rows
+        .first()
+        .filter(|_| top_level && input.outdent_tables_by_cell_margin && !bidi_visual)
+        .filter(|_| floating.is_none());
+    let table_indent = match (outdent_row, tbl.properties.as_ref().and_then(|p| p.jc)) {
+        (None, _) | (_, Some(ST_Jc::Center)) => table_indent,
+        (Some(row), Some(ST_Jc::Right | ST_Jc::End)) => {
+            table_indent + row.cells.last().map_or(0.0, |cell| cell.margin_right)
+        }
+        (Some(row), _) => table_indent - row.cells.first().map_or(0.0, |cell| cell.margin_left),
+    };
 
     Ok((
         TableBlock {
@@ -1716,6 +1729,7 @@ fn layout_cell_content(
                     story,
                     &source_path,
                     doc_grid,
+                    false,
                 )?;
                 blocks.push(CellBlock::Table(nested));
                 semantics.push(CellBlockSemantics::Table(nested_semantics));
@@ -1821,6 +1835,7 @@ fn layout_control_cell_content(
                     story,
                     &source_path,
                     doc_grid,
+                    false,
                 )?;
                 blocks.push(CellBlock::Table(nested));
                 semantics.push(CellBlockSemantics::Table(nested_semantics));
@@ -2196,6 +2211,7 @@ mod tests {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
+            outdent_tables_by_cell_margin: false,
             math_properties: None,
             note_defaults: [None, None],
             document: rdocx_oxml::document::CT_Document {
@@ -2390,6 +2406,7 @@ mod tests {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
+            outdent_tables_by_cell_margin: false,
             math_properties: None,
             note_defaults: [None, None],
             document: rdocx_oxml::document::CT_Document {

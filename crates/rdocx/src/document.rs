@@ -26122,6 +26122,19 @@ impl Document {
             &headers.keys().cloned().collect(),
             &footers.keys().cloned().collect(),
         );
+        // Word 2013 layout, `w:compatibilityMode` 15 or later. An absent
+        // mode is an older one.
+        let word_2013_layout = self.settings.as_ref().is_some_and(|settings| {
+            settings.compatibility_settings().iter().any(|setting| {
+                setting.name == "compatibilityMode"
+                    && setting.uri == "http://schemas.microsoft.com/office/word"
+                    && setting
+                        .value
+                        .trim()
+                        .parse::<u32>()
+                        .is_ok_and(|mode| mode >= 15)
+            })
+        });
 
         LayoutInput {
             revision_view: rdocx_layout::RevisionView::Accepted,
@@ -26134,17 +26147,8 @@ impl Document {
                 .settings
                 .as_ref()
                 .and_then(CT_Settings::default_tab_stop),
-            clamp_tabs_past_margin: self.settings.as_ref().is_some_and(|settings| {
-                settings.compatibility_settings().iter().any(|setting| {
-                    setting.name == "compatibilityMode"
-                        && setting.uri == "http://schemas.microsoft.com/office/word"
-                        && setting
-                            .value
-                            .trim()
-                            .parse::<u32>()
-                            .is_ok_and(|mode| mode >= 15)
-                })
-            }),
+            clamp_tabs_past_margin: word_2013_layout,
+            outdent_tables_by_cell_margin: !word_2013_layout,
             mirror_margins: self
                 .settings
                 .as_ref()

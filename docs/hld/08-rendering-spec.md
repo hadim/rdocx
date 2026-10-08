@@ -979,8 +979,16 @@ tokens differ in layout only as cell borders, and both draw no line elsewhere.
 
 A table without an explicit style uses the authored default table style.
 Its modeled base width, alignment, indent, borders, shading, look, and cell
-margins resolve base-first before direct table and cell overlays. Existing
-direct width and alignment behavior remains unchanged.
+margins resolve base-first before direct table and cell overlays. A direct
+`w:jc` overrides the style's alignment, so a table's own `center`, `right` or
+`end` places it as a style-supplied value does. Existing direct width behavior
+remains unchanged. A left or right cell margin that neither the table nor its
+style chain sets is zero, because Word's usual 108 twips come from the `Normal
+Table` style a Word document carries. Below `w:compatibilityMode` 15, or with
+none, a top-level table that is not floating or right-to-left starts one first
+cell left margin before its indent, so that cell's text sits at the indent, and
+a right-aligned one reaches one last cell right margin past the right margin,
+as Word places them. A centred table and a nested one do not move.
 The direct table facade can author auto, fixed, and percentage width modes,
 left indentation, fixed or autofit layout, shading, aggregate or individual
 borders, default cell margins, conditional look flags, and the complete active
