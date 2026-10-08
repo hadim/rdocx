@@ -2894,6 +2894,64 @@ def test_story_comment_after_a_block_content_control_anchors_on_its_paragraph():
     ]
 
 
+def test_nested_paragraph_story_items_carry_text_and_xml():
+    """GitHub issue #289: the item of a paragraph inside a block content
+    control carries its text and XML, from a comment anchor or a handle."""
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("Plain paragraph.")
+    document.add_paragraph("Inside a block content control.")
+    source = zipfile.ZipFile(io.BytesIO(document.to_bytes()))
+    xml = source.read("word/document.xml").decode()
+    start = xml.index("<w:p>", xml.index("Plain paragraph."))
+    end = xml.index("</w:p>", start) + len("</w:p>")
+    xml = (
+        xml[:start]
+        + '<w:sdt><w:sdtPr><w:tag w:val="block"/></w:sdtPr><w:sdtContent>'
+        + xml[start:end]
+        + "</w:sdtContent></w:sdt>"
+        + xml[end:]
+    )
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as package:
+        for info in source.infolist():
+            package.writestr(
+                info,
+                xml
+                if info.filename == "word/document.xml"
+                else source.read(info.filename),
+            )
+    document = rdocx.Document.from_bytes(out.getvalue())
+    # story_items keeps listing the control, not the paragraph inside it.
+    assert [
+        (item.kind, item.index_path) for item in document.story_items[:2]
+    ] == [("paragraph", (0,)), ("content_control", (1,))]
+
+    document.add_comment_on_text(
+        "Inside a block", author="A", text="c", date="2026-10-08T12:00:00Z"
+    )
+    [comment] = rdocx.Document.from_bytes(document.to_bytes()).comments
+    assert comment.anchor_text == "Inside a block"
+    for item in (comment.anchor.start.item, comment.anchor.end.item):
+        assert (item.story.kind, item.kind, item.index_path) == (
+            "body",
+            "paragraph",
+            (1, 0),
+        )
+        assert item.text == "Inside a block content control."
+        assert item.xml.startswith(b"<w:p") and item.xml.endswith(b"</w:p>")
+        assert b"Inside a block" in item.xml
+        assert item.direct_body_index == 1
+
+    # A Paragraph handle reaches the same item.
+    paragraph = document.paragraphs[1]
+    position = rdocx.StoryRunPosition(paragraph=paragraph, run_index=0)
+    assert position.item.index_path == (1, 0)
+    assert position.item.text == paragraph.text
+    assert b"Inside a block" in position.item.xml
+
+
 # GitHub issue #172: a run index read from Paragraph.runs anchors on that run,
 # including the runs inside an inline content control.
 _INLINE_CONTROL_PARAGRAPH = (

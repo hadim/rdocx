@@ -2817,6 +2817,89 @@ mod block_control_comment_positions {
         assert!(document.paragraph_story_location(4).unwrap().is_none());
     }
 
+    /// GitHub issue #289: the story item of a paragraph inside a block
+    /// content control carries its text and XML, as a direct paragraph does,
+    /// whether it comes from a paragraph location or a comment anchor.
+    #[test]
+    fn nested_paragraph_story_items_carry_text_and_xml() {
+        let mut document = super::document_with_content_controls(&super::wrap_word_body(BODY));
+        let snapshots = document.story_item_snapshots().unwrap();
+        let control = snapshots
+            .iter()
+            .find(|item| item.location().item_kind() == StoryItemKind::ContentControl)
+            .unwrap();
+
+        let alpha = document.paragraph_story_location(0).unwrap().unwrap();
+        let direct = document.story_item_snapshot(&alpha).unwrap();
+        let listed = snapshots
+            .iter()
+            .find(|item| item.location() == &alpha)
+            .unwrap();
+        assert_eq!(direct.text(), listed.text());
+        assert_eq!(direct.xml(), listed.xml());
+        assert_eq!(direct.direct_body_index(), listed.direct_body_index());
+        assert!(direct.is_direct_child());
+
+        for (paragraph_index, text) in [(1, "Control one."), (2, "Control two.")] {
+            let location = document
+                .paragraph_story_location(paragraph_index)
+                .unwrap()
+                .unwrap();
+            assert_eq!(location.index_path().len(), 2);
+            let item = document.story_item_snapshot(&location).unwrap();
+            assert_eq!(item.location(), &location);
+            assert_eq!(item.text(), Some(text));
+            assert_eq!(
+                Some(document.paragraph(paragraph_index).unwrap().text().as_str()),
+                item.text()
+            );
+            let xml = std::str::from_utf8(item.xml()).unwrap();
+            assert!(xml.starts_with("<w:p>") && xml.ends_with("</w:p>"), "{xml}");
+            assert!(xml.contains(text), "{xml}");
+            assert_eq!(item.direct_body_index(), control.direct_body_index());
+            assert!(!item.is_direct_child());
+        }
+
+        let location = document.paragraph_story_location(2).unwrap().unwrap();
+        let id = comment_on(&mut document, &location).unwrap();
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let anchors = reopened.comment_anchors().unwrap();
+        let range = anchors[&id].range().unwrap();
+        for position in [&range.start, &range.end] {
+            assert_eq!(position.location.index_path().len(), 2);
+            let item = reopened.story_item_snapshot(&position.location).unwrap();
+            assert_eq!(item.text(), Some("Control two."));
+            assert!(
+                std::str::from_utf8(item.xml())
+                    .unwrap()
+                    .contains("Control two.")
+            );
+        }
+
+        // End locations and paths that do not name a nested paragraph fail.
+        let story = location.story().clone();
+        assert!(
+            document
+                .story_item_snapshot(&ContentLocation::end(story.clone()))
+                .is_err()
+        );
+        for (kind, path) in [
+            (StoryItemKind::Paragraph, vec![alpha.index_path()[0], 0]),
+            (StoryItemKind::Paragraph, vec![location.index_path()[0], 9]),
+            (
+                StoryItemKind::ContentControl,
+                location.index_path().to_vec(),
+            ),
+            (
+                StoryItemKind::Paragraph,
+                vec![location.index_path()[0], 0, 0],
+            ),
+        ] {
+            let location = ContentLocation::new(story.clone(), kind, path.clone());
+            assert!(document.story_item_snapshot(&location).is_err(), "{path:?}");
+        }
+    }
+
     #[test]
     fn two_segment_positions_must_name_a_paragraph_of_a_block_control() {
         let mut document = super::document_with_content_controls(&super::wrap_word_body(BODY));

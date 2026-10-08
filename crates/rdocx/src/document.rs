@@ -6356,6 +6356,58 @@ fn content_fragment_root_is_section_properties(xml: &[u8], item: &StoryItemSpan)
     }
 }
 
+/// Resolve a one-segment story item path, or the two-segment path
+/// `[control, paragraph]` of a paragraph inside a block content control.
+fn story_location_span(
+    xml: &[u8],
+    owner: &StoryOwnerSpan,
+    location: &ContentLocation,
+) -> Result<StoryItemSpan> {
+    let items = scan_story_items(xml, owner)?;
+    let item_at = |index: usize, expected: StoryItemKind| -> Result<&StoryItemSpan> {
+        let item = items.get(index).ok_or(StoryError::OutOfBounds {
+            index,
+            len: items.len(),
+        })?;
+        if item.kind != expected {
+            return Err(StoryError::KindMismatch {
+                expected,
+                actual: item.kind,
+            }
+            .into());
+        }
+        Ok(item)
+    };
+    match location.index_path.as_slice() {
+        [index] => item_at(*index, location.item_kind).cloned(),
+        [control_index, paragraph_index] if location.item_kind == StoryItemKind::Paragraph => {
+            let control = item_at(*control_index, StoryItemKind::ContentControl)?;
+            let paragraphs = scan_story_control_paragraphs(xml, control)?;
+            let full =
+                paragraphs
+                    .get(*paragraph_index)
+                    .cloned()
+                    .ok_or(StoryError::OutOfBounds {
+                        index: *paragraph_index,
+                        len: paragraphs.len(),
+                    })?;
+            Ok(StoryItemSpan {
+                kind: StoryItemKind::Paragraph,
+                scan: full.clone(),
+                full,
+                direct_owner_child: false,
+                complex_field: false,
+                complex_ancestors: Vec::new(),
+                sdt_context: None,
+            })
+        }
+        _ => Err(StoryError::InvalidPath {
+            path: location.index_path.clone(),
+        }
+        .into()),
+    }
+}
+
 fn direct_story_content_items(xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<StoryItemSpan>> {
     let mut items = Vec::new();
     for item in scan_story_items(xml, owner)? {
@@ -15516,19 +15568,7 @@ impl Document {
             }
             .into());
         }
-        let items = scan_story_items(source.xml.as_ref(), &owner)?;
-        let index = location.index_path[0];
-        let item = items.get(index).cloned().ok_or(StoryError::OutOfBounds {
-            index,
-            len: items.len(),
-        })?;
-        if item.kind != location.item_kind {
-            return Err(StoryError::KindMismatch {
-                expected: location.item_kind,
-                actual: item.kind,
-            }
-            .into());
-        }
+        let item = story_location_span(source.xml.as_ref(), &owner, location)?;
         Ok((source, item))
     }
 
@@ -15536,50 +15576,9 @@ impl Document {
         &'a self,
         location: &ContentLocation,
     ) -> Result<(StorySource<'a>, StoryItemSpan)> {
-        if location.index_path.len() == 1 {
-            return self.story_item_source(location);
-        }
-        if location.index_path.len() != 2 || location.item_kind != StoryItemKind::Paragraph {
-            return Err(StoryError::InvalidPath {
-                path: location.index_path.clone(),
-            }
-            .into());
-        }
         let (source, owner) = self.story_source_and_owner(&location.story)?;
-        let items = scan_story_items(source.xml.as_ref(), &owner)?;
-        let control_index = location.index_path[0];
-        let control = items.get(control_index).ok_or(StoryError::OutOfBounds {
-            index: control_index,
-            len: items.len(),
-        })?;
-        if control.kind != StoryItemKind::ContentControl {
-            return Err(StoryError::KindMismatch {
-                expected: StoryItemKind::ContentControl,
-                actual: control.kind,
-            }
-            .into());
-        }
-        let paragraphs = scan_story_control_paragraphs(source.xml.as_ref(), control)?;
-        let paragraph_index = location.index_path[1];
-        let full = paragraphs
-            .get(paragraph_index)
-            .cloned()
-            .ok_or(StoryError::OutOfBounds {
-                index: paragraph_index,
-                len: paragraphs.len(),
-            })?;
-        Ok((
-            source,
-            StoryItemSpan {
-                kind: StoryItemKind::Paragraph,
-                scan: full.clone(),
-                full,
-                direct_owner_child: false,
-                complex_field: false,
-                complex_ancestors: Vec::new(),
-                sdt_context: None,
-            },
-        ))
+        let item = story_location_span(source.xml.as_ref(), &owner, location)?;
+        Ok((source, item))
     }
 
     /// Traverse one story's supported content without constructing a second
@@ -15789,6 +15788,48 @@ impl Document {
             }
         }
         Ok(snapshots)
+    }
+
+    /// Materialize the story item at one checked location.
+    ///
+    /// Besides the one-segment paths of [`Self::story_item_snapshots`], this
+    /// resolves the two-segment path `[control, paragraph]` of a paragraph
+    /// inside a block content control, as [`Self::paragraph_story_location`]
+    /// and comment anchors return it. Such an item carries its accepted-view
+    /// text and exact XML like a direct paragraph, the direct body index of
+    /// its control, and is not a direct child of its owner.
+    pub fn story_item_snapshot(&self, location: &ContentLocation) -> Result<StoryItemSnapshot> {
+        if location.is_end {
+            return Err(StoryError::InvalidPath {
+                path: location.index_path.clone(),
+            }
+            .into());
+        }
+        let (source, owner) = self.story_source_and_owner(&location.story)?;
+        let xml = source.xml.as_ref();
+        let item = story_location_span(xml, &owner, location)?;
+        let direct_body_index = if owner.kind == StoryKind::Body {
+            direct_story_content_items(xml, &owner)?
+                .iter()
+                .position(|direct| {
+                    direct.full.start <= item.full.start && item.full.end <= direct.full.end
+                })
+        } else {
+            None
+        };
+        let text = story_item_text(xml, &item)?;
+        let item_xml = if item.complex_field {
+            complex_story_field_xml(xml, &item)?
+        } else {
+            xml[item.full.clone()].to_vec()
+        };
+        Ok(StoryItemSnapshot {
+            location: location.clone(),
+            direct_body_index,
+            direct_child: location.index_path.len() == 1 && item.direct_owner_child,
+            text,
+            xml: item_xml,
+        })
     }
 
     fn story_link_info(
