@@ -3384,6 +3384,36 @@ def test_removing_commented_content_never_leaves_a_comment_without_anchor():
     assert len(_anchored_comment_ids(document)) == 3
 
 
+def test_replacing_a_commented_header_removes_its_thread():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("body")
+    document.set_header("Draft")
+    header_item = next(
+        item
+        for item in document.story_items
+        if item.story.kind == "header" and item.kind == "paragraph"
+    )
+    comment_id = document.add_comment(
+        rdocx.StoryRunRange(
+            start=rdocx.StoryRunPosition(item=header_item, run_index=0),
+            end=rdocx.StoryRunPosition(item=header_item, run_index=1),
+        ),
+        author="A",
+        text="Is this header final?",
+    )
+    document.reply_to(comment_id, author="B", text="Not yet.")
+    document = rdocx.Document.from_bytes(document.to_bytes())
+    assert len(document.comments) == 2
+
+    document.set_header("Final")
+    assert document.comments == ()
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert reopened.comments == ()
+    assert _story_paragraph_texts(reopened, "header") == ["Final"]
+
+
 def test_move_comment_keeps_its_thread_and_drops_empty_google_wrappers():
     import rdocx
 

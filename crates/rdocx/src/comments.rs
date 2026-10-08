@@ -2105,6 +2105,76 @@ impl Document {
         Ok(ids)
     }
 
+    /// Return the ids of the comments marked in a story before a staged
+    /// call removes or replaces whole stories, or `None` when the document
+    /// defines no comment.
+    pub(crate) fn marked_comments_before_story_removal(&self) -> Result<Option<HashSet<i32>>> {
+        if self
+            .comments
+            .as_ref()
+            .is_none_or(|comments| comments.comments.is_empty())
+        {
+            return Ok(None);
+        }
+        self.comment_marker_ids().map(Some)
+    }
+
+    /// Remove each comment of `marked_before` that a staged call removing or
+    /// replacing whole stories left with no marker in any story, with its
+    /// replies and rows, as [`Self::remove_comment`] does. A story part
+    /// that another section still references keeps its markers, so its
+    /// comments stay. Return whether a comment was removed.
+    pub(crate) fn remove_comments_of_removed_stories_staged(
+        &mut self,
+        marked_before: Option<HashSet<i32>>,
+    ) -> Result<bool> {
+        let Some(marked_before) = marked_before else {
+            return Ok(false);
+        };
+        let marked_after = self.comment_marker_ids()?;
+        let mut gone = marked_before
+            .difference(&marked_after)
+            .copied()
+            .collect::<Vec<_>>();
+        gone.sort_unstable();
+        let mut removed = false;
+        for id in gone {
+            removed |= self.remove_comment_staged(id)?;
+        }
+        Ok(removed)
+    }
+
+    /// Return, in id order, the comments marked in `removed`, a byte range
+    /// of `xml`, that no marker outside it and no marker in a story names.
+    /// `xml` is a part that is not a story, such as a glossary document.
+    pub(crate) fn comments_marked_only_in(
+        &self,
+        xml: &[u8],
+        removed: Range<usize>,
+    ) -> Result<Vec<i32>> {
+        if self
+            .comments
+            .as_ref()
+            .is_none_or(|comments| comments.comments.is_empty())
+            || !mentions_comment_markers(&xml[removed.clone()])
+        {
+            return Ok(Vec::new());
+        }
+        let mut elsewhere = self.comment_marker_ids()?;
+        let mut inside = BTreeSet::new();
+        for marker in scan_comment_markers(xml)? {
+            if removed.start <= marker.span.start && marker.span.end <= removed.end {
+                inside.insert(marker.id);
+            } else {
+                elsewhere.insert(marker.id);
+            }
+        }
+        Ok(inside
+            .into_iter()
+            .filter(|id| !elsewhere.contains(id))
+            .collect())
+    }
+
     fn story_part_xml(&self, part_name: &str) -> Result<Vec<u8>> {
         if part_name == self.doc_part_name {
             return Ok(self.document.to_xml()?);

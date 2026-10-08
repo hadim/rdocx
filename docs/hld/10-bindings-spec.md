@@ -404,7 +404,8 @@ the control, in a nested content control or a table, has no story location:
 comment's id, text, replies and resolved state, refuse a reply id, and advance
 the revision once. `remove_content`, `pop_content` and `Table.remove_row`
 never leave a comment without an anchor, and `insert_content` restores the
-threads a popped fragment carries.
+threads a popped fragment carries. `Document.set_header` and
+`Document.set_footer` remove the threads anchored in the story they replace.
 `Comment`, `ComparisonDiagnostic`, `BoundingBox`, `LayoutFragment`,
 `LayoutPage`, `TocRebuildReport`, and `Revision` are frozen typed snapshots.
 `Document.revisions` lists the revisions of every story that the accept and

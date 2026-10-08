@@ -1766,6 +1766,19 @@ then cuts the remaining ones from each story source, including markers inside
 tracked insertions, hyperlinks and fields, with the reference runs and the
 Google Docs `goog_rdk` content controls left holding nothing.
 
+Removing or replacing a whole story settles its comments the same way.
+`remove_footnote`, `remove_endnote`, `remove_section_story`,
+`replace_section_story`, `inherit_section_story` and every header and footer
+setter (`set_header`, `set_footer`, their first-page, image and raw variants)
+note the comments marked in any story before the change, and remove each one
+left with no marker after it through `remove_comment`'s staging, replies and
+rows included. A story part that another section still references keeps its
+markers, so its comments stay. `unlink_section_story` copies the markers with
+the story and removes nothing. `remove_building_block` removes the comments
+that only the removed entry marks: an entry built from a fragment holds the
+markers of the comments the fragment carried, whose definitions live in the
+main document's comments part.
+
 Checked picture insertion uses the same story owner and package relationship
 scope. `insert_picture_to_story` accepts bytes, a safe filename, paired
 explicit dimensions or native 72 DPI sizing, and an optional direct item after

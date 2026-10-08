@@ -17975,11 +17975,19 @@ impl Document {
     }
 
     /// Remove a normal footnote and every matching reference in the main body.
+    ///
+    /// A comment whose range lies in the footnote goes with it, with its
+    /// replies and its `commentsExtended`, `commentsIds` and
+    /// `commentsExtensible` rows, as [`Self::remove_comment`] removes it.
     pub fn remove_footnote(&mut self, id: i32) -> Result<()> {
         self.remove_note(StoryKind::Footnote, id)
     }
 
     /// Remove a normal endnote and every matching reference in the main body.
+    ///
+    /// A comment whose range lies in the endnote goes with it, with its
+    /// replies and its `commentsExtended`, `commentsIds` and
+    /// `commentsExtensible` rows, as [`Self::remove_comment`] removes it.
     pub fn remove_endnote(&mut self, id: i32) -> Result<()> {
         self.remove_note(StoryKind::Endnote, id)
     }
@@ -17995,6 +18003,7 @@ impl Document {
             .ok_or_else(|| Error::Other(format!("{label} ID {id} does not exist")))?;
         let mut candidate = self.clone_for_staging();
         candidate.flush_to_package()?;
+        let marked = candidate.marked_comments_before_story_removal()?;
         let part_name = story.part_name.clone();
         let mut notes_xml = candidate
             .package
@@ -18016,6 +18025,7 @@ impl Document {
         let document_part = candidate.doc_part_name.clone();
         set_story_source_xml(&mut candidate, &document_part, without_references)?;
         set_story_source_xml(&mut candidate, &part_name, notes_xml)?;
+        candidate.remove_comments_of_removed_stories_staged(marked)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
         Ok(())
@@ -19273,6 +19283,11 @@ impl Document {
     ///
     /// Creates a header part with the given text and references it from
     /// the section properties.
+    ///
+    /// The previous story of that variant is replaced, and the comments whose
+    /// range lay in it go with it, with their replies and their
+    /// `commentsExtended`, `commentsIds` and `commentsExtensible` rows, as
+    /// [`Self::remove_comment`] removes them.
     pub fn set_header(&mut self, text: &str) {
         let mut candidate = self.clone_for_staging();
         candidate.invalidate_layout();
@@ -19283,6 +19298,11 @@ impl Document {
     }
 
     /// Set the default footer text.
+    ///
+    /// The previous story of that variant is replaced, and the comments whose
+    /// range lay in it go with it, with their replies and their
+    /// `commentsExtended`, `commentsIds` and `commentsExtensible` rows, as
+    /// [`Self::remove_comment`] removes them.
     pub fn set_footer(&mut self, text: &str) {
         let mut candidate = self.clone_for_staging();
         candidate.invalidate_layout();
@@ -19293,6 +19313,11 @@ impl Document {
     }
 
     /// Set the first-page header text.
+    ///
+    /// The previous story of that variant is replaced, and the comments whose
+    /// range lay in it go with it, with their replies and their
+    /// `commentsExtended`, `commentsIds` and `commentsExtensible` rows, as
+    /// [`Self::remove_comment`] removes them.
     pub fn set_first_page_header(&mut self, text: &str) {
         let mut candidate = self.clone_for_staging();
         candidate.invalidate_layout();
@@ -19304,6 +19329,11 @@ impl Document {
     }
 
     /// Set the first-page footer text.
+    ///
+    /// The previous story of that variant is replaced, and the comments whose
+    /// range lay in it go with it, with their replies and their
+    /// `commentsExtended`, `commentsIds` and `commentsExtensible` rows, as
+    /// [`Self::remove_comment`] removes them.
     pub fn set_first_page_footer(&mut self, text: &str) {
         let mut candidate = self.clone_for_staging();
         candidate.invalidate_layout();
@@ -19337,6 +19367,11 @@ impl Document {
     ///
     /// Creates a header part with an image paragraph. The image is embedded
     /// in the header part's relationships.
+    ///
+    /// The previous story of that variant is replaced, and the comments whose
+    /// range lay in it go with it, with their replies and their
+    /// `commentsExtended`, `commentsIds` and `commentsExtensible` rows, as
+    /// [`Self::remove_comment`] removes them.
     pub fn set_header_image(
         &mut self,
         image_data: &[u8],
@@ -19670,6 +19705,11 @@ impl Document {
     }
 
     /// Set the default footer to an inline image.
+    ///
+    /// The previous story of that variant is replaced, and the comments whose
+    /// range lay in it go with it, with their replies and their
+    /// `commentsExtended`, `commentsIds` and `commentsExtensible` rows, as
+    /// [`Self::remove_comment`] removes them.
     pub fn set_footer_image(
         &mut self,
         image_data: &[u8],
@@ -19702,6 +19742,11 @@ impl Document {
     /// - `rel_id`: the relationship ID referenced in the header XML (e.g. "rId1")
     /// - `image_data`: the raw image bytes
     /// - `image_filename`: used to derive the part name and content type (e.g. "image5.png")
+    ///
+    /// The previous story of that variant is replaced, and the comments whose
+    /// range lay in it go with it, with their replies and their
+    /// `commentsExtended`, `commentsIds` and `commentsExtensible` rows, as
+    /// [`Self::remove_comment`] removes them.
     pub fn set_raw_header_with_images(
         &mut self,
         header_xml: Vec<u8>,
@@ -19717,6 +19762,11 @@ impl Document {
     }
 
     /// Set a footer from raw XML bytes with associated images.
+    ///
+    /// The previous story of that variant is replaced, and the comments whose
+    /// range lay in it go with it, with their replies and their
+    /// `commentsExtended`, `commentsIds` and `commentsExtensible` rows, as
+    /// [`Self::remove_comment`] removes them.
     pub fn set_raw_footer_with_images(
         &mut self,
         footer_xml: Vec<u8>,
@@ -19736,6 +19786,11 @@ impl Document {
     /// Creates a header part where the paragraph has shading fill set to
     /// `bg_color` (hex string, e.g. "000000" for black) and contains the
     /// inline image.
+    ///
+    /// The previous story of that variant is replaced, and the comments whose
+    /// range lay in it go with it, with their replies and their
+    /// `commentsExtended`, `commentsIds` and `commentsExtensible` rows, as
+    /// [`Self::remove_comment`] removes them.
     pub fn set_header_image_with_background(
         &mut self,
         image_data: &[u8],
@@ -19761,6 +19816,11 @@ impl Document {
     }
 
     /// Set the first-page header to an inline image.
+    ///
+    /// The previous story of that variant is replaced, and the comments whose
+    /// range lay in it go with it, with their replies and their
+    /// `commentsExtended`, `commentsIds` and `commentsExtensible` rows, as
+    /// [`Self::remove_comment`] removes them.
     pub fn set_first_page_header_image(
         &mut self,
         image_data: &[u8],
@@ -19821,6 +19881,9 @@ impl Document {
     /// relate it to the document, and point the section properties at it.
     ///
     /// Any previous reference of the same [`HdrFtrType`] is replaced.
+    ///
+    /// The comments whose range lay in the replaced story go with it, with
+    /// their replies and rows, as [`Self::remove_comment`] removes them.
     fn reserve_hdr_ftr_part_name(
         &mut self,
         is_header: bool,
@@ -19864,6 +19927,9 @@ impl Document {
         hdr_type: HdrFtrType,
     ) -> Result<String> {
         let (_, rel_type, content_type) = Self::hdr_ftr_slot_metadata(is_header, hdr_type);
+        // The infallible setters keep installing the part when a story
+        // cannot be read, as before comments were settled here.
+        let marked = self.marked_comments_before_story_removal().ok().flatten();
 
         // Setting the same header twice must not leave the first relationship
         // behind pointing at the same part.
@@ -19925,6 +19991,9 @@ impl Document {
             rel_id,
         });
 
+        if self.remove_comments_of_removed_stories_staged(marked)? {
+            self.flush_dirty_related_story_models()?;
+        }
         Ok(part_name)
     }
 
@@ -22026,6 +22095,11 @@ impl Document {
 
     /// Remove the direct reference so the same variant inherits from the
     /// nearest preceding section, or remains absent when none exists.
+    ///
+    /// When no section references the story any more, the comments whose
+    /// range lies in it go with it, with their replies and their
+    /// `commentsExtended`, `commentsIds` and `commentsExtensible` rows, as
+    /// [`Self::remove_comment`] removes them.
     pub fn inherit_section_story(
         &mut self,
         section_index: usize,
@@ -22034,15 +22108,20 @@ impl Document {
     ) -> Result<()> {
         let mut candidate = self.clone_for_staging();
         candidate.flush_to_package()?;
+        let marked = candidate.marked_comments_before_story_removal()?;
         let removed =
             candidate.set_direct_section_story_reference(section_index, kind, hdr_type, None)?;
         candidate.prune_unreachable_authored_section_stories(&removed)?;
+        candidate.remove_comments_of_removed_stories_staged(marked)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
         Ok(())
     }
 
     /// Clone the effective story into an independent story owned by this section.
+    ///
+    /// The copy keeps the comment markers of the story, so its comments stay
+    /// anchored.
     pub fn unlink_section_story(
         &mut self,
         section_index: usize,
@@ -22056,6 +22135,11 @@ impl Document {
     }
 
     /// Replace one variant with an independent copy of an existing same-kind story.
+    ///
+    /// When no section references the replaced story any more, the comments
+    /// whose range lies in it go with it, with their replies and their
+    /// `commentsExtended`, `commentsIds` and `commentsExtensible` rows, as
+    /// [`Self::remove_comment`] removes them.
     pub fn replace_section_story(
         &mut self,
         section_index: usize,
@@ -22066,6 +22150,7 @@ impl Document {
         let mut candidate = self.clone_for_staging();
         candidate.flush_to_package()?;
         candidate.validate_section_story_target(source, kind)?;
+        let marked = candidate.marked_comments_before_story_removal()?;
         let part_name = candidate.clone_header_footer_story_part(source.part_name(), kind)?;
         let relationship_id = candidate.document_story_relationship(kind, &part_name)?;
         let removed = candidate.set_direct_section_story_reference(
@@ -22075,6 +22160,7 @@ impl Document {
             Some(relationship_id),
         )?;
         candidate.prune_unreachable_authored_section_stories(&removed)?;
+        candidate.remove_comments_of_removed_stories_staged(marked)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         let result = reopened
             .section_story(section_index, kind, hdr_type)?
@@ -22085,6 +22171,12 @@ impl Document {
     }
 
     /// Replace one section variant with a distinct empty story.
+    ///
+    /// When no section references the replaced story any more, the comments
+    /// whose range lies in it go with it, with their replies and their
+    /// `commentsExtended`, `commentsIds` and `commentsExtensible` rows, as
+    /// [`Self::remove_comment`] removes them. A story that another section
+    /// still references keeps its comments.
     pub fn remove_section_story(
         &mut self,
         section_index: usize,
@@ -22093,7 +22185,9 @@ impl Document {
     ) -> Result<StoryId> {
         let mut candidate = self.clone_for_staging();
         candidate.flush_to_package()?;
+        let marked = candidate.marked_comments_before_story_removal()?;
         candidate.install_empty_section_story(section_index, kind, hdr_type)?;
+        candidate.remove_comments_of_removed_stories_staged(marked)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         let result = reopened
             .section_story(section_index, kind, hdr_type)?

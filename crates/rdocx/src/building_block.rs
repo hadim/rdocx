@@ -585,9 +585,34 @@ impl Document {
     }
 
     /// Remove one snapshot-checked entry, retaining the valid glossary bundle.
+    ///
+    /// An entry created from a fragment that carried comments holds their
+    /// markers, while their definitions live in the main document's
+    /// comments part. A comment that no story and no other entry marks goes
+    /// with the entry, with its replies and its `commentsExtended`,
+    /// `commentsIds` and `commentsExtensible` rows, as
+    /// [`Self::remove_comment`] removes it.
     pub fn remove_building_block(&mut self, entry: &BuildingBlockInfo) -> Result<BuildingBlock> {
         self.checked_building_block(entry)?;
         let mut candidate = self.clone_for_staging();
+        let orphaned = if candidate
+            .comments
+            .as_ref()
+            .is_some_and(|comments| !comments.comments.is_empty())
+        {
+            candidate.prepare_staged_package()?;
+            let xml = candidate
+                .package
+                .get_part(&entry.glossary_part)
+                .ok_or_else(|| Error::Other("glossary part is missing".to_owned()))?;
+            let range = CT_GlossaryDocument::from_xml(xml)?.body_range(entry.ordinal)?;
+            candidate.comments_marked_only_in(xml, range)?
+        } else {
+            Vec::new()
+        };
+        for id in orphaned {
+            candidate.remove_comment_staged(id)?;
+        }
         candidate
             .glossary
             .as_mut()

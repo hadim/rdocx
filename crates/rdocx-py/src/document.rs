@@ -3232,11 +3232,19 @@ impl PyDocument {
             .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
+    /// Replace the default header with one paragraph of `text`.
+    ///
+    /// The comments whose range lay in the replaced header go with it, with
+    /// their replies.
     fn set_header(&mut self, text: &str) {
         self.inner.set_header(text);
         self.revisions.bump();
     }
 
+    /// Replace the default footer with one paragraph of `text`.
+    ///
+    /// The comments whose range lay in the replaced footer go with it, with
+    /// their replies.
     fn set_footer(&mut self, text: &str) {
         self.inner.set_footer(text);
         self.revisions.bump();
