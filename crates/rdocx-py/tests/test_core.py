@@ -300,6 +300,208 @@ def test_counted_replacement_checks_expected_counts_before_publishing():
             document.replace_all(pairs)
 
 
+def test_paragraph_replacement_is_counted_scoped_and_keeps_formatting_and_anchors():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("Version is locked for the build tools.")
+    paragraph = document.add_paragraph("Note: ")
+    paragraph.runs[0].font.italic = True
+    document.paragraphs[1].add_run("Version is lo")
+    document.paragraphs[1].add_run("cked").font.bold = True
+    document.paragraphs[1].add_run(" for the test tools.").font.italic = True
+    run = lambda index: rdocx.RunPosition(body_index=1, run_index=index)  # noqa: E731
+    document.add_comment(
+        rdocx.RunRange(start=run(3), end=run(4)), author="Ada", text="check the pin"
+    )
+    document.add_bookmark("clause", rdocx.RunRange(start=run(0), end=run(1)))
+    with pytest.raises(rdocx.ReplacementCountError, match="found 2"):
+        document.try_replace_text("Version is locked", "Version is pinned", expect=1)
+
+    held = document.paragraphs[1]
+    before = document.to_bytes()
+    with pytest.raises(rdocx.ReplacementCountError) as raised:
+        held.replace_text("Version is locked", "Version is pinned", expect=2)
+    assert str(raised.value) == 'expected 2 replacement(s) of "Version is locked", found 1'
+    assert (raised.value.index, raised.value.expected, raised.value.found) == (None, 2, 1)
+    with pytest.raises(rdocx.RdocxError, match="U\\+0001"):
+        held.replace_text("Version", "\x01")
+    assert held.replace_text("missing", "x") == 0
+    assert held.replace_text("missing", "x", expect=0) == 0
+    assert document.to_bytes() == before
+    assert held.text == "Note: Version is locked for the test tools."
+
+    assert held.replace_text("Version is locked", "Version is pinned", expect=1) == 1
+    with pytest.raises(rdocx.StaleElementError):
+        held.text
+    first, second = document.paragraphs
+    assert first.text == "Version is locked for the build tools."
+    assert second.text == "Note: Version is pinned for the test tools."
+    runs = [(run.text, run.font.bold, run.font.italic) for run in second.runs if run.text]
+    assert runs == [
+        ("Note: ", None, True),
+        ("Version is pinned", None, None),
+        (" for the test tools.", None, True),
+    ]
+
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert [comment.text for comment in reopened.comments] == ["check the pin"]
+    assert [bookmark.name for bookmark in reopened.bookmarks] == ["clause"]
+    xml = _document_xml(reopened)
+    for anchor in (b"commentRangeStart", b"commentRangeEnd", b"commentReference", b"bookmarkStart"):
+        assert xml.count(anchor) == 1
+
+
+def test_cell_and_cell_paragraph_replacement_is_counted_and_scoped():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("Version is locked")
+    document.add_table(1, 2)
+    document.tables[0].cell(0, 0).text = "Version is locked"
+    document.tables[0].cell(0, 1).text = "Version is locked"
+    document.tables[0].cell(0, 1).add_paragraph("Version is locked again")
+    before = document.to_bytes()
+
+    cell = document.tables[0].cell(0, 1)
+    with pytest.raises(rdocx.ReplacementCountError) as raised:
+        cell.replace_text("locked", "pinned", expect=1)
+    assert str(raised.value) == 'expected 1 replacement(s) of "locked", found 2'
+    assert document.to_bytes() == before
+    assert cell.replace_text("Version", "Release", expect=2) == 2
+    with pytest.raises(rdocx.StaleElementError):
+        cell.text
+
+    held = document.tables[0].cell(0, 1).paragraphs[1]
+    assert held.replace_text("locked", "pinned", expect=1) == 1
+    with pytest.raises(rdocx.StaleElementError):
+        held.text
+    table = document.tables[0]
+    assert table.cell(0, 0).text == "Version is locked"
+    assert [paragraph.text for paragraph in table.cell(0, 1).paragraphs] == [
+        "Release is locked",
+        "Release is pinned again",
+    ]
+    assert document.paragraphs[0].text == "Version is locked"
+
+
+def test_story_item_replacement_changes_one_header_paragraph():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("Version is locked")
+    document.set_header("Version is locked")
+    document.set_footer("Version is locked")
+    header_item = next(
+        item
+        for item in document.story_items
+        if item.story.kind == "header" and item.kind == "paragraph"
+    )
+    before = document.to_bytes()
+
+    with pytest.raises(rdocx.ReplacementCountError) as raised:
+        document.replace_story_text(header_item, "Version is locked", "Version is pinned", expect=2)
+    assert str(raised.value) == 'expected 2 replacement(s) of "Version is locked", found 1'
+    assert document.replace_story_text(header_item, "missing", "x") == 0
+    assert document.to_bytes() == before
+
+    assert (
+        document.replace_story_text(header_item, "Version is locked", "Version is pinned", expect=1)
+        == 1
+    )
+    assert _story_paragraph_texts(document, "header") == ["Version is pinned"]
+    assert _story_paragraph_texts(document, "footer") == ["Version is locked"]
+    assert document.paragraphs[0].text == "Version is locked"
+    with pytest.raises(rdocx.StaleElementError, match="story item handle"):
+        document.replace_story_text(header_item, "Version", "Release")
+
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert _story_paragraph_texts(reopened, "header") == ["Version is pinned"]
+
+
+def _rewrite_part(document, name, edit):
+    source = io.BytesIO(document.to_bytes())
+    result = io.BytesIO()
+    with zipfile.ZipFile(source) as source_zip:
+        with zipfile.ZipFile(result, "w") as result_zip:
+            for info in source_zip.infolist():
+                data = source_zip.read(info.filename)
+                if info.filename == name:
+                    data = edit(data.decode()).encode()
+                result_zip.writestr(info, data)
+    return type(document).from_bytes(result.getvalue())
+
+
+_STORY_CELL_TABLE = (
+    '<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid><w:tr><w:tc>'
+    '<w:tcPr><w:tcW w:w="1000" w:type="dxa"/></w:tcPr>'
+    "<w:p><w:r><w:t>Version in a cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+)
+
+
+def test_story_item_replacement_refuses_text_boxes_comments_and_their_cells():
+    import rdocx
+
+    commented = rdocx.Document()
+    commented.add_paragraph("Version in the body")
+    commented.add_comment(
+        rdocx.RunRange(
+            start=rdocx.RunPosition(body_index=0, run_index=0),
+            end=rdocx.RunPosition(body_index=0, run_index=1),
+        ),
+        author="Ada",
+        text="Version in the comment",
+    )
+    commented = _rewrite_part(
+        commented,
+        "word/comments.xml",
+        lambda xml: xml.replace("</w:comment>", _STORY_CELL_TABLE + "<w:p/></w:comment>", 1),
+    )
+    targets = [
+        item
+        for item in commented.story_items
+        if item.story.kind in ("comment", "table_cell") and item.kind == "paragraph"
+    ]
+    assert {item.story.kind for item in targets} == {"comment", "table_cell"}
+    before = commented.to_bytes()
+    for item in targets:
+        with pytest.raises(rdocx.RdocxError, match="never searches comments"):
+            commented.replace_story_text(item, "Version", "Release")
+    assert commented.to_bytes() == before
+
+    wps = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+    content = (
+        "<w:txbxContent>" + _STORY_CELL_TABLE
+        + "<w:p><w:r><w:t>Version in a box</w:t></w:r></w:p></w:txbxContent>"
+    )
+    boxed = _replace_document_body(
+        rdocx.Document(),
+        '<w:p><w:r><mc:AlternateContent '
+        'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" '
+        f'xmlns:wps="{wps}" '
+        'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+        'xmlns:v="urn:schemas-microsoft-com:vml"><mc:Choice Requires="wps"><w:drawing>'
+        '<wp:inline><wp:extent cx="914400" cy="914400"/><wp:docPr id="1" name="Text Box 1"/>'
+        f'<a:graphic><a:graphicData uri="{wps}"><wps:wsp><wps:cNvSpPr txBox="1"/><wps:spPr/>'
+        f"<wps:txbx>{content}</wps:txbx><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic>"
+        "</wp:inline></w:drawing></mc:Choice><mc:Fallback><w:pict><v:shape id=\"box\">"
+        f"<v:textbox>{content}</v:textbox></v:shape></w:pict></mc:Fallback>"
+        "</mc:AlternateContent></w:r></w:p>",
+    )
+    targets = [
+        item
+        for item in boxed.story_items
+        if item.story.kind in ("text_box", "table_cell") and item.kind == "paragraph"
+    ]
+    assert {item.story.kind for item in targets} == {"text_box", "table_cell"}
+    before = boxed.to_bytes()
+    for item in targets:
+        with pytest.raises(rdocx.RdocxError, match="every copy of a text box"):
+            boxed.replace_story_text(item, "Version", "Release")
+    assert boxed.to_bytes() == before
+
+
 def test_update_fields_takes_a_keyword_context_and_counts_updates():
     import datetime
 

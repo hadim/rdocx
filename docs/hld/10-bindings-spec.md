@@ -298,6 +298,34 @@ and stales every earlier handle, the assigned paragraph included, as
 `Cell.text` does. A rejected one changes nothing.
 `Document::set_story_text` keeps its own behavior.
 
+`Paragraph.replace_text(placeholder, replacement, *, expect=None)` and
+`Cell.replace_text` with the same signature keep the counted contract of
+`Document.try_replace_text` over a narrower scope. The paragraph form covers
+that paragraph, in the body or a table cell, and the paragraphs nested in it.
+The cell form covers every paragraph of the cell, those of its nested tables
+and content controls included. A match may span runs and keeps the formatting
+of its first run, and comment ranges, bookmarks and the runs outside a match
+are kept. The count, the `ReplacementCountError` and its message, the
+unchanged document and revision after a mismatch, and the single revision
+advance when something was replaced are those of the document form, so a
+replacement that changes something stales every held handle, the one it was
+called on included. The native `Paragraph::try_replace_text` and
+`Cell::try_replace_text` run the same typed replacement on a copy of the
+paragraph or cell when `expect` is given, in place otherwise, and return a
+mismatch as `ReplacementCountMismatch`. Neither clones the document.
+`Document.replace_story_text(item, placeholder, replacement, *, expect=None)`
+does the same for one `StoryItem` snapshot, a paragraph, table or block
+content control of the body, a table cell, a header, a footer, a footnote or
+an endnote, through the native `Document::try_replace_story_text`. It edits
+that element of the staged part and publishes the reopened candidate only
+when the count matches. A text box story, and a table cell story inside a
+text box, are refused, because Word keeps a second copy of a text box that
+the document form edits too. A comment story, and a table cell story inside a
+comment, are refused as well, since the document form never searches
+comments. A part that binds WordprocessingML under a prefix other than `w`
+counts its matches as the document form does, and the rewritten element
+declares `w` itself.
+
 `Paragraph.style` accepts a style ID the package defines or, as python-docx
 does, a style name, and writes the resolved ID. Among paragraph styles only,
 the ID is tried first, so a value read back always assigns the same style,

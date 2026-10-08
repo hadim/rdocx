@@ -930,6 +930,108 @@ fn edit_header_footer(hf: &mut CT_HdrFtr, edit: &mut dyn FnMut(&mut CT_P) -> usi
     count
 }
 
+/// Replace all occurrences of `placeholder` in one block element of a part,
+/// the paragraph, table or block content control that spans `block` in
+/// `xml`.
+///
+/// The element is parsed with the namespaces its ancestors declare and
+/// edited as a header or footer edits the blocks it keeps as raw XML, see
+/// [`replace_in_header_footer`]: the paragraphs of a table or a control are
+/// reached, and a match that straddles a control or a tracked insertion is
+/// not replaced. The element is re-serialised only when the replacement
+/// counts a change, and every byte outside it is kept. The rewritten element
+/// uses the `w` prefix, so it declares that prefix itself when the part
+/// binds WordprocessingML under another one. Another element and one the
+/// typed parsers refuse keep their bytes and count nothing. Returns the
+/// modified XML and the replacement count. A `block` that is not exactly
+/// one element of `xml`, and an element in whose scope `w` names another
+/// namespace, are errors.
+#[doc(hidden)]
+pub fn replace_in_block_at(
+    xml: &[u8],
+    block: std::ops::Range<usize>,
+    placeholder: &str,
+    replacement: &str,
+) -> crate::error::Result<(Vec<u8>, usize)> {
+    use crate::error::OxmlError;
+    use quick_xml::Reader;
+    use quick_xml::events::Event;
+    use quick_xml::name::QName;
+
+    let invalid_block = || OxmlError::InvalidValue(format!("no element spans {block:?}"));
+    let mut reader = Reader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    // The bindings the elements open around the current position declare.
+    let mut scopes: Vec<Vec<String>> = Vec::new();
+    while (reader.buffer_position() as usize) < block.start {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) => {
+                let prefixes = word_prefixes_at(&start, scopes.last().map_or(&[], Vec::as_slice))?;
+                scopes.push(prefixes);
+            }
+            Event::End(_) => {
+                scopes.pop();
+            }
+            Event::Eof => return Err(invalid_block()),
+            _ => {}
+        }
+        buffer.clear();
+    }
+    if reader.buffer_position() as usize != block.start {
+        return Err(invalid_block());
+    }
+    let prefixes = scopes.pop().unwrap_or_default();
+    // The element must end exactly at `block.end`, and an empty one holds no
+    // text.
+    let (own_prefixes, has_content) = match reader.read_event_into(&mut buffer)? {
+        Event::Start(start) => {
+            let own_prefixes = word_prefixes_at(&start, &prefixes)?;
+            let name = start.name().as_ref().to_vec();
+            reader.read_to_end_into(QName(&name), &mut Vec::new())?;
+            (own_prefixes, true)
+        }
+        Event::Empty(_) => (Vec::new(), false),
+        _ => return Err(invalid_block()),
+    };
+    if reader.buffer_position() as usize != block.end {
+        return Err(invalid_block());
+    }
+    if !has_content {
+        return Ok((xml.to_vec(), 0));
+    }
+    let mut raw = xml[block.clone()].to_vec();
+    if !own_prefixes.iter().any(|prefix| prefix == "w") {
+        if namespace_bindings(&own_prefixes)
+            .iter()
+            .any(|(prefix, _)| prefix == "w")
+        {
+            return Err(OxmlError::InvalidValue(
+                "the w prefix names another namespace than WordprocessingML".to_owned(),
+            ));
+        }
+        // The `w` prefix is unbound here, so the element declares it and the
+        // rewrite carries that declaration over.
+        let name_end = raw
+            .iter()
+            .position(|byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n' | b'>' | b'/'))
+            .ok_or_else(invalid_block)?;
+        let declaration = format!(r#" xmlns:w="{W_NS}""#);
+        raw.splice(name_end..name_end, declaration.into_bytes());
+    }
+    let count = edit_raw_block(&mut raw, &prefixes, &mut |paragraph| {
+        replace_in_paragraph(paragraph, placeholder, replacement)
+    });
+    if count == 0 {
+        return Ok((xml.to_vec(), 0));
+    }
+    let mut rewritten = Vec::with_capacity(xml.len() - block.len() + raw.len());
+    rewritten.extend_from_slice(&xml[..block.start]);
+    rewritten.extend_from_slice(&raw);
+    rewritten.extend_from_slice(&xml[block.end..]);
+    Ok((rewritten, count))
+}
+
 /// Replace placeholders in text boxes and shapes within a raw XML part.
 ///
 /// Walks the XML, finds `w:txbxContent` elements at any depth outside another
@@ -2106,6 +2208,69 @@ mod tests {
         let count = replace_in_header_footer(&mut hf, "{{company}}", "Acme Corp");
         assert_eq!(count, 1);
         assert_eq!(hf.text(), "Company: Acme Corp");
+    }
+
+    #[test]
+    fn replace_in_block_at_edits_that_block_alone() {
+        let xml = format!(
+            r#"<x:hdr xmlns:x="{W_NS}" xmlns:w="{W_NS}"><x:p><x:r><x:t>{{{{a}}}}</x:t></x:r></x:p><x:p><x:r><x:t>{{{{a}}}} and {{{{a}}}}</x:t></x:r></x:p></x:hdr>"#
+        );
+        let second = xml.rfind("<x:p>").unwrap();
+        let block = second..xml.rfind("</x:hdr>").unwrap();
+
+        let (rewritten, count) =
+            replace_in_block_at(xml.as_bytes(), block.clone(), "{{a}}", "A").unwrap();
+        assert_eq!(count, 2);
+        let rewritten = String::from_utf8(rewritten).unwrap();
+        assert!(rewritten.starts_with(&xml[..second]), "{rewritten}");
+        assert!(rewritten.ends_with("</x:hdr>"), "{rewritten}");
+        assert!(rewritten.contains(">A and A<"), "{rewritten}");
+
+        let (unchanged, count) =
+            replace_in_block_at(xml.as_bytes(), block.clone(), "{{b}}", "B").unwrap();
+        assert_eq!((unchanged.as_slice(), count), (xml.as_bytes(), 0));
+        assert!(replace_in_block_at(xml.as_bytes(), second + 1..block.end, "a", "b").is_err());
+        assert!(replace_in_block_at(xml.as_bytes(), second..xml.len() + 1, "a", "b").is_err());
+        // A range over both paragraphs is not one element.
+        let first = xml.find("<x:p>").unwrap();
+        assert!(replace_in_block_at(xml.as_bytes(), first..block.end, "{{a}}", "A").is_err());
+    }
+
+    #[test]
+    fn replace_in_block_at_declares_w_where_the_part_binds_another_prefix() {
+        let xml = format!(
+            r#"<ns0:hdr xmlns:ns0="{W_NS}"><ns0:p><ns0:r><ns0:t>Version head</ns0:t></ns0:r></ns0:p></ns0:hdr>"#
+        );
+        let block = xml.find("<ns0:p>").unwrap()..xml.rfind("</ns0:hdr>").unwrap();
+        let (rewritten, count) =
+            replace_in_block_at(xml.as_bytes(), block.clone(), "Version", "Release").unwrap();
+        assert_eq!(count, 1);
+        let rewritten = String::from_utf8(rewritten).unwrap();
+        assert!(
+            rewritten.contains(&format!(r#"<w:p xmlns:w="{W_NS}">"#)),
+            "{rewritten}"
+        );
+        assert!(rewritten.contains(">Release head<"), "{rewritten}");
+        let mut reader = quick_xml::NsReader::from_reader(rewritten.as_bytes());
+        let mut buffer = Vec::new();
+        loop {
+            match reader.read_resolved_event_into(&mut buffer).unwrap() {
+                (_, quick_xml::events::Event::Eof) => break,
+                (namespace, quick_xml::events::Event::Start(_)) => assert_eq!(
+                    namespace,
+                    quick_xml::name::ResolveResult::Bound(quick_xml::name::Namespace(
+                        W_NS.as_bytes()
+                    ))
+                ),
+                _ => {}
+            }
+            buffer.clear();
+        }
+
+        let other = xml.replace("<ns0:hdr ", r#"<ns0:hdr xmlns:w="urn:other" "#);
+        let block = other.find("<ns0:p>").unwrap()..other.rfind("</ns0:hdr>").unwrap();
+        let error = replace_in_block_at(other.as_bytes(), block, "Version", "Release").unwrap_err();
+        assert!(error.to_string().contains("another namespace"), "{error}");
     }
 
     /// The tables and block content controls of a header are raw XML in the

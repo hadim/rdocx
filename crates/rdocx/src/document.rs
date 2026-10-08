@@ -5701,6 +5701,34 @@ fn word_element(namespace: &ResolveResult<'_>) -> bool {
     )
 }
 
+/// Whether the story owner element that starts at `offset` of `xml` lies
+/// inside a `w:txbxContent`, the DrawingML or the VML copy of a text box.
+fn story_owner_in_text_box(xml: &[u8], offset: usize) -> Result<bool> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    // Whether each element open around the current position is a text box.
+    let mut open = Vec::new();
+    let mut buffer = Vec::new();
+    while (reader.buffer_position() as usize) < offset {
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("story owner scan failed: {error}")))?;
+        let is_word = story_namespace(&namespace) == StoryNamespace::Word;
+        match event {
+            Event::Start(element) => {
+                open.push(is_word && element.local_name().as_ref() == b"txbxContent");
+            }
+            Event::End(_) => {
+                open.pop();
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    Ok(open.contains(&true))
+}
+
 fn story_namespace(namespace: &ResolveResult<'_>) -> StoryNamespace {
     match namespace {
         ResolveResult::Bound(Namespace(uri)) => match *uri {
@@ -10891,6 +10919,64 @@ pub(crate) fn visit_body_paragraphs_mut(
             BodyContent::RawXml(_) => {}
         }
     }
+}
+
+/// Run [`Document::try_replace_text`]'s replacement over one paragraph or
+/// table cell, `replace` counting what it replaced in `target`. With
+/// `expect`, it runs on a copy that becomes `target` only when the count
+/// matches. Nothing is staged, as replacing run text cannot make a paragraph
+/// fail to serialize.
+pub(crate) fn try_replace_scoped<T: Clone>(
+    target: &mut T,
+    placeholder: &str,
+    replacement: &str,
+    expect: Option<usize>,
+    replace: fn(&mut T, &str, &str) -> usize,
+) -> Result<std::result::Result<usize, ReplacementCountMismatch>> {
+    oxml_core::xml::reject_non_xml_characters("replacement text", replacement)?;
+    let Some(expected) = expect else {
+        return Ok(Ok(replace(target, placeholder, replacement)));
+    };
+    let mut candidate = target.clone();
+    let found = replace(&mut candidate, placeholder, replacement);
+    if found != expected {
+        return Ok(Err(ReplacementCountMismatch {
+            index: 0,
+            placeholder: placeholder.to_owned(),
+            expected,
+            found,
+        }));
+    }
+    *target = candidate;
+    Ok(Ok(found))
+}
+
+/// Run the typed replacement over a paragraph and the paragraphs nested in
+/// it, as [`Document::replace_text`] runs it over each body paragraph.
+pub(crate) fn replace_in_paragraph_tree(
+    paragraph: &mut CT_P,
+    placeholder: &str,
+    replacement: &str,
+) -> usize {
+    let mut count = 0;
+    visit_paragraph_mut(paragraph, &mut |paragraph| {
+        count += rdocx_oxml::placeholder::replace_in_paragraph(paragraph, placeholder, replacement);
+    });
+    count
+}
+
+/// Run the typed replacement over every paragraph of a table cell, those of
+/// its nested tables and content controls included.
+pub(crate) fn replace_in_cell_tree(
+    cell: &mut CT_Tc,
+    placeholder: &str,
+    replacement: &str,
+) -> usize {
+    let mut count = 0;
+    visit_cell_mut(cell, &mut |paragraph| {
+        count += rdocx_oxml::placeholder::replace_in_paragraph(paragraph, placeholder, replacement);
+    });
+    count
 }
 
 fn visit_paragraph_mut(paragraph: &mut CT_P, visitor: &mut impl FnMut(&mut CT_P)) {
@@ -24767,6 +24853,118 @@ impl Document {
         Ok(Ok(counts))
     }
 
+    /// Replace literal text in one story item only and return the count.
+    ///
+    /// `location` is a paragraph, a table or a block content control that
+    /// [`Self::story_items`] lists, in a story [`Self::try_replace_text`]
+    /// searches, so the paragraphs of the body, table cells, headers,
+    /// footers, footnotes and endnotes are reached without touching the rest
+    /// of their story.
+    /// Matching and formatting are those of [`Self::try_replace_text`]: a
+    /// match may span runs and keeps the formatting of its first run, and
+    /// comment ranges, bookmarks and the runs outside a match are kept. A
+    /// table or a control reaches the paragraphs it holds. A text box inside
+    /// the item is not searched.
+    ///
+    /// With `expect`, a different count leaves the document unchanged and is
+    /// returned as the inner error, whose `index` is 0. The outer error is a
+    /// refused location, a refused `replacement`, see
+    /// [`Self::try_replace_text`], or a staging failure, and it also leaves
+    /// the document unchanged. The edited part is staged and reopened before
+    /// it replaces the live document. A text box story is refused, and so is
+    /// a table cell story inside a text box, because Word keeps a second copy
+    /// of a text box that a change to one story would leave behind, while
+    /// [`Self::try_replace_text`] edits both. A comment story, and a table
+    /// cell story inside a comment, are refused too, as that call never
+    /// searches comments.
+    pub fn try_replace_story_text(
+        &mut self,
+        location: &ContentLocation,
+        placeholder: &str,
+        replacement: &str,
+        expect: Option<usize>,
+    ) -> Result<std::result::Result<usize, ReplacementCountMismatch>> {
+        oxml_core::xml::reject_non_xml_characters("replacement text", replacement)?;
+        let unreachable = |kind: StoryKind| {
+            Error::Other(format!(
+                "text replacement does not reach one story in a {kind:?}: the document-wide \
+                 replacement edits every copy of a text box and never searches comments"
+            ))
+        };
+        if matches!(location.story.kind, StoryKind::TextBox | StoryKind::Comment) {
+            return Err(unreachable(location.story.kind));
+        }
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let (source, owner) = candidate.story_source_and_owner(&location.story)?;
+        // A table cell story is refused where its comment or text box is.
+        if source.root_kind == StoryKind::Comment {
+            return Err(unreachable(StoryKind::Comment));
+        }
+        if story_owner_in_text_box(&source.xml, owner.full.start)? {
+            return Err(unreachable(StoryKind::TextBox));
+        }
+        let [index] = location.index_path[..] else {
+            return Err(StoryError::InvalidPath {
+                path: location.index_path.clone(),
+            }
+            .into());
+        };
+        let items = scan_story_items(&source.xml, &owner)?;
+        let item = items.get(index).ok_or(StoryError::OutOfBounds {
+            index,
+            len: items.len(),
+        })?;
+        if item.kind != location.item_kind {
+            return Err(StoryError::KindMismatch {
+                expected: location.item_kind,
+                actual: item.kind,
+            }
+            .into());
+        }
+        if !item.direct_owner_child
+            || !matches!(
+                item.kind,
+                StoryItemKind::Paragraph | StoryItemKind::Table | StoryItemKind::ContentControl
+            )
+        {
+            return Err(Error::Other(format!(
+                "text replacement reaches only paragraph, table or block content control \
+                 story items, not this {:?} item",
+                item.kind
+            )));
+        }
+        let (updated, found) = rdocx_oxml::placeholder::replace_in_block_at(
+            &source.xml,
+            item.full.clone(),
+            placeholder,
+            replacement,
+        )?;
+        if let Some(expected) = expect
+            && expected != found
+        {
+            return Ok(Err(ReplacementCountMismatch {
+                index: 0,
+                placeholder: placeholder.to_owned(),
+                expected,
+                found,
+            }));
+        }
+        if found == 0 {
+            return Ok(Ok(0));
+        }
+        let part_name = source.part_name.clone();
+        if part_name == candidate.doc_part_name {
+            candidate.document = CT_Document::from_xml(&updated)?;
+            candidate.flush_to_package()?;
+        } else {
+            candidate.package.set_part(&part_name, updated);
+        }
+        let reopened = candidate.reopen_prepared_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(Ok(found))
+    }
+
     /// Render scalar and structural template tags from structured JSON data.
     ///
     /// Tags use `{{ path.to.value }}` syntax and may cross ordinary Word run
@@ -34921,6 +35119,542 @@ mod tests {
             "pair 1: expected 1 replacement(s) of \"{{b}}\", found 2"
         );
         assert_eq!(doc.to_bytes().unwrap(), before);
+    }
+
+    #[test]
+    fn paragraph_replacement_changes_one_paragraph_and_keeps_its_anchors() {
+        use crate::{RunPosition, RunRange};
+
+        let mut doc = Document::new();
+        doc.add_paragraph("Version is locked for the build tools.");
+        doc.add_paragraph("Version is locked for the test tools.");
+        let first_run = RunRange {
+            start: RunPosition {
+                body_index: 1,
+                run_index: 0,
+            },
+            end: RunPosition {
+                body_index: 1,
+                run_index: 1,
+            },
+        };
+        doc.add_comment(first_run, "Ada", None, "check the pin")
+            .unwrap();
+        doc.add_bookmark("clause", first_run).unwrap();
+        let mismatch = doc
+            .try_replace_all_expected(&[("Version is locked", "Version is pinned", Some(1))])
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(mismatch.found, 2);
+
+        let found = doc
+            .paragraph_mut(1)
+            .unwrap()
+            .try_replace_text("Version is locked", "Version is pinned", Some(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(found, 1);
+
+        let reopened = Document::from_bytes(&doc.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            reopened.paragraph(0).unwrap().text(),
+            "Version is locked for the build tools."
+        );
+        assert_eq!(
+            reopened.paragraph(1).unwrap().text(),
+            "Version is pinned for the test tools."
+        );
+        let comments = reopened
+            .comments()
+            .iter()
+            .map(|comment| comment.text())
+            .collect::<Vec<_>>();
+        assert_eq!(comments, ["check the pin"]);
+        let bookmarks = reopened.bookmarks();
+        assert_eq!(bookmarks.len(), 1);
+        assert_eq!(bookmarks[0].name(), Some("clause"));
+        assert_eq!(bookmarks[0].range(), Some(first_run));
+        let mut xml = Writer::new(Vec::new());
+        reopened
+            .paragraph(1)
+            .unwrap()
+            .inner
+            .to_xml(&mut xml)
+            .unwrap();
+        let xml = String::from_utf8(xml.into_inner()).unwrap();
+        for anchor in [
+            "commentRangeStart",
+            "commentRangeEnd",
+            "commentReference",
+            "bookmarkStart",
+            "bookmarkEnd",
+        ] {
+            assert!(xml.contains(anchor), "{anchor} missing from {xml}");
+        }
+    }
+
+    #[test]
+    fn paragraph_replacement_across_runs_keeps_the_formatting_outside_the_match() {
+        let mut doc = Document::new();
+        let mut paragraph = CT_P::new();
+        for (text, properties) in [
+            (
+                "Keep ",
+                CT_RPr {
+                    bold: Some(true),
+                    ..Default::default()
+                },
+            ),
+            (
+                "Version is lo",
+                CT_RPr {
+                    italic: Some(true),
+                    ..Default::default()
+                },
+            ),
+            (
+                "cked",
+                CT_RPr {
+                    color: Some("112233".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                " for the tools.",
+                CT_RPr {
+                    strike: Some(true),
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let mut run = CT_R::new(text);
+            run.properties = Some(properties);
+            paragraph.runs.push(run);
+        }
+        doc.document
+            .body
+            .content
+            .push(BodyContent::Paragraph(paragraph));
+
+        let found = doc
+            .paragraph_mut(0)
+            .unwrap()
+            .try_replace_text("Version is locked", "Version is pinned", None)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(found, 1);
+        let paragraph = doc.paragraph(0).unwrap();
+        assert_eq!(paragraph.text(), "Keep Version is pinned for the tools.");
+        let runs = (0..paragraph.run_count())
+            .map(|index| {
+                let run = paragraph.run(index).unwrap();
+                (run.text(), run.inner.properties.clone().unwrap_or_default())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(runs.len(), 3);
+        assert_eq!(runs[0].0, "Keep ");
+        assert_eq!(runs[0].1.bold, Some(true));
+        assert_eq!(runs[1].0, "Version is pinned");
+        assert_eq!(runs[1].1.italic, Some(true));
+        assert_eq!(runs[2].0, " for the tools.");
+        assert_eq!(runs[2].1.strike, Some(true));
+    }
+
+    #[test]
+    fn scoped_replacement_mismatch_or_refused_text_changes_nothing() {
+        let mut doc = Document::new();
+        doc.add_paragraph("{{a}} and {{a}}");
+        let mut table = doc.add_table(1, 1);
+        table.cell(0, 0).unwrap().set_text("{{b}} and {{b}}");
+        let before = doc.to_bytes().unwrap();
+
+        let mismatch = doc
+            .paragraph_mut(0)
+            .unwrap()
+            .try_replace_text("{{a}}", "A", Some(1))
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(
+            mismatch,
+            ReplacementCountMismatch {
+                index: 0,
+                placeholder: "{{a}}".to_owned(),
+                expected: 1,
+                found: 2,
+            }
+        );
+        let mismatch = doc
+            .table_mut(0)
+            .unwrap()
+            .cell(0, 0)
+            .unwrap()
+            .try_replace_text("{{b}}", "B", Some(3))
+            .unwrap()
+            .unwrap_err();
+        assert_eq!((mismatch.expected, mismatch.found), (3, 2));
+        let error = doc
+            .paragraph_mut(0)
+            .unwrap()
+            .try_replace_text("{{a}}", "\u{1}", None)
+            .unwrap_err();
+        assert!(error.to_string().contains("U+0001"), "{error}");
+        assert_eq!(
+            doc.paragraph_mut(0)
+                .unwrap()
+                .try_replace_text("missing", "x", Some(0))
+                .unwrap(),
+            Ok(0)
+        );
+        assert_eq!(doc.to_bytes().unwrap(), before);
+    }
+
+    #[test]
+    fn paragraph_replacement_keeps_a_bookmark_inside_a_cross_run_match() {
+        use crate::{RunPosition, RunRange};
+
+        let mut doc = Document::new();
+        doc.add_paragraph("Version is lo").add_run("cked here");
+        let position = |run_index| RunPosition {
+            body_index: 0,
+            run_index,
+        };
+        doc.add_bookmark(
+            "inside",
+            RunRange {
+                start: position(1),
+                end: position(2),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            doc.paragraph_mut(0)
+                .unwrap()
+                .try_replace_text("Version is locked", "Version is pinned", Some(1))
+                .unwrap(),
+            Ok(1)
+        );
+
+        let reopened = Document::from_bytes(&doc.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            reopened.paragraph(0).unwrap().text(),
+            "Version is pinned here"
+        );
+        let bookmarks = reopened.bookmarks();
+        assert_eq!(bookmarks.len(), 1);
+        assert_eq!(bookmarks[0].name(), Some("inside"));
+        assert_eq!(bookmarks[0].issue(), None);
+    }
+
+    #[test]
+    fn cell_replacement_changes_one_cell_or_one_of_its_paragraphs() {
+        let mut doc = Document::new();
+        doc.add_paragraph("Version is locked");
+        {
+            let mut table = doc.add_table(1, 2);
+            table.cell(0, 0).unwrap().set_text("Version is locked");
+            let mut cell = table.cell(0, 1).unwrap();
+            cell.set_text("Version is locked");
+            cell.add_paragraph("Version is locked again");
+        }
+
+        let mut table = doc.table_mut(0).unwrap();
+        let mut cell = table.cell(0, 1).unwrap();
+        assert_eq!(
+            cell.paragraph_mut(1)
+                .unwrap()
+                .try_replace_text("locked", "pinned", Some(1))
+                .unwrap(),
+            Ok(1)
+        );
+        assert_eq!(
+            cell.try_replace_text("Version", "Release", Some(2))
+                .unwrap(),
+            Ok(2)
+        );
+
+        let table = doc.table(0).unwrap();
+        assert_eq!(table.cell(0, 0).unwrap().text(), "Version is locked");
+        let cell = table.cell(0, 1).unwrap();
+        assert_eq!(cell.paragraph(0).unwrap().text(), "Release is locked");
+        assert_eq!(cell.paragraph(1).unwrap().text(), "Release is pinned again");
+        assert_eq!(doc.paragraph(0).unwrap().text(), "Version is locked");
+    }
+
+    /// Reopen `document` with one part rewritten by `edit`.
+    fn with_rewritten_part(
+        document: &mut Document,
+        part_name: &str,
+        edit: impl FnOnce(String) -> String,
+    ) -> Document {
+        let mut package =
+            OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let xml = String::from_utf8(package.get_part(part_name).unwrap().to_vec()).unwrap();
+        package.set_part(part_name, edit(xml).into_bytes());
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(bytes.get_ref()).unwrap()
+    }
+
+    const STORY_REPLACEMENT_TABLE: &str = r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:w="1000" w:type="dxa"/></w:tcPr><w:p><w:r><w:t>Version in a cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
+
+    fn story_locations(doc: &Document, kind: StoryKind) -> Vec<ContentLocation> {
+        doc.story_item_snapshots()
+            .unwrap()
+            .into_iter()
+            .filter(|item| {
+                item.location().story().kind() == kind
+                    && item.location().item_kind() == StoryItemKind::Paragraph
+            })
+            .map(|item| item.location().clone())
+            .collect()
+    }
+
+    #[test]
+    fn story_replacement_refuses_text_boxes_comments_and_the_cells_inside_them() {
+        let mut commented = Document::new();
+        commented.add_paragraph("Version in the body");
+        let anchor = crate::RunPosition {
+            body_index: 0,
+            run_index: 0,
+        };
+        let end = crate::RunPosition {
+            run_index: 1,
+            ..anchor
+        };
+        commented
+            .add_comment(
+                crate::RunRange { start: anchor, end },
+                "Ada",
+                None,
+                "Version",
+            )
+            .unwrap();
+        let mut commented = with_rewritten_part(&mut commented, "/word/comments.xml", |xml| {
+            xml.replacen(
+                "</w:comment>",
+                &format!("{STORY_REPLACEMENT_TABLE}<w:p/></w:comment>"),
+                1,
+            )
+        });
+        let cells = story_locations(&commented, StoryKind::TableCell);
+        assert_eq!(cells.len(), 1);
+        let before = commented.to_bytes().unwrap();
+        let error = commented
+            .try_replace_story_text(&cells[0], "Version", "Release", None)
+            .unwrap_err();
+        assert!(error.to_string().contains("in a Comment"), "{error}");
+        assert_eq!(commented.to_bytes().unwrap(), before);
+
+        let mut boxed = Document::new();
+        boxed.add_paragraph("Body");
+        let text_box = format!(
+            concat!(
+                r#"<w:p><w:r><mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" "#,
+                r#"xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" "#,
+                r#"xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" "#,
+                r#"xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:v="urn:schemas-microsoft-com:vml">"#,
+                r#"<mc:Choice Requires="wps"><w:drawing><wp:anchor distT="0" distB="0" distL="0" distR="0" simplePos="0" "#,
+                r#"relativeHeight="1" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1"><wp:simplePos x="0" y="0"/>"#,
+                r#"<wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH>"#,
+                r#"<wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>"#,
+                r#"<wp:extent cx="914400" cy="914400"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:wrapNone/>"#,
+                r#"<wp:docPr id="1" name="Text Box 1"/><wp:cNvGraphicFramePr/><a:graphic>"#,
+                r#"<a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp>"#,
+                r#"<wps:cNvSpPr txBox="1"/><wps:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="914400" cy="914400"/></a:xfrm>"#,
+                r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></wps:spPr><wps:txbx><w:txbxContent>{0}<w:p><w:r><w:t>Version in a box</w:t></w:r></w:p></w:txbxContent></wps:txbx>"#,
+                r#"<wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></mc:Choice>"#,
+                r#"<mc:Fallback><w:pict><v:shape id="box" style="width:72pt;height:72pt"><v:textbox><w:txbxContent>{0}<w:p><w:r><w:t>Version in a box</w:t></w:r></w:p></w:txbxContent>"#,
+                r#"</v:textbox></v:shape></w:pict></mc:Fallback></mc:AlternateContent></w:r></w:p>"#,
+            ),
+            STORY_REPLACEMENT_TABLE
+        );
+        let mut boxed = with_rewritten_part(&mut boxed, "/word/document.xml", |xml| {
+            xml.replacen("<w:sectPr", &format!("{text_box}<w:sectPr"), 1)
+        });
+        let before = boxed.to_bytes().unwrap();
+        let boxes = story_locations(&boxed, StoryKind::TextBox);
+        let cells = story_locations(&boxed, StoryKind::TableCell);
+        assert!(!boxes.is_empty() && !cells.is_empty());
+        for location in boxes.iter().chain(&cells) {
+            let error = boxed
+                .try_replace_story_text(location, "Version", "Release", None)
+                .unwrap_err();
+            assert!(error.to_string().contains("in a TextBox"), "{error}");
+        }
+        assert_eq!(boxed.to_bytes().unwrap(), before);
+        // The document-wide call edits both copies of the box.
+        assert_eq!(boxed.try_replace_text("Version", "Release").unwrap(), 2);
+    }
+
+    #[test]
+    fn story_replacement_reaches_a_footnote_a_table_cell_and_a_header_under_another_prefix() {
+        let mut doc = Document::new();
+        doc.add_paragraph("Version in the body");
+        doc.add_footnote("Version in a note");
+        doc.add_table(1, 1)
+            .cell(0, 0)
+            .unwrap()
+            .set_text("Version in a cell");
+        doc.set_header("Version in the header");
+
+        let note = story_locations(&doc, StoryKind::Footnote)
+            .into_iter()
+            .last()
+            .unwrap();
+        assert_eq!(
+            doc.try_replace_story_text(&note, "Version", "Release", Some(1))
+                .unwrap(),
+            Ok(1)
+        );
+        let cell = story_locations(&doc, StoryKind::TableCell)[0].clone();
+        assert_eq!(
+            doc.try_replace_story_text(&cell, "Version", "Release", Some(1))
+                .unwrap(),
+            Ok(1)
+        );
+        let reopened = Document::from_bytes(&doc.to_bytes().unwrap()).unwrap();
+        let texts = reopened
+            .story_item_snapshots()
+            .unwrap()
+            .into_iter()
+            .filter(|item| item.location().item_kind() == StoryItemKind::Paragraph)
+            .filter_map(|item| item.text().map(str::to_owned))
+            .filter(|text| !text.is_empty())
+            .collect::<Vec<_>>();
+        for expected in [
+            "Version in the body",
+            "Release in a note",
+            "Release in a cell",
+            "Version in the header",
+        ] {
+            assert!(
+                texts.iter().any(|text| text.ends_with(expected)),
+                "{expected} missing from {texts:?}"
+            );
+        }
+
+        // A header that binds WordprocessingML to `ns0` counts the match too.
+        let header = story_locations(&doc, StoryKind::Header)[0].clone();
+        let part_name = header.story().part_name().to_owned();
+        let mut prefixed = with_rewritten_part(&mut doc, &part_name, |xml| {
+            xml.replace("<w:", "<ns0:")
+                .replace("</w:", "</ns0:")
+                .replace(" w:", " ns0:")
+                .replace("xmlns:w=", "xmlns:ns0=")
+        });
+        let header = story_locations(&prefixed, StoryKind::Header)[0].clone();
+        assert_eq!(
+            prefixed
+                .try_replace_story_text(&header, "Version", "Release", Some(1))
+                .unwrap(),
+            Ok(1)
+        );
+        let reopened = Document::from_bytes(&prefixed.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            reopened.header_text().as_deref(),
+            Some("Release in the header")
+        );
+    }
+
+    #[test]
+    fn story_replacement_changes_one_header_paragraph() {
+        let mut doc = Document::new();
+        doc.set_header("Version is locked");
+        doc.add_paragraph("Version is locked");
+        let header = doc
+            .story_item_snapshots()
+            .unwrap()
+            .into_iter()
+            .find(|item| {
+                item.location().story().kind() == StoryKind::Header
+                    && item.location().item_kind() == StoryItemKind::Paragraph
+            })
+            .unwrap()
+            .location()
+            .clone();
+        let before = doc.to_bytes().unwrap();
+
+        let mismatch = doc
+            .try_replace_story_text(&header, "Version", "Release", Some(2))
+            .unwrap()
+            .unwrap_err();
+        assert_eq!(
+            (mismatch.index, mismatch.expected, mismatch.found),
+            (0, 2, 1)
+        );
+        assert!(
+            doc.try_replace_story_text(&header, "Version", "\u{1}", None)
+                .is_err()
+        );
+        assert_eq!(
+            doc.try_replace_story_text(&header, "missing", "x", None)
+                .unwrap(),
+            Ok(0)
+        );
+        assert_eq!(doc.to_bytes().unwrap(), before);
+
+        assert_eq!(
+            doc.try_replace_story_text(&header, "is locked", "is pinned", Some(1))
+                .unwrap(),
+            Ok(1)
+        );
+        assert_eq!(doc.header_text().as_deref(), Some("Version is pinned"));
+        assert_eq!(doc.paragraph(0).unwrap().text(), "Version is locked");
+        let reopened = Document::from_bytes(&doc.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.header_text().as_deref(), Some("Version is pinned"));
+
+        let body = doc
+            .story_item_snapshots()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.location().story().kind() == StoryKind::Body)
+            .unwrap()
+            .location()
+            .clone();
+        assert_eq!(
+            doc.try_replace_story_text(&body, "locked", "pinned", Some(1))
+                .unwrap(),
+            Ok(1)
+        );
+        assert_eq!(doc.paragraph(0).unwrap().text(), "Version is pinned");
+        // The header changed, so the location captured before it is stale.
+        let error = doc
+            .try_replace_story_text(&header, "pinned", "x", None)
+            .unwrap_err();
+        assert!(error.to_string().contains("stale"), "{error}");
+
+        let anchor = crate::RunPosition {
+            body_index: 0,
+            run_index: 0,
+        };
+        let end = crate::RunPosition {
+            run_index: 1,
+            ..anchor
+        };
+        doc.add_comment(
+            crate::RunRange { start: anchor, end },
+            "Ada",
+            None,
+            "Version",
+        )
+        .unwrap();
+        let comment = doc
+            .story_item_snapshots()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.location().story().kind() == StoryKind::Comment)
+            .unwrap()
+            .location()
+            .clone();
+        let error = doc
+            .try_replace_story_text(&comment, "Version", "Release", None)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("never searches comments"),
+            "{error}"
+        );
     }
 
     #[test]
