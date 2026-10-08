@@ -19541,6 +19541,7 @@ mod advanced_table_authoring_and_geometry {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
+            outdent_tables_by_cell_margin: false,
             math_properties: None,
             note_defaults: [None, None],
             document,
@@ -20005,7 +20006,9 @@ mod advanced_table_authoring_and_geometry {
     /// table, whose narrow `ID` column measures 20.34 points against a 242.28
     /// point heading column and whose total stops short of the 468 point text
     /// column because the content fits. Rows 11 to 14 are the nested table,
-    /// which resolves its own grid inside the owning cell content box.
+    /// which resolves its own grid inside the owning cell content box. No
+    /// style sets a cell margin in a new document, so that box is the whole
+    /// cell, as in Word.
     const GOLDEN_TABLE_GEOMETRY: &[(f64, f64, f64, f64)] = &[
         (72.0, 72.0, 144.0, 22.49),
         (216.0, 72.0, 144.0, 22.49),
@@ -20017,10 +20020,10 @@ mod advanced_table_authoring_and_geometry {
         (92.34, 116.98, 242.28, 22.49),
         (72.0, 139.47, 20.34, 22.49),
         (92.34, 139.47, 242.28, 22.49),
-        (311.4, 184.45, 111.6, 22.49),
-        (423.0, 184.45, 111.6, 22.49),
-        (311.4, 206.94, 111.6, 22.49),
-        (423.0, 206.94, 111.6, 22.49),
+        (306.0, 184.45, 112.5, 22.49),
+        (418.5, 184.45, 112.5, 22.49),
+        (306.0, 206.94, 112.5, 22.49),
+        (418.5, 206.94, 112.5, 22.49),
     ];
 }
 
@@ -21205,8 +21208,11 @@ mod f266c_character_grid_and_vertical_text {
     /// page in paint order with the properties F-266a's serialisation records,
     /// and the six coefficients of the transform that maps the run into page
     /// space, which is what makes a lost or altered rotation fail here.
+    ///
+    /// Re-recorded for #278: no style sets a cell margin in a new document,
+    /// so the page's table cells have none, as in Word.
     const GRID_AND_VERTICAL_GEOMETRY_DIGEST: &str =
-        "02995cf452d8add0ceb9c147d65773d55bc9f8b065b7a92b0e42073fdd770f7f";
+        "2002409b412388ad17b7f85e170d36b8c3658e6c7e4cff84098220772c006b76";
 
     /// One coordinate, with the sign of zero normalised, as F-266a documents.
     fn number(value: f64) -> String {

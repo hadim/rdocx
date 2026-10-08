@@ -338,6 +338,86 @@ fn a_tables_own_alignment_places_it() {
 }
 
 #[test]
+fn table_placement_follows_word_compatibility_mode_and_cell_margins() {
+    // Measured in Word 16.111 on a table of two 72 pt columns. Before Word
+    // 2013 (compatibility mode below 15, or none) the first cell's text, not
+    // the table edge, sits at the indent, a right table reaches one cell
+    // margin past the right margin, and a centred one does not move. A side
+    // margin nothing sets is zero.
+    let first_text_x = |mode: Option<&str>, margin: Option<f64>, alignment: Option<Alignment>| {
+        let mut document = Document::new();
+        if let Some(mode) = mode {
+            document
+                .set_compatibility_setting(
+                    "compatibilityMode",
+                    "http://schemas.microsoft.com/office/word",
+                    mode,
+                )
+                .unwrap();
+        }
+        document.add_paragraph("Margin");
+        {
+            let mut table = document.add_table(1, 2);
+            table
+                .set_grid_widths(&[Length::pt(72.0), Length::pt(72.0)])
+                .unwrap();
+            table.set_width(Length::pt(144.0));
+            table.set_layout_fixed();
+            if let Some(margin) = margin {
+                table.set_cell_margins(
+                    Length::pt(0.0),
+                    Length::pt(margin),
+                    Length::pt(0.0),
+                    Length::pt(margin),
+                );
+            }
+            if let Some(alignment) = alignment {
+                table.set_alignment(alignment);
+            }
+            table.cell(0, 0).expect("left cell").set_text("Left");
+            table.cell(0, 1).expect("right cell").set_text("Right");
+        }
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let result = reopened.layout_deterministic().unwrap();
+        let mut runs = Vec::new();
+        oxml_layout::walk(&result.layout.pages[0].elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element {
+                runs.push((run.text.clone(), run.origin.x));
+            }
+        });
+        let x = |text: &str| runs.iter().find(|(run, _)| run == text).expect(text).1;
+        x("Left") - x("Margin")
+    };
+    let close = |actual: f64, expected: f64| {
+        assert!((actual - expected).abs() < 1e-9, "{actual} != {expected}");
+    };
+    let free = 468.0 - 144.0;
+    // No style and no direct margin: the text sits at the table edge.
+    close(first_text_x(None, None, None), 0.0);
+    close(first_text_x(Some("15"), None, None), 0.0);
+    for mode in [None, Some("14")] {
+        close(first_text_x(mode, Some(5.4), None), 0.0);
+        close(
+            first_text_x(mode, Some(5.4), Some(Alignment::Center)),
+            free / 2.0 + 5.4,
+        );
+        close(
+            first_text_x(mode, Some(5.4), Some(Alignment::Right)),
+            free + 10.8,
+        );
+    }
+    close(first_text_x(Some("15"), Some(5.4), None), 5.4);
+    close(
+        first_text_x(Some("15"), Some(5.4), Some(Alignment::Center)),
+        free / 2.0 + 5.4,
+    );
+    close(
+        first_text_x(Some("15"), Some(5.4), Some(Alignment::Right)),
+        free + 5.4,
+    );
+}
+
+#[test]
 fn table_row_split_policy_respects_cant_split_and_exact_height() {
     let mut unsplittable = Document::new();
     for index in 0..35 {
@@ -28364,6 +28444,7 @@ fn empty_story_layout_input() -> rdocx_layout::LayoutInput {
     rdocx_layout::LayoutInput {
         automatic_hyphenation: false,
         clamp_tabs_past_margin: false,
+        outdent_tables_by_cell_margin: false,
         mirror_margins: false,
         gutter_at_top: false,
         do_not_use_html_paragraph_auto_spacing: false,
@@ -28891,16 +28972,18 @@ fn dense_form_matches_reviewed_one_page_geometry() {
         306.0,
         109.5 + word_line_shift
     ));
+    // The form's style sets no cell margin, so its cells have none, as in
+    // Word, and the nested table starts at the cell edge.
     assert!(has_line(
-        311.4,
+        306.0,
         92.375 + word_line_shift,
-        421.4,
+        416.0,
         92.375 + word_line_shift
     ));
     assert!(has_line(
-        421.4,
+        416.0,
         105.125 + word_line_shift,
-        531.4,
+        526.0,
         105.125 + word_line_shift
     ));
     assert!(has_line(
@@ -28941,8 +29024,8 @@ fn dense_form_matches_reviewed_one_page_geometry() {
         .chunks_exact(4)
         .filter(|pixel| *pixel == [255, 215, 215, 255])
         .count();
-    assert_eq!(checksum, 3_354_091_765_578_971_749);
-    assert_eq!(non_white_pixels, 32_467);
+    assert_eq!(checksum, 15_322_395_591_900_737_191);
+    assert_eq!(non_white_pixels, 32_421);
     assert_eq!(
         behind_pixels, 0,
         "page-behind stamp is covered by cell shading"
@@ -40058,6 +40141,7 @@ mod advanced_table_geometry_regressions {
         rdocx_layout::LayoutInput {
             automatic_hyphenation: false,
             clamp_tabs_past_margin: false,
+            outdent_tables_by_cell_margin: false,
             mirror_margins: false,
             gutter_at_top: false,
             do_not_use_html_paragraph_auto_spacing: false,
@@ -42153,6 +42237,15 @@ mod table_row_border_and_margin_regressions {
     /// and right. A paragraph on the same kind of line follows it.
     fn probe(configure: impl FnOnce(&mut Table)) -> Document {
         let mut document = Document::new();
+        // Word 2013 layout keeps the table edge at the margin, so a left cell
+        // margin shows as the offset of the first cell's text.
+        document
+            .set_compatibility_setting(
+                "compatibilityMode",
+                "http://schemas.microsoft.com/office/word",
+                "15",
+            )
+            .expect("compatibility mode");
         {
             let mut table = document.add_table(5, 2);
             table.set_cell_margins(

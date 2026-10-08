@@ -364,6 +364,7 @@ mod tests {
             do_not_use_html_paragraph_auto_spacing: false,
             default_tab_stop: None,
             clamp_tabs_past_margin: false,
+            outdent_tables_by_cell_margin: false,
             math_properties: None,
             note_defaults: [None, None],
             document: rdocx_oxml::document::CT_Document::new(),
