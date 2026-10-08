@@ -348,6 +348,11 @@ impl Document {
     }
 
     /// Replace one existing glossary entry through a staged save and reopen.
+    ///
+    /// A comment that only the old body marked, and that no story and no
+    /// entry marks after the replacement, is removed with its replies and
+    /// its `commentsExtended`, `commentsIds` and `commentsExtensible` rows,
+    /// as [`Self::remove_comment`] removes it.
     pub fn replace_building_block(
         &mut self,
         glossary_part: &str,
@@ -358,6 +363,7 @@ impl Document {
             return Err(Error::Other("stale glossary part identity".to_owned()));
         }
         let mut candidate = self.clone_for_staging();
+        let marked = candidate.comments_only_in_building_block(glossary_part, ordinal)?;
         let part = candidate
             .glossary
             .as_mut()
@@ -366,7 +372,8 @@ impl Document {
         apply_block(part, block.clone())?;
         candidate.glossary_dirty = true;
         candidate.preserve_glossary_drawing_ids_staged()?;
-        let reopened = candidate.prepare_and_reopen_staged()?;
+        let mut reopened = candidate.prepare_and_reopen_staged()?;
+        reopened.remove_building_block_comments_left_unmarked(&marked, glossary_part)?;
         let result = reopened
             .building_blocks()?
             .into_iter()
@@ -393,6 +400,54 @@ impl Document {
             return Err(Error::Other("stale building block snapshot".to_owned()));
         }
         Ok(())
+    }
+
+    /// Return the comments that the body of entry `ordinal` marks and that
+    /// no story and no other entry marks, before a staged call replaces or
+    /// removes the entry. The package is prepared first when the document
+    /// has comments, so the glossary part holds the current entries.
+    fn comments_only_in_building_block(
+        &mut self,
+        glossary_part: &str,
+        ordinal: usize,
+    ) -> Result<Vec<i32>> {
+        if self
+            .comments
+            .as_ref()
+            .is_none_or(|comments| comments.comments.is_empty())
+        {
+            return Ok(Vec::new());
+        }
+        self.prepare_staged_package()?;
+        let xml = self
+            .package
+            .get_part(glossary_part)
+            .ok_or_else(|| Error::Other("glossary part is missing".to_owned()))?;
+        let range = CT_GlossaryDocument::from_xml(xml)?.body_range(ordinal)?;
+        self.comments_marked_only_in(xml, range)
+    }
+
+    /// Remove, on a reopened candidate, each comment of `marked_before` that
+    /// no story and no entry of `glossary_part` marks any more, with its
+    /// replies and rows, as [`Self::remove_comment`] does.
+    fn remove_building_block_comments_left_unmarked(
+        &mut self,
+        marked_before: &[i32],
+        glossary_part: &str,
+    ) -> Result<()> {
+        if marked_before.is_empty() {
+            return Ok(());
+        }
+        let glossary = self.package.get_part(glossary_part).map(<[u8]>::to_vec);
+        let marked_before = marked_before.iter().copied().collect::<HashSet<_>>();
+        let gone = self.comments_left_unmarked(&marked_before, glossary.as_deref())?;
+        if gone.is_empty() {
+            return Ok(());
+        }
+        for id in gone {
+            self.remove_comment_staged(id)?;
+        }
+        self.flush_dirty_related_story_models()
     }
 
     fn ensure_glossary_staged(&mut self) -> Result<String> {
@@ -534,6 +589,11 @@ impl Document {
     }
 
     /// Replace entry content and metadata through the dependency import transaction.
+    ///
+    /// A comment that only the old body marked, and that no story and no
+    /// entry marks after the update, is removed with its replies and its
+    /// `commentsExtended`, `commentsIds` and `commentsExtensible` rows, as
+    /// [`Self::remove_comment`] removes it.
     pub fn update_building_block_from_fragment(
         &mut self,
         entry: &BuildingBlockInfo,
@@ -553,6 +613,8 @@ impl Document {
         }
         let mut candidate = self.clone_for_staging();
         candidate.prepare_staged_package()?;
+        let marked =
+            candidate.comments_only_in_building_block(&entry.glossary_part, entry.ordinal)?;
         let content =
             fragment.import_content_staged(&mut candidate, &entry.glossary_part, policy)?;
         let glossary = candidate
@@ -578,7 +640,8 @@ impl Document {
         apply_block(part, block)?;
         candidate.glossary_dirty = true;
         candidate.preserve_glossary_drawing_ids_staged()?;
-        let reopened = candidate.prepare_and_reopen_staged()?;
+        let mut reopened = candidate.prepare_and_reopen_staged()?;
+        reopened.remove_building_block_comments_left_unmarked(&marked, &entry.glossary_part)?;
         let result = reopened.building_blocks()?.remove(entry.ordinal);
         self.commit_staged_mutation(reopened);
         Ok(result)
@@ -595,21 +658,8 @@ impl Document {
     pub fn remove_building_block(&mut self, entry: &BuildingBlockInfo) -> Result<BuildingBlock> {
         self.checked_building_block(entry)?;
         let mut candidate = self.clone_for_staging();
-        let orphaned = if candidate
-            .comments
-            .as_ref()
-            .is_some_and(|comments| !comments.comments.is_empty())
-        {
-            candidate.prepare_staged_package()?;
-            let xml = candidate
-                .package
-                .get_part(&entry.glossary_part)
-                .ok_or_else(|| Error::Other("glossary part is missing".to_owned()))?;
-            let range = CT_GlossaryDocument::from_xml(xml)?.body_range(entry.ordinal)?;
-            candidate.comments_marked_only_in(xml, range)?
-        } else {
-            Vec::new()
-        };
+        let orphaned =
+            candidate.comments_only_in_building_block(&entry.glossary_part, entry.ordinal)?;
         for id in orphaned {
             candidate.remove_comment_staged(id)?;
         }

@@ -2119,29 +2119,49 @@ impl Document {
         self.comment_marker_ids().map(Some)
     }
 
-    /// Remove each comment of `marked_before` that a staged call removing or
-    /// replacing whole stories left with no marker in any story, with its
-    /// replies and rows, as [`Self::remove_comment`] does. A story part
-    /// that another section still references keeps its markers, so its
-    /// comments stay. Return whether a comment was removed.
-    pub(crate) fn remove_comments_of_removed_stories_staged(
-        &mut self,
-        marked_before: Option<HashSet<i32>>,
-    ) -> Result<bool> {
-        let Some(marked_before) = marked_before else {
-            return Ok(false);
-        };
-        let marked_after = self.comment_marker_ids()?;
+    /// Return, in id order, the comments of `marked_before` that no story
+    /// and no marker in `extra`, a part that is not a story such as a
+    /// glossary document, marks any more.
+    pub(crate) fn comments_left_unmarked(
+        &self,
+        marked_before: &HashSet<i32>,
+        extra: Option<&[u8]>,
+    ) -> Result<Vec<i32>> {
+        if marked_before.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut marked_after = self.comment_marker_ids()?;
+        if let Some(xml) = extra {
+            marked_after.extend(
+                scan_comment_markers(xml)?
+                    .into_iter()
+                    .map(|marker| marker.id),
+            );
+        }
         let mut gone = marked_before
             .difference(&marked_after)
             .copied()
             .collect::<Vec<_>>();
         gone.sort_unstable();
-        let mut removed = false;
-        for id in gone {
-            removed |= self.remove_comment_staged(id)?;
+        Ok(gone)
+    }
+
+    /// Remove each comment of `marked_before` that a staged call removing or
+    /// replacing whole stories left with no marker in any story, with its
+    /// replies and rows, as [`Self::remove_comment`] does. A story part
+    /// that another section still references keeps its markers, so its
+    /// comments stay.
+    pub(crate) fn remove_comments_of_removed_stories_staged(
+        &mut self,
+        marked_before: Option<HashSet<i32>>,
+    ) -> Result<()> {
+        let Some(marked_before) = marked_before else {
+            return Ok(());
+        };
+        for id in self.comments_left_unmarked(&marked_before, None)? {
+            self.remove_comment_staged(id)?;
         }
-        Ok(removed)
+        Ok(())
     }
 
     /// Return, in id order, the comments marked in `removed`, a byte range

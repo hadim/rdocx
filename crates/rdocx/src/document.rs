@@ -19284,9 +19284,10 @@ impl Document {
     /// Creates a header part with the given text and references it from
     /// the section properties.
     ///
-    /// The previous story of that variant is replaced, and the comments whose
-    /// range lay in it go with it, with their replies and their
-    /// `commentsExtended`, `commentsIds` and `commentsExtensible` rows, as
+    /// The previous story of that variant is replaced in place, for every
+    /// section that shares its part, and the comments whose range lay in it
+    /// go with it, with their replies and their `commentsExtended`,
+    /// `commentsIds` and `commentsExtensible` rows, as
     /// [`Self::remove_comment`] removes them.
     pub fn set_header(&mut self, text: &str) {
         let mut candidate = self.clone_for_staging();
@@ -19299,9 +19300,10 @@ impl Document {
 
     /// Set the default footer text.
     ///
-    /// The previous story of that variant is replaced, and the comments whose
-    /// range lay in it go with it, with their replies and their
-    /// `commentsExtended`, `commentsIds` and `commentsExtensible` rows, as
+    /// The previous story of that variant is replaced in place, for every
+    /// section that shares its part, and the comments whose range lay in it
+    /// go with it, with their replies and their `commentsExtended`,
+    /// `commentsIds` and `commentsExtensible` rows, as
     /// [`Self::remove_comment`] removes them.
     pub fn set_footer(&mut self, text: &str) {
         let mut candidate = self.clone_for_staging();
@@ -19314,9 +19316,10 @@ impl Document {
 
     /// Set the first-page header text.
     ///
-    /// The previous story of that variant is replaced, and the comments whose
-    /// range lay in it go with it, with their replies and their
-    /// `commentsExtended`, `commentsIds` and `commentsExtensible` rows, as
+    /// The previous story of that variant is replaced in place, for every
+    /// section that shares its part, and the comments whose range lay in it
+    /// go with it, with their replies and their `commentsExtended`,
+    /// `commentsIds` and `commentsExtensible` rows, as
     /// [`Self::remove_comment`] removes them.
     pub fn set_first_page_header(&mut self, text: &str) {
         let mut candidate = self.clone_for_staging();
@@ -19330,9 +19333,10 @@ impl Document {
 
     /// Set the first-page footer text.
     ///
-    /// The previous story of that variant is replaced, and the comments whose
-    /// range lay in it go with it, with their replies and their
-    /// `commentsExtended`, `commentsIds` and `commentsExtensible` rows, as
+    /// The previous story of that variant is replaced in place, for every
+    /// section that shares its part, and the comments whose range lay in it
+    /// go with it, with their replies and their `commentsExtended`,
+    /// `commentsIds` and `commentsExtensible` rows, as
     /// [`Self::remove_comment`] removes them.
     pub fn set_first_page_footer(&mut self, text: &str) {
         let mut candidate = self.clone_for_staging();
@@ -19368,9 +19372,10 @@ impl Document {
     /// Creates a header part with an image paragraph. The image is embedded
     /// in the header part's relationships.
     ///
-    /// The previous story of that variant is replaced, and the comments whose
-    /// range lay in it go with it, with their replies and their
-    /// `commentsExtended`, `commentsIds` and `commentsExtensible` rows, as
+    /// The previous story of that variant is replaced in place, for every
+    /// section that shares its part, and the comments whose range lay in it
+    /// go with it, with their replies and their `commentsExtended`,
+    /// `commentsIds` and `commentsExtensible` rows, as
     /// [`Self::remove_comment`] removes them.
     pub fn set_header_image(
         &mut self,
@@ -19706,9 +19711,10 @@ impl Document {
 
     /// Set the default footer to an inline image.
     ///
-    /// The previous story of that variant is replaced, and the comments whose
-    /// range lay in it go with it, with their replies and their
-    /// `commentsExtended`, `commentsIds` and `commentsExtensible` rows, as
+    /// The previous story of that variant is replaced in place, for every
+    /// section that shares its part, and the comments whose range lay in it
+    /// go with it, with their replies and their `commentsExtended`,
+    /// `commentsIds` and `commentsExtensible` rows, as
     /// [`Self::remove_comment`] removes them.
     pub fn set_footer_image(
         &mut self,
@@ -19743,9 +19749,10 @@ impl Document {
     /// - `image_data`: the raw image bytes
     /// - `image_filename`: used to derive the part name and content type (e.g. "image5.png")
     ///
-    /// The previous story of that variant is replaced, and the comments whose
-    /// range lay in it go with it, with their replies and their
-    /// `commentsExtended`, `commentsIds` and `commentsExtensible` rows, as
+    /// The previous story of that variant is replaced in place, for every
+    /// section that shares its part, and the comments whose range lay in it
+    /// go with it, with their replies and their `commentsExtended`,
+    /// `commentsIds` and `commentsExtensible` rows, as
     /// [`Self::remove_comment`] removes them.
     pub fn set_raw_header_with_images(
         &mut self,
@@ -19763,9 +19770,10 @@ impl Document {
 
     /// Set a footer from raw XML bytes with associated images.
     ///
-    /// The previous story of that variant is replaced, and the comments whose
-    /// range lay in it go with it, with their replies and their
-    /// `commentsExtended`, `commentsIds` and `commentsExtensible` rows, as
+    /// The previous story of that variant is replaced in place, for every
+    /// section that shares its part, and the comments whose range lay in it
+    /// go with it, with their replies and their `commentsExtended`,
+    /// `commentsIds` and `commentsExtensible` rows, as
     /// [`Self::remove_comment`] removes them.
     pub fn set_raw_footer_with_images(
         &mut self,
@@ -19787,9 +19795,10 @@ impl Document {
     /// `bg_color` (hex string, e.g. "000000" for black) and contains the
     /// inline image.
     ///
-    /// The previous story of that variant is replaced, and the comments whose
-    /// range lay in it go with it, with their replies and their
-    /// `commentsExtended`, `commentsIds` and `commentsExtensible` rows, as
+    /// The previous story of that variant is replaced in place, for every
+    /// section that shares its part, and the comments whose range lay in it
+    /// go with it, with their replies and their `commentsExtended`,
+    /// `commentsIds` and `commentsExtensible` rows, as
     /// [`Self::remove_comment`] removes them.
     pub fn set_header_image_with_background(
         &mut self,
@@ -19817,9 +19826,10 @@ impl Document {
 
     /// Set the first-page header to an inline image.
     ///
-    /// The previous story of that variant is replaced, and the comments whose
-    /// range lay in it go with it, with their replies and their
-    /// `commentsExtended`, `commentsIds` and `commentsExtensible` rows, as
+    /// The previous story of that variant is replaced in place, for every
+    /// section that shares its part, and the comments whose range lay in it
+    /// go with it, with their replies and their `commentsExtended`,
+    /// `commentsIds` and `commentsExtensible` rows, as
     /// [`Self::remove_comment`] removes them.
     pub fn set_first_page_header_image(
         &mut self,
@@ -19881,9 +19891,6 @@ impl Document {
     /// relate it to the document, and point the section properties at it.
     ///
     /// Any previous reference of the same [`HdrFtrType`] is replaced.
-    ///
-    /// The comments whose range lay in the replaced story go with it, with
-    /// their replies and rows, as [`Self::remove_comment`] removes them.
     fn reserve_hdr_ftr_part_name(
         &mut self,
         is_header: bool,
@@ -19919,6 +19926,14 @@ impl Document {
         self.identifiers.reserve_preferred_part_name(&preferred)
     }
 
+    /// Store a header/footer part and point the section properties at it,
+    /// replacing the part of that variant in place when one exists.
+    ///
+    /// The comments whose range lay in the replaced story go with it, with
+    /// their replies and rows, as [`Self::remove_comment`] removes them. The
+    /// setters that call this cannot fail, so when the comments cannot be
+    /// read or removed they stay as they are and the part is installed all
+    /// the same.
     fn install_hdr_ftr_part(
         &mut self,
         part_name: String,
@@ -19927,8 +19942,6 @@ impl Document {
         hdr_type: HdrFtrType,
     ) -> Result<String> {
         let (_, rel_type, content_type) = Self::hdr_ftr_slot_metadata(is_header, hdr_type);
-        // The infallible setters keep installing the part when a story
-        // cannot be read, as before comments were settled here.
         let marked = self.marked_comments_before_story_removal().ok().flatten();
 
         // Setting the same header twice must not leave the first relationship
@@ -19991,8 +20004,20 @@ impl Document {
             rel_id,
         });
 
-        if self.remove_comments_of_removed_stories_staged(marked)? {
-            self.flush_dirty_related_story_models()?;
+        if let Some(marked) = marked
+            && let Ok(gone) = self.comments_left_unmarked(&marked, None)
+            && !gone.is_empty()
+        {
+            // Settle on a copy, so a failure leaves this candidate as the
+            // header replacement made it.
+            let mut settled = self.clone_for_staging();
+            let outcome = gone
+                .iter()
+                .try_for_each(|id| settled.remove_comment_staged(*id).map(drop))
+                .and_then(|()| settled.flush_dirty_related_story_models());
+            if outcome.is_ok() {
+                *self = settled;
+            }
         }
         Ok(part_name)
     }

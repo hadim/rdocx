@@ -4266,6 +4266,177 @@ mod story_removal_comments {
         assert!(!rows.contains("commentId "), "{rows}");
     }
 
+    /// A plain one-paragraph fragment, or one whose paragraph carries a
+    /// comment with a reply.
+    fn glossary_fragment(commented: bool) -> rdocx::DocumentFragment {
+        let mut source = Document::new();
+        source.add_paragraph("glossary text");
+        if commented {
+            let range = rdocx::RunRange {
+                start: rdocx::RunPosition {
+                    body_index: 0,
+                    run_index: 0,
+                },
+                end: rdocx::RunPosition {
+                    body_index: 0,
+                    run_index: 1,
+                },
+            };
+            let comment = source.add_comment(range, "A", None, "comment").unwrap();
+            source.reply_to(comment, "B", "reply").unwrap();
+        }
+        let body = super::f254_story(&source, rdocx::StoryKind::Body);
+        rdocx::DocumentFragment::from_range(
+            &source,
+            &super::f254_item(&source, &body, 0),
+            &ContentLocation::end(body),
+            false,
+        )
+        .unwrap()
+    }
+
+    /// A document with one entry built from a commented fragment.
+    fn commented_building_block() -> Document {
+        let mut document = with_body_paragraph();
+        document
+            .create_building_block_from_fragment(
+                super::f277_block("commented", "docParts"),
+                &glossary_fragment(true),
+                rdocx::FragmentConflictPolicy::rename_all(),
+            )
+            .unwrap();
+        assert_eq!(ids(&document).len(), 2);
+        document
+    }
+
+    #[test]
+    fn replacing_a_building_block_body_removes_the_comments_only_it_marked() {
+        // A metadata update keeps the body and its comments.
+        let mut document = commented_building_block();
+        let entry = document.building_blocks().unwrap().remove(0);
+        let mut block = entry.block.clone();
+        block.description = Some("renamed".to_owned());
+        document.update_building_block(&entry, block).unwrap();
+        assert_eq!(ids(&reopen(&mut document)).len(), 2);
+
+        let mut document = commented_building_block();
+        let entry = document.building_blocks().unwrap().remove(0);
+        let mut block = entry.block.clone();
+        block.body = rdocx_oxml::document::CT_Body::new();
+        block.body.sect_pr = None;
+        document
+            .replace_building_block(&entry.glossary_part, entry.ordinal, block)
+            .unwrap();
+        assert_eq!(ids(&reopen(&mut document)), Vec::<i32>::new());
+        let extended = part(&mut document, "/word/commentsExtended.xml");
+        assert!(!extended.contains("commentEx "), "{extended}");
+
+        let mut document = commented_building_block();
+        let entry = document.building_blocks().unwrap().remove(0);
+        let mut block = super::f277_block("commented", "docParts");
+        block.description = entry.block.description.clone();
+        document
+            .update_building_block_from_fragment(
+                &entry,
+                block,
+                &glossary_fragment(false),
+                rdocx::FragmentConflictPolicy::rename_all(),
+            )
+            .unwrap();
+        assert_eq!(ids(&reopen(&mut document)), Vec::<i32>::new());
+    }
+
+    #[test]
+    fn replacing_a_section_story_with_a_copy_removes_the_old_comments() {
+        let mut document = with_commented_header();
+        document.set_first_page_header("First");
+        let source = document
+            .section_story(0, HeaderFooterKind::Header, HdrFtrType::First)
+            .unwrap()
+            .unwrap()
+            .story()
+            .clone();
+        document
+            .replace_section_story(0, HeaderFooterKind::Header, HdrFtrType::Default, &source)
+            .unwrap();
+        assert_no_comment_left(&mut document);
+    }
+
+    #[test]
+    fn image_and_raw_header_setters_remove_the_replaced_comments() {
+        let mut document = with_commented_header();
+        document.set_header_image(
+            b"header image",
+            "header.png",
+            rdocx::Length::pt(10.0),
+            rdocx::Length::pt(10.0),
+        );
+        assert_no_comment_left(&mut document);
+
+        let mut document = with_commented_header();
+        document.set_raw_header_with_images(
+            br#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:p><w:r><w:t>Raw</w:t></w:r></w:p></w:hdr>"#.to_vec(),
+            &[],
+            HdrFtrType::Default,
+        );
+        assert_eq!(document.header_text().as_deref(), Some("Raw"));
+        assert_no_comment_left(&mut document);
+    }
+
+    #[test]
+    fn a_comment_already_without_markers_survives_an_unrelated_header_change() {
+        let mut document = with_body_paragraph();
+        let body = document.paragraph_story_location(0).unwrap().unwrap();
+        comment_on_first_item(&mut document, body.story());
+        let mut package =
+            OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec())
+            .unwrap()
+            .replace(r#"<w:commentRangeStart w:id="0"/>"#, "")
+            .replace(r#"<w:commentRangeEnd w:id="0"/>"#, "")
+            .replace(r#"<w:r><w:commentReference w:id="0"/></w:r>"#, "");
+        assert!(!xml.contains("w:id=\"0\""), "{xml}");
+        package.set_part("/word/document.xml", xml.into_bytes());
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        assert_eq!(document.unanchored_comments().unwrap(), [0]);
+
+        // Only comments that the change unmarks go.
+        document.set_header("Header");
+        let reopened = reopen(&mut document);
+        assert_eq!(ids(&reopened), [0]);
+        assert_eq!(reopened.unanchored_comments().unwrap(), [0]);
+    }
+
+    #[test]
+    fn a_header_setter_keeps_the_comments_it_cannot_remove() {
+        let mut document = with_commented_header();
+        let mut package =
+            OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+        // A commentsIds part whose end tag does not match cannot be edited.
+        package.set_part(
+            "/word/commentsIds.xml",
+            br#"<w16cid:commentsIds xmlns:w16cid="http://schemas.microsoft.com/office/word/2016/wordml/cid"><w16cid:commentId w16cid:paraId="00000001" w16cid:durableId="70000000"/></w16cid:broken>"#.to_vec(),
+        );
+        package.get_or_create_part_rels("/word/document.xml").add(
+            "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds",
+            "commentsIds.xml",
+        );
+        package.content_types.add_override(
+            "/word/commentsIds.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsIds+xml",
+        );
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        assert!(document.remove_comment(0).is_err());
+
+        document.set_header("Replaced");
+        assert_eq!(document.header_text().as_deref(), Some("Replaced"));
+        assert_eq!(ids(&document), [0, 1]);
+    }
+
     #[test]
     fn removing_a_building_block_removes_the_comments_only_it_marks() {
         let mut source = Document::new();
