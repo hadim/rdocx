@@ -1127,6 +1127,54 @@ impl DocumentFragment {
         )
     }
 
+    /// Return this fragment without the comment markers of its content and
+    /// of its footnotes and endnotes, so that an import brings none of its
+    /// comment threads.
+    pub(crate) fn without_comment_markers(&self) -> Result<Self> {
+        let mut package = OpcPackage::from_reader(std::io::Cursor::new(&self.package))?;
+        let main = package
+            .main_document_part()
+            .ok_or_else(|| Error::Other("document fragment main part is missing".to_owned()))?;
+        let mut parts = vec![main.clone()];
+        if let Some(relationships) = package.get_part_rels(&main) {
+            parts.extend(
+                relationships
+                    .items
+                    .iter()
+                    .filter(|relationship| {
+                        relationship_is_internal(relationship)
+                            && matches!(
+                                relationship.rel_type.as_str(),
+                                rel_types::FOOTNOTES | rel_types::ENDNOTES
+                            )
+                    })
+                    .map(|relationship| {
+                        OpcPackage::resolve_rel_target(&main, &relationship.target)
+                    }),
+            );
+        }
+        let mut changed = false;
+        for part in parts {
+            let Some(xml) = package.get_part(&part) else {
+                continue;
+            };
+            let stripped = crate::comments::without_comment_markers(xml)?;
+            if stripped != xml {
+                package.set_part(&part, stripped);
+                changed = true;
+            }
+        }
+        if !changed {
+            return Ok(self.clone());
+        }
+        let mut output = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut output)?;
+        Ok(Self {
+            package: output.into_inner(),
+            include_final_section_properties: self.include_final_section_properties,
+        })
+    }
+
     pub(crate) fn contains_section_properties(&self) -> bool {
         self.include_final_section_properties
     }
@@ -20005,7 +20053,7 @@ impl Document {
         });
 
         if let Some(marked) = marked
-            && let Ok(gone) = self.comments_left_unmarked(&marked, None)
+            && let Ok(gone) = self.comments_left_unmarked(&marked)
             && !gone.is_empty()
         {
             // Settle on a copy, so a failure leaves this candidate as the

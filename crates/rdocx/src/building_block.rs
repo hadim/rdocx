@@ -349,10 +349,9 @@ impl Document {
 
     /// Replace one existing glossary entry through a staged save and reopen.
     ///
-    /// A comment that only the old body marked, and that no story and no
-    /// entry marks after the replacement, is removed with its replies and
-    /// its `commentsExtended`, `commentsIds` and `commentsExtensible` rows,
-    /// as [`Self::remove_comment`] removes it.
+    /// The typed body is written as given. Its comment markers, as a body
+    /// read from a Word glossary holds them, name comments of the
+    /// glossary's own comments part, never of the main document's.
     pub fn replace_building_block(
         &mut self,
         glossary_part: &str,
@@ -363,7 +362,6 @@ impl Document {
             return Err(Error::Other("stale glossary part identity".to_owned()));
         }
         let mut candidate = self.clone_for_staging();
-        let marked = candidate.comments_only_in_building_block(glossary_part, ordinal)?;
         let part = candidate
             .glossary
             .as_mut()
@@ -372,8 +370,7 @@ impl Document {
         apply_block(part, block.clone())?;
         candidate.glossary_dirty = true;
         candidate.preserve_glossary_drawing_ids_staged()?;
-        let mut reopened = candidate.prepare_and_reopen_staged()?;
-        reopened.remove_building_block_comments_left_unmarked(&marked, glossary_part)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
         let result = reopened
             .building_blocks()?
             .into_iter()
@@ -400,54 +397,6 @@ impl Document {
             return Err(Error::Other("stale building block snapshot".to_owned()));
         }
         Ok(())
-    }
-
-    /// Return the comments that the body of entry `ordinal` marks and that
-    /// no story and no other entry marks, before a staged call replaces or
-    /// removes the entry. The package is prepared first when the document
-    /// has comments, so the glossary part holds the current entries.
-    fn comments_only_in_building_block(
-        &mut self,
-        glossary_part: &str,
-        ordinal: usize,
-    ) -> Result<Vec<i32>> {
-        if self
-            .comments
-            .as_ref()
-            .is_none_or(|comments| comments.comments.is_empty())
-        {
-            return Ok(Vec::new());
-        }
-        self.prepare_staged_package()?;
-        let xml = self
-            .package
-            .get_part(glossary_part)
-            .ok_or_else(|| Error::Other("glossary part is missing".to_owned()))?;
-        let range = CT_GlossaryDocument::from_xml(xml)?.body_range(ordinal)?;
-        self.comments_marked_only_in(xml, range)
-    }
-
-    /// Remove, on a reopened candidate, each comment of `marked_before` that
-    /// no story and no entry of `glossary_part` marks any more, with its
-    /// replies and rows, as [`Self::remove_comment`] does.
-    fn remove_building_block_comments_left_unmarked(
-        &mut self,
-        marked_before: &[i32],
-        glossary_part: &str,
-    ) -> Result<()> {
-        if marked_before.is_empty() {
-            return Ok(());
-        }
-        let glossary = self.package.get_part(glossary_part).map(<[u8]>::to_vec);
-        let marked_before = marked_before.iter().copied().collect::<HashSet<_>>();
-        let gone = self.comments_left_unmarked(&marked_before, glossary.as_deref())?;
-        if gone.is_empty() {
-            return Ok(());
-        }
-        for id in gone {
-            self.remove_comment_staged(id)?;
-        }
-        self.flush_dirty_related_story_models()
     }
 
     fn ensure_glossary_staged(&mut self) -> Result<String> {
@@ -538,6 +487,12 @@ impl Document {
 
     /// Create an entry with content and dependencies from an owned fragment.
     /// The metadata body's content must be empty. The fragment supplies its body.
+    ///
+    /// An entry carries no comments: the comment markers of the fragment's
+    /// content and of its footnotes and endnotes are left out, and its
+    /// comment threads are not imported. Word keeps the
+    /// comments of a glossary in a comments part of the glossary's own, so a
+    /// thread in the main document's comments part would be anchored nowhere.
     pub fn create_building_block_from_fragment(
         &mut self,
         mut block: BuildingBlock,
@@ -556,7 +511,11 @@ impl Document {
         let mut candidate = self.clone_for_staging();
         candidate.prepare_staged_package()?;
         let part_name = candidate.ensure_glossary_staged()?;
-        let content = fragment.import_content_staged(&mut candidate, &part_name, policy)?;
+        let content = fragment.without_comment_markers()?.import_content_staged(
+            &mut candidate,
+            &part_name,
+            policy,
+        )?;
         let part = CT_DocPart::from_body_xml(&content)?;
         block.body = part.body.clone();
         let ordinal = candidate.add_building_block_staged(part, block)?;
@@ -590,10 +549,8 @@ impl Document {
 
     /// Replace entry content and metadata through the dependency import transaction.
     ///
-    /// A comment that only the old body marked, and that no story and no
-    /// entry marks after the update, is removed with its replies and its
-    /// `commentsExtended`, `commentsIds` and `commentsExtensible` rows, as
-    /// [`Self::remove_comment`] removes it.
+    /// As in [`Self::create_building_block_from_fragment`], the comment
+    /// markers of the fragment are left out and its threads not imported.
     pub fn update_building_block_from_fragment(
         &mut self,
         entry: &BuildingBlockInfo,
@@ -613,10 +570,11 @@ impl Document {
         }
         let mut candidate = self.clone_for_staging();
         candidate.prepare_staged_package()?;
-        let marked =
-            candidate.comments_only_in_building_block(&entry.glossary_part, entry.ordinal)?;
-        let content =
-            fragment.import_content_staged(&mut candidate, &entry.glossary_part, policy)?;
+        let content = fragment.without_comment_markers()?.import_content_staged(
+            &mut candidate,
+            &entry.glossary_part,
+            policy,
+        )?;
         let glossary = candidate
             .glossary
             .as_mut()
@@ -640,8 +598,7 @@ impl Document {
         apply_block(part, block)?;
         candidate.glossary_dirty = true;
         candidate.preserve_glossary_drawing_ids_staged()?;
-        let mut reopened = candidate.prepare_and_reopen_staged()?;
-        reopened.remove_building_block_comments_left_unmarked(&marked, &entry.glossary_part)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
         let result = reopened.building_blocks()?.remove(entry.ordinal);
         self.commit_staged_mutation(reopened);
         Ok(result)
@@ -649,20 +606,12 @@ impl Document {
 
     /// Remove one snapshot-checked entry, retaining the valid glossary bundle.
     ///
-    /// An entry created from a fragment that carried comments holds their
-    /// markers, while their definitions live in the main document's
-    /// comments part. A comment that no story and no other entry marks goes
-    /// with the entry, with its replies and its `commentsExtended`,
-    /// `commentsIds` and `commentsExtensible` rows, as
-    /// [`Self::remove_comment`] removes it.
+    /// No comment of the main document goes with it: an entry holds no
+    /// marker of those comments, and a comment marker that a glossary read
+    /// from a file holds names a comment of the glossary's own comments part.
     pub fn remove_building_block(&mut self, entry: &BuildingBlockInfo) -> Result<BuildingBlock> {
         self.checked_building_block(entry)?;
         let mut candidate = self.clone_for_staging();
-        let orphaned =
-            candidate.comments_only_in_building_block(&entry.glossary_part, entry.ordinal)?;
-        for id in orphaned {
-            candidate.remove_comment_staged(id)?;
-        }
         candidate
             .glossary
             .as_mut()
@@ -677,6 +626,11 @@ impl Document {
     }
 
     /// Capture retained entry XML with the glossary's relationship scope.
+    ///
+    /// The fragment carries no comment: a comment marker in the entry names
+    /// a comment of the glossary's own comments part, not of the main
+    /// document's, so the markers of the entry and of its footnotes and
+    /// endnotes are left out.
     pub fn building_block_fragment(&self, entry: &BuildingBlockInfo) -> Result<DocumentFragment> {
         self.checked_building_block(entry)?;
         let mut candidate = self.clone_for_staging();
@@ -697,10 +651,14 @@ impl Document {
             false,
             &std::collections::BTreeMap::new(),
         )?;
-        DocumentFragment::from_part_content(&candidate, &entry.glossary_part, content)
+        DocumentFragment::from_part_content(&candidate, &entry.glossary_part, content)?
+            .without_comment_markers()
     }
 
     /// Insert an entry through the shared dependency import transaction.
+    ///
+    /// The inserted content carries no comment, as
+    /// [`Self::building_block_fragment`] captures it.
     pub fn insert_building_block(
         &mut self,
         destination: &ContentLocation,

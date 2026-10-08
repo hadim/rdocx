@@ -1261,7 +1261,8 @@ The additive pre-1.0 Rust surface also exposes `create_building_block`,
 `building_block_fragment`, `insert_building_block` and
 `bind_building_block_placeholder`. Typed creation accepts dependency-free
 content. Fragment creation and insertion use `FragmentConflictPolicy` and
-the source package dependency closure. Mutation checks the complete
+the source package dependency closure, without the comment markers and
+threads of the fragment or entry. Mutation checks the complete
 `BuildingBlockInfo` snapshot, rejecting stale ordinals and changed values.
 Placeholder binding keeps the existing control discriminator and updates
 selection properties only on existing document-part control variants.

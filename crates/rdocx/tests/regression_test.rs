@@ -4266,86 +4266,6 @@ mod story_removal_comments {
         assert!(!rows.contains("commentId "), "{rows}");
     }
 
-    /// A plain one-paragraph fragment, or one whose paragraph carries a
-    /// comment with a reply.
-    fn glossary_fragment(commented: bool) -> rdocx::DocumentFragment {
-        let mut source = Document::new();
-        source.add_paragraph("glossary text");
-        if commented {
-            let range = rdocx::RunRange {
-                start: rdocx::RunPosition {
-                    body_index: 0,
-                    run_index: 0,
-                },
-                end: rdocx::RunPosition {
-                    body_index: 0,
-                    run_index: 1,
-                },
-            };
-            let comment = source.add_comment(range, "A", None, "comment").unwrap();
-            source.reply_to(comment, "B", "reply").unwrap();
-        }
-        let body = super::f254_story(&source, rdocx::StoryKind::Body);
-        rdocx::DocumentFragment::from_range(
-            &source,
-            &super::f254_item(&source, &body, 0),
-            &ContentLocation::end(body),
-            false,
-        )
-        .unwrap()
-    }
-
-    /// A document with one entry built from a commented fragment.
-    fn commented_building_block() -> Document {
-        let mut document = with_body_paragraph();
-        document
-            .create_building_block_from_fragment(
-                super::f277_block("commented", "docParts"),
-                &glossary_fragment(true),
-                rdocx::FragmentConflictPolicy::rename_all(),
-            )
-            .unwrap();
-        assert_eq!(ids(&document).len(), 2);
-        document
-    }
-
-    #[test]
-    fn replacing_a_building_block_body_removes_the_comments_only_it_marked() {
-        // A metadata update keeps the body and its comments.
-        let mut document = commented_building_block();
-        let entry = document.building_blocks().unwrap().remove(0);
-        let mut block = entry.block.clone();
-        block.description = Some("renamed".to_owned());
-        document.update_building_block(&entry, block).unwrap();
-        assert_eq!(ids(&reopen(&mut document)).len(), 2);
-
-        let mut document = commented_building_block();
-        let entry = document.building_blocks().unwrap().remove(0);
-        let mut block = entry.block.clone();
-        block.body = rdocx_oxml::document::CT_Body::new();
-        block.body.sect_pr = None;
-        document
-            .replace_building_block(&entry.glossary_part, entry.ordinal, block)
-            .unwrap();
-        assert_eq!(ids(&reopen(&mut document)), Vec::<i32>::new());
-        let extended = part(&mut document, "/word/commentsExtended.xml");
-        assert!(!extended.contains("commentEx "), "{extended}");
-
-        let mut document = commented_building_block();
-        let entry = document.building_blocks().unwrap().remove(0);
-        let mut block = super::f277_block("commented", "docParts");
-        block.description = entry.block.description.clone();
-        document
-            .update_building_block_from_fragment(
-                &entry,
-                block,
-                &glossary_fragment(false),
-                rdocx::FragmentConflictPolicy::rename_all(),
-            )
-            .unwrap();
-        assert_eq!(ids(&reopen(&mut document)), Vec::<i32>::new());
-    }
-
     #[test]
     fn replacing_a_section_story_with_a_copy_removes_the_old_comments() {
         let mut document = with_commented_header();
@@ -4436,74 +4356,264 @@ mod story_removal_comments {
         assert_eq!(document.header_text().as_deref(), Some("Replaced"));
         assert_eq!(ids(&document), [0, 1]);
     }
+}
 
-    #[test]
-    fn removing_a_building_block_removes_the_comments_only_it_marks() {
-        let mut source = Document::new();
-        source.add_paragraph("glossary text");
-        let range = rdocx::RunRange {
-            start: rdocx::RunPosition {
+/// GitHub issue #292: a building block carries no comment of the main
+/// document, whether created from a commented fragment or read from a
+/// glossary whose markers name comments of its own comments part.
+mod building_block_comments {
+    use std::io::Cursor;
+
+    use oxml_opc::OpcPackage;
+    use rdocx::{
+        ContentLocation, Document, DocumentFragment, FragmentConflictPolicy, RunPosition, RunRange,
+        StoryKind,
+    };
+
+    const GLOSSARY: &str = "/word/glossary/document.xml";
+
+    fn part(document: &mut Document, name: &str) -> String {
+        let package = OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+        package
+            .get_part(name)
+            .map(|xml| String::from_utf8(xml.to_vec()).unwrap())
+            .unwrap_or_default()
+    }
+
+    fn reopen(document: &mut Document) -> Document {
+        Document::from_bytes(&document.to_bytes().unwrap()).unwrap()
+    }
+
+    fn ids(document: &Document) -> Vec<i32> {
+        document
+            .comments()
+            .iter()
+            .map(|comment| comment.id())
+            .collect()
+    }
+
+    fn assert_no_marker(xml: &str) {
+        assert!(
+            !xml.contains("commentRangeStart")
+                && !xml.contains("commentRangeEnd")
+                && !xml.contains("commentReference"),
+            "{xml}"
+        );
+    }
+
+    /// Comment the first run of body paragraph 0, with a reply.
+    fn comment_first_paragraph(document: &mut Document) -> i32 {
+        let range = RunRange {
+            start: RunPosition {
                 body_index: 0,
                 run_index: 0,
             },
-            end: rdocx::RunPosition {
+            end: RunPosition {
                 body_index: 0,
                 run_index: 1,
             },
         };
-        let comment = source.add_comment(range, "A", None, "comment").unwrap();
-        source.reply_to(comment, "B", "reply").unwrap();
-        let body = super::f254_story(&source, rdocx::StoryKind::Body);
-        let fragment = rdocx::DocumentFragment::from_range(
+        let id = document.add_comment(range, "A", None, "comment").unwrap();
+        document.reply_to(id, "B", "reply").unwrap();
+        id
+    }
+
+    /// A one-paragraph fragment holding `text`, commented when asked.
+    fn fragment(text: &str, commented: bool) -> DocumentFragment {
+        let mut source = Document::new();
+        source.add_paragraph(text);
+        if commented {
+            comment_first_paragraph(&mut source);
+        }
+        let body = super::f254_story(&source, StoryKind::Body);
+        DocumentFragment::from_range(
+            &source,
+            &super::f254_item(&source, &body, 0),
+            &ContentLocation::end(body),
+            false,
+        )
+        .unwrap()
+    }
+
+    fn end_of_body(document: &Document) -> ContentLocation {
+        ContentLocation::end(super::f254_story(document, StoryKind::Body))
+    }
+
+    #[test]
+    fn a_building_block_from_a_commented_fragment_carries_no_comment() {
+        let mut document = Document::new();
+        document.add_paragraph("body");
+        let entry = document
+            .create_building_block_from_fragment(
+                super::f277_block("commented", "docParts"),
+                &fragment("glossary text", true),
+                FragmentConflictPolicy::rename_all(),
+            )
+            .unwrap();
+        let reopened = reopen(&mut document);
+        assert_eq!(ids(&reopened), Vec::<i32>::new());
+        assert_eq!(reopened.unanchored_comments().unwrap(), Vec::<i32>::new());
+        let glossary = part(&mut document, GLOSSARY);
+        assert!(glossary.contains("glossary text"), "{glossary}");
+        assert_no_marker(&glossary);
+
+        // The inserted entry brings no comment either.
+        let body = end_of_body(&document);
+        document
+            .insert_building_block(&body, &entry, FragmentConflictPolicy::rename_all())
+            .unwrap();
+        let reopened = reopen(&mut document);
+        assert_eq!(ids(&reopened), Vec::<i32>::new());
+        let main = part(&mut document, "/word/document.xml");
+        assert!(main.contains("glossary text"), "{main}");
+        assert_no_marker(&main);
+
+        // An update from a commented fragment keeps the entry free of comments.
+        let entry = document.building_blocks().unwrap().remove(0);
+        let mut block = super::f277_block("commented", "docParts");
+        block.description = entry.block.description.clone();
+        document
+            .update_building_block_from_fragment(
+                &entry,
+                block,
+                &fragment("updated text", true),
+                FragmentConflictPolicy::rename_all(),
+            )
+            .unwrap();
+        let reopened = reopen(&mut document);
+        assert_eq!(ids(&reopened), Vec::<i32>::new());
+        assert_eq!(reopened.unanchored_comments().unwrap(), Vec::<i32>::new());
+        let glossary = part(&mut document, GLOSSARY);
+        assert!(glossary.contains("updated text"), "{glossary}");
+        assert_no_marker(&glossary);
+    }
+
+    #[test]
+    fn a_building_block_leaves_out_the_comments_of_its_footnotes() {
+        // The source paragraph references a footnote that holds a comment.
+        let mut source = Document::new();
+        source.add_paragraph("noted text");
+        let location = source.paragraph_story_location(0).unwrap().unwrap();
+        let note = source.create_footnote(&location, "note text").unwrap();
+        let story = source.footnote_story(note).unwrap().unwrap();
+        let item = source.story_items(&story).unwrap()[0].location().clone();
+        let range = rdocx::StoryRunRange {
+            start: rdocx::StoryRunPosition {
+                location: item.clone(),
+                run_index: 0,
+            },
+            end: rdocx::StoryRunPosition {
+                location: item,
+                run_index: 1,
+            },
+        };
+        source
+            .add_story_comment(range, "A", None, "comment")
+            .unwrap();
+        assert_eq!(ids(&source), [0]);
+        let body = super::f254_story(&source, StoryKind::Body);
+        let fragment = DocumentFragment::from_range(
             &source,
             &super::f254_item(&source, &body, 0),
             &ContentLocation::end(body),
             false,
         )
         .unwrap();
-        let mut document = with_body_paragraph();
-        let policy = rdocx::FragmentConflictPolicy::rename_all;
-        document
-            .create_building_block_from_fragment(
-                super::f277_block("first", "docParts"),
-                &fragment,
-                policy(),
-            )
-            .unwrap();
-        document
-            .create_building_block_from_fragment(
-                super::f277_block("second", "docParts"),
-                &fragment,
-                policy(),
-            )
-            .unwrap();
-        let before = ids(&document);
-        assert_eq!(before.len(), 4, "{before:?}");
 
-        // The comments of the other entry stay.
-        let first = document.building_blocks().unwrap().remove(0);
-        document.remove_building_block(&first).unwrap();
+        let mut document = Document::new();
+        document.add_paragraph("body");
+        let entry = document
+            .create_building_block_from_fragment(
+                super::f277_block("noted", "docParts"),
+                &fragment,
+                FragmentConflictPolicy::rename_all(),
+            )
+            .unwrap();
         let reopened = reopen(&mut document);
-        assert_eq!(ids(&reopened).len(), 2);
-        let glossary = part(&mut document, "/word/glossary/document.xml");
-        for id in ids(&reopened) {
-            if reopened
-                .comments()
-                .iter()
-                .any(|comment| comment.id() == id && comment.parent_id().is_none())
-            {
-                assert!(
-                    glossary.contains(&format!(r#"<w:commentRangeStart w:id="{id}"/>"#)),
-                    "{glossary}"
-                );
-            }
-        }
+        assert_eq!(ids(&reopened), Vec::<i32>::new());
+        assert_eq!(reopened.unanchored_comments().unwrap(), Vec::<i32>::new());
 
-        let second = document.building_blocks().unwrap().remove(0);
-        document.remove_building_block(&second).unwrap();
-        assert_eq!(ids(&reopen(&mut document)), Vec::<i32>::new());
-        let extended = part(&mut document, "/word/commentsExtended.xml");
-        assert!(!extended.contains("commentEx "), "{extended}");
+        let body = end_of_body(&document);
+        document
+            .insert_building_block(&body, &entry, FragmentConflictPolicy::rename_all())
+            .unwrap();
+        let reopened = reopen(&mut document);
+        assert_eq!(ids(&reopened), Vec::<i32>::new());
+        assert_eq!(reopened.unanchored_comments().unwrap(), Vec::<i32>::new());
+        for story in reopened.stories().unwrap() {
+            assert_no_marker(&part(&mut document, story.part_name()));
+        }
+        assert_no_marker(&part(&mut document, GLOSSARY));
+        let notes = part(&mut document, "/word/footnotes.xml");
+        assert!(notes.contains("note text"), "{notes}");
+    }
+
+    #[test]
+    fn existing_glossary_comment_markers_never_name_a_main_comment() {
+        // The main body holds comment 0, and the entry markers of its own
+        // comment 0, as Word writes a glossary with its own comments part.
+        let mut document = Document::new();
+        document.add_paragraph("body");
+        let id = comment_first_paragraph(&mut document);
+        assert_eq!(id, 0);
+        document
+            .create_building_block_from_fragment(
+                super::f277_block("entry", "docParts"),
+                &fragment("glossary text", false),
+                FragmentConflictPolicy::rename_all(),
+            )
+            .unwrap();
+        let mut package =
+            OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let glossary = String::from_utf8(package.get_part(GLOSSARY).unwrap().to_vec()).unwrap();
+        let start = glossary.find("<w:r>").unwrap();
+        let end = glossary.find("</w:r>").unwrap() + "</w:r>".len();
+        let marked = format!(
+            r#"{}<w:commentRangeStart w:id="0"/>{}<w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r>{}"#,
+            &glossary[..start],
+            &glossary[start..end],
+            &glossary[end..]
+        );
+        package.set_part(GLOSSARY, marked.into_bytes());
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        let before = ids(&document);
+        assert_eq!(before.len(), 2);
+
+        // The captured fragment carries no comment.
+        let entry = document.building_blocks().unwrap().remove(0);
+        let mut other = Document::new();
+        other.add_paragraph("other");
+        let body = end_of_body(&other);
+        other
+            .import_fragment(
+                &body,
+                &document.building_block_fragment(&entry).unwrap(),
+                FragmentConflictPolicy::rename_all(),
+            )
+            .unwrap();
+        assert_eq!(ids(&reopen(&mut other)), Vec::<i32>::new());
+        assert_no_marker(&part(&mut other, "/word/document.xml"));
+
+        // Inserting the entry copies no main comment.
+        let body = end_of_body(&document);
+        document
+            .insert_building_block(&body, &entry, FragmentConflictPolicy::rename_all())
+            .unwrap();
+        let reopened = reopen(&mut document);
+        assert_eq!(ids(&reopened), before);
+        assert_eq!(reopened.unanchored_comments().unwrap(), Vec::<i32>::new());
+        let main = part(&mut document, "/word/document.xml");
+        assert_eq!(main.matches("commentRangeStart").count(), 1, "{main}");
+        assert_eq!(main.matches("glossary text").count(), 1, "{main}");
+
+        // Removing the entry keeps the main comment its markers share an id with.
+        let entry = document.building_blocks().unwrap().remove(0);
+        document.remove_building_block(&entry).unwrap();
+        let reopened = reopen(&mut document);
+        assert_eq!(ids(&reopened), before);
+        assert_eq!(reopened.unanchored_comments().unwrap(), Vec::<i32>::new());
     }
 }
 

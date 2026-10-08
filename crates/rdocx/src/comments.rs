@@ -2120,24 +2120,12 @@ impl Document {
     }
 
     /// Return, in id order, the comments of `marked_before` that no story
-    /// and no marker in `extra`, a part that is not a story such as a
-    /// glossary document, marks any more.
-    pub(crate) fn comments_left_unmarked(
-        &self,
-        marked_before: &HashSet<i32>,
-        extra: Option<&[u8]>,
-    ) -> Result<Vec<i32>> {
+    /// marks any more.
+    pub(crate) fn comments_left_unmarked(&self, marked_before: &HashSet<i32>) -> Result<Vec<i32>> {
         if marked_before.is_empty() {
             return Ok(Vec::new());
         }
-        let mut marked_after = self.comment_marker_ids()?;
-        if let Some(xml) = extra {
-            marked_after.extend(
-                scan_comment_markers(xml)?
-                    .into_iter()
-                    .map(|marker| marker.id),
-            );
-        }
+        let marked_after = self.comment_marker_ids()?;
         let mut gone = marked_before
             .difference(&marked_after)
             .copied()
@@ -2158,41 +2146,10 @@ impl Document {
         let Some(marked_before) = marked_before else {
             return Ok(());
         };
-        for id in self.comments_left_unmarked(&marked_before, None)? {
+        for id in self.comments_left_unmarked(&marked_before)? {
             self.remove_comment_staged(id)?;
         }
         Ok(())
-    }
-
-    /// Return, in id order, the comments marked in `removed`, a byte range
-    /// of `xml`, that no marker outside it and no marker in a story names.
-    /// `xml` is a part that is not a story, such as a glossary document.
-    pub(crate) fn comments_marked_only_in(
-        &self,
-        xml: &[u8],
-        removed: Range<usize>,
-    ) -> Result<Vec<i32>> {
-        if self
-            .comments
-            .as_ref()
-            .is_none_or(|comments| comments.comments.is_empty())
-            || !mentions_comment_markers(&xml[removed.clone()])
-        {
-            return Ok(Vec::new());
-        }
-        let mut elsewhere = self.comment_marker_ids()?;
-        let mut inside = BTreeSet::new();
-        for marker in scan_comment_markers(xml)? {
-            if removed.start <= marker.span.start && marker.span.end <= removed.end {
-                inside.insert(marker.id);
-            } else {
-                elsewhere.insert(marker.id);
-            }
-        }
-        Ok(inside
-            .into_iter()
-            .filter(|id| !elsewhere.contains(id))
-            .collect())
     }
 
     fn story_part_xml(&self, part_name: &str) -> Result<Vec<u8>> {
@@ -3135,6 +3092,21 @@ fn append_root_children(xml: &[u8], children: &str) -> Result<Vec<u8>> {
     updated.extend_from_slice(children.as_bytes());
     updated.extend_from_slice(&xml[close..]);
     Ok(updated)
+}
+
+/// Remove every comment range marker and comment reference from `xml`,
+/// which must declare the namespaces it uses, with the reference runs and
+/// the Google Docs `goog_rdk` content controls left holding nothing.
+pub(crate) fn without_comment_markers(xml: &[u8]) -> Result<Vec<u8>> {
+    if !mentions_comment_markers(xml) {
+        return Ok(xml.to_vec());
+    }
+    let ids = scan_comment_markers(xml)?
+        .into_iter()
+        .map(|marker| marker.id)
+        .collect::<HashSet<_>>();
+    let spans = comment_marker_removal_spans(xml, &ids)?;
+    Ok(without_spans(xml, &spans))
 }
 
 /// Return `xml` without the byte `spans`, which must not overlap.

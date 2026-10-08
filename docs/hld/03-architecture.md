@@ -1779,11 +1779,19 @@ part shared by several sections is replaced for all of them and its comments
 go. Those setters cannot fail: when the comments cannot be read or removed,
 they stay and the part is installed all the same. `unlink_section_story`
 copies the markers with the story and removes nothing.
-`remove_building_block`, `replace_building_block`, `update_building_block`
-and `update_building_block_from_fragment` remove the comments that only the
-removed or replaced entry body marked: an entry built from a fragment holds
-the markers of the comments the fragment carried, whose definitions live in
-the main document's comments part.
+Word keeps the comments of a glossary in a comments part of the glossary's
+own, so a glossary marker never names a comment of the main comments part,
+and rdocx puts no main-document comment into an entry.
+`create_building_block` rejects comment markers in its typed body.
+`create_building_block_from_fragment` and
+`update_building_block_from_fragment` leave out the comment markers of the
+fragment's content and of its footnotes and endnotes, and import none of its
+threads. `building_block_fragment`, and so `insert_building_block`, leaves
+out the same markers of the entry. `update_building_block` keeps the body,
+and `replace_building_block` writes the typed body it is given as is, since
+a body read from a Word glossary may hold markers of the glossary's own
+comments. Removing or replacing an entry therefore removes no comment of the
+main document.
 
 Checked picture insertion uses the same story owner and package relationship
 scope. `insert_picture_to_story` accepts bytes, a safe filename, paired
