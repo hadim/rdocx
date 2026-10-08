@@ -841,8 +841,18 @@ class Document:
         merge_record_number: int | None = None,
         merge_sequence_number: int | None = None,
     ) -> int: ...
-    def set_header(self, text: str) -> None: ...
-    def set_footer(self, text: str) -> None: ...
+    def set_header(self, text: str) -> None:
+        """Replace the default header with one paragraph of ``text``.
+
+        The comments whose range lay in the replaced header go with it, with
+        their replies.
+        """
+    def set_footer(self, text: str) -> None:
+        """Replace the default footer with one paragraph of ``text``.
+
+        The comments whose range lay in the replaced footer go with it, with
+        their replies.
+        """
     def set_story_text(self, item: StoryItem, text: str) -> None: ...
     def replace_story_text(
         self,

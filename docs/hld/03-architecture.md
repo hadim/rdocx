@@ -1766,6 +1766,33 @@ then cuts the remaining ones from each story source, including markers inside
 tracked insertions, hyperlinks and fields, with the reference runs and the
 Google Docs `goog_rdk` content controls left holding nothing.
 
+Removing or replacing a whole story settles its comments the same way.
+`remove_footnote`, `remove_endnote`, `remove_section_story`,
+`replace_section_story`, `inherit_section_story` and every header and footer
+setter (`set_header`, `set_footer`, their first-page, image and raw variants)
+note the comments marked in any story before the change, and remove each one
+left with no marker after it through `remove_comment`'s staging, replies and
+rows included. For the section story calls, a story part that another
+section still references keeps its markers, so its comments stay. The header
+and footer setters rewrite the existing part of their variant in place, so a
+part shared by several sections is replaced for all of them and its comments
+go. Those setters cannot fail: when the comments cannot be read or removed,
+they stay and the part is installed all the same. `unlink_section_story`
+copies the markers with the story and removes nothing.
+Word keeps the comments of a glossary in a comments part of the glossary's
+own, so a glossary marker never names a comment of the main comments part,
+and rdocx puts no main-document comment into an entry.
+`create_building_block` rejects comment markers in its typed body.
+`create_building_block_from_fragment` and
+`update_building_block_from_fragment` leave out the comment markers of the
+fragment's content and of its footnotes and endnotes, and import none of its
+threads. `building_block_fragment`, and so `insert_building_block`, leaves
+out the same markers of the entry. `update_building_block` keeps the body,
+and `replace_building_block` writes the typed body it is given as is, since
+a body read from a Word glossary may hold markers of the glossary's own
+comments. Removing or replacing an entry therefore removes no comment of the
+main document.
+
 Checked picture insertion uses the same story owner and package relationship
 scope. `insert_picture_to_story` accepts bytes, a safe filename, paired
 explicit dimensions or native 72 DPI sizing, and an optional direct item after

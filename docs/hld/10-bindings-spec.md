@@ -432,7 +432,8 @@ the control, in a nested content control or a table, has no story location:
 comment's id, text, replies and resolved state, refuse a reply id, and advance
 the revision once. `remove_content`, `pop_content` and `Table.remove_row`
 never leave a comment without an anchor, and `insert_content` restores the
-threads a popped fragment carries.
+threads a popped fragment carries. `Document.set_header` and
+`Document.set_footer` remove the threads anchored in the story they replace.
 `Comment`, `ComparisonDiagnostic`, `BoundingBox`, `LayoutFragment`,
 `LayoutPage`, `TocRebuildReport`, and `Revision` are frozen typed snapshots.
 `Document.revisions` lists the revisions of every story that the accept and
@@ -1288,7 +1289,8 @@ The additive pre-1.0 Rust surface also exposes `create_building_block`,
 `building_block_fragment`, `insert_building_block` and
 `bind_building_block_placeholder`. Typed creation accepts dependency-free
 content. Fragment creation and insertion use `FragmentConflictPolicy` and
-the source package dependency closure. Mutation checks the complete
+the source package dependency closure, without the comment markers and
+threads of the fragment or entry. Mutation checks the complete
 `BuildingBlockInfo` snapshot, rejecting stale ordinals and changed values.
 Placeholder binding keeps the existing control discriminator and updates
 selection properties only on existing document-part control variants.

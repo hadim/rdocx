@@ -348,6 +348,10 @@ impl Document {
     }
 
     /// Replace one existing glossary entry through a staged save and reopen.
+    ///
+    /// The typed body is written as given. Its comment markers, as a body
+    /// read from a Word glossary holds them, name comments of the
+    /// glossary's own comments part, never of the main document's.
     pub fn replace_building_block(
         &mut self,
         glossary_part: &str,
@@ -483,6 +487,12 @@ impl Document {
 
     /// Create an entry with content and dependencies from an owned fragment.
     /// The metadata body's content must be empty. The fragment supplies its body.
+    ///
+    /// An entry carries no comments: the comment markers of the fragment's
+    /// content and of its footnotes and endnotes are left out, and its
+    /// comment threads are not imported. Word keeps the
+    /// comments of a glossary in a comments part of the glossary's own, so a
+    /// thread in the main document's comments part would be anchored nowhere.
     pub fn create_building_block_from_fragment(
         &mut self,
         mut block: BuildingBlock,
@@ -501,7 +511,11 @@ impl Document {
         let mut candidate = self.clone_for_staging();
         candidate.prepare_staged_package()?;
         let part_name = candidate.ensure_glossary_staged()?;
-        let content = fragment.import_content_staged(&mut candidate, &part_name, policy)?;
+        let content = fragment.without_comment_markers()?.import_content_staged(
+            &mut candidate,
+            &part_name,
+            policy,
+        )?;
         let part = CT_DocPart::from_body_xml(&content)?;
         block.body = part.body.clone();
         let ordinal = candidate.add_building_block_staged(part, block)?;
@@ -534,6 +548,9 @@ impl Document {
     }
 
     /// Replace entry content and metadata through the dependency import transaction.
+    ///
+    /// As in [`Self::create_building_block_from_fragment`], the comment
+    /// markers of the fragment are left out and its threads not imported.
     pub fn update_building_block_from_fragment(
         &mut self,
         entry: &BuildingBlockInfo,
@@ -553,8 +570,11 @@ impl Document {
         }
         let mut candidate = self.clone_for_staging();
         candidate.prepare_staged_package()?;
-        let content =
-            fragment.import_content_staged(&mut candidate, &entry.glossary_part, policy)?;
+        let content = fragment.without_comment_markers()?.import_content_staged(
+            &mut candidate,
+            &entry.glossary_part,
+            policy,
+        )?;
         let glossary = candidate
             .glossary
             .as_mut()
@@ -585,6 +605,10 @@ impl Document {
     }
 
     /// Remove one snapshot-checked entry, retaining the valid glossary bundle.
+    ///
+    /// No comment of the main document goes with it: an entry holds no
+    /// marker of those comments, and a comment marker that a glossary read
+    /// from a file holds names a comment of the glossary's own comments part.
     pub fn remove_building_block(&mut self, entry: &BuildingBlockInfo) -> Result<BuildingBlock> {
         self.checked_building_block(entry)?;
         let mut candidate = self.clone_for_staging();
@@ -602,6 +626,11 @@ impl Document {
     }
 
     /// Capture retained entry XML with the glossary's relationship scope.
+    ///
+    /// The fragment carries no comment: a comment marker in the entry names
+    /// a comment of the glossary's own comments part, not of the main
+    /// document's, so the markers of the entry and of its footnotes and
+    /// endnotes are left out.
     pub fn building_block_fragment(&self, entry: &BuildingBlockInfo) -> Result<DocumentFragment> {
         self.checked_building_block(entry)?;
         let mut candidate = self.clone_for_staging();
@@ -622,10 +651,14 @@ impl Document {
             false,
             &std::collections::BTreeMap::new(),
         )?;
-        DocumentFragment::from_part_content(&candidate, &entry.glossary_part, content)
+        DocumentFragment::from_part_content(&candidate, &entry.glossary_part, content)?
+            .without_comment_markers()
     }
 
     /// Insert an entry through the shared dependency import transaction.
+    ///
+    /// The inserted content carries no comment, as
+    /// [`Self::building_block_fragment`] captures it.
     pub fn insert_building_block(
         &mut self,
         destination: &ContentLocation,

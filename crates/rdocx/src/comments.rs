@@ -2105,6 +2105,53 @@ impl Document {
         Ok(ids)
     }
 
+    /// Return the ids of the comments marked in a story before a staged
+    /// call removes or replaces whole stories, or `None` when the document
+    /// defines no comment.
+    pub(crate) fn marked_comments_before_story_removal(&self) -> Result<Option<HashSet<i32>>> {
+        if self
+            .comments
+            .as_ref()
+            .is_none_or(|comments| comments.comments.is_empty())
+        {
+            return Ok(None);
+        }
+        self.comment_marker_ids().map(Some)
+    }
+
+    /// Return, in id order, the comments of `marked_before` that no story
+    /// marks any more.
+    pub(crate) fn comments_left_unmarked(&self, marked_before: &HashSet<i32>) -> Result<Vec<i32>> {
+        if marked_before.is_empty() {
+            return Ok(Vec::new());
+        }
+        let marked_after = self.comment_marker_ids()?;
+        let mut gone = marked_before
+            .difference(&marked_after)
+            .copied()
+            .collect::<Vec<_>>();
+        gone.sort_unstable();
+        Ok(gone)
+    }
+
+    /// Remove each comment of `marked_before` that a staged call removing or
+    /// replacing whole stories left with no marker in any story, with its
+    /// replies and rows, as [`Self::remove_comment`] does. A story part
+    /// that another section still references keeps its markers, so its
+    /// comments stay.
+    pub(crate) fn remove_comments_of_removed_stories_staged(
+        &mut self,
+        marked_before: Option<HashSet<i32>>,
+    ) -> Result<()> {
+        let Some(marked_before) = marked_before else {
+            return Ok(());
+        };
+        for id in self.comments_left_unmarked(&marked_before)? {
+            self.remove_comment_staged(id)?;
+        }
+        Ok(())
+    }
+
     fn story_part_xml(&self, part_name: &str) -> Result<Vec<u8>> {
         if part_name == self.doc_part_name {
             return Ok(self.document.to_xml()?);
@@ -3045,6 +3092,21 @@ fn append_root_children(xml: &[u8], children: &str) -> Result<Vec<u8>> {
     updated.extend_from_slice(children.as_bytes());
     updated.extend_from_slice(&xml[close..]);
     Ok(updated)
+}
+
+/// Remove every comment range marker and comment reference from `xml`,
+/// which must declare the namespaces it uses, with the reference runs and
+/// the Google Docs `goog_rdk` content controls left holding nothing.
+pub(crate) fn without_comment_markers(xml: &[u8]) -> Result<Vec<u8>> {
+    if !mentions_comment_markers(xml) {
+        return Ok(xml.to_vec());
+    }
+    let ids = scan_comment_markers(xml)?
+        .into_iter()
+        .map(|marker| marker.id)
+        .collect::<HashSet<_>>();
+    let spans = comment_marker_removal_spans(xml, &ids)?;
+    Ok(without_spans(xml, &spans))
 }
 
 /// Return `xml` without the byte `spans`, which must not overlap.
