@@ -419,6 +419,89 @@ def test_story_item_replacement_changes_one_header_paragraph():
     assert _story_paragraph_texts(reopened, "header") == ["Version is pinned"]
 
 
+def _rewrite_part(document, name, edit):
+    source = io.BytesIO(document.to_bytes())
+    result = io.BytesIO()
+    with zipfile.ZipFile(source) as source_zip:
+        with zipfile.ZipFile(result, "w") as result_zip:
+            for info in source_zip.infolist():
+                data = source_zip.read(info.filename)
+                if info.filename == name:
+                    data = edit(data.decode()).encode()
+                result_zip.writestr(info, data)
+    return type(document).from_bytes(result.getvalue())
+
+
+_STORY_CELL_TABLE = (
+    '<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid><w:tr><w:tc>'
+    '<w:tcPr><w:tcW w:w="1000" w:type="dxa"/></w:tcPr>'
+    "<w:p><w:r><w:t>Version in a cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"
+)
+
+
+def test_story_item_replacement_refuses_text_boxes_comments_and_their_cells():
+    import rdocx
+
+    commented = rdocx.Document()
+    commented.add_paragraph("Version in the body")
+    commented.add_comment(
+        rdocx.RunRange(
+            start=rdocx.RunPosition(body_index=0, run_index=0),
+            end=rdocx.RunPosition(body_index=0, run_index=1),
+        ),
+        author="Ada",
+        text="Version in the comment",
+    )
+    commented = _rewrite_part(
+        commented,
+        "word/comments.xml",
+        lambda xml: xml.replace("</w:comment>", _STORY_CELL_TABLE + "<w:p/></w:comment>", 1),
+    )
+    targets = [
+        item
+        for item in commented.story_items
+        if item.story.kind in ("comment", "table_cell") and item.kind == "paragraph"
+    ]
+    assert {item.story.kind for item in targets} == {"comment", "table_cell"}
+    before = commented.to_bytes()
+    for item in targets:
+        with pytest.raises(rdocx.RdocxError, match="never searches comments"):
+            commented.replace_story_text(item, "Version", "Release")
+    assert commented.to_bytes() == before
+
+    wps = "http://schemas.microsoft.com/office/word/2010/wordprocessingShape"
+    content = (
+        "<w:txbxContent>" + _STORY_CELL_TABLE
+        + "<w:p><w:r><w:t>Version in a box</w:t></w:r></w:p></w:txbxContent>"
+    )
+    boxed = _replace_document_body(
+        rdocx.Document(),
+        '<w:p><w:r><mc:AlternateContent '
+        'xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" '
+        f'xmlns:wps="{wps}" '
+        'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+        'xmlns:v="urn:schemas-microsoft-com:vml"><mc:Choice Requires="wps"><w:drawing>'
+        '<wp:inline><wp:extent cx="914400" cy="914400"/><wp:docPr id="1" name="Text Box 1"/>'
+        f'<a:graphic><a:graphicData uri="{wps}"><wps:wsp><wps:cNvSpPr txBox="1"/><wps:spPr/>'
+        f"<wps:txbx>{content}</wps:txbx><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic>"
+        "</wp:inline></w:drawing></mc:Choice><mc:Fallback><w:pict><v:shape id=\"box\">"
+        f"<v:textbox>{content}</v:textbox></v:shape></w:pict></mc:Fallback>"
+        "</mc:AlternateContent></w:r></w:p>",
+    )
+    targets = [
+        item
+        for item in boxed.story_items
+        if item.story.kind in ("text_box", "table_cell") and item.kind == "paragraph"
+    ]
+    assert {item.story.kind for item in targets} == {"text_box", "table_cell"}
+    before = boxed.to_bytes()
+    for item in targets:
+        with pytest.raises(rdocx.RdocxError, match="every copy of a text box"):
+            boxed.replace_story_text(item, "Version", "Release")
+    assert boxed.to_bytes() == before
+
+
 def test_update_fields_takes_a_keyword_context_and_counts_updates():
     import datetime
 

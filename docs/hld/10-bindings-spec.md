@@ -318,9 +318,13 @@ does the same for one `StoryItem` snapshot, a paragraph, table or block
 content control of the body, a table cell, a header, a footer, a footnote or
 an endnote, through the native `Document::try_replace_story_text`. It edits
 that element of the staged part and publishes the reopened candidate only
-when the count matches. A text box story is refused, because Word keeps a
-second copy of a text box that the document form edits too, and so is a
-comment story, which the document form never searches.
+when the count matches. A text box story, and a table cell story inside a
+text box, are refused, because Word keeps a second copy of a text box that
+the document form edits too. A comment story, and a table cell story inside a
+comment, are refused as well, since the document form never searches
+comments. A part that binds WordprocessingML under a prefix other than `w`
+counts its matches as the document form does, and the rewritten element
+declares `w` itself.
 
 `Paragraph.style` accepts a style ID the package defines or, as python-docx
 does, a style name, and writes the resolved ID. Among paragraph styles only,

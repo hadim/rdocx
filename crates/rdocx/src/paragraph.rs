@@ -968,7 +968,9 @@ impl<'a> Paragraph<'a> {
     ///
     /// With `expect`, the replacement runs on a copy of the paragraph, and a
     /// different count leaves the paragraph unchanged and is returned as the
-    /// inner error, whose `index` is 0.
+    /// inner error, whose `index` is 0, as
+    /// [`crate::Document::try_replace_all_expected`] returns it for the whole
+    /// document.
     pub fn try_replace_text(
         &mut self,
         placeholder: &str,
