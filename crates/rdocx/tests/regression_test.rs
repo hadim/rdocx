@@ -284,6 +284,59 @@ fn table_row_page_membership_matches_pinned_libreoffice() {
     }
 }
 
+/// The x of each text run on the first page of a table of two 72 pt columns
+/// that follows a paragraph, with the table's own alignment when given.
+fn aligned_table_text_x(alignment: Option<Alignment>) -> Vec<(String, f64)> {
+    let mut document = Document::new();
+    document.add_paragraph("Margin");
+    {
+        let mut table = document.add_table(1, 2);
+        table
+            .set_grid_widths(&[Length::pt(72.0), Length::pt(72.0)])
+            .unwrap();
+        table.set_width(Length::pt(144.0));
+        table.set_layout_fixed();
+        if let Some(alignment) = alignment {
+            table.set_alignment(alignment);
+        }
+        table.cell(0, 0).expect("left cell").set_text("Left");
+        table.cell(0, 1).expect("right cell").set_text("Right");
+    }
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let result = reopened.layout_deterministic().unwrap();
+    let mut runs = Vec::new();
+    oxml_layout::walk(&result.layout.pages[0].elements, &mut |element, _| {
+        if let oxml_layout::PositionedElement::Text(run) = element {
+            runs.push((run.text.clone(), run.origin.x));
+        }
+    });
+    runs
+}
+
+#[test]
+fn a_tables_own_alignment_places_it() {
+    // Word 16.111 places a table by its own `w:jc` as it does by its style's.
+    let x = |alignment: Option<Alignment>, text: &str| {
+        let runs = aligned_table_text_x(alignment);
+        runs.iter()
+            .find(|(run, _)| run == text)
+            .unwrap_or_else(|| panic!("{text} missing from {runs:?}"))
+            .1
+    };
+    let margin = x(None, "Margin");
+    let left = x(None, "Left");
+    let free = 468.0 - 144.0;
+    assert_eq!(x(Some(Alignment::Left), "Left"), left);
+    assert_eq!(
+        x(Some(Alignment::Center), "Left") - margin,
+        left - margin + free / 2.0
+    );
+    assert_eq!(
+        x(Some(Alignment::Right), "Left") - margin,
+        left - margin + free
+    );
+}
+
 #[test]
 fn table_row_split_policy_respects_cant_split_and_exact_height() {
     let mut unsplittable = Document::new();

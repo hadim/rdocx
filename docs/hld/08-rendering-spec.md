@@ -978,8 +978,10 @@ have the same invisible-border layout behavior.
 
 A table without an explicit style uses the authored default table style.
 Its modeled base width, alignment, indent, borders, shading, look, and cell
-margins resolve base-first before direct table and cell overlays. Existing
-direct width and alignment behavior remains unchanged.
+margins resolve base-first before direct table and cell overlays. A direct
+`w:jc` overrides the style's alignment, so a table's own `center`, `right` or
+`end` places it as a style-supplied value does. Existing direct width behavior
+remains unchanged.
 The direct table facade can author auto, fixed, and percentage width modes,
 left indentation, fixed or autofit layout, shading, aggregate or individual
 borders, default cell margins, conditional look flags, and the complete active
