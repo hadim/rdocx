@@ -163,7 +163,7 @@ impl PyBookmark {
 }
 
 #[pyclass(name = "Comment", frozen, get_all, eq, skip_from_py_object)]
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct PyComment {
     pub id: i32,
     pub author: Option<String>,
@@ -172,12 +172,36 @@ pub struct PyComment {
     pub text: String,
     pub parent_id: Option<i32>,
     pub resolved: bool,
+    /// The accepted-view text of the comment's range, `""` for a comment
+    /// with a reference and no range, and `None` for a comment with no
+    /// marker of its own.
+    pub anchor_text: Option<String>,
+    /// The comment's range, as `add_comment` takes it.
+    pub anchor: Option<PyStoryRunRange>,
 }
+
+/// Equality covers the thread fields only, so a snapshot equals a record
+/// rebuilt from them, and snapshots of two documents compare equal whatever
+/// the revision their anchors were captured at.
+impl PartialEq for PyComment {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.author == other.author
+            && self.initials == other.initials
+            && self.date == other.date
+            && self.text == other.text
+            && self.parent_id == other.parent_id
+            && self.resolved == other.resolved
+    }
+}
+
+impl Eq for PyComment {}
 
 #[pymethods]
 impl PyComment {
     #[new]
-    #[pyo3(signature = (*, id, author, initials, date, text, parent_id, resolved))]
+    #[pyo3(signature = (*, id, author, initials, date, text, parent_id, resolved, anchor_text=None, anchor=None))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         id: i32,
         author: Option<String>,
@@ -186,6 +210,8 @@ impl PyComment {
         text: String,
         parent_id: Option<i32>,
         resolved: bool,
+        anchor_text: Option<String>,
+        anchor: Option<PyRef<'_, PyStoryRunRange>>,
     ) -> Self {
         Self {
             id,
@@ -195,6 +221,8 @@ impl PyComment {
             text,
             parent_id,
             resolved,
+            anchor_text,
+            anchor: anchor.map(|anchor| anchor.clone()),
         }
     }
 }
@@ -1588,6 +1616,86 @@ impl PyDocument {
         ))
     }
 
+    fn native_story_run_range(
+        &self,
+        py: Python<'_>,
+        range: &PyStoryRunRange,
+    ) -> PyResult<rdocx::StoryRunRange> {
+        Ok(rdocx::StoryRunRange {
+            start: rdocx::StoryRunPosition {
+                location: self.native_location(py, &range.start.item)?,
+                run_index: range.start.run_index,
+            },
+            end: rdocx::StoryRunPosition {
+                location: self.native_location(py, &range.end.item)?,
+                run_index: range.end.run_index,
+            },
+        })
+    }
+
+    /// Snapshot a native story range for the current revision.
+    fn story_run_range_snapshot(
+        &self,
+        py: Python<'_>,
+        range: &rdocx::StoryRunRange,
+        snapshots: &[rdocx::StoryItemSnapshot],
+    ) -> PyResult<PyStoryRunRange> {
+        let position = |position: &rdocx::StoryRunPosition| -> PyResult<PyStoryRunPosition> {
+            Ok(PyStoryRunPosition {
+                item: self.paragraph_location_item(py, &position.location, snapshots)?,
+                run_index: position.run_index,
+            })
+        };
+        Ok(PyStoryRunRange {
+            start: position(&range.start)?,
+            end: position(&range.end)?,
+        })
+    }
+
+    /// Snapshot a paragraph location. A paragraph inside a block content
+    /// control has no story item of its own, so it gets the two-segment path
+    /// of `paragraph_story_location`, the control's direct body index, and
+    /// no text or XML.
+    fn paragraph_location_item(
+        &self,
+        py: Python<'_>,
+        location: &rdocx::ContentLocation,
+        snapshots: &[rdocx::StoryItemSnapshot],
+    ) -> PyResult<PyStoryItem> {
+        let nested = location.index_path().len() == 2;
+        let lookup = if nested {
+            rdocx::ContentLocation::new(
+                location.story().clone(),
+                rdocx::StoryItemKind::ContentControl,
+                vec![location.index_path()[0]],
+            )
+        } else {
+            location.clone()
+        };
+        let item = snapshots
+            .iter()
+            .find(|item| item.location() == &lookup)
+            .ok_or_else(|| {
+                rdocx_to_pyerr(
+                    py,
+                    rdocx::Error::Other("story paragraph has no checked location".to_owned()),
+                )
+            })?;
+        Ok(PyStoryItem {
+            story: story_snapshot(location.story()),
+            kind: "paragraph".to_owned(),
+            index_path: location.index_path().to_vec(),
+            direct_body_index: item.direct_body_index(),
+            text: (!nested).then(|| item.text().map(str::to_owned)).flatten(),
+            xml: if nested {
+                Vec::new()
+            } else {
+                item.xml().to_vec()
+            },
+            revision: self.revisions.current(),
+        })
+    }
+
     fn body_location(&self, py: Python<'_>, index: usize) -> PyResult<rdocx::ContentLocation> {
         self.body_locations(py, &[index])?
             .pop()
@@ -2373,18 +2481,42 @@ impl PyDocument {
 
     #[getter]
     fn comments<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
-        PyTuple::new(
-            py,
-            self.inner.comments().into_iter().map(|comment| PyComment {
-                id: comment.id(),
-                author: comment.author().map(str::to_owned),
-                initials: comment.initials().map(str::to_owned),
-                date: comment.date().map(str::to_owned),
-                text: comment.text(),
-                parent_id: comment.parent_id(),
-                resolved: comment.resolved(),
-            }),
-        )
+        let comments = self.inner.comments();
+        if comments.is_empty() {
+            return Ok(PyTuple::empty(py));
+        }
+        let anchors = self
+            .inner
+            .comment_anchors()
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let snapshots = if anchors.values().any(|anchor| anchor.range().is_some()) {
+            self.inner
+                .story_item_snapshots()
+                .map_err(|error| rdocx_to_pyerr(py, error))?
+        } else {
+            Vec::new()
+        };
+        let comments = comments
+            .into_iter()
+            .map(|comment| {
+                let anchor = anchors.get(&comment.id());
+                Ok(PyComment {
+                    id: comment.id(),
+                    author: comment.author().map(str::to_owned),
+                    initials: comment.initials().map(str::to_owned),
+                    date: comment.date().map(str::to_owned),
+                    text: comment.text(),
+                    parent_id: comment.parent_id(),
+                    resolved: comment.resolved(),
+                    anchor_text: anchor.map(|anchor| anchor.text().to_owned()),
+                    anchor: anchor
+                        .and_then(rdocx::CommentAnchor::range)
+                        .map(|range| self.story_run_range_snapshot(py, range, &snapshots))
+                        .transpose()?,
+                })
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        PyTuple::new(py, comments)
     }
 
     #[getter]
@@ -3148,22 +3280,9 @@ impl PyDocument {
             self.inner
                 .add_comment_with_date((*range.borrow()).into(), author, initials, text, date)
         } else if let Ok(range) = range.cast::<PyStoryRunRange>() {
-            let range = range.borrow();
-            let start = rdocx::StoryRunPosition {
-                location: self.native_location(py, &range.start.item)?,
-                run_index: range.start.run_index,
-            };
-            let end = rdocx::StoryRunPosition {
-                location: self.native_location(py, &range.end.item)?,
-                run_index: range.end.run_index,
-            };
-            self.inner.add_story_comment_with_date(
-                rdocx::StoryRunRange { start, end },
-                author,
-                initials,
-                text,
-                date,
-            )
+            let range = self.native_story_run_range(py, &range.borrow())?;
+            self.inner
+                .add_story_comment_with_date(range, author, initials, text, date)
         } else {
             return Err(PyTypeError::new_err(
                 "range must be a RunRange or StoryRunRange",
@@ -3225,6 +3344,56 @@ impl PyDocument {
             self.revisions.bump();
         }
         Ok(updated)
+    }
+
+    /// Move a comment to another range, keeping its id, text, replies and
+    /// resolved state.
+    fn move_comment(&mut self, id: i32, range: &Bound<'_, PyAny>, py: Python<'_>) -> PyResult<()> {
+        let range = if let Ok(range) = range.cast::<PyStoryRunRange>() {
+            self.native_story_run_range(py, &range.borrow())?
+        } else if let Ok(range) = range.cast::<PyRunRange>() {
+            let range = rdocx::RunRange::from(*range.borrow());
+            let mut locations =
+                self.body_locations(py, &[range.start.body_index, range.end.body_index])?;
+            let end = locations.pop().expect("two requested body locations");
+            let start = locations.pop().expect("two requested body locations");
+            rdocx::StoryRunRange {
+                start: rdocx::StoryRunPosition {
+                    location: start,
+                    run_index: range.start.run_index,
+                },
+                end: rdocx::StoryRunPosition {
+                    location: end,
+                    run_index: range.end.run_index,
+                },
+            }
+        } else {
+            return Err(PyTypeError::new_err(
+                "range must be a RunRange or StoryRunRange",
+            ));
+        };
+        self.inner
+            .move_comment(id, range)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(())
+    }
+
+    /// Move a comment to the `occurrence`-th match of `anchor`, counted from
+    /// zero, in the main story, as `add_comment_on_text` finds it.
+    #[pyo3(signature = (id, anchor, *, occurrence = 0))]
+    fn move_comment_to_text(
+        &mut self,
+        id: i32,
+        anchor: &str,
+        occurrence: usize,
+        py: Python<'_>,
+    ) -> PyResult<()> {
+        self.inner
+            .move_comment_to_text(id, anchor, occurrence)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(())
     }
 
     fn remove_comment(&mut self, id: i32, py: Python<'_>) -> PyResult<bool> {

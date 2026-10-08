@@ -2705,6 +2705,26 @@ fn comment_commands_round_trip_one_resolved_thread() {
                     "text": "Review this",
                     "parent_id": null,
                     "resolved": true,
+                    "anchor_text": "Comment target",
+                    "anchor": {
+                        "story": {
+                            "kind": "body",
+                            "part_name": "/word/document.xml",
+                            "owner_index": 0,
+                        },
+                        "start": { "index_path": [0], "body_index": 0, "run_index": 0 },
+                        "end": { "index_path": [0], "body_index": 0, "run_index": 1 },
+                    },
+                    "reference": {
+                        "story": {
+                            "kind": "body",
+                            "part_name": "/word/document.xml",
+                            "owner_index": 0,
+                        },
+                        "index_path": [0],
+                        "body_index": 0,
+                        "run_index": 1,
+                    },
                 },
                 {
                     "id": 1,
@@ -2714,6 +2734,9 @@ fn comment_commands_round_trip_one_resolved_thread() {
                     "text": "Agreed",
                     "parent_id": 0,
                     "resolved": false,
+                    "anchor_text": null,
+                    "anchor": null,
+                    "reference": null,
                 },
             ],
         })
@@ -2743,6 +2766,183 @@ fn comment_commands_round_trip_one_resolved_thread() {
     );
     assert!(Document::open(&removed_path).unwrap().comments().is_empty());
     assert_eq!(Document::open(&input).unwrap().comments().len(), 0);
+}
+
+/// GitHub issues #283 and #284: `comment list --json` says where each
+/// comment points, and `comment move` moves a thread without losing it.
+#[test]
+fn comment_list_reports_anchors_and_move_keeps_the_thread() {
+    let temp = TempWorkspace::new("comment-move");
+    let input = temp.path.join("input.docx");
+    let mut document = fixture_document(&["Alpha stays.", "Delta goes away."]);
+    document
+        .add_table(1, 1)
+        .row(0)
+        .unwrap()
+        .cell(0)
+        .unwrap()
+        .set_text("In a cell");
+    let root = document
+        .add_comment_on_text("Delta goes away.", 0, "Alice", None, "Delete this?", None)
+        .unwrap();
+    document
+        .add_comment_on_text("a cell", 0, "Alice", None, "Cell", None)
+        .unwrap();
+    document.reply_to(root, "Bob", "Agreed").unwrap();
+    assert!(document.resolve_comment(root, true).unwrap());
+    document.save(&input).unwrap();
+
+    let list = |path: &Path| -> Value {
+        let listed = cli(&["comment", "list", path_text(path), "--json"]);
+        assert_success(&listed, "comment list");
+        serde_json::from_slice(&listed.stdout).unwrap()
+    };
+    let value = list(&input);
+    let comments = value["comments"].as_array().unwrap();
+    assert_eq!(comments[0]["anchor_text"], "Delta goes away.");
+    assert_eq!(comments[0]["anchor"]["story"]["kind"], "body");
+    assert_eq!(comments[0]["anchor"]["start"]["body_index"], 1);
+    assert_eq!(comments[1]["anchor_text"], "a cell");
+    assert_eq!(comments[1]["anchor"]["story"]["kind"], "table-cell");
+    assert_eq!(comments[1]["anchor"]["start"]["body_index"], Value::Null);
+    assert_eq!(comments[2]["anchor"], Value::Null);
+
+    let moved_path = temp.path.join("moved.docx");
+    let moved = cli(&[
+        "comment",
+        "move",
+        path_text(&input),
+        "--id",
+        "0",
+        "--anchor",
+        "Alpha",
+        "--output",
+        path_text(&moved_path),
+        "--json",
+    ]);
+    assert_success(&moved, "comment move");
+    let value: Value = serde_json::from_slice(&moved.stdout).unwrap();
+    assert_eq!(
+        value,
+        json!({
+            "schema": 1,
+            "scope": "main",
+            "action": "move",
+            "comment_id": 0,
+            "output": path_text(&moved_path),
+        })
+    );
+    let value = list(&moved_path);
+    let comments = value["comments"].as_array().unwrap();
+    assert_eq!(
+        (
+            &comments[0]["id"],
+            &comments[0]["text"],
+            &comments[0]["resolved"],
+            &comments[0]["anchor_text"],
+            &comments[0]["anchor"]["start"]["body_index"],
+        ),
+        (
+            &json!(0),
+            &json!("Delete this?"),
+            &json!(true),
+            &json!("Alpha"),
+            &json!(0),
+        )
+    );
+    assert_eq!(comments[2]["parent_id"], 0);
+
+    // An existing output is refused, the input is kept, and a bad move
+    // writes nothing.
+    let args = [
+        "comment",
+        "move",
+        path_text(&input),
+        "--id",
+        "0",
+        "--anchor",
+        "Alpha",
+        "--occurrence",
+        "0",
+        "--output",
+        path_text(&moved_path),
+    ];
+    let before = fs::read(&moved_path).unwrap();
+    let refused = cli(&args);
+    assert_eq!(refused.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("output already exists"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert_eq!(fs::read(&moved_path).unwrap(), before);
+    for (id, anchor, message) in [
+        (
+            "2",
+            "Alpha",
+            "Error: comment id 2 is a reply to comment 0, so it moves with its thread root",
+        ),
+        ("9", "Alpha", "Error: comment id 9 does not exist"),
+        (
+            "0",
+            "absent",
+            r#"Error: comment anchor text "absent" has no occurrence 0: it occurs 0 times in the main story"#,
+        ),
+    ] {
+        let refused_path = temp.path.join("refused.docx");
+        let refused = cli(&[
+            "comment",
+            "move",
+            path_text(&input),
+            "--id",
+            id,
+            "--anchor",
+            anchor,
+            "--output",
+            path_text(&refused_path),
+        ]);
+        assert_eq!(refused.status.code(), Some(1), "{id} {anchor}");
+        assert_eq!(
+            String::from_utf8(refused.stderr).unwrap(),
+            format!("{message}\n")
+        );
+        assert!(!refused_path.exists());
+    }
+}
+
+/// GitHub issue #282: `validate` flags a comment that points at nothing.
+#[test]
+fn validate_flags_a_comment_without_range_or_reference() {
+    let temp = TempWorkspace::new("validate-unanchored-comment");
+    let input = temp.path.join("input.docx");
+    let mut document = fixture_document(&["Alpha stays.", "Delta goes away."]);
+    let root = document
+        .add_comment_on_text("Delta", 0, "Alice", None, "Delete this?", None)
+        .unwrap();
+    document.reply_to(root, "Bob", "Agreed").unwrap();
+    document.save(&input).unwrap();
+    let output = cli(&["validate", path_text(&input)]);
+    assert_success(&output, "validate anchored comments");
+
+    // Drop the paragraph behind the library's back, as an older rdocx did.
+    let mut package = OpcPackage::open(&input).unwrap();
+    let part = package.main_document_part().unwrap();
+    let xml = String::from_utf8(package.get_part(&part).unwrap().to_vec()).unwrap();
+    let start = xml.rfind("<w:p>").unwrap();
+    let end = start + xml[start..].find("</w:p>").unwrap() + "</w:p>".len();
+    package.set_part(&part, [&xml[..start], &xml[end..]].concat().into_bytes());
+    let orphaned = temp.path.join("orphaned.docx");
+    package.save(&orphaned).unwrap();
+
+    let output = cli(&["validate", path_text(&orphaned)]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!(
+            "1 error(s) in {}:\n  1. comment 0 has no range and no reference in any story\n",
+            orphaned.display()
+        )
+    );
 }
 
 /// GitHub issue #172: `comment add` counts runs the way `text --json` lists

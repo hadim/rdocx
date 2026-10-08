@@ -1353,9 +1353,15 @@ fn middle_snake(
 pub fn comment_list(file: &Path, json_output: bool) -> Result<()> {
     let doc = Document::open(file)?;
     let comments = doc.comments();
+    let (anchors, snapshots) = if json_output {
+        (doc.comment_anchors()?, doc.story_item_snapshots()?)
+    } else {
+        Default::default()
+    };
     let records = comments
         .iter()
         .map(|comment| {
+            let anchor = anchors.get(&comment.id());
             json!({
                 "id": comment.id(),
                 "author": comment.author(),
@@ -1364,6 +1370,17 @@ pub fn comment_list(file: &Path, json_output: bool) -> Result<()> {
                 "text": comment.text(),
                 "parent_id": comment.parent_id(),
                 "resolved": comment.resolved(),
+                "anchor_text": anchor.map(rdocx::CommentAnchor::text),
+                "anchor": anchor.and_then(rdocx::CommentAnchor::range).map(|range| json!({
+                    "story": story_json(range.start.location.story()),
+                    "start": story_position_json(&range.start, &snapshots),
+                    "end": story_position_json(&range.end, &snapshots),
+                })),
+                "reference": anchor.and_then(rdocx::CommentAnchor::reference).map(|reference| {
+                    let mut position = story_position_json(reference, &snapshots);
+                    position["story"] = story_json(reference.location.story());
+                    position
+                }),
             })
         })
         .collect::<Vec<_>>();
@@ -1392,6 +1409,35 @@ pub fn comment_list(file: &Path, json_output: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Describe one story run boundary: the item path in its story, the direct
+/// body child that holds it in the body, and the run boundary.
+fn story_position_json(
+    position: &rdocx::StoryRunPosition,
+    snapshots: &[rdocx::StoryItemSnapshot],
+) -> Value {
+    let path = position.location.index_path();
+    // A paragraph inside a block content control has a two-segment path
+    // whose first segment is the control.
+    let holder = rdocx::ContentLocation::new(
+        position.location.story().clone(),
+        if path.len() == 2 {
+            StoryItemKind::ContentControl
+        } else {
+            StoryItemKind::Paragraph
+        },
+        path.iter().take(1).copied().collect(),
+    );
+    let body_index = snapshots
+        .iter()
+        .find(|item| item.location() == &holder)
+        .and_then(rdocx::StoryItemSnapshot::direct_body_index);
+    json!({
+        "index_path": path,
+        "body_index": body_index,
+        "run_index": position.run_index,
+    })
 }
 
 /// Where `comment add` anchors its comment.
@@ -1467,6 +1513,28 @@ pub fn comment_resolve(file: &Path, id: i32, output: &Path, json_output: bool) -
         json_output,
         "main",
         "resolve",
+        json!({ "comment_id": id }),
+        output,
+    )
+}
+
+/// Move one comment thread onto a text and publish the complete document
+/// atomically.
+pub fn comment_move(
+    file: &Path,
+    id: i32,
+    anchor: &str,
+    occurrence: usize,
+    output: &Path,
+    json_output: bool,
+) -> Result<()> {
+    let mut doc = Document::open(file)?;
+    doc.move_comment_to_text(id, anchor, occurrence)?;
+    publish_document(&mut doc, output)?;
+    mutation_record(
+        json_output,
+        "main",
+        "move",
         json!({ "comment_id": id }),
         output,
     )
@@ -2234,6 +2302,16 @@ pub fn validate(file: &Path) -> Result<bool> {
         if doc.style(&style_id).is_none() && !errors.contains(&issue) {
             errors.push(issue);
         }
+    }
+
+    // A comment with no range and no reference has nothing to point at, and
+    // each application shows or drops it in its own way.
+    match doc.unanchored_comments() {
+        Ok(ids) => errors.extend(
+            ids.into_iter()
+                .map(|id| format!("comment {id} has no range and no reference in any story")),
+        ),
+        Err(error) => errors.push(format!("comment anchors cannot be read: {error}")),
     }
 
     // --- Advisory findings ---

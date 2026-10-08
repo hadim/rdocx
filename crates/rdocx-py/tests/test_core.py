@@ -3101,6 +3101,197 @@ def test_add_comment_on_text_anchors_the_occurrence_after_a_table():
     assert document.to_bytes() == before
 
 
+# GitHub issues #282, #283 and #284: comments as a reviewer's pass on a file
+# saved by Google Docs uses them.
+def _google_commented_paragraph(comment_id, text):
+    return (
+        f'<w:p><w:sdt><w:sdtPr><w:tag w:val="goog_rdk_{10 * comment_id}"/></w:sdtPr>'
+        f'<w:sdtContent><w:commentRangeStart w:id="{comment_id}"/></w:sdtContent>'
+        f"</w:sdt><w:r><w:t>{text}</w:t></w:r>"
+        f'<w:commentRangeEnd w:id="{comment_id}"/>'
+        f'<w:sdt><w:sdtPr><w:tag w:val="goog_rdk_{10 * comment_id + 1}"/></w:sdtPr>'
+        f'<w:sdtContent><w:r><w:commentReference w:id="{comment_id}"/></w:r>'
+        "</w:sdtContent></w:sdt></w:p>"
+    )
+
+
+def _google_reviewed_document():
+    """Comments 0 to 2 on two paragraphs and a table cell, their markers in
+    `goog_rdk` controls, comment 3 a reply to comment 1, and Google's
+    commentsExtended.xml with a default namespace on its root and done="0"."""
+    import rdocx
+
+    texts = (
+        "Alpha paragraph stays as it is.",
+        "Delta paragraph carries a comment that asks to delete it.",
+        "Build",
+    )
+    document = rdocx.Document()
+    document.add_paragraph(texts[0])
+    document.add_paragraph(texts[1])
+    document.add_table(2, 1)
+    document.tables[0].cell(0, 0).text = "Category"
+    document.tables[0].cell(1, 0).text = texts[2]
+    for text in texts:
+        document.add_comment_on_text(text, author="Reviewer A", text=f"On {text}")
+    document.reply_to(1, author="Reviewer B", text="Agreed.")
+    cell = '<w:tc><w:tcPr><w:tcW w:w="4000" w:type="dxa"/></w:tcPr>{}</w:tc>'
+    document = _replace_document_body(
+        document,
+        _google_commented_paragraph(0, texts[0])
+        + _google_commented_paragraph(1, texts[1])
+        + '<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid>'
+        + "<w:tr>"
+        + cell.format("<w:p><w:r><w:t>Category</w:t></w:r></w:p>")
+        + "</w:tr><w:tr>"
+        + cell.format(_google_commented_paragraph(2, texts[2]))
+        + "</w:tr></w:tbl>"
+        + "<w:p><w:r><w:t>Golf keeps the end.</w:t></w:r></w:p>",
+    )
+    source = io.BytesIO(document.to_bytes())
+    result = io.BytesIO()
+    with zipfile.ZipFile(source) as source_zip:
+        with zipfile.ZipFile(result, "w") as result_zip:
+            for info in source_zip.infolist():
+                data = source_zip.read(info.filename)
+                if info.filename == "word/commentsExtended.xml":
+                    data = data.replace(
+                        b"<w15:commentsEx ",
+                        b'<w15:commentsEx xmlns="http://schemas.microsoft.com/'
+                        b'office/tasks/2019/documenttasks" ',
+                        1,
+                    )
+                    data = re.sub(rb"<w15:commentEx ((?:(?!done)[^>])*)/>",
+                                  rb'<w15:commentEx \1 w15:done="0"/>', data)
+                result_zip.writestr(info, data)
+    return rdocx.Document.from_bytes(result.getvalue())
+
+
+def _anchored_comment_ids(document):
+    xml = _document_xml(document).decode()
+    return sorted({int(i) for i in re.findall(r'<w:commentReference w:id="(\d+)"', xml)})
+
+
+def test_comment_anchor_reads_through_google_content_controls():
+    import rdocx
+
+    document = _google_reviewed_document()
+    comments = {comment.id: comment for comment in document.comments}
+    assert comments[1].anchor_text == (
+        "Delta paragraph carries a comment that asks to delete it."
+    )
+    anchor = comments[1].anchor
+    assert isinstance(anchor, rdocx.StoryRunRange)
+    assert anchor.start.item.story.kind == "body"
+    assert anchor.start.item.direct_body_index == 1
+    assert anchor.start.item.text == comments[1].anchor_text
+    assert (anchor.start.run_index, anchor.end.run_index) == (0, 1)
+    assert comments[2].anchor_text == "Build"
+    assert comments[2].anchor.start.item.story.kind == "table_cell"
+    # A reply without markers of its own follows its root.
+    assert (comments[3].parent_id, comments[3].anchor_text, comments[3].anchor) == (
+        1,
+        None,
+        None,
+    )
+    assert [comment.resolved for comment in document.comments] == [False] * 4
+
+    # The anchor is the range add_comment takes.
+    copy = document.add_comment(anchor, author="B", text="Same range")
+    assert {c.id: c for c in document.comments}[copy].anchor_text == (
+        comments[1].anchor_text
+    )
+
+    # The reproduction of issue #283.
+    document = rdocx.Document()
+    document.add_paragraph("Alpha stays.")
+    text = "Delta paragraph carries a comment that asks to delete it."
+    document.add_paragraph(text)
+    document.add_comment_on_text(text, author="A", text="Please delete this paragraph.")
+    [comment] = rdocx.Document.from_bytes(document.to_bytes()).comments
+    assert comment.anchor_text == text
+    assert comment.anchor.start.item.direct_body_index == 1
+
+
+def test_removing_commented_content_never_leaves_a_comment_without_anchor():
+    import rdocx
+
+    document = _google_reviewed_document()
+    assert document.remove_content(1)
+    assert [comment.id for comment in document.comments] == [0, 2]
+    assert _anchored_comment_ids(document) == [0, 2]
+
+    document = _google_reviewed_document()
+    document.tables[0].remove_row(1)
+    assert [comment.id for comment in document.comments] == [0, 1, 3]
+    assert _anchored_comment_ids(document) == [0, 1]
+
+    # A popped fragment carries the thread back when it is inserted again.
+    document = _google_reviewed_document()
+    fragment = document.pop_content(1)
+    assert [comment.id for comment in document.comments] == [0, 2]
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert _anchored_comment_ids(reopened) == [0, 2]
+    document.insert_content(0, fragment)
+    texts = {comment.text: comment for comment in document.comments}
+    root = texts["On Delta paragraph carries a comment that asks to delete it."]
+    assert texts["Agreed."].parent_id == root.id
+    assert root.anchor_text == (
+        "Delta paragraph carries a comment that asks to delete it."
+    )
+    assert root.anchor.start.item.direct_body_index == 0
+    assert len(_anchored_comment_ids(document)) == 3
+
+
+def test_move_comment_keeps_its_thread_and_drops_empty_google_wrappers():
+    import rdocx
+
+    document = _google_reviewed_document()
+    assert document.resolve_comment(1)
+    before = {comment.id: comment for comment in document.comments}[1]
+    document.move_comment_to_text(1, "Golf keeps", occurrence=0)
+    after = {comment.id: comment for comment in document.comments}
+    assert (after[1].author, after[1].date, after[1].text, after[1].resolved) == (
+        before.author,
+        before.date,
+        before.text,
+        True,
+    )
+    assert after[3].parent_id == 1
+    assert after[1].anchor_text == "Golf keeps"
+    xml = _document_xml(document).decode()
+    assert "goog_rdk_10" not in xml and "goog_rdk_11" not in xml
+    assert xml.count('<w:commentReference w:id="1"/>') == 1
+    # The paragraph the reviewer asked to delete goes, the thread stays.
+    assert document.remove_content(1)
+    assert [comment.id for comment in document.comments] == [0, 1, 2, 3]
+
+    # move_comment takes a range, for example another comment's anchor, read
+    # at the current revision.
+    with pytest.raises(rdocx.StaleElementError):
+        document.move_comment(1, after[0].anchor)
+    document.move_comment(1, document.comments[0].anchor)
+    assert {c.id: c for c in document.comments}[1].anchor_text == (
+        "Alpha paragraph stays as it is."
+    )
+    document.move_comment(
+        1,
+        rdocx.RunRange(
+            start=rdocx.RunPosition(body_index=2, run_index=0),
+            end=rdocx.RunPosition(body_index=2, run_index=1),
+        ),
+    )
+    assert {c.id: c for c in document.comments}[1].anchor_text == "Golf keeps"
+
+    before = document.to_bytes()
+    for comment_id, reason in ((3, "is a reply to comment 1"), (9, "does not exist")):
+        with pytest.raises(rdocx.RdocxError, match=reason):
+            document.move_comment_to_text(comment_id, "Golf")
+    with pytest.raises(rdocx.RdocxError, match="has no occurrence 2"):
+        document.move_comment_to_text(1, "Golf", occurrence=2)
+    assert document.to_bytes() == before
+
+
 def test_python_round_three_authoring_and_inspection_is_typed_and_lossless():
     import rdocx
 

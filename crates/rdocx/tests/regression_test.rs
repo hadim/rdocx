@@ -3005,6 +3005,577 @@ mod comment_on_text {
     }
 }
 
+/// GitHub issues #282, #283 and #284: a comment's anchor is readable, a
+/// removal never leaves a comment without one, and a comment moves with its
+/// thread.
+mod comment_anchors {
+    use std::io::Cursor;
+
+    use oxml_opc::OpcPackage;
+    use rdocx::{
+        CommentAnchor, ContentLocation, Document, RunPosition, RunRange, StoryKind,
+        StoryRunPosition, StoryRunRange,
+    };
+
+    const COMMENTS_TYPE: &str =
+        "http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments";
+    const EXTENDED_TYPE: &str =
+        "http://schemas.microsoft.com/office/2011/relationships/commentsExtended";
+    const IDS_TYPE: &str = "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds";
+
+    /// A paragraph commented as Google Docs writes it: the start marker and
+    /// the reference run each in a `goog_rdk` control, the end marker bare.
+    fn google_paragraph(id: i32, text: &str) -> String {
+        format!(
+            r#"<w:p><w:sdt><w:sdtPr><w:tag w:val="goog_rdk_{start}"/></w:sdtPr><w:sdtContent><w:commentRangeStart w:id="{id}"/></w:sdtContent></w:sdt><w:r><w:t>{text}</w:t></w:r><w:commentRangeEnd w:id="{id}"/><w:sdt><w:sdtPr><w:tag w:val="goog_rdk_{reference}"/></w:sdtPr><w:sdtContent><w:r><w:commentReference w:id="{id}"/></w:r></w:sdtContent></w:sdt></w:p>"#,
+            start = 10 * id,
+            reference = 10 * id + 1,
+        )
+    }
+
+    fn plain_paragraph(text: &str) -> String {
+        format!(r#"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>"#)
+    }
+
+    fn cell(paragraph: &str) -> String {
+        format!(r#"<w:tc><w:tcPr><w:tcW w:w="4000" w:type="dxa"/></w:tcPr>{paragraph}</w:tc>"#)
+    }
+
+    /// Comments 0 to 4 anchored in body paragraphs, a table cell and a block
+    /// `goog_rdk` control, comment 5 a reply to comment 1 with no markers of
+    /// its own, and Google's `commentsExtended.xml` with a default namespace
+    /// on its root and `done="0"`, except comment 2 which is resolved.
+    fn google_reviewed_document() -> Document {
+        let body = [
+            plain_paragraph("1. Scope"),
+            google_paragraph(0, "Alpha paragraph stays as it is."),
+            google_paragraph(1, "Delta paragraph carries a comment that asks to delete it."),
+            google_paragraph(2, "Echo paragraph is the target of a rewrite."),
+            format!(
+                r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="4000"/><w:gridCol w:w="4000"/></w:tblGrid><w:tr>{}{}</w:tr><w:tr>{}{}</w:tr></w:tbl>"#,
+                cell(&plain_paragraph("Category")),
+                cell(&plain_paragraph("Version")),
+                cell(&google_paragraph(3, "Build")),
+                cell(&plain_paragraph("Locked")),
+            ),
+            format!(
+                r#"<w:sdt><w:sdtPr><w:tag w:val="goog_rdk_99"/></w:sdtPr><w:sdtContent>{}</w:sdtContent></w:sdt>"#,
+                google_paragraph(4, "Foxtrot closing paragraph.")
+            ),
+            plain_paragraph("Golf keeps the end."),
+        ]
+        .concat();
+        let comment = |id: i32, text: &str| {
+            format!(
+                r#"<w:comment w:id="{id}" w:author="Reviewer A" w:date="2026-01-05T10:00:00Z" w:initials="RA"><w:p w14:paraId="0000015{id}"><w:r><w:t>{text}</w:t></w:r></w:p></w:comment>"#
+            )
+        };
+        let comments = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml">{}</w:comments>"#,
+            [
+                comment(0, "Keep this paragraph?"),
+                comment(1, "Please delete this paragraph."),
+                comment(2, "Rewrite this sentence."),
+                comment(3, "Which build tools?"),
+                comment(4, "Close here."),
+                comment(5, "Agreed."),
+            ]
+            .concat()
+        );
+        let extended = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w15:commentsEx xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" xmlns="http://schemas.microsoft.com/office/tasks/2019/documenttasks">{}<w15:commentEx w15:paraId="00000155" w15:paraIdParent="00000151" w15:done="0"/></w15:commentsEx>"#,
+            (0..5)
+                .map(|id| format!(
+                    r#"<w15:commentEx w15:paraId="0000015{id}" w15:done="{}"/>"#,
+                    u8::from(id == 2)
+                ))
+                .collect::<String>()
+        );
+        let ids = format!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w16cid:commentsIds xmlns:w16cid="http://schemas.microsoft.com/office/word/2016/wordml/cid">{}</w16cid:commentsIds>"#,
+            (0..6)
+                .map(|id| format!(
+                    r#"<w16cid:commentId w16cid:paraId="0000015{id}" w16cid:durableId="7000000{id}"/>"#
+                ))
+                .collect::<String>()
+        );
+
+        let mut seed = Document::new();
+        seed.add_paragraph("seed");
+        let mut package = OpcPackage::from_reader(Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        package.set_part(
+            "/word/document.xml",
+            super::wrap_word_body(&body).into_bytes(),
+        );
+        for (part, relationship_type, content_type, xml) in [
+            (
+                "comments.xml",
+                COMMENTS_TYPE,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+                comments,
+            ),
+            (
+                "commentsExtended.xml",
+                EXTENDED_TYPE,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsExtended+xml",
+                extended,
+            ),
+            (
+                "commentsIds.xml",
+                IDS_TYPE,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.commentsIds+xml",
+                ids,
+            ),
+        ] {
+            package.set_part(&format!("/word/{part}"), xml.into_bytes());
+            package
+                .get_or_create_part_rels("/word/document.xml")
+                .add(relationship_type, part);
+            package
+                .content_types
+                .add_override(&format!("/word/{part}"), content_type);
+        }
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(bytes.get_ref()).unwrap()
+    }
+
+    fn part(document: &mut Document, name: &str) -> String {
+        let package = OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+        package
+            .get_part(name)
+            .map(|xml| String::from_utf8(xml.to_vec()).unwrap())
+            .unwrap_or_default()
+    }
+
+    fn ids(document: &Document) -> Vec<i32> {
+        document
+            .comments()
+            .iter()
+            .map(|comment| comment.id())
+            .collect()
+    }
+
+    fn anchor_text(document: &Document, id: i32) -> Option<String> {
+        document
+            .comment_anchor(id)
+            .unwrap()
+            .map(|anchor| anchor.text().to_owned())
+    }
+
+    /// The location of direct body child `index`, or the end of the body.
+    fn body_location(document: &Document, index: usize) -> ContentLocation {
+        let snapshots = document.story_item_snapshots().unwrap();
+        snapshots
+            .iter()
+            .find(|item| item.is_direct_child() && item.direct_body_index() == Some(index))
+            .map(|item| item.location().clone())
+            .unwrap_or_else(|| {
+                let story = snapshots[0].location().story().clone();
+                assert_eq!(story.kind(), StoryKind::Body);
+                ContentLocation::end(story)
+            })
+    }
+
+    fn snapshot(document: &Document, id: i32) -> String {
+        let comments = document.comments();
+        let comment = comments.iter().find(|comment| comment.id() == id).unwrap();
+        format!(
+            "{:?}",
+            (
+                comment.author(),
+                comment.initials(),
+                comment.date(),
+                comment.text(),
+                comment.parent_id(),
+                comment.resolved(),
+            )
+        )
+    }
+
+    /// Every comment of the saved document is anchored, its rows in the
+    /// comment parts match its definitions, and no `goog_rdk` control is
+    /// left empty.
+    fn assert_consistent(document: &mut Document) {
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.unanchored_comments().unwrap(), Vec::<i32>::new());
+        let rows = ids(&reopened).len();
+        assert_eq!(
+            part(document, "/word/commentsExtended.xml")
+                .matches("<w15:commentEx ")
+                .count(),
+            rows
+        );
+        let body = part(document, "/word/document.xml");
+        assert!(
+            !body.contains("<w:sdtContent></w:sdtContent>") && !body.contains("<w:sdtContent/>"),
+            "{body}"
+        );
+    }
+
+    #[test]
+    fn anchors_read_through_google_content_controls() {
+        let document = google_reviewed_document();
+        let anchors = document.comment_anchors().unwrap();
+        assert_eq!(anchors.keys().copied().collect::<Vec<_>>(), [0, 1, 2, 3, 4]);
+        let anchor = |id: i32| -> &CommentAnchor { &anchors[&id] };
+        assert_eq!(
+            anchor(1).text(),
+            "Delta paragraph carries a comment that asks to delete it."
+        );
+        // The run boundaries count the run of the reference control.
+        let range = anchor(1).range().unwrap();
+        assert_eq!(range.start.location, body_location(&document, 2));
+        assert_eq!(range.end.location, range.start.location);
+        assert_eq!((range.start.run_index, range.end.run_index), (0, 1));
+        assert_eq!(anchor(1).reference().unwrap().run_index, 1);
+        assert_eq!(anchor(3).text(), "Build");
+        assert_eq!(
+            anchor(3).range().unwrap().start.location.story().kind(),
+            StoryKind::TableCell
+        );
+        assert_eq!(anchor(4).text(), "Foxtrot closing paragraph.");
+        assert_eq!(
+            anchor(4).range().unwrap().start.location.index_path().len(),
+            2
+        );
+        // A reply written without markers follows its root.
+        assert!(!anchors.contains_key(&5));
+        assert_eq!(document.unanchored_comments().unwrap(), Vec::<i32>::new());
+        // The anchor is the range `add_story_comment` takes.
+        let mut copy = google_reviewed_document();
+        let id = copy
+            .add_story_comment(anchor(1).range().unwrap().clone(), "B", None, "Same text")
+            .unwrap();
+        assert_eq!(
+            anchor_text(&copy, id).as_deref(),
+            Some("Delta paragraph carries a comment that asks to delete it.")
+        );
+    }
+
+    #[test]
+    fn anchor_text_spans_paragraphs_cells_and_tracked_insertions() {
+        let mut document = Document::new();
+        document.add_paragraph("First line of the range");
+        document.add_paragraph("Second line ends here");
+        let across = document
+            .add_comment(
+                RunRange {
+                    start: RunPosition {
+                        body_index: 0,
+                        run_index: 0,
+                    },
+                    end: RunPosition {
+                        body_index: 1,
+                        run_index: 1,
+                    },
+                },
+                "A",
+                None,
+                "Across",
+            )
+            .unwrap();
+        assert_eq!(
+            anchor_text(&document, across).as_deref(),
+            Some("First line of the range\nSecond line ends here")
+        );
+
+        let mut document = super::document_with_content_controls(&super::wrap_word_body(
+            r#"<w:p><w:r><w:t xml:space="preserve">Kept </w:t></w:r><w:ins w:id="1" w:author="A"><w:r><w:t>inserted words</w:t></w:r></w:ins><w:del w:id="2" w:author="A"><w:r><w:delText>gone</w:delText></w:r></w:del></w:p><w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>In the cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+        ));
+        let inserted = document
+            .add_comment_on_text("inserted words", 0, "A", None, "Insertion", None)
+            .unwrap();
+        let in_cell = document
+            .add_comment_on_text("the cell", 0, "A", None, "Cell", None)
+            .unwrap();
+        assert_eq!(
+            anchor_text(&document, inserted).as_deref(),
+            Some("inserted words")
+        );
+        let anchor = document.comment_anchor(in_cell).unwrap().unwrap();
+        assert_eq!(anchor.text(), "the cell");
+        assert_eq!(
+            anchor.range().unwrap().start.location.story().kind(),
+            StoryKind::TableCell
+        );
+
+        // A reference without a range reads as empty text, no marker as none.
+        let mut document = super::document_with_content_controls(&super::wrap_word_body(
+            r#"<w:p><w:r><w:t>Point</w:t></w:r><w:r><w:commentReference w:id="0"/></w:r></w:p>"#,
+        ));
+        assert_eq!(anchor_text(&document, 0).as_deref(), Some(""));
+        assert!(
+            document
+                .comment_anchor(0)
+                .unwrap()
+                .unwrap()
+                .range()
+                .is_none()
+        );
+        assert_eq!(anchor_text(&document, 7), None);
+        document.add_paragraph("unchanged");
+    }
+
+    #[test]
+    fn removing_a_commented_paragraph_removes_its_thread_and_rows() {
+        let mut document = google_reviewed_document();
+        assert!(document.remove_content(2));
+        assert_eq!(ids(&document), [0, 2, 3, 4]);
+        let comments_ids = part(&mut document, "/word/commentsIds.xml");
+        assert!(!comments_ids.contains("00000151"), "{comments_ids}");
+        assert!(!comments_ids.contains("00000155"), "{comments_ids}");
+        assert_eq!(comments_ids.matches("<w16cid:commentId ").count(), 4);
+        assert_eq!(
+            anchor_text(&document, 0).as_deref(),
+            Some("Alpha paragraph stays as it is.")
+        );
+        assert!(document.comments()[1].resolved());
+        assert_consistent(&mut document);
+
+        // A whole table goes with the comments of its cells.
+        let mut document = google_reviewed_document();
+        assert!(document.remove_content(4));
+        assert_eq!(ids(&document), [0, 1, 2, 4, 5]);
+        assert_consistent(&mut document);
+    }
+
+    #[test]
+    fn removing_a_commented_row_removes_its_thread() {
+        let mut document = google_reviewed_document();
+        assert!(document.remove_table_row(0, 1).unwrap());
+        assert_eq!(ids(&document), [0, 1, 2, 4, 5]);
+        assert_consistent(&mut document);
+
+        let mut document = google_reviewed_document();
+        assert!(document.remove_table_row(0, 0).unwrap());
+        assert_eq!(ids(&document), [0, 1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn removing_a_row_refuses_to_cut_a_range_that_continues_outside_it() {
+        let mut document = super::document_with_content_controls(&super::wrap_word_body(
+            r#"<w:p><w:commentRangeStart w:id="0"/><w:r><w:t>Before the table</w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>Top</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>Cut</w:t></w:r><w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r></w:p></w:tc></w:tr></w:tbl>"#,
+        ));
+        let mut package =
+            OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
+        package.set_part(
+            "/word/comments.xml",
+            br#"<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:comment w:id="0" w:author="A"><w:p><w:r><w:t>Across</w:t></w:r></w:p></w:comment></w:comments>"#.to_vec(),
+        );
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .add(COMMENTS_TYPE, "comments.xml");
+        package.content_types.add_override(
+            "/word/comments.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+        );
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        let before = document.to_bytes().unwrap();
+        let error = document.remove_table_row(0, 1).unwrap_err().to_string();
+        assert!(
+            error.contains("comment 0 continues outside table row 1"),
+            "{error}"
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+
+    #[test]
+    fn a_partial_cut_keeps_the_comment_on_what_is_left() {
+        let across = |document: &mut Document| {
+            document
+                .add_comment(
+                    RunRange {
+                        start: RunPosition {
+                            body_index: 1,
+                            run_index: 0,
+                        },
+                        end: RunPosition {
+                            body_index: 2,
+                            run_index: 1,
+                        },
+                    },
+                    "A",
+                    None,
+                    "Across",
+                )
+                .unwrap()
+        };
+        let fixture = || {
+            let mut document = Document::new();
+            document.add_paragraph("Before");
+            document.add_paragraph("Start of the range");
+            document.add_paragraph("End of the range");
+            document.add_paragraph("After");
+            let id = across(&mut document);
+            let reply = document.reply_to(id, "B", "Reply").unwrap();
+            assert!(document.resolve_comment(id, true).unwrap());
+            (document, id, reply)
+        };
+
+        // The start goes: the range now starts at the next paragraph.
+        let (mut document, id, reply) = fixture();
+        assert!(document.remove_content(1));
+        assert_eq!(ids(&document), [id, reply]);
+        assert_eq!(
+            anchor_text(&document, id).as_deref(),
+            Some("End of the range")
+        );
+        assert!(document.comments()[0].resolved());
+        assert_consistent(&mut document);
+
+        // The end goes: the range now ends with the paragraph before.
+        let (mut document, id, _) = fixture();
+        let location = body_location(&document, 2);
+        let fragment = document.remove_content_at(&location).unwrap();
+        assert_eq!(
+            anchor_text(&document, id).as_deref(),
+            Some("Start of the range")
+        );
+        assert_consistent(&mut document);
+        // The fragment does not carry a marker of the comment that stays.
+        let end = body_location(&document, 2);
+        document.insert_content(&end, fragment).unwrap();
+        assert_eq!(ids(&document).len(), 2);
+        assert_eq!(
+            anchor_text(&document, id).as_deref(),
+            Some("Start of the range")
+        );
+        assert_consistent(&mut document);
+    }
+
+    #[test]
+    fn popping_a_commented_paragraph_carries_its_thread_back() {
+        let mut document = google_reviewed_document();
+        let delta = body_location(&document, 2);
+        let fragment = document.remove_content_at(&delta).unwrap();
+        assert_eq!(ids(&document), [0, 2, 3, 4]);
+        assert_consistent(&mut document);
+
+        // Inserted again, the thread comes back under fresh ids.
+        let end = body_location(&document, 1);
+        document.insert_content(&end, fragment.clone()).unwrap();
+        let comments = document.comments();
+        assert_eq!(comments.len(), 6);
+        let root = comments
+            .iter()
+            .find(|comment| comment.text() == "Please delete this paragraph.")
+            .unwrap();
+        let reply = comments
+            .iter()
+            .find(|comment| comment.text() == "Agreed.")
+            .unwrap();
+        assert_eq!(reply.parent_id(), Some(root.id()));
+        assert_eq!(root.author(), Some("Reviewer A"));
+        assert_eq!(root.date(), Some("2026-01-05T10:00:00Z"));
+        assert_eq!(
+            anchor_text(&document, root.id()).as_deref(),
+            Some("Delta paragraph carries a comment that asks to delete it.")
+        );
+        assert_consistent(&mut document);
+
+        // Another document takes the thread too.
+        let mut other = Document::new();
+        other.add_paragraph("Host");
+        let end = body_location(&other, 1);
+        other.insert_content(&end, fragment).unwrap();
+        assert_eq!(
+            other
+                .comments()
+                .iter()
+                .map(|comment| comment.text())
+                .collect::<Vec<_>>(),
+            ["Please delete this paragraph.", "Agreed."]
+        );
+        assert_consistent(&mut other);
+    }
+
+    #[test]
+    fn moving_a_comment_keeps_its_thread_and_drops_empty_google_wrappers() {
+        let mut document = google_reviewed_document();
+        let before = snapshot(&document, 2);
+        document
+            .move_comment_to_text(2, "Alpha paragraph", 0)
+            .unwrap();
+        assert_eq!(ids(&document), [0, 1, 2, 3, 4, 5]);
+        assert_eq!(snapshot(&document, 2), before);
+        assert!(document.comments()[2].resolved());
+        assert_eq!(
+            anchor_text(&document, 2).as_deref(),
+            Some("Alpha paragraph")
+        );
+        let body = part(&mut document, "/word/document.xml");
+        assert!(!body.contains("goog_rdk_20"), "{body}");
+        assert!(!body.contains("goog_rdk_21"), "{body}");
+        assert_eq!(body.matches("<w:commentReference w:id=\"2\"/>").count(), 1);
+        assert_consistent(&mut document);
+
+        // The thread root moves with its replies, onto a range.
+        let range = document
+            .comment_anchor(3)
+            .unwrap()
+            .unwrap()
+            .range()
+            .unwrap()
+            .clone();
+        document.move_comment(1, range).unwrap();
+        assert_eq!(anchor_text(&document, 1).as_deref(), Some("Build"));
+        assert_eq!(document.comments()[5].parent_id(), Some(1));
+        assert_consistent(&mut document);
+        // The old paragraph can now go without taking the thread.
+        assert!(document.remove_content(2));
+        assert_eq!(ids(&document), [0, 1, 2, 3, 4, 5]);
+
+        // A comment moves within its own paragraph after its reference run.
+        let mut document = Document::new();
+        document.add_paragraph("One two three");
+        let id = document
+            .add_comment_on_text("One", 0, "A", None, "First word", None)
+            .unwrap();
+        document.move_comment_to_text(id, "three", 0).unwrap();
+        assert_eq!(anchor_text(&document, id).as_deref(), Some("three"));
+        assert_eq!(document.paragraph(0).unwrap().text(), "One two three");
+    }
+
+    #[test]
+    fn moving_a_reply_an_unknown_comment_or_onto_a_bad_range_is_an_error() {
+        let mut document = google_reviewed_document();
+        let before = document.to_bytes().unwrap();
+        for (id, anchor, reason) in [
+            (5, "Golf", "is a reply to comment 1"),
+            (9, "Golf", "comment id 9 does not exist"),
+            (1, "Nowhere", "has no occurrence 0"),
+        ] {
+            let error = document
+                .move_comment_to_text(id, anchor, 0)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(reason), "{id}: {error}");
+        }
+        let golf = body_location(&document, 6);
+        let error = document
+            .move_comment(
+                1,
+                StoryRunRange {
+                    start: StoryRunPosition {
+                        location: golf.clone(),
+                        run_index: 0,
+                    },
+                    end: StoryRunPosition {
+                        location: golf,
+                        run_index: 9,
+                    },
+                },
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("run index 9"), "{error}");
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+}
+
 /// GitHub issue #168: `Paragraph::remove_run` removes one run in place.
 mod remove_run {
     use rdocx::{Document, RunPosition, RunRange};

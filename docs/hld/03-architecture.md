@@ -1726,6 +1726,35 @@ deleting unrelated runs or producer XML.
 The additive `add_comment_with_date` and `reply_to_with_date` operations own
 validated optional timestamps. The original operations delegate with no date.
 
+`Document::comment_anchors` reads where each comment points from one story
+inventory. A `CommentAnchor` holds the comment's range as the
+`StoryRunRange` that `add_story_comment` takes, the boundary before its
+reference run, and the accepted-view text of the range, its paragraphs joined
+with a line feed. Markers inside a tracked deletion or move source do not
+anchor, and a reply that carries no markers of its own has no anchor and
+follows its thread root. `Document::unanchored_comments` lists the roots of
+the threads with no marker in any story, which `rdocx validate` reports as
+errors. `move_comment` and `move_comment_to_text` write the new markers under a
+free id, remove every old marker of the thread, then rename the new ones, so
+removing the old reference run cannot shift the new range. The comment keeps
+its id, definition, replies and resolved state, the markers a reply carries of
+its own are dropped, and a reply id is refused.
+
+Removing body content keeps every comment anchored. `remove_content`,
+`remove_content_at` and `remove_table_row` remove a comment whose markers all
+sit in the removed content, with its replies, its `commentsExtended`,
+`commentsIds` and `commentsExtensible` rows, as `remove_comment` does. A
+comment that keeps part of its range moves the lost start marker to the start
+of the first paragraph of its story after the cut, or the lost end marker and
+reference to the end of the last paragraph before it. A row removal that would
+cut a range continuing outside the row is refused, since each cell is a story
+of its own. `remove_content_at` refuses a range it cannot anchor again, while
+`remove_content`, which cannot fail, removes that comment instead. The
+fragment that `remove_content_at` returns carries the threads it removed and
+none of the markers of the comments that stay, and `insert_content` restores
+the threads under fresh ids. Comment marker removal also drops a Google Docs
+`goog_rdk` inline content control left empty by it.
+
 Checked picture insertion uses the same story owner and package relationship
 scope. `insert_picture_to_story` accepts bytes, a safe filename, paired
 explicit dimensions or native 72 DPI sizing, and an optional direct item after

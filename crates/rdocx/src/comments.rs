@@ -1,6 +1,6 @@
 //! Public comment handles and atomic document comment mutations.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ops::Range;
 
 use oxml_opc::OpcPackage;
@@ -168,16 +168,7 @@ fn scan_story_markers(xml: &[u8], location: &ContentLocation) -> Result<Vec<Stor
             Event::Start(ref element) | Event::Empty(ref element) => {
                 let local = element.local_name().as_ref().to_vec();
                 let hidden = stack.iter().any(|(name, word, _)| {
-                    *word
-                        && matches!(
-                            name.as_slice(),
-                            b"del"
-                                | b"moveFrom"
-                                | b"txbxContent"
-                                | b"smartTag"
-                                | b"customXml"
-                                | b"fldSimple"
-                        )
+                    *word && RUN_HIDING_ANCESTORS.contains(&name.as_slice())
                 });
                 if is_word && local == b"r" && !hidden {
                     run_index += 1;
@@ -1230,15 +1221,27 @@ impl Document {
         date: Option<&str>,
     ) -> Result<i32> {
         validate_comment_date(date)?;
+        self.ensure_comment_models()?;
+        self.ensure_comment_relationships()?;
+        let mut identifiers = self.identifiers.clone();
+        let id = identifiers.reserve_comment_id()?;
+        self.anchor_comment_on_text(anchor, occurrence, id)?;
+        self.push_comment_definition(id, author, initials, text, date)?;
+        self.identifiers = identifiers;
+        self.comments_dirty = true;
+        self.invalidate_layout();
+        Ok(id)
+    }
+
+    /// Write the markers of comment `id` around the `occurrence`-th match of
+    /// `anchor` in the main story, as [`Self::add_comment_on_text`] finds and
+    /// anchors it.
+    fn anchor_comment_on_text(&mut self, anchor: &str, occurrence: usize, id: i32) -> Result<()> {
         if anchor.is_empty() {
             return Err(Error::Other(
                 "comment anchor text must not be empty".to_owned(),
             ));
         }
-        self.ensure_comment_models()?;
-        self.ensure_comment_relationships()?;
-        let mut identifiers = self.identifiers.clone();
-        let id = identifiers.reserve_comment_id()?;
         let mut remaining = occurrence;
         let mut anchored = None;
         visit_body_paragraphs_mut(&mut self.document.body.content, &mut |paragraph| {
@@ -1292,12 +1295,7 @@ impl Document {
             Error::Other(format!(
                 "comment anchor text {anchor:?} has no occurrence {occurrence}: it occurs {found} {times} in the main story"
             ))
-        })??;
-        self.push_comment_definition(id, author, initials, text, date)?;
-        self.identifiers = identifiers;
-        self.comments_dirty = true;
-        self.invalidate_layout();
-        Ok(id)
+        })?
     }
 
     /// Append comment `id`, holding one paragraph per line of `text`, and its
@@ -1529,7 +1527,7 @@ impl Document {
         Ok(removed)
     }
 
-    fn remove_comment_staged(&mut self, id: i32) -> Result<bool> {
+    pub(crate) fn remove_comment_staged(&mut self, id: i32) -> Result<bool> {
         let Some(comments) = self.comments.as_ref() else {
             return Ok(false);
         };
@@ -1572,6 +1570,12 @@ impl Document {
             }
         }
 
+        let removed_paragraph_ids = comments
+            .comments
+            .iter()
+            .filter(|comment| removed_ids.contains(&comment.id))
+            .flat_map(|comment| comment.paragraph_ids.iter().flatten().cloned())
+            .collect::<HashSet<_>>();
         let comments = self.comments.as_mut().expect("model exists");
         let removed_comment_entries = comments
             .comments
@@ -1599,9 +1603,8 @@ impl Document {
                 .collect();
             remap_raw_positions(&mut extended.extra_xml, &removed_extension_entries);
         }
-        for content in &mut self.document.body.content {
-            remove_anchors_from_body_content(content, &removed_ids);
-        }
+        self.remove_durable_comment_rows(&removed_paragraph_ids)?;
+        self.remove_comment_markers_staged(&removed_ids)?;
         self.identifiers
             .retire_authored_comment_ids(removed_ids.iter().copied());
         self.remove_owned_empty_comment_parts();
@@ -1716,6 +1719,924 @@ impl Document {
             self.comments_extended_owned = false;
         }
     }
+}
+
+impl Document {
+    /// Return the anchor of every comment that has a visible marker in a
+    /// story paragraph, keyed by comment id.
+    ///
+    /// A comment missing from the map has no range and no reference in any
+    /// story. A reply that Word or rdocx wrote without markers of its own is
+    /// missing too: it follows its thread root, which
+    /// [`CommentRef::parent_id`] names. Markers inside tracked deletions and
+    /// moves away do not anchor. The comment story itself is not searched.
+    pub fn comment_anchors(&self) -> Result<BTreeMap<i32, CommentAnchor>> {
+        #[derive(Default)]
+        struct Found {
+            start: Option<(usize, usize)>,
+            end: Option<(usize, usize)>,
+            reference: Option<(usize, usize)>,
+        }
+
+        let paragraphs = self
+            .story_range_paragraph_spans()?
+            .into_iter()
+            .filter(|paragraph| paragraph.location.story().kind() != crate::StoryKind::Comment)
+            .collect::<Vec<_>>();
+        let mut found = BTreeMap::<i32, Found>::new();
+        for (index, paragraph) in paragraphs.iter().enumerate() {
+            for marker in scan_comment_markers(&paragraph.xml)? {
+                if marker.hidden {
+                    continue;
+                }
+                let entry = found.entry(marker.id).or_default();
+                match marker.kind {
+                    CommentMarkerKind::Start if entry.start.is_none() => {
+                        entry.start = Some((index, marker.run_index));
+                    }
+                    // An end before the start, or in another story, closes
+                    // no range.
+                    CommentMarkerKind::End
+                        if entry.end.is_none()
+                            && entry.start.is_some_and(|(start, _)| {
+                                paragraphs[start].location.story() == paragraph.location.story()
+                            }) =>
+                    {
+                        entry.end = Some((index, marker.run_index));
+                    }
+                    // The reference position is the boundary before its run.
+                    CommentMarkerKind::Reference if entry.reference.is_none() => {
+                        entry.reference = Some((index, marker.run_index.saturating_sub(1)));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let position = |(index, run_index): (usize, usize)| StoryRunPosition {
+            location: paragraphs[index].location.clone(),
+            run_index,
+        };
+        let mut anchors = BTreeMap::new();
+        for (id, found) in found {
+            let (range, text) = match (found.start, found.end) {
+                (Some(start), Some(end)) => (
+                    Some(StoryRunRange {
+                        start: position(start),
+                        end: position(end),
+                    }),
+                    story_range_text(&paragraphs, start, end)?,
+                ),
+                _ => (None, String::new()),
+            };
+            if range.is_none() && found.reference.is_none() {
+                // A lone start or end marker anchors nothing.
+                continue;
+            }
+            anchors.insert(
+                id,
+                CommentAnchor {
+                    range,
+                    reference: found.reference.map(position),
+                    text,
+                },
+            );
+        }
+        Ok(anchors)
+    }
+
+    /// Return the anchor of comment `id`, as [`Self::comment_anchors`]
+    /// reports it.
+    pub fn comment_anchor(&self, id: i32) -> Result<Option<CommentAnchor>> {
+        Ok(self.comment_anchors()?.remove(&id))
+    }
+
+    /// Return the thread roots, in package order, of the comment threads
+    /// that have no range marker and no reference in any story.
+    ///
+    /// A reply without markers of its own is anchored through its thread
+    /// root, as Word and rdocx write replies, so a thread is reported once,
+    /// by its root.
+    pub fn unanchored_comments(&self) -> Result<Vec<i32>> {
+        let comments = self.comments();
+        if comments.is_empty() {
+            return Ok(Vec::new());
+        }
+        let marked = self.comment_marker_ids()?;
+        let parents = comments
+            .iter()
+            .map(|comment| (comment.id(), comment.parent_id()))
+            .collect::<HashMap<_, _>>();
+        let root = |id: i32| {
+            let mut current = id;
+            let mut seen = HashSet::from([id]);
+            while let Some(parent) = parents.get(&current).copied().flatten() {
+                if !seen.insert(parent) {
+                    break;
+                }
+                current = parent;
+            }
+            current
+        };
+        let anchored_roots = comments
+            .iter()
+            .map(CommentRef::id)
+            .filter(|id| marked.contains(id))
+            .map(root)
+            .collect::<HashSet<_>>();
+        Ok(comments
+            .iter()
+            .filter(|comment| comment.parent_id().is_none())
+            .map(CommentRef::id)
+            .filter(|id| !anchored_roots.contains(id))
+            .collect())
+    }
+
+    /// Move comment `id` to `range`, keeping its id, author, initials, date,
+    /// text, replies and resolved state.
+    ///
+    /// The range markers and the reference run move together, as
+    /// [`Self::add_story_comment`] places them on `range`. A Google Docs
+    /// `goog_rdk` content control that held only an old marker goes with
+    /// it. A reply follows its thread root, so markers that a reply carries
+    /// of its own are removed. An unknown id, the id of a reply, or a range
+    /// that cannot be anchored exactly is an error and leaves the document
+    /// unchanged.
+    pub fn move_comment(&mut self, id: i32, range: StoryRunRange) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        let replies = candidate.comment_replies_for_move(id)?;
+        candidate.replace_comment_anchors_staged(id, &replies, |document, temporary| {
+            document.anchor_story_range(&range, RangeAnchor::Comment(temporary), "comment")?;
+            Ok(range.start.location.story().part_name().to_owned())
+        })?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    /// Move comment `id` to the `occurrence`-th match of `anchor`, counted
+    /// from zero, in the main story, as [`Self::add_comment_on_text`] finds
+    /// and anchors a match, and as [`Self::move_comment`] keeps the thread.
+    pub fn move_comment_to_text(&mut self, id: i32, anchor: &str, occurrence: usize) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        let replies = candidate.comment_replies_for_move(id)?;
+        candidate.replace_comment_anchors_staged(id, &replies, |document, temporary| {
+            document.anchor_comment_on_text(anchor, occurrence, temporary)?;
+            Ok(document.doc_part_name.clone())
+        })?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    /// Return the replies descended from thread root `id`, or an error when
+    /// `id` names no comment or a reply.
+    fn comment_replies_for_move(&self, id: i32) -> Result<Vec<i32>> {
+        let comments = self.comments();
+        let comment = comments
+            .iter()
+            .find(|comment| comment.id() == id)
+            .ok_or_else(|| Error::Other(format!("comment id {id} does not exist")))?;
+        if let Some(parent) = comment.parent_id() {
+            return Err(Error::Other(format!(
+                "comment id {id} is a reply to comment {parent}, so it moves with its thread root"
+            )));
+        }
+        let mut thread = HashSet::from([id]);
+        loop {
+            let before = thread.len();
+            for comment in &comments {
+                if comment
+                    .parent_id()
+                    .is_some_and(|parent| thread.contains(&parent))
+                {
+                    thread.insert(comment.id());
+                }
+            }
+            if thread.len() == before {
+                break;
+            }
+        }
+        thread.remove(&id);
+        let mut replies = thread.into_iter().collect::<Vec<_>>();
+        replies.sort_unstable();
+        Ok(replies)
+    }
+
+    /// Anchor comment `id` where `anchor` writes the markers of the free id
+    /// it receives, then remove the old markers of `id` and of `dropped`.
+    ///
+    /// `anchor` returns the story part it wrote to. The new markers take a
+    /// free id until the old ones are gone, so removing the old reference
+    /// run cannot shift the run boundaries of the new range.
+    fn replace_comment_anchors_staged(
+        &mut self,
+        id: i32,
+        dropped: &[i32],
+        anchor: impl FnOnce(&mut Self, i32) -> Result<String>,
+    ) -> Result<()> {
+        let taken = self
+            .comment_marker_ids()?
+            .into_iter()
+            .chain(
+                self.comments
+                    .iter()
+                    .flat_map(|comments| comments.comments.iter().map(|comment| comment.id)),
+            )
+            .max()
+            .unwrap_or(-1);
+        let temporary = taken
+            .checked_add(1)
+            .ok_or_else(|| Error::Other("comment identifiers are exhausted".to_owned()))?;
+        let part_name = anchor(self, temporary)?;
+        let mut removed = vec![id];
+        removed.extend_from_slice(dropped);
+        self.remove_comment_markers_staged(&removed.into_iter().collect())?;
+        let xml = self.story_part_xml(&part_name)?;
+        let renamed = rename_comment_marker_ids(&xml, &HashMap::from([(temporary, id)]))?;
+        crate::document::set_story_source_xml(self, &part_name, renamed)?;
+        self.invalidate_layout();
+        Ok(())
+    }
+
+    /// Return the ids that a comment marker names in any story part other
+    /// than the comments.
+    fn comment_marker_ids(&self) -> Result<HashSet<i32>> {
+        let mut ids = scan_comment_markers(&self.document.to_xml()?)?
+            .into_iter()
+            .map(|marker| marker.id)
+            .collect::<HashSet<_>>();
+        for source in self.related_story_sources()? {
+            if source.root_kind != crate::StoryKind::Comment {
+                ids.extend(
+                    scan_comment_markers(&source.xml)?
+                        .into_iter()
+                        .map(|marker| marker.id),
+                );
+            }
+        }
+        Ok(ids)
+    }
+
+    fn story_part_xml(&self, part_name: &str) -> Result<Vec<u8>> {
+        if part_name == self.doc_part_name {
+            return Ok(self.document.to_xml()?);
+        }
+        self.package
+            .get_part(part_name)
+            .map(<[u8]>::to_vec)
+            .ok_or_else(|| Error::Other(format!("story part {part_name} is missing")))
+    }
+
+    /// Remove every marker of comments `ids` from every story, together
+    /// with a Google Docs `goog_rdk` content control in the main story that
+    /// held only one of them.
+    fn remove_comment_markers_staged(&mut self, ids: &HashSet<i32>) -> Result<()> {
+        for content in &mut self.document.body.content {
+            remove_anchors_from_body_content(content, ids);
+        }
+        let related = self
+            .related_story_sources()?
+            .into_iter()
+            .filter(|source| source.root_kind != crate::StoryKind::Comment)
+            .map(|source| (source.part_name, source.xml.into_owned()))
+            .collect::<Vec<_>>();
+        for (part_name, xml) in related {
+            let spans = scan_comment_markers(&xml)?
+                .into_iter()
+                .filter(|marker| ids.contains(&marker.id))
+                .map(|marker| marker.span)
+                .collect::<Vec<_>>();
+            if !spans.is_empty() {
+                crate::document::set_story_source_xml(
+                    self,
+                    &part_name,
+                    without_spans(&xml, &spans),
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Remove the `commentsIds` and `commentsExtensible` rows of the comment
+    /// paragraphs `paragraph_ids`. Neither part is modelled, so each is
+    /// edited in place.
+    fn remove_durable_comment_rows(&mut self, paragraph_ids: &HashSet<String>) -> Result<()> {
+        if paragraph_ids.is_empty() {
+            return Ok(());
+        }
+        let owner = self.doc_part_name.clone();
+        let part_of = |relationship_type: &str| {
+            self.package
+                .get_part_rels(&owner)?
+                .items
+                .iter()
+                .find(|relationship| {
+                    relationship.rel_type == relationship_type
+                        && crate::document::relationship_is_internal(relationship)
+                })
+                .map(|relationship| OpcPackage::resolve_rel_target(&owner, &relationship.target))
+        };
+        let ids_part = part_of(COMMENTS_IDS_REL_TYPE);
+        let extensible_part = part_of(COMMENTS_EXTENSIBLE_REL_TYPE);
+        let mut durable_ids = HashSet::new();
+        if let Some(part) = ids_part
+            && let Some(xml) = self.package.get_part(&part)
+        {
+            let (updated, removed) = remove_keyed_rows(
+                xml,
+                COMMENTS_IDS_NAMESPACE,
+                b"commentId",
+                b"paraId",
+                paragraph_ids,
+                b"durableId",
+            )?;
+            durable_ids = removed;
+            self.package.set_part(&part, updated);
+        }
+        if let Some(part) = extensible_part
+            && !durable_ids.is_empty()
+            && let Some(xml) = self.package.get_part(&part)
+        {
+            let (updated, _) = remove_keyed_rows(
+                xml,
+                COMMENTS_EXTENSIBLE_NAMESPACE,
+                b"commentExtensible",
+                b"durableId",
+                &durable_ids,
+                b"durableId",
+            )?;
+            self.package.set_part(&part, updated);
+        }
+        Ok(())
+    }
+
+    /// Classify the comments that `removed`, a byte range of the story
+    /// source `xml` of `part_name`, holds markers of, before it is removed.
+    pub(crate) fn comment_cut(
+        &self,
+        part_name: &str,
+        xml: &[u8],
+        removed: Range<usize>,
+    ) -> Result<CommentCut> {
+        let mut cut = CommentCut::default();
+        let Some(comments) = self.comments.as_ref() else {
+            return Ok(cut);
+        };
+        let defined = comments
+            .comments
+            .iter()
+            .map(|comment| comment.id)
+            .collect::<HashSet<_>>();
+        let markers = scan_comment_markers(xml)?;
+        let inside = |marker: &CommentMarkerSpan| {
+            removed.start <= marker.span.start && marker.span.end <= removed.end
+        };
+        let cut_ids = markers
+            .iter()
+            .filter(|marker| inside(marker) && defined.contains(&marker.id))
+            .map(|marker| marker.id)
+            .collect::<BTreeSet<_>>();
+        let mut paragraphs = None;
+        for id in cut_ids {
+            let kept = markers
+                .iter()
+                .filter(|marker| marker.id == id && !inside(marker))
+                .collect::<Vec<_>>();
+            if kept.is_empty() {
+                cut.whole.push(id);
+                continue;
+            }
+            // The markers that stay in the document do not go into the
+            // fragment, which cannot carry a comment that stays.
+            cut.kept_marker_spans.extend(
+                markers
+                    .iter()
+                    .filter(|marker| marker.id == id && inside(marker))
+                    .map(|marker| marker.span.clone()),
+            );
+            // A comment that lost its whole range but keeps its reference
+            // stays as a point comment.
+            let Some(kept_marker) = kept
+                .iter()
+                .find(|marker| marker.kind != CommentMarkerKind::Reference)
+            else {
+                continue;
+            };
+            if paragraphs.is_none() {
+                paragraphs = Some(self.story_range_paragraph_spans()?);
+            }
+            let paragraphs = paragraphs.as_ref().expect("paragraphs were just listed");
+            let holder = paragraphs
+                .iter()
+                .find(|paragraph| {
+                    paragraph.part_name == part_name
+                        && paragraph.span.start <= kept_marker.span.start
+                        && kept_marker.span.end <= paragraph.span.end
+                })
+                .ok_or_else(|| {
+                    Error::Other(format!(
+                        "comment {id} keeps a range marker outside every story paragraph, so its range cannot be anchored again after the removal"
+                    ))
+                })?;
+            let story = holder.location.story();
+            let paragraphs_before = paragraphs
+                .iter()
+                .filter(|paragraph| {
+                    paragraph.location.story() == story && paragraph.span.end <= removed.start
+                })
+                .count();
+            cut.partial.push((id, paragraphs_before));
+        }
+        Ok(cut)
+    }
+
+    /// Finish the removal that `cut` describes: anchor again on what is left
+    /// each comment that keeps part of its range, then remove each comment
+    /// that lost every marker, with its replies.
+    pub(crate) fn apply_comment_cut_staged(&mut self, cut: &CommentCut) -> Result<()> {
+        for (id, paragraphs_before) in &cut.partial {
+            // Each anchoring edits the story, so every range is read afresh.
+            let range = self.kept_comment_range(*id, *paragraphs_before)?;
+            self.replace_comment_anchors_staged(*id, &[], |document, temporary| {
+                document.anchor_story_range(&range, RangeAnchor::Comment(temporary), "comment")?;
+                Ok(range.start.location.story().part_name().to_owned())
+            })?;
+        }
+        for id in &cut.whole {
+            self.remove_comment_staged(*id)?;
+        }
+        Ok(())
+    }
+
+    /// Return the range that comment `id` keeps after a removal: a lost start
+    /// moves to the start of the first paragraph of its story after the
+    /// removed content, and a lost end to the end of the last paragraph
+    /// before it. `paragraphs_before` counts the paragraphs of that story
+    /// before the removed content.
+    fn kept_comment_range(&self, id: i32, paragraphs_before: usize) -> Result<StoryRunRange> {
+        let paragraphs = self.story_range_paragraph_spans()?;
+        let mut start = None;
+        let mut end = None;
+        for (index, paragraph) in paragraphs.iter().enumerate() {
+            for marker in scan_comment_markers(&paragraph.xml)? {
+                if marker.id != id || marker.hidden {
+                    continue;
+                }
+                match marker.kind {
+                    CommentMarkerKind::Start if start.is_none() => {
+                        start = Some((index, marker.run_index));
+                    }
+                    CommentMarkerKind::End if end.is_none() => {
+                        end = Some((index, marker.run_index));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let error = |reason: &str| {
+            Error::Other(format!(
+                "comment {id} keeps part of its range outside the removed content, but {reason}"
+            ))
+        };
+        let story_paragraph = |kept: usize, ordinal: Option<usize>| {
+            let story = paragraphs[kept].location.story();
+            ordinal
+                .and_then(|ordinal| {
+                    paragraphs
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, paragraph)| paragraph.location.story() == story)
+                        .nth(ordinal)
+                })
+                .map(|(index, _)| index)
+                .ok_or_else(|| error("its story has no paragraph at the edge of the removal"))
+        };
+        let (start, end) = match (start, end) {
+            (Some(start), Some(end)) => (start, end),
+            (Some(start), None) => {
+                let last = story_paragraph(start.0, paragraphs_before.checked_sub(1))?;
+                let run_count = CT_P::from_xml_fragment(&paragraphs[last].xml)?
+                    .accepted_run_paths()
+                    .len();
+                (start, (last, run_count))
+            }
+            (None, Some(end)) => ((story_paragraph(end.0, Some(paragraphs_before))?, 0), end),
+            (None, None) => return Err(error("no range marker of it is left in a paragraph")),
+        };
+        if start > end {
+            return Err(error("what is left of it would end before it starts"));
+        }
+        Ok(StoryRunRange {
+            start: StoryRunPosition {
+                location: paragraphs[start.0].location.clone(),
+                run_index: start.1,
+            },
+            end: StoryRunPosition {
+                location: paragraphs[end.0].location.clone(),
+                run_index: end.1,
+            },
+        })
+    }
+
+    /// Copy the threads of comments `ids`, replies included, for a removed
+    /// fragment to carry.
+    pub(crate) fn carried_comments(&self, ids: &[i32]) -> Result<Option<CarriedComments>> {
+        let Some(source) = self.comments.as_ref().filter(|_| !ids.is_empty()) else {
+            return Ok(None);
+        };
+        let ids = ids.iter().map(i32::to_string).collect::<Vec<_>>();
+        let included =
+            selected_fragment_comment_ids(source, self.comments_extended.as_ref(), &ids)?;
+        let mut comments = source.clone();
+        comments
+            .comments
+            .retain(|comment| included.contains(&comment.id));
+        comments.extra_xml.clear();
+        let paragraph_ids = comments
+            .comments
+            .iter()
+            .flat_map(|comment| comment.paragraph_ids.iter().flatten().cloned())
+            .collect::<HashSet<_>>();
+        let extended = self.comments_extended.as_ref().map(|source| {
+            let mut extended = source.clone();
+            extended
+                .comments
+                .retain(|entry| paragraph_ids.contains(&entry.para_id));
+            extended.extra_xml.clear();
+            extended
+        });
+        Ok(Some(CarriedComments { comments, extended }))
+    }
+
+    /// Add the threads a fragment carries under fresh ids, and return the
+    /// new id of each old one.
+    pub(crate) fn restore_carried_comments_staged(
+        &mut self,
+        carried: &CarriedComments,
+    ) -> Result<HashMap<i32, i32>> {
+        let ids = carried
+            .comments
+            .comments
+            .iter()
+            .map(|comment| comment.id.to_string())
+            .collect::<Vec<_>>();
+        let remap = self.import_fragment_comments_staged(
+            Some(&carried.comments),
+            carried.extended.as_ref(),
+            &ids,
+        )?;
+        remap
+            .into_iter()
+            .map(|(old, new)| match (old.parse(), new.parse()) {
+                (Ok(old), Ok(new)) => Ok((old, new)),
+                _ => Err(Error::Other(
+                    "restored comment ids must be integers".to_owned(),
+                )),
+            })
+            .collect()
+    }
+}
+
+/// Where a comment points in its story.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommentAnchor {
+    range: Option<StoryRunRange>,
+    reference: Option<StoryRunPosition>,
+    text: String,
+}
+
+impl CommentAnchor {
+    /// Return the range between the comment's range markers, in the
+    /// accepted-view run boundaries that [`Document::add_story_comment`]
+    /// takes, or `None` for a comment that has only a reference.
+    pub fn range(&self) -> Option<&StoryRunRange> {
+        self.range.as_ref()
+    }
+
+    /// Return the boundary before the run that holds the comment reference.
+    pub fn reference(&self) -> Option<&StoryRunPosition> {
+        self.reference.as_ref()
+    }
+
+    /// Return the accepted-view text of the range, its paragraphs joined
+    /// with `"\n"`, or `""` when the comment has no range. A paragraph that
+    /// the range covers whole reads as `Paragraph::text` reads it.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+}
+
+/// The comments that a removal of story content holds markers of.
+#[derive(Debug, Default)]
+pub(crate) struct CommentCut {
+    /// Comments whose every marker lies in the removed content.
+    whole: Vec<i32>,
+    /// Comments that keep a range marker outside it, with the count of
+    /// paragraphs of that marker's story before the removed content.
+    partial: Vec<(i32, usize)>,
+    /// The spans, in the scanned source, of the removed markers of the
+    /// comments that stay.
+    kept_marker_spans: Vec<Range<usize>>,
+}
+
+impl CommentCut {
+    pub(crate) fn whole(&self) -> &[i32] {
+        &self.whole
+    }
+
+    /// Return `xml[removed]` without the markers of the comments that stay.
+    pub(crate) fn fragment_xml(&self, xml: &[u8], removed: Range<usize>) -> Vec<u8> {
+        let spans = self
+            .kept_marker_spans
+            .iter()
+            .map(|span| span.start - removed.start..span.end - removed.start)
+            .collect::<Vec<_>>();
+        without_spans(&xml[removed], &spans)
+    }
+}
+
+/// Comment threads that travel with a removed content fragment.
+#[derive(Debug, Clone)]
+pub(crate) struct CarriedComments {
+    comments: CT_Comments,
+    extended: Option<CT_CommentsEx>,
+}
+
+const COMMENTS_IDS_REL_TYPE: &str =
+    "http://schemas.microsoft.com/office/2016/09/relationships/commentsIds";
+const COMMENTS_EXTENSIBLE_REL_TYPE: &str =
+    "http://schemas.microsoft.com/office/2018/08/relationships/commentsExtensible";
+const COMMENTS_IDS_NAMESPACE: &str = "http://schemas.microsoft.com/office/word/2016/wordml/cid";
+const COMMENTS_EXTENSIBLE_NAMESPACE: &str =
+    "http://schemas.microsoft.com/office/word/2018/wordml/cex";
+
+/// The ancestors whose runs accepted-view run positions skip.
+const RUN_HIDING_ANCESTORS: [&[u8]; 6] = [
+    b"del",
+    b"moveFrom",
+    b"txbxContent",
+    b"smartTag",
+    b"customXml",
+    b"fldSimple",
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CommentMarkerKind {
+    Start,
+    End,
+    Reference,
+}
+
+/// One comment marker element in story XML.
+#[derive(Debug, Clone)]
+pub(crate) struct CommentMarkerSpan {
+    pub(crate) id: i32,
+    pub(crate) kind: CommentMarkerKind,
+    /// The whole element.
+    pub(crate) span: Range<usize>,
+    /// The start tag of the element.
+    tag: Range<usize>,
+    /// Accepted-view runs that start before the marker, counted as story
+    /// range positions count them. A reference counts the run that holds it.
+    run_index: usize,
+    /// Whether an ancestor that run positions skip, such as a tracked
+    /// deletion, holds the marker.
+    hidden: bool,
+}
+
+/// Find every Word comment range marker and comment reference in `xml`,
+/// which must declare the namespaces it uses.
+pub(crate) fn scan_comment_markers(xml: &[u8]) -> Result<Vec<CommentMarkerSpan>> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut stack: Vec<(Vec<u8>, bool, Option<usize>)> = Vec::new();
+    let mut markers = Vec::<CommentMarkerSpan>::new();
+    let mut run_index = 0usize;
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("comment marker scan failed: {error}")))?;
+        let is_word = matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == rdocx_oxml::namespace::W_NS.as_bytes());
+        drop(namespace);
+        let after = reader.buffer_position() as usize;
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                let local = element.local_name().as_ref().to_vec();
+                let hidden = stack.iter().any(|(name, word, _)| {
+                    *word && RUN_HIDING_ANCESTORS.contains(&name.as_slice())
+                });
+                if is_word && local == b"r" && !hidden {
+                    run_index += 1;
+                }
+                let kind = match local.as_slice() {
+                    b"commentRangeStart" if is_word => Some(CommentMarkerKind::Start),
+                    b"commentRangeEnd" if is_word => Some(CommentMarkerKind::End),
+                    b"commentReference" if is_word => Some(CommentMarkerKind::Reference),
+                    _ => None,
+                };
+                let id = match kind {
+                    Some(_) => word_marker_attribute(&reader, element, b"id")?
+                        .and_then(|id| id.trim().parse::<i32>().ok()),
+                    None => None,
+                };
+                let marker_index = kind.zip(id).map(|(kind, id)| {
+                    markers.push(CommentMarkerSpan {
+                        id,
+                        kind,
+                        span: before..after,
+                        tag: before..after,
+                        run_index,
+                        hidden,
+                    });
+                    markers.len() - 1
+                });
+                if matches!(event, Event::Start(_)) {
+                    stack.push((local, is_word, marker_index));
+                }
+            }
+            Event::End(_) => {
+                if let Some((_, _, Some(index))) = stack.pop() {
+                    markers[index].span.end = after;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    Ok(markers)
+}
+
+/// Rewrite the `w:id` of every comment marker whose id `rename` maps.
+pub(crate) fn rename_comment_marker_ids(xml: &[u8], rename: &HashMap<i32, i32>) -> Result<Vec<u8>> {
+    let mut edits = Vec::new();
+    for marker in scan_comment_markers(xml)? {
+        let Some(id) = rename.get(&marker.id) else {
+            continue;
+        };
+        let tag = &xml[marker.tag.clone()];
+        let mut reader = quick_xml::Reader::from_reader(tag);
+        let (element, empty) = match reader
+            .read_event()
+            .map_err(|error| Error::Other(format!("comment marker rename failed: {error}")))?
+        {
+            Event::Start(element) => (element, false),
+            Event::Empty(element) => (element, true),
+            _ => {
+                return Err(Error::Other(
+                    "comment marker rename found no start tag".to_owned(),
+                ));
+            }
+        };
+        let name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
+        let mut renamed = BytesStart::new(name);
+        for attribute in element.attributes() {
+            let attribute = attribute.map_err(|error| Error::Other(error.to_string()))?;
+            if attribute.key.local_name().as_ref() == b"id" && attribute.key.prefix().is_some() {
+                renamed.push_attribute((attribute.key.as_ref(), id.to_string().as_bytes()));
+            } else {
+                renamed.push_attribute(attribute);
+            }
+        }
+        let mut written = Vec::new();
+        let event = if empty {
+            Event::Empty(renamed)
+        } else {
+            Event::Start(renamed)
+        };
+        quick_xml::Writer::new(&mut written)
+            .write_event(event)
+            .map_err(|error| Error::Other(format!("comment marker rename failed: {error}")))?;
+        edits.push((marker.tag, written));
+    }
+    let mut updated = xml.to_vec();
+    for (range, written) in edits.into_iter().rev() {
+        updated.splice(range, written);
+    }
+    Ok(updated)
+}
+
+/// Return `xml` without the byte `spans`, which must not overlap.
+fn without_spans(xml: &[u8], spans: &[Range<usize>]) -> Vec<u8> {
+    let mut spans = spans.to_vec();
+    spans.sort_by_key(|span| span.start);
+    let mut kept = Vec::with_capacity(xml.len());
+    let mut cursor = 0;
+    for span in spans {
+        if span.start >= cursor {
+            kept.extend_from_slice(&xml[cursor..span.start]);
+            cursor = span.end;
+        }
+    }
+    kept.extend_from_slice(&xml[cursor..]);
+    kept
+}
+
+/// Remove the `local` elements in `namespace` whose `key` attribute, in the
+/// same namespace, is one of `keys`, and return the edited part with the
+/// `collect` attribute of each removed element.
+fn remove_keyed_rows(
+    xml: &[u8],
+    namespace: &str,
+    local: &[u8],
+    key: &[u8],
+    keys: &HashSet<String>,
+    collect: &[u8],
+) -> Result<(Vec<u8>, HashSet<String>)> {
+    let mut reader = NsReader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut spans = Vec::new();
+    let mut collected = HashSet::new();
+    let mut open: Option<(usize, usize)> = None;
+    let mut depth = 0usize;
+    let mut buffer = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (resolved, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("comment id part scan failed: {error}")))?;
+        let matches_row =
+            matches!(resolved, ResolveResult::Bound(Namespace(uri)) if uri == namespace.as_bytes());
+        drop(resolved);
+        let after = reader.buffer_position() as usize;
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                let empty = matches!(event, Event::Empty(_));
+                if open.is_none() && matches_row && element.local_name().as_ref() == local {
+                    let mut selected = false;
+                    let mut value = None;
+                    for attribute in element.attributes() {
+                        let attribute =
+                            attribute.map_err(|error| Error::Other(error.to_string()))?;
+                        let (attribute_namespace, attribute_local) =
+                            reader.resolver().resolve_attribute(attribute.key);
+                        if !matches!(attribute_namespace, ResolveResult::Bound(Namespace(uri)) if uri == namespace.as_bytes())
+                        {
+                            continue;
+                        }
+                        let text = attribute
+                            .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                            .map_err(|error| Error::Other(error.to_string()))?
+                            .into_owned();
+                        if attribute_local.as_ref() == key {
+                            selected = keys.contains(&text);
+                        }
+                        if attribute_local.as_ref() == collect {
+                            value = Some(text);
+                        }
+                    }
+                    if selected {
+                        collected.extend(value);
+                        if empty {
+                            spans.push(before..after);
+                        } else {
+                            open = Some((before, depth));
+                        }
+                    }
+                }
+                if !empty {
+                    depth += 1;
+                }
+            }
+            Event::End(_) => {
+                depth = depth.saturating_sub(1);
+                if let Some((start, level)) = open
+                    && level == depth
+                {
+                    spans.push(start..after);
+                    open = None;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    Ok((without_spans(xml, &spans), collected))
+}
+
+/// Return the text of a story range between two paragraph positions of
+/// `paragraphs`, its paragraphs joined with `"\n"`.
+fn story_range_text(
+    paragraphs: &[crate::document::StoryRangeParagraph],
+    start: (usize, usize),
+    end: (usize, usize),
+) -> Result<String> {
+    let mut lines = Vec::new();
+    for (index, paragraph) in paragraphs.iter().enumerate().take(end.0 + 1).skip(start.0) {
+        let paragraph = CT_P::from_xml_fragment(&paragraph.xml)?;
+        let runs = paragraph.accepted_bookmark_runs();
+        let from = if index == start.0 { start.1 } else { 0 }.min(runs.len());
+        let to = if index == end.0 { end.1 } else { runs.len() }.clamp(from, runs.len());
+        lines.push(if from == 0 && to == runs.len() {
+            paragraph.accepted_text()
+        } else {
+            runs[from..to].iter().map(|run| run.text()).collect()
+        });
+    }
+    Ok(lines.join("\n"))
 }
 
 fn validate_comment_date(date: Option<&str>) -> Result<()> {
@@ -2312,11 +3233,30 @@ fn remove_anchors_from_control(control: &mut CT_Sdt, ids: &HashSet<i32>) {
 }
 
 fn remove_anchors_from_paragraph(paragraph: &mut CT_P, ids: &HashSet<i32>) {
+    let held_content = paragraph
+        .content_controls
+        .iter()
+        .map(|(_, _, _, control)| !control.content.is_empty())
+        .collect::<Vec<_>>();
     for (_, _, _, control) in &mut paragraph.content_controls {
         remove_anchors_from_control(control, ids);
     }
     let ids = ids.iter().copied().collect::<Vec<_>>();
     paragraph.remove_comment_anchors(&ids);
+    // Google Docs wraps each comment marker in its own `goog_rdk` control,
+    // which is left empty once the marker goes.
+    let mut held_content = held_content.into_iter();
+    paragraph.content_controls.retain(|(_, _, _, control)| {
+        let emptied = held_content.next().unwrap_or(false)
+            && control.content.is_empty()
+            && control.revisions().is_empty()
+            && control
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.tag.as_deref())
+                .is_some_and(|tag| tag.starts_with("goog_rdk"));
+        !emptied
+    });
 }
 
 fn remap_raw_positions(extra_xml: &mut [(usize, Vec<u8>)], removed: &[bool]) {

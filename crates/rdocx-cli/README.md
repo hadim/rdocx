@@ -13,8 +13,9 @@ and produces fixed or flow output without an Office host.
 - PDF, HTML, Markdown, PNG, JPEG, and multi-page TIFF conversion.
 - Page-range rendering, guarded literal replacement, diffing, and validation
   verdicts that check every related part and every style id.
-- Comment thread inspection and mutation with explicit body run ranges or an
-  anchor text, and optional RFC 3339 dates.
+- Comment thread inspection with each comment's anchor text and location,
+  and mutation with explicit body run ranges or an anchor text, optional
+  RFC 3339 dates, and thread moves.
 - Tracked revision inspection, filtered resolution, table-of-contents rebuilds,
   and document comparison at run, word, or character granularity with ignore
   options.
@@ -60,6 +61,7 @@ rdocx comment add report.docx --start-paragraph 0 --start-run 0 \
   --date 2026-09-13T12:00:00Z -o commented.docx
 rdocx comment add report.docx --anchor 'target words' --occurrence 1 \
   --author Reviewer --text 'Check this' -o commented.docx
+rdocx comment move commented.docx --id 0 --anchor 'kept words' -o moved.docx
 rdocx revision accept reviewed.docx --author Reviewer -o accepted.docx
 rdocx compare original.docx edited.docx --author Reviewer \
   --timestamp 2026-09-13T12:00:00Z -o redline.docx
@@ -84,6 +86,14 @@ resolution, and removal select a decimal comment id. Comment `add` and `reply`
 write an optional `--date` RFC 3339 timestamp as the comment date. An invalid
 timestamp exits unsuccessfully without creating the output, and without
 `--date` the comment stays undated.
+`comment move` moves the thread of a root comment id onto the zero-based
+`--occurrence` of an `--anchor` text, found as `add --anchor` finds it, and
+keeps its id, text, replies, and resolved state. A reply id, an unknown id, or
+an anchor that cannot be placed exits unsuccessfully without creating the
+output. `comment list --json` gives each comment its `anchor_text`, the
+accepted-view text of its range, and its `anchor` and `reference` locations:
+the story, the item path in it, the direct body index in the body, and the run
+boundary. A reply without markers of its own has none of them.
 
 `compare` replaces each changed run whole by default (`--granularity run`),
 like the Rust and Python APIs. `--granularity word` marks only the changed
@@ -162,7 +172,8 @@ character, or table style id that no style defines. Word silently falls back
 to the default style for such an id. A style id inside a tracked property
 change is not checked, because it records the formatting before the change,
 and neither is one inside `mc:Fallback`, which Word does not read, or an empty
-id.
+id. A comment thread with no range and no reference in any story is an
+error too.
 Empty paragraphs, heading level gaps, and missing metadata are warnings.
 
 `layout --json` uses bundled deterministic fonts. It lists every direct body
@@ -230,8 +241,9 @@ every file it would write before it writes the first one, and publishes each
 file only once it is complete, so a failed run leaves no truncated output.
 
 `validate` exits unsuccessfully on a structural error: a relationship to a
-missing part, a part without a content type, or a prefix that `mc:Ignorable`
-or `mc:MustUnderstand` lists without a namespace declaration. Empty
+missing part, a part without a content type, a prefix that `mc:Ignorable`
+or `mc:MustUnderstand` lists without a namespace declaration, or a comment
+thread anchored nowhere. Empty
 paragraphs, heading level gaps, and missing metadata are warnings only.
 
 
