@@ -1535,7 +1535,9 @@ one page transition for the immediately following block. A paragraph-level
 creating an empty page. Intervening blocks, visible continuation formatting,
 line or column breaks, and section boundaries clear or prevent that state.
 Line breaks remain line-only, and column breaks remain distinguishable without
-becoming page breaks while layout is single-column. Body fragments, page
+becoming page breaks while layout is single-column. Inside a table cell, nested
+tables included, a page or column break produces nothing, as in Word, so the
+text on either side of it joins on one line. Body fragments, page
 fields, cross-reference targets, PDF, and raster output all consume the
 resulting shared page sequence.
 
