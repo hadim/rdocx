@@ -17506,6 +17506,67 @@ fn run_level_page_breaks_match_word_pagination() {
 }
 
 #[test]
+fn page_and_column_breaks_inside_a_table_cell_are_dropped() {
+    // Word 16.111 drops a page or column break inside a table cell, nested
+    // tables included: the text on either side of it joins on one line.
+    let text_lines = |break_kind: Option<BreakKind>| {
+        let mut document = Document::new();
+        {
+            let mut table = document.add_table(1, 2);
+            {
+                let mut cell = table.cell(0, 0).expect("left cell");
+                let mut paragraph = cell.paragraph_mut(0).expect("left paragraph");
+                let mut run = paragraph.add_run("AAA");
+                if let Some(kind) = break_kind {
+                    run.add_break(kind);
+                }
+                run.add_text("BBB");
+            }
+            table.cell(0, 1).expect("right cell").set_text("Right");
+        }
+        document.add_paragraph("After");
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let result = reopened.layout_deterministic().unwrap();
+        let pages = &result.layout.pages;
+        assert_eq!(
+            pages.len(),
+            1,
+            "{break_kind:?} inside a cell broke the page"
+        );
+        let mut lines = Vec::new();
+        oxml_layout::walk(&pages[0].elements, &mut |element, _| {
+            if let oxml_layout::PositionedElement::Text(run) = element {
+                lines.push((run.text.clone(), run.origin.y));
+            }
+        });
+        lines
+    };
+
+    let plain = text_lines(None);
+    let baseline = |lines: &[(String, f64)], text: &str| {
+        lines
+            .iter()
+            .find(|(run, _)| run == text)
+            .unwrap_or_else(|| panic!("{text} missing from {lines:?}"))
+            .1
+    };
+    for kind in [BreakKind::Page, BreakKind::Column] {
+        let broken = text_lines(Some(kind));
+        let row = baseline(&broken, "Right");
+        for (text, y) in &broken {
+            if text != "After" {
+                assert_eq!(*y, row, "{kind:?}: {text} left the first line: {broken:?}");
+            }
+        }
+        assert_eq!(
+            baseline(&broken, "After"),
+            baseline(&plain, "After"),
+            "{kind:?} made the row taller"
+        );
+    }
+}
+
+#[test]
 fn adjacent_run_and_paragraph_page_breaks_share_one_transition() {
     const ORACLE: &str = "LibreOffice 26.2.5.2";
     assert_eq!(ORACLE, "LibreOffice 26.2.5.2");
