@@ -930,6 +930,72 @@ fn edit_header_footer(hf: &mut CT_HdrFtr, edit: &mut dyn FnMut(&mut CT_P) -> usi
     count
 }
 
+/// Replace all occurrences of `placeholder` in one block element of a part,
+/// the paragraph, table or block content control that spans `block` in
+/// `xml`.
+///
+/// The element is parsed with the namespaces its ancestors declare and
+/// edited as a header or footer edits the blocks it keeps as raw XML, see
+/// [`replace_in_header_footer`]: the paragraphs of a table or a control are
+/// reached, and a match that straddles a control or a tracked insertion is
+/// not replaced. The element is re-serialised only when the replacement
+/// counts a change, and every byte outside it is kept. Another element, one
+/// the typed parsers refuse, and a part whose ancestors do not bind the `w`
+/// prefix to WordprocessingML, keep their bytes and count nothing. Returns
+/// the modified XML and the replacement count. A `block` that does not start
+/// at an element of `xml` is an error.
+pub fn replace_in_block_at(
+    xml: &[u8],
+    block: std::ops::Range<usize>,
+    placeholder: &str,
+    replacement: &str,
+) -> crate::error::Result<(Vec<u8>, usize)> {
+    use crate::error::OxmlError;
+    use quick_xml::Reader;
+    use quick_xml::events::Event;
+
+    let invalid_block = || OxmlError::InvalidValue(format!("no element spans {block:?}"));
+    let mut reader = Reader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    // The bindings the elements open around the current position declare.
+    let mut scopes: Vec<Vec<String>> = Vec::new();
+    while (reader.buffer_position() as usize) < block.start {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) => {
+                let prefixes = word_prefixes_at(&start, scopes.last().map_or(&[], Vec::as_slice))?;
+                scopes.push(prefixes);
+            }
+            Event::End(_) => {
+                scopes.pop();
+            }
+            Event::Eof => return Err(invalid_block()),
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let prefixes = scopes.pop().unwrap_or_default();
+    let mut raw = match xml.get(block.clone()) {
+        Some(raw) if reader.buffer_position() as usize == block.start => raw.to_vec(),
+        _ => return Err(invalid_block()),
+    };
+    // The rewritten element uses the `w` prefix, so the part must bind it.
+    if !prefixes.iter().any(|prefix| prefix == "w") {
+        return Ok((xml.to_vec(), 0));
+    }
+    let count = edit_raw_block(&mut raw, &prefixes, &mut |paragraph| {
+        replace_in_paragraph(paragraph, placeholder, replacement)
+    });
+    if count == 0 {
+        return Ok((xml.to_vec(), 0));
+    }
+    let mut rewritten = Vec::with_capacity(xml.len() - block.len() + raw.len());
+    rewritten.extend_from_slice(&xml[..block.start]);
+    rewritten.extend_from_slice(&raw);
+    rewritten.extend_from_slice(&xml[block.end..]);
+    Ok((rewritten, count))
+}
+
 /// Replace placeholders in text boxes and shapes within a raw XML part.
 ///
 /// Walks the XML, finds `w:txbxContent` elements at any depth outside another
@@ -2106,6 +2172,29 @@ mod tests {
         let count = replace_in_header_footer(&mut hf, "{{company}}", "Acme Corp");
         assert_eq!(count, 1);
         assert_eq!(hf.text(), "Company: Acme Corp");
+    }
+
+    #[test]
+    fn replace_in_block_at_edits_that_block_alone() {
+        let xml = format!(
+            r#"<x:hdr xmlns:x="{W_NS}" xmlns:w="{W_NS}"><x:p><x:r><x:t>{{{{a}}}}</x:t></x:r></x:p><x:p><x:r><x:t>{{{{a}}}} and {{{{a}}}}</x:t></x:r></x:p></x:hdr>"#
+        );
+        let second = xml.rfind("<x:p>").unwrap();
+        let block = second..xml.rfind("</x:hdr>").unwrap();
+
+        let (rewritten, count) =
+            replace_in_block_at(xml.as_bytes(), block.clone(), "{{a}}", "A").unwrap();
+        assert_eq!(count, 2);
+        let rewritten = String::from_utf8(rewritten).unwrap();
+        assert!(rewritten.starts_with(&xml[..second]), "{rewritten}");
+        assert!(rewritten.ends_with("</x:hdr>"), "{rewritten}");
+        assert!(rewritten.contains(">A and A<"), "{rewritten}");
+
+        let (unchanged, count) =
+            replace_in_block_at(xml.as_bytes(), block.clone(), "{{b}}", "B").unwrap();
+        assert_eq!((unchanged.as_slice(), count), (xml.as_bytes(), 0));
+        assert!(replace_in_block_at(xml.as_bytes(), second + 1..block.end, "a", "b").is_err());
+        assert!(replace_in_block_at(xml.as_bytes(), second..xml.len() + 1, "a", "b").is_err());
     }
 
     /// The tables and block content controls of a header are raw XML in the

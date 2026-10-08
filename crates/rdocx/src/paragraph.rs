@@ -956,6 +956,34 @@ impl<'a> Paragraph<'a> {
         Ok(())
     }
 
+    /// Replace literal text in this paragraph only and return the count.
+    ///
+    /// Matching and formatting are those of
+    /// [`crate::Document::try_replace_text`], restricted to this paragraph
+    /// and the paragraphs nested in it: a match may span runs and keeps the
+    /// formatting of its first run, and comment ranges, bookmarks and the
+    /// runs outside a match are kept. A text box anchored in the paragraph
+    /// is not searched. A `replacement` that XML 1.0 cannot carry is the
+    /// error, and leaves the paragraph unchanged.
+    ///
+    /// With `expect`, the replacement runs on a copy of the paragraph, and a
+    /// different count leaves the paragraph unchanged and is returned as the
+    /// inner error, whose `index` is 0.
+    pub fn try_replace_text(
+        &mut self,
+        placeholder: &str,
+        replacement: &str,
+        expect: Option<usize>,
+    ) -> crate::Result<std::result::Result<usize, crate::ReplacementCountMismatch>> {
+        crate::document::try_replace_scoped(
+            self.inner,
+            placeholder,
+            replacement,
+            expect,
+            crate::document::replace_in_paragraph_tree,
+        )
+    }
+
     /// Iterate over typed equations in paragraph source order.
     pub fn equations(&self) -> impl Iterator<Item = &OfficeMath> {
         self.inner.equations.iter().map(|(_, _, equation)| equation)

@@ -1656,6 +1656,33 @@ impl<'a> Cell<'a> {
         }
     }
 
+    /// Replace literal text in this cell only and return the count.
+    ///
+    /// Matching and formatting are those of
+    /// [`crate::Document::try_replace_text`], restricted to the paragraphs
+    /// of this cell, those of its nested tables and content controls
+    /// included. Each paragraph is searched on its own, so a match never
+    /// spans two of them. A `replacement` that XML 1.0 cannot carry is the
+    /// error, and leaves the cell unchanged.
+    ///
+    /// With `expect`, the replacement runs on a copy of the cell, and a
+    /// different count leaves the cell unchanged and is returned as the
+    /// inner error, whose `index` is 0.
+    pub fn try_replace_text(
+        &mut self,
+        placeholder: &str,
+        replacement: &str,
+        expect: Option<usize>,
+    ) -> Result<std::result::Result<usize, crate::ReplacementCountMismatch>> {
+        crate::document::try_replace_scoped(
+            self.inner,
+            placeholder,
+            replacement,
+            expect,
+            crate::document::replace_in_cell_tree,
+        )
+    }
+
     /// Add a paragraph to the cell and return a mutable reference.
     pub fn add_paragraph(&mut self, text: &str) -> Paragraph<'_> {
         use rdocx_oxml::table::CellContent;
