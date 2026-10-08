@@ -2952,6 +2952,36 @@ def test_nested_paragraph_story_items_carry_text_and_xml():
     assert b"Inside a block" in position.item.xml
 
 
+def test_multi_run_complex_field_story_items_carry_their_result_text():
+    """GitHub issue #291: a complex field written across several runs gives
+    its cached result as StoryItem.text, as Paragraph.text shows it."""
+    import rdocx
+
+    field = (
+        '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        '<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>'
+        '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+        "<w:r><w:t>{}</w:t></w:r>"
+        '<w:r><w:fldChar w:fldCharType="end"/></w:r>'
+    )
+    document = _replace_document_body(
+        rdocx.Document(),
+        "<w:p><w:r><w:t>Page </w:t></w:r>" + field.format("7") + "</w:p>"
+        "<w:sdt><w:sdtContent><w:p>"
+        + field.format("9")
+        + "</w:p></w:sdtContent></w:sdt>",
+    )
+    assert [paragraph.text for paragraph in document.paragraphs] == ["Page 7", "9"]
+    assert [
+        (item.kind, item.index_path, item.text) for item in document.story_items
+    ] == [
+        ("paragraph", (0,), "Page 7"),
+        ("field", (1,), "7"),
+        ("content_control", (2,), "9"),
+        ("field", (3,), "9"),
+    ]
+
+
 def test_paragraph_handle_comments_land_on_that_paragraph_of_a_block_control():
     """A paragraph handle in a block content control maps to that exact
     paragraph; one in a nested control or table has no story location."""

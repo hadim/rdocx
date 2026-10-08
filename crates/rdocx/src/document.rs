@@ -6227,11 +6227,9 @@ fn local_story_item(
         scan: 0..closed_len,
         direct_owner_child: item.direct_owner_child,
         complex_field: item.complex_field,
-        complex_ancestors: item
-            .complex_ancestors
-            .iter()
-            .map(|ancestor| local(*ancestor))
-            .collect(),
+        // An enclosing field begins before this excerpt, so its marker has no
+        // local position; ancestors only gate the item scan, not later reads.
+        complex_ancestors: Vec::new(),
         sdt_context: item.sdt_context,
     }
 }
@@ -6241,9 +6239,48 @@ fn story_item_text_with_scope(
     item: &StoryItemSpan,
     scope: &BTreeMap<String, String>,
 ) -> Result<Option<String>> {
-    let (closed, added) = scoped_story_fragment(xml, item.scan.clone(), scope)?;
-    let local = local_story_item(item, item.scan.start, closed.len(), added);
-    story_item_text(&closed, &local)
+    if !item.complex_field {
+        let (closed, added) = scoped_story_fragment(xml, item.scan.clone(), scope)?;
+        let local = local_story_item(item, item.scan.start, closed.len(), added);
+        return story_item_text(&closed, &local);
+    }
+    // A complex field's scan range runs over several sibling runs, so the
+    // scope is declared on a synthetic wrapper rather than on the first root
+    // only: later runs would otherwise lose their WordprocessingML prefix and
+    // the field result would read as empty.
+    let fragment = xml
+        .get(item.scan.clone())
+        .ok_or_else(|| Error::Other("story fragment lies outside its source part".to_owned()))?;
+    let mut wrapped = b"<rdocx-story-scope".to_vec();
+    for (prefix, namespace) in scope {
+        if prefix == "xml" {
+            continue;
+        }
+        wrapped.extend_from_slice(b" xmlns");
+        if !prefix.is_empty() {
+            wrapped.push(b':');
+            wrapped.extend_from_slice(prefix.as_bytes());
+        }
+        wrapped.extend_from_slice(b"=\"");
+        wrapped.extend_from_slice(quick_xml::escape::escape(namespace).as_bytes());
+        wrapped.push(b'"');
+    }
+    wrapped.push(b'>');
+    let offset = wrapped.len();
+    wrapped.extend_from_slice(fragment);
+    wrapped.extend_from_slice(b"</rdocx-story-scope>");
+    let local = |position: usize| position - item.scan.start + offset;
+    let local_item = StoryItemSpan {
+        kind: item.kind,
+        full: local(item.full.start)..local(item.full.end),
+        scan: local(item.scan.start)..local(item.scan.end),
+        direct_owner_child: item.direct_owner_child,
+        complex_field: item.complex_field,
+        // As in `local_story_item`: enclosing fields begin outside the excerpt.
+        complex_ancestors: Vec::new(),
+        sdt_context: item.sdt_context,
+    };
+    story_item_text(&wrapped, &local_item)
 }
 
 fn scan_story_item_links_with_scope(
@@ -15838,7 +15875,8 @@ impl Document {
 
     /// Materialize the story item at one checked location.
     ///
-    /// Besides the one-segment paths of [`Self::story_item_snapshots`], this
+    /// For a one-segment path the snapshot equals the entry of
+    /// [`Self::story_item_snapshots`] at that location. Besides those, this
     /// resolves the two-segment path `[control, paragraph]` of a paragraph
     /// inside a block content control, as [`Self::paragraph_story_location`]
     /// and comment anchors return it. Such an item carries its story-item

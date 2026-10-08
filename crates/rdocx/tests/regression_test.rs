@@ -2900,6 +2900,90 @@ mod block_control_comment_positions {
         }
     }
 
+    /// GitHub issue #291: a complex field written across several runs reads
+    /// its cached result as text in the snapshot list too, so every story
+    /// item API agrees, in the body or in a block content control, and a
+    /// field nested in another field's instruction or result reads its own.
+    #[test]
+    fn multi_run_complex_field_items_read_the_same_text_from_every_api() {
+        let marker = |kind: &str| format!(r#"<w:r><w:fldChar w:fldCharType="{kind}"/></w:r>"#);
+        let instr = |code: &str| {
+            format!(r#"<w:r><w:instrText xml:space="preserve">{code}</w:instrText></w:r>"#)
+        };
+        let text = |value: &str| format!(r#"<w:r><w:t xml:space="preserve">{value}</w:t></w:r>"#);
+        let field = |code: &str, result: &str| {
+            format!(
+                "{}{}{}{}{}",
+                marker("begin"),
+                instr(code),
+                marker("separate"),
+                result,
+                marker("end")
+            )
+        };
+        let page = |value: &str| field(" PAGE ", &text(value));
+        // IF { PAGE } = 3 "yes": PAGE nests in the IF instruction.
+        let condition = format!(
+            "{}{}{}{}{}{}{}",
+            marker("begin"),
+            instr(" IF "),
+            page("3"),
+            instr(r#" = 3 "yes" "#),
+            marker("separate"),
+            text("yes"),
+            marker("end")
+        );
+        // REF with a PAGE in its cached result.
+        let reference = field(" REF mark ", &format!("{}{}", text("Page "), page("4")));
+        let body = format!(
+            r#"<w:p><w:r><w:t>Page </w:t></w:r>{}</w:p><w:p><w:r><w:fldChar w:fldCharType="begin"/><w:instrText> PAGE </w:instrText><w:fldChar w:fldCharType="separate"/><w:t>8</w:t><w:fldChar w:fldCharType="end"/></w:r></w:p><w:sdt><w:sdtPr><w:alias w:val="Block"/></w:sdtPr><w:sdtContent><w:p>{}</w:p></w:sdtContent></w:sdt><w:p>{condition}</w:p><w:p>{reference}</w:p>"#,
+            page("7"),
+            page("9"),
+        );
+        let document = super::document_with_content_controls(&super::wrap_word_body(&body));
+        let paragraphs: Vec<String> = (0..5)
+            .map(|index| document.paragraph(index).unwrap().text())
+            .collect();
+        assert_eq!(paragraphs, ["Page 7", "8", "9", "yes", "Page 4"]);
+
+        let snapshots = document.story_item_snapshots().unwrap();
+        let fields: Vec<_> = snapshots
+            .iter()
+            .filter(|item| item.location().item_kind() == StoryItemKind::Field)
+            .map(|item| item.text())
+            .collect();
+        assert_eq!(
+            fields,
+            [
+                Some("7"),
+                Some("8"),
+                Some("9"),
+                Some("yes"),
+                Some("3"),
+                Some("Page 4"),
+                Some("4")
+            ]
+        );
+        let story = snapshots[0].location().story().clone();
+        let refs = document.story_items(&story).unwrap();
+        for listed in &snapshots {
+            let one = document.story_item_snapshot(listed.location()).unwrap();
+            let path = listed.location().index_path();
+            assert_eq!(one.text(), listed.text(), "{path:?}");
+            assert_eq!(one.xml(), listed.xml(), "{path:?}");
+            assert_eq!(one.direct_body_index(), listed.direct_body_index());
+            assert_eq!(one.is_direct_child(), listed.is_direct_child());
+            assert_eq!(
+                refs[path[0]].text().unwrap().as_deref(),
+                listed.text(),
+                "{path:?}"
+            );
+            // The link scan reads the same per-item excerpt.
+            assert!(refs[path[0]].links().unwrap().is_empty(), "{path:?}");
+        }
+        assert!(document.story_link_snapshots().unwrap().is_empty());
+    }
+
     /// A paragraph handle inside a block content control maps to that exact
     /// paragraph, never to a sibling (an empty `<w:p/>` included), and a
     /// paragraph deeper than a
