@@ -1747,48 +1747,41 @@ impl PyDocument {
         })
     }
 
-    /// Snapshot a paragraph location. A paragraph inside a block content
-    /// control has no story item of its own, so it gets the two-segment path
-    /// of `paragraph_story_location`, the control's direct body index, and
-    /// no text or XML.
+    /// Snapshot a paragraph location. A top-level item is read from the
+    /// document-wide `snapshots`; a paragraph inside a block content control
+    /// has the two-segment path of `paragraph_story_location` and is read on
+    /// its own, with its text, XML and the control's direct body index.
     fn paragraph_location_item(
         &self,
         py: Python<'_>,
         location: &rdocx::ContentLocation,
         snapshots: &[rdocx::StoryItemSnapshot],
     ) -> PyResult<PyStoryItem> {
-        let nested = location.index_path().len() == 2;
-        let lookup = if nested {
-            rdocx::ContentLocation::new(
-                location.story().clone(),
-                rdocx::StoryItemKind::ContentControl,
-                vec![location.index_path()[0]],
-            )
-        } else {
-            location.clone()
-        };
+        if location.index_path().len() != 1 {
+            return self.story_item_snapshot(py, location);
+        }
         let item = snapshots
             .iter()
-            .find(|item| item.location() == &lookup)
+            .find(|item| item.location() == location)
             .ok_or_else(|| {
                 rdocx_to_pyerr(
                     py,
                     rdocx::Error::Other("story paragraph has no checked location".to_owned()),
                 )
             })?;
-        Ok(PyStoryItem {
-            story: story_snapshot(location.story()),
-            kind: "paragraph".to_owned(),
-            index_path: location.index_path().to_vec(),
+        Ok(self.py_story_item(item))
+    }
+
+    fn py_story_item(&self, item: &rdocx::StoryItemSnapshot) -> PyStoryItem {
+        PyStoryItem {
+            story: story_snapshot(item.location().story()),
+            kind: story_item_kind_name(item.location().item_kind()).to_owned(),
+            index_path: item.location().index_path().to_vec(),
             direct_body_index: item.direct_body_index(),
-            text: (!nested).then(|| item.text().map(str::to_owned)).flatten(),
-            xml: if nested {
-                Vec::new()
-            } else {
-                item.xml().to_vec()
-            },
+            text: item.text().map(str::to_owned),
+            xml: item.xml().to_vec(),
             revision: self.revisions.current(),
-        })
+        }
     }
 
     fn body_location(&self, py: Python<'_>, index: usize) -> PyResult<rdocx::ContentLocation> {
@@ -1846,26 +1839,13 @@ impl PyDocument {
     ) -> PyResult<PyStoryItem> {
         let item = self
             .inner
-            .story_item_snapshots()
-            .map_err(|error| rdocx_to_pyerr(py, error))?
-            .into_iter()
-            .find(|item| item.location() == location)
-            .ok_or_else(|| PyIndexError::new_err("inserted story item was not found"))?;
-        Ok(PyStoryItem {
-            story: story_snapshot(item.location().story()),
-            kind: story_item_kind_name(item.location().item_kind()).to_owned(),
-            index_path: item.location().index_path().to_vec(),
-            direct_body_index: item.direct_body_index(),
-            text: item.text().map(str::to_owned),
-            xml: item.xml().to_vec(),
-            revision: self.revisions.current(),
-        })
+            .story_item_snapshot(location)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        Ok(self.py_story_item(&item))
     }
 
-    /// Snapshot the story item of a body paragraph handle. A paragraph
-    /// inside a block content control has no story item of its own, so it
-    /// gets the two-segment path of `paragraph_story_location` with the
-    /// paragraph text and no XML.
+    /// Snapshot the story item of a body paragraph handle, including the
+    /// two-segment path of a paragraph inside a block content control.
     fn paragraph_story_item(py: Python<'_>, paragraph: &PyParagraph) -> PyResult<PyStoryItem> {
         let ParagraphLocation::Body(paragraph_index) = paragraph.validate(py)? else {
             return Err(PyValueError::new_err(
@@ -1877,30 +1857,13 @@ impl PyDocument {
             .inner
             .paragraph_story_location(paragraph_index)
             .map_err(|error| rdocx_to_pyerr(py, error))?
-            .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
-        let [control_index, _] = location.index_path() else {
-            return document.story_item_snapshot(py, &location);
-        };
-        let control = document.story_item_snapshot(
-            py,
-            &rdocx::ContentLocation::new(
-                location.story().clone(),
-                rdocx::StoryItemKind::ContentControl,
-                vec![*control_index],
-            ),
-        )?;
-        Ok(PyStoryItem {
-            story: control.story,
-            kind: "paragraph".to_owned(),
-            index_path: location.index_path().to_vec(),
-            direct_body_index: control.direct_body_index,
-            text: document
-                .inner
-                .paragraph(paragraph_index)
-                .map(|paragraph| paragraph.text()),
-            xml: Vec::new(),
-            revision: document.revisions.current(),
-        })
+            .ok_or_else(|| {
+                PyIndexError::new_err(
+                    "paragraph has no story location: it sits in a content control or table \
+                     nested inside a block content control",
+                )
+            })?;
+        document.story_item_snapshot(py, &location)
     }
 
     fn direct_content_index(
@@ -3112,16 +3075,8 @@ impl PyDocument {
             .story_item_snapshots()
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         let snapshots = items
-            .into_iter()
-            .map(|item| PyStoryItem {
-                story: story_snapshot(item.location().story()),
-                kind: story_item_kind_name(item.location().item_kind()).to_owned(),
-                index_path: item.location().index_path().to_vec(),
-                direct_body_index: item.direct_body_index(),
-                text: item.text().map(str::to_owned),
-                xml: item.xml().to_vec(),
-                revision: self.revisions.current(),
-            })
+            .iter()
+            .map(|item| self.py_story_item(item))
             .collect::<Vec<_>>();
         PyTuple::new(py, snapshots)
     }

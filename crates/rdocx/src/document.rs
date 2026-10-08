@@ -6255,11 +6255,9 @@ fn local_story_item(
         scan: 0..closed_len,
         direct_owner_child: item.direct_owner_child,
         complex_field: item.complex_field,
-        complex_ancestors: item
-            .complex_ancestors
-            .iter()
-            .map(|ancestor| local(*ancestor))
-            .collect(),
+        // An enclosing field begins before this excerpt, so its marker has no
+        // local position; ancestors only gate the item scan, not later reads.
+        complex_ancestors: Vec::new(),
         sdt_context: item.sdt_context,
     }
 }
@@ -6269,9 +6267,48 @@ fn story_item_text_with_scope(
     item: &StoryItemSpan,
     scope: &BTreeMap<String, String>,
 ) -> Result<Option<String>> {
-    let (closed, added) = scoped_story_fragment(xml, item.scan.clone(), scope)?;
-    let local = local_story_item(item, item.scan.start, closed.len(), added);
-    story_item_text(&closed, &local)
+    if !item.complex_field {
+        let (closed, added) = scoped_story_fragment(xml, item.scan.clone(), scope)?;
+        let local = local_story_item(item, item.scan.start, closed.len(), added);
+        return story_item_text(&closed, &local);
+    }
+    // A complex field's scan range runs over several sibling runs, so the
+    // scope is declared on a synthetic wrapper rather than on the first root
+    // only: later runs would otherwise lose their WordprocessingML prefix and
+    // the field result would read as empty.
+    let fragment = xml
+        .get(item.scan.clone())
+        .ok_or_else(|| Error::Other("story fragment lies outside its source part".to_owned()))?;
+    let mut wrapped = b"<rdocx-story-scope".to_vec();
+    for (prefix, namespace) in scope {
+        if prefix == "xml" {
+            continue;
+        }
+        wrapped.extend_from_slice(b" xmlns");
+        if !prefix.is_empty() {
+            wrapped.push(b':');
+            wrapped.extend_from_slice(prefix.as_bytes());
+        }
+        wrapped.extend_from_slice(b"=\"");
+        wrapped.extend_from_slice(quick_xml::escape::escape(namespace).as_bytes());
+        wrapped.push(b'"');
+    }
+    wrapped.push(b'>');
+    let offset = wrapped.len();
+    wrapped.extend_from_slice(fragment);
+    wrapped.extend_from_slice(b"</rdocx-story-scope>");
+    let local = |position: usize| position - item.scan.start + offset;
+    let local_item = StoryItemSpan {
+        kind: item.kind,
+        full: local(item.full.start)..local(item.full.end),
+        scan: local(item.scan.start)..local(item.scan.end),
+        direct_owner_child: item.direct_owner_child,
+        complex_field: item.complex_field,
+        // As in `local_story_item`: enclosing fields begin outside the excerpt.
+        complex_ancestors: Vec::new(),
+        sdt_context: item.sdt_context,
+    };
+    story_item_text(&wrapped, &local_item)
 }
 
 fn scan_story_item_links_with_scope(
@@ -6381,6 +6418,58 @@ fn content_fragment_root_is_section_properties(xml: &[u8], item: &StoryItemSpan)
             }
             _ => buffer.clear(),
         }
+    }
+}
+
+/// Resolve a one-segment story item path, or the two-segment path
+/// `[control, paragraph]` of a paragraph inside a block content control.
+fn story_location_span(
+    xml: &[u8],
+    owner: &StoryOwnerSpan,
+    location: &ContentLocation,
+) -> Result<StoryItemSpan> {
+    let items = scan_story_items(xml, owner)?;
+    let item_at = |index: usize, expected: StoryItemKind| -> Result<&StoryItemSpan> {
+        let item = items.get(index).ok_or(StoryError::OutOfBounds {
+            index,
+            len: items.len(),
+        })?;
+        if item.kind != expected {
+            return Err(StoryError::KindMismatch {
+                expected,
+                actual: item.kind,
+            }
+            .into());
+        }
+        Ok(item)
+    };
+    match location.index_path.as_slice() {
+        [index] => item_at(*index, location.item_kind).cloned(),
+        [control_index, paragraph_index] if location.item_kind == StoryItemKind::Paragraph => {
+            let control = item_at(*control_index, StoryItemKind::ContentControl)?;
+            let paragraphs = scan_story_control_paragraphs(xml, control)?;
+            let full =
+                paragraphs
+                    .get(*paragraph_index)
+                    .cloned()
+                    .ok_or(StoryError::OutOfBounds {
+                        index: *paragraph_index,
+                        len: paragraphs.len(),
+                    })?;
+            Ok(StoryItemSpan {
+                kind: StoryItemKind::Paragraph,
+                scan: full.clone(),
+                full,
+                direct_owner_child: false,
+                complex_field: false,
+                complex_ancestors: Vec::new(),
+                sdt_context: None,
+            })
+        }
+        _ => Err(StoryError::InvalidPath {
+            path: location.index_path.clone(),
+        }
+        .into()),
     }
 }
 
@@ -8463,7 +8552,9 @@ fn scan_story_control_paragraphs(xml: &[u8], control: &StoryItemSpan) -> Result<
         drop(namespace);
         let after = reader.buffer_position() as usize;
         match event {
-            Event::Start(element) => {
+            // An empty `<w:p/>` is a paragraph of the control too, so that
+            // the positions match the paragraphs of the document model.
+            Event::Start(ref element) | Event::Empty(ref element) => {
                 let name = element.local_name().as_ref().to_vec();
                 let direct_content = stack
                     .last()
@@ -8479,11 +8570,17 @@ fn scan_story_control_paragraphs(xml: &[u8], control: &StoryItemSpan) -> Result<
                     && direct_content
                     && owning_control.is_some_and(|(_, _, start)| *start == control.full.start)
                 {
-                    paragraphs.push(before..story_element_end(xml, before)?);
+                    let end = if matches!(event, Event::Empty(_)) {
+                        after
+                    } else {
+                        story_element_end(xml, before)?
+                    };
+                    paragraphs.push(before..end);
                 }
-                stack.push((is_word, name, before));
+                if matches!(event, Event::Start(_)) {
+                    stack.push((is_word, name, before));
+                }
             }
-            Event::Empty(_) => {}
             Event::End(_) => {
                 stack.pop();
             }
@@ -10333,6 +10430,37 @@ fn nth_paragraph_in_control<'a>(
         if paragraph.is_some() {
             return paragraph;
         }
+    }
+    None
+}
+
+/// Map the `index`-th paragraph of a block content control, counted
+/// recursively as [`paragraph_count_in_control`] counts them, to its position
+/// among the paragraphs placed directly in the control's content. A
+/// paragraph inside a nested control or a table of the control has no such
+/// position and returns `None`.
+fn direct_control_paragraph_ordinal(control: &CT_Sdt, index: usize) -> Option<usize> {
+    let mut remaining = index;
+    let mut ordinal = 0usize;
+    for child in &control.content {
+        let count = match child {
+            SdtContent::Paragraph(_) => {
+                if remaining == 0 {
+                    return Some(ordinal);
+                }
+                ordinal += 1;
+                1
+            }
+            SdtContent::Table(table) => paragraph_count_in_table(table),
+            SdtContent::Row(row) => paragraph_count_in_row(row),
+            SdtContent::Cell(cell) => paragraph_count_in_cell(cell),
+            SdtContent::ContentControl(control) => paragraph_count_in_control(control),
+            SdtContent::Run(_) | SdtContent::RawXml(_) => 0,
+        };
+        if remaining < count {
+            return None;
+        }
+        remaining -= count;
     }
     None
 }
@@ -15232,14 +15360,21 @@ impl Document {
             StoryKind::Body => {
                 match (self.document.body.content.get_mut(paragraph_slot), ordinal) {
                     (Some(BodyContent::Paragraph(paragraph)), None) => Ok(paragraph),
-                    (Some(BodyContent::ContentControl(control)), Some(mut remaining)) => {
-                        nth_paragraph_in_control(control, &mut remaining).ok_or_else(|| {
-                            Error::Other(format!(
-                                "comment content control has no paragraph {}",
-                                ordinal.unwrap_or_default()
-                            ))
+                    // The ordinal counts the paragraphs placed directly in
+                    // the control's content, as the story paths do.
+                    (Some(BodyContent::ContentControl(control)), Some(ordinal)) => control
+                        .content
+                        .iter_mut()
+                        .filter_map(|child| match child {
+                            SdtContent::Paragraph(paragraph) => Some(paragraph),
+                            _ => None,
                         })
-                    }
+                        .nth(ordinal)
+                        .ok_or_else(|| {
+                            Error::Other(format!(
+                                "comment content control has no paragraph {ordinal}"
+                            ))
+                        }),
                     _ => Err(Error::Other("comment body paragraph is missing".to_owned())),
                 }
             }
@@ -15602,19 +15737,7 @@ impl Document {
             }
             .into());
         }
-        let items = scan_story_items(source.xml.as_ref(), &owner)?;
-        let index = location.index_path[0];
-        let item = items.get(index).cloned().ok_or(StoryError::OutOfBounds {
-            index,
-            len: items.len(),
-        })?;
-        if item.kind != location.item_kind {
-            return Err(StoryError::KindMismatch {
-                expected: location.item_kind,
-                actual: item.kind,
-            }
-            .into());
-        }
+        let item = story_location_span(source.xml.as_ref(), &owner, location)?;
         Ok((source, item))
     }
 
@@ -15622,50 +15745,9 @@ impl Document {
         &'a self,
         location: &ContentLocation,
     ) -> Result<(StorySource<'a>, StoryItemSpan)> {
-        if location.index_path.len() == 1 {
-            return self.story_item_source(location);
-        }
-        if location.index_path.len() != 2 || location.item_kind != StoryItemKind::Paragraph {
-            return Err(StoryError::InvalidPath {
-                path: location.index_path.clone(),
-            }
-            .into());
-        }
         let (source, owner) = self.story_source_and_owner(&location.story)?;
-        let items = scan_story_items(source.xml.as_ref(), &owner)?;
-        let control_index = location.index_path[0];
-        let control = items.get(control_index).ok_or(StoryError::OutOfBounds {
-            index: control_index,
-            len: items.len(),
-        })?;
-        if control.kind != StoryItemKind::ContentControl {
-            return Err(StoryError::KindMismatch {
-                expected: StoryItemKind::ContentControl,
-                actual: control.kind,
-            }
-            .into());
-        }
-        let paragraphs = scan_story_control_paragraphs(source.xml.as_ref(), control)?;
-        let paragraph_index = location.index_path[1];
-        let full = paragraphs
-            .get(paragraph_index)
-            .cloned()
-            .ok_or(StoryError::OutOfBounds {
-                index: paragraph_index,
-                len: paragraphs.len(),
-            })?;
-        Ok((
-            source,
-            StoryItemSpan {
-                kind: StoryItemKind::Paragraph,
-                scan: full.clone(),
-                full,
-                direct_owner_child: false,
-                complex_field: false,
-                complex_ancestors: Vec::new(),
-                sdt_context: None,
-            },
-        ))
+        let item = story_location_span(source.xml.as_ref(), &owner, location)?;
+        Ok((source, item))
     }
 
     /// Traverse one story's supported content without constructing a second
@@ -15875,6 +15957,51 @@ impl Document {
             }
         }
         Ok(snapshots)
+    }
+
+    /// Materialize the story item at one checked location.
+    ///
+    /// For a one-segment path the snapshot equals the entry of
+    /// [`Self::story_item_snapshots`] at that location. Besides those, this
+    /// resolves the two-segment path `[control, paragraph]` of a paragraph
+    /// inside a block content control, as [`Self::paragraph_story_location`]
+    /// and comment anchors return it. Such an item carries its story-item
+    /// text and exact XML as a direct paragraph item does (story-item text
+    /// leaves out tabs and breaks, so it can differ from `Paragraph::text`),
+    /// the direct body index of its control, and is not a direct child of
+    /// its owner.
+    pub fn story_item_snapshot(&self, location: &ContentLocation) -> Result<StoryItemSnapshot> {
+        if location.is_end {
+            return Err(StoryError::InvalidPath {
+                path: location.index_path.clone(),
+            }
+            .into());
+        }
+        let (source, owner) = self.story_source_and_owner(&location.story)?;
+        let xml = source.xml.as_ref();
+        let item = story_location_span(xml, &owner, location)?;
+        let direct_body_index = if owner.kind == StoryKind::Body {
+            direct_story_content_items(xml, &owner)?
+                .iter()
+                .position(|direct| {
+                    direct.full.start <= item.full.start && item.full.end <= direct.full.end
+                })
+        } else {
+            None
+        };
+        let text = story_item_text(xml, &item)?;
+        let item_xml = if item.complex_field {
+            complex_story_field_xml(xml, &item)?
+        } else {
+            xml[item.full.clone()].to_vec()
+        };
+        Ok(StoryItemSnapshot {
+            location: location.clone(),
+            direct_body_index,
+            direct_child: location.index_path.len() == 1 && item.direct_owner_child,
+            text,
+            xml: item_xml,
+        })
     }
 
     fn story_link_info(
@@ -18560,7 +18687,10 @@ impl Document {
     /// its own, has a two-segment path: the control's story item index, then
     /// the paragraph's position among the control's paragraphs. Only
     /// [`Self::add_story_comment`] accepts the two-segment form. Returns
-    /// `None` when the index is out of range.
+    /// `None` when the index is out of range, and for a paragraph that sits
+    /// deeper in a block content control than a two-segment path reaches,
+    /// such as one inside a nested content control or a table of the
+    /// control.
     pub fn paragraph_story_location(
         &self,
         paragraph_index: usize,
@@ -18574,7 +18704,15 @@ impl Document {
                 BodyContent::Table(_) | BodyContent::RawXml(_) => 0,
             };
             if remaining < count {
-                let ordinal = matches!(child, BodyContent::ContentControl(_)).then_some(remaining);
+                let ordinal = match child {
+                    BodyContent::ContentControl(control) => {
+                        match direct_control_paragraph_ordinal(control, remaining) {
+                            Some(ordinal) => Some(ordinal),
+                            None => return Ok(None),
+                        }
+                    }
+                    _ => None,
+                };
                 target = Some((slot, ordinal));
                 break;
             }

@@ -2950,6 +2950,230 @@ mod block_control_comment_positions {
         assert!(document.paragraph_story_location(4).unwrap().is_none());
     }
 
+    /// GitHub issue #289: the story item of a paragraph inside a block
+    /// content control carries its text and XML, as a direct paragraph does,
+    /// whether it comes from a paragraph location or a comment anchor.
+    #[test]
+    fn nested_paragraph_story_items_carry_text_and_xml() {
+        let mut document = super::document_with_content_controls(&super::wrap_word_body(BODY));
+        let snapshots = document.story_item_snapshots().unwrap();
+        let control = snapshots
+            .iter()
+            .find(|item| item.location().item_kind() == StoryItemKind::ContentControl)
+            .unwrap();
+
+        let alpha = document.paragraph_story_location(0).unwrap().unwrap();
+        let direct = document.story_item_snapshot(&alpha).unwrap();
+        let listed = snapshots
+            .iter()
+            .find(|item| item.location() == &alpha)
+            .unwrap();
+        assert_eq!(direct.text(), listed.text());
+        assert_eq!(direct.xml(), listed.xml());
+        assert_eq!(direct.direct_body_index(), listed.direct_body_index());
+        assert!(direct.is_direct_child());
+
+        for (paragraph_index, text) in [(1, "Control one."), (2, "Control two.")] {
+            let location = document
+                .paragraph_story_location(paragraph_index)
+                .unwrap()
+                .unwrap();
+            assert_eq!(location.index_path().len(), 2);
+            let item = document.story_item_snapshot(&location).unwrap();
+            assert_eq!(item.location(), &location);
+            assert_eq!(item.text(), Some(text));
+            assert_eq!(
+                Some(document.paragraph(paragraph_index).unwrap().text().as_str()),
+                item.text()
+            );
+            let xml = std::str::from_utf8(item.xml()).unwrap();
+            assert!(xml.starts_with("<w:p>") && xml.ends_with("</w:p>"), "{xml}");
+            assert!(xml.contains(text), "{xml}");
+            assert_eq!(item.direct_body_index(), control.direct_body_index());
+            assert!(!item.is_direct_child());
+        }
+
+        let location = document.paragraph_story_location(2).unwrap().unwrap();
+        let id = comment_on(&mut document, &location).unwrap();
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let anchors = reopened.comment_anchors().unwrap();
+        let range = anchors[&id].range().unwrap();
+        for position in [&range.start, &range.end] {
+            assert_eq!(position.location.index_path().len(), 2);
+            let item = reopened.story_item_snapshot(&position.location).unwrap();
+            assert_eq!(item.text(), Some("Control two."));
+            assert!(
+                std::str::from_utf8(item.xml())
+                    .unwrap()
+                    .contains("Control two.")
+            );
+        }
+
+        // End locations and paths that do not name a nested paragraph fail.
+        let story = location.story().clone();
+        assert!(
+            document
+                .story_item_snapshot(&ContentLocation::end(story.clone()))
+                .is_err()
+        );
+        for (kind, path) in [
+            (StoryItemKind::Paragraph, vec![alpha.index_path()[0], 0]),
+            (StoryItemKind::Paragraph, vec![location.index_path()[0], 9]),
+            (
+                StoryItemKind::ContentControl,
+                location.index_path().to_vec(),
+            ),
+            (
+                StoryItemKind::Paragraph,
+                vec![location.index_path()[0], 0, 0],
+            ),
+        ] {
+            let location = ContentLocation::new(story.clone(), kind, path.clone());
+            assert!(document.story_item_snapshot(&location).is_err(), "{path:?}");
+        }
+    }
+
+    /// GitHub issue #291: a complex field written across several runs reads
+    /// its cached result as text in the snapshot list too, so every story
+    /// item API agrees, in the body or in a block content control, and a
+    /// field nested in another field's instruction or result reads its own.
+    #[test]
+    fn multi_run_complex_field_items_read_the_same_text_from_every_api() {
+        let marker = |kind: &str| format!(r#"<w:r><w:fldChar w:fldCharType="{kind}"/></w:r>"#);
+        let instr = |code: &str| {
+            format!(r#"<w:r><w:instrText xml:space="preserve">{code}</w:instrText></w:r>"#)
+        };
+        let text = |value: &str| format!(r#"<w:r><w:t xml:space="preserve">{value}</w:t></w:r>"#);
+        let field = |code: &str, result: &str| {
+            format!(
+                "{}{}{}{}{}",
+                marker("begin"),
+                instr(code),
+                marker("separate"),
+                result,
+                marker("end")
+            )
+        };
+        let page = |value: &str| field(" PAGE ", &text(value));
+        // IF { PAGE } = 3 "yes": PAGE nests in the IF instruction.
+        let condition = format!(
+            "{}{}{}{}{}{}{}",
+            marker("begin"),
+            instr(" IF "),
+            page("3"),
+            instr(r#" = 3 "yes" "#),
+            marker("separate"),
+            text("yes"),
+            marker("end")
+        );
+        // REF with a PAGE in its cached result.
+        let reference = field(" REF mark ", &format!("{}{}", text("Page "), page("4")));
+        let body = format!(
+            r#"<w:p><w:r><w:t>Page </w:t></w:r>{}</w:p><w:p><w:r><w:fldChar w:fldCharType="begin"/><w:instrText> PAGE </w:instrText><w:fldChar w:fldCharType="separate"/><w:t>8</w:t><w:fldChar w:fldCharType="end"/></w:r></w:p><w:sdt><w:sdtPr><w:alias w:val="Block"/></w:sdtPr><w:sdtContent><w:p>{}</w:p></w:sdtContent></w:sdt><w:p>{condition}</w:p><w:p>{reference}</w:p>"#,
+            page("7"),
+            page("9"),
+        );
+        let document = super::document_with_content_controls(&super::wrap_word_body(&body));
+        let paragraphs: Vec<String> = (0..5)
+            .map(|index| document.paragraph(index).unwrap().text())
+            .collect();
+        assert_eq!(paragraphs, ["Page 7", "8", "9", "yes", "Page 4"]);
+
+        let snapshots = document.story_item_snapshots().unwrap();
+        let fields: Vec<_> = snapshots
+            .iter()
+            .filter(|item| item.location().item_kind() == StoryItemKind::Field)
+            .map(|item| item.text())
+            .collect();
+        assert_eq!(
+            fields,
+            [
+                Some("7"),
+                Some("8"),
+                Some("9"),
+                Some("yes"),
+                Some("3"),
+                Some("Page 4"),
+                Some("4")
+            ]
+        );
+        let story = snapshots[0].location().story().clone();
+        let refs = document.story_items(&story).unwrap();
+        for listed in &snapshots {
+            let one = document.story_item_snapshot(listed.location()).unwrap();
+            let path = listed.location().index_path();
+            assert_eq!(one.text(), listed.text(), "{path:?}");
+            assert_eq!(one.xml(), listed.xml(), "{path:?}");
+            assert_eq!(one.direct_body_index(), listed.direct_body_index());
+            assert_eq!(one.is_direct_child(), listed.is_direct_child());
+            assert_eq!(
+                refs[path[0]].text().unwrap().as_deref(),
+                listed.text(),
+                "{path:?}"
+            );
+            // The link scan reads the same per-item excerpt.
+            assert!(refs[path[0]].links().unwrap().is_empty(), "{path:?}");
+        }
+        assert!(document.story_link_snapshots().unwrap().is_empty());
+    }
+
+    /// A paragraph handle inside a block content control maps to that exact
+    /// paragraph, never to a sibling (an empty `<w:p/>` included), and a
+    /// paragraph deeper than a
+    /// two-segment path reaches, in a nested control or a table of the
+    /// control, has no location.
+    #[test]
+    fn paragraph_locations_skip_what_a_two_segment_path_cannot_reach() {
+        const LAYOUT: &str = r#"<w:p><w:r><w:t>Alpha.</w:t></w:r></w:p><w:sdt><w:sdtPr><w:alias w:val="Block"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>p1</w:t></w:r></w:p><w:p/><w:sdt><w:sdtPr><w:alias w:val="Nested"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>p2</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>p3</w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p><w:r><w:t>p5</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>Beta.</w:t></w:r></w:p>"#;
+        let mut document = super::document_with_content_controls(&super::wrap_word_body(LAYOUT));
+        let mut seen = Vec::new();
+        let mut index = 0;
+        while let Some(paragraph) = document.paragraph(index) {
+            let text = paragraph.text();
+            let location = document.paragraph_story_location(index).unwrap();
+            let resolved = location.map(|location| {
+                document
+                    .story_item_snapshot(&location)
+                    .unwrap()
+                    .text()
+                    .unwrap_or_default()
+                    .to_owned()
+            });
+            // Story-item text is `None` for a paragraph without text runs.
+            if let Some(resolved) = &resolved {
+                assert_eq!(resolved, &text, "paragraph {index}");
+            }
+            seen.push((text, resolved.is_some()));
+            index += 1;
+        }
+        assert_eq!(
+            seen,
+            [
+                ("Alpha.", true),
+                ("p1", true),
+                ("", true),
+                ("p2", false),
+                ("p3", true),
+                ("cell", false),
+                ("p5", true),
+                ("Beta.", true),
+            ]
+            .map(|(text, reachable)| (text.to_owned(), reachable))
+        );
+
+        // A comment through the handle of p3 lands on p3, not on p5.
+        let location = document.paragraph_story_location(4).unwrap().unwrap();
+        let id = comment_on(&mut document, &location).unwrap();
+        let xml = super::document_xml(&mut document);
+        let start = xml
+            .find(&format!(r#"<w:commentRangeStart w:id="{id}"/>"#))
+            .unwrap();
+        let end = xml
+            .find(&format!(r#"<w:commentRangeEnd w:id="{id}"/>"#))
+            .unwrap();
+        assert_eq!(super::f_x093_visible_text(&xml[start..end]), "p3");
+    }
+
     #[test]
     fn two_segment_positions_must_name_a_paragraph_of_a_block_control() {
         let mut document = super::document_with_content_controls(&super::wrap_word_body(BODY));
