@@ -28811,10 +28811,12 @@ fn dense_form_matches_reviewed_one_page_geometry() {
     // Horizontal borders fill the band below their row boundary, and the
     // bands are part of the row heights, so the nested table starts below
     // the 1 point band of its row and the last row carries the bottom one.
-    assert_eq!(table_lines.len(), 26, "table geometry: {table_lines:?}");
+    assert_eq!(table_lines.len(), 25, "table geometry: {table_lines:?}");
     // The preceding line now advances by its Word Windows-font pitch.
     let word_line_shift = 2.20703125;
-    assert!(has_line(
+    // The first cell's `nil` top removes the table's outer edge above it, as
+    // Word 16.111 draws the form.
+    assert!(!has_line(
         72.0,
         70.5 + word_line_shift,
         306.0,
@@ -28888,7 +28890,7 @@ fn dense_form_matches_reviewed_one_page_geometry() {
         .chunks_exact(4)
         .filter(|pixel| *pixel == [255, 215, 215, 255])
         .count();
-    assert_eq!(checksum, 3_354_091_765_578_971_749);
+    assert_eq!(checksum, 17_727_332_437_927_583_437);
     assert_eq!(non_white_pixels, 32_467);
     assert_eq!(
         behind_pixels, 0,

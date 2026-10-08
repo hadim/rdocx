@@ -969,12 +969,13 @@ so a `firstRow` region's `w:rPr` reaches the header row's runs. A conditional
 region's `w:trPr` is modeled and round-tripped but not applied, which is row
 geometry owned by F-268a. Region selection reads the table look together with
 every `w:cnfStyle` on the row, the cell and the cell's paragraphs. Direct table
-and cell properties remain the final overlay. An explicit
-cell `nil` or `none` border yields to a visible table border only on the exact
-outer edge. The same value remains suppressive on an interior edge.
+and cell properties remain the final overlay. A cell `nil` border removes the
+edge on the outer boundary of the table as on an interior edge. A cell `none`
+border is read as unset, as Word 16.111 reads it, so the table's border for
+that edge applies, outer or interior.
 The model retains `nil` and `none` as distinct source tokens because an
-unrelated table or document edit must not normalize producer XML. Both tokens
-have the same invisible-border layout behavior.
+unrelated table or document edit must not normalize producer XML. The two
+tokens differ in layout only as cell borders, and both draw no line elsewhere.
 
 A table without an explicit style uses the authored default table style.
 Its modeled base width, alignment, indent, borders, shading, look, and cell
