@@ -2338,12 +2338,22 @@ impl Document {
             .as_ref()
             .and_then(|part| self.package.get_part(part))
             .map(<[u8]>::to_vec);
-        let mut taken = durable_ids(&ids_xml);
+        let mut taken = durable_ids(&ids_xml).into_iter().collect::<HashSet<_>>();
         if let Some(xml) = &extensible_xml {
             taken.extend(durable_ids(xml));
         }
-        let mut next = taken.into_iter().max().map_or(1, |max| max + 1);
-        let comments = self.comments.as_ref().map(|comments| &comments.comments);
+        let mut free_from = 1;
+        let comments = self
+            .comments
+            .as_ref()
+            .map(|comments| {
+                comments
+                    .comments
+                    .iter()
+                    .map(|comment| (comment.id, comment))
+                    .collect::<HashMap<_, _>>()
+            })
+            .unwrap_or_default();
         let mut id_rows = String::new();
         let mut extensible_rows = String::new();
         let ids_prefix = element_prefix(root_start(&ids_xml));
@@ -2352,22 +2362,13 @@ impl Document {
             .map(|xml| element_prefix(root_start(xml)))
             .unwrap_or_default();
         for id in ids {
-            let Some(comment) = comments
-                .into_iter()
-                .flatten()
-                .find(|comment| comment.id == *id)
-            else {
+            let Some(comment) = comments.get(id).copied() else {
                 continue;
             };
             let Some(para_id) = last_para_id(comment) else {
                 continue;
             };
-            // Durable ids stay below 0x7FFFFFFF, as Word requires.
-            if next >= 0x7FFF_FFFF {
-                return Err(Error::Other("comment durable ids are exhausted".to_owned()));
-            }
-            let durable = format!("{next:08X}");
-            next += 1;
+            let durable = format!("{:08X}", allocate_durable_id(&mut taken, &mut free_from)?);
             id_rows.push_str(&format!(
                 r#"<{ids_prefix}commentId {ids_prefix}paraId="{para_id}" {ids_prefix}durableId="{durable}"/>"#
             ));
@@ -2974,6 +2975,31 @@ fn root_start(xml: &[u8]) -> &[u8] {
     &[]
 }
 
+/// Allocate a durable id not in `taken`: one above the largest, or the
+/// lowest free one from `free_from` on when that would leave the range, so
+/// that successive calls never rescan the same ids. Durable ids stay below
+/// 0x7FFFFFFF, as Word requires, whatever a part already holds.
+fn allocate_durable_id(taken: &mut HashSet<u32>, free_from: &mut u32) -> Result<u32> {
+    const LIMIT: u32 = 0x7FFF_FFFF;
+    let above = taken
+        .iter()
+        .copied()
+        .filter(|id| *id < LIMIT)
+        .max()
+        .map_or(1, |max| max + 1);
+    let allocated = if above < LIMIT && !taken.contains(&above) {
+        above
+    } else {
+        let free = (*free_from..LIMIT)
+            .find(|candidate| !taken.contains(candidate))
+            .ok_or_else(|| Error::Other("comment durable ids are exhausted".to_owned()))?;
+        *free_from = free + 1;
+        free
+    };
+    taken.insert(allocated);
+    Ok(allocated)
+}
+
 /// Return the hexadecimal durable ids that a `commentsIds` or
 /// `commentsExtensible` part names.
 fn durable_ids(xml: &[u8]) -> Vec<u32> {
@@ -2988,6 +3014,11 @@ fn durable_ids(xml: &[u8]) -> Vec<u32> {
 fn append_root_children(xml: &[u8], children: &str) -> Result<Vec<u8>> {
     let trimmed = xml.trim_ascii_end();
     let root = root_start(xml);
+    if root.is_empty() {
+        return Err(Error::Other(
+            "comment id part has no root element".to_owned(),
+        ));
+    }
     let root_offset = xml.len() - root.len();
     let mut updated = Vec::with_capacity(xml.len() + children.len());
     if trimmed.ends_with(b"/>") && !root[..root.len().saturating_sub(2)].contains(&b'>') {
@@ -4484,5 +4515,21 @@ mod tests {
             .expect("plist value is utf8")
             .trim()
             .to_owned()
+    }
+
+    #[test]
+    fn durable_ids_and_id_parts_from_a_hostile_file_never_panic() {
+        let mut taken = HashSet::from([u32::MAX, 0x7FFF_FFFE, 2]);
+        let mut free_from = 1;
+        assert_eq!(allocate_durable_id(&mut taken, &mut free_from).unwrap(), 1);
+        assert_eq!(allocate_durable_id(&mut taken, &mut free_from).unwrap(), 3);
+        let mut taken = HashSet::from([5]);
+        assert_eq!(allocate_durable_id(&mut taken, &mut 1).unwrap(), 6);
+        assert!(append_root_children(b"/>", "<w15:commentId/>").is_err());
+        assert!(append_root_children(b"", "<w15:commentId/>").is_err());
+        assert_eq!(
+            append_root_children(b"<w16cid:commentsIds/>", "<x/>").unwrap(),
+            b"<w16cid:commentsIds><x/></w16cid:commentsIds>"
+        );
     }
 }
