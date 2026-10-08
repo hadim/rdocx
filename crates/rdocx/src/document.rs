@@ -5463,6 +5463,7 @@ thread_local! {
     static LAYOUT_INVOCATIONS: Cell<usize> = const { Cell::new(0) };
     static FAIL_NEXT_HEADER_FOOTER_SERIALIZATION: Cell<bool> = const { Cell::new(false) };
     static STORY_SOURCE_BUILDS: Cell<usize> = const { Cell::new(0) };
+    static STORY_NAMESPACE_PREFIX_SCANS: Cell<usize> = const { Cell::new(0) };
     static STORY_TEXT_PREFIX_BYTES: Cell<usize> = const { Cell::new(0) };
 }
 
@@ -5641,6 +5642,16 @@ pub(crate) struct StoryRangeParagraph {
     pub(crate) span: Range<usize>,
     /// The paragraph XML with its namespace declarations closed.
     pub(crate) xml: Vec<u8>,
+}
+
+/// The paragraphs, story owners and story sources that range markers can
+/// sit in, in [`Document::stories`] order.
+pub(crate) struct StoryRangeInventory {
+    pub(crate) paragraphs: Vec<StoryRangeParagraph>,
+    /// Each story owner with its byte span in its part's story source.
+    pub(crate) owners: Vec<(StoryId, Range<usize>)>,
+    /// Each story source by root kind and part name.
+    pub(crate) parts: Vec<(StoryKind, String, Vec<u8>)>,
 }
 
 pub(crate) struct StorySource<'a> {
@@ -6011,7 +6022,7 @@ fn story_word_prefixes_at(
     Ok(prefixes)
 }
 
-fn story_element_end(xml: &[u8], start: usize) -> Result<usize> {
+pub(crate) fn story_element_end(xml: &[u8], start: usize) -> Result<usize> {
     let fragment = xml
         .get(start..)
         .ok_or_else(|| Error::Other("story element begins outside its source part".to_owned()))?;
@@ -6049,6 +6060,8 @@ pub(crate) fn story_namespace_scope_at(
     xml: &[u8],
     offset: usize,
 ) -> Result<BTreeMap<String, String>> {
+    #[cfg(test)]
+    STORY_NAMESPACE_PREFIX_SCANS.set(STORY_NAMESPACE_PREFIX_SCANS.get() + 1);
     let mut reader = quick_xml::Reader::from_reader(xml);
     reader.config_mut().trim_text(false);
     let mut scopes = vec![BTreeMap::<String, String>::new()];
@@ -7195,13 +7208,36 @@ fn freshen_content_fragment_identities(
     Ok(updated[item.full.clone()].to_vec())
 }
 
-/// Count the comment markers of each id in `xml`.
-fn comment_marker_counts(xml: &[u8]) -> Result<BTreeMap<i32, usize>> {
-    let mut counts = BTreeMap::new();
+/// Count the start markers, end markers and references of each comment id
+/// in `xml`.
+fn comment_marker_counts(xml: &[u8]) -> Result<BTreeMap<i32, [usize; 3]>> {
+    let mut counts = BTreeMap::<i32, [usize; 3]>::new();
     for marker in crate::comments::scan_comment_markers(xml)? {
-        *counts.entry(marker.id).or_insert(0) += 1;
+        counts.entry(marker.id).or_default()[marker.kind as usize] += 1;
     }
     Ok(counts)
+}
+
+/// Why removing one story item failed.
+enum ItemRemovalError {
+    /// A comment that keeps part of its range cannot be anchored again.
+    Reanchor(String),
+    Other(Error),
+}
+
+impl From<Error> for ItemRemovalError {
+    fn from(error: Error) -> Self {
+        Self::Other(error)
+    }
+}
+
+impl ItemRemovalError {
+    fn into_error(self) -> Error {
+        match self {
+            Self::Reanchor(message) => Error::Other(message),
+            Self::Other(error) => error,
+        }
+    }
 }
 
 fn remove_comment_anchors_from_fragment(xml: &[u8]) -> Result<Vec<u8>> {
@@ -15577,14 +15613,23 @@ impl Document {
     /// Return the paragraphs that paired range markers can sit in, in
     /// [`Self::stories`] order and then source order, with the byte span each
     /// takes in its part's story source.
-    ///
-    /// Every package source is built once and every story owner scanned once.
     pub(crate) fn story_range_paragraph_spans(&self) -> Result<Vec<StoryRangeParagraph>> {
+        Ok(self.story_range_inventory()?.paragraphs)
+    }
+
+    /// Inventory the story paragraphs, the story owners and the story
+    /// sources that range markers can sit in.
+    ///
+    /// Every package source is built once, every story owner scanned once,
+    /// and the namespace scopes of a source read in one forward pass.
+    pub(crate) fn story_range_inventory(&self) -> Result<StoryRangeInventory> {
         let mut paragraphs = Vec::new();
+        let mut owners = Vec::new();
+        let mut parts = Vec::new();
         let mut seen = HashSet::new();
-        let mut story_index = 0usize;
         for source in self.story_sources()? {
             let source_xml = source.xml.as_ref();
+            let mut spans = Vec::new();
             for owner in scan_story_owners(source_xml, source.root_kind)? {
                 if !seen.insert((owner.kind, source.part_name.clone(), owner.owner_index)) {
                     continue;
@@ -15596,44 +15641,60 @@ impl Document {
                     fingerprint: owner.fingerprint,
                 };
                 for (index, item) in scan_story_items(source_xml, &owner)?.iter().enumerate() {
-                    let spans = match item.kind {
-                        StoryItemKind::Paragraph => vec![(vec![index], item.full.clone())],
-                        StoryItemKind::ContentControl => {
-                            scan_story_control_paragraphs(source_xml, item)?
-                                .into_iter()
-                                .enumerate()
-                                .map(|(paragraph_index, span)| (vec![index, paragraph_index], span))
-                                .collect()
+                    match item.kind {
+                        StoryItemKind::Paragraph => {
+                            spans.push((owners.len(), vec![index], item.full.clone()));
                         }
-                        _ => continue,
-                    };
-                    for (path, span) in spans {
-                        let scope = story_namespace_scope_at(source_xml, span.start)?;
-                        let xml =
-                            close_content_fragment_namespaces(&source_xml[span.clone()], &scope)?;
-                        paragraphs.push((
-                            story_index,
-                            StoryRangeParagraph {
-                                location: ContentLocation::new(
-                                    story.clone(),
-                                    StoryItemKind::Paragraph,
-                                    path,
-                                ),
-                                part_name: source.part_name.clone(),
-                                span,
-                                xml,
-                            },
-                        ));
+                        StoryItemKind::ContentControl => {
+                            for (paragraph_index, span) in
+                                scan_story_control_paragraphs(source_xml, item)?
+                                    .into_iter()
+                                    .enumerate()
+                            {
+                                spans.push((owners.len(), vec![index, paragraph_index], span));
+                            }
+                        }
+                        _ => {}
                     }
                 }
-                story_index += 1;
+                owners.push((story, owner.full.clone()));
             }
+            let scopes =
+                story_namespace_scopes_at(source_xml, spans.iter().map(|(_, _, span)| span.start))?;
+            for (owner, path, span) in spans {
+                let scope = scopes.get(&span.start).ok_or_else(|| {
+                    Error::Other("story paragraph namespace scope was not inventoried".to_owned())
+                })?;
+                let xml = close_content_fragment_namespaces(&source_xml[span.clone()], scope)?;
+                paragraphs.push((
+                    owner,
+                    StoryRangeParagraph {
+                        location: ContentLocation::new(
+                            owners[owner].0.clone(),
+                            StoryItemKind::Paragraph,
+                            path,
+                        ),
+                        part_name: source.part_name.clone(),
+                        span,
+                        xml,
+                    },
+                ));
+            }
+            parts.push((
+                source.root_kind,
+                source.part_name.clone(),
+                source.xml.into_owned(),
+            ));
         }
-        paragraphs.sort_by_key(|(story_index, paragraph)| (*story_index, paragraph.span.start));
-        Ok(paragraphs
-            .into_iter()
-            .map(|(_, paragraph)| paragraph)
-            .collect())
+        paragraphs.sort_by_key(|(owner, paragraph)| (*owner, paragraph.span.start));
+        Ok(StoryRangeInventory {
+            paragraphs: paragraphs
+                .into_iter()
+                .map(|(_, paragraph)| paragraph)
+                .collect(),
+            owners,
+            parts,
+        })
     }
 
     /// Materialize every story item after building each package source once.
@@ -16897,8 +16958,9 @@ impl Document {
         };
         reject_section_owning_content_fragment(&fragment)?;
         validate_fragment_relationships(&candidate, &location.story, &fragment)?;
-        let (xml, comments) =
-            candidate.remove_story_item_staged(&part_name, source_xml, item.full)?;
+        let (xml, comments) = candidate
+            .remove_story_item_staged(&part_name, source_xml, &owner, item.full)
+            .map_err(ItemRemovalError::into_error)?;
         let fragment = ContentFragment {
             xml,
             comments,
@@ -16909,8 +16971,9 @@ impl Document {
         Ok(fragment)
     }
 
-    /// Remove the bytes `item` from the story source `xml` of `part_name` on
-    /// a staged candidate, and settle the comments anchored there.
+    /// Remove the bytes `item`, a direct child of `owner`, from the story
+    /// source `xml` of `part_name` on a staged candidate, and settle the
+    /// comments anchored there.
     ///
     /// Return the removed XML without the markers of the comments that stay,
     /// and the threads it removed.
@@ -16918,16 +16981,63 @@ impl Document {
         &mut self,
         part_name: &str,
         xml: Vec<u8>,
+        owner: &StoryOwnerSpan,
         item: Range<usize>,
-    ) -> Result<(Vec<u8>, Option<crate::comments::CarriedComments>)> {
-        let cut = self.comment_cut(part_name, &xml, item.clone())?;
+    ) -> std::result::Result<(Vec<u8>, Option<crate::comments::CarriedComments>), ItemRemovalError>
+    {
+        let cut = self.comment_cut(&xml, item.clone())?;
         let removed = cut.fragment_xml(&xml, item.clone());
         let carried = self.carried_comments(cut.whole())?;
+        let last_paragraph = if cut.partial_ids().next().is_some() {
+            direct_story_content_items(&xml, owner)?
+                .into_iter()
+                .filter(|candidate| {
+                    candidate.kind == StoryItemKind::Paragraph && candidate.full.end <= item.start
+                })
+                .map(|candidate| candidate.full)
+                .next_back()
+        } else {
+            None
+        };
+        let mut edits = cut
+            .reanchor_edits(&xml, item.clone(), last_paragraph)
+            .map_err(ItemRemovalError::Reanchor)?;
         let mut updated = xml;
         updated.drain(item);
+        // Insertions at one offset keep their order.
+        edits.reverse();
+        edits.sort_by_key(|(offset, _)| std::cmp::Reverse(*offset));
+        for (offset, written) in edits {
+            updated.splice(offset..offset, written.into_bytes());
+        }
         set_story_source_xml(self, part_name, updated)?;
-        self.apply_comment_cut_staged(&cut)?;
+        for id in cut.whole() {
+            self.remove_comment_staged(*id)?;
+        }
+        let kept = cut.partial_ids().collect::<Vec<_>>();
+        if !kept.is_empty() {
+            let counts = comment_marker_counts(&self.story_part_source(part_name)?)?;
+            if let Some(id) = kept.into_iter().find(|id| {
+                counts
+                    .get(id)
+                    .is_some_and(|kinds| kinds.iter().any(|count| *count > 1))
+            }) {
+                return Err(ItemRemovalError::Reanchor(format!(
+                    "comment {id} would keep two markers of one kind after the removal"
+                )));
+            }
+        }
         Ok((removed, carried))
+    }
+
+    fn story_part_source(&self, part_name: &str) -> Result<Vec<u8>> {
+        if part_name == self.doc_part_name {
+            return Ok(self.document.to_xml()?);
+        }
+        self.package
+            .get_part(part_name)
+            .map(<[u8]>::to_vec)
+            .ok_or_else(|| Error::Other(format!("story part {part_name} is missing")))
     }
 
     /// Clone one checked direct child into a checked insertion boundary.
@@ -18424,11 +18534,13 @@ impl Document {
     /// A comment whose range markers and reference all sit in the removed
     /// content is removed with its replies, as [`Self::remove_comment`]
     /// removes it. A comment that keeps part of its range outside it stays
-    /// on what is left: a lost start marker moves to the start of the first
-    /// paragraph of its story after the removed content, a lost end marker
-    /// and reference to the end of the last paragraph before it. A comment
-    /// whose remaining part cannot be anchored again is removed as well, so
-    /// no comment is left without an anchor.
+    /// on what is left: a lost start marker moves to the start of the
+    /// paragraph that follows the removed content, a lost end marker and
+    /// reference to the end of the paragraph that precedes it. When a table
+    /// borders the cut instead, the marker goes between the blocks, as Word
+    /// writes it, so the range keeps the table. A comment whose remaining
+    /// part cannot be anchored again is removed as well, so no comment is
+    /// left without an anchor.
     pub fn remove_content(&mut self, index: usize) -> bool {
         let Some(item) = self.document.body.content.get(index) else {
             return false;
@@ -18446,24 +18558,32 @@ impl Document {
             Vec::new()
         };
         if !marked.is_empty() {
-            if let Ok(reopened) = self.staged_body_item_removal(index) {
-                self.commit_staged_mutation(reopened);
-                return true;
+            match self.staged_body_item_removal(index) {
+                Ok(reopened) => {
+                    self.commit_staged_mutation(reopened);
+                    return true;
+                }
+                // Removing each comment that lost a marker still leaves none
+                // without an anchor.
+                Err(ItemRemovalError::Reanchor(_)) => {
+                    self.invalidate_layout();
+                    self.document.body.remove(index);
+                    for id in marked {
+                        let _ = self.remove_comment(id);
+                    }
+                    return true;
+                }
+                Err(ItemRemovalError::Other(_)) => {}
             }
-            // Removing each comment that lost a marker still leaves none
-            // without an anchor.
-            self.invalidate_layout();
-            self.document.body.remove(index);
-            for id in marked {
-                let _ = self.remove_comment(id);
-            }
-            return true;
         }
         self.invalidate_layout();
         self.document.body.remove(index).is_some()
     }
 
-    fn staged_body_item_removal(&self, index: usize) -> Result<Self> {
+    fn staged_body_item_removal(
+        &self,
+        index: usize,
+    ) -> std::result::Result<Self, ItemRemovalError> {
         let mut candidate = self.clone_for_staging();
         candidate.flush_to_package()?;
         let story = candidate
@@ -18474,23 +18594,24 @@ impl Document {
         let (source, owner) = candidate.story_source_and_owner(&story)?;
         let part_name = source.part_name.clone();
         let xml = source.xml.into_owned();
-        let mut items = Vec::new();
-        for item in direct_story_content_items(&xml, &owner)? {
-            if !content_fragment_root_is_section_properties(&xml, &item)? {
-                items.push(item.full);
-            }
+        let mut items = direct_story_content_items(&xml, &owner)?;
+        // The body section properties are serialized last.
+        if let Some(last) = items.last()
+            && content_fragment_root_is_section_properties(&xml, last)?
+        {
+            items.pop();
         }
         if items.len() != candidate.document.body.content.len() {
-            return Err(Error::Other(
-                "direct body items do not match the body content".to_owned(),
-            ));
+            return Err(
+                Error::Other("direct body items do not match the body content".to_owned()).into(),
+            );
         }
         let item = items
             .get(index)
-            .cloned()
+            .map(|item| item.full.clone())
             .ok_or_else(|| Error::Other(format!("body index {index} is out of range")))?;
-        candidate.remove_story_item_staged(&part_name, xml, item)?;
-        candidate.prepare_and_reopen_staged()
+        candidate.remove_story_item_staged(&part_name, xml, &owner, item)?;
+        Ok(candidate.prepare_and_reopen_staged()?)
     }
 
     // ---- Image support ----
@@ -28614,6 +28735,35 @@ mod tests {
             assert!(document.story_link_snapshots().unwrap().is_empty());
             assert_eq!(STORY_SOURCE_BUILDS.get(), 1);
         }
+    }
+
+    #[test]
+    fn comment_anchors_and_comment_aware_removal_scale_linearly() {
+        let mut removal_scans = Vec::new();
+        for paragraph_count in [64, 128] {
+            let mut document = Document::new();
+            for index in 0..paragraph_count {
+                document.add_paragraph(&format!("paragraph number {index}"));
+            }
+            document
+                .add_comment_on_text("paragraph number 3", 0, "A", None, "c", None)
+                .unwrap();
+
+            STORY_SOURCE_BUILDS.set(0);
+            STORY_NAMESPACE_PREFIX_SCANS.set(0);
+            assert_eq!(document.comment_anchors().unwrap().len(), 1);
+            assert_eq!(STORY_SOURCE_BUILDS.get(), 1);
+            assert_eq!(STORY_NAMESPACE_PREFIX_SCANS.get(), 0);
+
+            // The removal scans a story prefix a fixed number of times,
+            // not once per body item.
+            STORY_NAMESPACE_PREFIX_SCANS.set(0);
+            assert!(document.remove_content(3));
+            assert!(document.comments().is_empty());
+            removal_scans.push(STORY_NAMESPACE_PREFIX_SCANS.get());
+        }
+        assert_eq!(removal_scans[0], removal_scans[1]);
+        assert!(removal_scans[0] <= 4, "{removal_scans:?}");
     }
 
     #[test]

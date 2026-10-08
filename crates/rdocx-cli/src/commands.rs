@@ -1376,11 +1376,10 @@ pub fn comment_list(file: &Path, json_output: bool) -> Result<()> {
                     "start": story_position_json(&range.start, &snapshots),
                     "end": story_position_json(&range.end, &snapshots),
                 })),
-                "reference": anchor.and_then(rdocx::CommentAnchor::reference).map(|reference| {
-                    let mut position = story_position_json(reference, &snapshots);
-                    position["story"] = story_json(reference.location.story());
-                    position
-                }),
+                "reference": anchor.and_then(rdocx::CommentAnchor::reference).map(|reference| json!({
+                    "story": story_json(reference.location.story()),
+                    "position": story_position_json(reference, &snapshots),
+                })),
             })
         })
         .collect::<Vec<_>>();
@@ -2306,12 +2305,13 @@ pub fn validate(file: &Path) -> Result<bool> {
 
     // A comment with no range and no reference has nothing to point at, and
     // each application shows or drops it in its own way.
-    match doc.unanchored_comments() {
-        Ok(ids) => errors.extend(
+    // A story that cannot be scanned is reported by the checks above, not
+    // as a comment finding.
+    if let Ok(ids) = doc.unanchored_comments() {
+        errors.extend(
             ids.into_iter()
                 .map(|id| format!("comment {id} has no range and no reference in any story")),
-        ),
-        Err(error) => errors.push(format!("comment anchors cannot be read: {error}")),
+        );
     }
 
     // --- Advisory findings ---

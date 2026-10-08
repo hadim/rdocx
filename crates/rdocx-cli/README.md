@@ -91,8 +91,9 @@ timestamp exits unsuccessfully without creating the output, and without
 keeps its id, text, replies, and resolved state. A reply id, an unknown id, or
 an anchor that cannot be placed exits unsuccessfully without creating the
 output. `comment list --json` gives each comment its `anchor_text`, the
-accepted-view text of its range, and its `anchor` and `reference` locations:
-the story, the item path in it, the direct body index in the body, and the run
+accepted-view text of its range, and its `anchor` and `reference` locations.
+Each names its `story`, then gives its `start` and `end`, or its `position`,
+as the item path in the story, the direct body index in the body, and the run
 boundary. A reply without markers of its own has none of them.
 
 `compare` replaces each changed run whole by default (`--granularity run`),

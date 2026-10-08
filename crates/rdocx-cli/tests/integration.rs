@@ -2721,9 +2721,7 @@ fn comment_commands_round_trip_one_resolved_thread() {
                             "part_name": "/word/document.xml",
                             "owner_index": 0,
                         },
-                        "index_path": [0],
-                        "body_index": 0,
-                        "run_index": 1,
+                        "position": { "index_path": [0], "body_index": 0, "run_index": 1 },
                     },
                 },
                 {

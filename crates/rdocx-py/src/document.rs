@@ -162,22 +162,67 @@ impl PyBookmark {
     }
 }
 
-#[pyclass(name = "Comment", frozen, get_all, eq, skip_from_py_object)]
+#[pyclass(name = "Comment", frozen, eq, skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyComment {
+    #[pyo3(get)]
     pub id: i32,
+    #[pyo3(get)]
     pub author: Option<String>,
+    #[pyo3(get)]
     pub initials: Option<String>,
+    #[pyo3(get)]
     pub date: Option<String>,
+    #[pyo3(get)]
     pub text: String,
+    #[pyo3(get)]
     pub parent_id: Option<i32>,
+    #[pyo3(get)]
     pub resolved: bool,
-    /// The accepted-view text of the comment's range, `""` for a comment
-    /// with a reference and no range, and `None` for a comment with no
-    /// marker of its own.
-    pub anchor_text: Option<String>,
-    /// The comment's range, as `add_comment` takes it.
-    pub anchor: Option<PyStoryRunRange>,
+    anchor: CommentAnchorSource,
+}
+
+/// Where a `Comment` reads its anchor: values given to its constructor, or
+/// the document it was listed from, read on first access.
+#[derive(Clone)]
+enum CommentAnchorSource {
+    Given(Box<(Option<String>, Option<PyStoryRunRange>)>),
+    Document(std::sync::Arc<LazyCommentAnchors>),
+}
+
+/// Each comment's anchor text and range, by comment id.
+type CommentAnchorSnapshots = HashMap<i32, (String, Option<PyStoryRunRange>)>;
+
+/// The anchors of the comments one `Document.comments` call listed, read
+/// once, on the first access to one of them, from the document at the
+/// revision of the listing.
+pub(crate) struct LazyCommentAnchors {
+    document: Py<PyDocument>,
+    revision: u64,
+    anchors: std::sync::OnceLock<Option<CommentAnchorSnapshots>>,
+}
+
+impl LazyCommentAnchors {
+    /// Return the anchors, or `None` when the document cannot read them.
+    fn get(&self, py: Python<'_>) -> PyResult<Option<&CommentAnchorSnapshots>> {
+        if let Some(anchors) = self.anchors.get() {
+            return Ok(anchors.as_ref());
+        }
+        let document = self.document.borrow(py);
+        if document.revisions.current() != self.revision {
+            return Err(crate::stale_to_pyerr(
+                py,
+                StaleElementError {
+                    element_kind: "comment".to_owned(),
+                    captured_revision: self.revision,
+                    current_revision: document.revisions.current(),
+                    recovery_hint: "Re-fetch it with document.comments.".to_owned(),
+                },
+            ));
+        }
+        let anchors = document.comment_anchor_snapshots(py);
+        Ok(self.anchors.get_or_init(|| anchors).as_ref())
+    }
 }
 
 /// Equality covers the thread fields only, so a snapshot equals a record
@@ -221,9 +266,37 @@ impl PyComment {
             text,
             parent_id,
             resolved,
-            anchor_text,
-            anchor: anchor.map(|anchor| anchor.clone()),
+            anchor: CommentAnchorSource::Given(Box::new((
+                anchor_text,
+                anchor.map(|anchor| anchor.clone()),
+            ))),
         }
+    }
+
+    /// The accepted-view text of the comment's range, `""` for a comment
+    /// anchored without a range, and `None` for a comment with no marker of
+    /// its own or when the anchors cannot be read.
+    #[getter]
+    fn anchor_text(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        Ok(match &self.anchor {
+            CommentAnchorSource::Given(given) => given.0.clone(),
+            CommentAnchorSource::Document(lazy) => lazy
+                .get(py)?
+                .and_then(|anchors| anchors.get(&self.id))
+                .map(|(text, _)| text.clone()),
+        })
+    }
+
+    /// The comment's range, as `add_comment` takes it.
+    #[getter]
+    fn anchor(&self, py: Python<'_>) -> PyResult<Option<PyStoryRunRange>> {
+        Ok(match &self.anchor {
+            CommentAnchorSource::Given(given) => given.1.clone(),
+            CommentAnchorSource::Document(lazy) => lazy
+                .get(py)?
+                .and_then(|anchors| anchors.get(&self.id))
+                .and_then(|(_, range)| range.clone()),
+        })
     }
 }
 
@@ -1616,6 +1689,28 @@ impl PyDocument {
         ))
     }
 
+    /// Read every comment anchor as Python values, or `None` when the
+    /// document cannot read them.
+    fn comment_anchor_snapshots(&self, py: Python<'_>) -> Option<CommentAnchorSnapshots> {
+        let anchors = self.inner.comment_anchors().ok()?;
+        let snapshots = if anchors.values().any(|anchor| anchor.range().is_some()) {
+            self.inner.story_item_snapshots().ok()?
+        } else {
+            Vec::new()
+        };
+        anchors
+            .iter()
+            .map(|(id, anchor)| {
+                let range = anchor
+                    .range()
+                    .map(|range| self.story_run_range_snapshot(py, range, &snapshots))
+                    .transpose()
+                    .ok()?;
+                Some((*id, (anchor.text().to_owned(), range)))
+            })
+            .collect()
+    }
+
     fn native_story_run_range(
         &self,
         py: Python<'_>,
@@ -2480,42 +2575,29 @@ impl PyDocument {
     }
 
     #[getter]
-    fn comments<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
-        let comments = self.inner.comments();
-        if comments.is_empty() {
-            return Ok(PyTuple::empty(py));
-        }
-        let anchors = self
+    fn comments<'py>(slf: &Bound<'py, Self>) -> PyResult<Bound<'py, PyTuple>> {
+        let py = slf.py();
+        let document = slf.borrow();
+        let lazy = std::sync::Arc::new(LazyCommentAnchors {
+            document: slf.clone().unbind(),
+            revision: document.revisions.current(),
+            anchors: std::sync::OnceLock::new(),
+        });
+        let comments = document
             .inner
-            .comment_anchors()
-            .map_err(|error| rdocx_to_pyerr(py, error))?;
-        let snapshots = if anchors.values().any(|anchor| anchor.range().is_some()) {
-            self.inner
-                .story_item_snapshots()
-                .map_err(|error| rdocx_to_pyerr(py, error))?
-        } else {
-            Vec::new()
-        };
-        let comments = comments
+            .comments()
             .into_iter()
-            .map(|comment| {
-                let anchor = anchors.get(&comment.id());
-                Ok(PyComment {
-                    id: comment.id(),
-                    author: comment.author().map(str::to_owned),
-                    initials: comment.initials().map(str::to_owned),
-                    date: comment.date().map(str::to_owned),
-                    text: comment.text(),
-                    parent_id: comment.parent_id(),
-                    resolved: comment.resolved(),
-                    anchor_text: anchor.map(|anchor| anchor.text().to_owned()),
-                    anchor: anchor
-                        .and_then(rdocx::CommentAnchor::range)
-                        .map(|range| self.story_run_range_snapshot(py, range, &snapshots))
-                        .transpose()?,
-                })
+            .map(|comment| PyComment {
+                id: comment.id(),
+                author: comment.author().map(str::to_owned),
+                initials: comment.initials().map(str::to_owned),
+                date: comment.date().map(str::to_owned),
+                text: comment.text(),
+                parent_id: comment.parent_id(),
+                resolved: comment.resolved(),
+                anchor: CommentAnchorSource::Document(lazy.clone()),
             })
-            .collect::<PyResult<Vec<_>>>()?;
+            .collect::<Vec<_>>();
         PyTuple::new(py, comments)
     }
 

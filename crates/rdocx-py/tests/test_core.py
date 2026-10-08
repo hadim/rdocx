@@ -3195,6 +3195,16 @@ def test_comment_anchor_reads_through_google_content_controls():
         None,
     )
     assert [comment.resolved for comment in document.comments] == [False] * 4
+    # Anchors are read on first access, at the revision of the listing.
+    listed = document.comments
+    document.add_paragraph("A structural change.")
+    with pytest.raises(rdocx.StaleElementError, match="document.comments"):
+        listed[0].anchor_text
+    read = document.comments
+    assert read[1].anchor_text == comments[1].anchor_text
+    document.add_paragraph("Another change.")
+    assert read[1].anchor_text == comments[1].anchor_text
+    anchor = document.comments[1].anchor
 
     # The anchor is the range add_comment takes.
     copy = document.add_comment(anchor, author="B", text="Same range")

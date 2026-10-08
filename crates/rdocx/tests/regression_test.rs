@@ -3037,6 +3037,54 @@ mod comment_anchors {
         format!(r#"<w:p><w:r><w:t>{text}</w:t></w:r></w:p>"#)
     }
 
+    /// A document with `body` and a definition for each of comments `ids`.
+    fn with_comments(body: &str, ids: &[i32]) -> Document {
+        let mut seed = Document::new();
+        seed.add_paragraph("seed");
+        let mut package = OpcPackage::from_reader(Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        package.set_part(
+            "/word/document.xml",
+            super::wrap_word_body(body).into_bytes(),
+        );
+        let comments = ids
+            .iter()
+            .map(|id| {
+                format!(
+                    r#"<w:comment w:id="{id}" w:author="A"><w:p><w:r><w:t>Comment {id}</w:t></w:r></w:p></w:comment>"#
+                )
+            })
+            .collect::<String>();
+        package.set_part(
+            "/word/comments.xml",
+            format!(
+                r#"<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">{comments}</w:comments>"#
+            )
+            .into_bytes(),
+        );
+        package
+            .get_or_create_part_rels("/word/document.xml")
+            .add(COMMENTS_TYPE, "comments.xml");
+        package.content_types.add_override(
+            "/word/comments.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
+        );
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(bytes.get_ref()).unwrap()
+    }
+
+    /// Count the start markers, end markers and references of comment `id`
+    /// in the saved main document.
+    fn marker_counts(document: &mut Document, id: i32) -> [usize; 3] {
+        let body = part(document, "/word/document.xml");
+        [
+            format!(r#"<w:commentRangeStart w:id="{id}"/>"#),
+            format!(r#"<w:commentRangeEnd w:id="{id}"/>"#),
+            format!(r#"<w:commentReference w:id="{id}"/>"#),
+        ]
+        .map(|marker| body.matches(&marker).count())
+    }
+
     fn cell(paragraph: &str) -> String {
         format!(r#"<w:tc><w:tcPr><w:tcW w:w="4000" w:type="dxa"/></w:tcPr>{paragraph}</w:tc>"#)
     }
@@ -3199,13 +3247,13 @@ mod comment_anchors {
     fn assert_consistent(document: &mut Document) {
         let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
         assert_eq!(reopened.unanchored_comments().unwrap(), Vec::<i32>::new());
-        let rows = ids(&reopened).len();
-        assert_eq!(
-            part(document, "/word/commentsExtended.xml")
-                .matches("<w15:commentEx ")
-                .count(),
-            rows
-        );
+        let extended = part(document, "/word/commentsExtended.xml");
+        if !extended.is_empty() {
+            assert_eq!(
+                extended.matches("<w15:commentEx ").count(),
+                ids(&reopened).len()
+            );
+        }
         let body = part(document, "/word/document.xml");
         assert!(
             !body.contains("<w:sdtContent></w:sdtContent>") && !body.contains("<w:sdtContent/>"),
@@ -3300,10 +3348,12 @@ mod comment_anchors {
             StoryKind::TableCell
         );
 
-        // A reference without a range reads as empty text, no marker as none.
-        let mut document = super::document_with_content_controls(&super::wrap_word_body(
-            r#"<w:p><w:r><w:t>Point</w:t></w:r><w:r><w:commentReference w:id="0"/></w:r></w:p>"#,
-        ));
+        // A reference without a range reads as empty text, no marker as none,
+        // and markers of an id comments.xml does not define are left out.
+        let document = with_comments(
+            r#"<w:p><w:r><w:t>Point</w:t></w:r><w:r><w:commentReference w:id="0"/></w:r></w:p><w:p><w:commentRangeStart w:id="5"/><w:r><w:t>Stray</w:t></w:r><w:commentRangeEnd w:id="5"/></w:p>"#,
+            &[0, 7],
+        );
         assert_eq!(anchor_text(&document, 0).as_deref(), Some(""));
         assert!(
             document
@@ -3314,7 +3364,138 @@ mod comment_anchors {
                 .is_none()
         );
         assert_eq!(anchor_text(&document, 7), None);
-        document.add_paragraph("unchanged");
+        assert_eq!(anchor_text(&document, 5), None);
+        assert_eq!(document.unanchored_comments().unwrap(), [7]);
+
+        // Markers inside a tracked deletion anchor where the deleted runs
+        // were, with no text, and count as an anchor.
+        let document = with_comments(
+            r#"<w:p><w:r><w:t xml:space="preserve">Kept </w:t></w:r><w:del w:id="9" w:author="A"><w:commentRangeStart w:id="0"/><w:r><w:delText>gone</w:delText></w:r><w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r></w:del></w:p>"#,
+            &[0],
+        );
+        let anchor = document.comment_anchor(0).unwrap().unwrap();
+        let range = anchor.range().unwrap();
+        assert_eq!(
+            (anchor.text(), range.start.run_index, range.end.run_index),
+            ("", 1, 1)
+        );
+        assert_eq!(anchor.reference().unwrap().run_index, 1);
+        assert!(document.unanchored_comments().unwrap().is_empty());
+    }
+
+    #[test]
+    fn anchors_follow_the_paragraph_model_around_fields() {
+        let mut document = with_comments(
+            r#"<w:p><w:r><w:t xml:space="preserve">Page </w:t></w:r><w:commentRangeStart w:id="0"/><w:fldSimple w:instr="PAGE"><w:r><w:t>7</w:t></w:r></w:fldSimple><w:r><w:t xml:space="preserve"> of </w:t></w:r><w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r><w:r><w:t>doc</w:t></w:r></w:p><w:p><w:commentRangeStart w:id="1"/><w:r><w:t xml:space="preserve">See </w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>REF x</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>Result</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:commentRangeEnd w:id="1"/><w:r><w:commentReference w:id="1"/></w:r><w:r><w:t xml:space="preserve"> tail</w:t></w:r></w:p>"#,
+            &[0, 1],
+        );
+        assert_eq!(anchor_text(&document, 0).as_deref(), Some("7 of "));
+        assert_eq!(anchor_text(&document, 1).as_deref(), Some("See Result"));
+        // Each range is a range of the same model, so it moves another comment
+        // onto the same text.
+        for (moved, onto, text) in [(1, 0, "7 of "), (0, 1, "7 of ")] {
+            let range = document
+                .comment_anchor(onto)
+                .unwrap()
+                .unwrap()
+                .range()
+                .unwrap()
+                .clone();
+            document.move_comment(moved, range).unwrap();
+            assert_eq!(anchor_text(&document, moved).as_deref(), Some(text));
+        }
+        assert_eq!(document.paragraph(0).unwrap().text(), "Page 7 of doc");
+        assert_eq!(document.paragraph(1).unwrap().text(), "See Result tail");
+    }
+
+    #[test]
+    fn markers_between_blocks_anchor_and_survive_removals() {
+        // Word writes the start of a comment on a table before the table.
+        let table = r#"<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>Cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#;
+        let body = format!(
+            r#"{}<w:commentRangeStart w:id="0"/>{table}<w:p><w:r><w:t>After table</w:t></w:r><w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r></w:p>{}"#,
+            plain_paragraph("Before"),
+            plain_paragraph("Tail"),
+        );
+        let document = with_comments(&body, &[0]);
+        assert_eq!(anchor_text(&document, 0).as_deref(), Some("After table"));
+
+        for pop in [false, true] {
+            let mut document = with_comments(&body, &[0]);
+            if pop {
+                let location = body_location(&document, 3);
+                document.remove_content_at(&location).unwrap();
+            } else {
+                assert!(document.remove_content(3));
+            }
+            assert_eq!(ids(&document), [0], "pop: {pop}");
+            assert_eq!(marker_counts(&mut document, 0), [1, 1, 1], "pop: {pop}");
+            assert_consistent(&mut document);
+        }
+
+        // A lost start before a table goes between the blocks, so the range
+        // keeps the table.
+        let body = format!(
+            r#"{}<w:p><w:commentRangeStart w:id="0"/><w:r><w:t>Start</w:t></w:r></w:p>{table}<w:p><w:r><w:t>End</w:t></w:r><w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r></w:p>"#,
+            plain_paragraph("Before"),
+        );
+        let mut document = with_comments(&body, &[0]);
+        assert!(document.remove_content(1));
+        let xml = part(&mut document, "/word/document.xml");
+        assert!(
+            xml.contains(r#"<w:commentRangeStart w:id="0"/><w:tbl>"#),
+            "{xml}"
+        );
+        assert_eq!(anchor_text(&document, 0).as_deref(), Some("End"));
+        assert_consistent(&mut document);
+    }
+
+    #[test]
+    fn markers_inside_insertions_and_hyperlinks_move_and_cut_whole() {
+        for body in [
+            r#"<w:p><w:r><w:t xml:space="preserve">Kept </w:t></w:r><w:ins w:id="9" w:author="A"><w:commentRangeStart w:id="0"/><w:r><w:t>inserted</w:t></w:r><w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r></w:ins></w:p><w:p><w:r><w:t>Target</w:t></w:r></w:p>"#,
+            r#"<w:p><w:hyperlink w:anchor="x"><w:commentRangeStart w:id="0"/><w:r><w:t>link</w:t></w:r><w:commentRangeEnd w:id="0"/></w:hyperlink><w:r><w:commentReference w:id="0"/></w:r></w:p><w:p><w:r><w:t>Target</w:t></w:r></w:p>"#,
+        ] {
+            let mut document = with_comments(body, &[0]);
+            document.move_comment_to_text(0, "Target", 0).unwrap();
+            assert_eq!(marker_counts(&mut document, 0), [1, 1, 1], "{body}");
+            assert_eq!(anchor_text(&document, 0).as_deref(), Some("Target"));
+            let xml = part(&mut document, "/word/document.xml");
+            assert!(
+                !xml.contains("<w:r></w:r>") && !xml.contains("<w:r/>"),
+                "{xml}"
+            );
+            assert!(document.remove_comment(0).unwrap());
+            assert_eq!(marker_counts(&mut document, 0), [0, 0, 0], "{body}");
+        }
+
+        // A range that starts inside an insertion and loses its end keeps one
+        // start marker, and one that loses that start gets a single new one.
+        let body = r#"<w:p><w:r><w:t>A</w:t></w:r><w:ins w:id="9" w:author="A"><w:commentRangeStart w:id="0"/><w:r><w:t>ins</w:t></w:r></w:ins></w:p><w:p><w:r><w:t>B</w:t></w:r></w:p><w:p><w:hyperlink w:anchor="x"><w:r><w:t>C</w:t></w:r><w:commentRangeEnd w:id="0"/></w:hyperlink><w:r><w:commentReference w:id="0"/></w:r></w:p>"#;
+        for (removed, text) in [(2, "ins\nB"), (0, "B\nC")] {
+            let mut document = with_comments(body, &[0]);
+            assert!(document.remove_content(removed));
+            assert_eq!(marker_counts(&mut document, 0), [1, 1, 1], "{removed}");
+            assert_eq!(anchor_text(&document, 0).as_deref(), Some(text));
+            assert_consistent(&mut document);
+        }
+    }
+
+    #[test]
+    fn a_popped_fragment_keeps_no_empty_reference_run() {
+        let body = r#"<w:p><w:commentRangeStart w:id="0"/><w:r><w:t>Start</w:t></w:r><w:r><w:commentReference w:id="9"/></w:r></w:p><w:p><w:r><w:t>End</w:t></w:r><w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r></w:p>"#;
+        let mut document = with_comments(body, &[0]);
+        let location = body_location(&document, 1);
+        let fragment = document.remove_content_at(&location).unwrap();
+        let end = body_location(&document, 1);
+        document.insert_content(&end, fragment).unwrap();
+        let xml = part(&mut document, "/word/document.xml");
+        assert!(
+            !xml.contains("<w:r></w:r>") && !xml.contains("<w:r/>"),
+            "{xml}"
+        );
+        assert_eq!(marker_counts(&mut document, 0), [1, 1, 1]);
+        assert_eq!(anchor_text(&document, 0).as_deref(), Some("Start"));
     }
 
     #[test]
@@ -3354,25 +3535,10 @@ mod comment_anchors {
 
     #[test]
     fn removing_a_row_refuses_to_cut_a_range_that_continues_outside_it() {
-        let mut document = super::document_with_content_controls(&super::wrap_word_body(
+        let mut document = with_comments(
             r#"<w:p><w:commentRangeStart w:id="0"/><w:r><w:t>Before the table</w:t></w:r></w:p><w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>Top</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>Cut</w:t></w:r><w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r></w:p></w:tc></w:tr></w:tbl>"#,
-        ));
-        let mut package =
-            OpcPackage::from_reader(Cursor::new(document.to_bytes().unwrap())).unwrap();
-        package.set_part(
-            "/word/comments.xml",
-            br#"<w:comments xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:comment w:id="0" w:author="A"><w:p><w:r><w:t>Across</w:t></w:r></w:p></w:comment></w:comments>"#.to_vec(),
+            &[0],
         );
-        package
-            .get_or_create_part_rels("/word/document.xml")
-            .add(COMMENTS_TYPE, "comments.xml");
-        package.content_types.add_override(
-            "/word/comments.xml",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml",
-        );
-        let mut bytes = Cursor::new(Vec::new());
-        package.write_to(&mut bytes).unwrap();
-        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
         let before = document.to_bytes().unwrap();
         let error = document.remove_table_row(0, 1).unwrap_err().to_string();
         assert!(
@@ -3474,6 +3640,9 @@ mod comment_anchors {
             anchor_text(&document, root.id()).as_deref(),
             Some("Delta paragraph carries a comment that asks to delete it.")
         );
+        // The restored thread gets its rows in commentsIds.xml again.
+        let comments_ids = part(&mut document, "/word/commentsIds.xml");
+        assert_eq!(comments_ids.matches("<w16cid:commentId ").count(), 6);
         assert_consistent(&mut document);
 
         // Another document takes the thread too.
