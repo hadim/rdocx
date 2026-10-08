@@ -409,6 +409,22 @@ comment positions accept.
 `Document.add_comment_on_text` comments on the zero-based occurrence of an
 exact text in the main story without run index bookkeeping. The original
 direct-body constructors and call shape remain unchanged.
+`Comment.anchor_text` is the accepted-view text of the comment's range, `""`
+for a comment with a reference and no range, and `None` for a comment with no
+marker of its own, such as a reply that follows its thread root.
+`Comment.anchor` is the range as a `StoryRunRange`, or `None`. Both are read
+on first access, once for every comment of one `Document.comments` listing,
+at the revision of that listing: a later structural change makes the first
+access raise `StaleElementError`, and a document whose anchors cannot be read
+gives `None` rather than raising. A position inside a block content control
+has the two-segment path, the control's direct body index, and no text.
+`Comment` equality covers the thread fields, not the anchor.
+`Document.move_comment` takes either range form and
+`Document.move_comment_to_text` mirrors `add_comment_on_text`. Both keep the
+comment's id, text, replies and resolved state, refuse a reply id, and advance
+the revision once. `remove_content`, `pop_content` and `Table.remove_row`
+never leave a comment without an anchor, and `insert_content` restores the
+threads a popped fragment carries.
 `Comment`, `ComparisonDiagnostic`, `BoundingBox`, `LayoutFragment`,
 `LayoutPage`, `TocRebuildReport`, and `Revision` are frozen typed snapshots.
 `Document.revisions` lists the revisions of every story that the accept and

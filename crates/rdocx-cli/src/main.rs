@@ -302,6 +302,29 @@ enum CommentCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Move one comment thread onto a piece of text, keeping its id, replies
+    /// and resolved state
+    Move {
+        /// Path to the DOCX file
+        file: PathBuf,
+        /// Comment id of a thread root
+        #[arg(long)]
+        id: i32,
+        /// Anchor the comment on this literal, case-sensitive text of the
+        /// main story
+        #[arg(long)]
+        anchor: String,
+        /// Zero-based occurrence of the --anchor text in document order,
+        /// 0 when absent
+        #[arg(long, default_value = "0")]
+        occurrence: usize,
+        /// Output DOCX file
+        #[arg(long, short = 'o')]
+        output: PathBuf,
+        /// Output the operation record as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Remove one comment and its replies
     Remove {
         /// Path to the DOCX file
@@ -582,6 +605,14 @@ fn run_cli() {
                 output,
                 json,
             } => commands::comment_resolve(&file, id, &output, json),
+            CommentCommand::Move {
+                file,
+                id,
+                anchor,
+                occurrence,
+                output,
+                json,
+            } => commands::comment_move(&file, id, &anchor, occurrence, &output, json),
             CommentCommand::Remove {
                 file,
                 id,

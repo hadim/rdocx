@@ -221,6 +221,9 @@ def exercise_rdocx_types(path: Path) -> None:
     document.set_hyperlink_url(hyperlinks[0], "https://example.org/new")
     document.remove_hyperlink(hyperlinks[0])
     resolved: bool = document.resolve_comment(comment_id)
+    document.move_comment(comment_id, story_range)
+    document.move_comment(comment_id, range_)
+    document.move_comment_to_text(comment_id, "review", occurrence=0)
     removed: bool = document.remove_comment(reply_id)
     diagnostics: tuple[ComparisonDiagnostic, ...] = document.compare(
         opened, author="Ada", timestamp="2026-09-14T09:00:00Z"
@@ -310,6 +313,8 @@ def exercise_rdocx_types(path: Path) -> None:
         bounds: BoundingBox = fragments[0].bounds
         assert_type(bounds.width, float)
     assert_type(comments[0].date, str | None)
+    assert_type(comments[0].anchor_text, str | None)
+    assert_type(comments[0].anchor, StoryRunRange | None)
     assert_type(sections[0].page_width, int | None)
     assert_type(styles[0].style_type, str)
     assert_type(stories[0].owner_index, int)

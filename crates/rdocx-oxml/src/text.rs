@@ -4422,6 +4422,55 @@ fn append_accepted_text(paragraph: &CT_P, output: &mut String) {
     }
 }
 
+/// Append the text that [`append_accepted_text`] reads for the accepted-view
+/// run boundaries `range`. A smart tag, custom XML element or simple field
+/// result between two runs counts when its boundary is in the range.
+fn append_accepted_text_between(
+    paragraph: &CT_P,
+    range: std::ops::Range<usize>,
+    output: &mut String,
+) {
+    let wrapper_text = |raw: &[u8], prefixes: &[String], output: &mut String| {
+        if let Some(content) = run_wrapper_paragraph(raw, prefixes) {
+            append_accepted_text(&content, output);
+        }
+    };
+    let mut index = 0usize;
+    for boundary in 0..=paragraph.runs.len() {
+        for owner in boundary_owners(paragraph, boundary) {
+            let mut runs = Vec::new();
+            match owner {
+                BoundaryOwner::ContentControl(control) => {
+                    append_accepted_control_runs(&paragraph.content_controls[control].3, &mut runs);
+                }
+                BoundaryOwner::Revision(revision) => {
+                    append_accepted_revision_runs(&paragraph.revisions[revision].2, &mut runs);
+                }
+                BoundaryOwner::Wrapper(wrapper) => {
+                    if range.contains(&index) {
+                        wrapper_text(&paragraph.extra_xml[wrapper].1, &["w".to_owned()], output);
+                    }
+                }
+            }
+            for run in runs {
+                if range.contains(&index) {
+                    output.push_str(&run.text());
+                }
+                index += 1;
+            }
+        }
+        if let Some(run) = paragraph.runs.get(boundary) {
+            if range.contains(&index) {
+                match simple_field_source(run) {
+                    Some((raw, prefixes)) => wrapper_text(raw, prefixes, output),
+                    None => output.push_str(&run.text()),
+                }
+            }
+            index += 1;
+        }
+    }
+}
+
 fn accepted_paragraph_run_paths(paragraph: &CT_P) -> Vec<AcceptedRunPath> {
     let mut output = Vec::new();
     let mut prefix = Vec::new();
@@ -4746,6 +4795,18 @@ impl CT_P {
     pub fn accepted_text(&self) -> String {
         let mut text = String::new();
         append_accepted_text(self, &mut text);
+        text
+    }
+
+    /// Return the text that [`Self::accepted_text`] reads between the
+    /// accepted-view run boundaries `start` and `end`, which count the runs
+    /// of [`Self::accepted_bookmark_runs`]. A simple field reads as its
+    /// result, and a smart tag or custom XML element counts when its boundary
+    /// is at or after `start` and before `end`.
+    #[doc(hidden)]
+    pub fn accepted_text_between(&self, start: usize, end: usize) -> String {
+        let mut text = String::new();
+        append_accepted_text_between(self, start..end, &mut text);
         text
     }
 

@@ -65,8 +65,9 @@ with open("report.pdf", "wb") as output:
 - Complete paragraph and run formatting, multilingual and vertical typography,
   conditional and floating tables, section semantics, settings, fields, forms,
   equations, drawings, comments, and metadata.
-- Tracked comparison, main-body comment threads, bookmarks, revision
-  resolution, and TOC insertion and rebuilding.
+- Tracked comparison, main-body comment threads with their anchor text and
+  range, thread moves, bookmarks, revision resolution, and TOC insertion and
+  rebuilding.
 - Deterministic layout fragments, page geometry, and PDF, PDF/A, SVG, PNG,
   JPEG, and TIFF output through the native document engine, with caller fonts
   or a font directory for PDF. PDF and raster methods accept keyword-only
