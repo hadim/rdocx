@@ -1,6 +1,6 @@
 use oxml_py_support::{ContentPath, PathSeg};
 use pyo3::exceptions::{
-    PyIndexError, PyKeyError, PyNotImplementedError, PyTypeError, PyValueError,
+    PyIndexError, PyKeyError, PyNotImplementedError, PyTypeError, PyUserWarning, PyValueError,
 };
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyList, PySlice, PyTuple};
@@ -546,23 +546,32 @@ impl PyTable {
     /// name.
     #[setter]
     fn set_style(&self, py: Python<'_>, value: &str) -> PyResult<()> {
-        // Word ignores a style reference that names no defined style, so an
-        // unknown value raises instead of writing one.
-        let style = style_id_of_type(
+        // Word draws a table whose style the package does not define with
+        // the default table style. python-docx writes such a reference (its
+        // template defines Word's built-in table styles), so an unknown value
+        // is written as given and a UserWarning says it will not show.
+        let style = match style_id_of_type(
             &self.document.borrow(py).inner,
             value,
             rdocx::StyleType::Table,
-        )
-        .map_err(|error| {
-            if error.is_instance_of::<PyKeyError>(py) {
-                PyKeyError::new_err(format!(
-                    "no table style is named or identified by '{value}', define it first with \
-                     Document.add_style(..., style_type=\"table\") or pick one of Document.styles"
-                ))
-            } else {
-                error
+        ) {
+            Ok(style) => style,
+            Err(error) if error.is_instance_of::<PyKeyError>(py) => {
+                PyErr::warn(
+                    py,
+                    &py.get_type::<PyUserWarning>(),
+                    &std::ffi::CString::new(format!(
+                        "no table style is named or identified by '{value}' in this document: \
+                         Word and Google Docs draw the table with the default table style. \
+                         Define it with Document.add_style(..., style_type=\"table\") or pick \
+                         one of Document.styles"
+                    ))?,
+                    1,
+                )?;
+                value.to_owned()
             }
-        })?;
+            Err(error) => return Err(error),
+        };
         self.edit(py, |table| {
             table.set_style(&style);
             Ok(())

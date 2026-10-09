@@ -1095,7 +1095,8 @@ def test_table_look_layout_and_style_by_name():
     assert '<w:tblLayout w:type="fixed"/>' in xml
     assert 'w:noVBand="1"' in xml
 
-    # A table style is found by name, and a value naming no style stays an ID.
+    # A table style is found by name, and a value naming no style stays an ID
+    # with a warning, as python-docx writes it.
     style_ids = {style.name: style.style_id for style in reopened.styles}
     table_styles = [
         style for style in reopened.styles if style.style_type == "table"
@@ -1103,8 +1104,9 @@ def test_table_look_layout_and_style_by_name():
     if table_styles:
         table.style = table_styles[0].name
         assert table.style == table_styles[0].style_id
-    with pytest.raises(KeyError, match="add_style"):
+    with pytest.warns(UserWarning, match="add_style"):
         table.style = "NoSuchTableStyle"
+    assert table.style == "NoSuchTableStyle"
     if "Normal" in style_ids:
         with pytest.raises(ValueError, match="not a table style"):
             table.style = "Normal"
