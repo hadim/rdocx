@@ -895,4 +895,4 @@ implementation or acceptance is claimed by this intake.
 
 | F-X198 | S91 | M | 2 | not recorded | 2026-10-09 | Dependency-prefix completion, qualified paired-box/cell atomic refusal,40native/106installed controls, clean production/integration reviews, recovered unchanged consumer and remaining targets, hash49 unchanged, final actual archives/source bytes. Full sprint gate remains due |
 
-| F-X193 | S91 | S | 1 | not recorded | 2026-10-09 | Scoped completion, PR294 semantic mark inheritance, clean production/integration reviews, 11HTML/514library/364integration controls across qualified retries/2331regression/2doctests, policy terminal141 with unavailable tool exit, hash49 unchanged, current F-X198 archives/source congruence. Full sprint gate remains due |
+| F-X193 | S91 | S | 1 | not recorded | 2026-10-10 | Scoped completion, PR294 semantic mark inheritance, clean production/integration reviews, 11HTML/514library/364integration controls across qualified retries/2331regression/2doctests, policy terminal141 with unavailable tool exit, hash49 unchanged, current F-X198 archives/source congruence. Full sprint gate remains due |

@@ -697,3 +697,32 @@ resource rendered each string, glyph outlines or caller-symbol precedence.
 Those exact native provider obligations remain explicit, as does the failed
 movie decoded-frame qualification. Neither static checks nor inventory-only
 font names may become full-acceptance credit.
+
+## Source-built runner provenance preparation
+
+Root read the full revised runner at
+/private/tmp/S91-F-X211-corpus-runner-prep-r2/runner.py, SHA256
+47c5c868f47dee23e37f0004d136b62c97a4d5592c87088c1e5d855dab297f6c.
+All six preparation artifacts authenticate and AST parsing passes. This is
+runner preparation only. No specimen, binding import, build or installation
+ran, and neither Base nor final source/environment is selected yet.
+
+Before execution, bind both families to genuinely observed source-built
+wheels from one selected exact commit. Authenticate the Git commit/tree,
+complete captured crate/Cargo/toolchain/config membership and each source
+blob before and after the observed build. Retain exact invocation, source
+root, true exits and linked build/install log paths and hashes. Compare
+installed package and extension bytes with the measured wheel. A version
+number, old normalized receipt or cryptographic correspondence alone cannot
+prove compiler input provenance. The earlier candidate314-file inventory is
+not a selected Base and must not be relabeled after199 integration.
+
+The bounded QuickTime selection attempt was interrupted before opening the
+movie. Refreshed surfaces showed no owned movie window/tab. No decoded
+frames were observed, and the UI lease is released. The retained receipt
+/private/tmp/S91-F-X211-native-movie-playback/attempt-receipt.json has SHA256
+b23993e3965079f5a89503dd0d4058303604879bb0aaa7c5fc8c7d0697e0f05b.
+This tool selection failure is not codec refusal or playback qualification.
+Preserve the separate failed AVAssetReader result. P-AREA-10 admission and
+additional native obligations still prevent a complete acceptance metric.
+R2 corpus bodies and allocation remain unchanged.

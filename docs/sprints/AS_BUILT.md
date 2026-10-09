@@ -18818,7 +18818,7 @@ No issue closure, push, main merge, tag or release occurred.
 ### F-X193, Preserve semantic mark highlights through nested HTML runs
 
 **Sprint.** S91
-**Completed.** 2026-10-09
+**Completed.** 2026-10-10
 **Size.** S, estimated1 day, actual not recorded.
 
 **What was built.** Semantic HTML mark highlights survive nested bold,
