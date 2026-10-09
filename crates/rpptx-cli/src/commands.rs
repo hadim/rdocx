@@ -1293,27 +1293,50 @@ pub struct FooterInput<'a> {
     pub skip_title: bool,
 }
 
-/// Today's UTC calendar date, from the days-since-epoch civil conversion.
-fn today_utc() -> Result<(i32, u32, u32)> {
-    let days = std::time::SystemTime::now()
+/// Today's local calendar date, as Python's `date.today()` reads it.
+///
+/// Unix asks the C library for the local time. Elsewhere it is the UTC date.
+fn today_local() -> Result<(i32, u32, u32)> {
+    let seconds = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)?
-        .as_secs() as i64
-        / 86_400
-        + 719_468;
-    let era = days.div_euclid(146_097);
-    let day_of_era = days.rem_euclid(146_097);
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_index = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
-    let month = if month_index < 10 {
-        month_index + 3
-    } else {
-        month_index - 9
-    };
-    let year = year_of_era + era * 400 + i64::from(month <= 2);
-    Ok((i32::try_from(year)?, month as u32, day as u32))
+        .as_secs();
+    #[cfg(unix)]
+    {
+        let time = libc::time_t::try_from(seconds)?;
+        // SAFETY: `localtime_r` writes only the `tm` it is given, which is
+        // fully owned here and zero-initialisable plain data.
+        let mut local: libc::tm = unsafe { std::mem::zeroed() };
+        if unsafe { libc::localtime_r(&time, &mut local) }.is_null() {
+            return Err("could not read the local date".into());
+        }
+        Ok((
+            local.tm_year + 1900,
+            u32::try_from(local.tm_mon + 1)?,
+            u32::try_from(local.tm_mday)?,
+        ))
+    }
+    #[cfg(not(unix))]
+    {
+        let days = i64::try_from(seconds / 86_400)? + 719_468;
+        let era = days.div_euclid(146_097);
+        let day_of_era = days.rem_euclid(146_097);
+        let year_of_era =
+            (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+        let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+        let month_index = (5 * day_of_year + 2) / 153;
+        let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+        let month = if month_index < 10 {
+            month_index + 3
+        } else {
+            month_index - 9
+        };
+        let year = year_of_era + era * 400 + i64::from(month <= 2);
+        Ok((
+            i32::try_from(year)?,
+            u32::try_from(month)?,
+            u32::try_from(day)?,
+        ))
+    }
 }
 
 pub fn footer(file: &Path, input: FooterInput<'_>, output: &Path, as_json: bool) -> Result<()> {
@@ -1321,7 +1344,7 @@ pub fn footer(file: &Path, input: FooterInput<'_>, output: &Path, as_json: bool)
     let date = match input.date {
         "off" => HeaderFooterDate::Off,
         "auto" => {
-            let (year, month, day) = today_utc()?;
+            let (year, month, day) = today_local()?;
             HeaderFooterDate::Automatic {
                 field_type: input.date_format.to_owned(),
                 text: rpptx::date_field_text(input.date_format, year, month, day)?,

@@ -71,7 +71,7 @@ impl TransitionKind {
                 &[Left, Up, Right, Down, LeftUp, RightUp, LeftDown, RightDown]
             }
             Self::Split => &[HorizontalOut, HorizontalIn, VerticalOut, VerticalIn],
-            Self::Zoom => &[In, Out],
+            Self::Zoom => &[Out, In],
             Self::Fade | Self::Cut | Self::Other(_) => &[],
         }
     }
@@ -228,12 +228,22 @@ impl SlideTransition {
                 .find(|parameter| parameter.name == name)
                 .map(|parameter| parameter.value.as_str())
         };
+        // An effect that names any direction attribute reads with the
+        // schema defaults for the others, so `<p:split orient="vert"/>` is
+        // vertical-out. One that names none keeps the default, `None`.
         let direction = kind.as_ref().and_then(|kind| {
+            let defaults = kind.directions().first()?.attributes();
+            if !defaults.iter().any(|(name, _)| parameter(name).is_some()) {
+                return None;
+            }
             kind.directions().iter().copied().find(|direction| {
-                direction
-                    .attributes()
-                    .iter()
-                    .all(|(name, value)| parameter(name) == Some(*value))
+                direction.attributes().iter().all(|(name, value)| {
+                    let default = defaults
+                        .iter()
+                        .find(|(default_name, _)| default_name == name)
+                        .map(|(_, value)| *value);
+                    parameter(name).or(default) == Some(*value)
+                })
             })
         });
         Self {

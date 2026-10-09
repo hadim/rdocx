@@ -843,8 +843,61 @@ where
 
 // Header and footer, transitions, masters and themes (#311).
 
+/// The index path of every shape on a slide, groups included, by shape id.
+fn shape_paths(
+    presentation: &rpptx::Presentation,
+    slide_index: usize,
+) -> std::collections::HashMap<u32, Vec<usize>> {
+    fn walk<'a>(
+        shapes: impl Iterator<Item = rpptx::ShapeRef<'a>>,
+        prefix: &[usize],
+        paths: &mut std::collections::HashMap<u32, Vec<usize>>,
+    ) {
+        for (index, shape) in shapes.enumerate() {
+            let mut path = prefix.to_vec();
+            path.push(index);
+            walk(shape.children(), &path, paths);
+            if let Some(id) = shape.non_visual_id() {
+                paths.insert(id, path);
+            }
+        }
+    }
+    let mut paths = std::collections::HashMap::new();
+    if let Some(slide) = presentation.slide(slide_index) {
+        walk(slide.shapes(), &[], &mut paths);
+    }
+    paths
+}
+
+/// Every slide's shape paths, to tell whether a header-footer edit moved any.
+pub(crate) fn all_shape_paths(
+    presentation: &rpptx::Presentation,
+) -> Vec<std::collections::HashMap<u32, Vec<usize>>> {
+    (0..presentation.len())
+        .map(|index| shape_paths(presentation, index))
+        .collect()
+}
+
+/// Whether every shape that survived an edit kept its index path. Date,
+/// footer and slide-number placeholders are appended after the other shapes,
+/// so adding them or rewriting their text leaves every held handle valid,
+/// and only removing one before another shape moves anything.
+pub(crate) fn paths_kept(
+    before: &[std::collections::HashMap<u32, Vec<usize>>],
+    after: &[std::collections::HashMap<u32, Vec<usize>>],
+) -> bool {
+    before.len() == after.len()
+        && before.iter().zip(after).all(|(before, after)| {
+            before
+                .iter()
+                .all(|(id, path)| after.get(id).is_none_or(|moved| moved == path))
+        })
+}
+
 /// Today's local date as the cached text of a `datetime1` to `datetime7` field.
-pub(crate) fn today_field_text(py: Python<'_>, field_type: &str) -> PyResult<String> {
+///
+/// `hint` names how the caller supplies the text instead for a time format.
+pub(crate) fn today_field_text(py: Python<'_>, field_type: &str, hint: &str) -> PyResult<String> {
     let today = py
         .import("datetime")?
         .getattr("date")?
@@ -854,7 +907,7 @@ pub(crate) fn today_field_text(py: Python<'_>, field_type: &str) -> PyResult<Str
     let day: u32 = today.getattr("day")?.extract()?;
     rpptx::date_field_text(field_type, year, month, day).map_err(|_| {
         PyValueError::new_err(format!(
-            "{field_type} has no date format rpptx can fill, use datetime1 to datetime7 or pass text= with the cached value"
+            "{field_type} is not a date format rpptx can fill with today's date, use datetime1 to datetime7{hint}"
         ))
     })
 }
@@ -872,7 +925,7 @@ pub(crate) fn header_footer_settings(
         None => rpptx::HeaderFooterDate::Off,
         Some("auto") => rpptx::HeaderFooterDate::Automatic {
             field_type: date_format.to_owned(),
-            text: today_field_text(py, date_format)?,
+            text: today_field_text(py, date_format, "")?,
         },
         Some(text) => rpptx::HeaderFooterDate::Fixed(text.to_owned()),
     };
@@ -886,8 +939,9 @@ pub(crate) fn header_footer_settings(
 /// One slide's date, footer and slide number, read and written live.
 ///
 /// Each assignment adds or removes the slide's own placeholders, copied from
-/// its layout, so the presentation revision advances and shape handles of
-/// the slide must be fetched again.
+/// its layout. Added placeholders go after the other shapes, so held slide
+/// and shape handles stay valid. Only removing a placeholder that other
+/// shapes follow advances the revision, which stales held handles.
 #[pyclass(name = "HeaderFooter")]
 pub struct PyHeaderFooter {
     presentation: Py<PyPresentation>,
@@ -920,12 +974,16 @@ impl PyHeaderFooter {
         let (index, mut settings) = self.current(py)?;
         change(&mut settings);
         let mut presentation = self.presentation.borrow_mut(py);
+        let before = shape_paths(&presentation.inner, index);
         presentation
             .inner
             .set_slide_header_footer(index, &settings)
             .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
-        presentation.revisions.bump();
-        self.path = presentation.revisions.capture(self.path.segs.clone());
+        let after = shape_paths(&presentation.inner, index);
+        if !paths_kept(&[before], &[after]) {
+            presentation.revisions.bump();
+            self.path = presentation.revisions.capture(self.path.segs.clone());
+        }
         Ok(())
     }
 }
@@ -1035,7 +1093,8 @@ impl PySlideTransition {
             .slide_mut(index)
             .ok_or_else(|| PyIndexError::new_err("slide index out of range"))?
             .set_transition(Some(&transition))
-            .map_err(|error| crate::rpptx_to_pyerr(py, error))
+            // The only failures are values the effect does not take.
+            .map_err(|error| PyValueError::new_err(error.to_string()))
     }
 }
 

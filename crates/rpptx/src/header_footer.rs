@@ -282,11 +282,22 @@ fn field_type(body: &CT_TextBody) -> Option<&str> {
 }
 
 /// One paragraph holding only `field`, formatted as `template`'s first one.
-fn field_paragraph(template: Option<&CT_TextBody>, field: CT_TextField) -> CT_TextParagraph {
+///
+/// The field keeps the character properties, `lang` included, of the first
+/// run or field it replaces, as PowerPoint does.
+fn field_paragraph(template: Option<&CT_TextBody>, mut field: CT_TextField) -> CT_TextParagraph {
     let mut paragraph = template
         .and_then(|body| body.paragraphs().first())
         .cloned()
         .unwrap_or_default();
+    let properties = paragraph.runs.iter().find_map(|run| match run {
+        TextRun::Run(run) => run.properties.clone(),
+        TextRun::Field(field) => field.run_properties.clone(),
+        TextRun::Break(_) => None,
+    });
+    if field.run_properties.is_none() {
+        field.run_properties = properties;
+    }
     paragraph.set_text("");
     if let Some(first) = paragraph.runs.first_mut() {
         *first = TextRun::Field(Box::new(field));
@@ -360,9 +371,17 @@ fn latent_copy(
         })
         .map_err(|error| invalid_slide_mutation("add a header or footer", error.to_string()))?;
     if from_master {
-        shape.shape_properties.transform = template.shape_properties.transform.clone();
-    }
-    if let (Some(body), Some(source)) = (shape.text_body.as_mut(), template.text_body.as_ref()) {
+        // A slide placeholder inherits only through its layout, so a copy of
+        // a master placeholder carries the master's geometry, body
+        // properties and list style itself, as its text keeps its size and
+        // alignment.
+        shape.shape_properties = template.shape_properties.clone();
+        if template.text_body.is_some() {
+            shape.text_body = template.text_body.clone();
+        }
+    } else if let (Some(body), Some(source)) =
+        (shape.text_body.as_mut(), template.text_body.as_ref())
+    {
         for (index, paragraph) in source.paragraphs().iter().enumerate() {
             if index == 0 {
                 if let Some(first) = body.paragraph_mut(0) {
@@ -556,24 +575,23 @@ impl Presentation {
         ids: &mut ShapeIdAllocator,
     ) -> Result<Vec<CT_Shape>> {
         let layout = &self.layouts[layout_index].layout;
-        let header_footer = match &layout.header_footer {
-            Some(header_footer) => header_footer.clone(),
-            None => {
-                // A layout reached without a master relationship has no
-                // master flags, so its new slides receive none.
-                let layout_part = &self.layouts[layout_index].part_name;
-                let Some(master_part) =
-                    related_internal_part(&self.package, layout_part, rel_types::SLIDE_MASTER)?
-                else {
-                    return Ok(Vec::new());
-                };
-                let master = CT_SlideMaster::from_xml(required_part(&self.package, &master_part)?)
-                    .map_err(|error| malformed(&master_part, error))?;
-                match master.header_footer {
-                    Some(header_footer) => header_footer,
-                    None => return Ok(Vec::new()),
-                }
-            }
+        // A layout reached without a master relationship has no master flags
+        // or placeholders to fall back on.
+        let layout_part = &self.layouts[layout_index].part_name;
+        let master =
+            match related_internal_part(&self.package, layout_part, rel_types::SLIDE_MASTER)? {
+                Some(master_part) => Some(
+                    CT_SlideMaster::from_xml(required_part(&self.package, &master_part)?)
+                        .map_err(|error| malformed(&master_part, error))?,
+                ),
+                None => None,
+            };
+        let Some(header_footer) = layout.header_footer.clone().or_else(|| {
+            master
+                .as_ref()
+                .and_then(|master| master.header_footer.clone())
+        }) else {
+            return Ok(Vec::new());
         };
         let mut shapes = Vec::new();
         for kind in LATENT_KINDS {
@@ -582,11 +600,17 @@ impl Presentation {
                 PhType::Footer => header_footer.footer_enabled(),
                 _ => header_footer.slide_number_enabled(),
             };
-            if let Some(template) =
-                find_latent(&layout.common_slide_data.shape_tree.children, &kind)
+            // As set_header_footer does, a layout without the placeholder
+            // falls back on the master's.
+            let template = match &master {
+                Some(master) => latent_template(layout, master, &kind),
+                None => find_latent(&layout.common_slide_data.shape_tree.children, &kind)
+                    .map(|shape| (shape, false)),
+            };
+            if let Some((template, from_master)) = template
                 && enabled
             {
-                let mut copy = latent_copy(template, false, &kind, ids)?;
+                let mut copy = latent_copy(template, from_master, &kind, ids)?;
                 if kind == PhType::SlideNumber {
                     let body = copy.text_body.get_or_insert_with(CT_TextBody::new);
                     fill_latent_body(body, &LatentContent::SlideNumber)?;
@@ -704,6 +728,9 @@ impl Presentation {
                 .map_err(|error| malformed(&record.part_name, error))?;
             staged.package.set_part(&record.part_name, xml);
         }
+        staged
+            .presentation
+            .set_show_special_placeholders_on_title_slide(hide_on_title.then_some(false));
         for (master_part, mut master) in masters {
             master.header_footer = Some(header_footer_flags(settings));
             update_templates(&mut master.common_slide_data.shape_tree.children, settings)?;

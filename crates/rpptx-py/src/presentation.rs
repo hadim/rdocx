@@ -397,13 +397,18 @@ impl PyPresentation {
     /// PowerPoint's Header and Footer dialog with Apply to All (rpptx
     /// extension).
     ///
-    /// `date` is `None`, fixed text, or `"auto"` for a `date_format` field
-    /// PowerPoint refreshes, cached with today's date. With `hide_on_title`,
-    /// slides on a title layout show none of them. Each slide owns the
+    /// Unlike the opt-in `rpptx footer` flags, the slide number and
+    /// `hide_on_title` default to on, the usual corporate deck. `date` is
+    /// `None`, fixed text, or `"auto"` for a `date_format` field
+    /// PowerPoint refreshes, cached with today's local date. With
+    /// `hide_on_title`, slides on a title layout show none of them and
+    /// `showSpecialPlsOnTitleSld="0"` records it. Each slide owns the
     /// placeholders it shows, copied from its layout, which is what both
-    /// PowerPoint and Google Slides display, and the masters and layouts
-    /// get matching `p:hf` flags so slides added later follow. The revision
-    /// advances, so held shape handles must be fetched again.
+    /// PowerPoint and Google Slides display, and the masters and layouts get
+    /// matching `p:hf` flags so slides added later follow. New placeholders
+    /// go after the other shapes, so held handles stay valid unless a
+    /// removed placeholder was followed by other shapes, which advances the
+    /// revision.
     #[pyo3(signature = (slide_number = true, footer = None, date = None, hide_on_title = true, date_format = "datetime1"))]
     fn set_header_footer(
         &mut self,
@@ -416,10 +421,13 @@ impl PyPresentation {
     ) -> PyResult<()> {
         let settings =
             crate::slide::header_footer_settings(py, slide_number, footer, date, date_format)?;
+        let before = crate::slide::all_shape_paths(&self.inner);
         self.inner
             .set_header_footer(&settings, hide_on_title)
             .map_err(|error| rpptx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        if !crate::slide::paths_kept(&before, &crate::slide::all_shape_paths(&self.inner)) {
+            self.revisions.bump();
+        }
         Ok(())
     }
 

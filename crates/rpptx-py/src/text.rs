@@ -648,9 +648,11 @@ impl PyParagraph {
         let index = self.validate(py)?;
         let text = match text {
             Some(text) => Some(text),
-            None if field_type.starts_with("datetime") => {
-                Some(crate::slide::today_field_text(py, field_type)?)
-            }
+            None if field_type.starts_with("datetime") => Some(crate::slide::today_field_text(
+                py,
+                field_type,
+                " or pass text= with the cached value",
+            )?),
             None => None,
         };
         let mut presentation = self.presentation.borrow_mut(py);

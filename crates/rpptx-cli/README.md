@@ -61,9 +61,11 @@ theirs. `inspect --json` adds them as `masters`, where a missing `p:hf` is
 
 `footer` sets the slide number, footer and date of every slide, as PowerPoint's
 Header and Footer dialog with Apply to All. `--date` takes `off`, the default,
-`auto` for a field PowerPoint refreshes, cached with today's UTC date in the
+`auto` for a field PowerPoint refreshes, cached with today's local date in the
 `--date-format` from `datetime1` to `datetime7`, or fixed text. `--skip-title`
-leaves slides on a title layout without them. Each slide owns the placeholders
+leaves slides on a title layout without them. Every flag is opt-in, where
+Python's `set_header_footer` turns the slide number and the title-slide skip on
+by default. Each slide owns the placeholders
 it shows, which is what PowerPoint and Google Slides display, and the masters
 and layouts receive matching `p:hf` flags so slides added later follow.
 

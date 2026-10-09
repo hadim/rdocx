@@ -28215,6 +28215,140 @@ mod header_footer_theme_and_transitions {
         assert!(!title.slide_number && !title.footer && !title.date);
     }
 
+    /// The default deck with one layout part rewritten by `edit`.
+    fn deck_with_layout(part: &str, edit: impl Fn(&str) -> String) -> Presentation {
+        let bytes = deck().to_bytes().unwrap();
+        let mut package = OpcPackage::from_reader(Cursor::new(&bytes)).unwrap();
+        let xml = String::from_utf8(package.get_part(part).unwrap().to_vec()).unwrap();
+        package.set_part(part, edit(&xml).into_bytes());
+        let mut output = Cursor::new(Vec::new());
+        package.write_to(&mut output).unwrap();
+        Presentation::from_bytes(output.get_ref()).unwrap()
+    }
+
+    fn latent_shape_xml(slide: &str, ph_type: &str) -> String {
+        let marker = format!("type=\"{ph_type}\"");
+        slide
+            .split("<p:sp>")
+            .find(|shape| shape.contains(&marker))
+            .unwrap_or_else(|| panic!("no {ph_type} placeholder in {slide}"))
+            .to_owned()
+    }
+
+    #[test]
+    fn a_layout_without_a_slide_number_falls_back_on_the_whole_master_placeholder() {
+        let layout = "/ppt/slideLayouts/slideLayout2.xml";
+        let mut presentation = deck_with_layout(layout, |xml| {
+            let start = xml.find("<p:sp><p:nvSpPr><p:cNvPr id=\"6\"").unwrap();
+            let end = start + xml[start..].find("</p:sp>").unwrap() + "</p:sp>".len();
+            assert!(xml[start..end].contains("type=\"sldNum\""));
+            format!("{}{}", &xml[..start], &xml[end..])
+        });
+        presentation.set_header_footer(&numbered(), true).unwrap();
+        presentation.add_slide(1).unwrap();
+        let bytes = presentation.to_bytes().unwrap();
+        // Slide 2 existed before the call and slide 5 was added after it.
+        for part in ["/ppt/slides/slide2.xml", "/ppt/slides/slide5.xml"] {
+            let number = latent_shape_xml(&part_text(&bytes, part), "sldNum");
+            for expected in [
+                "<a:xfrm>",
+                "algn=\"r\"",
+                "sz=\"1200\"",
+                "anchor=\"ctr\"",
+                "type=\"slidenum\"",
+            ] {
+                assert!(number.contains(expected), "{part} {expected}: {number}");
+            }
+        }
+        let texts = slide_texts(&presentation);
+        assert!(texts[4].contains(&"5".to_owned()), "{:?}", texts[4]);
+    }
+
+    #[test]
+    fn layout_children_keep_the_schema_sequence_and_fields_keep_their_language() {
+        // CT_SlideLayout is cSld, clrMapOvr, transition, timing, hf, extLst.
+        let layout = "/ppt/slideLayouts/slideLayout2.xml";
+        let mut presentation = deck_with_layout(layout, |xml| {
+            xml.replace(
+                "</p:clrMapOvr>",
+                "</p:clrMapOvr><p:transition spd=\"slow\"><p:fade/></p:transition><p:timing><p:tnLst><p:par><p:cTn id=\"1\" dur=\"indefinite\" restart=\"never\" nodeType=\"tmRoot\"/></p:par></p:tnLst></p:timing>",
+            )
+        });
+        let date = HeaderFooterDate::Automatic {
+            field_type: "datetime1".to_owned(),
+            text: date_field_text("datetime1", 2026, 10, 9).unwrap(),
+        };
+        presentation
+            .set_header_footer(&HeaderFooter { date, ..numbered() }, true)
+            .unwrap();
+        let bytes = presentation.to_bytes().unwrap();
+        let written = part_text(&bytes, layout);
+        let positions = ["<p:clrMapOvr", "<p:transition", "<p:timing", "<p:hf"].map(|tag| {
+            written
+                .find(tag)
+                .unwrap_or_else(|| panic!("{tag} in {written}"))
+        });
+        assert!(
+            positions.windows(2).all(|pair| pair[0] < pair[1]),
+            "{written}"
+        );
+        assert!(Presentation::from_bytes(&bytes).is_ok());
+
+        let slide = part_text(&bytes, "/ppt/slides/slide2.xml");
+        let date = latent_shape_xml(&slide, "dt");
+        assert!(
+            date.contains("type=\"datetime1\"><a:rPr lang=\"en-US\""),
+            "{date}"
+        );
+        let presentation_xml = part_text(&bytes, "/ppt/presentation.xml");
+        assert!(presentation_xml.contains("showSpecialPlsOnTitleSld=\"0\""));
+        let mut reopened = Presentation::from_bytes(&bytes).unwrap();
+        reopened.set_header_footer(&numbered(), false).unwrap();
+        let bytes = reopened.to_bytes().unwrap();
+        assert!(!part_text(&bytes, "/ppt/presentation.xml").contains("showSpecialPlsOnTitleSld"));
+    }
+
+    #[test]
+    fn transition_directions_read_schema_defaults() {
+        let presentation = deck();
+        for (effect, expected) in [
+            (
+                "<p:split orient=\"vert\"/>",
+                Some(TransitionDirection::VerticalOut),
+            ),
+            (
+                "<p:split dir=\"in\"/>",
+                Some(TransitionDirection::HorizontalIn),
+            ),
+            ("<p:split/>", None),
+            ("<p:zoom dir=\"out\"/>", Some(TransitionDirection::Out)),
+        ] {
+            let bytes = presentation.to_bytes().unwrap();
+            let mut package = OpcPackage::from_reader(Cursor::new(&bytes)).unwrap();
+            let part = "/ppt/slides/slide2.xml";
+            let xml = String::from_utf8(package.get_part(part).unwrap().to_vec())
+                .unwrap()
+                .replacen(
+                    "</p:clrMapOvr>",
+                    &format!("</p:clrMapOvr><p:transition>{effect}</p:transition>"),
+                    1,
+                );
+            package.set_part(part, xml.into_bytes());
+            let mut output = Cursor::new(Vec::new());
+            package.write_to(&mut output).unwrap();
+            let reopened = Presentation::from_bytes(output.get_ref()).unwrap();
+            assert_eq!(
+                reopened.slide(1).unwrap().transition().unwrap().direction,
+                expected,
+                "{effect}"
+            );
+        }
+        assert_eq!(
+            TransitionKind::Zoom.directions().first(),
+            Some(&TransitionDirection::Out)
+        );
+    }
+
     #[test]
     fn transitions_round_trip_and_refuse_what_they_cannot_write() {
         let mut presentation = deck();

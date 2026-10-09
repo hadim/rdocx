@@ -4708,7 +4708,10 @@ def test_header_footer_fields_theme_and_transitions_from_python(tmp_path):
     assert not any(shape.is_placeholder and shape.placeholder_format.type == PP_PLACEHOLDER.SLIDE_NUMBER
                    for slide in prs.slides for shape in slide.shapes)
 
+    held = prs.slides[1]
     prs.set_header_footer(slide_number=True, footer="ACME - Confidential", date="Q3 review")
+    # The placeholders go after the other shapes, so held handles stay valid.
+    assert held.header_footer.footer == "ACME - Confidential"
     title, first, second = prs.slides
     assert (title.header_footer.slide_number, title.header_footer.footer) == (False, None)
     assert (first.header_footer.slide_number, first.header_footer.footer, first.header_footer.date) == (
@@ -4719,18 +4722,27 @@ def test_header_footer_fields_theme_and_transitions_from_python(tmp_path):
     with pytest.raises(ValueError, match="not a placeholder"):
         title.shapes.add_textbox(0, 0, 914400, 914400).placeholder_format
 
-    # Each assignment changes the slide's shapes, so the revision advances
-    # and slide handles go stale, while the header-footer handle follows.
-    header_footer = prs.slides[2].header_footer
+    # Placeholders are added after the other shapes and rewritten in place,
+    # so held handles stay valid. Removing the footer moves the slide number
+    # that follows it, which advances the revision, and the header-footer
+    # handle follows it.
+    second = prs.slides[2]
+    header_footer = second.header_footer
     header_footer.date = "auto"
     assert (header_footer.date, header_footer.date_format) == ("auto", "datetime1")
     header_footer.date_format = "datetime4"
     assert header_footer.date_format == "datetime4"
+    assert len(second.shapes) == 5
     header_footer.footer = None
     assert header_footer.footer is None
     with pytest.raises(StaleElementError):
         second.shapes
-    with pytest.raises(ValueError, match="datetime1 to datetime7"):
+    second = prs.slides[2]
+    second.header_footer.footer = "Back"
+    assert len(second.shapes) == 5
+    with pytest.raises(ValueError, match="use datetime1 to datetime7$"):
+        second.header_footer.date_format = "datetime9"
+    with pytest.raises(ValueError, match="use datetime1 to datetime7$"):
         prs.set_header_footer(date="auto", date_format="datetime9")
 
     prs.slides[1].shapes.add_textbox(0, 0, 914400, 914400).text_frame.paragraphs[0].add_run("Page ")
@@ -4756,7 +4768,7 @@ def test_header_footer_fields_theme_and_transitions_from_python(tmp_path):
     transition.direction = "up"
     transition.duration = 1.5
     transition.advance_after = 3
-    with pytest.raises(RpptxError, match="fade takes no direction"):
+    with pytest.raises(ValueError, match="fade takes no direction"):
         second.transition.type = "fade"
         second.transition.direction = "left"
     with pytest.raises(ValueError, match="unknown transition type"):

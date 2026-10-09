@@ -114,7 +114,9 @@ enum Command {
         notes: bool,
     },
     /// Set the slide number, footer and date of every slide, as PowerPoint's
-    /// Header and Footer dialog with Apply to All
+    /// Header and Footer dialog with Apply to All. Every flag is opt-in, while
+    /// Python's set_header_footer turns the slide number and the title-slide
+    /// skip on by default
     Footer {
         file: PathBuf,
         /// Show the slide number
@@ -123,7 +125,8 @@ enum Command {
         /// Footer text, no footer when omitted
         #[arg(long)]
         footer: Option<String>,
-        /// off, auto for a date PowerPoint refreshes, or fixed text
+        /// off, auto for a date PowerPoint refreshes, cached with today's local
+        /// date, or fixed text
         #[arg(long, default_value = "off")]
         date: String,
         /// Date field format for --date auto, datetime1 to datetime7
