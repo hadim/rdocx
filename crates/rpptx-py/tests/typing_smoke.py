@@ -540,6 +540,48 @@ def exercise_rpptx_header_footer_theme_transition_types(presentation: Presentati
     (numbered, footer, date, date_format, kind_name, accent, heading, body, masters, layouts)
 
 
+
+def exercise_rpptx_master_layout_theme_types(presentation: Presentation, logo: Path) -> None:
+    from rpptx._rpptx import (
+        GradientStop,
+        MasterTextStyles,
+        TextStyleLevel,
+        ThemeColors,
+    )
+
+    master = presentation.slide_master
+    master.shapes.add_picture(logo, 0, 0)
+    master.background.fill.gradient()
+    master.background.fill.gradient_angle = 90.0
+    stop: GradientStop = master.background.fill.gradient_stops[0]
+    stop.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+    stop.position = 0.0
+    colors: ThemeColors = master.theme.colors
+    colors["accent1"] = RGBColor(0xFF, 0x66, 0x00)
+    colors["accent2"] = "#1A237E"
+    colors["dk2"] = (0x33, 0x33, 0x33)
+    master.theme.fonts.major.latin = "Montserrat"
+    styles: MasterTextStyles = master.text_styles
+    level: TextStyleLevel = styles.body[0]
+    level.bullet = "\u2022"
+    level.bullet_color = "FF6600"
+    level.font.size = 20 * 12700
+    level.left_indent = 342900
+    layout = presentation.slide_layouts[0]
+    layout.name = "Cover"
+    layout.show_master_shapes = False
+    layout.follow_master_background = True
+    layout.background.fill.picture(logo)
+    used: tuple[Slide, ...] = layout.used_by_slides
+    copy: SlideLayout = presentation.slide_layouts.duplicate(layout)
+    presentation.slide_layouts.remove(copy)
+    presentation.slides[0].show_master_shapes = False
+    hidden: bool = presentation.slides[0].show_master_shapes
+    placeholders: list[Shape] = list(master.placeholders)
+    presentation.apply_theme("brand.potx", import_master=True)
+    (used, hidden, placeholders)
+
+
 if TYPE_CHECKING:
     BoundingBox()  # type: ignore[call-arg]
     AdjustmentCollection()  # type: ignore[call-arg]

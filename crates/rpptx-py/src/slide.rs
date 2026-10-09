@@ -2,7 +2,7 @@ use oxml_py_support::{ContentPath, PathSeg};
 use pyo3::PyClass;
 use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyList, PySlice, PyTuple};
+use pyo3::types::{PyAny, PyList, PySlice, PyTuple};
 use smallvec::smallvec;
 
 use crate::dml::{FillTarget, PyFillFormat};
@@ -25,6 +25,7 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyTheme>()?;
     module.add_class::<PyThemeFonts>()?;
     module.add_class::<PyThemeFontSet>()?;
+    module.add_class::<PyThemeColors>()?;
     Ok(())
 }
 
@@ -45,6 +46,53 @@ impl PySlideLayout {
             &format!(".slide_layouts[{}]", self.index),
         )
     }
+
+    /// The path of the layout's own content at the current revision.
+    fn part_path(&self, py: Python<'_>) -> ContentPath {
+        self.presentation
+            .borrow(py)
+            .revisions
+            .capture(smallvec![PathSeg::Layout(self.index)])
+    }
+}
+
+/// Whether a slide or layout follows the background above it.
+fn follow_master_background(
+    py: Python<'_>,
+    presentation: &Py<PyPresentation>,
+    part: rpptx::PartRef,
+) -> PyResult<bool> {
+    presentation
+        .borrow(py)
+        .inner
+        .part_has_background(part)
+        .map(|explicit| !explicit)
+        .map_err(|error| crate::rpptx_to_pyerr(py, error))
+}
+
+/// Following removes the part's own background, and not following gives it
+/// an empty no-fill one, as python-pptx does.
+fn set_follow_master_background(
+    py: Python<'_>,
+    presentation: &Py<PyPresentation>,
+    part: rpptx::PartRef,
+    value: bool,
+) -> PyResult<()> {
+    let mut presentation = presentation.borrow_mut(py);
+    let explicit = presentation
+        .inner
+        .part_has_background(part)
+        .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+    let result = if value {
+        presentation.inner.remove_part_background(part)
+    } else if !explicit {
+        presentation
+            .inner
+            .set_part_background(part, rpptx::Fill::NoFill(rpptx::NoFill::default()))
+    } else {
+        Ok(())
+    };
+    result.map_err(|error| crate::rpptx_to_pyerr(py, error))
 }
 
 #[pymethods]
@@ -58,6 +106,132 @@ impl PySlideLayout {
             .inner
             .layout_name(self.index)
             .map(str::to_owned))
+    }
+
+    // Masters, layouts and themes (#312).
+
+    /// Renames the layout, as PowerPoint's Rename Layout does.
+    #[setter]
+    fn set_name(&self, py: Python<'_>, value: &str) -> PyResult<()> {
+        self.validate(py)?;
+        self.presentation
+            .borrow_mut(py)
+            .inner
+            .set_layout_name(self.index, value)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))
+    }
+
+    /// The slide master this layout belongs to.
+    #[getter]
+    fn slide_master(&self, py: Python<'_>) -> PyResult<Py<PySlideMaster>> {
+        self.validate(py)?;
+        let master = self
+            .presentation
+            .borrow(py)
+            .inner
+            .layout_master(self.index)
+            .ok_or_else(|| {
+                PyValueError::new_err("the layout is not reached from a slide master")
+            })?;
+        let path = self.presentation.borrow(py).revisions.capture(smallvec![]);
+        PySlideMasterCollection::new(self.presentation.clone_ref(py), path).item(py, master)
+    }
+
+    /// The layout's own shapes, such as a logo every slide on it shows.
+    #[getter]
+    fn shapes(&self, py: Python<'_>) -> PyResult<Py<PyShapeCollection>> {
+        self.validate(py)?;
+        Py::new(
+            py,
+            PyShapeCollection::new(self.presentation.clone_ref(py), self.part_path(py)),
+        )
+    }
+
+    /// The layout's placeholders, which new slides copy and slides inherit.
+    #[getter]
+    fn placeholders(&self, py: Python<'_>) -> PyResult<Py<PyPlaceholderCollection>> {
+        self.validate(py)?;
+        Py::new(
+            py,
+            PyPlaceholderCollection::new(self.presentation.clone_ref(py), self.part_path(py)),
+        )
+    }
+
+    /// The layout's own background, which its slides follow.
+    #[getter]
+    fn background(&self, py: Python<'_>) -> PyResult<Py<PyBackground>> {
+        self.validate(py)?;
+        Py::new(
+            py,
+            PyBackground {
+                presentation: self.presentation.clone_ref(py),
+                path: self.part_path(py),
+            },
+        )
+    }
+
+    /// Whether the layout inherits its master's background.
+    #[getter]
+    fn follow_master_background(&self, py: Python<'_>) -> PyResult<bool> {
+        self.validate(py)?;
+        follow_master_background(py, &self.presentation, rpptx::PartRef::Layout(self.index))
+    }
+
+    #[setter]
+    fn set_follow_master_background(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        self.validate(py)?;
+        set_follow_master_background(
+            py,
+            &self.presentation,
+            rpptx::PartRef::Layout(self.index),
+            value,
+        )
+    }
+
+    /// Whether slides on this layout show the master's shapes, such as a
+    /// logo. False hides them, as PowerPoint's Hide Background Graphics
+    /// does on a layout.
+    #[getter]
+    fn show_master_shapes(&self, py: Python<'_>) -> PyResult<bool> {
+        self.validate(py)?;
+        self.presentation
+            .borrow(py)
+            .inner
+            .show_master_shapes(rpptx::PartRef::Layout(self.index))
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))
+    }
+
+    #[setter]
+    fn set_show_master_shapes(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        self.validate(py)?;
+        self.presentation
+            .borrow_mut(py)
+            .inner
+            .set_show_master_shapes(rpptx::PartRef::Layout(self.index), value)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))
+    }
+
+    /// The slides that use this layout, like python-pptx `used_by_slides`.
+    #[getter]
+    fn used_by_slides<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        self.validate(py)?;
+        let presentation = self.presentation.borrow(py);
+        let slides = presentation
+            .inner
+            .layout_slides(self.index)
+            .into_iter()
+            .map(|index| {
+                presentation
+                    .revisions
+                    .capture(smallvec![PathSeg::Slide(index)])
+            })
+            .collect::<Vec<_>>();
+        drop(presentation);
+        let items = slides
+            .into_iter()
+            .map(|path| Py::new(py, PySlide::new(self.presentation.clone_ref(py), path)))
+            .collect::<PyResult<Vec<_>>>()?;
+        PyTuple::new(py, items)
     }
 
     /// Two handles are equal when they name the same layout of one presentation.
@@ -127,6 +301,52 @@ impl PySlideLayoutCollection {
         }
         layout.validate(py)?;
         Ok(layout.index)
+    }
+
+    /// Removes a layout no slide uses, like python-pptx
+    /// `SlideLayouts.remove`. Layout handles are invalidated.
+    fn remove(&self, py: Python<'_>, slide_layout: &Bound<'_, PyAny>) -> PyResult<()> {
+        let index = self.index(py, slide_layout)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        let used = presentation.inner.layout_slides(index);
+        if !used.is_empty() {
+            return Err(PyValueError::new_err(format!(
+                "cannot remove slide-layout in use by one or more slides (slides {used:?}), set their slide_layout to another layout first"
+            )));
+        }
+        presentation
+            .inner
+            .remove_layout(index)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        presentation.revisions.bump();
+        Ok(())
+    }
+
+    /// Copies a layout into a new layout of the same master, placed right
+    /// after it and named as PowerPoint names a copy (rpptx extension).
+    /// Layout handles are invalidated, and the new layout is returned.
+    fn duplicate(
+        &self,
+        py: Python<'_>,
+        slide_layout: &Bound<'_, PyAny>,
+    ) -> PyResult<Py<PySlideLayout>> {
+        let index = self.index(py, slide_layout)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        let copy = presentation
+            .inner
+            .duplicate_layout(index)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        presentation.revisions.bump();
+        let path = presentation.revisions.capture(smallvec![]);
+        drop(presentation);
+        Py::new(
+            py,
+            PySlideLayout {
+                presentation: self.presentation.clone_ref(py),
+                index: copy,
+                path,
+            },
+        )
     }
 
     fn __iter__(&self, py: Python<'_>) -> PyResult<Py<PySlideLayoutIterator>> {
@@ -357,6 +577,28 @@ impl PySlide {
                 path: self.path.clone(),
             },
         )
+    }
+
+    /// Whether the slide shows its layout's and master's shapes, such as a
+    /// logo. False hides them, as PowerPoint's Hide Background Graphics does.
+    #[getter]
+    fn show_master_shapes(&self, py: Python<'_>) -> PyResult<bool> {
+        let index = self.validate(py)?;
+        self.presentation
+            .borrow(py)
+            .inner
+            .show_master_shapes(rpptx::PartRef::Slide(index))
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))
+    }
+
+    #[setter]
+    fn set_show_master_shapes(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        let index = self.validate(py)?;
+        self.presentation
+            .borrow_mut(py)
+            .inner
+            .set_show_master_shapes(rpptx::PartRef::Slide(index), value)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))
     }
 
     /// Whether the slide inherits its background from its layout and master.
@@ -1236,7 +1478,7 @@ impl PySlideTransition {
     }
 }
 
-/// A slide master, read-only for now: its layouts and its theme.
+/// A slide master: its layouts, shapes, background, text styles and theme.
 #[pyclass(name = "SlideMaster")]
 pub struct PySlideMaster {
     presentation: Py<PyPresentation>,
@@ -1254,38 +1496,78 @@ impl PySlideMaster {
             &format!(".slide_masters[{}]", self.index),
         )
     }
+
+    /// The path of the master's own content at the current revision.
+    fn part_path(&self, py: Python<'_>) -> ContentPath {
+        self.presentation
+            .borrow(py)
+            .revisions
+            .capture(smallvec![PathSeg::Master(self.index)])
+    }
 }
 
 #[pymethods]
 impl PySlideMaster {
-    /// The theme this master uses, read when accessed.
+    /// The theme this master uses. Its colours and fonts are read and
+    /// written live.
     #[getter]
-    fn theme(&self, py: Python<'_>) -> PyResult<PyTheme> {
+    fn theme(&self, py: Python<'_>) -> PyResult<Py<PyTheme>> {
         self.validate(py)?;
-        let theme = self
-            .presentation
-            .borrow(py)
-            .inner
-            .theme(self.index)
-            .map_err(|error| crate::rpptx_to_pyerr(py, error))?
-            .ok_or_else(|| PyIndexError::new_err("slide master index out of range"))?;
-        let fonts = |fonts: &rpptx::ThemeFonts| PyThemeFontSet {
-            latin: fonts.latin.clone(),
-            east_asian: fonts.east_asian.clone(),
-            complex_script: fonts.complex_script.clone(),
+        let theme = PyTheme {
+            presentation: self.presentation.clone_ref(py),
+            master: self.index,
+            path: self.path.clone(),
         };
-        Ok(PyTheme {
-            name: theme.name.clone(),
-            colors: theme
-                .colors
-                .iter()
-                .map(|(slot, color)| ((*slot).to_owned(), color.map(|color| color.components())))
-                .collect(),
-            fonts: PyThemeFonts {
-                major: fonts(&theme.major_font),
-                minor: fonts(&theme.minor_font),
+        theme.read(py)?;
+        Py::new(py, theme)
+    }
+
+    // Masters, layouts and themes (#312).
+
+    /// The master's own shapes, such as a logo every slide shows.
+    #[getter]
+    fn shapes(&self, py: Python<'_>) -> PyResult<Py<PyShapeCollection>> {
+        self.validate(py)?;
+        Py::new(
+            py,
+            PyShapeCollection::new(self.presentation.clone_ref(py), self.part_path(py)),
+        )
+    }
+
+    /// The master's placeholders, which layouts and slides inherit.
+    #[getter]
+    fn placeholders(&self, py: Python<'_>) -> PyResult<Py<PyPlaceholderCollection>> {
+        self.validate(py)?;
+        Py::new(
+            py,
+            PyPlaceholderCollection::new(self.presentation.clone_ref(py), self.part_path(py)),
+        )
+    }
+
+    /// The master's background, which layouts and slides follow.
+    #[getter]
+    fn background(&self, py: Python<'_>) -> PyResult<Py<PyBackground>> {
+        self.validate(py)?;
+        Py::new(
+            py,
+            PyBackground {
+                presentation: self.presentation.clone_ref(py),
+                path: self.part_path(py),
             },
-        })
+        )
+    }
+
+    /// The master's title, body and other text styles (rpptx extension).
+    #[getter]
+    fn text_styles(&self, py: Python<'_>) -> PyResult<Py<crate::text::PyMasterTextStyles>> {
+        self.validate(py)?;
+        Py::new(
+            py,
+            crate::text::PyMasterTextStyles::new(
+                self.presentation.clone_ref(py),
+                self.part_path(py),
+            ),
+        )
     }
 
     /// The layouts this master owns, as `prs.slide_layouts` members.
@@ -1374,57 +1656,262 @@ impl PySlideMasterCollection {
     }
 }
 
-/// A snapshot of one master's theme: name, colour scheme and fonts.
-#[pyclass(name = "Theme", frozen)]
+/// One master's theme, read and written live: name, colour scheme and fonts.
+#[pyclass(name = "Theme")]
 pub struct PyTheme {
-    name: Option<String>,
-    colors: Vec<(String, Option<[u8; 3]>)>,
-    fonts: PyThemeFonts,
+    presentation: Py<PyPresentation>,
+    master: usize,
+    path: ContentPath,
+}
+
+impl PyTheme {
+    fn read(&self, py: Python<'_>) -> PyResult<rpptx::Theme> {
+        let presentation = self.presentation.borrow(py);
+        validate_path(
+            py,
+            &presentation,
+            &self.path,
+            "theme",
+            &format!(".slide_masters[{}].theme", self.master),
+        )?;
+        presentation
+            .inner
+            .theme(self.master)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?
+            .ok_or_else(|| PyIndexError::new_err("slide master index out of range"))
+    }
+
+    fn handle<T: PyClass + Into<pyo3::PyClassInitializer<T>>>(
+        &self,
+        py: Python<'_>,
+        build: impl FnOnce(Py<PyPresentation>, usize, ContentPath) -> T,
+    ) -> PyResult<Py<T>> {
+        self.read(py)?;
+        Py::new(
+            py,
+            build(
+                self.presentation.clone_ref(py),
+                self.master,
+                self.path.clone(),
+            ),
+        )
+    }
 }
 
 #[pymethods]
 impl PyTheme {
     #[getter]
-    fn name(&self) -> Option<&str> {
-        self.name.as_deref()
+    fn name(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        Ok(self.read(py)?.name)
     }
 
     /// `dk1`, `lt1`, `dk2`, `lt2`, `accent1` to `accent6`, `hlink` and
     /// `folHlink` mapped to an `RGBColor`, or `None` for a colour rpptx
-    /// cannot resolve.
+    /// cannot resolve. Assigning a colour changes the theme, and every
+    /// shape and text that uses it follows.
     #[getter]
-    fn colors<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let rgb = py.import("rpptx.dml.color")?.getattr("RGBColor")?;
-        let colors = PyDict::new(py);
-        for (slot, color) in &self.colors {
-            let value = match color {
-                Some([red, green, blue]) => rgb.call1((*red, *green, *blue))?.unbind(),
-                None => py.None(),
-            };
-            colors.set_item(slot, value)?;
-        }
-        Ok(colors)
+    fn colors(&self, py: Python<'_>) -> PyResult<Py<PyThemeColors>> {
+        self.handle(py, |presentation, master, path| PyThemeColors {
+            presentation,
+            master,
+            path,
+        })
     }
 
     #[getter]
-    fn fonts(&self) -> PyThemeFonts {
-        self.fonts.clone()
+    fn fonts(&self, py: Python<'_>) -> PyResult<Py<PyThemeFonts>> {
+        self.handle(py, |presentation, master, path| PyThemeFonts {
+            presentation,
+            master,
+            path,
+        })
+    }
+}
+
+/// The theme's colour scheme as a live mapping from slot name to `RGBColor`.
+#[pyclass(name = "ThemeColors", mapping)]
+pub struct PyThemeColors {
+    presentation: Py<PyPresentation>,
+    master: usize,
+    path: ContentPath,
+}
+
+impl PyThemeColors {
+    fn theme(&self, py: Python<'_>) -> PyTheme {
+        PyTheme {
+            presentation: self.presentation.clone_ref(py),
+            master: self.master,
+            path: self.path.clone(),
+        }
+    }
+}
+
+#[pymethods]
+impl PyThemeColors {
+    fn __len__(&self, py: Python<'_>) -> PyResult<usize> {
+        Ok(self.theme(py).read(py)?.colors.len())
+    }
+
+    fn __contains__(&self, py: Python<'_>, key: &str) -> PyResult<bool> {
+        Ok(self
+            .theme(py)
+            .read(py)?
+            .colors
+            .iter()
+            .any(|(slot, _)| *slot == key))
+    }
+
+    fn __getitem__(&self, py: Python<'_>, key: &str) -> PyResult<Py<PyAny>> {
+        let theme = self.theme(py).read(py)?;
+        let (_, color) = theme
+            .colors
+            .iter()
+            .find(|(slot, _)| *slot == key)
+            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(key.to_owned()))?;
+        match color {
+            Some(color) => {
+                let [red, green, blue] = color.components();
+                Ok(py
+                    .import("rpptx.dml.color")?
+                    .getattr("RGBColor")?
+                    .call1((red, green, blue))?
+                    .unbind())
+            }
+            None => Ok(py.None()),
+        }
+    }
+
+    /// Sets one scheme colour from an `RGBColor`, a hex string with or
+    /// without `#`, or an `(r, g, b)` triple.
+    fn __setitem__(&self, py: Python<'_>, key: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.theme(py).read(py)?;
+        let color = crate::dml::color_argument(value, "theme colour")?;
+        self.presentation
+            .borrow_mut(py)
+            .inner
+            .set_theme_color(self.master, key, color)
+            .map_err(|error| pyo3::exceptions::PyKeyError::new_err(error.to_string()))
+    }
+
+    fn __iter__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.keys(py)?.into_any().try_iter().map(Bound::into_any)
+    }
+
+    fn keys<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let theme = self.theme(py).read(py)?;
+        PyList::new(py, theme.colors.iter().map(|(slot, _)| *slot))
+    }
+
+    fn items<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let keys = self.keys(py)?;
+        let items = PyList::empty(py);
+        for key in keys.iter() {
+            let key = key.extract::<String>()?;
+            let value = self.__getitem__(py, &key)?;
+            items.append((key, value))?;
+        }
+        Ok(items)
     }
 }
 
 /// The theme's heading (`major`) and body (`minor`) fonts.
-#[pyclass(name = "ThemeFonts", frozen, get_all, skip_from_py_object)]
-#[derive(Clone)]
+#[pyclass(name = "ThemeFonts")]
 pub struct PyThemeFonts {
-    major: PyThemeFontSet,
-    minor: PyThemeFontSet,
+    presentation: Py<PyPresentation>,
+    master: usize,
+    path: ContentPath,
+}
+
+impl PyThemeFonts {
+    fn set(&self, py: Python<'_>, role: rpptx::ThemeFontRole) -> PyResult<Py<PyThemeFontSet>> {
+        Py::new(
+            py,
+            PyThemeFontSet {
+                presentation: self.presentation.clone_ref(py),
+                master: self.master,
+                path: self.path.clone(),
+                role,
+            },
+        )
+    }
+}
+
+#[pymethods]
+impl PyThemeFonts {
+    #[getter]
+    fn major(&self, py: Python<'_>) -> PyResult<Py<PyThemeFontSet>> {
+        self.set(py, rpptx::ThemeFontRole::Major)
+    }
+
+    #[getter]
+    fn minor(&self, py: Python<'_>) -> PyResult<Py<PyThemeFontSet>> {
+        self.set(py, rpptx::ThemeFontRole::Minor)
+    }
 }
 
 /// One theme font collection's typefaces, empty when the theme names none.
-#[pyclass(name = "ThemeFontSet", frozen, get_all, skip_from_py_object)]
-#[derive(Clone)]
+/// Assigning a typeface changes the theme.
+#[pyclass(name = "ThemeFontSet")]
 pub struct PyThemeFontSet {
-    latin: String,
-    east_asian: String,
-    complex_script: String,
+    presentation: Py<PyPresentation>,
+    master: usize,
+    path: ContentPath,
+    role: rpptx::ThemeFontRole,
+}
+
+impl PyThemeFontSet {
+    fn read(&self, py: Python<'_>) -> PyResult<rpptx::ThemeFonts> {
+        let theme = PyTheme {
+            presentation: self.presentation.clone_ref(py),
+            master: self.master,
+            path: self.path.clone(),
+        }
+        .read(py)?;
+        Ok(match self.role {
+            rpptx::ThemeFontRole::Major => theme.major_font,
+            rpptx::ThemeFontRole::Minor => theme.minor_font,
+        })
+    }
+
+    fn write(&self, py: Python<'_>, script: rpptx::ThemeFontScript, value: &str) -> PyResult<()> {
+        self.read(py)?;
+        self.presentation
+            .borrow_mut(py)
+            .inner
+            .set_theme_font(self.master, self.role, script, value)
+            .map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+}
+
+#[pymethods]
+impl PyThemeFontSet {
+    #[getter]
+    fn latin(&self, py: Python<'_>) -> PyResult<String> {
+        Ok(self.read(py)?.latin)
+    }
+
+    #[setter]
+    fn set_latin(&self, py: Python<'_>, value: &str) -> PyResult<()> {
+        self.write(py, rpptx::ThemeFontScript::Latin, value)
+    }
+
+    #[getter]
+    fn east_asian(&self, py: Python<'_>) -> PyResult<String> {
+        Ok(self.read(py)?.east_asian)
+    }
+
+    #[setter]
+    fn set_east_asian(&self, py: Python<'_>, value: &str) -> PyResult<()> {
+        self.write(py, rpptx::ThemeFontScript::EastAsian, value)
+    }
+
+    #[getter]
+    fn complex_script(&self, py: Python<'_>) -> PyResult<String> {
+        Ok(self.read(py)?.complex_script)
+    }
+
+    #[setter]
+    fn set_complex_script(&self, py: Python<'_>, value: &str) -> PyResult<()> {
+        self.write(py, rpptx::ThemeFontScript::ComplexScript, value)
+    }
 }

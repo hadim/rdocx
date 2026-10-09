@@ -431,6 +431,44 @@ impl PyPresentation {
         Ok(())
     }
 
+    // Masters, layouts and themes (#312).
+
+    /// Applies the theme of a `.pptx`, `.potx` or `.thmx` file, of its
+    /// bytes, or of another `Presentation` to every slide master: colours,
+    /// fonts and effects (rpptx extension).
+    ///
+    /// With `import_master`, the source's first master design comes too:
+    /// its logo and other shapes, background and text styles, and its
+    /// layouts replace the layouts of the same type or name, adding the
+    /// others. Slides keep their content and take the new design. A `.thmx`
+    /// carries a theme only. Every held handle is invalidated.
+    #[pyo3(signature = (source, *, import_master = false))]
+    fn apply_theme(
+        &mut self,
+        py: Python<'_>,
+        source: &Bound<'_, PyAny>,
+        import_master: bool,
+    ) -> PyResult<()> {
+        let result = if let Ok(other) = source.extract::<PyRef<'_, PyPresentation>>() {
+            let other = other.inner.clone();
+            self.inner.apply_theme(&other, import_master)
+        } else if let Ok(bytes) = source.extract::<Vec<u8>>()
+            && !source.is_instance_of::<pyo3::types::PyString>()
+        {
+            self.inner.apply_theme_bytes(&bytes, import_master)
+        } else if let Ok(path) = source.extract::<PathBuf>() {
+            let bytes = std::fs::read(&path)?;
+            self.inner.apply_theme_bytes(&bytes, import_master)
+        } else {
+            return Err(pyo3::exceptions::PyTypeError::new_err(
+                "source must be a path to a .pptx, .potx or .thmx file, its bytes, or a Presentation",
+            ));
+        };
+        result.map_err(|error| rpptx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(())
+    }
+
     /// The slide masters, like python-pptx `slide_masters`.
     #[getter]
     fn slide_masters(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<PySlideMasterCollection>> {
