@@ -133,3 +133,9 @@ None. The user's rolling intake instruction explicitly includes new independent
 PRs. PR302 is a narrow equivalence correction with in-memory controls and no
 new surface. Issues264 and281 remain excluded. Draft contribution status does
 not substitute for local acceptance evidence or authorize GitHub closure.
+
+## Rolling PR refresh and archive measurements
+
+PR302 advanced to head7ac2851cb61b5e7b26427004517cc0cd4db0dbd9 before implementation. Its native fix and tests are unchanged. The added archive records are relevant generated maintenance, but the contributor's Apple M3 measurements and per-package provenance override are not local evidence for this Apple M5 host.
+
+The integrator runs the existing measurement generator after all source changes are integrated, then updates README.md, crates/rdocx-oxml/README.md and scripts/readme_doctests.py with actual local package bytes and provenance. Do not copy foreign measurements or loosen archive guards. This required integrated measurement remains a completion barrier. The existing host provenance is sufficient, so no new override dictionary is planned.
