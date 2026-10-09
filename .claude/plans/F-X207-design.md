@@ -496,3 +496,38 @@ Detailed read-only decision memo is
 explicit refresh, None-family preservation, physical inventory and conservative
 shared-context policies remain selected contracts. General terminal extent
 and candidate admission still need this bounded final technical resolution.
+
+## Final size and terminal controls
+
+Four additional genuine PowerPoint16.113.3 build16.113.26092714 controls
+are authenticated under /private/tmp/S91-F-X207-next-bounded-control.
+The30-entry final manifest has SHA
+f717573bceeaab91ed246b927ae1670373e280cfe2de88ac468bba49f16138ca.
+Normal reopening and saving preserves both native slide parts byte exactly.
+PDF content bytes differ, while authenticated embedded Arial6.80 subsets,
+measured baselines and drawn sizes agree. No PDF byte-equality claim follows.
+
+The28pt reference, terminal-descender variant and last-paragraph-after8pt
+variant all store92500/0 and draw about26pt. A20pt control with proportional
+usable height stores92500/10000 and draws about19pt. Source sizes remain
+28/20pt. These native choices falsify size-invariant reduction inference.
+Terminal after-space does not change the native choice in this one control,
+which does not establish arbitrary paragraph-spacing semantics.
+
+Root ran the existing compiled exact-font diagnostic with actual exit0.
+measured-four-controls.json has SHA
+14283fba0e81b9e42d1e0759415ad42362947c560af5bd0d8d954a820bfd777a.
+The existing unrounded terminal-metric hypothesis selects92500/0 for all
+four cases and therefore misses the native20pt choice. Full-line-advance
+fitting selects92500/10000 for all four and misses the three28pt choices.
+Neither result is adopted as a successful production solver.
+
+A bounded whole-point half-up arithmetic hypothesis explains this difference:
+20 times0.925 becomes19pt, whereas28 times0.925 becomes26pt. It is not a
+shared-layout execution or universal mixed-run rounding proof. The prepared
+optional quantized-candidate diagnostic preserves the original source and
+measurements, binds22 genuine owners, and recomputes the actual shared
+layout of rounded explicit-size clones. Compile and actual execution remain
+required before selecting this producer policy. Width, wrapped text, bullets,
+mixed/default run styles, shared owners and anchored resizing remain actual
+implementation acceptance gates. No additional height sweep is needed.
