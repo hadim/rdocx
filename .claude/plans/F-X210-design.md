@@ -7,7 +7,7 @@
 
 ## Problem
 
-Issue313 repeats the caller-font and variable-instance work already owned by F-X195 for Issues296 and297. This story owns only the new coverage delta. Current mappings at crates/oxml-layout/src/font.rs:2117 substitute Liberation Serif for Georgia and Carlito for Segoe UI. Aptos has no explicit mapping or substitution message. The PowerPoint bullet mapper at crates/rpptx-render/src/text.rs:317 handles only F0B7 to U+2022. Word Symbol runs at crates/rdocx-layout/src/engine.rs:9647 still shape the original private-use character. Broader private-use mappings need font identity, not a universal codepoint substitution.
+Issue313 repeats the caller-font and variable-instance work already owned by F-X195 for Issues296 and297. This story owns only the new coverage delta. Current mappings at crates/oxml-layout/src/font.rs:2117 substitute Caladea followed by Liberation Serif for Georgia and Carlito for Segoe UI. Aptos has no explicit mapping or substitution message. The PowerPoint bullet mapper at crates/rpptx-render/src/text.rs:317 handles only F0B7 to U+2022. Word Symbol runs at crates/rdocx-layout/src/engine.rs:9647 still shape the original private-use character. Broader private-use mappings need font identity, not a universal codepoint substitution.
 
 ## Spec reference
 
@@ -119,7 +119,7 @@ controls. Those are explicit failed controls, with no numerical shaping
 claim and no font conversion or redistribution. Selawik shaping parity
 remains unproved by this experiment. No production or baseline changed.
 
-The same40 controls compared the existing Liberation Serif substitute with
+The same40 controls compared the secondary Liberation Serif fallback with
 the same licensed Georgia references. Gelasio is closer in absolute string
 advance on39 controls. The regular kern0 ligature string is slightly farther,
 with delta-0.28857421875em versus-0.26953125em. Existing substitute maximum
@@ -145,3 +145,19 @@ walk with F-X195's verified synthesis and caller precedence. Assess all
 claimed twelve rendering deltas before any labelled behavioral commit or
 exclusive local baseline update. Caller and variable font work remains
 F-X195, with no duplicated loader or resolver under this contribution.
+
+## Correct primary fallback comparison
+
+A direct resolver read at font.rs:2130 confirms Georgia selects Caladea
+before Liberation Serif. The earlier Liberation Serif comparison remains
+valid secondary-face evidence and does not represent the primary fallback.
+The same40 genuine covered HarfBuzz controls now compare actual bundled
+Caladea faces with the same Georgia references and approved Gelasio inputs.
+Gelasio has a smaller absolute shaped-string advance difference on all40.
+Caladea maximum differences are1.233953125em regular,4.59014453125em bold,
+3.087125em italic and6.170203125em bold-italic. These are bounded observed
+controls, with no universal wrapping or vertical-metric guarantee.
+Complete commands, glyphs, face hashes and results are retained in
+/private/tmp/S91-F-X210-font-intake/primary-caladea-comparison.json,
+SHA2566211cf634c66c5ab31e2a45799a20a6da6e94cf3973f5a4285e1d79d3cef2f62.
+No production, asset or baseline changed.

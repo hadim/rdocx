@@ -112,3 +112,81 @@ Ordinary rendering and save without explicit refresh should remain unchanged. Au
 3. Which native PowerPoint build and immutable controlled frames establish the real coupled scale/line-space algorithm? No formula is approved before this observation.
 4. Define every-frame scope for table cells, notes and shared layout/master owners. Current slide-layout report exclusions cannot silently satisfy that phrase.
 5. For directly owned shared frames with different effective contexts, approve a conservative global result or explicit refusal/materialization policy before changing owner XML. General master/layout authoring remains F-X209-owned.
+
+## Qualified autofit owner contract
+
+## Inputs and concrete location
+
+Reuse exactly X195 font preparation once per operation. Native input is font_files:&[(&str,&[u8])], and Python refresh_autofit and TextFrame.fit_text accept fonts=None, font_dir=None and font_dirs=None. Ordered directories, lexical file order, later same-rank precedence, explicit fonts last, embedded family/style identity, caller-only versus bundled fallback and invalid-directory failures remain the one X195 rule. Do not create a second fit loader or omit font_dirs now that313 is included. Copy caller byte ownership before detached work. All measurement trials use one prepared font selection, including genuine variable weight/italic instances and requested/actual family diagnostics.
+
+Use a concrete frame location, not only slide_index+shape_id. Proposed existing-file native type `TextFrameLocation` carries owner_part:String, child_path:Vec<usize>, cell:Option<(usize,usize)> and checked owner fingerprint. Its constructor is private and inventory returns it. Context-specific reports also carry slide_index:Option<usize>, owner_kind and instantiated context identity. The source child ordinal path identifies group descendants, and cell coordinates identify a table text body. Shape ID is report metadata, not sole mutation identity. Duplicate IDs or failed owner correspondence are checked errors. No new generic path engine, source file or trait.
+
+Proposed native signatures:
+
+- Presentation::refresh_autofit(&mut self,font_files:&[(&str,&[u8])])->Result<AutofitRefreshResult>.
+- Presentation::fit_text_at(&mut self,location:&TextFrameLocation,font_family:Option<&str>,max_size:u16,font_files:&[(&str,&[u8])])->Result<AutofitUpdate>.
+- Presentation::fit_report(&self,font_files:&[(&str,&[u8])])->Result<FitReport>.
+
+Python TextFrame.fit_text delegates its existing checked ContentPath to the concrete native location. Keep the initially proposed native slide-index/shape-ID method only as an optional convenience if it resolves exactly one same-owner frame and actually has another consumer. Do not add a forwarding wrapper merely to preserve a draft signature. Native location fields/checks can instead reuse a reviewed existing X206 owner locator if it is integrated by claim time. The draft X206 explicitly says no stable-ID resolver yet, plan:195, so that provider is not assumed implemented.
+
+## Inventory and every-frame accounting
+
+Inventory scans qualified typed owner parts in stable package ownership order, then shape-tree child/source order. Include ordinary shapes, populated placeholders, nested groups and table-cell text bodies. Inventory includes empty text and flag presence, not only visible characters. Existing text_layout_deterministic at rpptx/lib.rs:1199 omits master/layout shapes, SmartArt, table cells and empty frames, so it is not this inventory.
+
+One physical owned text body is one mutation target. Slide-local inherited body flags are resolved through actual layout/master context, then their computed answer is materialized on that slide-local owner. Never change a shared master merely because a slide inherits a flag. Directly owned master/layout frames with flags are inventoried separately, along with every consuming slide context. Notes-slide and notes-master frame owners are inventoried separately using the existing notes resolution/theme/page geometry, not slide geometry. SmartArt/opaque unsupported text ownership is recorded with a named unsupported location, not ignored as though it had no flag.
+
+For a directly shared master/layout/notes-master frame, evaluate every applicable context before mutation. Normal shrink may use only a common candidate pair that passes every context. Choose the least shrinking candidate in the approved candidate order satisfying their intersection. Shared shape-to-fit resize may be written only when required local bounds and anchor adjustment are identical in every context after canonical EMU quantization. If they differ, refuse the entire refresh with owner/context details, rather than select a global arbitrary size or duplicate shared XML into slide-local shapes. This is a conservative exact ownership rule, not an optimization based on similar rendered text. An unused shared owner without a resolvable context receives an explicit not-measured diagnostic and cannot count toward a complete every-frame acceptance until an owner-context policy is approved.
+
+Table-cell normal shrink and uniform fit_text use the actual shared cell layout box and resolved paragraph style. Shape-to-fit flag on a table cell has no independently owned shape extent. Refuse with a named unsupported-cell-size policy until a reviewed row/table geometry transaction exists, rather than changing just text box height or falsely claiming one cell changed its enclosing row correctly. This is a real every-frame acceptance barrier if any required imported flagged cell uses that mode. Direct X209 master/layout authoring is not reimplemented here.
+
+Empty flagged frames are accounted for with status='empty', no sizing/text mutation and no fabricated lines or zero scale. Their existing flag/raw properties remain. Empty fit_text is a no-op. Invalid retained XML, nonpositive usable box, duplicate IDs, unsupported flagged owner or unfit floor returns an atomic refresh error that names its physical location. A diagnostic-only report may enumerate unsupported owners, but successful refresh cannot claim it measured them.
+
+## Fitting facts and thresholds
+
+Use the existing shared shaping/line breaking/stacking/inheritance/theme and page-field value path, with width_factor fixed1.0 for authoring and fit report. Reuse 0.01-point acceptance tolerance from StackedText::fits at rpptx-render/text.rs:439 and ink-width checks at666. Both width and height must pass. Do not fit by height alone, estimate font width or count characters. Display rotations and text directions use their actual reading frame, ShapeTextLayout documentation at rpptx-render/lib.rs:214. Retain glyph ink handling, bullet extents, field values, indentation, insets and exact paragraph spacing.
+
+For fit_text, max_size is a positive integer in the existing DrawingML size range, with explicit Python bool/nonintegral/overflow rejection. Validate against the actual native size setter before candidate trials rather than assuming u16 proves all schema bounds. Try each permitted integer point size descending from max_size through1. Choose the first that passes the same fixed-frame test. Exhaustive bounded descending search avoids an unproved monotonic binary-search assumption caused by line-wrap changes. Candidate-plus-one must fail unless the max cap selected the result.
+
+font_family=None preserves effective per-run family and bold/italic while writing one chosen point size. Explicit family writes that family on affected native direct runs, fields and paragraph/default/end properties without replacing text. Preserve color, hyperlink, unknown attributes, ordered text choices and original XML owners. Set wrap on and explicit no-autofit only after success. The method is formatting and geometry, not text replacement. Unfit-at1 refuses with original bytes unchanged. Native python-pptx comparison only applies to deliberately matching explicit-family/default and stored-shape semantics, not automatic claim of identical None-family behavior.
+
+Normal-autofit recomputation ignores previous stored scale/reduction for explicit refresh, but ordinary renderer continues to trust them. Current bare computation in text.rs:477 searches1.0 then0.975...0.25 with reductionNone. Canonical candidate scale lattice is integer100000,97500,...,25000, avoiding floating serialization. Its adequacy and coupled reduction order are NOT established as native PowerPoint steps by current source. That remains the exact native oracle question below.
+
+Store a selected approved pair as decimal integer strings fontScale and lnSpcReduction in NormalAutofit, oxml-drawing/text/body.rs:225. Both values are present for a successfully recomputed nonempty frame, including100000/0 when unshrunk. Couple measurement and storage from the same concrete result. No formula lnSpcReduction=1-fontScale is assumed. Existing stored reduction applies to percentage/default spacing but not exact-point spacing, text.rs:930. Generated coupled candidates must preserve this existing stored-value interpretation. If floor still overflows, mutation refuses rather than storing a falsely successful25-percent pair.
+
+For SHAPE_TO_FIT_TEXT, measure at current effective text sizes, usable width, wrap and paragraph settings, ignoring renderer-side shrink. New local height is measured content extent plus actual insets and supported leading/trailing rules. Allow growth and shrinkage. Preserve local top/bottom/center anchor exactly, transform through existing shape/group affine conversion and retain rotation/flip/vertical direction. Canonical EMU truncation stays unchanged. No axis-aligned world-space shortcut for rotated/grouped shapes. If inverse transform or coordinates cannot be represented, refuse before any mutation. Native oracle must verify anchor facts and group/rotation controls separately from the coupled shrink study.
+
+## Reports and mutation generations
+
+AutofitUpdate includes checked location, owner/context, shape ID/name metadata, mode, changed/status, old/new local bounds and canonical scale/reduction or written uniform point size, plus ordered requested/actual font diagnostics. AutofitRefreshResult contains updates in physical inventory order and diagnostics. Same-size/same-attributes refresh is idempotent and publishes no mutation. One genuinely changed deck-wide refresh is one staged package transaction, serialized/reopened before publication. A late failure changes no part or generation.
+
+Use X194/X206 handle partition: formatting and extent changes do not alter indexed slide/shape/table/text topology, so no structural or text-topology revision bump is justified for successful refresh or fit_text alone. Existing Slide/Shape/TextFrame/Paragraph/Run handles remain live when their logical paths are unchanged. Invalidate native completed layout cache once after successful formatting/geometry publication. Do not bump text_revisions merely because font sizes were written. If implementation actually creates/removes logical paragraph/run owners to fit, reject that approach or explicitly revise its contract instead of silently applying blanket staleness. Immutable report snapshots remain historical values and are not mutation selectors.
+
+Read-only FitReport returns frames in instantiated slide/notes context order with their physical location, current measured scale/spacing, overflow, hypothetical needed_scale/reduction, bounds, status and diagnostics. Needed means a total hypothetical scale relative to original effective run sizes, not an additional ratio multiplied by current stored scale. It uses the same approved solver as refresh without persisting it. Unfit-at-approved-floor returns needed_scale=None with reason and remains overflow. Unsupported owners are explicit unmeasured records. F-X204 CLI consumes that common provider and must not turn unsupported into successful fit0 or run a second solver.
+
+## Smallest coupled PowerPoint oracle study
+
+Prepare one controlled slide with four otherwise identical fixed-size unrotated inline text boxes, explicit family/style/point size, no bullets, no theme-dependent fonts, same width/insets, and fresh bare normAutofit. Use a real installed native font whose exact original face bytes/version/hash are recorded and feed those same bytes to rdocx/rpptx measurement. No font install or UI capture is implied by this research task.
+
+- A: several explicit text lines in one paragraph with100-percent/default line spacing, height chosen to overflow slightly at full size.
+- B: identical text and bounds with exact point line spacing equal to the initial nominal spacing.
+- C: identical text/bounds with150-percent spacing.
+- D: identical text and default spacing but split into multiple paragraphs with explicit before/after spacing.
+
+A/B discriminates whether native writes/uses a line-spacing reduction distinct from font shrink, because the current renderer intentionally does not reduce exact point spacing. C discriminates proportional reduction, absolute percent-point reduction or a scale-only answer. D discriminates reducing line spacing versus paragraph spacing. Fixed width and explicit breaks isolate vertical shrink. No wrap uncertainty should be introduced into this first study. Avoid a hand-calculated expected pair.
+
+Capture actual pinned PowerPoint build, generated source SHA, app-selected fonts and exact native edit action that triggers recomputation, then save. Extract each fontScale/lnSpcReduction, actual extents/insets/spacing and complete owner XML from the saved package. Close/reopen/save without editing, capture another SHA and compare the exact values/owners. Merely opening/saving a bare flag is not evidence of recomputation. Do not manually author the expected attributes into the oracle output.
+
+If A/B/C/D do not discriminate quantization, use a second two-height intervention on the same A text with all other inputs unchanged. The two heights should straddle an observed native step, determined from the first actual receipt. Only then choose a candidate lattice and coupling rule. Additional mixed-size/bullet/wrapped controls validate generalization after an actual rule has been identified. Finite observed matches do not prove arbitrary parity, so any remaining discrepancy stays an explicit acceptance barrier.
+
+Separately, a three-box shape-autofit control shares text/size but differs top/center/bottom anchor. Record old/new local bounds and native anchor points. Add one rotated grouped frame only after unrotated anchor results are understood. This keeps coupling and coordinate diagnostics independent.
+
+## Actual unresolved acceptance barriers
+
+Native coupled scale/reduction algorithm is still unmeasured. Current F100 ladder with zero reduction cannot be asserted as the requested PowerPoint algorithm. Shared-context shape resize, unsupported cell/SmartArt/unused shared owners need actual admission and oracle evidence before every-frame completion. These are bounded provider design/evidence barriers, not user preference questions or authorization to approximate. Root can approve ownership/refusal policy, but no plan approval substitutes for required native ground truth.
+
+Canonical read HEAD: `5caf36fd631fb32e2a00acb26b1625d0b99b92ca`. Source SHA receipts:
+
+- `crates/rpptx/src/lib.rs`: `9e203e0e9e3fe71c8b0c9d070a1a0cffa6f757fbd849c88c46702ed910996b6b`.
+- `crates/rpptx-render/src/text.rs`: `2a7570f8d9fcdbd1933625a4148ca4ae7d76f2f9773e1d25da821339043323d4`.
+- `crates/rpptx-render/src/lib.rs`: `98f646dbb7e10806140b0079298165e79c71c3dcb571e03548fea23f223a641b`.
+- `crates/oxml-drawing/src/text/body.rs`: `d9db6dd0a2dc2b61eaa7512c630ba7d33d27762eceb683f7e9a676f9541dc9cb`.
