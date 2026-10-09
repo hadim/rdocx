@@ -3011,7 +3011,7 @@ Schedule this unfinished story in S91. Close all numbering interactions across
 TOC, STYLEREF, REF, PAGEREF, captions,
 and document outline results, including table-cell headings and suppressed
 paragraphs.
-**Depends on**: F-248, F-279 through F-282.
+**Depends on**: F-248, F-279 through F-282, F-X200.
 **Test gate**: regression. One multilevel numbered document stays consistent
 across visible markers, navigation structures, references, and saved caches.
 
@@ -6866,7 +6866,7 @@ deterministic hash harness to remain unchanged. Issues264 and281 stay excluded.
 
 Resolve [Issue303](https://github.com/tensorbee/rdocx/issues/303) in S91,
 part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
-coverage checklist. Expose superscript, subscript, caps, spacing, strike, hidden, language/script fonts and RTL. Add paragraph tabs, borders, shading, outline and bidi, extended style properties, document defaults, list helpers, restart/start overrides and checklists. Reuse F-X197 for both bindings' colour contract. Confirm plain-instance numbering continuation against Word before changing rendering.
+coverage checklist. Expose superscript, subscript, caps, spacing, strike, hidden, language/script fonts and RTL. Add paragraph tabs, borders, shading, outline and bidi, extended style properties, document defaults, list helpers, restart/start overrides and checklists. Reuse F-X197 for both bindings' colour contract. Align plain-instance continuation with authenticated Word evidence through an explicitly reviewed change to the prior independent-instance contract. Preserve concrete source identity, explicit restarts, bounded supported constructs and authoritative navigation results.
 
 **Depends on**: F-X197.
 **Test gate**: regression. Reproduce each missing operation or reported defect

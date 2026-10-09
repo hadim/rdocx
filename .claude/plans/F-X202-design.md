@@ -13,8 +13,8 @@ citations were checked against canonical head
 
 ## Problem
 
-Issue305 requests complete everyday tables, pictures and internal links, plus
-synchronized scoped text-box edits. Python exposes checked merge primitives
+Issue305 requests complete everyday tables, pictures and internal links.
+Issue301 follow-through adds synchronized scoped text-box edits. Python exposes checked merge primitives
 and clone_row but lacks the requested empty-row, nested-table and table
 formatting surface. Native `Document::clone_table_row` deliberately copies
 content at `crates/rdocx/src/document.rs:19793`. Native table columns and whole
@@ -25,7 +25,7 @@ resizes every main-document picture sharing the relationship. The Python test
 `crates/rdocx-py/tests/test_core.py:877` explicitly pins this behavior. The issue
 demands one physical picture. `Paragraph::add_hyperlink_with_tooltip` at
 `crates/rdocx/src/paragraph.rs:1104` sets anchor=None. F-X198's approved scoped
-refusal safely prevents divergence but does not fulfill Issue305's required
+refusal safely prevents divergence but does not fulfill Issue301's required
 successful edit of both Choice and Fallback copies.
 
 ## Spec reference

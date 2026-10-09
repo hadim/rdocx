@@ -2269,7 +2269,8 @@ F-ID first, with later contributor PRs attached to that owner.
 
 F-X200 reuses F-X197 colours. F-X202 reuses F-X194 indentation and F-X198
 physical alternate safety, then adds the synchronized editing demanded by
-Issue305. F-X203 reuses F-X196 and F-X201 validation. F-X205 reuses F-X194 and
+Issue301. The latest Issue305 body delegates Issue300 and Issue301 to those
+existing owners. F-X203 reuses F-X196 and F-X201 validation. F-X205 reuses F-X194 and
 F-X197. F-X207 consumes caller-font measurement from F-X195. F-X210 contains
 only the new metric-compatible face, diagnostics and bullet mapping criteria
 from Issue313. Its caller-font and variable-font acceptance remains F-X195.
@@ -2705,3 +2706,8 @@ Future breadth must preserve the properties that distinguish this workspace:
   one implementation per document family.
 - Offline operation by default, with network access isolated behind explicit
   adapters.
+
+S91 semantic prerequisite: complete F-X200 before F-283. The authenticated
+Word numbering controls require an explicitly reviewed revision to the old
+independent-numId contract. Navigation consumes that final authoritative
+result once, preserving source identity and proving its own field switches.

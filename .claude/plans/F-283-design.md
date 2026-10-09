@@ -3,7 +3,7 @@
 **Status**: approved
 **Sprint**: S91
 **Size**: L
-**Depends on**: F-248, F-279 through F-282
+**Depends on**: F-248, F-279 through F-282, F-X200
 
 ## Scheduling
 
@@ -175,3 +175,14 @@ their behavior, and fresh Word evidence is pinned to 16.113.2 build
 16.113.26092012. INDEX and TOA use en-US source language with the captured Word
 locale recorded explicitly. Technical ownership probes in the test plan must
 pass before completion and may not be replaced by guessed expectations.
+
+## S91 numbering prerequisite
+
+Complete F-X200 before claiming this story. Issue303 requests native Word
+plain-instance continuation, superseding the earlier intentional independent
+concrete-instance contract. F-X200 owns that explicitly reviewed counter
+change and its additional native controls. This story consumes the integrated
+authoritative results for visible markers and all navigation fields. Preserve
+actual concrete source numIds and prove numbered REF context separately.
+The fresh navigation oracle must cover shared-definition plain instances
+and explicit restarts, rather than replaying an independent Python counter.

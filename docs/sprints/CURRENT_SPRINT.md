@@ -82,8 +82,10 @@ PR294 and PR302 retain their previously assessed immutable heads.
 Reuse existing issue work: Issue303 consumes F-X197 colours, Issue305 consumes
 F-X194 indentation and F-X198 alternate-owner safety, Issue306 consumes
 F-X196 validation, Issue308 consumes F-X194 cell text and F-X197 colours, and
-Issue313 consumes F-X195 caller fonts and variable instances. Issue305 requires
-synchronized alternate updates beyond the earlier permitted atomic refusal.
+Issue313 consumes F-X195 caller fonts and variable instances. Issue305
+delegates Issue300 to F-X194 and Issue301 to the existing scoped owners.
+Issue301 requires synchronized alternate updates in F-X202 beyond the earlier
+F-X198 atomic refusal.
 Keep the completed refusal safety and implement only that uncovered capability.
 
 Detailed designs and resource waves for the added scope must be approved

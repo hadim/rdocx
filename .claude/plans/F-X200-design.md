@@ -200,6 +200,8 @@ it. Tests and claims may not treat an unconfirmed Word assertion as evidence.
 
 - docs/hld/02-scope-and-non-goals.md, Python capability rows.
 - docs/hld/07-inheritance-and-resolution.md, defaults and list resolution contracts if expanded.
+- docs/hld/08-rendering-spec.md, authoritative Word numbering continuation and restart contract.
+- docs/hld/12-testing-strategy.md, intentional numbering divergence and authenticated controls.
 - docs/hld/10-bindings-spec.md, exact font/paragraph/style/default/list signatures and invalidation.
 - docs/hld/14-development-backlog.md, resolved acceptance and retained boundaries.
 
@@ -376,3 +378,25 @@ separate labeled behavior commit, rather than treating current behavior as
 an unexplained defect. Final approval must reconcile that decision, actual
 affected fixture keys and F-283 resolved-counter dependency before claiming
 X200. No implementation or baseline update is authorized by this draft.
+
+## Selected continuation scope and scheduling
+
+The accepted Issue303 parity scope supersedes the prior intentional
+independent-numId counter behavior. F-X200 owns the authoritative native
+NumberingState change in existing rdocx-layout/src/style_resolver.rs. It must
+update advance, current, ancestor substitution, deeper and section restart,
+and transaction state lifecycle together where the authenticated controls
+require it. Preserve concrete numId in ResolvedNumbering as source identity.
+Do not change relative_to from visible-marker evidence alone. F-283 now
+requires completed F-X200 and proves its own numbered REF switch semantics.
+
+Before production edits, capture return-to-old-instance, plain-after-override,
+non-one and child start overrides, replacement-level-only, cross-instance
+lvlRestart and section controls. A global abstract-id key substitution is
+not a sufficient design. Preserve separate abstract definitions and source
+traversal facts. Existing independence tests become explicitly labeled Word
+parity regressions. HLD08 and HLD12 must describe the new current contract.
+Native layout, deterministic render, package and hash riders apply alongside
+binding riders. Use a separate intentional behavior commit. No exact fixture
+delta is claimed before measurement. Baseline ownership remains exclusive.
+The draft remains pending the bounded native state decision.
