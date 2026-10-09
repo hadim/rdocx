@@ -464,22 +464,24 @@ pub fn fit_normal_autofit(
     })
 }
 
-/// Returns the text rectangle height PowerPoint gives a shape-autofit text
-/// body, in points, insets included.
+/// Returns the text rectangle height and width PowerPoint gives a
+/// shape-autofit text body, in points, insets included.
 ///
 /// The arguments are those of [`layout_shape_text`], and the text is laid
 /// out at full size. The text is measured as PowerPoint's fit measures it,
-/// and the height with insets is then scaled by 1034/1024, as PowerPoint for
-/// Mac 16 sizes `a:spAutoFit` shapes: Arial, Calibri and Times New Roman
-/// frames of 1 to 9 lines at 10 to 32 points, with and without paragraph
-/// spacing, match it to the EMU.
-pub fn shape_autofit_height(
+/// the width as its widest line, and each length with its insets is then
+/// scaled by 1034/1024, as PowerPoint for Mac 16 sizes `a:spAutoFit` shapes:
+/// Arial, Calibri and Times New Roman frames of 1 to 9 lines at 10 to 32
+/// points, with and without paragraph spacing, match it to the EMU. The
+/// width is the one a shape that does not wrap takes.
+pub fn shape_autofit_size(
     shape: &ResolvedShape,
     text: &ResolvedTextBody,
     font_manager: &mut FontManager,
     page_number: usize,
     text_directions: &[Vec<oxml_layout::TextDirection>],
-) -> Result<f64, RenderInputError> {
+) -> Result<(f64, f64), RenderInputError> {
+    const POWERPOINT_SCALE: f64 = 1034.0 / 1024.0;
     let mut text = text.clone();
     text.autofit = ResolvedAutofit::None;
     let (_, _, stacked) = stack_shape_text(
@@ -490,7 +492,11 @@ pub fn shape_autofit_height(
         text_directions,
         1.0,
     )?;
-    Ok((stacked.fit_height + text.insets.top + text.insets.bottom) * 1034.0 / 1024.0)
+    let insets = text.insets;
+    Ok((
+        (stacked.fit_height + insets.top + insets.bottom) * POWERPOINT_SCALE,
+        (stacked.width + insets.left + insets.right) * POWERPOINT_SCALE,
+    ))
 }
 
 fn layout_slide_with_fonts(

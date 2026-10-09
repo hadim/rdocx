@@ -1260,17 +1260,56 @@ def test_setting_shape_to_fit_text_resizes_the_shape_keeping_its_anchored_edge()
     import rpptx
     from rpptx import MSO_ANCHOR, MSO_AUTO_SIZE
 
-    presentation, shape = _autofit_textbox(rpptx, 2)
+    # The python-pptx order: autofit first, text afterwards, then save.
+    presentation, shape = _autofit_textbox(rpptx, 0)
     bottom = shape.top + shape.height
     shape.text_frame.vertical_anchor = MSO_ANCHOR.BOTTOM
     shape.text_frame.auto_size = MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT
+    assert shape.height == rpptx.Inches(1.5)
+    _write_arial_lines(rpptx, presentation, 2)
+    presentation.to_bytes()
 
     # PowerPoint for Mac sizes two 18 point lines to 646331 EMU.
+    shape = presentation.slides[0].shapes[0]
     assert shape.height == 646_331
     assert shape.top + shape.height == bottom
     assert shape.left == rpptx.Inches(1)
     (result,) = presentation.refresh_autofit()
-    assert (result.autofit, result.height) == ("shape", rpptx.Length(646_331))
+    assert (result.autofit, result.height, result.width) == (
+        "shape",
+        rpptx.Length(646_331),
+        None,
+    )
+
+
+def test_marked_frames_refresh_on_save_and_none_unmarks_them(tmp_path):
+    import rpptx
+    from rpptx import MSO_AUTO_SIZE
+
+    presentation, shape = _autofit_textbox(rpptx, 0)
+    shape.text_frame.auto_size = MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
+    _write_arial_lines(rpptx, presentation, 6)
+    output = tmp_path / "marked.pptx"
+    presentation.save(output)
+    assert '<a:normAutofit fontScale="92500" lnSpcReduction="20000"/>' in _text_body_xml(output)
+
+    # Text edited after a save is refitted by the next one.
+    _write_arial_lines(rpptx, presentation, 8)
+    presentation.save(output)
+    assert '<a:normAutofit fontScale="70000" lnSpcReduction="20000"/>' in _text_body_xml(output)
+
+    # Back to NONE, the frame is no longer refitted.
+    frame = presentation.slides[0].shapes[0].text_frame
+    frame.auto_size = MSO_AUTO_SIZE.NONE
+    presentation.save(output)
+    assert "<a:noAutofit/>" in _text_body_xml(output)
+
+    # A marked shape that is removed is forgotten.
+    presentation.slides[0].shapes[0].text_frame.auto_size = MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT
+    shapes = presentation.slides[0].shapes
+    shapes.remove(shapes[0])
+    assert presentation.text_layout() == ()
+    presentation.save(output)
 
 
 def test_fit_text_writes_the_largest_fitting_size_on_every_run(tmp_path):
@@ -1316,6 +1355,8 @@ def test_fit_text_writes_the_largest_fitting_size_on_every_run(tmp_path):
     assert frame.paragraphs[0].runs[0].font.name == "Calibri"
     assert frame.paragraphs[0].runs[0].font.bold is False
 
+    # python-pptx takes int(max_size).
+    assert frame.fit_text(max_size=18.9).font_size == rpptx.Pt(14)
     with pytest.raises(ValueError, match="max_size"):
         frame.fit_text(max_size=0)
     with pytest.raises(ValueError, match="font_file"):

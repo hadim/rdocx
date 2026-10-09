@@ -184,6 +184,7 @@ pub struct PyAutofitResult {
     font_scale: f64,
     line_spacing_reduction: f64,
     height: Option<i64>,
+    width: Option<i64>,
     font_size: Option<f64>,
     fits: bool,
     font_substitutions: Vec<(String, String)>,
@@ -203,6 +204,7 @@ impl From<rpptx::AutofitResult> for PyAutofitResult {
             font_scale: result.font_scale,
             line_spacing_reduction: result.line_spacing_reduction,
             height: result.height.map(|height| height.0),
+            width: result.width.map(|width| width.0),
             font_size: result.font_size,
             fits: result.fits,
             font_substitutions: result.font_substitutions,
@@ -255,6 +257,11 @@ impl PyAutofitResult {
     }
 
     #[getter]
+    fn width(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.width.map(|emu| length(py, emu)).transpose()
+    }
+
+    #[getter]
     fn font_size(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         self.font_size
             .map(|points| length(py, (points * 12_700.0).round() as i64))
@@ -273,13 +280,14 @@ impl PyAutofitResult {
 
     fn __repr__(&self) -> String {
         format!(
-            "AutofitResult(slide_index={}, shape_id={:?}, autofit={:?}, font_scale={}, line_spacing_reduction={}, height={:?}, font_size={:?}, fits={}, font_substitutions={:?})",
+            "AutofitResult(slide_index={}, shape_id={:?}, autofit={:?}, font_scale={}, line_spacing_reduction={}, height={:?}, width={:?}, font_size={:?}, fits={}, font_substitutions={:?})",
             self.slide_index,
             self.shape_id,
             self.autofit,
             self.font_scale,
             self.line_spacing_reduction,
             self.height,
+            self.width,
             self.font_size,
             self.fits,
             self.font_substitutions

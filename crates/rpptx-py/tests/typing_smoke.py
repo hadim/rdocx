@@ -549,7 +549,7 @@ def exercise_rpptx_autofit_types(presentation: Presentation) -> None:
     frame = presentation.slides[0].shapes[0].text_frame
     refreshed: AutofitResult | None = frame.refresh_autofit()
     fitted: AutofitResult | None = frame.fit_text(
-        "Calibri", max_size=24, bold=True, italic=False, font_file=Path("font.ttf")
+        "Calibri", max_size=24.0, bold=True, italic=False, font_file=Path("font.ttf")
     )
     for result in results + tuple(item for item in (refreshed, fitted) if item):
         slide_index: int = result.slide_index
@@ -558,7 +558,8 @@ def exercise_rpptx_autofit_types(presentation: Presentation) -> None:
         autofit: str = result.autofit
         scale: tuple[float, float] = (result.font_scale, result.line_spacing_reduction)
         height: Length | None = result.height
+        width: Length | None = result.width
         font_size: Length | None = result.font_size
         fits: bool = result.fits
         substitutions: tuple[tuple[str, str], ...] = result.font_substitutions
-        (slide_index, shape_id, name, autofit, scale, height, font_size, fits, substitutions)
+        (slide_index, shape_id, name, autofit, scale, height, width, font_size, fits, substitutions)

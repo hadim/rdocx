@@ -240,6 +240,9 @@ pub struct AutofitResult {
     /// The shape height shape autofit gave the shape, in EMU. `None` for
     /// other modes and for vertical text, whose shape is left unchanged.
     pub height: Option<Emu>,
+    /// The shape width shape autofit gave a shape whose text does not wrap,
+    /// in EMU, `None` otherwise.
+    pub width: Option<Emu>,
     /// The size [`Presentation::fit_text`] wrote on every run, in points.
     pub font_size: Option<f64>,
     /// Whether the text fits its box after the change.
@@ -1248,7 +1251,7 @@ impl Presentation {
             )));
         }
         let package = self.staged_package(false)?;
-        let mut assembly = prepare_render_context(&package, false)?;
+        let mut assembly = prepare_render_slides(&package, false, |_| true)?;
         let mut frames = Vec::new();
         visit_rendered_text_shapes(&mut assembly, |font_manager, frame| {
             let layout = rpptx_render::layout_shape_text(
@@ -1290,8 +1293,11 @@ impl Presentation {
     /// `lnSpcReduction` steps that fits, measured with deterministic fonts.
     /// An inherited normal autofit whose text fits at full size is left as
     /// it is. Shape autofit sets the shape height to its text, keeping the
-    /// top, middle or bottom edge that the vertical anchor names, and leaves
-    /// the width and vertical text unchanged.
+    /// top, middle or bottom edge that the vertical anchor names, and the
+    /// width too when the text does not wrap, keeping the edge or centre its
+    /// first paragraph's alignment names. Enclosing groups are refit to
+    /// their members. Vertical text is measured but its shape is left
+    /// unchanged. Slides are resolved, not laid out as pages.
     #[cfg(feature = "render")]
     pub fn refresh_autofit(&mut self) -> Result<Vec<AutofitResult>> {
         self.refresh_autofit_where(None)
@@ -1302,32 +1308,55 @@ impl Presentation {
     /// `shape_path` is read as in [`Self::effective_geometry`]. The result is
     /// that of [`Self::refresh_autofit`] for this frame, and `None` when the
     /// frame has neither normal nor shape autofit in effect or is not drawn.
+    /// Only its slide is resolved.
     #[cfg(feature = "render")]
     pub fn refresh_shape_autofit(
         &mut self,
         slide_index: usize,
         shape_path: &[usize],
     ) -> Result<Option<AutofitResult>> {
-        self.shape_at(slide_index, shape_path, "refresh autofit")?;
         Ok(self
-            .refresh_autofit_where(Some((slide_index, shape_path)))?
+            .refresh_shapes_autofit(&[(slide_index, shape_path.to_vec())])?
             .pop())
+    }
+
+    /// Stores the autofit result of each `(slide_index, shape_path)` frame.
+    ///
+    /// The results are those of [`Self::refresh_autofit`] for these frames,
+    /// in slide and draw order, and only their slides are resolved. A path
+    /// that names no shape is an error and changes nothing.
+    #[cfg(feature = "render")]
+    pub fn refresh_shapes_autofit(
+        &mut self,
+        shapes: &[(usize, Vec<usize>)],
+    ) -> Result<Vec<AutofitResult>> {
+        for (slide_index, shape_path) in shapes {
+            self.shape_at(*slide_index, shape_path, "refresh autofit")?;
+        }
+        if shapes.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.refresh_autofit_where(Some(shapes))
     }
 
     #[cfg(feature = "render")]
     fn refresh_autofit_where(
         &mut self,
-        only: Option<(usize, &[usize])>,
+        only: Option<&[(usize, Vec<usize>)]>,
     ) -> Result<Vec<AutofitResult>> {
         let package = self.staged_package(false)?;
-        let mut assembly = prepare_render_context(&package, false)?;
+        let mut assembly = prepare_render_slides(&package, false, |slide_index| {
+            only.is_none_or(|shapes| shapes.iter().any(|(slide, _)| *slide == slide_index))
+        })?;
         let mut plans = Vec::new();
         visit_rendered_text_shapes(&mut assembly, |font_manager, frame| {
             let Some(shape_path) = frame.shape_path.clone() else {
                 return Ok(());
             };
-            if only.is_some_and(|(slide_index, path)| {
-                slide_index != frame.slide_index || path != shape_path.as_slice()
+            if only.is_some_and(|shapes| {
+                !shapes
+                    .iter()
+                    .any(|(slide, path)| *slide == frame.slide_index && *path == shape_path)
             }) {
                 return Ok(());
             }
@@ -1363,7 +1392,7 @@ impl Presentation {
                 )
                 .map_err(|error| frame.failure(error))?;
                 if frame.text.vertical == rpptx_layout::TextDirection::Horizontal {
-                    let text_rect_height = rpptx_render::shape_autofit_height(
+                    let (height, width) = rpptx_render::shape_autofit_size(
                         frame.shape,
                         frame.text,
                         font_manager,
@@ -1371,19 +1400,37 @@ impl Presentation {
                         frame.directions,
                     )
                     .map_err(|error| frame.failure(error))?;
-                    let text_rect =
-                        layout.usable.height + frame.text.insets.top + frame.text.insets.bottom;
+                    let insets = &frame.text.insets;
                     // A preset whose text rectangle is a share of the shape,
                     // such as an ellipse, grows by that share.
-                    let share = if text_rect > 0.0 {
-                        layout.frame.height / text_rect
-                    } else {
-                        1.0
-                    };
-                    AutofitPlan::Height {
-                        frame_height: layout.frame.height,
-                        height: text_rect_height * share,
-                        anchor: frame.text.anchor,
+                    let share = |shape: f64, text: f64| if text > 0.0 { shape / text } else { 1.0 };
+                    let height_share = share(
+                        layout.frame.height,
+                        layout.usable.height + insets.top + insets.bottom,
+                    );
+                    let width_share = share(
+                        layout.frame.width,
+                        layout.usable.width + insets.left + insets.right,
+                    );
+                    let alignment = frame
+                        .text
+                        .paragraphs
+                        .first()
+                        .map(|paragraph| paragraph.alignment);
+                    AutofitPlan::Size {
+                        frame: (layout.frame.width, layout.frame.height),
+                        height: height * height_share,
+                        width: (!frame.text.wrap).then_some(width * width_share),
+                        vertical_side: match frame.text.anchor {
+                            rpptx_layout::TextAnchor::Center => 0.0,
+                            rpptx_layout::TextAnchor::Bottom => -1.0,
+                            _ => 1.0,
+                        },
+                        horizontal_side: match alignment {
+                            Some(rpptx_layout::ParagraphAlignment::Center) => 0.0,
+                            Some(rpptx_layout::ParagraphAlignment::Right) => -1.0,
+                            _ => 1.0,
+                        },
                     }
                 } else {
                     result.fits = !layout.overflow;
@@ -1425,61 +1472,87 @@ impl Presentation {
                         .set_normal_autofit(font_scale, reduction)?;
                 }
             }
-            AutofitPlan::Height {
-                frame_height,
+            AutofitPlan::Size {
+                frame,
                 height,
-                anchor,
+                width,
+                vertical_side,
+                horizontal_side,
             } => {
-                let Some((_, _, _, current)) = self.effective_geometry(slide_index, &path)? else {
+                let Some((_, _, current_width, current_height)) =
+                    self.effective_geometry(slide_index, &path)?
+                else {
                     return Ok(result);
-                };
-                let emu_per_point = if frame_height > 0.0 {
-                    current.0 as f64 / frame_height
-                } else {
-                    12_700.0
                 };
                 // Half an EMU rounds up, as PowerPoint rounds, despite the
                 // point conversion's last bit.
-                let target = Emu((((height * emu_per_point) + 0.5 + 1e-6).floor() as i64).max(1));
-                result.height = Some(target);
-                if target != current {
+                let to_emu = |points: f64, current: Emu, drawn: f64| {
+                    let per_point = if drawn > 0.0 {
+                        current.0 as f64 / drawn
+                    } else {
+                        12_700.0
+                    };
+                    Emu((((points * per_point) + 0.5 + 1e-6).floor() as i64).max(1))
+                };
+                let target_height = to_emu(height, current_height, frame.1);
+                let target_width =
+                    width.map_or(current_width, |width| to_emu(width, current_width, frame.0));
+                result.height = Some(target_height);
+                result.width = width.map(|_| target_width);
+                if (target_width, target_height) != (current_width, current_height) {
                     self.materialize_geometry(slide_index, &path)?;
                     let mut shape = self.shape_mut_at(slide_index, &path, OPERATION)?;
                     let transform = shape.transform_mut(OPERATION)?;
                     let offset = transform.offset.unwrap_or_default();
                     let extent = transform.extent.unwrap_or(CT_PositiveSize2D {
-                        cx: Emu(0),
-                        cy: current,
+                        cx: current_width,
+                        cy: current_height,
                     });
-                    // The centre moves along the shape's own vertical axis
-                    // so that the anchored edge stays where it was drawn.
-                    let mut side = match anchor {
-                        rpptx_layout::TextAnchor::Center => 0.0,
-                        rpptx_layout::TextAnchor::Bottom => -1.0,
-                        _ => 1.0,
-                    };
-                    if transform.flip_vertical {
-                        side = -side;
-                    }
-                    let growth = (target.0 - extent.cy.0) as f64;
-                    let shift = side * growth / 2.0;
-                    let angle = (transform.rotation.0 as f64 / 60_000.0).to_radians();
+                    // The centre moves along the shape's own axes so that
+                    // the anchored edges stay where they were drawn.
+                    let growth_x = (target_width.0 - extent.cx.0) as f64;
+                    let growth_y = (target_height.0 - extent.cy.0) as f64;
+                    let flip = |flipped: bool, side: f64| if flipped { -side } else { side };
+                    let local_x = flip(transform.flip_horizontal, horizontal_side) * growth_x / 2.0;
+                    let local_y = flip(transform.flip_vertical, vertical_side) * growth_y / 2.0;
+                    let (sin, cos) = (transform.rotation.0 as f64 / 60_000.0)
+                        .to_radians()
+                        .sin_cos();
                     // The offset moves by whole EMU toward zero, as
                     // PowerPoint moves a middle-anchored shape.
-                    let dx = (-shift * angle.sin()).trunc() as i64;
-                    let dy = (shift * angle.cos() - growth / 2.0).trunc() as i64;
+                    let dx = (local_x * cos - local_y * sin - growth_x / 2.0).trunc() as i64;
+                    let dy = (local_x * sin + local_y * cos - growth_y / 2.0).trunc() as i64;
                     transform.offset = Some(CT_Point2D {
                         x: Emu(offset.x.0 + dx),
                         y: Emu(offset.y.0 + dy),
                     });
                     transform.extent = Some(CT_PositiveSize2D {
-                        cx: extent.cx,
-                        cy: target,
+                        cx: target_width,
+                        cy: target_height,
                     });
+                    self.refit_enclosing_groups(slide_index, &path, OPERATION)?;
                 }
             }
         }
         Ok(result)
+    }
+
+    /// Refits each group around the shape at `shape_path` to its members,
+    /// innermost first, as a member's new size asks.
+    #[cfg(feature = "render")]
+    fn refit_enclosing_groups(
+        &mut self,
+        slide_index: usize,
+        shape_path: &[usize],
+        operation: &'static str,
+    ) -> Result<()> {
+        for depth in (1..shape_path.len()).rev() {
+            let shape = self.shape_mut_at(slide_index, &shape_path[..depth], operation)?;
+            if let ShapeTreeChild::GroupShape(group) = shape.child {
+                fit_group_to_members(group, true);
+            }
+        }
+        Ok(())
     }
 
     /// Writes the largest whole-point size at which a slide text frame fits.
@@ -1518,7 +1591,7 @@ impl Presentation {
             ));
         }
         let package = self.staged_package(false)?;
-        let mut assembly = prepare_render_context(&package, false)?;
+        let mut assembly = prepare_render_slides(&package, false, |index| index == slide_index)?;
         let mut fitted = None;
         visit_rendered_text_shapes(&mut assembly, |font_manager, frame| {
             if frame.slide_index != slide_index || frame.shape_path.as_deref() != Some(shape_path) {
@@ -11425,14 +11498,27 @@ struct PreparedSlideAssembly {
     smartart_clips: Vec<Option<Rect>>,
 }
 
+/// The resolved slides one render or text pass needs, before page layout.
+#[cfg(feature = "render")]
+struct PreparedRenderSlides {
+    input: RenderInput,
+    font_manager: FontManager,
+    slides: Vec<PreparedSlideAssembly>,
+    /// Paragraph directions parallel to `input.slides`.
+    text_directions: Vec<ResolvedSlideTextDirections>,
+    /// The zero-based presentation index of each prepared slide.
+    slide_indices: Vec<usize>,
+    size: (f64, f64),
+    default_text_style: CT_TextListStyle,
+    table_styles: Option<CT_TableStyleList>,
+}
+
 #[cfg(feature = "render")]
 struct PreparedRenderAssembly {
     input: RenderInput,
     layout: LayoutResult,
     font_manager: FontManager,
     slides: Vec<PreparedSlideAssembly>,
-    /// Paragraph directions parallel to `input.slides`, as lowering used them.
-    text_directions: Vec<ResolvedSlideTextDirections>,
     size: (f64, f64),
     default_text_style: CT_TextListStyle,
     table_styles: Option<CT_TableStyleList>,
@@ -11453,6 +11539,9 @@ std::thread_local! {
         std::cell::Cell::new(0)
     };
     static PREPARED_FONT_MANAGER_COUNT: std::cell::Cell<usize> = const {
+        std::cell::Cell::new(0)
+    };
+    static PREPARED_SLIDE_COUNT: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
     };
 }
@@ -11518,6 +11607,62 @@ fn prepare_render_context(
 ) -> Result<PreparedRenderAssembly> {
     #[cfg(test)]
     PREPARED_RENDER_ASSEMBLY_COUNT.with(|count| count.set(count.get() + 1));
+    let PreparedRenderSlides {
+        input,
+        mut font_manager,
+        slides: prepared_slides,
+        text_directions,
+        size,
+        default_text_style,
+        table_styles,
+        ..
+    } = prepare_render_slides(package, collect_media_diagnostics, |_| true)?;
+    #[cfg(test)]
+    PREPARED_LAYOUT_COUNT.with(|count| count.set(count.get() + 1));
+    let mut layout = layout_presentation_with_font_manager_and_text_directions_mut(
+        &input,
+        &mut font_manager,
+        &text_directions,
+    )
+    .map_err(|error| render_failure(error.to_string()))?;
+    if layout.pages.len() != input.slides.len() {
+        return Err(render_failure(format!(
+            "rendered {} pages for {} slides",
+            layout.pages.len(),
+            input.slides.len()
+        )));
+    }
+    for ((page, slide), prepared) in layout
+        .pages
+        .iter_mut()
+        .zip(&input.slides)
+        .zip(&prepared_slides)
+    {
+        apply_smartart_clips(
+            std::sync::Arc::make_mut(page),
+            slide,
+            &prepared.smartart_clips,
+        )?;
+    }
+    Ok(PreparedRenderAssembly {
+        input,
+        layout,
+        font_manager,
+        slides: prepared_slides,
+        size,
+        default_text_style,
+        table_styles,
+    })
+}
+
+/// Resolves the slides `include` names, in presentation order, without
+/// laying out their pages.
+#[cfg(feature = "render")]
+fn prepare_render_slides(
+    package: &OpcPackage,
+    collect_media_diagnostics: bool,
+    include: impl Fn(usize) -> bool,
+) -> Result<PreparedRenderSlides> {
     let presentation_part = package
         .main_document_part()
         .ok_or(Error::MissingMainDocument)?;
@@ -11548,7 +11693,14 @@ fn prepare_render_context(
     let mut resolved_slides = Vec::with_capacity(presentation.slide_ids.len());
     let mut text_directions = Vec::with_capacity(presentation.slide_ids.len());
     let mut prepared_slides = Vec::with_capacity(presentation.slide_ids.len());
+    let mut slide_indices = Vec::with_capacity(presentation.slide_ids.len());
     for (slide_index, slide_id) in presentation.slide_ids.iter().enumerate() {
+        if !include(slide_index) {
+            continue;
+        }
+        #[cfg(test)]
+        PREPARED_SLIDE_COUNT.with(|count| count.set(count.get() + 1));
+        slide_indices.push(slide_index);
         let slide_relationship = presentation_relationships
             .get_by_id(&slide_id.relationship_id)
             .ok_or_else(|| Error::MissingRelationship {
@@ -11687,45 +11839,17 @@ fn prepare_render_context(
         });
     }
 
-    let input = RenderInput {
-        slides: resolved_slides,
-        media,
-        fonts: Vec::new(),
-        metadata: None,
-    };
-    #[cfg(test)]
-    PREPARED_LAYOUT_COUNT.with(|count| count.set(count.get() + 1));
-    let mut layout = layout_presentation_with_font_manager_and_text_directions_mut(
-        &input,
-        &mut font_manager,
-        &text_directions,
-    )
-    .map_err(|error| render_failure(error.to_string()))?;
-    if layout.pages.len() != input.slides.len() {
-        return Err(render_failure(format!(
-            "rendered {} pages for {} slides",
-            layout.pages.len(),
-            input.slides.len()
-        )));
-    }
-    for ((page, slide), prepared) in layout
-        .pages
-        .iter_mut()
-        .zip(&input.slides)
-        .zip(&prepared_slides)
-    {
-        apply_smartart_clips(
-            std::sync::Arc::make_mut(page),
-            slide,
-            &prepared.smartart_clips,
-        )?;
-    }
-    Ok(PreparedRenderAssembly {
-        input,
-        layout,
+    Ok(PreparedRenderSlides {
+        input: RenderInput {
+            slides: resolved_slides,
+            media,
+            fonts: Vec::new(),
+            metadata: None,
+        },
         font_manager,
         slides: prepared_slides,
         text_directions,
+        slide_indices,
         size,
         default_text_style,
         table_styles,
@@ -12434,6 +12558,7 @@ impl RenderedTextShape<'_> {
             font_scale: 1.0,
             line_spacing_reduction: 0.0,
             height: None,
+            width: None,
             font_size: None,
             fits: true,
             font_substitutions: font_substitutions(font_manager, self.text),
@@ -12446,34 +12571,40 @@ impl RenderedTextShape<'_> {
 enum AutofitPlan {
     Unchanged,
     Normal,
-    /// Shape autofit: `height` points for a shape drawn `frame_height` tall.
-    Height {
-        frame_height: f64,
+    /// Shape autofit, in points for a shape drawn `frame` wide and tall: the
+    /// new height, the new width of text that does not wrap, and which edge
+    /// each keeps, `1.0` the top or left, `0.0` the centre, `-1.0` the
+    /// bottom or right.
+    Size {
+        frame: (f64, f64),
         height: f64,
-        anchor: rpptx_layout::TextAnchor,
+        width: Option<f64>,
+        vertical_side: f64,
+        horizontal_side: f64,
     },
 }
 
-/// Calls `visit` for every text shape in each slide's own shape tree that
-/// the deterministic renderer draws, SmartArt left out.
+/// Calls `visit` for every text shape in each prepared slide's own shape
+/// tree that the deterministic renderer draws, SmartArt left out.
 #[cfg(feature = "render")]
 fn visit_rendered_text_shapes(
-    assembly: &mut PreparedRenderAssembly,
+    assembly: &mut PreparedRenderSlides,
     mut visit: impl FnMut(&mut FontManager, RenderedTextShape<'_>) -> Result<()>,
 ) -> Result<()> {
-    let PreparedRenderAssembly {
+    let PreparedRenderSlides {
         input,
         font_manager,
         slides,
         text_directions,
+        slide_indices,
         default_text_style,
         ..
     } = assembly;
-    for (slide_index, ((prepared, slide), directions)) in slides
+    for (((prepared, slide), directions), &slide_index) in slides
         .iter()
         .zip(&input.slides)
         .zip(text_directions.iter())
-        .enumerate()
+        .zip(slide_indices.iter())
     {
         let context = ResolveCtx::new(
             &prepared.theme,
@@ -12570,22 +12701,46 @@ fn resolved_latin_typefaces(text: &rpptx_layout::ResolvedTextBody) -> Vec<String
     typefaces
 }
 
-/// Each Latin typeface of `text` that measured with a face of another family.
+/// Each Latin typeface of `text` that measured with a face of another
+/// family, checked in every bold and italic combination its runs use.
 #[cfg(feature = "render")]
 fn font_substitutions(
     font_manager: &mut FontManager,
     text: &rpptx_layout::ResolvedTextBody,
 ) -> Vec<(String, String)> {
-    resolved_latin_typefaces(text)
-        .into_iter()
-        .filter_map(|typeface| {
-            let id = font_manager
-                .resolve_font_for_metrics(Some(&typeface), false, false)
-                .ok()?;
-            let family = font_manager.font_data(id).ok()?.family;
-            (!family.eq_ignore_ascii_case(&typeface)).then_some((typeface, family))
-        })
-        .collect()
+    let mut faces: Vec<(&str, bool, bool)> = Vec::new();
+    for paragraph in &text.paragraphs {
+        for run in &paragraph.runs {
+            let (rpptx_layout::ResolvedTextRun::Text { style, .. }
+            | rpptx_layout::ResolvedTextRun::Field { style, .. }) = run
+            else {
+                continue;
+            };
+            if let Some(typeface) = style.latin_typeface.as_deref() {
+                let face = (typeface, style.bold, style.italic);
+                if !faces.contains(&face) {
+                    faces.push(face);
+                }
+            }
+        }
+    }
+    let mut substitutions: Vec<(String, String)> = Vec::new();
+    for (typeface, bold, italic) in faces {
+        let Some(family) = font_manager
+            .resolve_font_for_metrics(Some(typeface), bold, italic)
+            .ok()
+            .and_then(|id| font_manager.font_data(id).ok())
+            .map(|data| data.family)
+        else {
+            continue;
+        };
+        let substitution = (typeface.to_owned(), family);
+        if !substitution.1.eq_ignore_ascii_case(typeface) && !substitutions.contains(&substitution)
+        {
+            substitutions.push(substitution);
+        }
+    }
+    substitutions
 }
 
 /// Gives every run and paragraph end the size and font `fit_text` measures.
@@ -13767,5 +13922,43 @@ mod write_tests {
         let part = media.insert(&mut package, png, "duplicate.png");
 
         assert_eq!(part, "/ppt/media/image1.png");
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn refreshing_one_frame_resolves_only_its_slide_and_lays_out_no_page() {
+        let mut presentation = Presentation::new().unwrap();
+        for _ in 0..3 {
+            presentation.add_slide(6).unwrap();
+        }
+        for slide_index in 0..3 {
+            let mut slide = presentation.slide_mut(slide_index).unwrap();
+            let mut frame = slide
+                .add_textbox(Emu(914_400), Emu(914_400), Emu(2_743_200), Emu(254_000))
+                .unwrap()
+                .into_text_frame()
+                .unwrap();
+            frame.set_text("one\ntwo\nthree\nfour");
+            frame.set_autofit_mode(Some(AutofitMode::Normal));
+        }
+        let counts = || (PREPARED_SLIDE_COUNT.get(), PREPARED_LAYOUT_COUNT.get());
+
+        let before = counts();
+        let result = presentation
+            .refresh_shape_autofit(1, &[0])
+            .unwrap()
+            .unwrap();
+        let after_one = counts();
+        let all = presentation.refresh_autofit().unwrap();
+        let after_all = counts();
+
+        assert_eq!(result.slide_index, 1);
+        assert!(result.font_scale < 1.0);
+        assert_eq!((after_one.0 - before.0, after_one.1 - before.1), (1, 0));
+        assert_eq!(all.len(), 3);
+        assert_eq!(
+            (after_all.0 - after_one.0, after_all.1 - after_one.1),
+            (3, 0)
+        );
     }
 }

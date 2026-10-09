@@ -10230,6 +10230,244 @@ fn refresh_autofit_reports_fallback_fonts_and_leaves_fitting_inherited_frames_al
 }
 
 #[test]
+fn refresh_autofit_writes_inherited_autofit_onto_slide_placeholders() {
+    let placeholder = |id: u32, name: &str, index: u32, transform: &str, body: &str, text: &str| {
+        format!(
+            r#"<p:sp><p:nvSpPr><p:cNvPr id="{id}" name="{name}"/><p:cNvSpPr/><p:nvPr><p:ph type="body" idx="{index}"/></p:nvPr></p:nvSpPr><p:spPr>{transform}</p:spPr><p:txBody>{body}<a:lstStyle/>{text}</p:txBody></p:sp>"#
+        )
+    };
+    let frame = |y: i64| {
+        format!(r#"<a:xfrm><a:off x="914400" y="{y}"/><a:ext cx="2743200" cy="1371600"/></a:xfrm>"#)
+    };
+    let layout_shapes = [
+        placeholder(
+            20,
+            "Layout shrink",
+            21,
+            &frame(457_200),
+            r#"<a:bodyPr wrap="square"><a:normAutofit/></a:bodyPr>"#,
+            "<a:p/>",
+        ),
+        placeholder(
+            21,
+            "Layout grow",
+            22,
+            &frame(3_200_400),
+            r#"<a:bodyPr wrap="square" anchor="b"><a:spAutoFit/></a:bodyPr>"#,
+            "<a:p/>",
+        ),
+    ]
+    .concat();
+    let no_bullets = r#"<a:pPr marL="0" indent="0"><a:lnSpc><a:spcPct val="100000"/></a:lnSpc><a:spcBef><a:spcPts val="0"/></a:spcBef><a:buNone/></a:pPr>"#;
+    let slide_shapes = [
+        placeholder(
+            2,
+            "Shrink",
+            21,
+            "",
+            "<a:bodyPr/>",
+            &autofit_paragraphs(&numbered("Item", 6), "Arial", 18, no_bullets),
+        ),
+        placeholder(
+            3,
+            "Grow",
+            22,
+            "",
+            "<a:bodyPr/>",
+            &autofit_paragraphs(&numbered("Row", 2), "Arial", 18, no_bullets),
+        ),
+    ]
+    .concat();
+    let mut presentation = text_layout_deck(&slide_shapes, &layout_shapes);
+
+    let results = presentation.refresh_autofit().unwrap();
+
+    assert_eq!(
+        results
+            .iter()
+            .map(|result| (result.name.as_deref().unwrap(), result.autofit))
+            .collect::<Vec<_>>(),
+        [
+            ("Shrink", rpptx::AutofitMode::Normal),
+            ("Grow", rpptx::AutofitMode::Shape)
+        ]
+    );
+    let slide = presentation.slide(0).unwrap();
+    // The inherited shrink lands on the slide's own bodyPr, as PowerPoint
+    // stores it, with the six-line step it chose for a text box.
+    let shrink = slide.shape(0).unwrap();
+    assert_eq!(
+        shrink.text_frame().unwrap().normal_autofit(),
+        Some((92_500, 20_000))
+    );
+    // The placeholder without a transform gets the inherited one, shrunk to
+    // its two lines toward the bottom edge its layout anchors.
+    let grow = slide.shape(1).unwrap();
+    assert_eq!(grow.size(), Some((Emu(2_743_200), Emu(646_331))));
+    assert_eq!(
+        grow.position(),
+        Some((Emu(914_400), Emu(3_200_400 + 1_371_600 - 646_331)))
+    );
+    assert!(
+        presentation
+            .text_layout_deterministic(1.0)
+            .unwrap()
+            .iter()
+            .all(|frame| !frame.layout.overflow)
+    );
+}
+
+#[test]
+fn shape_autofit_refits_its_group_and_keeps_the_flipped_anchor_edge() {
+    let child = autofit_box(
+        3,
+        "Member",
+        (914_400, 914_400),
+        1_371_600,
+        "<a:spAutoFit/>",
+        &autofit_paragraphs(&numbered("Row", 2), "Arial", 18, ""),
+    );
+    let sibling = autofit_box(
+        4,
+        "Sibling",
+        (914_400, 2_743_200),
+        457_200,
+        "",
+        &autofit_paragraphs(&["x".to_owned()], "Arial", 18, ""),
+    );
+    let group = format!(
+        r#"<p:grpSp><p:nvGrpSpPr><p:cNvPr id="2" name="Group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="914400" y="914400"/><a:ext cx="2743200" cy="2286000"/><a:chOff x="914400" y="914400"/><a:chExt cx="2743200" cy="2286000"/></a:xfrm></p:grpSpPr>{child}{sibling}</p:grpSp>"#
+    );
+    let flipped = autofit_box(
+        5,
+        "Flipped",
+        (4_572_000, 914_400),
+        1_371_600,
+        "<a:spAutoFit/>",
+        &autofit_paragraphs(&numbered("Row", 2), "Arial", 18, ""),
+    )
+    .replace("<a:xfrm>", r#"<a:xfrm flipV="1">"#);
+    let mut presentation = text_layout_deck(&[group, flipped].concat(), "");
+
+    let results = presentation.refresh_autofit().unwrap();
+
+    assert_eq!(results[0].shape_path, [0, 0]);
+    let slide = presentation.slide(0).unwrap();
+    let group = slide.shape(0).unwrap();
+    let member = group.child(0).unwrap();
+    assert_eq!(member.size(), Some((Emu(2_743_200), Emu(646_331))));
+    assert_eq!(member.position(), Some((Emu(914_400), Emu(914_400))));
+    // The group still spans its members, now the shorter one and the sibling.
+    assert_eq!(group.position(), Some((Emu(914_400), Emu(914_400))));
+    assert_eq!(group.size(), Some((Emu(2_743_200), Emu(2_286_000))));
+    assert_eq!(
+        group.child(1).unwrap().position(),
+        Some((Emu(914_400), Emu(2_743_200)))
+    );
+    // Flipped vertically, a top-anchored shape keeps its drawn bottom edge.
+    let flipped = slide.shape(1).unwrap();
+    assert_eq!(flipped.size(), Some((Emu(2_743_200), Emu(646_331))));
+    assert_eq!(
+        flipped.position(),
+        Some((Emu(4_572_000), Emu(914_400 + 1_371_600 - 646_331)))
+    );
+}
+
+#[test]
+fn shape_autofit_grows_the_group_when_its_member_grows() {
+    let child = autofit_box(
+        3,
+        "Member",
+        (914_400, 914_400),
+        457_200,
+        "<a:spAutoFit/>",
+        &autofit_paragraphs(&numbered("Row", 5), "Arial", 18, ""),
+    );
+    let group = format!(
+        r#"<p:grpSp><p:nvGrpSpPr><p:cNvPr id="2" name="Group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="914400" y="914400"/><a:ext cx="2743200" cy="457200"/><a:chOff x="914400" y="914400"/><a:chExt cx="2743200" cy="457200"/></a:xfrm></p:grpSpPr>{child}</p:grpSp>"#
+    );
+    let mut presentation = text_layout_deck(&group, "");
+
+    presentation.refresh_shape_autofit(0, &[0, 0]).unwrap();
+
+    let group = presentation.slide(0).unwrap().shape(0).unwrap();
+    assert_eq!(group.size(), Some((Emu(2_743_200), Emu(1_477_328))));
+    assert_eq!(
+        group.child(0).unwrap().size(),
+        Some((Emu(2_743_200), Emu(1_477_328)))
+    );
+}
+
+#[test]
+fn shape_autofit_without_wrapping_sizes_the_width_from_the_aligned_edge() {
+    // PowerPoint for Mac widened or narrowed these 3 inch boxes to
+    // 1069524 EMU ("Short") and 4108882 EMU (the long line), keeping the
+    // left edge, the centre or the right edge as the paragraphs align.
+    let paragraphs = |text: &str, align: &str| {
+        autofit_paragraphs(
+            &[text.to_owned(), "Row two".to_owned()],
+            "Arial",
+            18,
+            &format!(r#"<a:pPr algn="{align}"/>"#),
+        )
+    };
+    let long = "A much longer line of text than the box";
+    let cases = [
+        ("l", "Short", 1_069_524),
+        ("ctr", "Short", 1_069_524),
+        ("r", "Short", 1_069_524),
+        ("l", long, 4_108_882),
+        ("ctr", long, 4_108_882),
+        ("r", long, 4_108_882),
+    ];
+    let shapes = cases
+        .iter()
+        .enumerate()
+        .map(|(index, (align, text, _))| {
+            text_layout_shape(
+                index as u32 + 2,
+                &format!("{align} {index}"),
+                (
+                    2_743_200,
+                    274_320 + index as i64 * 1_005_840,
+                    2_743_200,
+                    914_400,
+                ),
+                r#"<a:bodyPr wrap="none"><a:spAutoFit/></a:bodyPr>"#,
+                &paragraphs(text, align),
+            )
+        })
+        .collect::<String>();
+    let mut presentation = text_layout_deck(&shapes, "");
+
+    let results = presentation.refresh_autofit().unwrap();
+
+    let slide = presentation.slide(0).unwrap();
+    for (index, ((align, _, powerpoint_width), result)) in cases.iter().zip(&results).enumerate() {
+        let shape = slide.shape(index).unwrap();
+        let (Some((left, top)), Some((width, height))) = (shape.position(), shape.size()) else {
+            panic!("case {index} lost its transform");
+        };
+        assert_eq!(
+            (top, height),
+            (Emu(274_320 + index as i64 * 1_005_840), Emu(646_331))
+        );
+        assert_eq!(result.width, Some(width));
+        // Within half a percent of PowerPoint's width.
+        assert!(
+            (width.0 - powerpoint_width).abs() * 200 < *powerpoint_width,
+            "case {index}: {width:?}"
+        );
+        let (old_left, old_right) = (2_743_200, 2_743_200 + 2_743_200);
+        match *align {
+            "l" => assert_eq!(left, Emu(old_left)),
+            "r" => assert_eq!(left.0 + width.0, old_right),
+            _ => assert!((2 * left.0 + width.0 - (old_left + old_right)).abs() <= 1),
+        }
+    }
+}
+
+#[test]
 fn fit_text_writes_the_largest_whole_size_that_fits_on_every_run() {
     let shapes = [
         autofit_box(

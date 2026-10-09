@@ -1134,11 +1134,20 @@ about 280 frames, each refitted by editing its last paragraph or by setting
   scaled by 1034/1024 as PowerPoint for Mac sizes `a:spAutoFit` shapes, with
   half an EMU rounding up. A preset whose text rectangle is a share of the
   shape grows by that share. The top, middle or bottom edge the vertical
-  anchor names stays where it was drawn, along the shape's own axis when it
-  is rotated, and the offset moves by whole EMU toward zero. Width and
-  vertical text are left unchanged.
-- `fit_text` follows python-pptx: the largest whole size up to `max_size`
-  whose text fits with no autofit and word wrap.
+  anchor names stays where it was drawn, along the shape's own axes when it
+  is rotated or flipped, and the offset moves by whole EMU toward zero. Text
+  that does not wrap also sets the width to its widest line, keeping the
+  left edge, the centre or the right edge as the first paragraph aligns, as
+  PowerPoint does. The widths PowerPoint recorded are within about 0.4
+  percent of rpptx's, which measures 1.2 points more on a 300 point line.
+  Each group around a resized member is then refit to its members, innermost
+  first, so no other member moves. PowerPoint could not be scripted to resize
+  a group member, so that refit follows python-pptx. Vertical text is left
+  unchanged.
+- `fit_text` follows python-pptx: the largest whole size up to `int(max_size)`
+  whose text fits with no autofit and word wrap. `font_family=None` keeps each
+  run's typeface where python-pptx writes Calibri, and an empty frame is left
+  unchanged and returns `None`.
 
 Against the recorded frames, Arial, Calibri and Times New Roman at 10 to 32
 points, single and 150 percent spacing, wrapped and unwrapped, every stored

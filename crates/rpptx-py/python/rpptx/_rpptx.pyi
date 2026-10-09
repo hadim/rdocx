@@ -164,6 +164,8 @@ class AutofitResult:
     @property
     def height(self) -> _Length | None: ...
     @property
+    def width(self) -> _Length | None: ...
+    @property
     def font_size(self) -> _Length | None: ...
     @property
     def fits(self) -> bool: ...
@@ -629,7 +631,7 @@ class TextFrame:
     def fit_text(
         self,
         font_family: str | None = None,
-        max_size: int = 18,
+        max_size: float = 18.0,
         bold: bool = False,
         italic: bool = False,
         font_file: _Path | None = None,

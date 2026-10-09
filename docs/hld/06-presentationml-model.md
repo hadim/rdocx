@@ -467,16 +467,26 @@ reduction. `set_normal_autofit` stores both in thousandths of a percent and
 omits a full-size scale and a zero reduction, so text that fits keeps a bare
 `a:normAutofit`. `set_font_on_every_run` is the write half of python-pptx's
 `fit_text`: size, bold, italic and an optional Latin typeface on every run,
-line break, field and paragraph end.
+line break, field and paragraph end. `TextParagraphMut::set_bullet` removes
+the preserved picture or follow-text bullet part that the new value replaces,
+so the paragraph keeps one choice per bullet group.
 
 With the `render` feature, `Presentation::refresh_autofit`,
-`Presentation::refresh_shape_autofit(slide_index, shape_path)` and
+`Presentation::refresh_shape_autofit(slide_index, shape_path)`,
+`Presentation::refresh_shapes_autofit(&[(slide_index, shape_path)])` and
 `Presentation::fit_text(slide_index, shape_path, FitTextOptions)` measure the
 text with deterministic fonts and store the result, as the rendering spec's
-autofit section describes. Each returns `AutofitResult` values naming the
-frame, the stored values and every typeface the measurement replaced. `TextParagraphMut::set_bullet` removes the preserved picture or
-follow-text bullet part that the new value replaces, so the paragraph keeps one
-choice per bullet group.
+autofit section describes. They resolve only the slides they need and lay
+out no page. Each returns `AutofitResult` values naming the frame, the stored
+values and every typeface, in every bold and italic face its runs use, that
+the measurement replaced.
+
+The Python `TextFrame.auto_size` setter writes the mode and marks the frame
+by slide id and shape id. `save`, `to_bytes`, `to_pdf`, the slide renders and
+`text_layout` first refresh every marked frame that still exists, through
+`refresh_shapes_autofit`, so text written after the setter, as python-pptx
+scripts write it, is fitted in the saved file. Setting `NONE` or `None`, or
+`fit_text`, which leaves no autofit, unmarks the frame.
 
 Whole-frame replacement creates a minimal body when needed and always retains
 one paragraph. It preserves existing body properties, list style,
