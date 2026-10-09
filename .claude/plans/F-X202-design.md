@@ -439,3 +439,20 @@ paired-box edits. No contributed gate, archive tuple or baseline is adopted.
 ## Immutable contribution assessment decisions
 
 Completed immutable PR322 assessment is retained in .claude/scratch/S91-PR322-6b5e2e-assessment.md. Adapt logical-grid validation and qualified picture scans under the existing full contract. PyPicture at contributor binding document.rs:741 carries index/revision without its document owner, while resize at:2531 checks only revision. Reject cross-document same-revision pictures before any write. Python heading bookmark publication at paragraph.rs:216 precedes source validation at:231, while native comments.rs:1077 reuses a bookmark merely starting at the heading. Use the approved atomic whole-heading and link transaction, with full heading scope and unique identity. Native table.rs:719/:1656 clear opaque row/cell properties, and some mutations bypass complete document staging. Preserve unrelated opaque formatting and stage all fallible topology operations. The unbounded TableEdit exception history is not an approved replacement for X211 owner identity and causal invalidation. Nested NotImplemented paths and body-only pictures remain full-scope gaps. No local gate is claimed.
+
+## PR322 advanced head and authentic style setter control
+
+PR322 now points to347091e6c9f2747c73de4b1b171c84203a9041ae. Its incremental
+change allows undefined table-style strings with a warning. Retain this
+story's strict missing-definition refusal instead. Actual python-docx1.2.0
+public setters refuse unknown display names and IDs with KeyError and exact
+package preservation. Defined display names succeed silently, defined IDs
+warn about deprecated ID lookup, and warning-as-error refuses before edits.
+The quickstart style exists in its bundled template. Private XML assignment
+of an unknown ID is not public setter success. Duplicate-name first-match
+oracle behavior remains a documented divergence from selected ambiguity
+refusal. Keep current explicit-ID compatibility independently of the oracle's
+warning. Complete controls/receipt are at
+/private/tmp/S91-F-X202-style-policy-control. Incremental contribution receipt
+SHA0350451b0e26b764d0adb4a6ec756478881bf62ed22e436023378dceced27b40.
+No source, baseline, completed acceptance or new F-ID follows from intake.

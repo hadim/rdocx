@@ -486,3 +486,20 @@ Python document/property projections and current CLI source/test entrypoints.
 No proposed contributor inspection.rs file is authorized. Provider completion
 is required before the source claim. Native typed export diagnostics retain
 path, code and loss information through the installed projection.
+
+## Complete PR325 and advanced-head reconciliation
+
+PR325 closes Issue306 and attaches to this existing F-ID. Complete original
+headfbeb5a5b4eaea022fb8c24d21862b9fa2cd57a61 and advanced head
+87d4b71c1ed211ecf34156d39f18a69cb4fd44ad are captured in
+/private/tmp/S91-PR325-intake and /private/tmp/S91-PR325-87d4b71-intake.
+All26 cumulative feature paths are unchanged by the advance, which only
+classifies inspection as operations in the existing workflow test. No feature
+recapture or duplicate implementation is required. Retain useful shared
+CLI/native text and validation work, but implement the approved typed export
+reports, qualified physical owners, checked insertion and live property
+contracts. Bare export bytes and truncated warnings do not satisfy those
+contracts. Adapt useful extraction inside existing files without adopting
+contributor inspection.rs. Formal X212 completion supplies paragraph visibility.
+Root's delegated verification authenticated both complete captures and Git
+blob identities, including all26 unchanged head blobs against the new tree.

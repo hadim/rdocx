@@ -457,3 +457,19 @@ rotation and flips together, not only the existing unit-scale markers.
 Retain member IDs, z-order, opaque XML and save/reopen evidence. Reuse the
 shared group transform and connector implementation once. This intake has
 not reproduced the defect or changed production source.
+
+## Complete PR326 and Issue323 reconciliation
+
+PR326 at a81d94683688d5e4d144e0f2dafd9c876548a293 closes Issue309 and
+attaches here. Its36-file cumulative capture and71 base/head Git blobs are
+retained in /private/tmp/S91-PR326-intake, receiptSHA
+47b21f03bb8b454f0e85359590b986d010e0373a6116ce65a03c01d599c65c8c.
+Affine order and visual-bound work are useful bounded contribution input.
+Nonuniform rotated-child ungroup approximation must become supported exact
+behavior or atomic refusal, not silent drift. Reject failed alignment before
+live geometry materialization. Preserve qualified decorative/highlight raw
+extensions, glued-connector lifecycle and placeholder relationship closure.
+The contributor explicitly leaves Issue323 unresolved. Retain resolvable
+siblings and owner-specific diagnostics for unresolved grouped connector
+members. Its global kind-counter history is not the selected X211 causal
+owner contract. New and later PRs remain under this owner, without a new F-ID.

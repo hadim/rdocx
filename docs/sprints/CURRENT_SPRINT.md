@@ -282,3 +282,19 @@ remain identical after native normal reopen/save. No handoutMaster exists
 in the source or saved deck, establishing a default-print compatibility case
 that the current native exporter must still resolve. These bounded native
 controls are design evidence, not local renderer or sprint verification.
+
+## Completed rolling contribution reconciliation
+
+The22:20:37UTC refresh has11 open PRs and24 issues, of which22 issues
+are in scope after264 and281 are excluded. All new and advanced heads are
+completely captured. PR325/Issue306 remains F-X203 at87d4b71c, and
+PR326/Issue309 plus Issue323 remain F-X206. PR324 remains F-X208 and
+advanced PR322 remains F-X202. Updated assessments are in those canonical
+plans. No duplicate F-ID or repeated feature implementation was created.
+
+Independent checks authenticated202 evidence artifacts,124 Git blobs and
+15 causal source references with no mismatches. PR325's advance changes
+only workflow classification, preserving all26 cumulative feature paths.
+Fresh comments/reviews/inline reviews for325 and326 contain no entries.
+Previously captured heads and closed completed deliveries keep their existing
+owners. Contributor test claims are not local completion or closure evidence.

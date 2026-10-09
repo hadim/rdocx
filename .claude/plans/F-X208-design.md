@@ -309,3 +309,18 @@ against our authenticated controls and actual integrated implementation.
 Do not adopt new source files, the libc dependency, public struct changes,
 archive values or output hashes implicitly. Shared colours remain X197 and
 theme editing remains X209. No additional F-ID is created.
+
+## Completed immutable PR324 assessment
+
+The complete35-file PR324 source and68 Git blobs were authenticated at
+b4786dc9211f36a48e64b38d4277a07b21e11354, retained under
+/private/tmp/S91-PR324-intake. ReceiptSHA
+8bef6a0de587509bee618e5a04649d90d3b9ebc2e677d41275b83282c9f9d180.
+Reuse useful footer fields, legal hf ownership, firstSlideNum, theme reads
+and child-order corrections. Transition edits must preserve sound and opaque
+siblings instead of replacing the complete subtree. Cover supported transition
+variants and timing/units explicitly. Footer writes preflight the whole OPC
+candidate, generate unique field IDs and resolve current owner/theme state.
+Preserve placeholder identity, transformed geometry and qualified relationships.
+The copied new files, libc dependency and public result field are not implicitly
+authorized. Contributor hashes remain inputs to inspect, not local gate evidence.
