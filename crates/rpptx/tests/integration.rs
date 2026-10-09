@@ -9437,6 +9437,81 @@ fn notes_and_handouts_export_pdf_and_png_with_deterministic_dimensions() {
 }
 
 #[test]
+fn selected_slides_render_as_jpeg_or_one_tiff_and_handouts_need_a_master() {
+    let presentation = Presentation::from_bytes(&f226_fixture_bytes()).unwrap();
+    assert!(presentation.has_handout_master());
+    assert!(!Presentation::new().unwrap().has_handout_master());
+    let options = |format| rpptx::RasterOptions { dpi: 36.0, format };
+    let rpptx::RasterOutput::SeparatePages(jpegs) = presentation
+        .render_slides_deterministic(&[1, 0], options(rpptx::RasterFormat::Jpeg { quality: 80 }))
+        .unwrap()
+    else {
+        panic!("JPEG renders one image per slide");
+    };
+    assert_eq!(jpegs.len(), 2);
+    assert!(
+        jpegs
+            .iter()
+            .all(|jpeg| jpeg.starts_with(&[0xFF, 0xD8, 0xFF]))
+    );
+    let rpptx::RasterOutput::MultiPageTiff(tiff) = presentation
+        .render_slides_deterministic(&[0], options(rpptx::RasterFormat::Tiff))
+        .unwrap()
+    else {
+        panic!("TIFF renders one stream");
+    };
+    assert!(tiff.starts_with(b"II*\0"));
+    assert!(matches!(
+        presentation.render_slides_deterministic(&[9], options(rpptx::RasterFormat::Tiff)),
+        Err(Error::Render { .. })
+    ));
+}
+
+#[test]
+fn slide_images_back_picture_fills_and_tables_keep_a_style_id() {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    let png = valid_one_pixel_png();
+    let first = presentation.add_slide_image(0, &png, "fill.png").unwrap();
+    assert_eq!(
+        presentation.add_slide_image(0, &png, "again.png").unwrap(),
+        first
+    );
+    assert!(
+        presentation
+            .add_slide_image(0, b"not an image", "x.png")
+            .is_err()
+    );
+    let fill = Fill::from_xml(
+        format!(
+            r#"<a:blipFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><a:blip r:embed="{first}"/><a:stretch><a:fillRect/></a:stretch></a:blipFill>"#
+        )
+        .as_bytes(),
+    )
+    .unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        slide.set_background(fill).unwrap();
+        let mut shape = slide
+            .add_table(2, 2, Emu(10), Emu(20), Emu(300), Emu(200))
+            .unwrap();
+        let mut table = shape.table_mut().unwrap();
+        assert_eq!(table.style_id(), None);
+        table.set_style_id(Some("{073A0DAA-6AF3-43AB-8588-CEC1D06C72B9}"));
+    }
+    let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
+    assert!(reopened.validate().is_empty());
+    let slide = reopened.slide(0).unwrap();
+    assert!(matches!(slide.background_fill(), Some(Fill::Blip(_))));
+    let table = slide.shapes().last().unwrap().table().unwrap();
+    assert_eq!(
+        table.style_id(),
+        Some("{073A0DAA-6AF3-43AB-8588-CEC1D06C72B9}")
+    );
+    assert!(reopened.slide_png_deterministic(0, 24.0).unwrap().is_some());
+}
+
+#[test]
 fn slide_png_conveniences_match_the_resolved_layout_raster_path() {
     let presentation = Presentation::from_bytes(&f226_fixture_bytes()).unwrap();
     let (_, layout) = presentation.render_deterministic().unwrap();
