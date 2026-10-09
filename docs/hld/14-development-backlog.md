@@ -6814,6 +6814,12 @@ fill, line and shadow APIs. Save/reopen, malformed inputs, unset colours,
 stale handles and actual rendering distinguish correct formats from coercion
 or source loss. Strict typing and stub checks agree with the runtime API.
 
+Shared expanded acceptance from Issues303 and308 remains owned by F-X197:
+one extractor in existing oxml-py-support serves both real bindings, with
+surface-specific None/auto behavior retained. Existing enum/export files
+expose supported theme values, and PowerPoint formats expose source-preserving
+brightness using existing transforms. Later parity stories reuse this result.
+
 ### F-X198, Preserve alternate text-box copies during scoped replacement (M)
 
 Resolve `hadim`'s [Issue301](https://github.com/tensorbee/rdocx/issues/301), a

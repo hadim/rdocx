@@ -52,24 +52,27 @@ Repeat the source and stub inventory before completion and add any other
 existing colour-taking call found. Named highlight colours are a separate
 Word highlight vocabulary, not scalar RGB setters.
 
-Use concrete package-local validators in existing binding files. A Word
-helper has this signature:
+Use one concrete PyO3 extractor in existing oxml-py-support/src/lib.rs,
+consumed directly by both current bindings:
 
 ```rust
-fn color_hex(
-    py: Python<'_>,
+pub fn rgb_channels(
     value: &Bound<'_, PyAny>,
     parameter: &str,
-    allow_auto: bool,
-) -> PyResult<String>;
+) -> PyResult<(u8, u8, u8)>;
 ```
 
-The PowerPoint helper returns native RgbColor. Accept RGBColor and exactly
-six ASCII hexadecimal digits with an optional single leading hash. Normalize
-uppercase. Retain legacy three-channel tuple inputs on font/style setters
-that already accept them. Existing auto remains accepted only where the
-original border/shading contract allows it. Preserve each setter's existing
-None clearing or omission semantics.
+Add the existing workspace PyO3 dependency to this unpublished support crate,
+without a new feature flag or extension-module setting. Both real consumers
+already use the same pinned PyO3 version. Keep extension-module in the binding
+crates. No new type, trait, generic parameter, wrapper or file is needed.
+Native RGB/hex representation is adapted at each existing call site.
+
+Accept tuple-compatible RGBColor and existing legacy channel triples, plus
+exactly six ASCII hex digits with an optional single leading hash. Normalize
+hex uppercase. None omission/clearing and existing Word auto are handled by
+the calling property before shared extraction, retaining their original
+surface-specific semantics. Do not add generic policy switches to the helper.
 
 Validate before mutable source access. Wrong types raise TypeError naming
 the full affected parameter, accepted forms and actual Python type. Invalid
@@ -169,12 +172,18 @@ python-pptx==1.0.2 and document the approved getter adaptation.
 
 ## HLD impact
 
+- `docs/hld/03-architecture.md`: shared Python support dependency and extraction ownership.
+- `docs/hld/14-development-backlog.md`: full shared Issue299/303/308 colour acceptance.
 - `docs/hld/10-bindings-spec.md`: complete input/getter inventory, source
   preservation, type/theme tokens, auto sentinel, live format and deliberate
   getter compatibility change.
 
 ## Risk routing
 
+- Dependency graph: HLD03, inspect the support PyO3 dependency and both actual consumers.
+  Preserve oxml family direction and keep PyO3 outside both WASM graphs.
+  Run the support crate's actual existing unit entrypoint with Python runtime
+  initialization, and retain binding exclusions on workspace test binaries.
 - Theme colour: read HLD05 colour sections. Run source-preservation controls
   for themes and transforms. Do not modify legacy Word tint/shade math.
 - PyO3: read HLD10. Run installed runtime, strict typing and stub checks,
@@ -200,7 +209,7 @@ blocks completion.
 
 - [ ] Reproduce the nested font colour failure on the claimed base.
 - [ ] Freeze and recheck the full existing setter/getter inventory.
-- [ ] Implement concrete package-local input validation.
+- [ ] Implement the single shared PyO3 colour extractor and both consumers.
 - [ ] Add Word live format and extend existing PowerPoint format.
 - [ ] Expose supported type/theme source values without flattening themes.
 - [ ] Migrate styles, borders, shading and every inventoried setter.
@@ -220,3 +229,25 @@ exclusive hash baseline.
 None. Issue299 explicitly requests the live getter. Preserve direct assignment
 and tuple inputs, document scalar reading through rgb, retain existing auto,
 None and colour-source semantics, and use supported native theme tokens.
+
+## Approved expanded colour intake
+
+Issue303 explicitly requires the shared extractor described above, replacing
+the earlier package-local proposal before implementation begins. Issue308
+adds Python colour-format type, theme colour and brightness expectations.
+They belong here, not duplicate implementations in F-X200 or F-X205.
+Expose supported MSO_THEME_COLOR values through existing enum/export files,
+retaining accepted native token inputs and source semantics. Do not introduce
+a new enum module merely to mimic an import path. Use existing native colour
+transform models to read/write brightness for the PowerPoint font/fill/line/
+shadow formats. Preserve unknown transforms, cached literal/source distinction
+and alpha. Verify the exact supported brightness contract against pinned
+python-pptx1.0.2, rather than inventing a tint formula. Word retains its native
+tint/shade vocabulary and deliberately pinned conversion convention.
+
+Add shared helper malformed/type/legacy controls to the existing support test
+module and installed binding suites, then explicit theme-enum and brightness
+save/reopen, unknown-transform and rendering controls. Shared extraction must
+validate before any mutation. No fresh parser model, file or dependency beyond
+the already pinned workspace PyO3 is approved. If actual missing native
+transform support earns parser changes, revise the risk contract first.
