@@ -265,3 +265,53 @@ Exact extracted owner files use names `coupled-autofit-after-reopen-ppt_notesMas
 ## Remaining provider decision barrier
 
 F-X207 now has native real-edit counterexamples and persisted scale-pair evidence. It still needs a measured, approved candidate ordering and shaping/stacking parity sufficient to reproduce the stored pair from the same exact font and text inputs. Mixed size/font runs, default versus explicit100-percent spacing, inherited flags, bullets, wrapped text and shared-owner contexts remain separate generalization controls. No universal formula, successful refresh gate, renderer parity or deterministic baseline update is asserted by this receipt. Root may reconcile the concrete observed pairs into the plan while retaining those bounded acceptance barriers.
+
+## Bounded native coupling analysis
+
+## Proven spacing semantics
+
+Current source already implements absolute percentage-point subtraction, not proportional reduction. crates/rpptx-render/src/text.rs:936 calculates SINGLE_SPACING_EM * (factor - line_spacing_reduction), and exact spacing at938 stays unchanged. The omitted percent case at940 treats original factor1.0. SINGLE_SPACING_EM is1.2 at21. The low-level actual line height at crates/oxml-layout/src/line.rs:1918 is font_size*multiple and :1919 exact points. There is no multiplication bug to fix in this path.
+
+Primary Microsoft documentation, ECMA-376 remarks for NormalAutoFit, says the reduction is subtracted from the original line spacing and applies only to percentage line spacing. It gives original-font scaling with default100% and reduction default0%. Source: [Microsoft NormalAutoFit](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.drawing.normalautofit?view=openxml-3.0.1). This describes stored attribute semantics, not the producer's algorithm for choosing attributes.
+
+Native PowerPoint16.113.3/build16.113.26092714 exported Quartz PDFs normally before/after reopen. Arial original font at /Applications/Microsoft PowerPoint.app/Contents/Resources/DFonts/arial.ttf has version6.80i, unitsPerEm2048, source SHA15663c7e8495594c6136eb51b11983eb8f5bbcdd07bb2c327e0d1e83415b0f06. PDF subset revision/global metrics match that installed face, not system Arial5.01. Font-resolution receipt explicitly limits this to emitted-face identification, not a blanket OS resolver trace. Use that exact caller-font face through X195 for the bounded comparison.
+
+Direct content-object3 matrices identify emitted font sizes: A10022pt, BExact287pt, C15013pt, DParagraph11pt. PDF font size is CTM0.24 multiplied by text matrix91.66666/29.16667/54.16666/45.83333, not the literal Tf1. These differ from unrounded stored-scale products21.7/7/13.3/11.2pt. This is an actual export quantization observation, not permission to globally round native renderer fonts. Height controls'26pt is an inference from identical Line glyph bbox and matching face metrics, separately labeled in the calculation receipt.
+
+| Control | Native stored scale/reduction | Mean six native baseline pitches, pt | Prediction with emitted point size and absolute subtraction, pt |
+| --- | --- | --- | --- |
+| A100 | .775/.20 | 21.1600017 | 22*1.2*(1-.2)=21.12 |
+| BExact28 | .25/.20 | 28.0000017 | exact28, unaffected |
+| C150 | .475/.20 | 20.36 | 13*1.2*(1.5-.2)=20.28 |
+| DParagraph | .40/.20 | 22.52 | 11*1.2*(1-.2)+6+6=22.56 |
+| AHeight260 | .925/.20 | 25.0000017 | 26*1.2*(1-.2)=24.96 |
+| AHeight290 | .925/.10 | 28.1600017 | 26*1.2*(1-.1)=28.08 |
+
+The six physical baseline steps are retained individually. They vary at0.24pt rendering increments and some differing-line glyph metrics, so averages are informative and must not be represented as exact constant per-line distances. C150 decisively distinguishes rules: proportional reduction predicts13*1.2*1.5*.8=18.72pt,1.64pt below observed mean, whereas absolute subtraction differs by.08pt. D's observed pitch is consistent with unchanged exact6pt before/after paragraph spacing. It does not prove before/after rules for omitted spcFirstLast, percentage paragraph spacing, mixed font sizes or bullets.
+
+## Actual candidate grid versus unknown ordering
+
+The six outputs lie on the existing2.5%-font-scale grid from1.0 through.25, with reduction values.10/.20. A candidate representation can therefore use integer scale ticks100000-2500*k for k0..30 and integer reduction ticks0/10000/20000. These exact integer attributes avoid float-grid accumulation. This is a bounded candidate lattice containing the observed answers. It does NOT prove intermediate reduction values impossible, a20% universal cap, the allowed complete producer scale range, or the order in which candidates are tested.
+
+Same fontScale92500 with lnSpcReduction20000 at height260 and10000 at height290 rules out reduction=f(scale) alone. At least the measured frame height/context participates. Comparing independent one-dimensional maxima also cannot decide a coupled objective. A concrete scale-first lexicographic order is falsified by these controls under the current renderer's actual acceptance equations, not merely unproven:
+
+- Inner heights: the first four use2.25in*72 minus two.05in insets=154.8pt. Height260=180pt, height290=201.6pt.
+- For the uniform seven lines with explicit100% spacing and fixed6pt spaces on D, current arithmetic is H_A=7*28*s*1.2*(1-r), H_C=7*28*s*1.2*(1.5-r), H_D=7*28*s*1.2*(1-r)+72. The72pt is six adjacent before/after pairs. These are numeric source-model deductions, not a native rendering run.
+- With r=.2, largest source-grid fit would be A.800(H150.528), C.500(H152.88), D.425(H151.968), height260.950(H178.752). Native selected.775/.475/.400/.925 respectively. Each native selected scale is one2.5% step lower than this simplified source prediction.
+- Height290 with r=.1 admits source-grid.950(H201.096), yet native writes.925/.1. With r=.2 it admits even.975(H183.456), so maximizing font scale before minimizing reduction would select a distinctly different pair. A purely global reduction-first order would prefer substantially smaller fonts with r0, also not these native pairs.
+
+It would be easy to invent one extra scale rung, a hidden padding constant, a weighted utility or an initial.925 trial to force these answers. None is identified by the controls. Do not encode any such empirical patch as the PowerPoint coupled algorithm. Integer font-point quantization can change fit thresholds, but it does not by itself establish producer search ordering. The current renderer uses scaled original run sizes rather than those observed Quartz integer font emissions (text.rs:652/:656), so exact stored-pair parity and exported PDF metric parity need separate comparisons.
+
+A valid concrete solver design can retain one prepared font manager and one shaped original text inventory, evaluate every integer candidate without mutating any owner, and retain actual StackedText.fits results at text.rs:439, checking both width and height. The solver must accept a documented/native-confirmed candidate ordering. The present evidence only licenses the representation and evaluator, not a final ordering. Refresh/fit_report must consume the SAME eventual ordering and fit threshold. Persist the exact selected integer pair only after every shared owner context passes. Reports retain ordered font diagnostics and the tested pair. No unproved ordering can be silently substituted to mark the design complete.
+
+## The exact-spacing floor is a positive unfit discriminator
+
+BExact28's seven line advances remain28pt, regardless of fontScale or reduction. Current source full line-height sum is196pt, greater than154.8pt for every candidate. Native selected floor.25/.20 and still drew lines past the frame: actual baseline235.68pt and last word bbox lower extent lie beyond frame bottom205.2pt and content bottom201.6pt. The saved native pair is evidence of producer floor behavior, not of successful fitting. It must not become a successful fit status.
+
+Keep canonical atomic unfit contract. An operation requiring all requested normal frames to fit must refuse before publication when B cannot fit at the approved floor. Read-only report returns overflow=true, needed_scale=None and an exact-spacing reason. Do not shrink exact28pt spacing, truncate/drop lines, raise the floor, classify native floor persistence as successful parity, or partially write other frames. Native floor-reproduction can be independently asserted as an observed serialization control while the product deliberately reports failure, with that exact divergence documented.
+
+## Smallest next discriminator and implementation gates
+
+Before claiming the native ordering is settled, capture a near-full-size boundary using the identical seven lines, same exact Arial face, width, insets and explicit100% spacing. Heights3.2/3.3/3.4in give inner223.2/230.4/237.6pt, straddling the unshrunk source235.2pt. Native edits/recompute must establish whether first overflow chooses initial.925, a.975 first rung, reduction before shrink, or another joint rule. A controlled150% spacing partner distinguishes compression priority at the same font scale. Keep exact output/source receipts and ordinary reopen. These are bounded research operations to be scheduled with the current native UI owner, not a question for the user.
+
+Then replay every actual pair and next-boundary output with the exact original font bytes through the current measurement provider. Compare line baseline advances, glyph point sizes, physical first/last bounds and fit decisions separately. A current source-model mismatch is not solved by replacing the native oracle with the library. Expand only where a new production branch actually requires mixed sizes, percentage paragraph spacing, wrapping, bullets or shared master/layout contexts. Record every unsupported/unmeasured case, never silently skip it. Existing saved six-pair controls can be promoted to authored regression expected values only after the chosen algorithm's true source-model fit correspondence is established. No universal six-control parity, scoped gate, baseline update or source approval is asserted here.

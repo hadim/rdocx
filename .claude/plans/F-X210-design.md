@@ -181,3 +181,25 @@ SHA256c42e62142caf81adf7eeccc72e3467c59e958af2e6ab0cb7b61c04de576be71b.
 WOFF tables were read in memory without font copying, conversion or table
 export. No kerning, wrapping or genuine Bold equivalence is established.
 The earlier HarfBuzz WOFF load failures remain failed shaping controls.
+
+## Additional bullet coverage proposal
+
+The exact existing eight-file approval remains valid. A separate proposed
+3916-byte NotoSansSymbols2-bullets-subset.ttf supplies16 Unicode bullet
+characters absent from current bundled coverage. Its official source was
+independently retrieved by complete Git blob at google/fonts commit
+51303ca9e8ac9dcea7b12d307ba568fd0e6fcfca, source SHA256
+7d5fb73b7ca67a6798101741f5d280a3d016a56a197afcd4199dbb57b4b82a21.
+The original OFL1.1 and copyright name the Noto Symbols project.
+Root reproduced the contributed subset byte for byte using FontTools4.66.1,
+output SHA2567f5a31d932df09902c1097af020569b63d6296c067bc804ae6a597ef9b3ad21b.
+All16 glyphs are covered in the independent HarfBuzz check. Source, license,
+reproduction output and one-file proposal are retained under
+/private/tmp/S91-F-X210-symbol-proposal. The completed temporary tool
+environment was removed after reproduction to save disk space.
+
+Approval was requested for this one exact new tracked binary. It remains
+pending and is not copied into the repository. Its copyright, pinned recipe
+and hashes will use the existing NOTICE-Noto, with no new documentation file.
+This proposal does not authorize the different four static Gelasio faces,
+new font installation or unverified original Symbol/Wingdings mappings.
