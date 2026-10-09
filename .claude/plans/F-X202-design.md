@@ -82,7 +82,7 @@ pub fn insert_table_column(&mut self, table_index: usize,
 pub fn delete_table_column(&mut self, table_index: usize,
     index: usize) -> Result<()>;
 pub fn split_table_cell(&mut self, table_index: usize,
-    row: usize, logical_column: usize) -> Result<()>;
+    row: usize, logical_column: usize) -> Result<bool>;
 pub fn add_empty_table_row(&mut self, table_index: usize) -> Result<usize>;
 ```
 
@@ -315,22 +315,12 @@ dependency prefix, and update this draft's citations at the actual claim Base.
 
 ## Open questions
 
-1. Approve the explicit set_picture_size target/signature change and migration
-   of the current relationship-wide behavior. Decide whether that legacy
-   operation remains under an explicit name, rather than an ambiguous overload.
-2. Resolve logical-column insertion across a span and vertical merged empty-row
-   continuation from native controls. Define split content/formatting and
-   gridBefore/gridAfter admission before implementing the full projection.
-3. Choose the final public picture snapshot selector, inventory scope and
-   paired picture representation support without silently inventing identity.
-4. Define heading-link placement/return handle and compatible internal dispatch
-   for '#name'. Exact native target/bookmark admission is technical work.
-5. Define the complete paired owner/paragraph correspondence supported by scoped
-   edits. Asymmetric topology needs an explicit refusal boundary, while genuine
-   native paired success remains mandatory.
-6. Split implementation into dependency-safe children if the full native plus
-   Python/oracle contract exceeds the approved L estimate. No criterion can be
-   dropped merely to complete a smaller patch.
+The explicit Picture target transition, named relationship-wide compatibility
+operation, logical-grid rules, split/no-op results, bookmark placement and
+paired-owner admission are resolved below. Final approval still requires the
+mandatory native table and genuine paired-text-box controls, exact provider
+source ownership and a bounded complete implementation wave. No Issue301
+closure follows from the F-X198 safety prefix alone.
 
 ## PR317 synchronization reuse assessment
 
@@ -351,3 +341,85 @@ qualified multiple-choice/grouped/identical/foreign/opaque controls,
 asymmetric box counts, nested cells and unselected-paragraph divergence.
 Contributor claimed regression tests have not been independently verified
 by this static source assessment. Do not claim local success from them.
+
+## Resolved table and physical owner contracts
+
+
+Freeze the existing clone operation as content cloning. Native document.rs:19793 copies properties, nested content, relationships and producer XML, freshens identities and omits comment anchors. Python clone_row currently bumps structural revision and returns a newly captured Row at rdocx-py/table.rs:597. It remains available with that contract.
+
+Choose `Table.add_row() -> Row` as empty append, backed by checked native add_empty_table_row(table_index)->Result<usize>. Copy last direct row's row/cell formatting and horizontal logical occupancy, then replace each cell content with its required empty paragraph. Do not copy nested content, bookmarks/comments, bindings, drawing relationships or paragraph identities. Clear vMerge on all new cells so append does not extend an existing vertical merge or start a fresh multirow region inadvertently. This is the proposed rule, not an observed Word/python-docx result. A last row with gridBefore/gridAfter keeps those omissions and gridSpan occupancy. A table without a last direct row refuses until a separate initial-row contract exists. Wrapped row/cell control topology cannot be cloned as formatting: refuse before publication if it cannot be projected without copying control ownership. Do not turn add_row into clone_row plus ad hoc text clearing.
+
+Keep proposed Python insert_column(index:int,*,before:bool=True)->None and delete_column(index:int)->None. Index identifies an existing logical tblGrid column, in0..column_count. Insertion boundary is index or index+1. No negative indexing for mutation, no guessed clamping, and invalid inputs fail before native mutable access. Native document methods use document-wide recursive table ordinal, as documented for clone_table_row at document.rs:19788 and implemented by table/table_mut at19769/19778. The current Python ContentPath top segment is not sufficient for arbitrary nested table translation: table.rs:23 finds the first Body segment. Resolve the full existing ContentPath to the checked native physical table before choosing its recursive ordinal. Do not claim nested parity by feeding a body index to a tables-only ordinal.
+
+Use existing row_cell_ranges and validate_table_topology, table.rs:584/636. They already validate positive widths, exact active-grid coverage, omissions and matching vertical continuation ranges. Build the edit's one local logical range projection from them, not an independently tolerant grid interpretation.
+
+Insertion rules:
+
+- Copy the referenced logical neighbour's grid width. Within a spanning cell's strict interior, increase its gridSpan and dxa cell-width hint by that grid width, retaining its content and vMerge. Apply the same logical boundary to every row, so a vertically merged range expands consistently.
+- At a cell boundary, add an independent empty cell with properties of the referenced neighbour covering index in that row, required empty paragraph, gridSpan/vMerge/hMerge removed, and dxa width equal to the inserted grid width. When index is omitted in that row, extend the corresponding gridBefore/gridAfter omission rather than inventing a cell.
+- Shift omitted-range boundaries consistently. Preserve percentage/auto/nil table or cell width policy rather than treating it as dxa. Update only existing dxa aggregate width hints using checked arithmetic, leaving absent hints absent. Refuse an inconsistent explicit-width case if it cannot retain the selected width policy without guessing.
+
+Deletion rules:
+
+- Shrink every range crossing the deleted logical column. A multi-column cell loses one gridSpan unit and the deleted dxa width while retaining all content once. A one-column cell intersecting deletion is removed with its complete content.
+- Decrement gridBefore/gridAfter if the deleted column is omitted. Preserve remaining cell/property/raw order and adjust stored opaque boundary positions instead of deleting unrelated raw siblings.
+- A vertical merge shrinks by the same logical column in each member. Removing its final logical column removes every member of that region. Run existing comment/marker removal reconciliation on the complete candidate, document.rs:19888 and comments.rs:3234, so deleted anchors do not leave an invalid package. Refuse ownership that cannot be reconciled rather than leaving dangling IDs.
+- Refuse final-column deletion, zero-width/overflow, orphan continuation and unsupported legacy hMerge/control-wrapped topology before publication. Support gridBefore/gridAfter when the existing positive-width exact-coverage projection succeeds, rather than refusing all omission metadata.
+
+Choose `Cell.split() -> None`, native split_table_cell(table_index,row,logical_column)->Result<bool>, where bool means a structural change. Resolve a selected continuation to its restart, then discover the complete contiguous rectangle defined by exact logical range and matching vMerge chain. Materialize one physical cell for every original tblGrid column in every region row. Original merge-origin content stays once at that origin. Clear gridSpan/vMerge on every materialized cell. Keep each existing row member's content at its leftmost resulting cell if it owns distinct retained content, rather than silently deleting a continuation's producer content. If distinct continuation content or raw ownership makes complete region reconstruction ambiguous, refuse atomically. Newly materialized cells copy only cell formatting and take the corresponding grid width, with an empty paragraph. Preserve existing member tcPr producer XML in place and copy formatting into new cells only when it is free of unmodelled document-wide identity/relationship ownership. Do not clone raw content into each new cell.
+
+An unmerged cell is a no-op: false native result, Python None, unchanged bytes/revision/handles. A horizontal-only, vertical-only or rectangular region is one transaction. Validate pre/post topology, reconcile removed markers if any, prepare/reopen and publish once. Valid topology is not proof that omitted producer content was retained, so assert complete unrelated part equality as well.
+
+Structural table edits bump Python document revision once only after native success. This invalidates all prior rows/cells/tables, including the receiver. add_row and Cell.add_table return fresh handles captured after the bump. Column methods and split return None, so callers reacquire document.tables to continue. Failures and split no-op do not bump. Native Cell.add_table_checked at table.rs:1975 remains the bounded route with a mandatory trailing paragraph, rather than the unchecked add_table at1930.
+
+Native Word/python-docx controls are still mandatory verification for the chosen empty-row/merge/width rules. These decisions define a proposed concrete algorithm and admission boundary, not a substituted oracle pass. Any disagreement earns plan correction before implementation, not an unexplained output delta.
+
+## Picture occurrence identity and compatibility
+
+Preserve existing native Document::set_picture_size(rel_id,width,height)->Result<usize> unchanged as the relationship-wide main-document operation, document.rs:20672. Existing Python test_core.py:877 pins multiple matching drawings. Do not reinterpret that native relationship parameter or silently take its first occurrence.
+
+Add native `set_picture_size_at(&mut self, location:&ContentLocation, occurrence:usize, width:Length, height:Length)->Result<()>`. Location is a checked paragraph or supported direct content owner, and occurrence is the source ordinal among qualified direct ungrouped DrawingML picture carriers within that selected owner, not relationship ID, docPr ID, raw byte offset or global picture ordinal. Keep the existing native relationship-wide method available and explicitly document the difference. Python `Document.set_picture_size(picture:Picture,width:int,height:int)->None` uses the occurrence route, and `set_picture_sizes_for_relationship(relationship_id:str,width:int,height:int)->int` preserves the legacy Python behavior under an explicit name. The change to the old Python target/signature requires the approved pre-1.0 migration note and both tests, not deletion of the previous regression.
+
+Picture is an immutable Python snapshot retaining its originating PyDocument object, revision, checked ContentLocation, within-owner qualified occurrence, occurrence source fingerprint and metadata/owned media bytes. Reject foreign originating document, stale revision or failed native physical correspondence before any write. No caller can fabricate a token from an arbitrary relationship string. Native callers explicitly supply the checked location and occurrence, following existing StoryId fingerprint semantics at document.rs:930 rather than introducing a new global document UUID system.
+
+Inventory emits supported story owners in native stories order and each qualifying occurrence in physical source order. Scan physical parts once, then assign the most specific containing supported owner so body, TableCell and TextBox views cannot duplicate one occurrence. Distinguish two carriers with the same embed relationship. Relationship lookup is on the actual owning part. The snapshot carries content type, bytes, extent, description/title/decorative and anchor metadata. If a required owner or media relationship is malformed, return a checked error rather than silently returning a partial inventory. No charts, group-child drawings, foreign lookalikes or SVG extension blip are reinterpreted as ordinary picture identities.
+
+For resize, qualify the selected carrier using the existing resize_story_pictures paths at document.rs:10073, update only its wp:extent and pic:spPr/a:xfrm/a:ext, and scale effectExtent with the existing checked arithmetic. Preserve anchor placement, crop, unrelated drawing children, media, relationships and every other occurrence. Re-resolve the actual source before applying source-range edits. For qualified alternate picture carriers with a VML or unproven additional Choice representation, retain atomic refusal until an independently reviewed complete representation-size rule exists. Keep inventory honest about supported editable carriers. This picture limitation is distinct from the text-box synchronized text transaction.
+
+Owned run/cell insertion uses a checked original physical run boundary or cell paragraph owner, allocates media on that story part and appends into that owner, not a new unrelated body paragraph. Existing insert_picture_to_story at17496 creates an inline paragraph, so it is a reusable staging/media ingredient, not direct proof of Run.add_picture support. Native Run/Cell relationship-only helpers cannot provide checked package import by themselves. A successful insertion returns a fresh Picture after one structural revision bump. Failure adds no relationship/media and preserves old handles. A successful resize likewise bumps the Python revision once to make old extent snapshots stale, with no-op same-size handling explicit and no bump when unchanged.
+
+## Bookmarks and internal links
+
+Choose checked native owner operations in existing document/comments/paragraph files, operating on ContentLocation/StoryRunRange and staging one candidate. Python Paragraph.add_internal_hyperlink(text,bookmark,*,tooltip=None)->Run appends one hyperlink run at the paragraph's final supported accepted-run boundary. The link has anchor=bookmark, rel_id=None and tooltip preserved. Validate XML text and native bookmark grammar first, then require exactly one existing complete bookmark with that name in the same Document. Existing comments.rs:1889 defines authored name policy and comments.rs:657 inventories checked paired ranges. A bookmark target may be in a different supported owner of the same document because it is a name target, but the inserted source run and any newly authored target range must each be one exact supported owner.
+
+Only a URL whose first character is # dispatches to internal authoring, stripping exactly that first character and validating the remainder. An ordinary URL containing a fragment remains external. Empty # is invalid. External hyperlink behavior otherwise remains native relationship-backed. Current paragraph.rs:1104 always authors rel_id and anchor=None, so add a direct anchor authoring branch, not an external relationship followed by mutation/cleanup.
+
+`Document.add_heading_hyperlink(paragraph:Paragraph,heading:Paragraph,text:str,*,tooltip=None)->Run` validates both owner documents and revisions, requires the target to be a supported native heading paragraph, and appends at the source paragraph's final supported boundary. A target bookmark is suitable only when its paired checked range exactly encloses the heading's accepted run extent in that one owner. Reuse the first suitable name in native range source order. Do not reuse a mere same-name or partial bookmark elsewhere. When absent, allocate deterministic valid name Heading_<fresh_id> without a reserved leading underscore, bounded by the native40-byte rule, and anchor exactly the heading range using existing checked story-range machinery, comments.rs:415 and document.rs:16201. Never derive the only identity from mutable heading text.
+
+An empty heading uses the native supported zero-width paragraph boundary only if the existing exact range authoring admits it. Otherwise refuse before publication, rather than insert dummy text or invent a range. Boundary crossing an inline control/revision edge follows existing exact native refusal, comments.rs:1036. Stage new bookmark ID and source hyperlink together and publish once, so a failed source insertion cannot leave a new orphan bookmark. A successful append is structural and returns a fresh source Run after one revision bump. A failure changes no bytes, IDs, relationships or revision. No new caller-owned marker edit API or detached XML handle is needed.
+
+## Paired text-box preparation and ambiguity
+
+Preserve X198 stale-target/physical correspondence validation, expected count mismatch and zero-match return before any synchronization topology refusal. For positive selected count, qualify the nearest containing modeled txbxContent and its MC AlternateContent using X198's structural namespace router, frozen worker document.rs:8309. Foreign namespace/local-name matches and descendants of opaque producer wrappers remain outside the mapping. PR317 local-name first-text-box admission is not reused, and global story-owner inventory does not change to facilitate scoped mutation.
+
+Supported correspondence is within that one qualified AlternateContent, across its qualified Choice/Fallback children that contain modeled textbox representations. Branches without qualified modeled boxes are preserved but are not fabricated into copies. Prepare source-order vectors of top-level modeled boxes in each representation. Nested AlternateContent/textbox ownership or grouped opaque routes without a provable qualified counterpart refuse. Require equal box cardinality and a consistent one-to-one vector of normalized semantic box signatures at corresponding ordinals. A signature includes qualified direct block-kind topology, accepted paragraph text vectors, nested table logical topology and supported control owner boundaries, but excludes DrawingML/VML carrier spelling, run splitting and formatting. Do not compare complete raw XML, because genuine representations differ.
+
+For a single box per branch, this proves the bounded owner slot. For multiple boxes, every corresponding signature must agree and the selected signature must be unique among sibling boxes in each branch. Identical sibling signatures are ambiguous and refuse, even when ordinal order looks plausible. Different signatures reordered across branches refuse rather than guessing a text-based permutation. Qualification, enclosing AlternateContent, ordinal topology and uniqueness are all required, so this is not an unconstrained search for another box sharing text. Do not use unrelated docPr/VML shape IDs as a shared key without actual source evidence that they are paired identities.
+
+Within the proved box, map the selected direct paragraph or descendant TableCell using its qualified structural path, direct kind sequence and logical table-grid coordinates. Validate all boundary/count correspondence before splicing. Unequal runs/formatting are supported because each physical paragraph runs the existing block-local replacement independently. Unselected whole-box text divergence is an explicit asymmetric-refusal case under the first bounded contract, not silent unselected edits or a claimed success. A later relaxation needs stronger nontext correspondence evidence, not broader matching by placeholder.
+
+Each physical mapped replacement must independently match exactly the selected logical count. Stage every source edit against original ranges, namespace-close only the required fragment context, retain each branch's formatting/opaque bytes and all comments/fields, then splice in descending offset order. Reconcile companions, prepare/reopen and publish once. Return the logical selected count, not copy count. Repeated identical paragraphs within one box remain distinguishable by checked structural slot, but repeated indistinguishable sibling boxes trigger the explicit ambiguity refusal. Preserve X198 guard for every unsupported route rather than deleting it globally.
+
+Complete regression matrix includes ordinary single-box DrawingML/VML positive success, three qualified representations, two distinct unambiguous boxes positive success, identical sibling ambiguity, reversed distinct order refusal, unequal cardinality, unselected-text divergence, unequal runs/formatting, direct and descendant-cell selection, nested typed controls, count mismatch/no-op/stale target before topology checks, aliases and rebound foreign namespaces, opaque producer lookalikes, complete unchanged package on each refusal, global replacement unchanged, and logical count once. Word save/reopen oracle remains mandatory for genuine positive representation updates.
+
+## Source and evidence receipt
+
+No proposed algorithm has been executed. This appendix is incorporated into the draft contract. Approval and actual prerequisites remain required before implementation. Source citations use canonical working source, with X198 helper explicitly cited from its frozen worker. Immutable PR317 head3d056f46e97e9cc1caf2969b5096eeb6775a5fa0 and source hash remain in .claude/scratch/S91-PR317-alternate-assessment.md. The conservative ambiguity admission is a concrete proposed safety boundary, not a claim of complete arbitrary producer pairing.
+
+Canonical read HEAD: `95278005c482420ad927c8c1b18fe2482c14461b`.
+
+- `crates/rdocx/src/document.rs` SHA256 `3b8eec9fc3980a9dc743be2faef39d1126c819be102a61b58a4f6ae798a59620`.
+- `crates/rdocx/src/table.rs` SHA256 `8e1d2d6f456643ccee1883b2ffb4b93433735226984cbe1787829d4cf4e1a690`.
+- `crates/rdocx/src/comments.rs` SHA256 `eda9a14535a0771475830cf9faa84a4df3f85b60877a4d9bdfdf5a9024e060c4`.
+- `crates/rdocx/src/paragraph.rs` SHA256 `83198917fce911d18c1cdcf732c9f6e992feae279cf3092f1c43a48084a6da0c`.
+- `crates/rdocx-py/src/table.rs` SHA256 `64d2c310a011732d26c472b6693c8a06d287756ea7548c845b929034048e9301`.
