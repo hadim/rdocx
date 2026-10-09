@@ -229,7 +229,7 @@ The remaining decision is how the requested parity supersedes the explicit
 independent-numId rendering contract, including bounded missing controls,
 actual fixture deltas and the F-283 dependency. Technical signatures, vertical
 mode tri-state behavior, document defaults, tabs and checked list helpers
-are resolved below. The plan remains draft until final contract review.
+are resolved below. The plan remains draft until prerequisite completion and final source-wave approval.
 
 ## Resolved technical decisions
 
@@ -332,7 +332,7 @@ Use the smallest required public signature:
 
 add_numbering_instance(definition_id: int, *, start: int|None=None, level: int=0) -> int
 
-When start supplied, construct one existing native NumberingLevelOverride::new(level).start(start), then call the existing staged Document::add_numbering_instance at document.rs:22207. When start omitted, pass the existing empty override slice and do not change continuation behavior. Reject nonzero level without start as meaningless, invalid level outside 0..8, negative or unrepresentable start (zero remains valid in the existing native u32 contract), missing definition and malformed numbering graph before source commit. No new public override type, parallel overrides/start forms or convenience framework is needed for Issue303's restart/start acceptance. Full replacement-level editing belongs the separately scoped numbering inspection work.
+When start supplied, construct one existing native NumberingLevelOverride::new(level).start(start), then call the existing staged Document::add_numbering_instance at document.rs:22207. When start is omitted, pass the existing empty override slice. Its rendering consumes the explicitly revised shared-definition continuation contract below. Reject nonzero level without start as meaningless, invalid level outside 0..8, negative or unrepresentable start (zero remains valid in the existing native u32 contract), missing definition and malformed numbering graph before source commit. No new public override type, parallel overrides/start forms or convenience framework is needed for Issue303's restart/start acceptance. Full replacement-level editing belongs the separately scoped numbering inspection work.
 
 Expose add_bullet_list_item(text, level=0) and add_numbered_list_item(text, level=0), returning the new Paragraph at the current revision. A checked native counterpart IS required, not just a Python level check. Native document.rs:21809/:21868 call fallible reserve_numbering_bundle and reserve_numbering_ids through expect. reserve_numbering_bundle at :21713 observes an imported package graph and can fail. Level validation cannot prevent those failures.
 
@@ -399,4 +399,95 @@ parity regressions. HLD08 and HLD12 must describe the new current contract.
 Native layout, deterministic render, package and hash riders apply alongside
 binding riders. Use a separate intentional behavior commit. No exact fixture
 delta is claimed before measurement. Baseline ownership remains exclusive.
-The draft remains pending the bounded native state decision.
+The bounded native state decision is recorded below. The prerequisite and final source-wave approval still gate implementation.
+
+## Final authenticated counter contract
+
+
+Microsoft Word `16.113.2`, build `16.113.26092012`. Pinned python-docx `1.2.0` creates ignored controls only. Pinned Poppler `26.01.0` extracts native printed PDFs. Native CUA opened the generated input, saved a separate local Word copy, exported local `Best for printing` PDF, closed only the saved generated copy, reopened that exact copy normally, then exported a second local printing PDF. No repair prompt, F9, numbering edit, online conversion, production layout inference or settings change. All input definitions precede instances and use distinct nsid values.
+
+Artifacts are under `/private/tmp/S91-F-X200-word-numbering`:
+
+- `create_section_levels.py`, `level-section-input-references.json`, `audit_level_section.py`, `level-section-audit-receipt.json`: 35 markers, five preserved distinct definitions, ten instances.
+- `create_ancestor_discriminator.py`, `ancestor-input-references.json`, `audit_ancestor.py`, `ancestor-audit-receipt.json`: eight markers, one definition, two instances.
+- Both have immutable original inputs, independent Word copies, first and reopened native PDFs/text, and source/saved numbering and document XML. Receipts include exact input/saved reference mappings, nsid, level, replacement and startOverride contracts, file bytes and SHA-256.
+- Original input hashes are unchanged. Saved Word renumbers IDs but preserves definition ownership, paragraph levels and explicit overrides. All 43 actual PDF markers are identical before and after reopen. These are actual printed numbers, not synthesized AX list numerals.
+
+Both generated documents were closed only after exact generated URL and `Saved to my Mac` proof. The existing APA6 study remains open and unchanged. Word UI lease released. No source, tracked file, Cargo, user document or setting writes.
+
+## New exact observations
+
+IDs below are input IDs. Receipts map saved IDs.
+
+| Control | Definition and IDs | Before section | After section | Contract |
+| --- | --- | --- | --- | --- |
+| P | abstract50 root start3, child start4, default restart. Plain1201, child override1202 start7 | 3,3.7 | used child override first:3.4, then3.5, plain child3.6, plain root4, override child4.4 | Child-first section restart initializes ancestor root3. Already-used override does not reapply. A root advancement by another instance resets the shared child to base4 without rearming that override. |
+| Q | abstract51 root3, child4, default restart. Plain1211, unused child override1212 start9 | 3,3.4 | unused child first:3.4, second3.9, plain child3.10, plain root4, override child4.4 | First child after section uses base4 without consuming unused override9. Second use applies9. Root advancement by another instance resets shared child to base4, preserving that override's consumed state. |
+| R | abstract52 section opt-in, root3, child4 with lvlRestart0. Plain1301, root override1302 start8 | 3,3.4,8,8.5 | used override root3, child3.6, plain root4, child4.7 | Section restart resets root to3 but preserves carried child count5. Neither section nor ordinary root advancement resets a lvlRestart0 child. |
+| S | abstract53 opt-out, otherwise same as R. Plain1401, root override1402 start8 | 3,3.4,8,8.5 | used override root9, child9.6, plain root10, child10.7 | Opt-out retains root and child state across section break. |
+| T | abstract54 section opt-in, root start3. Plain1501, root override1502 start8 | 3,8 | used override first3, second4, plain5 | Section restart uses non-one base start3 rather than hardcoded1 or consumed override8. |
+
+### Ordinary ancestor owner discriminator U
+
+Abstract60 has default child restart and base starts1. Plain1601 and child override1602 start7 refer to that same definition.
+
+| Physical paragraph | Concrete numId | Level | Printed marker |
+| --- | --- | --- | --- |
+| U_PLAIN_ROOT_1 | 1601 | 0 | 1. |
+| U_OVERRIDE_CHILD_1 | 1602 | 1 | 1.7. |
+| U_PLAIN_ROOT_2 | 1601 | 0 | 2. |
+| U_OVERRIDE_CHILD_AFTER_PLAIN_ROOT | 1602 | 1 | 2.1. |
+| U_OVERRIDE_ROOT_3 | 1602 | 0 | 3. |
+| U_OVERRIDE_CHILD_AFTER_SAME_ROOT | 1602 | 1 | 3.7. |
+| U_PLAIN_ROOT_4 | 1601 | 0 | 4. |
+| U_OVERRIDE_CHILD_AFTER_OTHER_ROOT_AGAIN | 1602 | 1 | 4.1. |
+
+This distinguishes shared counter reset from concrete override-use reset. A root from any instance resets the shared child count under the base restart policy. An already-used child override is rearmed only by an ancestor paragraph from its own concrete numId. Cross-instance root paragraphs do not rearm it. Earlier G observed same-instance rearming. U now proves its ownership boundary without section behavior confounding the result.
+
+## Recommended smallest concrete state
+
+Keep the existing `NumberingState` and existing native rendering path. Do not add a numbering framework, independent field counter, trait or new module.
+
+1. Shared counts: `HashMap<(abstract_num_id, ilvl), u32>`, replacing the concrete counter owner at `crates/rdocx-layout/src/style_resolver.rs:191`. Plain/old instances share counts, while separate distinct abstract definitions remain separate. Resolve definition ownership in the existing resolution path at line512.
+2. Concrete explicit-override use: a set keyed by `(num_id, ilvl)` in that same state. First ordinary use applies explicit `startOverride` to the shared count and marks consumed. Returning to a consumed override advances the shared count. Replacement-level `start` is not an explicit override. Concrete display formatting stays in the existing effective level path at lines534..550.
+3. Ancestor reset: under base lvlRestart policy at lines238..248, remove the shared deeper count across the definition. Rearm only `(the advancing paragraph's concrete num_id, reset_level)` overrides. Do not clear consumed override state for other instances. Keep lvlRestart0, configured owner thresholds and ignored replacement-level restart.
+4. Section restart: mark each opted-in previously initialized definition as pending for its next numbered use. When consumed, initialize the shared root from its base start and apply the base root-triggered deeper restart policy. Preserve carried deeper counts where lvlRestart0 or owner policy says not to reset. Preserve all consumed concrete override-use state. Skip applying explicit override for the first numbered item in this definition after the section break without consuming an unused override. After that first item, ordinary explicit-override rules resume.
+
+The pending section state is concrete today behavior required by N/O/P/Q/T. Initializing ancestor root when the first physical item is at child level is required by P/Q: the first child shows root3 and the next physical root is4. It is not sufficient to use root3 only as a formatting fallback while leaving its count absent. Conversely R proves that root restart cannot indiscriminately discard all deeper counts. Section initialization must be distinguished from an ordinary ancestor paragraph, since the section event must preserve override-use state rather than rearming the current concrete ID.
+
+The section method currently clears concrete counters at `style_resolver.rs:255`. Its implementation should become the measured deferred definition event above, not a blind map-key rename. `number_context` at line593 and `format_lvl_text` at line772 must consistently read definition-owned ancestor counts while rendering the selected concrete level. `references_only` at line300 must begin with empty shared counts, override-use and pending section state so note-width retries preserve existing once-only consumption. Clone semantics must include the concrete state fields.
+
+Do not change `ResolvedNumbering.num_id` or `relative_to` at line149. Actual concrete source identity remains distinct from shared count ownership. F-283 owns its authenticated REF switch oracle. Do not infer or implement nsid coalescing.
+
+## Implementation regressions and compatibility
+
+Use source-built controls in the existing style_resolver unit module and existing public integration entrypoint. E through U are expected-value specifications from the immutable native receipts. Meaningful controls include old/new/returned IDs, root and child overrides, concrete rearm versus shared reset, replacement-only display/start, child lvlRestart0, configured restart owner, opt-in/opt-out, non-one base starts, lower-level-first ancestor initialization, delayed unused override and consumed override continuation across section resets.
+
+Tests must separately assert marker values, ancestor number context and actual concrete reference identity. Existing owner/zero/replacement restart tests at lines1327/1357/1380 remain controls. The independent-instance expectation at line1202 is intentionally superseded and must be labelled in the behavior commit. Same-instance child override reapplication at1291 remains supported, while U adds the cross-instance distinction. Separate abstract definitions remain independent at1448.
+
+Update the existing X200 plan and current HLD07/08/10/12/14 numbering intent as described in the prior reconciliation. Historical F-248 design remains historical evidence. F-283 completion depends on settled X200 numbering output. Hash harness deltas require deterministic rendering, a labelled intentional behavior commit and independent review. No measured library parity, generated fixture acceptance, hash baseline change or gate pass is asserted here.
+
+## Evidence boundary
+
+These controls settle the requested shared-state ownership and section architecture for root3/child4, used and unused child overrides, ordinary same/different concrete ancestor ownership, default/zero/configured restart rules and opted-in/opted-out sections. No nsid coalescing, relative REF, unsupported numbering format, bullet, zero start or continuous-section oracle expansion is inferred. A child-first section event with lvlRestart0 was not directly captured, although separate controls establish child-first initialization and carry preservation. The algorithm above preserves both measured rules and should not invent a special reset for that combination. If production implementation needs another behavioral branch for that combination, obtain its bounded oracle rather than guessing.
+
+## New immutable artifact hashes
+
+| Artifact | Bytes | SHA-256 |
+| --- | --- | --- |
+| numbering-level-section-input.docx | 36895 | `d8bfbafb0273a8ed9827e7b6d6444db216d1662517ca6d555be0d779d29cdf2b` |
+| numbering-level-section-word.docx | 27060 | `1dc99af50f8c882341f52d37d5031cca701cd297bca75b431b29494f4ff9b857` |
+| numbering-level-section-first-export.pdf | 22073 | `82e26194be28ffbbe8d941425223b3b2bedd13eb128a1e93f7bdedec9a9c991f` |
+| numbering-level-section-reopened-export.pdf | 22073 | `bec1d17129aae7f6a24d401b5f61dfbacfaaffbda5a79cbc9315700fb348cecc` |
+| numbering-ancestor-input.docx | 36461 | `d8b4e0a1747f803bbad617f1bd0f0b96d4eff842aa4ad82e0db65c4cd16f9959` |
+| numbering-ancestor-word.docx | 26158 | `c54ef320d3f2d77b595a81b6cff02c409106378e23757783297b1a9b02ce8aaf` |
+| numbering-ancestor-first-export.pdf | 17349 | `bef1c7c55c2d0b7273e23415928860db3991b8a760a5430126495324a4c54587` |
+| numbering-ancestor-reopened-export.pdf | 17349 | `c9f736e2f3dc4e30eb04be2d660e5cc0ced9d8b20acca3ba902ba8d58f7df1d4` |
+
+Uninitialized definitions retain their existing first-use behavior across a
+section boundary. The measured section controls all previously initialized
+the definition. Do not extend the suppression rule to an unused definition
+without its own native control. This preserves behavior outside the observed
+contract while the shared-state change is implemented. No style-linked or
+nsid coalescing claim is added. The draft awaits completed F-X197 and final
+source-wave approval, not another user permission request.
