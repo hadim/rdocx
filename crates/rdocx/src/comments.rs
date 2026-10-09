@@ -1043,7 +1043,8 @@ impl Document {
     /// heading" does.
     ///
     /// An existing bookmark that covers exactly the paragraph's runs, such as
-    /// Word's `_Toc` bookmark of a heading, is reused. A new one is named
+    /// Word's `_Toc` bookmark of a heading, is reused, and otherwise one that
+    /// starts at the paragraph start. A new one is named
     /// after the paragraph text, such as `Heading_Results`, with a number
     /// added when that name is taken.
     pub fn heading_bookmark(&mut self, body_index: usize) -> Result<String> {
@@ -1066,9 +1067,17 @@ impl Document {
         };
         let text = paragraph.text();
         let bookmarks = self.bookmarks();
+        // A bookmark around the paragraph, or else one that starts with it,
+        // such as the point bookmark Google Docs puts before a heading.
+        let starts_here = |bookmark: &&BookmarkRef| {
+            bookmark
+                .direct_range()
+                .is_some_and(|candidate| candidate.start == range.start)
+        };
         if let Some(name) = bookmarks
             .iter()
             .find(|bookmark| bookmark.direct_range() == Some(range))
+            .or_else(|| bookmarks.iter().find(starts_here))
             .and_then(BookmarkRef::name)
         {
             return Ok(name.to_owned());

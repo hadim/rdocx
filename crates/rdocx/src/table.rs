@@ -1640,8 +1640,10 @@ impl<'a> Table<'a> {
     /// cell above it and holds one empty paragraph. A vertical merge does not
     /// continue into the new row. Row properties are copied without tracked
     /// row changes, and the row-level table-property exception and preserved
-    /// row attributes such as `w14:paraId` are not copied.
+    /// row attributes such as `w14:paraId` are not copied. A table whose rows
+    /// or cells sit in content controls is refused, as the column edits are.
     pub fn add_row(&mut self) -> Result<Row<'_>> {
+        check_column_edit_topology(self.inner)?;
         let last =
             self.inner.rows.last().ok_or_else(|| {
                 Error::Other("a table without rows has no row to copy".to_owned())
@@ -1665,7 +1667,10 @@ impl<'a> Table<'a> {
             }
             row.cells.push(copy);
         }
-        self.inner.rows.push(row);
+        let mut candidate = self.inner.clone();
+        candidate.rows.push(row);
+        validate_table_topology(&candidate)?;
+        *self.inner = candidate;
         Ok(Row {
             inner: self.inner.rows.last_mut().expect("the row was appended"),
         })
@@ -1778,6 +1783,17 @@ impl<'a> Table<'a> {
         )?
         .get(cell)
         .ok_or_else(|| Error::Other(format!("table row {row} cell {cell} does not exist")))?;
+        if self.inner.rows[row].cells[cell]
+            .properties
+            .as_ref()
+            .is_some_and(|properties| properties.h_merge.is_some())
+        {
+            return Err(Error::Other(
+                "the cell is merged with the legacy w:hMerge, which split_cell does not undo, \
+                 so remove its w:hMerge marks or rebuild the merge with a grid span first"
+                    .to_owned(),
+            ));
+        }
         let rows = vertical_merge_rows(self.inner, columns, row, range)?;
         let mut candidate = self.inner.clone();
         let grid_widths = candidate

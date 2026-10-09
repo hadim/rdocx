@@ -5584,12 +5584,13 @@ fn configured_pictures_insert_resize_one_at_a_time_and_list_their_alt_text() {
         .add_picture_with_options(&relationship, drawing_id, inline)
         .unwrap();
 
+    assert_eq!(document.picture_drawings().unwrap().len(), 3);
     document
-        .set_picture_size_at(&relationship, 1, Length::pt(30.0), Length::pt(30.0))
+        .set_picture_size_at(2, Length::pt(30.0), Length::pt(30.0))
         .unwrap();
     assert!(
         document
-            .set_picture_size_at(&relationship, 2, Length::pt(1.0), Length::pt(1.0))
+            .set_picture_size_at(3, Length::pt(1.0), Length::pt(1.0))
             .is_err()
     );
     let bytes = document.to_bytes().unwrap();
@@ -9125,6 +9126,65 @@ fn added_rows_copy_the_last_row_formatting_without_merges() {
     assert_eq!(row.cell(0).unwrap().shading_fill(), Some("E2EFDA"));
     assert!(row.cell(2).unwrap().v_merge().is_none());
     assert!((0..3).all(|cell| row.cell(cell).unwrap().text().is_empty()));
+}
+
+/// A document whose body is `body`, written through a blank package.
+fn document_with_body(body: &str) -> Document {
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(Document::new().to_bytes().unwrap())).unwrap();
+    let xml = String::from_utf8(package.get_part("word/document.xml").unwrap().to_vec()).unwrap();
+    let start = xml.find("<w:body>").unwrap() + "<w:body>".len();
+    let end = xml.find("<w:sectPr").unwrap();
+    let xml = format!("{}{body}{}", &xml[..start], &xml[end..]);
+    package.set_part("word/document.xml", xml.into_bytes());
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    Document::from_bytes(bytes.get_ref()).unwrap()
+}
+
+#[test]
+fn removing_a_column_drops_the_other_marker_of_a_cut_bookmark() {
+    let cell = |inner: &str| {
+        format!(
+            "<w:tc><w:tcPr><w:tcW w:w=\"2000\" w:type=\"dxa\"/></w:tcPr><w:p>{inner}</w:p></w:tc>"
+        )
+    };
+    let body = format!(
+        "<w:tbl><w:tblPr><w:tblW w:w=\"4000\" w:type=\"dxa\"/></w:tblPr><w:tblGrid><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"2000\"/></w:tblGrid><w:tr>{}{}</w:tr><w:tr>{}{}</w:tr></w:tbl><w:p/>",
+        cell(r#"<w:bookmarkStart w:id="7" w:name="cut"/><w:r><w:t>a</w:t></w:r>"#),
+        cell(r#"<w:r><w:t>b</w:t></w:r>"#),
+        cell(r#"<w:r><w:t>c</w:t></w:r><w:bookmarkEnd w:id="7"/>"#),
+        cell(
+            r#"<w:bookmarkStart w:id="8" w:name="kept"/><w:r><w:t>d</w:t></w:r><w:bookmarkEnd w:id="8"/>"#
+        ),
+    );
+    let mut document = document_with_body(&body);
+    document.remove_table_column(0, 0).unwrap();
+    let mut document = reopened(&mut document);
+    let names = document
+        .bookmarks()
+        .iter()
+        .filter_map(|bookmark| bookmark.name().map(str::to_owned))
+        .collect::<Vec<_>>();
+    assert_eq!(names, vec!["kept".to_owned()]);
+    let xml = compact_body_xml(&mut document);
+    assert!(!xml.contains("w:id=\"7\""), "{xml}");
+}
+
+#[test]
+fn added_rows_and_splits_refuse_what_they_cannot_keep_consistent() {
+    let mut document = document_with_body(
+        "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"2000\"/></w:tblGrid><w:tr><w:tc><w:p/></w:tc><w:sdt><w:sdtPr/><w:sdtContent><w:tc><w:p/></w:tc></w:sdtContent></w:sdt></w:tr></w:tbl><w:p/>",
+    );
+    let error = document.table_mut(0).unwrap().add_row().err().unwrap();
+    assert!(error.to_string().contains("content controls"), "{error}");
+    assert_eq!(document.table(0).unwrap().row_count(), 1);
+
+    let mut document = document_with_body(
+        "<w:tbl><w:tblPr/><w:tblGrid><w:gridCol w:w=\"2000\"/><w:gridCol w:w=\"2000\"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:hMerge w:val=\"restart\"/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr><w:hMerge/></w:tcPr><w:p/></w:tc></w:tr></w:tbl><w:p/>",
+    );
+    let error = document.table_mut(0).unwrap().split_cell(0, 0).unwrap_err();
+    assert!(error.to_string().contains("w:hMerge"), "{error}");
 }
 
 #[test]
