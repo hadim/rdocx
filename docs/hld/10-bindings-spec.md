@@ -436,7 +436,9 @@ literal replacement count. Paragraphs keep run formatting and never join
 separate paragraphs. Cells search their supported nested tables and controls,
 without visiting neighboring cells. The explicit Document operation accepts
 checked paragraph, table and block-control StoryItems, including related header,
-footer and normal note paragraphs. StoryItem remains frozen and detached.
+footer and normal note paragraphs. A text box paragraph edits the DrawingML and
+VML copies of the box together and counts once, or raises `RdocxError` when the
+copies cannot be paired. StoryItem remains frozen and detached.
 Paragraph handles inside block controls retain their checked two-segment paths.
 Cell and cell-paragraph handles use physical table, row and cell coordinates.
 
