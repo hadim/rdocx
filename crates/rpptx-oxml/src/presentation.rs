@@ -353,6 +353,18 @@ impl CT_Presentation {
         Ok(())
     }
 
+    /// Returns the number the first slide shows, `firstSlideNum`, 1 when absent.
+    ///
+    /// A value that is not a non-negative integer reads as the default, as
+    /// PowerPoint does not open such a file.
+    pub fn first_slide_number(&self) -> u32 {
+        self.raw_attributes
+            .iter()
+            .find(|(name, _)| name == "firstSlideNum")
+            .and_then(|(_, value)| value.trim().parse().ok())
+            .unwrap_or(1)
+    }
+
     pub fn sections(&self) -> &[Section] {
         &self.sections
     }
