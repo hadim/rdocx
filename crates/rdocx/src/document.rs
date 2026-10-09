@@ -19887,6 +19887,28 @@ impl Document {
         Ok(true)
     }
 
+    /// Remove grid column `column` from table `table_index`, counted as
+    /// [`Self::table_mut`] counts.
+    ///
+    /// A cell that spans the column narrows by one grid column, a cell that
+    /// covers only that column is removed with its content, and the grid,
+    /// row omissions and fixed widths stay synchronized. A table keeps at
+    /// least one column, and a row keeps at least one cell. Comment anchors in
+    /// removed cells go with them as row removal does. The document is
+    /// unchanged on error.
+    pub fn remove_table_column(&mut self, table_index: usize, column: usize) -> Result<()> {
+        let mut candidate = self.clone_for_staging();
+        let table = candidate
+            .table_mut(table_index)
+            .ok_or_else(|| Error::Other(format!("table index {table_index} is out of range")))?
+            .inner;
+        crate::table::remove_grid_column(table, column)?;
+        candidate.reconcile_comment_removal(self)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
     /// Set one body's table cell text through a checked package transaction.
     #[doc(hidden)]
     pub fn try_set_cell_text(
