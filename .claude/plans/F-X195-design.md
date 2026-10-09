@@ -1,0 +1,263 @@
+# F-X195, Honor caller fonts and variable styles across render paths
+
+**Status**: approved
+**Sprint**: S91
+**Size**: L
+**Depends on**: none
+
+## Problem
+
+Word CLI conversion consumes `font_dir` only for PDF at
+`crates/rdocx-cli/src/commands.rs:714`. Raster conversion constructs an
+unrelated deterministic layout at `:745`. Word Python PNG, SVG and page
+rendering lack caller-font arguments at
+`crates/rdocx-py/src/document.rs:2302`, `:2319`, `:2340` and `:2354`.
+PowerPoint Python PDF, slide and notes PNG and text-layout methods lack them
+at `crates/rpptx-py/src/presentation.rs:220` through `:265`.
+
+The font manager records requested style flags without selecting variation
+coordinates at `crates/oxml-layout/src/font.rs:1324`. Metrics and shaping use
+default coordinates at `:1276`, `:1427` and `:1734`. PDF ordinary subsetting
+at `crates/oxml-pdf/src/font.rs:390` and PNG default-coordinate outlines at
+`crates/oxml-pdf/src/raster.rs:955` therefore disagree with advertised variable
+Bold names. This plan resolves Issues 296 and 297 as one selection contract.
+
+## Spec reference
+
+- `docs/hld/14-development-backlog.md`, "F-X195, Honor caller fonts and variable styles across render paths".
+- `docs/hld/08-rendering-spec.md`, "The PDF backend", "The rasteriser", "The SVG backend", "Slide text layout as data" and "Performance".
+- `docs/hld/10-bindings-spec.md`, "Python API shape", "Native Word facade stability", "Native PowerPoint text layout", "WASM" and "CLIs".
+- `docs/hld/15-build-and-toolchain.md`, "Deterministic rendering", "Packaging" and "Dependency policy".
+
+## Approach
+
+Preserve original behavior when caller inputs are absent. Word normal APIs
+retain normal font discovery and bundled fallback. Deterministic Word CLI
+and PowerPoint APIs retain bundled fallback. Existing caller-only native
+layout methods remain caller-only.
+
+Directory inputs load in lexical path order before explicit `fonts` inputs.
+Explicit inputs load last and override same-family directory faces. Caller
+faces override document-embedded and fallback faces. Validate missing
+directories and paths that are not directories consistently before output
+creation. Use the font's embedded family identity, retaining existing
+filename aliases. Empty valid directories are accepted and retain the
+selected entrypoint's ordinary fallback policy.
+
+Add a normal-base Word caller-font layout operation:
+
+```rust
+pub fn layout_with_additional_fonts_and_options(
+    &self,
+    font_files: &[(&str, &[u8])],
+    options: RenderOptions,
+) -> Result<WordLayoutResult>;
+```
+
+Use this operation for normal Word PDF, PNG, SVG and raster rendering with
+caller inputs. Deterministic Word CLI rendering uses the existing caller-font
+bundled-fallback layout operation. Each renderer consumes the exact resulting
+owned layout bundle.
+
+Add caller-font native output variants for single PNG, SVG, selected raster
+pages and all PNG pages. The variants retain existing render parameters and
+add `font_files: &[(&str, &[u8])]` and `RenderOptions` where applicable. Add
+keyword-only `fonts=None` and `font_dir=None` to Word Python PDF, PNG, SVG,
+selected and all-page rendering, `layout` and `layout_page`. Preserve existing
+positional parameters, revision selection and return shapes. Copy Python font
+bytes before releasing the GIL. Perform directory reads and layout and render
+work while detached. Keep measurement and previews on the same explicit-input
+face selection as PDF. Correct the existing Python PDF typing prose that
+incorrectly describes caller-only fallback.
+
+Thread `font_files: &[FontFile]` through PowerPoint's existing preparation and
+slide, notes and handout assembly functions. Load caller fonts before resolving
+or measuring text. Add caller-font native variants for presentation PDF,
+single and all-slide PNG, notes PDF, all-notes PNG and text layout. The variants
+retain existing parameters and add `font_files: &[(&str, &[u8])]`. Common
+preparation also carries the configuration into handout and timeline paths
+without introducing a separate font resolver. Fit checks use the same manager
+configuration as PDF and previews.
+
+Add keyword-only caller arguments to every corresponding PowerPoint Python
+method, including `to_pdf`, `to_notes_pdf`, `render_slide_to_png`,
+`render_all_slides`, `render_all_notes` and `text_layout`. Update installed
+typing signatures and method documentation in the same change.
+
+Add `--font-dir` to every CLI text-layout command, including Word `layout`
+and `render`, and PowerPoint `render` and `thumbnail`. Apply it to PDF, PNG,
+JPEG and TIFF conversion. An output format that cannot consume font bytes
+returns an error before producing output. Preserve existing output limits,
+selection semantics and staging behavior.
+
+Extend owned output identity:
+
+```rust
+pub struct FontData {
+    // Existing fields retained.
+    pub variations: Vec<([u8; 4], f32)>,
+    pub synthetic_bold: bool,
+    pub synthetic_italic: bool,
+}
+```
+
+Retain equivalent private instance metadata in `LoadedFont`. These fields are
+additive in purpose but source-breaking for external struct literals. Record
+that pre-1.0 source break explicitly as the ownership change required by
+Issue 297. Update workspace literal construction sites. Instance identity
+belongs to each owned layout, not a global registry. The existing request
+keys remain valid because each font ID identifies one exact loaded instance.
+Changed font inputs invalidate resolution and shaping state through the
+existing manager lifecycle.
+
+Prefer a matching static face. For a variable face, bold selects `wght=700`
+within declared axis limits. Nonbold preserves the current default coordinate,
+including the intentionally Thin bundled CJK fonts. Prefer a genuine italic
+face, otherwise select `ital=1`, otherwise a usable `slnt` coordinate, normally
+`-12`. Retain exact selected coordinates and distinguish genuine style from
+synthesis. If a restricted axis cannot provide the requested style, use the
+verified synthesis path rather than claiming an unavailable instance.
+
+Apply coordinates consistently:
+
+- Call `ttf_parser::Face::set_variation` before extracting layout metrics, advances and raster outlines.
+- Construct `harfrust::ShaperInstance::from_variations` and pass the instance into both existing shaping paths.
+- Call existing `subsetter::subset_with_variations` when preparing PDF fonts. The current default-enabled feature instances TrueType outlines and converts CFF2 when needed.
+- Apply the same coordinates when computing PDF font widths and metrics.
+- Emit explicit matching variation settings in searchable SVG text and its embedded font declarations.
+
+Where a requested style has no suitable face or usable axis, use verified
+deterministic synthesis. Synthetic bold uses a centered fill-and-stroke width
+of `1/24` em with round joins and caps. Synthetic italic uses a 12-degree
+shear, with factor `tan(12 degrees) = 0.21255656`, around each run's baseline.
+These constants are deliberate implementation choices validated by independent
+controls, not claimed defaults of the existing toolkit. PDF, PNG and SVG
+implement equivalent geometry. PDF contains scoped fill-and-stroke and text
+matrix operations. PNG uses equivalent outline painting and affine geometry.
+SVG uses explicit stroke and baseline-relative geometry rather than relying
+on browser synthesis.
+
+Synthetic painting preserves shaped advances. Private ink bounds include
+stroke-radius expansion and the shear-transformed outline bounds. Independent
+geometry controls verify that preservation is correct. If controls demonstrate
+a necessary advance adjustment, document and review it before changing the
+policy.
+
+Keep embedded font names truthful. A regular source with synthesis is not
+presented as an actual static Bold or Italic font. Genuine variable instances
+carry their actual selected weight and slant identity. Preserve Unicode
+mapping, shaping clusters, static fonts, coverage fallback and font licensing.
+
+Use existing source and test modules. Add no dependency, crate, feature flag
+or tracked binary fixture. Existing `harfrust` 0.12, `ttf-parser` 0.25 and
+`subsetter` 0.2.6 provide the required APIs. The latter already enables
+`variable-fonts` by default. Neither WASM wrapper gains a host-directory API.
+
+## Rejected alternatives
+
+- Changing only font names or style flags leaves metrics and actual glyphs unchanged.
+- Instancing only PDF output leaves PNG previews and fit checks inconsistent.
+- A process-wide style registry breaks the owned-layout contract and repeated-render isolation.
+- Forcing every regular variable font to weight 400 breaks the existing Thin CJK contract.
+- New font dependencies are unnecessary because existing versions already provide the required APIs.
+
+## Test plan
+
+**Test gate**: regression.
+
+| Category | Test | Asserts |
+|---|---|---|
+| regression | `caller_fonts_are_honored_by_every_cli_layout_and_render_command` | Word layout, convert and render and PowerPoint convert, render and thumbnail use a caller-only family |
+| regression | `installed_python_render_and_layout_methods_share_caller_font_selection` | Every affected Word and PowerPoint method and typing signature accepts the same inputs |
+| regression | `explicit_font_bytes_override_lexically_loaded_directory_faces` | Directory order is deterministic and explicit inputs win |
+| regression | `invalid_font_directories_and_unsupported_formats_fail_before_output` | Missing paths, non-directory paths and unused format options produce consistent errors |
+| regression | `variable_bold_changes_actual_outlines_and_matches_measured_advances` | PDF subset outlines, PNG output and layout agree with independent static controls |
+| regression | `italic_faces_axes_and_synthetic_styles_draw_the_selected_geometry` | Static italic, ital and slnt axes and synthesis produce distinct verified geometry |
+| regression | `changing_same_family_font_bytes_does_not_reuse_a_previous_instance` | Repeated layout and shaping cannot retain stale instance identity |
+| regression | `omitted_font_inputs_preserve_existing_static_and_bundled_behavior` | Original no-input behavior and default CJK coordinates remain unchanged |
+| integration | `notes_previews_and_fit_checks_use_the_same_caller_faces_as_pdf` | Slide and notes output and measurement share preparation |
+| golden | `synthetic_painting_preserves_advances_and_expands_only_ink_bounds` | PDF, PNG and SVG match mathematical stroke and shear controls |
+
+Implement the regression cases in existing crate test modules and existing
+CLI and Python test entrypoints. Installed Python wheel tests cover both
+families and the exact runtime keyword and typing surfaces. Each listed
+entrypoint must have acceptance evidence, including Word selected and all
+pages, SVG, layout and layout_page, and PowerPoint slide and notes PDF and PNG
+plus fit checks. Cover TTC indices, filename aliases, embedded-versus-caller
+precedence, empty directories, selected page ranges, invalid inputs and
+repeated rendering. Use a caller-only renamed family that is absent from
+system discovery, not an ambient installed font.
+
+Use existing licensed Noto variable fonts for weight controls. Thai, Arabic
+and Devanagari have default 400 and weight range 100 to 900. Generate
+independent static 400 and 700 controls with exact `hb-subset` 14.4.0 and record
+source hashes and tool identity. Compare actual outlines and advances, not
+names or production variation metadata alone. Do not claim historical
+13.2.1 oracle parity.
+
+Use bundled static four-style families for static-face controls and
+regular-only synthesis controls. Generate minimal valid ital and slnt SFNT
+controls in existing test modules with independently specified outlines and
+metrics. A pinned licensed Lora corpus reference may supplement acceptance
+evidence in ignored storage. No new tracked binary asset is needed. The
+existing `LICENSE-Noto` and static-family licenses remain unchanged.
+
+Focused checks cover `oxml-layout`, `oxml-pdf`, both native facades, both
+CLIs and both Python binding compilations. Installed Python tests provide
+runtime evidence instead of linking PyO3 extension-module Rust test binaries.
+Run the scoped feature gate and the applicable riders below. Full workspace
+verification remains the integrated sprint gate.
+
+## HLD impact
+
+- `docs/hld/08-rendering-spec.md`
+- `docs/hld/10-bindings-spec.md`
+- `docs/hld/15-build-and-toolchain.md`
+
+## Risk routing
+
+- Layout and shaping, `.claude/skills/risk-routing.md`: deterministic font mode, focused render and metric controls, hash-harness comparison and independent review of every intentional delta.
+- Public published API, `docs/hld/10-bindings-spec.md`: declare the `FontData` literal source break, verified `cargo publish --dry-run` checks and `.crate` size assertions for affected published crates, preserving the 10 MiB archive ceiling and source membership.
+- Python and WASM graph, `docs/hld/10-bindings-spec.md`: installed runtime and typing tests and `cargo check --target wasm32-unknown-unknown -p rdocx-wasm -p rpptx-wasm`, including the rpptx rendering profile. Workspace tests exclude both PyO3 binding crates.
+- Font controls and assets, `docs/hld/15-build-and-toolchain.md`: verify licenses, source hashes and unchanged packaged font inventory.
+- External oracle comparison, `.claude/skills/differential-testing.md`: pin hb-subset 14.4.0 and exact control inputs. Record limitations of geometry comparisons and do not use production output as its own oracle.
+- Dependency graph, `docs/hld/03-architecture.md`: preserve format-neutral layering. No dependency change is planned. Check MSRV with the pinned toolchain and existing supply-chain gates.
+- No-default-features, `docs/hld/15-build-and-toolchain.md`: run `cargo test -p oxml-layout --no-default-features`.
+
+No new trait, generic parameter, crate, module, file or feature flag is
+introduced by implementation. The workflow plan itself is the existing
+required design artifact.
+
+## Hash harness
+
+Original no-input static and regular bundled rendering should remain
+unchanged. Existing variable-font bold runs can intentionally change their
+outlines and advances when weight 700 replaces default-coordinate output.
+Synthetic output can intentionally change unsupported-style runs. Enumerate
+actual affected cases from the deterministic harness, review them
+independently and move the exclusive baseline only in the designated sprint
+story. Preserve the separate existing Thin CJK oracle contract. Every
+intentional rendering delta belongs in this feature's labeled behavior commit.
+
+## Implementation checklist
+
+- [ ] Centralize validation and deterministic directory loading in existing files.
+- [ ] Apply lexical directory-first and explicit-last precedence.
+- [ ] Thread caller fonts through Word and PowerPoint common layout preparation.
+- [ ] Extend every affected CLI and installed Python runtime and typing surface.
+- [ ] Carry owned variation and synthesis identity through font output.
+- [ ] Apply coordinates consistently to metrics, shaping, PDF, PNG and SVG.
+- [ ] Implement and independently verify synthetic geometry and ink extents.
+- [ ] Preserve static faces, fallback, licenses and original no-input behavior.
+- [ ] Run entrypoint, font-control, packaging, MSRV and WASM riders.
+- [ ] Review and declare actual harness deltas.
+- [ ] Update the listed HLD sections.
+
+## Open questions
+
+None. The sprint invocation authorizes the complete Issues 296 and 297
+contract. The plan preserves original omission behavior, adopts lexical
+directory-first and explicit-last loading, retains default CJK regular
+coordinates, declares the required pre-1.0 output-identity source break and
+introduces no dependency. Synthetic constants are deliberate choices gated
+on independent controls.

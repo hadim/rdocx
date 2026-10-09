@@ -14,7 +14,7 @@ complete, with fresh evidence for the final source.
 
 ## Problem
 
-Numbered STYLEREF is explicitly rejected at `crates/rdocx/src/field.rs:9798`, and numbering-demand detection recognizes REF only at `crates/rdocx/src/field.rs:9226`. Existing headings excludes table cells at `crates/rdocx/src/document.rs:26319`, and document_outline builds only that tree at `crates/rdocx/src/document.rs:26332`. Renderer outline titles use projected text without visible marker at `crates/rdocx-layout/src/engine.rs:2160`. Heading detection at `crates/rdocx-layout/src/engine.rs:6179` does not consume the complete effective outline-level cascade.
+Numbered STYLEREF is explicitly rejected at `crates/rdocx/src/field.rs:12981`, and numbering-demand detection recognizes REF only at `crates/rdocx/src/field.rs:12089`. Existing headings excludes table cells at `crates/rdocx/src/document.rs:28916`, and document_outline builds only that tree at `crates/rdocx/src/document.rs:28930`. Renderer outline titles use projected text without visible marker at `crates/rdocx-layout/src/engine.rs:2160`. Heading detection at `crates/rdocx-layout/src/engine.rs:6179` does not consume the complete effective outline-level cascade.
 
 Existing authoritative numbering already contains marker, level, full context and literal-free values at `crates/rdocx-layout/src/style_resolver.rs:37`. Source-qualified numbering lookup exists at `crates/rdocx-layout/src/lib.rs:79`. This story composes these contracts rather than introducing another counter.
 
@@ -27,6 +27,11 @@ Existing authoritative numbering already contains marker, level, full context an
 - `docs/hld/14-development-backlog.md`, "F-283, Complete numbering-aware navigation fields" and F-248.
 
 ## Approach
+
+Every prerequisite is a completion barrier. S91 reuses the completed revised
+F-282 foundation. F-X192 full catalogue completion is not a formal dependency
+and its full formatter expansion cannot be presumed during navigation work.
+Refresh the exact F283 saved discriminator evidence before implementation.
 
 Every prerequisite is a completion barrier. Reconcile final F-279 through F-282 contracts before claim. Reuse F-280's SequenceOptions, CaptionOptions, CaptionTarget and CrossReferenceOptions. Reuse F-279's immutable bookmark-target, page and section records and F-281's generated-result ownership.
 

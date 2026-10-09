@@ -863,3 +863,30 @@ or changing the reviewed release boundary. Keep Issue281 open for F-184.
 | F-282 | S90 | L | 4 | not recorded | 2026-10-09 | Revised measured native bibliography contract, ALL pass4 clean, qualified native4160/all1340 APA and current layout320/Python178/CLI66, verified22 packages, hash49 unchanged. Full catalogue F-X192 and navigation F-283 in S91 |
 
 | F-X189 | S90 | L | 4 | not recorded | 2026-10-09 | Word0.16.0 and shared/PowerPoint0.14.0 local preparation, ALL pass3 clean, actual22crate archives, full native5708 and installed Word178/PPT77 per interpreter, WASM/npm/size and golden7 passed, hash49 match. Final HEAD review, hosted rehearsal, close and publication remain separate |
+
+## Next sprint replan, 2026-10-09
+
+Insert S91 before the template and form programme. F-X192 and F-283 retain
+their S91 carryover destination. F-X193 through F-X197 cover PR294 and
+Issues295 through300, bringing the new boundary to seven pending stories and
+20 to 25 estimated developer-days. Issues264 and281 remain excluded. F-X178's
+next eligible planning target becomes S92 with its separate scope decision.
+Issue281 remains open for F-184 at S96.
+
+The previous S91 through S104 roadmap shifts to S92 through S105. Historical
+S90 estimates, delivered rows and contribution reconciliation remain unchanged.
+The S90 summary's original F-X178 destination is superseded by this replan.
+No S91 completion, measured velocity, contribution closure or release is
+recorded by planning. AS_BUILT.md remains the append-only delivered record.
+
+S91 contribution intake stays open at the user's instruction. Refresh issues
+and PRs at design, implementation/resume checkpoints, integration and final
+verification/close. Attach later contributor PRs to their existing issue's
+F-ID, inspect updated heads before duplicating implementation, and reuse
+accepted work against the full contract. Update the canonical plan, backlog,
+HLD14 and active sprint record for added scope. Issues264 and281 stay excluded.
+The rolling intake procedure is defined in SPRINT_PLAN.md under S91.
+
+At S91 opening, the rolling refresh adds hadim Issue301 through F-X198. The
+scope is eight pending stories, estimated at 22 to 28 developer-days. No
+implementation or acceptance is claimed by this intake.

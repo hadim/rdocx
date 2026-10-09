@@ -11,7 +11,7 @@ a zero-finding `/microscope`. Full verification and sprint review cover the
 final integrated result at closure. A formal dependency checkpoint completes
 a prerequisite from scoped evidence and focused integration checks.
 
-The active roadmap runs through S104, with earlier deferred cutover boundaries
+The active roadmap runs through S105, with earlier deferred cutover boundaries
 retained in place. The sizing rationale and compression options are in
 `docs/hld/14-development-backlog.md`.
 
@@ -759,9 +759,9 @@ against `14-development-backlog.md` M14 through M24.
 The order is deliberate and each boundary is a stopping point. Stopping after
 S45 leaves one chart engine serving both families. Stopping after S51 leaves a
 document-automation product. S69 closes the first Word-depth programme. S73
-closes from-scratch generation for the five private business documents, and S94
+closes from-scratch generation for the five private business documents, and S95
 closes the broader modern DOCX authoring boundary. The advanced spreadsheet
-programme starts only after S94 and only if its feasibility gate confirms a gap
+programme starts only after S95 and only if its feasibility gate confirms a gap
 worth filling in the Rust ecosystem.
 
 | Sprints | Milestone | Stories | Days |
@@ -775,8 +775,8 @@ worth filling in the Rust ecosystem.
 | S59 to S64 | M21, presentation depth | 15 | 60 |
 | S65 to S69 | M22, Word depth | 12 | 44 |
 | S70 to S73 | M23, from-scratch business documents | 24 | 112 |
-| S74 to S75, S86, S89 to S94 | M24, modern DOCX authoring completeness | 47 | 219 |
-| S95 to S104 | M19, advanced spreadsheets | 21 | 85 |
+| S74 to S75, S86, S89 to S95 | M24, modern DOCX authoring completeness | 47 | 219 |
+| S96 to S105 | M19, advanced spreadsheets | 21 | 85 |
 
 The table counts milestone stories only. S70 also carries four cross-cutting
 Issue 67 and Issue 69 stories estimated at 12 developer-days. S76 through
@@ -1333,7 +1333,7 @@ evidence is attributed correctly. F-X084 through F-X086 are independent after
 that intake and may run in parallel, but only one story may own a rendering
 baseline change. F-240 is the planning authority. F-241 and F-242 consume its
 approved matrix, and F-240 updates the provisional sprint contents before
-S70 closes. The M24 end gate is S94.
+S70 closes. The M24 end gate is S95.
 
 #### Sprint S71, Fresh package, styles, and numbering
 
@@ -2040,7 +2040,7 @@ PR 279 supplies F-X182. PR 280 is stacked on it and supplies F-X183, including n
 Issue [281](https://github.com/tensorbee/rdocx/issues/281), raised by `hadim`,
 adds roadmap feedback to this sprint intake. Record its unified CLI/Python
 workflow, template filling, preservation-safe edits and rendering needs in the
-existing F-184 decision at S95. The [maintainer response](https://github.com/tensorbee/rdocx/issues/281#issuecomment-6058792996)
+existing F-184 decision at S96. The [maintainer response](https://github.com/tensorbee/rdocx/issues/281#issuecomment-6058792996)
 answers scheduling and staged-delivery questions and requests concrete workflows
 and preservation needs. Keep the discussion open for the F-184 decision. S90 delivers the documented
 assessment, while spreadsheet implementation retains its affirmative decision
@@ -2132,7 +2132,100 @@ is not full catalogue parity. F-X189 depends on completed revised F-282 and
 F-X191, not the carried S91 stories. Final integrated verification, sprint
 review, package checks and exact-SHA publication approval remain required.
 
-#### Sprint S91, Templates, controls, and forms
+#### Sprint S91, S90 carryovers and contribution repairs
+
+**Goal**: finish the bibliography catalogue and numbering-aware navigation
+carried from S90, then resolve the new HTML, Python authoring, rendering and
+CLI validation reports before the template and form programme resumes.
+
+| F-ID | Title | Size |
+|------|-------|------|
+| F-X192 | Complete the remaining Word bibliography catalogue | L |
+| F-283 | Complete numbering-aware navigation fields | L |
+| F-X193 | Preserve semantic mark highlights through nested HTML runs | S |
+| F-X194 | Complete Python table text and indentation APIs | M |
+| F-X195 | Honor caller fonts and variable styles across render paths | L |
+| F-X196 | Validate visible paragraph content without false empty warnings | S |
+| F-X197 | Unify Python colour inputs and font colour formats | L |
+| F-X198 | Preserve alternate text-box copies during scoped replacement | M |
+
+The 2026-10-09 intake includes [PR294](https://github.com/tensorbee/rdocx/pull/294)
+and Issues [295](https://github.com/tensorbee/rdocx/issues/295),
+[296](https://github.com/tensorbee/rdocx/issues/296),
+[297](https://github.com/tensorbee/rdocx/issues/297),
+[298](https://github.com/tensorbee/rdocx/issues/298),
+[299](https://github.com/tensorbee/rdocx/issues/299) and
+[300](https://github.com/tensorbee/rdocx/issues/300). These are all open records
+at intake except the explicitly excluded Issues264 and281. PR294, by
+`pedroassumpcao`, is assessed at head
+`63cd119dcb8fa9c367bf93141f79780db7f64886`. Issues295 through300 are reported
+by `hadim`. Contribution acceptance requires the full story contract and
+integrated evidence, not adoption of a PR's test claims.
+
+F-X194 groups the two Python table API gaps, Issues295 and300, while retaining
+separate save/reopen and render controls for each family. F-X195 groups the
+caller-font and variable-instance reports, Issues296 and297, because all text
+measurement and output paths must agree on the chosen face and instance.
+The grouping does not reduce either issue's acceptance criteria.
+
+Use exclusive source and Cargo waves. Complete F-X192 and F-283 against their
+actual prerequisites and saved evidence, then F-X193, F-X194, F-X197, F-X195
+F-X196 and F-X198. Colour consistency precedes the table/font visual acceptance
+recheck. Shared source, bindings, tests and the hash baseline have one owner
+at a time. New stories require approved designs, scoped gates and clean
+microscope reviews. The eight included stories are estimated at 22 to 28 developer-days,
+not a fixed calendar duration. The inserted boundary moves the previous S91
+through S104 to S92 through S105. S90 delivered history remains intact.
+
+Issues264 and281 are excluded from S91. F-X178 remains pending at S92 and
+requires a separate scope decision. Issue281 remains open for F-184 at S96.
+No spreadsheet implementation or publication is authorized by this intake.
+S90's intake freeze remains its completed delivery boundary.
+
+**Rolling contribution intake**: the user explicitly keeps S91 intake open.
+Refresh open GitHub issues and PRs before each design, before implementation
+starts or resumes, at saved feature checkpoints, before contribution
+integration, and before final sprint verification and close. Read new records
+and updated PR bodies, comments, changed files and immutable head SHAs.
+Keep Issues264 and281 excluded at every refresh. New issue or PR intake must
+update this plan, BACKLOG.md, HLD14 and the active sprint record together.
+
+Map each record to its existing F-ID and full acceptance criteria first. A
+contributor PR for an already included issue belongs to the same story, with
+its author, exact head, issue links and reusable changes recorded in that
+story's design and progress notes. Review incoming work before implementing
+the same change. Reuse accepted contribution code and tests where they meet
+the approved contract, then implement only uncovered criteria. An updated or
+stacked PR must be compared with both its previously assessed head and the
+integrated source to avoid replaying completed changes. Reassess affected
+checks after adaptation rather than claiming the contributor's tests passed
+locally. Never create another story merely because a PR arrives later.
+
+New acceptance criteria amend an existing story when they belong to its
+contract. Independent scope receives a new F-ID through normal design and
+tracking. Record additions and revise estimates and exclusive waves explicitly.
+If a late contribution changes the integrated source after verification,
+rerun the affected feature gate and review, then verify and review the actual
+final integrated result before close. Do not silently freeze intake or defer
+a new record. A PR that arrives after its issue is implemented is assessed
+against the existing evidence for reusable improvements and remaining gaps,
+without reopening completed behavior solely to reproduce the patch.
+
+**Sprint gate**: full pinned Word bibliography and consistent navigation,
+HTML mark inheritance, editable Python table text and signed indentation,
+matching caller-font layout and renders including variable bold/italic,
+content-aware empty-paragraph diagnostics and consistent Python colours.
+Verify installed bindings, round trips, native rendering controls and declared
+hash deltas. Run the full integrated gate and sprint review once over the
+completed result. Reconcile GitHub records only at verified sprint close.
+
+Issue [301](https://github.com/tensorbee/rdocx/issues/301), by `hadim`, entered
+at the opening refresh and adds F-X198 for alternate text-box ownership. It
+follows completed F-X187 and runs in its own exclusive wave. This expands the
+initial seven-story intake to eight without weakening acceptance or carrying
+new scope away from this sprint.
+
+#### Sprint S92, Templates, controls, and forms
 
 **Goal**: freeze the container-wide template grammar, create and bind content
 controls, and expose legacy and modern forms plus safe mail-merge package
@@ -2141,8 +2234,6 @@ state through public APIs.
 | F-ID | Title | Size |
 |------|-------|------|
 | F-X178 | Clearable direct run formatting setters | S |
-| F-X192 | Complete the remaining Word bibliography catalogue | L |
-| F-283 | Complete numbering-aware navigation fields | L |
 | F-284 | Stable container-wide template grammar | L |
 | F-285 | Content control creation and lifecycle | L |
 | F-286 | Rich, repeating, and typed content controls | L |
@@ -2152,14 +2243,11 @@ state through public APIs.
 | F-290 | Mail-merge package and data-source authoring | M |
 
 F-X178 is the explicit S90 carry for the user-excluded Issue264. Its next
-eligible planning target is S91. It remains pending and requires a separate
-scope decision before implementation, preserving the exclusion in S90.
+eligible planning target is S92. It remains pending and requires a separate
+scope decision before implementation, preserving the exclusion in S90 and
+the inserted S91.
 
-F-X192 completes the bibliography catalogue deferred from S90 after the
-reviewed F-282 native foundation. F-283 carries unfinished numbering-aware
-navigation under its existing approved contract. Complete their actual
-prerequisites before claim. These additions do not imply S90 delivered full
-bibliography or navigation parity.
+S91 completes the carried bibliography and navigation work before this sprint.
 
 F-284 builds on S89 fragment transactions. F-285 establishes the control
 lifecycle before F-286 and F-287 add typed values and bindings. F-288 uses the
@@ -2168,7 +2256,7 @@ into a complete form. F-290 may proceed alongside the form work after S90.
 The sprint gate checks public-created templates and forms through save-reopen,
 with explicit diagnostics for unavailable external mail-merge data.
 
-#### Sprint S92, Collaboration authoring
+#### Sprint S93, Collaboration authoring
 
 **Goal**: create complete Word revisions, comments, permission ranges, and
 comparison results, with caller-controlled identity and time instead of
@@ -2184,13 +2272,13 @@ ambient state.
 | F-296 | Collaboration identity and deterministic time policy | M |
 
 F-291 establishes revision ownership. F-292 and F-293 then cover property,
-move, and comment records across stories. F-294 uses the S91 form and
+move, and comment records across stories. F-294 uses the S92 form and
 protection surface. F-295 composes complete comparison revisions, and F-296
 closes identity and clock inputs. The sprint gate covers Word differential
 results, accept and reject views, and byte-identical output in deterministic
 mode.
 
-#### Sprint S93, Drawings, diagrams, and embedded content
+#### Sprint S94, Drawings, diagrams, and embedded content
 
 **Goal**: complete the visible and packaged Word object surface across every
 valid insertion point without raw compatibility wrappers or executable payload
@@ -2210,7 +2298,7 @@ F-297 through F-302 build independent object families on the shared
 relationship model. F-303 is their integrated deterministic layout and render
 gate.
 
-#### Sprint S94, Package extensibility and modern DOCX end gate
+#### Sprint S95, Package extensibility and modern DOCX end gate
 
 **Goal**: close package extension, accessibility, conformance, determinism,
 resource, binding, documentation, and stability boundaries for modern DOCX
@@ -2236,7 +2324,7 @@ separate from completing this sprint.
 
 ### M19, Advanced spreadsheets
 
-#### Sprint S95, Spreadsheet decision, corpus and core model
+#### Sprint S96, Spreadsheet decision, corpus and core model
 
 **Goal**: decide whether a material Rust ecosystem gap still exists, then build
 the ownership model only if that decision is affirmative.
@@ -2248,7 +2336,7 @@ the ownership model only if that decision is affirmative.
 | F-185 | Workbook and worksheet model | L |
 
 F-184 is a true go or no-go gate. It reassesses Calamine,
-`rust_xlsxwriter`, `umya-spreadsheet`, `xls`, and any credible successor at S95,
+`rust_xlsxwriter`, `umya-spreadsheet`, `xls`, and any credible successor at S96,
 then classifies each proposed feature as preserved, modeled and editable, or
 executable. If the ecosystem provides the complete required lifecycle by then,
 M19 is archived rather than implemented.
@@ -2257,8 +2345,8 @@ M19 is archived rather than implemented.
 for a unified CLI/Python workflow, template filling, preservation-safe edits
 and rendering. Include integration, installation and maintenance costs in
 F-184, including reuse of a maintained engine behind a consistent facade.
-S95 through S98 stage reading and loss-aware editing before calculation and
-pivots. Rendering and distribution retain the S104 boundary. An earlier
+S96 through S99 stage reading and loss-aware editing before calculation and
+pivots. Rendering and distribution retain the S105 boundary. An earlier
 distributable reader/editor requires a reviewed roadmap and release decision.
 
 The reporter's [follow-up](https://github.com/tensorbee/rdocx/issues/281#issuecomment-6063901190)
@@ -2287,7 +2375,7 @@ stories and any proposed reader/editor distribution boundary with that order
 before approving implementation. S90 records this direction without claiming
 that the conditional spreadsheet programme or an earlier release is approved.
 
-#### Sprint S96, Styles, tables and structured references
+#### Sprint S97, Styles, tables and structured references
 
 **Goal**: model the indexed formatting and structured data semantics that
 ordinary business workbooks rely on.
@@ -2302,7 +2390,7 @@ F-189 lands here because structured table references are part of the formula
 grammar rather than a string convention. The sprint does not yet calculate
 formulas.
 
-#### Sprint S97, Advanced worksheet objects
+#### Sprint S98, Advanced worksheet objects
 
 **Goal**: cover the visible and interactive worksheet surface before the
 streaming package boundary freezes it.
@@ -2315,7 +2403,7 @@ This includes comments, hyperlinks, rich text, drawings, grouping, panes,
 sparklines, page breaks, and modern image cells. External content stays offline
 unless an explicit bounded policy allows retrieval.
 
-#### Sprint S98, Streaming read and write
+#### Sprint S99, Streaming read and write
 
 **Goal**: prove that advanced workbooks remain bounded at the package boundary.
 
@@ -2328,7 +2416,7 @@ Both carry an asserted memory ceiling rather than a hoped-for one. A 100 MB
 fixture is the gate, not a smoke test. Unsupported package parts and
 relationships remain attached through unrelated typed edits.
 
-#### Sprint S99, Calculation and sheet features
+#### Sprint S100, Calculation and sheet features
 
 **Goal**: calculate ordinary and modern formulas, then expose the features that
 depend on their results.
@@ -2344,7 +2432,7 @@ including dynamic arrays, spill ranges, and structured references. Unsupported
 functions retain cached values with diagnostics. F-191 reuses `oxml-chart`
 rather than creating a spreadsheet-only chart engine.
 
-#### Sprint S100, Pivots and the Data Model boundary
+#### Sprint S101, Pivots and the Data Model boundary
 
 **Goal**: move PivotTables from opaque preservation to typed local refresh and
 define the boundary around proprietary analytical models.
@@ -2360,7 +2448,7 @@ and visible cells. Slicers and pivot charts follow that refresh. OLAP, Power
 Pivot, VertiPaq, and DAX state is preserved and inspectable but is not executed
 under this milestone.
 
-#### Sprint S101, Power Query language and package model
+#### Sprint S102, Power Query language and package model
 
 **Goal**: understand and evaluate M independently of external data access.
 
@@ -2373,7 +2461,7 @@ refresh metadata. The language boundary covers the pure transformations needed
 by the corpus before credentials, connectors, or network policy enter the
 runtime.
 
-#### Sprint S102, Power Query execution
+#### Sprint S103, Power Query execution
 
 **Goal**: refresh a bounded, useful connector set without weakening privacy or
 offline determinism.
@@ -2387,7 +2475,7 @@ privacy levels, source combination, timeouts, byte limits, caching, and query
 folding are explicit contracts. Proprietary and tenant-bound connectors remain
 preserved with diagnostics.
 
-#### Sprint S103, Office Scripts-compatible automation
+#### Sprint S104, Office Scripts-compatible automation
 
 **Goal**: automate the same workbook model through a versioned and sandboxed
 TypeScript surface.
@@ -2402,7 +2490,7 @@ not pretend to provide OneDrive, SharePoint, Power Automate, or Microsoft tenant
 identity. It does provide bounded workbook, range, table, chart, pivot, and
 query automation with atomic failure.
 
-#### Sprint S104, Rendering, distribution and advanced end gate
+#### Sprint S105, Rendering, distribution and advanced end gate
 
 **Goal**: close M19 as a headless advanced spreadsheet engine rather than a
 file-format crate.
@@ -2432,12 +2520,12 @@ at the fully verified SHA.
 | End of S64, M21 | Incubating `rpptx` family. Publish the stable family too only when the reviewed dependency diff requires new shared pins. | Collaboration, security, timing, media, SmartArt, ODP, handouts, HTML import, and PDF import form one complete presentation-depth boundary. |
 | End of S69, M22 | Stable `rdocx` family at v0.13.0 through F-X078. Publish the incubating shared family first only if a shared crate version or stable dependency pin moved. | OfficeMath, fields, dynamic TOC, automation, comparison, embedded content, and modern package variants complete the planned Word-depth boundary. |
 | End of S73, M23 | Stable `rdocx` family after the five-document public-API-only conformance gate passes. | This is the first boundary where the reference business documents can be authored from `Document::new()` without raw XML or a base template. |
-| End of S94, M24 | Stable `rdocx` family after the modern Word authoring capability matrix is closed. Publish the incubating shared family first only if a shared crate version or stable dependency pin moved. | This boundary completes the planned modern DOCX authoring surface, lossless extensibility, accessibility, strict-package, determinism, binding, and stability gates. |
-| End of S104, conditional M19 | The new `rxlsx` distribution family defined by F-195, plus only the existing families whose reviewed dependency pins moved. | F-195 is the first point where the conditional spreadsheet programme has a complete facade, CLI, WASM, Python, rendering, and advanced lifecycle gate. |
+| End of S95, M24 | Stable `rdocx` family after the modern Word authoring capability matrix is closed. Publish the incubating shared family first only if a shared crate version or stable dependency pin moved. | This boundary completes the planned modern DOCX authoring surface, lossless extensibility, accessibility, strict-package, determinism, binding, and stability gates. |
+| End of S105, conditional M19 | The new `rxlsx` distribution family defined by F-195, plus only the existing families whose reviewed dependency pins moved. | F-195 is the first point where the conditional spreadsheet programme has a complete facade, CLI, WASM, Python, rendering, and advanced lifecycle gate. |
 
 No intermediate sprint publishes merely because one subsystem compiles. A
 security fix may still justify a separately planned patch release, but ordinary
-feature work waits for the next boundary above. If F-184 archives M19, the S104
+feature work waits for the next boundary above. If F-184 archives M19, the S105
 boundary disappears with the programme and no spreadsheet release namespace is
 created.
 

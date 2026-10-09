@@ -50,14 +50,14 @@ contracts require integrated gates at each sprint boundary.
 M23 closes the five-document from-scratch business-document boundary. M24 then
 classifies and closes the broader modern DOCX authoring surface before M19 may
 begin. The spreadsheet programme remains a business decision and proceeds only
-if F-184 confirms a material gap in the Rust ecosystem at S95.
+if F-184 confirms a material gap in the Rust ecosystem at S96.
 
 The stopping and compression choices are:
 
 - **Stop after M23.** S73 can generate the five private reference documents
   from `Document::new()` through public modeled APIs, with no base template,
   raw OOXML, or LibreOffice field-update pass.
-- **Stop after M24.** S94 provides the complete modern DOCX authoring boundary.
+- **Stop after M24.** S95 provides the complete modern DOCX authoring boundary.
   Every in-scope feature is authorable, readable, mutable, round-trip safe,
   rendered where applicable, and classified across the public bindings.
 - **Archive M19 at its decision gate.** F-184 may still find that the advanced
@@ -1604,7 +1604,7 @@ decision lands.
 OPC, DrawingML, the chart engine, the layout engine and the PDF backend all
 exist and are format-neutral, which lowers the cost of a third family. That is
 not sufficient reason to build one. F-184 must reassess the Rust ecosystem when
-S95 begins. M19 proceeds only if no credible maintained crate provides the
+S96 begins. M19 proceeds only if no credible maintained crate provides the
 combined lifecycle required here: open an existing advanced workbook, preserve
 what is not executed, edit typed features, recalculate formulas and local
 pivots, refresh a declared Power Query subset, automate it through an Office
@@ -1626,7 +1626,7 @@ render to PDF.
 
 ### F-184, Advanced spreadsheet go or no-go (S)
 The go or no-go decision record. Reassess the maintained Rust spreadsheet
-ecosystem at S95, state whether the combined lifecycle gap still exists, and
+ecosystem at S96, state whether the combined lifecycle gap still exists, and
 archive M19 if it does not. If it does, amend `02-scope-and-non-goals.md`, define
 the boundary between `oxml-sml` as chart support and `rxlsx` as a library, and
 publish the preserve, model, and execute classification for every advanced
@@ -1639,7 +1639,7 @@ CLI/Python workflow with rendering. Compare integration, installation,
 maintenance and release costs, including reuse behind a consistent facade.
 Evaluate the utility and limits of a reader/editor stage before calculation
 and pivots, retaining formula and pivot state with explicit stale-result
-diagnostics when edits cannot be recalculated. The existing S104 distribution
+diagnostics when edits cannot be recalculated. The existing S105 distribution
 boundary remains until a separate reviewed roadmap decision changes it.
 
 The reporter's [follow-up](https://github.com/tensorbee/rdocx/issues/281#issuecomment-6063901190)
@@ -2268,7 +2268,7 @@ documents only as anonymous, non-identifying capability families. The audit
 found no duplicate scope, missing owner, dangling dependency, dependency cycle,
 or scheduling conflict in F-243 through F-310. Their boundaries, sizes, and
 dependencies remain authoritative. The current plan places them in S71 through
-S75, S86, and S89 through S94.
+S75, S86, and S89 through S95.
 **Capability matrix owner**: `docs/hld/02-scope-and-non-goals.md`, "Modern DOCX
 capability matrix".
 **Test gate**: regression. Every in-scope matrix row has evidence, an owner
@@ -6681,6 +6681,143 @@ controls pass. Unsupported producer extensions still preserve caches and
 metadata with diagnostics. Scoped verification, independent zero-finding
 review, unchanged or explicitly reviewed harness output and all earned risk
 riders are required before completion.
+
+### F-X193, Preserve semantic mark highlights through nested HTML runs (S)
+
+Assess Pedro Assumpcao's (`pedroassumpcao`)
+[PR294](https://github.com/tensorbee/rdocx/pull/294) at immutable head
+`63cd119dcb8fa9c367bf93141f79780db7f64886`. The HTML importer must carry the
+semantic highlight of `mark` through nested inline children, including bold
+and italic runs, while ordinary CSS backgrounds remain scoped to their own
+elements. Unmarked siblings must not inherit the highlight. Preserve existing
+inline formatting, importer behavior and producer XML on unrelated paths.
+
+**Test gate**: regression. Nested bold and italic marked runs retain their
+highlight after public import and save/reopen, with unmarked siblings and
+ordinary CSS backgrounds as discriminating controls. Assess the contribution
+against current main and record actual scoped verification and clean review.
+
+### F-X194, Complete Python table text and indentation APIs (M)
+
+Resolve `hadim`'s Issues
+[295](https://github.com/tensorbee/rdocx/issues/295) and
+[300](https://github.com/tensorbee/rdocx/issues/300) through existing table and
+binding types. PowerPoint `Cell.text_frame` returns the same public TextFrame
+surface used by shapes, including paragraphs, runs, font properties,
+vertical_anchor and word_wrap. Users can add paragraphs and set alignment,
+spacing, size, name, bold and colour without replacing the editable table with
+shapes. Expose Cell.vertical_anchor directly if the existing text-frame API
+does not provide it. Retain ownership, stale-handle and merged-cell contracts.
+
+Word `Table.indent` reads and writes Length values and accepts None to remove
+`w:tblInd`. Support negative values in the checked Rust authoring path and
+Python setter as well as positive and zero values. Respect the existing Word
+alignment, margin and compatibility placement rules rather than introducing
+a second positioning policy. Invalid inputs fail without partial mutation.
+
+**Test gate**: regression. Reproduce both missing Python APIs on the claimed
+base, then verify installed Python cell text-frame edits and signed table
+indentation through save/reopen and actual PDF/raster output. Include two
+paragraphs, merged-cell ownership, stale handles, removal of explicit indent,
+negative/zero/positive values and existing alignment/margin controls. Use
+existing integration entrypoints and public objects.
+
+### F-X195, Honor caller fonts and variable styles across render paths (L)
+
+Resolve `hadim`'s Issues
+[296](https://github.com/tensorbee/rdocx/issues/296) and
+[297](https://github.com/tensorbee/rdocx/issues/297) as one font-selection
+contract across Word and PowerPoint measurement and output paths.
+
+Provide consistent `--font-dir` handling on every CLI command that lays out
+text, including raster/PDF convert, render and thumbnail. An output format
+that cannot consume the option reports an error rather than silently ignoring
+it. Every Python render and layout entrypoint accepts caller fonts and font
+directories with the same semantics as Word Document.to_pdf. Cover Word page
+PNG, SVG, selected/all-page rendering and PowerPoint slide/notes PDF,
+selected/all-slide and all-notes raster rendering and text_layout. Fit checks,
+PDF and previews use the same face selection and caller-font precedence.
+
+Resolve variable fonts to the requested weight and italic/slant instance for
+both layout metrics and output glyphs. Bold selects a matching named or axis
+instance, normally wght700. Italic uses an appropriate face or ital/slnt axis.
+Instantiate embedded outlines or apply variation during subsetting so PDF and
+raster output reflect the selected style. Where no requested face or instance
+is available, use a verified synthetic style, never regular glyphs under a
+misleading Bold font name. Preserve static-font, bundled-font, fallback and
+font-licence behavior. Any dependency change earns the packaging, MSRV, WASM,
+archive and supply-chain riders in the approved design.
+
+**Test gate**: regression. A caller-only family absent from system discovery
+produces consistent CLI and installed Python Word/PowerPoint PDF, PNG and
+applicable SVG/notes/fit results. Pinned variable-font controls independently
+prove different regular/bold outlines and matching layout metrics, italic
+selection and truthful embedded faces. Use deterministic font mode and
+existing generated or appropriately licensed fixture conventions. Cover
+invalid directories, unsupported formats, default/bundled/static fonts and
+repeated rendering. Declare and independently review every expected rendering
+delta before moving the exclusive hash baseline.
+
+### F-X196, Validate visible paragraph content without false empty warnings (S)
+
+Resolve `hadim`'s
+[Issue298](https://github.com/tensorbee/rdocx/issues/298). CLI validation must
+not classify a paragraph as empty merely because its text projection trims
+to an empty string. Paragraphs containing a drawing, picture, object, chart,
+equation, field, symbol, tab, break, footnote/endnote reference or a content
+control containing visible content are nonempty. Inspect modeled content
+without mutating the document or discarding opaque source XML. Truly empty
+paragraphs retain the existing warning and metadata checks remain intact.
+
+**Test gate**: regression. The reported three-picture document has no empty
+paragraph warning. Independent controls cover every listed content kind,
+content controls, text/whitespace-only and truly empty paragraphs, with
+unchanged title and author diagnostics and no document mutation.
+
+### F-X197, Unify Python colour inputs and font colour formats (L)
+
+Resolve `hadim`'s
+[Issue299](https://github.com/tensorbee/rdocx/issues/299) across both Python
+families. Every public colour-setting parameter or property accepts RGBColor
+and six-digit hex strings with or without a leading hash. Scalar RGB getters
+return RGBColor consistently, whose string form is the hex value. Font.color
+returns a colour-format object supporting writable rgb and the available type
+and theme_color model, so the python-docx/python-pptx font.color.rgb idiom
+works. Retain direct font.color assignment as a compatibility shortcut.
+Preserve existing fill, line, shadow and theme format semantics rather than
+flattening theme colours into guessed RGB values.
+
+Cover style creation/update, font colour, table and cell borders, cell and run
+shading, and every other existing colour-taking public call in both families.
+Invalid types raise TypeError naming the affected parameter, accepted forms
+and actual type. Invalid hex values receive explicit validation errors and
+failed assignments leave source state unchanged. Update existing stubs,
+examples and typing/runtime checks with the approved compatibility decision.
+
+**Test gate**: regression. Installed Word and PowerPoint bindings accept both
+input forms at every inventoried setter, return consistent RGB values and
+support the nested font.color.rgb idiom, direct assignment and existing theme,
+fill, line and shadow APIs. Save/reopen, malformed inputs, unset colours,
+stale handles and actual rendering distinguish correct formats from coercion
+or source loss. Strict typing and stub checks agree with the runtime API.
+
+### F-X198, Preserve alternate text-box copies during scoped replacement (M)
+
+Resolve `hadim`'s [Issue301](https://github.com/tensorbee/rdocx/issues/301), a
+follow-up to Issue285. Scoped replacement of a checked text-box paragraph must
+update both the DrawingML Choice and VML Fallback of the same box, counting
+it once, or refuse with an explicit error and leave the document unchanged.
+Preserve run formatting, sibling text boxes, comments, namespace contexts and
+opaque producer XML. Match physical alternate ownership rather than identical
+text. Existing document-wide replacement semantics remain unchanged.
+
+**Depends on**: F-X187.
+**Test gate**: regression. A public checked text-box paragraph containing
+NEEDLE in both alternate branches produces PIN in both with one replacement,
+or atomic refusal with complete byte preservation. Installed Python maps
+refusal to RdocxError. Controls distinguish single-representation boxes,
+multiple identical boxes, stale locations, count mismatch and unequal or
+ambiguous alternates through save/reopen.
 
 ### F-X191, Ignore namespace declarations in numbering reader completeness (S)
 

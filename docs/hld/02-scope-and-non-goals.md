@@ -375,7 +375,7 @@ pixel, and byte caps fail closed, and no system codec or subprocess is used.
 
 `oxml-sml` remains chart-workbook support rather than a spreadsheet library.
 M19 may supersede that position only if F-184 finds a material gap still exists
-in the Rust ecosystem at S95. A basic reader, writer, or formula evaluator is
+in the Rust ecosystem at S96. A basic reader, writer, or formula evaluator is
 not enough. The required gap is one loss-aware lifecycle covering advanced
 editing, calculation, local pivot refresh, selected Power Query execution,
 Office Scripts-compatible automation, and rendering. If a credible maintained
