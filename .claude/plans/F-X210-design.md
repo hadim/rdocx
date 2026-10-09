@@ -129,3 +129,19 @@ support testing the proposed replacement, without establishing universal
 metric equality, line pitch or identical wrapping. Exact commands and source
 hashes are retained in current-substitute-comparison.json,
 SHA25684f15c46fb5bac01dc86f9d7479050573b32c1b412a1469e4a267df929e4c71c.
+
+## PR319 reconciliation
+
+PR319 at immutable head9a36bc966d1e12e4e9e2f38b777889bd687c5dd9 closes
+Issue313 and belongs to this existing story. It proposes four modified
+static Gelasio faces from a different upstream commit and a new Noto Sans
+Symbols2 subset, which differ from the exact eight assets already approved.
+Do not adopt those assets under the existing approval. Assess complete
+immutable sources and recipes against the independent shaping controls,
+metric-selection policy, genuine font coverage and bounded acceptance here.
+Its narrower printable-ASCII advance comparison does not establish shaped
+string or universal geometry equivalence. Reconcile its italic fallback
+walk with F-X195's verified synthesis and caller precedence. Assess all
+claimed twelve rendering deltas before any labelled behavioral commit or
+exclusive local baseline update. Caller and variable font work remains
+F-X195, with no duplicated loader or resolver under this contribution.

@@ -7409,3 +7409,36 @@ are limited to word/document.xml and PDF bytes/pages due to one fewer
 accessibility finding. Derive the actual49-key result, prove reverting the
 audit correction restores the old result, review the delta independently
 and make its own labelled commit. No contributor baseline is copied.
+
+## Rolling contribution reconciliation, 2026-10-09
+
+PR [319](https://github.com/tensorbee/rdocx/pull/319), immutable head
+`9a36bc966d1e12e4e9e2f38b777889bd687c5dd9`, closes Issue313 and attaches
+to existing F-X210. Caller fonts and variable instances remain F-X195 and
+PR315. Its proposed four modified static Gelasio faces and new Noto Sans
+Symbols2 subset differ from the explicitly approved eight-file inventory.
+Capture and assess their sources, license terms, metrics, glyph mappings,
+italic selection and diagnostic lifecycle before selecting any contribution.
+The existing asset approval does not authorize that different inventory.
+Its twelve claimed rendering deltas are contribution evidence, not accepted
+local baselines. Root retains exclusive baseline ownership.
+
+PR [320](https://github.com/tensorbee/rdocx/pull/320), immutable head
+`252acccbba9adab9264cfb109c4b1d720ed79d4a`, closes Issue303 and attaches
+to existing F-X200. Its colours remain F-X197. Assess its tri-state setters,
+tab ownership and enums, defaults preservation, list helpers and installed
+binding behavior against the full approved contract before reuse. Its body
+explicitly leaves native shared numbering counters unchanged.
+
+Issue [321](https://github.com/tensorbee/rdocx/issues/321) therefore maps to
+that same F-X200, which already owns the native shared-definition counter
+change and its authenticated Word evidence. It adds no duplicate F-ID or
+second implementation. Its explicit two-instance continuation, first-use
+startOverride and sub-level restart criteria are covered by the same native
+state contract and require local regressions and explained sample changes.
+F-283 retains its F-X200 completion prerequisite. Do not close Issue303 or
+Issue321 based only on the contributor's narrower binding patch.
+
+The refreshed intake contains seven open PRs and23 open issues. Issues264
+and281 remain excluded. Contributor test, measurement and baseline claims
+never substitute for local verification.

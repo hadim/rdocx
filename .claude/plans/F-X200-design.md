@@ -4,7 +4,7 @@
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X197
-**Issue**: 303, captured in S91-intake-issues.json on 2026-10-09
+**Issues**: 303 and321, captured in S91-intake-issues.json on 2026-10-09
 **Prerequisite**: F-X197
 **Implementation**: not claimed, no source changes or new gate evidence
 
@@ -491,3 +491,17 @@ without its own native control. This preserves behavior outside the observed
 contract while the shared-state change is implemented. No style-linked or
 nsid coalescing claim is added. The draft awaits completed F-X197 and final
 source-wave approval, not another user permission request.
+
+## PR320 and Issue321 reconciliation
+
+PR320 at immutable head252acccbba9adab9264cfb109c4b1d720ed79d4a closes
+Issue303 but explicitly leaves shared-definition native counters unchanged.
+Its native helper startOverride workaround is not a replacement for the
+156-marker authenticated Word state contract above. Issue321 is assigned
+to this same F-ID and provides explicit acceptance for ordinary-instance
+continuation, first-use explicit restart and sub-level restart preserving
+level0. Implement and verify those criteria once under the native owner.
+Contributor source is reusable only after full immutable source assessment,
+including tab-handle mutability versus the existing snapshot contract,
+unsupported tab enums, raw docDefaults retention and checked list operations.
+Colours remain F-X197. Contributor passes and hashes are not local gates.
