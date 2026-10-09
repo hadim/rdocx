@@ -52,7 +52,7 @@ Issues264 and281 stay excluded at every refresh. SPRINT_PLAN.md defines the
 full rolling procedure. PR294 and Issues295 through301 are included at opening.
 PR302 entered the rolling intake at immutable head
 `30e4a93df7549990c5838da9c95866d19f1247b0`, adding independent F-X199.
-It has no linked issue and remains a draft contribution by `pedroassumpcao`.
+It has no linked issue and is now ready for review, contributed by `pedroassumpcao`.
 Before implementation its head advanced to
 `7ac2851cb61b5e7b26427004517cc0cd4db0dbd9`. The native patch is unchanged.
 Archive records will use actual integrated local measurements.
@@ -60,8 +60,8 @@ Archive records will use actual integrated local measurements.
 ## Parallel implementation resources
 
 The source phase of wave 1 can run F-X193, F-X196, F-X198 and F-X199 in separate
-worktrees. Their exclusive files are respectively html.rs, document.rs and
-regression_test.rs, and rdocx-oxml/table.rs and integration_test.rs.
+worktrees. F-X193 owns html.rs. F-X198 owns document.rs and
+regression_test.rs. F-X199 owns rdocx-oxml/table.rs and integration_test.rs.
 F-X196 owns commands.rs and the existing CLI test entrypoint.
 F-X198 uses its approved regression entrypoint, not integration_test.rs.
 Serialize shared HLD completion edits and delivery-record integration.
