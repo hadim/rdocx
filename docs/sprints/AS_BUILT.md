@@ -18766,3 +18766,51 @@ work/f-x196-codex through sprint verification and close. Later F-X212 may
 extract the scanner and intentionally change native audit output only through
 its separately reviewed contract. No GitHub issue closure, push or release
 occurred. Final integrated full verification and sprint review remain due.
+
+### F-X198, Preserve alternate text-box copies during scoped replacement
+
+**Sprint.** S91
+**Completed.** 2026-10-09
+**Size.** M, estimated2 days, actual not recorded.
+
+**What was built.** Qualified physical containment refuses positive scoped
+edits inside paired text boxes, including descendant cells. Count mismatch
+and zero-no-op ordering, standalone edits and once-counted document-wide
+replacement remain unchanged. Source and opaque copies remain atomic.
+
+**Non-obvious choices.** This is Issue301's permitted safety prefix.
+Successful synchronized scoped editing remains F-X202. Pairing is not
+guessed from matching text or StoryKind. Foreign lookalikes remain opaque.
+
+**Deviations from the design plan.** None. Combined archive rows were
+actually measured, retaining F-X193 HTML, the F-X196 CLI row and policy limits.
+
+**Spec sections touched.** HLD10 scoped binding replacement, HLD12 checked
+replacement tests and HLD14 F-X198.
+
+**Tests.** Genuine Base failure,40 focused native and106 installed Python
+controls passed. Production ALLpass2 and independent integration pass1 have
+zero defects/smells. Scoped clippy and both WASM targets passed. Original full
+native37131 exited101 solely at the unchanged300-second external consumer
+compile timeout after511 library and363 integration passes. Diagnostic
+prewarm and unchanged exact consumer rerun passed, then2331 full regression
+and2 doctests passed separately. The original fail-fast command is not
+relabeled. Own policy passed141 with2 existing skips. Patched22-package
+publish dry-run passed without publication.
+
+**Hash harness.** Worker comparison matched all49 entries. Integrated
+production/test bytes match the frozen worker, preserving the separately
+reviewed F-X193 HTML. Three focused integrated metadata controls passed.
+Both final post-row archives measured3529438/50785422/37,11 compressed bytes
+from the observed carrier within unchanged64 tolerance. All34 ordinary
+package members, including current README, match canonical bytes. Existing
+archive validator passed twice. Original pre-row archive hashes remain
+distinct preserved evidence. These are scoped dependency-prefix facts,
+not final integrated full verification or sprint review.
+
+**Notes for future sessions.** Source head7d115db5, consumed handoff
+tip0b42204b and integrationb329f157 are recorded. Clean worktree removal
+without force followed integration recording. Retain work/f-x198-codex
+through sprint verification and close. Exact exits/source/package receipts
+remain under /private/tmp/S91-F-X198-*. Later final sprint gates remain due.
+No issue closure, push, main merge, tag or release occurred.
