@@ -442,6 +442,31 @@ impl PyTable {
         Ok(())
     }
 
+    /// The table indentation from the left margin, `w:tblInd`. A negative
+    /// value pulls the table into the margin, and `None` removes it.
+    #[getter]
+    fn indent(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        let index = self.validate(py)?;
+        self.document
+            .borrow(py)
+            .inner
+            .table(index)
+            .and_then(|table| table.indent())
+            .map(|value| length_object(py, value))
+            .transpose()
+    }
+
+    #[setter]
+    fn set_indent(&self, py: Python<'_>, value: Option<i64>) -> PyResult<()> {
+        self.edit(py, |table| match value {
+            Some(emu) => table.set_indent_checked(rdocx::Length::emu(emu)),
+            None => {
+                table.clear_indent();
+                Ok(())
+            }
+        })
+    }
+
     #[pyo3(signature = (style, *, size, color))]
     fn set_borders(&self, py: Python<'_>, style: &str, size: u32, color: &str) -> PyResult<()> {
         let style = border_style_from_name(style)?;

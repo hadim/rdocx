@@ -252,7 +252,9 @@ tuple or `None`. `set_cell_margins` takes four keyword EMU lengths and
 `cell_margins` reads a `(top, right, bottom, left)` tuple of optional
 `Length` values. `grid_widths` reads and replaces every grid column, and
 `set_column_width(column, width)` changes one. Both keep the table width and
-every covering cell width in step. `Row.height` and `Row.height_rule` follow
+every covering cell width in step. `Table.indent` reads and writes `w:tblInd`
+as a `Length`. A negative indent pulls the table into the left margin, as Word
+writes and honours it, and `None` removes the indent. `Row.height` and `Row.height_rule` follow
 python-docx with `WD_ROW_HEIGHT_RULE.AT_LEAST` and `EXACTLY`. Assigning a
 height keeps an exact rule, and a rule needs a height to apply to. Unlike
 python-docx, a row whose `w:trHeight` has an `auto` rule or no value reads no

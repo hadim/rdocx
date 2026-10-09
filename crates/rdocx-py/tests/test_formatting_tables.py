@@ -372,6 +372,28 @@ def test_table_borders_margins_and_grid_widths_round_trip():
     ]
 
 
+def test_table_indent_accepts_negative_values_and_none_removes_it():
+    from rdocx import Document, Inches
+
+    document = Document()
+    table = document.add_table(rows=1, cols=2)
+    assert table.indent is None
+    table.indent = Inches(-0.5)
+    assert table.indent == Inches(-0.5)
+
+    xml = _document_xml(document.to_bytes())
+    assert '<w:tblInd w:w="-720" w:type="dxa"/>' in xml
+    reopened = Document.from_bytes(document.to_bytes())
+    table = reopened.tables[0]
+    assert table.indent == Inches(-0.5)
+
+    table.indent = Inches(0.25)
+    assert table.indent == Inches(0.25)
+    table.indent = None
+    assert table.indent is None
+    assert "w:tblInd" not in _document_xml(reopened.to_bytes())
+
+
 def test_row_height_split_and_header_round_trip():
     from rdocx import Document, Pt, WD_ROW_HEIGHT_RULE
 

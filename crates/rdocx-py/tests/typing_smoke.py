@@ -101,6 +101,9 @@ def exercise_rdocx_types(path: Path) -> None:
     assert_type(table.grid_widths, tuple[Length, ...])
     table.grid_widths = [Inches(1)]
     table.set_column_width(0, Inches(2))
+    assert_type(table.indent, Length | None)
+    table.indent = Inches(-0.25)
+    table.indent = None
     assert_type(row.height, Length | None)
     assert_type(row.height_rule, WD_ROW_HEIGHT_RULE | None)
     assert_type(row.cant_split, bool | None)
