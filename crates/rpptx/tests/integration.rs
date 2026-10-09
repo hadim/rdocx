@@ -8108,7 +8108,7 @@ const F124_ARTIFACT_SHA256: &str =
 const F116_ARTIFACT_SHA256: &str =
     "d36da6e8849eabd4487d2572baea19c3716ee7d0fe03aaa4714a28ce3c41de4f";
 const F116_CURRENT_ARTIFACT_SHA256: &str =
-    "41f0bc53a296915c3505d649231aaf7797bce8e0c0ad5f05c590ee38e6095269";
+    "099862804d94aa12b7223b8575d0ddd2dd85669158a96207267542301c9b31bf";
 const F116_FINAL_TITLES: [&str; 10] = [
     "F-116 slide 10",
     "F-116 slide 02",
@@ -9509,6 +9509,45 @@ fn slide_images_back_picture_fills_and_tables_keep_a_style_id() {
         Some("{073A0DAA-6AF3-43AB-8588-CEC1D06C72B9}")
     );
     assert!(reopened.slide_png_deterministic(0, 24.0).unwrap().is_some());
+}
+
+#[test]
+fn released_slide_images_leave_no_dangling_relationship_and_style_ids_are_canonical() {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    let id = presentation
+        .add_slide_image(0, &valid_one_pixel_png(), "fill.png")
+        .unwrap();
+    assert!(!presentation.validate().is_empty());
+    presentation.release_unused_slide_images(0).unwrap();
+    assert!(presentation.validate().is_empty());
+    let package = open_opc(&presentation.to_bytes().unwrap(), "released.pptx");
+    assert!(
+        package
+            .parts
+            .keys()
+            .all(|part| !part.starts_with("/ppt/media/"))
+    );
+    assert!(
+        package
+            .get_part_rels("/ppt/slides/slide1.xml")
+            .is_none_or(|relationships| relationships.get_by_id(&id).is_none())
+    );
+
+    let medium = "{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}";
+    assert_eq!(
+        presentation
+            .table_style_id(&medium.to_ascii_lowercase())
+            .unwrap()
+            .as_deref(),
+        Some(medium)
+    );
+    assert_eq!(
+        presentation
+            .table_style_id("{00000000-0000-0000-0000-000000000000}")
+            .unwrap(),
+        None
+    );
 }
 
 #[test]

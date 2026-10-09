@@ -104,21 +104,6 @@ pub(crate) fn cell_mut_at<'a>(
         .into_cell_mut(row, column)
 }
 
-/// Whether `value` is a GUID in braces, `{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}`.
-pub(crate) fn is_braced_guid(value: &str) -> bool {
-    let Some(inner) = value
-        .strip_prefix('{')
-        .and_then(|value| value.strip_suffix('}'))
-    else {
-        return false;
-    };
-    let groups = inner.split('-').collect::<Vec<_>>();
-    groups.len() == 5
-        && groups.iter().zip([8, 4, 4, 4, 12]).all(|(group, length)| {
-            group.len() == length && group.bytes().all(|byte| byte.is_ascii_hexdigit())
-        })
-}
-
 /// Left, right, top, and bottom cell margins, as the facade reports them.
 type Margins = (
     Option<rpptx::Emu>,
@@ -262,7 +247,9 @@ impl PyTable {
 
     /// The `a:tableStyleId` GUID of the applied table style, such as
     /// `{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}` (Medium Style 2, Accent 1),
-    /// or `None` for the presentation's default style.
+    /// or `None` for the presentation's default style. A new id must name
+    /// one of PowerPoint's built-in styles or one the deck defines, and is
+    /// written in that style's spelling, upper case for a built-in one.
     #[getter]
     fn style_id(&self, py: Python<'_>) -> PyResult<Option<String>> {
         self.read(py, |table| table.style_id().map(str::to_owned))
@@ -270,15 +257,28 @@ impl PyTable {
 
     #[setter]
     fn set_style_id(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
-        if let Some(value) = value.as_deref()
-            && !is_braced_guid(value)
-        {
-            return Err(PyValueError::new_err(format!(
-                "table style id must be a braced GUID such as \
-                 {{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}}, got {value:?}"
-            )));
-        }
-        self.edit(py, |table| table.set_style_id(value.as_deref()))
+        let style_id = match value.as_deref() {
+            None => None,
+            Some(value) => {
+                let known = self
+                    .presentation
+                    .borrow(py)
+                    .inner
+                    .table_style_id(value)
+                    .map_err(|error| rpptx_to_pyerr(py, error))?;
+                Some(known.ok_or_else(|| {
+                    PyValueError::new_err(format!(
+                        "table style id {value:?} is neither one of PowerPoint's 74 built-in \
+                         table styles nor defined in the deck's ppt/tableStyles.xml. Read \
+                         table.style_id from a table styled in PowerPoint, or use a built-in \
+                         id such as {{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}} (Medium Style 2 \
+                         - Accent 1) or {{2D5ABB26-0587-4C30-8999-92F81FD0307C}} (No Style, \
+                         No Grid)"
+                    ))
+                })?)
+            }
+        };
+        self.edit(py, |table| table.set_style_id(style_id.as_deref()))
     }
 
     fn cell(&self, py: Python<'_>, row: isize, col: isize) -> PyResult<Py<PyCell>> {

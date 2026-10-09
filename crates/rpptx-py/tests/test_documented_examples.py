@@ -4779,6 +4779,19 @@ def test_issue_308_run_baseline_spacing_language_and_typefaces_round_trip():
     font = reopened.slides[0].shapes[0].text_frame.paragraphs[0].runs[0].font
     assert (font.baseline, font.spacing, font.language) == (-0.25, Pt(1.5), "fr-FR")
     assert (font.east_asian_name, font.complex_script_name) == ("Yu Gothic", "Arial")
+    from rpptx.enum.lang import MSO_LANGUAGE_ID
+
+    assert font.language_id == MSO_LANGUAGE_ID.FRENCH
+    font.language_id = MSO_LANGUAGE_ID.GERMAN
+    assert font.language == "de-DE"
+    font.language = "x-klingon"
+    with pytest.raises(ValueError, match="read it with font.language"):
+        _ = font.language_id
+    with pytest.raises(ValueError, match="names no language tag"):
+        font.language_id = MSO_LANGUAGE_ID.NO_PROOFING
+    font.language_id = None
+    assert (font.language, font.language_id) == (None, MSO_LANGUAGE_ID.NONE)
+    font.language = "fr-FR"
     font.baseline = None
     font.language = None
     assert (font.baseline, font.language) == (None, None)
@@ -4934,9 +4947,11 @@ def test_issue_308_table_banding_flags_and_style_id(tmp_path):
     table.last_col = True
     table.horz_banding = False
     table.vert_banding = True
-    table.style_id = "{073A0DAA-6AF3-43AB-8588-CEC1D06C72B9}"
-    with pytest.raises(ValueError, match="braced GUID"):
-        table.style_id = "Medium Style 2"
+    table.style_id = "{073a0daa-6af3-43ab-8588-cec1d06c72b9}"
+    assert table.style_id == "{073A0DAA-6AF3-43AB-8588-CEC1D06C72B9}"
+    for unknown in ("Medium Style 2", "{00000000-0000-0000-0000-000000000000}"):
+        with pytest.raises(ValueError, match="built-in table styles nor defined"):
+            table.style_id = unknown
     path = tmp_path / "table.pptx"
     prs.save(path)
     table = rpptx.Presentation(path).slides[0].shapes[0].table
@@ -4974,6 +4989,7 @@ def test_issue_308_sections_slide_ids_and_media(tmp_path):
     ]
     prs.set_sections([("Intro", [0, 1]), ("Body", [2])])
     assert [section.id for section in prs.sections] == [section.id for section in first]
+    assert repr(prs.sections[0]).startswith("Section(id='{")
     assert len({prs.slides[index].slide_id for index in range(3)}) == 3
 
     movie = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom" + bytes(64)
@@ -4987,6 +5003,7 @@ def test_issue_308_sections_slide_ids_and_media(tmp_path):
         ("video", "video/mp4", False)
     ]
     assert prs.slides[1].extract_media(media[0].shape_id) == movie
+    assert repr(media[0]).startswith("MediaInfo(shape_id=")
     path = tmp_path / "media.pptx"
     prs.save(path)
     reopened = rpptx.Presentation(path)
@@ -5013,6 +5030,8 @@ def test_issue_308_raster_archival_handout_and_odp_exports():
     assert tiff[:4] == b"II*\x00"
     with pytest.raises(ValueError, match="png, jpeg, or tiff"):
         prs.render_slides(format="gif")
+    with pytest.raises(ValueError, match="from 1 to 100"):
+        prs.render_slides(format="jpeg", quality=300)
     with pytest.raises(ValueError, match="quality applies to JPEG only"):
         prs.render_slides(quality=50)
     with pytest.raises(ValueError, match="transparent applies to PNG only"):
@@ -5029,3 +5048,36 @@ def test_issue_308_raster_archival_handout_and_odp_exports():
     back, diagnostics = rpptx.Presentation.from_odp(odp)
     assert len(back.slides) == 2 and diagnostics == []
     assert back.slides[1].shapes[0].text == "Box"
+
+
+def test_issue_308_replacing_a_picture_fill_releases_its_image(tmp_path):
+    import rpptx
+    from rpptx import Inches
+
+    def images(prs):
+        with zipfile.ZipFile(io.BytesIO(prs.to_bytes())) as archive:
+            return sorted(name for name in archive.namelist() if name.startswith("ppt/media/"))
+
+    prs = rpptx.Presentation()
+    for _ in range(2):
+        prs.slides.add_slide(prs.slide_layouts[6])
+    prs.slides[0].shapes.add_shape(1, 0, 0, Inches(1), Inches(1))
+    prs.slides[0].shapes.add_table(2, 2, Inches(2), 0, Inches(2), Inches(1))
+    prs.slides[0].shapes[0].fill.picture(io.BytesIO(_tiny_png(255, 0, 0)))
+    prs.slides[0].shapes[0].fill.picture(io.BytesIO(_tiny_png(0, 255, 0)))
+    cell = prs.slides[0].shapes[1].table.cell(0, 0)
+    cell.fill.picture(io.BytesIO(_tiny_png(0, 0, 255)))
+    cell.fill.solid()
+    prs.slides[0].background.fill.picture(io.BytesIO(_tiny_png(9, 9, 9)))
+    prs.slides[0].background.fill.picture(io.BytesIO(_tiny_png(8, 8, 8)))
+    prs.slides[1].background.fill.picture(io.BytesIO(_tiny_png(7, 7, 7)))
+    prs.slides[1].follow_master_background = True
+    assert prs.validate() == ()
+    assert len(images(prs)) == 2
+    prs.slides[0].shapes[0].fill.solid()
+    prs.slides[0].background.fill.solid()
+    assert prs.validate() == ()
+    assert images(prs) == []
+    path = tmp_path / "released.pptx"
+    prs.save(path)
+    assert rpptx.Presentation(path).validate() == ()

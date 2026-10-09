@@ -36,9 +36,10 @@ pub use oxml_drawing::line::{
 };
 use oxml_drawing::namespace::A_NS;
 use oxml_drawing::shape_props::CT_ShapeProperties;
-#[cfg(feature = "render")]
-use oxml_drawing::table::CT_TableStyleList;
-use oxml_drawing::table::{CT_Table, CT_TableCell, CT_TableCellProperties, CT_TableProperties};
+use oxml_drawing::table::{
+    CT_Table, CT_TableCell, CT_TableCellProperties, CT_TableProperties, CT_TableStyle,
+    CT_TableStyleList,
+};
 #[cfg(feature = "render")]
 use oxml_drawing::text::CT_TextListStyle;
 use oxml_drawing::text::{
@@ -3471,6 +3472,68 @@ impl Presentation {
         self.package = package;
         self.media_store = media_store;
         Ok(relationship_id)
+    }
+
+    /// Removes the slide's image relationships that nothing on the slide
+    /// names any more, such as the picture of a replaced picture fill, with
+    /// the image parts no other relationship reaches.
+    pub fn release_unused_slide_images(&mut self, slide_index: usize) -> Result<()> {
+        self.require_slide_index(slide_index)?;
+        let record = &self.slides[slide_index];
+        let part_name = record.part_name.clone();
+        let referenced = slide_relationship_ids(&record.slide)?;
+        let Some(mut relationships) = self.package.get_part_rels(&part_name).cloned() else {
+            return Ok(());
+        };
+        let mut released = HashSet::new();
+        relationships.items.retain(|relationship| {
+            let unused = relationship.rel_type == rel_types::IMAGE
+                && !relationship_is_external(relationship)
+                && !referenced.contains(&relationship.id);
+            if unused {
+                released.insert(OpcPackage::resolve_rel_target(
+                    &part_name,
+                    &relationship.target,
+                ));
+            }
+            !unused
+        });
+        if released.is_empty() {
+            return Ok(());
+        }
+        self.package.set_part_rels(&part_name, relationships);
+        prune_unreachable_parts(&mut self.package, &released);
+        self.media_store = MediaStore::scan(&self.package);
+        Ok(())
+    }
+
+    /// Returns the spelling of a table style id a table can apply, matched
+    /// without regard to case: one of PowerPoint's 74 built-in styles, in
+    /// upper case, or one `ppt/tableStyles.xml` defines, as it spells it.
+    pub fn table_style_id(&self, style_id: &str) -> Result<Option<String>> {
+        let upper = style_id.to_ascii_uppercase();
+        if CT_TableStyle::builtin(&upper).is_some() {
+            return Ok(Some(upper));
+        }
+        let Some(relationship) = self
+            .package
+            .get_part_rels(&self.presentation_part)
+            .and_then(|relationships| relationships.get_by_type(rel_types::TABLE_STYLES))
+        else {
+            return Ok(None);
+        };
+        let target = OpcPackage::resolve_rel_target(&self.presentation_part, &relationship.target);
+        let styles = CT_TableStyleList::from_xml(required_part(&self.package, &target)?).map_err(
+            |error| Error::MalformedPart {
+                part_name: target,
+                message: error.to_string(),
+            },
+        )?;
+        Ok(styles
+            .styles
+            .into_iter()
+            .map(|style| style.style_id)
+            .find(|id| id.eq_ignore_ascii_case(style_id)))
     }
 
     /// Returns a package and media store holding the image and a slide

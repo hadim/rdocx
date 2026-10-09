@@ -1703,6 +1703,50 @@ impl PyFont {
         self.update(py, |properties| properties.set_language(value.as_deref()))
     }
 
+    /// The language as an `MSO_LANGUAGE_ID` member, as python-pptx reads it:
+    /// `NONE` without a language. A tag no member stands for raises and
+    /// names `font.language`, which reads any tag.
+    #[getter]
+    fn language_id(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let language = self.language(py)?;
+        let module = py.import("rpptx.enum.lang")?;
+        let Some(tag) = language else {
+            return module
+                .getattr("MSO_LANGUAGE_ID")?
+                .getattr("NONE")
+                .map(Bound::unbind);
+        };
+        match module
+            .getattr("_MEMBERS")?
+            .get_item(tag.to_ascii_lowercase())
+        {
+            Ok(member) => Ok(member.unbind()),
+            Err(_) => Err(PyValueError::new_err(format!(
+                "language {tag:?} has no MSO_LANGUAGE_ID member, read it with font.language"
+            ))),
+        }
+    }
+
+    /// Writes the tag an `MSO_LANGUAGE_ID` member stands for. `None` or
+    /// `NONE` removes the language, as python-pptx does.
+    #[setter]
+    fn set_language_id(&self, py: Python<'_>, value: Option<i32>) -> PyResult<()> {
+        let tag = match value {
+            None | Some(0) => None,
+            Some(value) => {
+                let tags = py.import("rpptx.enum.lang")?.getattr("_TAGS")?;
+                let tag = tags.get_item(value).map_err(|_| {
+                    PyValueError::new_err(format!(
+                        "language id {value} names no language tag, pass an MSO_LANGUAGE_ID \
+                         member such as ENGLISH_US or set font.language = \"en-US\""
+                    ))
+                })?;
+                Some(tag.extract::<String>()?)
+            }
+        };
+        self.update(py, |properties| properties.set_language(tag.as_deref()))
+    }
+
     /// The East Asian typeface (`a:ea`), or `None` to inherit.
     #[getter]
     fn east_asian_name(&self, py: Python<'_>) -> PyResult<Option<String>> {

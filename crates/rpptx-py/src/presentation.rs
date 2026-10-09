@@ -160,6 +160,18 @@ pub struct PySection {
     pub slide_indices: Vec<usize>,
 }
 
+#[pymethods]
+impl PySection {
+    fn __repr__(&self, py: Python<'_>) -> PyResult<String> {
+        Ok(format!(
+            "Section(id={}, name={}, slide_indices={:?})",
+            pyo3::types::PyString::new(py, &self.id).repr()?,
+            pyo3::types::PyString::new(py, &self.name).repr()?,
+            self.slide_indices
+        ))
+    }
+}
+
 /// One ODP conversion diagnostic as a `(path, message)` pair.
 type OdpDiagnostics = Vec<(String, String)>;
 
@@ -233,7 +245,7 @@ const DEFAULT_JPEG_QUALITY: u8 = 90;
 /// Reads a raster format, refusing an option the format would ignore.
 fn raster_format(
     format: &str,
-    quality: Option<u8>,
+    quality: Option<i64>,
     transparent: bool,
 ) -> PyResult<rpptx::RasterFormat> {
     if quality.is_some() && !matches!(format, "jpg" | "jpeg") {
@@ -250,8 +262,10 @@ fn raster_format(
         "png" => Ok(rpptx::RasterFormat::Png {
             transparent_background: transparent,
         }),
-        "jpg" | "jpeg" => match quality.unwrap_or(DEFAULT_JPEG_QUALITY) {
-            quality @ 1..=100 => Ok(rpptx::RasterFormat::Jpeg { quality }),
+        "jpg" | "jpeg" => match quality.unwrap_or(i64::from(DEFAULT_JPEG_QUALITY)) {
+            quality @ 1..=100 => Ok(rpptx::RasterFormat::Jpeg {
+                quality: quality as u8,
+            }),
             quality => Err(PyValueError::new_err(format!(
                 "JPEG quality must be from 1 to 100, got {quality}"
             ))),
@@ -925,7 +939,7 @@ impl PyPresentation {
         py: Python<'_>,
         dpi: f64,
         format: &str,
-        quality: Option<u8>,
+        quality: Option<i64>,
         transparent: bool,
         slides: Option<Vec<usize>>,
     ) -> PyResult<Py<PyAny>> {

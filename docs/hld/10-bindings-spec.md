@@ -831,11 +831,17 @@ gradient is python-pptx's accent 1 default. `GradientStops.append(position)`
 and deletion advance the revision, and a gradient keeps at least two stops.
 `ColorFormat.alpha` reads and writes a colour's `a:alpha` as an opacity from
 0.0 to 1.0. `Font` adds `baseline` as a fraction of the font size,
-`spacing` as a `Length`, `language` as a tag, and `east_asian_name` and
+`spacing` as a `Length`, `language` as a tag, python-pptx's `language_id` as
+an `MSO_LANGUAGE_ID` member from `rpptx.enum.lang`, and `east_asian_name` and
 `complex_script_name`. `Paragraph` adds `auto_number` with an
 `ST_TextAutonumberScheme` token, `auto_number_start`, `bullet_color`,
 `bullet_size` as a fraction of the text size, and `bullet_font`. `Table` adds
-python-pptx's banding flags and a `style_id` that must be a braced GUID.
+python-pptx's banding flags and a `style_id` that must name one of
+PowerPoint's 74 built-in table styles or a style the deck's `tableStyles.xml`
+defines, matched without regard to case and written in that style's spelling,
+since LibreOffice refuses a deck whose table names an unknown or lower-case id.
+Replacing or removing a picture fill releases the image relationship and part
+when nothing else on the slide shows that image.
 
 ## Native Word facade stability
 Native Rust exposes `BibliographySourceKind`, `BibliographyContributorRole`,

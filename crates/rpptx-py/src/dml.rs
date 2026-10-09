@@ -133,7 +133,29 @@ fn current_fill(
     })
 }
 
+/// Writes a fill. Replacing a picture fill releases the image it showed
+/// when nothing else on the slide shows it.
 fn write_fill(
+    py: Python<'_>,
+    presentation: &mut rpptx::Presentation,
+    path: &ContentPath,
+    target: FillTarget,
+    fill: rpptx::Fill,
+) -> PyResult<()> {
+    let replaces_picture = matches!(
+        current_fill(presentation, path, target)?,
+        Some(rpptx::Fill::Blip(_))
+    );
+    write_fill_only(py, presentation, path, target, fill)?;
+    if replaces_picture {
+        presentation
+            .release_unused_slide_images(slide_index(path)?)
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+    }
+    Ok(())
+}
+
+fn write_fill_only(
     py: Python<'_>,
     presentation: &mut rpptx::Presentation,
     path: &ContentPath,

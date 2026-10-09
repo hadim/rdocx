@@ -39,6 +39,24 @@ pub struct PyMediaInfo {
     pub target: String,
 }
 
+#[pymethods]
+impl PyMediaInfo {
+    fn __repr__(&self, py: Python<'_>) -> PyResult<String> {
+        let text = |value: &str| pyo3::types::PyString::new(py, value).repr();
+        Ok(format!(
+            "MediaInfo(shape_id={}, kind={}, content_type={}, linked={}, target={})",
+            self.shape_id,
+            text(self.kind)?,
+            match &self.content_type {
+                Some(value) => text(value)?.to_string(),
+                None => "None".to_owned(),
+            },
+            if self.linked { "True" } else { "False" },
+            text(&self.target)?
+        ))
+    }
+}
+
 impl From<&rpptx::MediaInfo> for PyMediaInfo {
     fn from(info: &rpptx::MediaInfo) -> Self {
         let (content_type, linked, target) = match &info.source {
@@ -492,6 +510,11 @@ impl PySlide {
             .ok_or_else(|| PyIndexError::new_err(format!("slide index {index} is out of range")))?;
         if value {
             slide.remove_background();
+            // A picture background leaves an image nothing shows any more.
+            presentation
+                .inner
+                .release_unused_slide_images(index)
+                .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
         } else if !explicit {
             slide
                 .set_background(rpptx::Fill::NoFill(rpptx::NoFill::default()))
