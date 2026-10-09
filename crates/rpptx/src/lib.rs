@@ -4273,11 +4273,20 @@ impl Presentation {
         else {
             return Ok(infos);
         };
-        let layout = CT_SlideLayout::from_xml(required_part(&self.package, &layout_part)?)
-            .map_err(|error| Error::MalformedPart {
-                part_name: layout_part.clone(),
-                message: error.to_string(),
-            })?;
+        // Layouts and masters come from their records, so unsaved edits show.
+        let layout = match self
+            .layouts
+            .iter()
+            .find(|record| record.part_name.eq_ignore_ascii_case(&layout_part))
+        {
+            Some(record) => record.layout.clone(),
+            None => CT_SlideLayout::from_xml(required_part(&self.package, &layout_part)?).map_err(
+                |error| Error::MalformedPart {
+                    part_name: layout_part.clone(),
+                    message: error.to_string(),
+                },
+            )?,
+        };
         collect_smartart_infos(
             &self.package,
             slide_index,
@@ -4290,11 +4299,19 @@ impl Presentation {
         else {
             return Ok(infos);
         };
-        let master = CT_SlideMaster::from_xml(required_part(&self.package, &master_part)?)
-            .map_err(|error| Error::MalformedPart {
-                part_name: master_part.clone(),
-                message: error.to_string(),
-            })?;
+        let master = match self
+            .masters
+            .iter()
+            .position(|record| record.part_name.eq_ignore_ascii_case(&master_part))
+        {
+            Some(index) => self.master_model(index)?.clone(),
+            None => CT_SlideMaster::from_xml(required_part(&self.package, &master_part)?).map_err(
+                |error| Error::MalformedPart {
+                    part_name: master_part.clone(),
+                    message: error.to_string(),
+                },
+            )?,
+        };
         collect_smartart_infos(
             &self.package,
             slide_index,

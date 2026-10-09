@@ -28900,6 +28900,55 @@ mod masters_layouts_and_themes {
     }
 
     #[test]
+    fn a_master_logo_takes_a_click_hyperlink() {
+        let mut presentation = deck();
+        add_logo(
+            &mut presentation,
+            PartRef::Master(0),
+            [230, 80, 0, 255],
+            9_144_000,
+        );
+        let logo = presentation.part_shapes(PartRef::Master(0)).unwrap().len() - 1;
+        let id = presentation
+            .part_shape(PartRef::Master(0), logo)
+            .unwrap()
+            .non_visual_id()
+            .unwrap();
+        presentation
+            .set_part_shape_hyperlink(PartRef::Master(0), id, Some("https://example.com"))
+            .unwrap();
+        assert_eq!(
+            presentation
+                .part_shape_hyperlink_address(PartRef::Master(0), id)
+                .unwrap(),
+            Some("https://example.com")
+        );
+        assert!(presentation.validate().is_empty());
+        let bytes = presentation.to_bytes().unwrap();
+        assert!(part_text(&bytes, "/ppt/slideMasters/slideMaster1.xml").contains("<a:hlinkClick"));
+        let mut reopened = Presentation::from_bytes(&bytes).unwrap();
+        assert_eq!(
+            reopened
+                .part_shape_hyperlink_address(PartRef::Master(0), id)
+                .unwrap(),
+            Some("https://example.com")
+        );
+        reopened
+            .set_part_shape_hyperlink(PartRef::Master(0), id, None)
+            .unwrap();
+        let bytes = reopened.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(Cursor::new(&bytes)).unwrap();
+        assert!(
+            !package
+                .get_part_rels("/ppt/slideMasters/slideMaster1.xml")
+                .unwrap()
+                .items
+                .iter()
+                .any(|relationship| relationship.rel_type.ends_with("/hyperlink"))
+        );
+    }
+
+    #[test]
     fn a_thmx_theme_applies_its_theme_only() {
         let brand = Presentation::from_bytes(&brand()).unwrap();
         let brand_bytes = brand.to_bytes().unwrap();

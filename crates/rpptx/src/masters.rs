@@ -23,9 +23,10 @@ use rpptx_oxml::slide_parts::{
 use crate::{
     Error, LayoutRecord, MediaStore, Presentation, Result, RgbColor, ShapeMut, ShapeRef, ShapesMut,
     add_image_relationship, collect_subtree_ids, detach_connectors, group_at_mut,
-    invalid_presentation_mutation, invalid_shape_mutation, next_numbered_part_number,
-    picture_dimensions, prune_unreachable_parts, related_internal_part, relationship_is_external,
-    relative_part_target, required_part, shape_kind, shape_mut, shape_ref,
+    invalid_presentation_mutation, invalid_shape_mutation, locate_shape_hyperlink,
+    next_numbered_part_number, picture_dimensions, prune_unreachable_parts, related_internal_part,
+    relationship_is_external, relative_part_target, required_part, rewrite_shape_hyperlink,
+    shape_id_count, shape_kind, shape_mut, shape_ref,
 };
 
 /// A slide, slide layout or slide master, by zero-based index: the parts
@@ -536,6 +537,121 @@ impl Presentation {
         }
         tree.move_child(from_index, to_index)
             .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()))
+    }
+
+    /// Returns the external click hyperlink of one shape of a slide, layout
+    /// or master, found by its non-visual id, as
+    /// [`Self::shape_hyperlink_address`] does for slides.
+    pub fn part_shape_hyperlink_address(
+        &self,
+        part: PartRef,
+        shape_id: u32,
+    ) -> Result<Option<&str>> {
+        if let PartRef::Slide(slide_index) = part {
+            return self.shape_hyperlink_address(slide_index, shape_id);
+        }
+        let (_, location) = self.locate_part_click(part, shape_id)?;
+        let part_name = self.part_name(part)?;
+        Ok(location.relationship_id.as_deref().and_then(|id| {
+            self.package
+                .get_part_rels(part_name)?
+                .get_by_id(id)
+                .map(|relationship| relationship.target.as_str())
+        }))
+    }
+
+    /// Points the click action of one shape of a slide, layout or master at
+    /// an external `address`, or removes it with `None`, as
+    /// [`Self::set_shape_hyperlink`] does for slides. A clickable logo on a
+    /// master links from every slide that shows it.
+    pub fn set_part_shape_hyperlink(
+        &mut self,
+        part: PartRef,
+        shape_id: u32,
+        address: Option<&str>,
+    ) -> Result<()> {
+        const OPERATION: &str = "set shape hyperlink";
+        if let PartRef::Slide(slide_index) = part {
+            return self.set_shape_hyperlink(slide_index, shape_id, address);
+        }
+        if address.is_some_and(|address| {
+            address.is_empty()
+                || address.chars().any(|character| {
+                    character.is_control() || matches!(character, '\u{FFFE}' | '\u{FFFF}')
+                })
+        }) {
+            return Err(invalid_shape_mutation(
+                OPERATION,
+                "a hyperlink address must be non-empty text without control characters",
+            ));
+        }
+        let (xml, location) = self.locate_part_click(part, shape_id)?;
+        let part_name = self.part_name(part)?.to_owned();
+        let mut relationships = self
+            .package
+            .get_part_rels(&part_name)
+            .cloned()
+            .unwrap_or_default();
+        let link = match address {
+            None if location.click.is_none() => return Ok(()),
+            None => None,
+            Some(address) => Some(
+                relationships
+                    .items
+                    .iter()
+                    .find(|relationship| {
+                        relationship.rel_type == rel_types::HYPERLINK
+                            && relationship_is_external(relationship)
+                            && relationship.target == address
+                    })
+                    .map(|relationship| relationship.id.clone())
+                    .unwrap_or_else(|| relationships.add_external(rel_types::HYPERLINK, address)),
+            ),
+        };
+        let before = self.part_relationship_ids(part)?;
+        let rewritten =
+            rewrite_shape_hyperlink(&xml, &location, link.as_deref().map(|id| (id, None)))?;
+        match part {
+            PartRef::Layout(index) => {
+                let record = &mut self.layouts[index];
+                record.layout = CT_SlideLayout::from_xml(&rewritten)
+                    .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()))?;
+                record.dirty = true;
+            }
+            PartRef::Master(index) => {
+                let master = CT_SlideMaster::from_xml(&rewritten)
+                    .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()))?;
+                let record = &mut self.masters[index];
+                record.master = Ok(master);
+                record.dirty = true;
+            }
+            PartRef::Slide(_) => unreachable!("slides are handled above"),
+        }
+        let after = self.part_relationship_ids(part)?;
+        relationships.items.retain(|relationship| {
+            !before.contains(&relationship.id) || after.contains(&relationship.id)
+        });
+        self.package.set_part_rels(&part_name, relationships);
+        Ok(())
+    }
+
+    /// Serialises a layout or master and finds one shape's click action.
+    fn locate_part_click(
+        &self,
+        part: PartRef,
+        shape_id: u32,
+    ) -> Result<(Vec<u8>, crate::ShapeHyperlinkLocation)> {
+        const OPERATION: &str = "shape hyperlink";
+        if shape_id_count(&self.common_data(part)?.shape_tree.children, shape_id) != 1 {
+            return Err(invalid_shape_mutation(
+                OPERATION,
+                "shape id is missing or ambiguous",
+            ));
+        }
+        let xml = self.part_xml(part)?;
+        let location = locate_shape_hyperlink(&xml, shape_id)?
+            .ok_or_else(|| invalid_shape_mutation(OPERATION, "shape has no p:cNvPr"))?;
+        Ok((xml, location))
     }
 
     /// Returns the direct `p:bgPr` fill of a slide, layout or master
