@@ -350,3 +350,90 @@ from bodyPr and must be reproduced locally. F-X194 retains the reused
 TextFrame bodyPr surface. One owner implements actual cell anchoring.
 Do not adopt unrelated colour, accessor-read mutation, archive or hash
 records as part of this slice.
+
+## Authenticated combined group transform
+
+## Native method
+
+Microsoft PowerPoint 16.113.3, build 16.113.26092714, was operated through CUA only. An independent copy of the prior native blank template received a generated slide with twelve small filled square markers. The input opened without a repair prompt. Native Save As wrote a separate local copy. The PDF was exported using explicitly selected Best for printing, without an online export service. The saved generated deck was closed, normally reopened from its exact local path, saved, and exported again using the same local option.
+
+The input generator writes correctly ordered DrawingML group and shape XML and records every transform, center and independent numerical prediction. It does not write an expected output or modify any saved native package. Prediction order is tested independently using both candidate linear transforms, with screen coordinates where positive y points down and positive rotation is clockwise.
+
+For a point relative to the group's extent center, the accepted order is:
+
+```text
+local child-coordinate mapping to group extent
+horizontal/vertical flip about group extent center
+clockwise rotation about the same center
+translation to the parent coordinate system
+```
+
+The flip/rotation comparison computes `R * F` and `F * R` directly. Nested transforms compose child first, then parent. The PDF content stream provides each colored square's four actual vertices. Their arithmetic mean gives its native center. The y coordinate is converted from the PDF's bottom origin using the actual 540-point slide height. This uses vector coordinates, rather than reading positions from a screenshot.
+
+## Controls and results
+
+All controls use asymmetric red, green and blue marker locations, so a flip cannot be mistaken for unchanged symmetric contents. Group extents are3500000 by2000000 EMU. The ordinary H control rotates30 degrees with flipH. The V control rotates35 degrees with flipV. A nested control has a25-degree flipH outer group and a minus40-degree flipV inner group with its own offset and smaller extent. The fourth control rotates40 degrees without flips, which should agree under both candidate orders.
+
+All twelve native marker centers match flip then rotate. The maximum distance is0.00010007642342126402 points, consistent with the decimal precision of the emitted PDF path coordinates. The nine markers in groups with combined flip/rotation differ from rotate then flip by43.30707598425451 to143.46078135286186 points. The three no-flip markers agree under both orders. This directly confirms the `pivot_shift` comment's PowerPoint order and supplies concrete counterexamples to the current renderer's opposite combined order.
+
+The first and reopened page-one PDF content streams are byte identical. Native slide1.xml is byte identical across the normal reopen/save. Input package bytes retain their recorded initial SHA-256. Native changes during initial Save As are retained in separate original and saved owner XML, so serializer normalization is not confused with post-reopen geometry drift.
+
+Pinned Poppler26.01.0 rasterized the reopened page, and the image was visually inspected. All twelve markers are visible in their expected quadrants, with the nested case visibly asymmetric. The native template has a second blank slide, which was preserved. Only page one is the affine control and only page one is used for the position comparison.
+
+## Evidence
+
+`/private/tmp/S91-F-X206-native-affine` contains `create_controls.py`, `input-receipt.json`, the unchanged input, native before/after reopen packages, both native PDFs, exact extracted slide XML, PDF path streams, per-marker comparisons, a rendered page PNG, `audit.py` and `capture-receipt.json`. The receipt contains file sizes and SHA-256 values, native application version/build, all marker vertices, both candidate errors, and the byte-identity assertions. The complete numerical comparison can be rerun without opening PowerPoint.
+
+The generated native deck was closed only after its exact generated URL and Saved to my Mac state were visible. PowerPoint returned to its new/recent-files window without any remaining document. The UI lease is released. No user document, native application preference, tracked repository file, Cargo artifact or font was modified.
+
+## Bounded conclusions and remaining acceptance
+
+This establishes combined flip/rotation order for ordinary and nested groups with unit axis scale. It does not establish nonuniform group scaling combined with child rotation, skew decomposition, unsupported opaque nodes, group/ungroup position preservation, ID and relationship lifecycle, connectors, or stable handle generation. The initial group inputs were not modified through a native group or ungroup operation. Those acceptance cases still need their own operation-specific implementation and controls.
+
+Native align/distribute semantics were not exercised in this observation. Visual rotated bounds versus unrotated frame geometry remains an explicit separate decision. The affine result does not imply one of those policies.
+
+## Authenticated native selection alignment
+
+## Controlled input and native actions
+
+Microsoft PowerPoint16.113.3, build16.113.26092714, was operated only through CUA. A copy of the prior native blank template received three generated correctly ordered DrawingML rectangular shapes on its first slide. The input package hash and every original transform are in `/private/tmp/S91-F-X206-native-alignment/input-receipt.json`. No output position was written into the input. The second existing template slide was preserved and is outside this control.
+
+| Name | Original off x,y | Extent cx,cy | Rotation |
+| --- | --- | --- | --- |
+| RotatedRed | 1600000,900000 | 2300000,800000 | 45 degrees |
+| PlainGreen | 4500000,2200000 | 1200000,1000000 | 0 degrees |
+| RotatedBlue | 7200000,4000000 | 900000,1800000 | 30 degrees |
+
+The input opened without repair. Native Save As created `alignment-native.pptx` separately. A click on the visible red shape followed by Command-A selected all three slide shapes. A native screenshot showed all three distinct sets of selection handles, so this was not text selection or thumbnail selection.
+
+Home Arrange > Align explicitly showed Align Selected Objects checked. Align to Left was clicked. The native toolbar Save was then clicked after the menu had closed. The saved package was copied to `alignment-left-native.pptx`. The same selected objects then received Arrange > Align > Align to Top, again with Align Selected Objects checked. An explicit subsequent toolbar Save persisted that operation. Those actions changed native xfrm offsets. No saved native package was patched by a script.
+
+An early Command-S in the same call as the first menu selection had not persisted the changed positions. That intermediate read was not used as evidence. The explicit Save after the freshly observed editor state produced the actual changed native package, which is the retained Left result.
+
+## Native saved coordinates
+
+| Name | After Align Left off x,y | After Align Top off x,y |
+| --- | --- | --- |
+| RotatedRed | 1600000,900000 | 1600000,900000 |
+| PlainGreen | 1653984,2200000 | 1653984,203984 |
+| RotatedBlue | 2043696,4000000 | 2043696,308407 |
+
+The three raw x offsets differ after Left, and the three raw y offsets differ after Top. The extents and rotations remain unchanged. The minimum original rotated visual left is1653984.4891608513 EMU. The minimum original rotated visual top is203984.48916085134 EMU. Every saved shape's corresponding visual edge equals those reference edges within2 EMU. The reference is the original selection's outer visual edge, not the slide edge or raw unrotated off coordinate.
+
+Independent numerical comparison uses the axis-aligned bounds of the four rotated frame corners. Equivalently, a rectangle's rotated bound width is `abs(w*cos(theta)) + abs(h*sin(theta))`, with the corresponding height formula. Rotation occurs about the frame center. The native PDF provides a separate actual vertex measurement rather than only agreeing with an XML formula.
+
+## Export and normal reopen
+
+Local Best for printing PDF was explicitly selected, avoiding online export. The saved generated deck was closed only after its exact generated URL and Saved to my Mac state were visible. Its observed recent-file entry pointed to the same generated directory and was normally reopened. The native toolbar Save was clicked without any edit, and the same local PDF option produced a second export.
+
+Both native PDFs' page-one vector streams are byte identical. Saved slide1.xml is byte identical across the normal reopen/save. Original input package bytes retain the initial recorded SHA-256.
+
+All three emitted polygons have left130.235 points. Red's top is16.0618 points, while green and blue top is16.0617 points, within emitted path precision. The actual vector vertices therefore establish shared visible edges after both operations. Pinned Poppler26.01.0 rasterized the reopened PDF, and the page was visually inspected. The shapes overlap because both their left and top edges were aligned, with original z-order preserved.
+
+The final generated deck was safely closed, and PowerPoint returned to its new/recent-files window with no remaining document. No user document, application preference, font, production source, tracked repository file or Cargo artifact was modified. The PPT UI lease is released.
+
+## Evidence and bounded conclusion
+
+`/private/tmp/S91-F-X206-native-alignment` retains the original input, original transform receipt, native Left snapshot, native Left-plus-Top before/after reopen packages, two native PDFs, rendered PNG, extracted owner XML, PDF path streams, `audit.py` and `capture-receipt.json`. The receipt records file sizes and SHA-256 values, exact native action sequence, every original/final transform, numerical bounds and actual emitted PDF vertices. Running `audit.py` independently validates all assertions without opening PowerPoint.
+
+This answers the core native selection-alignment question: Align Left and Align Top align the transformed visual bounding boxes of these differently rotated rectangles. It does not prove behavior for slide-relative alignment, distribution spacing, nested-group selections, nonuniform scaling, lines/connectors, arbitrary freeform paths, cropped pictures, shadows, stroke extents or unsupported shapes. Root may choose the measured visual frame-bound policy for the declared API and retain those operation-specific cases in its acceptance tests. No claim about arbitrary painted-ink bounds or automatic generalization to distribution is made.

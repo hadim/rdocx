@@ -2756,3 +2756,27 @@ Issue321 based only on the contributor's narrower binding patch.
 The refreshed intake contains seven open PRs and23 open issues. Issues264
 and281 remain excluded. Contributor test, measurement and baseline claims
 never substitute for local verification.
+
+## Next rolling refresh, 2026-10-09
+
+PR [322](https://github.com/tensorbee/rdocx/pull/322), immutable head
+`6b5e2e352047357299d1f366f807f4661037430e`, closes Issue305 and attaches
+to existing F-X202. Its table grid edits, pictures, links and handle policy
+are contribution input for the full existing contract. Its explicit nested
+table exclusions and main-document-only picture inventory do not satisfy
+all qualified owners automatically. Indentation remains F-X194. Successful
+alternate-copy text replacement remains F-X202 after F-X198 safety, reusing
+the separately captured PR317 slice. Stable-handle residuals remain F-X211.
+No new F-ID is created, and contributor gates are not local evidence.
+
+PR318 advanced from the retained assessed b1aa842 head to
+`bfdd6ab732e8c0003ea8c6110e3c891fb098d5b3`. The immutable comparison shows
+one new commit changing only the PowerPoint chart artifact SHA in a Word
+native test. Complete changed source, Git OID/bytes/SHA and refreshed reviews
+are captured independently. Keep the prior assessment, with this addition
+attached to F-X205's template acceptance. Measure the actual locally authored
+artifact after adopting approved geometry. Do not copy the contributor's
+expected hash or rewrite immutable cross-viewer acceptance evidence.
+
+This refresh has eight open PRs and23 open issues, with all scope linked to
+existing owners. Issues264 and281 remain excluded.

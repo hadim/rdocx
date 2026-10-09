@@ -161,3 +161,23 @@ Complete commands, glyphs, face hashes and results are retained in
 /private/tmp/S91-F-X210-font-intake/primary-caladea-comparison.json,
 SHA2566211cf634c66c5ab31e2a45799a20a6da6e94cf3973f5a4285e1d79d3cef2f62.
 No production, asset or baseline changed.
+
+## Immutable contribution assessment decisions
+
+Completed immutable PR319 assessment is retained in .claude/scratch/S91-PR319-9a36bc9-assessment.md. Selawik source blobs match the exact approved release assets. Its unmatched_requests map keyed only by FontId at font.rs:2221 loses request identity during cached trace replay at font.rs:899, causing a prior Aptos request to generate spurious diagnostics on later Calibri/Carlito use of the same face. AptosDisplay can also lose identity. Use the existing bounded lifecycle trace with actual requested and drawn families per event, not a FontId-global warning. Require actual non-Aptos cached replay and alternate Aptos-name regressions. Reconcile its italic walk with F-X195 controlled synthesis before reuse. No different asset or contributed baseline was adopted.
+
+## Independent Selawik regular metric control
+
+All95 printable-ASCII cmap to hmtx normalized advances match exactly between
+approved Selawik Regular1.01 and the licensed installed Segoe UI Regular5.31
+WOFF read in place. Maximum advance difference is0em. Both faces have
+fsSelection64 without USE_TYPO_METRICS. Current Rust WordLineUnits selects
+identical Windows ascent2210/descent514, with zero leading and line height
+1.330078125em. Their differing hhea values do not change this current Word
+line-height selector, while generic metrics remain a distinct comparison.
+Exact source/version/hash, table selector and numeric results are retained in
+/private/tmp/S91-F-X210-font-intake/selawik-segoe-ascii-control.json,
+SHA256c42e62142caf81adf7eeccc72e3467c59e958af2e6ab0cb7b61c04de576be71b.
+WOFF tables were read in memory without font copying, conversion or table
+export. No kerning, wrapping or genuine Bold equivalence is established.
+The earlier HarfBuzz WOFF load failures remain failed shaping controls.

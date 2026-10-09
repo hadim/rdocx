@@ -505,3 +505,7 @@ Contributor source is reusable only after full immutable source assessment,
 including tab-handle mutability versus the existing snapshot contract,
 unsupported tab enums, raw docDefaults retention and checked list operations.
 Colours remain F-X197. Contributor passes and hashes are not local gates.
+
+## Immutable contribution assessment decisions
+
+Completed immutable PR320 assessment is retained in .claude/scratch/S91-PR320-252accc-assessment.md. All18 blobs and2585720 source bytes were independently revalidated. Retain the canonical read-only TabStop snapshots. Contributor mutable handles keyed by position alias imported duplicates and can revive after deletion/reinsertion or position reuse. Installed python-docx1.2.0 actually retains two tabs at an identical position and exposes ten alignment and six leader enum members, not the contributed four each. Do not silently narrow spacing or tab positions from i64 to i32. Native list expect paths and separately published restart allocation/paragraph updates require one checked candidate transaction. Preserve docDefaults unknown wrappers and shading pattern/foreground. XML-only small caps is not native rendering acceptance. Issue264 remains excluded even where Issue303 uses overlapping clearable run setters.

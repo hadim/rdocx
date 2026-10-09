@@ -400,3 +400,16 @@ SHA25613106840fe671a24696e933d8fbf6f5c055a05297d43c94904431b85a34102d5.
 This fills the structural provenance gap for the key slide-image/body
 rectangles. It does not establish notes-page visual output, handout export,
 renderer parity or full acceptance. Those implementation gates remain due.
+
+## PR318 incremental head refresh
+
+The contribution advanced to bfdd6ab732e8c0003ea8c6110e3c891fb098d5b3.
+Its one additional commit changes only the F158 PowerPoint artifact SHA
+constant in crates/rdocx/src/document.rs. Complete source is retained in
+.claude/scratch/S91-PR318-bfdd6ab-source, with Git blob3dc84d1eb439407426a8d48b67303e938316cecd,
+1674441 bytes and SHA256ed032cbd76c76d260758d1cac37294b77e5bc22d8bc2c37c0aa7a497d7a7cfab.
+Prior24-file assessment remains valid for unchanged source. Recompute the
+actual affected local authored artifact after reviewed template adoption.
+A foreign expected hash is not evidence that our artifact passes. Preserve
+immutable cross-viewer control hashes and separately justify any current
+authored-output expectation update. No source or baseline adoption occurred.

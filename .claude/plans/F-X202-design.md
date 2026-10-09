@@ -423,3 +423,19 @@ Canonical read HEAD: `95278005c482420ad927c8c1b18fe2482c14461b`.
 - `crates/rdocx/src/comments.rs` SHA256 `eda9a14535a0771475830cf9faa84a4df3f85b60877a4d9bdfdf5a9024e060c4`.
 - `crates/rdocx/src/paragraph.rs` SHA256 `83198917fce911d18c1cdcf732c9f6e992feae279cf3092f1c43a48084a6da0c`.
 - `crates/rdocx-py/src/table.rs` SHA256 `64d2c310a011732d26c472b6693c8a06d287756ea7548c845b929034048e9301`.
+
+## PR322 contribution intake
+
+Immutable head6b5e2e352047357299d1f366f807f4661037430e closes Issue305.
+Complete22-file Git blob capture and272919-byte patch are retained under
+.claude/scratch/S91-PR322-6b5e2e-* with per-source OID, bytes and SHA checks.
+Reuse only accepted native grid, picture and link slices after full source
+assessment. Nested NotImplemented paths, body-only picture enumeration,
+heading bookmark publication before link validation and table-generation
+exception history require reconciliation with this full contract and X211.
+This PR does not implement the separately owned indentation or successful
+paired-box edits. No contributed gate, archive tuple or baseline is adopted.
+
+## Immutable contribution assessment decisions
+
+Completed immutable PR322 assessment is retained in .claude/scratch/S91-PR322-6b5e2e-assessment.md. Adapt logical-grid validation and qualified picture scans under the existing full contract. PyPicture at contributor binding document.rs:741 carries index/revision without its document owner, while resize at:2531 checks only revision. Reject cross-document same-revision pictures before any write. Python heading bookmark publication at paragraph.rs:216 precedes source validation at:231, while native comments.rs:1077 reuses a bookmark merely starting at the heading. Use the approved atomic whole-heading and link transaction, with full heading scope and unique identity. Native table.rs:719/:1656 clear opaque row/cell properties, and some mutations bypass complete document staging. Preserve unrelated opaque formatting and stage all fallible topology operations. The unbounded TableEdit exception history is not an approved replacement for X211 owner identity and causal invalidation. Nested NotImplemented paths and body-only pictures remain full-scope gaps. No local gate is claimed.
