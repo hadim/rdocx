@@ -118,3 +118,14 @@ HarfBuzz failed to load the licensed Segoe WOFF reference directly in all10
 controls. Those are explicit failed controls, with no numerical shaping
 claim and no font conversion or redistribution. Selawik shaping parity
 remains unproved by this experiment. No production or baseline changed.
+
+The same40 controls compared the existing Liberation Serif substitute with
+the same licensed Georgia references. Gelasio is closer in absolute string
+advance on39 controls. The regular kern0 ligature string is slightly farther,
+with delta-0.28857421875em versus-0.26953125em. Existing substitute maximum
+absolute deltas are3.22607421875em regular,6.80029296875em bold,
+3.9931640625em italic and9.2265625em bold-italic. These bounded results
+support testing the proposed replacement, without establishing universal
+metric equality, line pitch or identical wrapping. Exact commands and source
+hashes are retained in current-substitute-comparison.json,
+SHA25684f15c46fb5bac01dc86f9d7479050573b32c1b412a1469e4a267df929e4c71c.
