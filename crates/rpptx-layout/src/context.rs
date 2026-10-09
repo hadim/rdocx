@@ -281,7 +281,10 @@ impl<'a> ResolveCtx<'a> {
             master_children,
             PassRules {
                 source: FlattenedSource::Master,
-                emit_non_placeholders: self.layout.show_master_shapes.unwrap_or(true),
+                // A slide that hides its background graphics hides the
+                // master's as well as its layout's, as PowerPoint draws it.
+                emit_non_placeholders: self.layout.show_master_shapes.unwrap_or(true)
+                    && self.slide.show_master_shapes.unwrap_or(true),
             },
             &mut flattened,
         );
@@ -4949,7 +4952,7 @@ mod tests {
             .collect();
 
         assert_eq!(master_suppressed_texts, ["layout", "slide"]);
-        assert_eq!(layout_suppressed_texts, ["master", "slide"]);
+        assert_eq!(layout_suppressed_texts, ["slide"]);
     }
 
     #[test]
