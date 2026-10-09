@@ -164,3 +164,39 @@ No unresolved product decision. The user authorized the full deferred contract.
 The comparator and own-locale native evidence are explicit technical execution
 barriers. This approval does not permit approximation, a new dependency or
 completion before those barriers are resolved.
+
+## Bounded native key and tie evidence
+
+Word16.113.2 build16.113.26092012 authenticated ten existing name/title/year
+controls and six new four-source Harvard Anglia and APA Sixth controls.
+The new controls expose Publisher identity markers outside both installed
+sort-key builders. All six explicitly completed F9 and preserve exact bytes
+through normal reopen without F9. Their nine field instructions and four
+source trees survive, apart from native RefOrder. Immutable input hashes,
+complete artifact hashes and installed style hashes are recorded in
+/private/tmp/S91-F192-key-tie-study/capture-receipt.json and independently
+checked before recording this plan evidence. The read-only study appendix is
+.claude/scratch/F-X192-native-key-comparator-study.md.
+
+For both styles, baseline identity order is19,20,17,18. Source reversal yields
+20,19,18,17. Citation reversal retains19,20,17,18 despite reversed RefOrder.
+These controlled equal-key pairs therefore retain source collection order.
+Do not use Tag, Guid or citation encounter order to break their ties. This
+result is bounded to the tested Book operands and contexts.
+
+Installed Harvard SortingString at HarvardAnglia2008OfficeOnline.xsl:6608
+concatenates contributor representation, Year and Title without delimiters.
+The two distinct operand combinations Boundary+A+2020+Collision and
+BoundaryA+2+020+Collision produce BoundaryA2020Collision. Their native tie
+reverses with source order. This disproves the current independent operand
+tuple as a sufficient Harvard key. APA uses its formatted contributor and
+source-kind-specific title/year assembly at APASixthEditionOfficeOnline.xsl:5826.
+Its tested personal/corporate pair is source-stable, but exact intermediate
+formatted-key byte equality was not independently extracted.
+
+The existing17-name controls show style-specific mixed-script order and
+suffix-sensitive name-equivalent pairs. They do not license a shared raw
+Last-name comparator. Portable comparator parity, nonempty/repeated initials,
+all source kinds/locales and remaining dense grammar branches are still
+unproved. No dependency or production change is authorized by this finite
+study. Preserve the existing exact-evidence implementation barrier.
