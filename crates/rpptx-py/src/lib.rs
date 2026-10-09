@@ -12,7 +12,7 @@ use pyo3::exceptions::{PyIndexError, PyRuntimeError};
 use pyo3::prelude::*;
 use pyo3::types::PyType;
 
-use oxml_py_support::{ContentPath, PathSeg, RevisionCounter, StaleElementError};
+use oxml_py_support::{ContentPath, PathSeg, RevisionCounter};
 use presentation::{PyComment, PyCommentAuthor, PyCommentReply, PyPresentation, PyValidationIssue};
 
 pub(crate) fn normalize_index(index: isize, len: usize, kind: &str) -> PyResult<usize> {
@@ -53,10 +53,6 @@ pub(crate) fn replacement_count_to_pyerr(
         Ok(class) => PyErr::from_type(class, (message, expected, found)),
         Err(_) => PyRuntimeError::new_err(message),
     }
-}
-
-pub(crate) fn stale_to_pyerr(py: Python<'_>, error: StaleElementError) -> PyErr {
-    public_error(py, "StaleElementError", error.to_string())
 }
 
 pub(crate) fn recovery_hint(path: &ContentPath, suffix: &str) -> String {
@@ -108,6 +104,16 @@ pub(crate) enum Scope {
 }
 
 impl Scope {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Slides => "slide",
+            Self::Shapes => "shape",
+            Self::Tables => "table",
+            Self::Paragraphs => "paragraph",
+            Self::Runs => "run",
+        }
+    }
+
     fn of(path: &ContentPath) -> Option<Self> {
         Some(match path.segs.last()? {
             PathSeg::Slide(_) => Self::Slides,
@@ -162,13 +168,22 @@ pub(crate) fn validate_path(
         return Ok(());
     };
     let revisions = &presentation.revisions;
-    let hint = format!(
-        "{} The last call that invalidated it was {}.",
-        recovery_hint(path, suffix),
-        revisions.causes[scope as usize]
-    );
-    path.validate_revision(revisions.counters[scope as usize].current(), kind, &hint)
-        .map_err(|error| stale_to_pyerr(py, error))
+    let current = revisions.counters[scope as usize].current();
+    if path.revision == current {
+        return Ok(());
+    }
+    Err(public_error(
+        py,
+        "StaleElementError",
+        format!(
+            "{kind} handle was created at {name} revision {captured}, but the {name} revision \
+             is now {current} because {cause} renumbered what it points to. {hint}",
+            name = scope.name(),
+            captured = path.revision,
+            cause = revisions.causes[scope as usize],
+            hint = recovery_hint(path, suffix),
+        ),
+    ))
 }
 
 pub(crate) fn rpptx_to_pyerr(py: Python<'_>, error: rpptx::Error) -> PyErr {

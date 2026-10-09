@@ -11185,7 +11185,7 @@ struct M21RecordedMovieSample {
 
 #[cfg(all(feature = "digital-signatures", feature = "render"))]
 const M21_CURRENT_MINIMAL_SOURCE_SHA256: &str =
-    "2a47b59d92718712a134e51a7ebc08a705505b4d7dd0cc39abd4febb53ea000b";
+    "ed3a427b42f96946c2fdbb47803b415fd7105979a2cf92aedc4d516294e55ccd";
 
 #[cfg(all(feature = "digital-signatures", feature = "render"))]
 const M21_LEGACY_UNSIGNED_SOURCE_SHA256: &str =
@@ -27291,18 +27291,16 @@ fn adding_to_a_rotated_or_flipped_group_keeps_its_members_in_place() {
                 "{attributes}: {corners:?} became {moved:?}"
             );
         }
-        // The renderer rotates a group before it flips it, which agrees with
-        // PowerPoint unless the group is both rotated and flipped.
-        if !(attributes.contains("rot") && attributes.contains("flip")) {
-            assert_eq!(
-                presentation
-                    .slide_png_deterministic(0, 72.0)
-                    .unwrap()
-                    .unwrap(),
-                png,
-                "{attributes}"
-            );
-        }
+        // The renderer flips a group before it rotates it, as PowerPoint
+        // does, so the drawn members stay put under every combination. The
+        // refit rounds `a:off` to whole EMU, which may shade a diagonal
+        // edge differently.
+        let after = presentation
+            .slide_png_deterministic(0, 72.0)
+            .unwrap()
+            .unwrap();
+        let similarity = smartart_png_ssim(&png, &after);
+        assert!(similarity >= 0.999, "{attributes}: SSIM {similarity}");
     }
 }
 
@@ -28665,4 +28663,130 @@ fn new_slide_placeholders_take_powerpoint_names() {
         names(3),
         ["Vertical Title 1", "Vertical Text Placeholder 2"]
     );
+}
+
+#[test]
+fn connector_endpoints_move_release_their_glue_and_presets_without_sites_use_edges() {
+    let mut presentation = blank_with_shapes(&[(1_000, 1_000, 2_000, 1_000)]);
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .add_shape("chartPlus", Emu(5_000), Emu(5_000), Emu(1_000), Emu(2_000))
+        .unwrap();
+    presentation
+        .slide_mut(0)
+        .unwrap()
+        .add_connector(ConnectorType::Straight, Emu(0), Emu(0), Emu(10), Emu(10))
+        .unwrap();
+    // `chartPlus` defines no `a:cxnLst`, so its sites are the four edge
+    // midpoints, and site 3 is the middle of its right edge.
+    presentation
+        .connect_connector(0, &[2], rpptx::ConnectorEnd::End, 3, 3)
+        .unwrap();
+    presentation
+        .connect_connector(0, &[2], rpptx::ConnectorEnd::Begin, 2, 0)
+        .unwrap();
+    assert_eq!(
+        presentation
+            .slide(0)
+            .unwrap()
+            .shape(2)
+            .unwrap()
+            .connector_endpoints(),
+        Some([(Emu(2_000), Emu(1_000)), (Emu(6_000), Emu(6_000))])
+    );
+    let error = presentation
+        .connect_connector(0, &[2], rpptx::ConnectorEnd::End, 3, 4)
+        .unwrap_err();
+    assert!(error.to_string().contains("4 connection sites"), "{error}");
+
+    let mut slide = presentation.slide_mut(0).unwrap();
+    let mut connector = slide.shape_mut(2).unwrap();
+    connector
+        .set_connector_endpoint(rpptx::ConnectorEnd::Begin, Emu(7_000), Emu(500))
+        .unwrap();
+    let error = slide
+        .shape_mut(0)
+        .unwrap()
+        .set_connector_endpoint(rpptx::ConnectorEnd::Begin, Emu(0), Emu(0))
+        .unwrap_err();
+    assert!(
+        matches!(error, Error::UnsupportedShapeMutation { .. }),
+        "{error}"
+    );
+    let connector = presentation.slide(0).unwrap().shape(2).unwrap();
+    assert_eq!(
+        connector.connector_endpoints(),
+        Some([(Emu(7_000), Emu(500)), (Emu(6_000), Emu(6_000))])
+    );
+    assert_eq!(
+        connector.connector_connection(rpptx::ConnectorEnd::Begin),
+        None
+    );
+    assert_eq!(
+        connector.connector_connection(rpptx::ConnectorEnd::End),
+        Some((3, 3))
+    );
+    let xml = slide_xml(&presentation, 0);
+    assert!(
+        xml.contains(r#"<a:xfrm flipH="1"><a:off x="6000" y="500"/><a:ext cx="1000" cy="5500"/>"#),
+        "{xml}"
+    );
+}
+
+#[test]
+fn a_rotated_mirrored_arrow_renders_as_powerpoint_draws_it() {
+    // PowerPoint mirrors a shape, then rotates it: a right arrow turned a
+    // quarter clockwise and mirrored left to right points up, where
+    // rotating first would point it down.
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    let mut arrow = slide
+        .add_shape(
+            "rightArrow",
+            Emu(4_000_000),
+            Emu(2_000_000),
+            Emu(2_000_000),
+            Emu(1_000_000),
+        )
+        .unwrap();
+    arrow.set_rotation(Angle(90 * 60_000)).unwrap();
+    arrow.set_flip_horizontal(true).unwrap();
+    let (_, layout) = presentation.render_deterministic().unwrap();
+    let page = &layout.pages[0];
+    let mut points = Vec::new();
+    walk(&page.elements, &mut |element, transform| {
+        if let PositionedElement::Path(path) = element
+            && path.fill.is_some()
+        {
+            for command in &path.path.commands {
+                if let oxml_layout::PathCommand::MoveTo(point)
+                | oxml_layout::PathCommand::LineTo(point) = command
+                {
+                    points.push(transform.apply(*point));
+                }
+            }
+        }
+    });
+    assert!(!points.is_empty());
+    let top = points
+        .iter()
+        .map(|point| point.y)
+        .fold(f64::INFINITY, f64::min);
+    let bottom = points
+        .iter()
+        .map(|point| point.y)
+        .fold(f64::NEG_INFINITY, f64::max);
+    // The tip is the single outline point at one end, and the tail has
+    // two.
+    let at_top = points
+        .iter()
+        .filter(|point| (point.y - top).abs() < 0.5)
+        .count();
+    let at_bottom = points
+        .iter()
+        .filter(|point| (point.y - bottom).abs() < 0.5)
+        .count();
+    assert!(at_top < at_bottom, "tip must point up: {points:?}");
 }

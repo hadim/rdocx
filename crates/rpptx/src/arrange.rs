@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::ops::Range;
 
 use oxml_drawing::xfrm::{CT_Point2D, CT_PositiveSize2D, CT_Transform2D};
-use rpptx_oxml::connector::CT_Connection;
+use rpptx_oxml::connector::{CT_Connection, CT_ConnectionShape};
 use rpptx_oxml::shape_tree::{CT_GroupShape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild};
 
 use crate::{
@@ -693,6 +693,62 @@ fn child_at_mut<'t>(
     group_at_mut(children, groups)?.children.get_mut(*last)
 }
 
+/// Rewrites a connector's transform so that it runs from `begin` to
+/// `finish`, in its parent's coordinates, without rotation.
+fn place_connector_ends(connector: &mut CT_ConnectionShape, begin: (f64, f64), finish: (f64, f64)) {
+    let transform = connector
+        .shape_properties
+        .transform
+        .get_or_insert_with(CT_Transform2D::default);
+    transform.offset = Some(CT_Point2D {
+        x: emu(begin.0.min(finish.0)),
+        y: emu(begin.1.min(finish.1)),
+    });
+    transform.extent = Some(CT_PositiveSize2D {
+        cx: emu((begin.0 - finish.0).abs()),
+        cy: emu((begin.1 - finish.1).abs()),
+    });
+    transform.rotation = Angle(0);
+    transform.flip_horizontal = begin.0 > finish.0;
+    transform.flip_vertical = begin.1 > finish.1;
+}
+
+impl ShapeMut<'_> {
+    /// Moves one end of a connector to `(x, y)` in its parent's
+    /// coordinates, as python-pptx `begin_x`, `begin_y`, `end_x`, and
+    /// `end_y` assignments do, and releases that end's glue, so PowerPoint
+    /// does not route it back to the shape it was glued to. The other end
+    /// stays where it is, and the connector's rotation resets to none.
+    /// Other shapes are rejected.
+    pub fn set_connector_endpoint(&mut self, end: ConnectorEnd, x: Emu, y: Emu) -> Result<()> {
+        const OPERATION: &str = "set connector endpoint";
+        let ShapeTreeChild::Connector(connector) = &mut *self.child else {
+            return Err(Error::UnsupportedShapeMutation {
+                operation: OPERATION,
+                shape_kind: shape_kind(self.child),
+            });
+        };
+        let point = (x.0 as f64, y.0 as f64);
+        let current = connector
+            .shape_properties
+            .transform
+            .as_ref()
+            .and_then(connector_endpoints)
+            .unwrap_or([point, point]);
+        match end {
+            ConnectorEnd::Begin => {
+                place_connector_ends(connector, point, current[1]);
+                connector.start_connection = None;
+            }
+            ConnectorEnd::End => {
+                place_connector_ends(connector, current[0], point);
+                connector.end_connection = None;
+            }
+        }
+        Ok(())
+    }
+}
+
 /// The begin and end points of a connector in its parent's coordinates.
 pub(crate) fn connector_endpoints(transform: &CT_Transform2D) -> Option<[(f64, f64); 2]> {
     let map = box_to_parent(transform)?;
@@ -713,7 +769,7 @@ impl Presentation {
     /// `a:endCxn` and moves to the site: the preset geometry's own
     /// connection sites with its adjustments, flips, and rotation, or the
     /// four edge midpoints, top, left, bottom, and right, of a shape without
-    /// a preset, as python-pptx counts them. The other end stays where it
+    /// a preset or whose preset defines none, as python-pptx counts them. The other end stays where it
     /// is, and the connector's rotation resets to none. A site outside the
     /// shape's sites, a missing or repeated shape id, and a path that names
     /// no connector are rejected without change.
@@ -779,6 +835,7 @@ impl Presentation {
             .transpose()
             .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()))?
             .flatten()
+            .filter(|sites| !sites.is_empty())
             .unwrap_or_else(|| {
                 vec![
                     (size.0 / 2.0, 0.0),
@@ -830,21 +887,7 @@ impl Presentation {
         else {
             unreachable!("the connector was found above");
         };
-        let transform = connector
-            .shape_properties
-            .transform
-            .get_or_insert_with(CT_Transform2D::default);
-        transform.offset = Some(CT_Point2D {
-            x: emu(begin.0.min(finish.0)),
-            y: emu(begin.1.min(finish.1)),
-        });
-        transform.extent = Some(CT_PositiveSize2D {
-            cx: emu((begin.0 - finish.0).abs()),
-            cy: emu((begin.1 - finish.1).abs()),
-        });
-        transform.rotation = Angle(0);
-        transform.flip_horizontal = begin.0 > finish.0;
-        transform.flip_vertical = begin.1 > finish.1;
+        place_connector_ends(connector, begin, finish);
         let connection = Some(CT_Connection::new(shape_id, site));
         match end {
             ConnectorEnd::Begin => connector.start_connection = connection,

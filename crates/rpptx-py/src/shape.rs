@@ -883,11 +883,23 @@ impl PyShape {
         length(py, points.map(|points| points[0].0))
     }
 
+    /// Moves that end and releases its glue, as python-pptx assigns it.
+    #[setter]
+    fn set_begin_x(&self, py: Python<'_>, value: i64) -> PyResult<()> {
+        self.move_connector_end(py, rpptx::ConnectorEnd::Begin, 0, value)
+    }
+
     /// The y coordinate of a connector's begin point.
     #[getter]
     fn begin_y(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         let points = self.connector_points(py)?;
         length(py, points.map(|points| points[0].1))
+    }
+
+    /// Moves that end and releases its glue, as python-pptx assigns it.
+    #[setter]
+    fn set_begin_y(&self, py: Python<'_>, value: i64) -> PyResult<()> {
+        self.move_connector_end(py, rpptx::ConnectorEnd::Begin, 1, value)
     }
 
     /// The x coordinate of a connector's end point.
@@ -897,11 +909,23 @@ impl PyShape {
         length(py, points.map(|points| points[1].0))
     }
 
+    /// Moves that end and releases its glue, as python-pptx assigns it.
+    #[setter]
+    fn set_end_x(&self, py: Python<'_>, value: i64) -> PyResult<()> {
+        self.move_connector_end(py, rpptx::ConnectorEnd::End, 0, value)
+    }
+
     /// The y coordinate of a connector's end point.
     #[getter]
     fn end_y(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         let points = self.connector_points(py)?;
         length(py, points.map(|points| points[1].1))
+    }
+
+    /// Moves that end and releases its glue, as python-pptx assigns it.
+    #[setter]
+    fn set_end_y(&self, py: Python<'_>, value: i64) -> PyResult<()> {
+        self.move_connector_end(py, rpptx::ConnectorEnd::End, 1, value)
     }
 }
 
@@ -920,6 +944,29 @@ impl PyShape {
     fn connector_points(&self, py: Python<'_>) -> PyResult<Option<[(rpptx::Emu, rpptx::Emu); 2]>> {
         self.require_connector(py)?;
         self.read(py, |shape| shape.connector_endpoints())
+    }
+
+    /// Sets one coordinate, `axis` 0 for x and 1 for y, of one connector end
+    /// and keeps the other coordinate.
+    fn move_connector_end(
+        &self,
+        py: Python<'_>,
+        end: rpptx::ConnectorEnd,
+        axis: usize,
+        value: i64,
+    ) -> PyResult<()> {
+        check_coordinate(if axis == 0 { "x" } else { "y" }, value, MIN_COORDINATE)?;
+        let points = self.connector_points(py)?.unwrap_or_default();
+        let (mut x, mut y) = match end {
+            rpptx::ConnectorEnd::Begin => points[0],
+            rpptx::ConnectorEnd::End => points[1],
+        };
+        if axis == 0 {
+            x = rpptx::Emu(value);
+        } else {
+            y = rpptx::Emu(value);
+        }
+        self.edit(py, |shape| shape.set_connector_endpoint(end, x, y))
     }
 
     fn connect(

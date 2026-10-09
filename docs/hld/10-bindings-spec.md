@@ -477,9 +477,9 @@ replacement invalidates run handles. Appends renumber nothing, so
 `add_slide`, every shape addition, `add_paragraph`, and `add_run` keep every
 handle, and so do notes, comment, layout, geometry, and formatting writes.
 `prs.slides`, `prs.slide_layouts`, and layout handles read the presentation
-live and never go stale. A `StaleElementError` names the handle, the
-revisions of its scope, the public path that re-fetches it, and the call that
-last advanced that scope, such as `SlideCollection.remove()`.
+live and never go stale. A `StaleElementError` names the handle, its scope
+and that scope's revisions, the call that last advanced them, such as
+`SlideCollection.remove()`, and the public path that re-fetches it.
 
 Presentation `Shape` handles expose optional `Length` values for left, top,
 width, and height plus optional non-visual id and name. Those values are the
@@ -596,8 +596,9 @@ raises. A connector's `begin_connect(shape, cxn_pt_idx)` and `end_connect`
 record `a:stCxn` or `a:endCxn` and move that end to the connection site, which
 is the preset geometry's own `a:cxnLst` site with its adjustments, flips, and
 rotation, or one of python-pptx's four edge midpoints for a shape without a
-preset. `begin_x`, `begin_y`, `end_x`, and `end_y` read the endpoints in the
-parent's coordinates. A new slide names its placeholders as PowerPoint and
+preset or whose preset defines none. `begin_x`, `begin_y`, `end_x`, and
+`end_y` read and write the endpoints in the parent's coordinates, as in
+python-pptx, and an assignment releases that end's glue. A new slide names its placeholders as PowerPoint and
 python-pptx do, such as `Title 1` and `Content Placeholder 2`.
 
 `shadow` returns a live `ShadowFormat` for ordinary shapes, pictures,

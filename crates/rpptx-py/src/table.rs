@@ -56,6 +56,7 @@ fn restructure(
     py: Python<'_>,
     presentation: &Py<PyPresentation>,
     path: &ContentPath,
+    cause: &'static str,
     edit: impl FnOnce(&mut rpptx::TableMut<'_>) -> rpptx::Result<()>,
 ) -> PyResult<()> {
     let mut presentation = presentation.borrow_mut(py);
@@ -63,9 +64,7 @@ fn restructure(
         .and_then(rpptx::ShapeMut::into_table_mut)
         .ok_or_else(|| PyValueError::new_err("shape has no table"))?;
     edit(&mut table).map_err(|error| rpptx_to_pyerr(py, error))?;
-    presentation
-        .revisions
-        .invalidate(Scope::Tables, "a row or column edit");
+    presentation.revisions.invalidate(Scope::Tables, cause);
     Ok(())
 }
 
@@ -269,9 +268,13 @@ impl PyColumnCollection {
     #[pyo3(signature = (index=None))]
     fn add_column(&self, py: Python<'_>, index: Option<isize>) -> PyResult<Py<PyColumn>> {
         let index = insertion_index(index, self.len(py)?, "column")?;
-        restructure(py, &self.presentation, &self.path, |table| {
-            table.insert_column(index)
-        })?;
+        restructure(
+            py,
+            &self.presentation,
+            &self.path,
+            "ColumnCollection.add_column()",
+            |table| table.insert_column(index),
+        )?;
         self.item(py, index)
     }
 
@@ -295,9 +298,13 @@ impl PyColumnCollection {
             _ => None,
         })
         .ok_or_else(|| PyValueError::new_err("column is not in this collection"))?;
-        restructure(py, &self.presentation, &self.path, |table| {
-            table.remove_column(index)
-        })
+        restructure(
+            py,
+            &self.presentation,
+            &self.path,
+            "ColumnCollection.remove()",
+            |table| table.remove_column(index),
+        )
     }
 }
 
@@ -446,9 +453,13 @@ impl PyRowCollection {
     #[pyo3(signature = (index=None))]
     fn add_row(&self, py: Python<'_>, index: Option<isize>) -> PyResult<Py<PyRow>> {
         let index = insertion_index(index, self.len(py)?, "row")?;
-        restructure(py, &self.presentation, &self.path, |table| {
-            table.insert_row(index)
-        })?;
+        restructure(
+            py,
+            &self.presentation,
+            &self.path,
+            "RowCollection.add_row()",
+            |table| table.insert_row(index),
+        )?;
         self.item(py, index)
     }
 
@@ -466,9 +477,13 @@ impl PyRowCollection {
             _ => None,
         })
         .ok_or_else(|| PyValueError::new_err("row is not in this collection"))?;
-        restructure(py, &self.presentation, &self.path, |table| {
-            table.remove_row(index)
-        })
+        restructure(
+            py,
+            &self.presentation,
+            &self.path,
+            "RowCollection.remove()",
+            |table| table.remove_row(index),
+        )
     }
 }
 

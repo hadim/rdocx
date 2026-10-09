@@ -225,7 +225,7 @@ def test_lazy_collections_and_stale_handles_are_loud():
     prs.slides.move(1, 0)
     with pytest.raises(
         rpptx.StaleElementError,
-        match=r"revision 0.*revision 1.*invalidated it was SlideCollection\.move\(\)",
+        match=r"revision 0.*revision is now 1 because SlideCollection\.move\(\) renumbered",
     ):
         _ = held.text
 
@@ -250,19 +250,33 @@ def _assert_stale_after_exactly_one_bump(rpptx, operation):
     with pytest.raises(rpptx.StaleElementError) as raised:
         operation()
     revisions = re.search(
-        r"revision (\d+).*revision (\d+)", str(raised.value)
+        r"revision (\d+).*revision is now (\d+)", str(raised.value)
     )
     assert revisions is not None
     captured, current = map(int, revisions.groups())
     assert current == captured + 1
 
 
+def _handle_scope(recovery):
+    """The scope of the last indexed step of a re-fetch path."""
+    steps = {
+        ".slides[": "slide",
+        ".shapes[": "shape",
+        ".cell(": "table",
+        ".columns[": "table",
+        ".rows[": "table",
+        ".paragraphs[": "paragraph",
+        ".runs[": "run",
+    }
+    return max(steps.items(), key=lambda step: recovery.rfind(step[0]))[1]
+
+
 def _assert_exact_stale(rpptx, operation, kind, captured, current, recovery, cause):
+    scope = _handle_scope(recovery)
     expected = (
-        f"{kind} handle was created at document revision {captured}, but the "
-        f"document is now at revision {current} (a structural change "
-        f"invalidated it). {recovery} The last call that invalidated it was "
-        f"{cause}."
+        f"{kind} handle was created at {scope} revision {captured}, but the "
+        f"{scope} revision is now {current} because {cause} renumbered what it "
+        f"points to. {recovery}"
     )
     with pytest.raises(rpptx.StaleElementError) as raised:
         operation()
@@ -4779,6 +4793,8 @@ def test_issue_309_connectors_glue_to_connection_sites_like_python_pptx(tmp_path
         left.begin_connect(right, 0)
     with pytest.raises(ValueError, match="not a connector"):
         _ = left.begin_x
+    with pytest.raises(ValueError, match="not a connector"):
+        left.end_y = 0
     output = tmp_path / "glued.pptx"
     prs.save(output)
 
@@ -4788,6 +4804,15 @@ def test_issue_309_connectors_glue_to_connection_sites_like_python_pptx(tmp_path
     cxn = oracle._element.nvCxnSpPr.cNvCxnSpPr
     assert (cxn.stCxn.get("id"), cxn.stCxn.get("idx")) == ("2", "3")
     assert (cxn.endCxn.get("id"), cxn.endCxn.get("idx")) == ("3", "1")
+
+    # Assigning a coordinate moves that end and releases its glue only.
+    moved = rpptx.Presentation(output)
+    moved_connector = moved.slides[0].shapes[2]
+    moved_connector.begin_x = 500
+    moved_connector.begin_y = 7_000
+    assert (moved_connector.begin_x, moved_connector.begin_y) == (500, 7_000)
+    assert (moved_connector.end_x, moved_connector.end_y) == (6_000, 4_500)
+    assert b"stCxn" not in moved_connector.xml and b"endCxn" in moved_connector.xml
 
     # python-pptx moves the begin point of a rectangle glue to the same site.
     deck = pptx.Presentation()
