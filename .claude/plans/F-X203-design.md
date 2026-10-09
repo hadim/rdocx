@@ -503,3 +503,24 @@ contracts. Adapt useful extraction inside existing files without adopting
 contributor inspection.rs. Formal X212 completion supplies paragraph visibility.
 Root's delegated verification authenticated both complete captures and Git
 blob identities, including all26 unchanged head blobs against the new tree.
+
+## Checkbox extension from stacked PR330
+
+PR330 head274e3ca82b3db0393f0b3e0833b640ae2bbf9dc8 includes an additive
+checkbox extension over this feature's authenticated PR325 ancestor. Retain
+its shared native/Python control operation here once, alongside the already
+approved typed property and tag binding operations. The assessment is in
+/private/tmp/S91-PR330-intake/assessment.md. No second CLI control model or
+new feature is created.
+
+The contributor writer at rdocx-oxml/src/content_control.rs:268 and:275
+selects a raw prefix and removes children by local name. Adapt it to the
+qualified Word2010 checked namespace, retaining foreign same-name children,
+attributes and opaque order verbatim. Bind checkedState/uncheckedState font
+and scalar together instead of dropping the state font at native
+content_control.rs:193/:199. Preserve actual supplied-face precedence and
+source XML, using X195/X210's shared qualified font semantics. Default
+U2612 is in the approved3916-byte subset. U2610 requires the separately
+pending3968-byte asset revision, which this PR cannot approve. Tests must
+cover foreign namespaces, distinct state fonts, explicit custom state glyphs,
+unsupported control kinds, live owner identity and late atomic refusal.

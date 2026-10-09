@@ -495,3 +495,16 @@ source changes. Full current discussions and reused source blob hashes are
 authenticated in /private/tmp/S91-PR318-545cba6-intake/receipt.json.
 The prior source assessment and existing feature ownership remain applicable.
 No duplicate work, asset approval, baseline or contributor pass claim changes.
+
+## Further PR318 replacement head
+
+The latest head1eab7066b69203e36df3782a2d343ff1ae1defd2 replaces545cba6
+with the same full treec48923347b2f8d7eb9a95d4fd9f72a70252f7aaf and
+the same parent. Direct tree comparison has zero changed paths. Complete
+metadata and reauthenticated25 main-base head blobs are recorded in
+/private/tmp/S91-PR318-1eab706-intake/receipt.json. Root verified all25
+source identities and17 retained artifacts without mismatch. Prior complete
+source assessment and this approved contract remain valid. No duplicate
+implementation, revised baseline or new F-ID follows from commit identity
+alone. The unchanged contributor chart-hash comment remains a claim rather
+than a passing local oracle.

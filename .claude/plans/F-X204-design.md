@@ -497,3 +497,34 @@ Canonical read HEAD: `decfe4b5356da90c22cef6d85b6553905d1de373`. Source SHA rece
 - `crates/rdocx-oxml/src/placeholder.rs`: `26ddc9f8912473176bc7f3a0bab2ed4bbe775c555a395524953d913156c25fef`.
 - `crates/rpptx/src/lib.rs`: `9e203e0e9e3fe71c8b0c9d070a1a0cffa6f757fbd849c88c46702ed910996b6b`.
 - `crates/oxml-cli-support/src/lib.rs`: `24b4104b26df27e800d049378ad31700aa04f99dbd9d840c3ee8d8d31b3b5cc7`.
+
+## Complete stacked PR330 reconciliation
+
+PR [330](https://github.com/tensorbee/rdocx/pull/330) closes Issue307 and
+remains this F-ID at head274e3ca82b3db0393f0b3e0833b640ae2bbf9dc8.
+PR325 head87d4b71c1ed211ecf34156d39f18a69cb4fd44ad is its authenticated
+ancestor and merge base. Six inherited commits belong to X203 once. Ten new
+commits and27 feature-only paths belong to this CLI contribution. Complete
+source, discussion, stack/base patches and assessment are retained in
+/private/tmp/S91-PR330-intake. Root authenticated92 source blobs and128
+artifacts, together with25 reused318 blobs and17 artifacts, with no mismatch
+in /private/tmp/S91-root-330-318-source-authentication.json.
+
+Adapt the ordered replacement schema, explicit civil date validation, output
+identity checks and nonreplacing staged publication. The approved empty-map
+no-op and unrestricted absent expected-count semantics govern batch changes.
+Use one checked native/Python transaction rather than sequential live CLI
+operations for replacement, tag fill and combined fields. Preserve now=None
+on omitted --now. The proposed ambient local clock and Unix libc dependency
+are not admitted. Extraction consumes X202's complete physical-owner inventory,
+uses generated flat names and refuses missing internal media. The proposed
+--force producer-name publication is not the approved rollback contract.
+
+Read-only fit consumes X207's complete inventory, Q/S trials and stored-layout
+containment with X195/X210 same-pass diagnostics. Unsupported mandatory owners
+cannot disappear into successful empty results. Metadata allocation consumes
+X203's checked PID and typed property policy. Checkbox native/Python extension
+belongs to X203 and qualified symbol rendering to X210. Contributor tests,
+archive measurements and proposed copied modules are not local acceptance
+evidence or new file/dependency approval. Formal prerequisite completion and
+exclusive source claims still apply.
