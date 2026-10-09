@@ -1124,7 +1124,7 @@ impl Presentation {
         let assembly = prepare_render_context(
             &self.staged_package(false)?,
             false,
-            &owned_fonts(font_files),
+            &FontFile::from_refs(font_files),
         )?;
         Ok((assembly.input, assembly.layout))
     }
@@ -1267,7 +1267,8 @@ impl Presentation {
             )));
         }
         let package = self.staged_package(false)?;
-        let mut assembly = prepare_render_context(&package, false, &owned_fonts(font_files))?;
+        let mut assembly =
+            prepare_render_context(&package, false, &FontFile::from_refs(font_files))?;
         let mut frames = Vec::new();
         for (slide_index, ((prepared, slide), directions)) in assembly
             .slides
@@ -1375,7 +1376,7 @@ impl Presentation {
         font_files: &[(&str, &[u8])],
     ) -> Result<Vec<u8>> {
         let package = self.staged_package(false)?;
-        let layout = render_notes_pages(&package, &owned_fonts(font_files))?;
+        let layout = render_notes_pages(&package, &FontFile::from_refs(font_files))?;
         Ok(oxml_pdf::render_to_pdf(&layout))
     }
 
@@ -1394,7 +1395,7 @@ impl Presentation {
         font_files: &[(&str, &[u8])],
     ) -> Result<Vec<Vec<u8>>> {
         let package = self.staged_package(false)?;
-        let layout = render_notes_pages(&package, &owned_fonts(font_files))?;
+        let layout = render_notes_pages(&package, &FontFile::from_refs(font_files))?;
         render_export_pngs(&layout, dpi)
     }
 
@@ -10031,17 +10032,6 @@ fn replace_text_in_run_segment(runs: &mut [TextRun], placeholder: &str, value: &
         last.text.value.replace_range(..end_offset, "");
     }
     matches.len()
-}
-
-#[cfg(feature = "render")]
-fn owned_fonts(font_files: &[(&str, &[u8])]) -> Vec<FontFile> {
-    font_files
-        .iter()
-        .map(|(family, data)| FontFile {
-            family: (*family).to_owned(),
-            data: data.to_vec(),
-        })
-        .collect()
 }
 
 #[cfg(feature = "render")]

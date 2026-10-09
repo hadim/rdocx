@@ -618,11 +618,13 @@ class Document:
 
         ``fonts`` gives ``(family, font bytes)`` pairs and ``font_dir`` a
         directory whose ``.ttf``, ``.otf`` and ``.ttc`` files are named after
-        their family. Those fonts come before every other font source, as
+        their family. When both are given, the directory fonts follow the
+        ``fonts`` pairs. Those fonts come before every other font source, as
         ``rdocx convert --font-dir`` does, and a family they do not provide
         resolves as without them. A missing ``font_dir`` raises
-        ``FileNotFoundError`` and a file ``NotADirectoryError``. Every render
-        and layout method takes the same two arguments.
+        ``FileNotFoundError`` and a file ``NotADirectoryError``. The PNG, image
+        and SVG render methods, ``layout`` and ``layout_page`` take the same two
+        arguments. ``to_pdfa_deterministic`` does not.
         """
     def to_pdfa_deterministic(
         self, profile: _Literal["pdfa-2b", "pdfa-3b"] = "pdfa-2b"

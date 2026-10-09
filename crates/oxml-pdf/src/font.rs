@@ -399,22 +399,28 @@ pub(crate) fn instanced_face(font_data: &FontData) -> Option<ttf_parser::Face<'_
 ///
 /// A variable face is instanced at its layout coordinates, so the embedded
 /// outlines are the ones layout measured rather than the default instance.
+/// Should instancing fail, the default outlines are embedded instead, still
+/// placed at the layout advances, so the text never disappears.
 pub(crate) fn prepare_font(font_data: &FontData, usage: &mut FontUsage) -> Option<PreparedFont> {
-    let subset_bytes = if font_data.variations.is_empty() {
-        subsetter::subset(&font_data.data, font_data.face_index, &usage.remapper).ok()?
-    } else {
-        let coordinates = font_data
-            .variations
-            .iter()
-            .map(|(tag, value)| (subsetter::Tag::new(tag), *value))
-            .collect::<Vec<_>>();
-        subsetter::subset_with_variations(
-            &font_data.data,
-            font_data.face_index,
-            &coordinates,
-            &usage.remapper,
-        )
-        .ok()?
+    let coordinates = font_data
+        .variations
+        .iter()
+        .map(|(tag, value)| (subsetter::Tag::new(tag), *value))
+        .collect::<Vec<_>>();
+    let instanced = (!coordinates.is_empty())
+        .then(|| {
+            subsetter::subset_with_variations(
+                &font_data.data,
+                font_data.face_index,
+                &coordinates,
+                &usage.remapper,
+            )
+            .ok()
+        })
+        .flatten();
+    let subset_bytes = match instanced {
+        Some(bytes) => bytes,
+        None => subsetter::subset(&font_data.data, font_data.face_index, &usage.remapper).ok()?,
     };
 
     // Build ToUnicode CMap

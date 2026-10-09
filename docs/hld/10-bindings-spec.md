@@ -2258,7 +2258,8 @@ draw the same faces. `render_pages_with_fonts_and_options` takes an optional
 page selection, `None` for every page, because the uncached layout cannot be
 counted without laying out twice. `layout` and `layout_page` take them too and
 call `Document::layout_with_fonts_and_bundled_fallback`, which keeps their
-bundled-font-only base.
+bundled-font-only base. When both are given, the directory fonts follow the
+`fonts` pairs. `to_pdfa_deterministic` takes no caller fonts.
 
 Python `Presentation.to_pdf`, `to_notes_pdf`, `render_slide_to_png`,
 `render_all_slides`, `render_all_notes`, and `text_layout` take the same

@@ -2235,7 +2235,7 @@ impl PyDocument {
             None => self.inner.to_pdf_with_options(options),
             Some(fonts) => self
                 .inner
-                .to_pdf_with_fonts_and_options(&font_refs(fonts), options),
+                .to_pdf_with_fonts_and_options(&rdocx::FontFile::as_refs(fonts), options),
         })
         .map(|bytes| PyBytes::new(py, &bytes))
         .map_err(|error| rdocx_to_pyerr(py, error))
@@ -2280,7 +2280,7 @@ impl PyDocument {
             Some(fonts) => self.inner.render_page_to_png_with_fonts_and_options(
                 page_index,
                 dpi,
-                &font_refs(fonts),
+                &rdocx::FontFile::as_refs(fonts),
                 options,
             ),
         })
@@ -2302,7 +2302,7 @@ impl PyDocument {
                 None => self.inner.render_page_to_svg(page_index),
                 Some(fonts) => self.inner.render_page_to_svg_with_fonts_and_options(
                     page_index,
-                    &font_refs(fonts),
+                    &rdocx::FontFile::as_refs(fonts),
                     rdocx::RenderOptions::default(),
                 ),
             })
@@ -2336,7 +2336,7 @@ impl PyDocument {
                 None => self.inner.render_all_pages_with_options(dpi, options),
                 Some(fonts) => self.inner.render_all_pages_with_fonts_and_options(
                     dpi,
-                    &font_refs(fonts),
+                    &rdocx::FontFile::as_refs(fonts),
                     options,
                 ),
             })
@@ -2367,7 +2367,7 @@ impl PyDocument {
                     return self.inner.render_pages_with_fonts_and_options(
                         pages.as_deref(),
                         rdocx::RasterOptions { dpi, format },
-                        &font_refs(fonts),
+                        &rdocx::FontFile::as_refs(fonts),
                         options,
                     );
                 }
@@ -3444,9 +3444,9 @@ impl PyDocument {
                         &*cached
                     }
                     Some(fonts) => {
-                        owned = self
-                            .inner
-                            .layout_with_fonts_and_bundled_fallback(&font_refs(fonts))?;
+                        owned = self.inner.layout_with_fonts_and_bundled_fallback(
+                            &rdocx::FontFile::as_refs(fonts),
+                        )?;
                         &owned
                     }
                 };
@@ -3492,7 +3492,7 @@ impl PyDocument {
                 Some(fonts) => {
                     owned = self
                         .inner
-                        .layout_with_fonts_and_bundled_fallback(&font_refs(fonts))?;
+                        .layout_with_fonts_and_bundled_fallback(&rdocx::FontFile::as_refs(fonts))?;
                     &owned
                 }
             };
@@ -4006,13 +4006,6 @@ fn caller_fonts(
         files.extend(rdocx::FontFile::load_dir(&font_dir)?);
     }
     Ok(Some(files))
-}
-
-fn font_refs(fonts: &[rdocx::FontFile]) -> Vec<(&str, &[u8])> {
-    fonts
-        .iter()
-        .map(|font| (font.family.as_str(), font.data.as_slice()))
-        .collect()
 }
 
 fn parse_render_options(revision_view: &str) -> PyResult<rdocx::RenderOptions> {

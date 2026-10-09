@@ -28,6 +28,25 @@ pub struct FontFile {
 }
 
 impl FontFile {
+    /// Borrow fonts as the `(family, bytes)` pairs the facade render methods take.
+    pub fn as_refs(fonts: &[FontFile]) -> Vec<(&str, &[u8])> {
+        fonts
+            .iter()
+            .map(|font| (font.family.as_str(), font.data.as_slice()))
+            .collect()
+    }
+
+    /// Copy `(family, bytes)` pairs into owned fonts.
+    pub fn from_refs(fonts: &[(&str, &[u8])]) -> Vec<FontFile> {
+        fonts
+            .iter()
+            .map(|(family, data)| FontFile {
+                family: (*family).to_owned(),
+                data: data.to_vec(),
+            })
+            .collect()
+    }
+
     /// Read every `.ttf`, `.otf`, and `.ttc` file of a directory, in file name
     /// order, each labelled with its file stem.
     ///

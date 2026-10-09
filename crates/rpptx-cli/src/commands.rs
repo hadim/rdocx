@@ -36,11 +36,7 @@ fn render_layout(presentation: &Presentation, font_dir: Option<&Path>) -> Result
         Some(dir) => FontFile::load_dir(dir)?,
         None => Vec::new(),
     };
-    let fonts = fonts
-        .iter()
-        .map(|font| (font.family.as_str(), font.data.as_slice()))
-        .collect::<Vec<_>>();
-    let (_, layout) = presentation.render_deterministic_with_fonts(&fonts)?;
+    let (_, layout) = presentation.render_deterministic_with_fonts(&FontFile::as_refs(&fonts))?;
     Ok(layout)
 }
 

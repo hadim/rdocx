@@ -227,7 +227,7 @@ impl PyPresentation {
         let fonts = caller_fonts(fonts, font_dir)?;
         py.detach(|| {
             self.inner
-                .to_pdf_deterministic_with_fonts(&font_refs(&fonts))
+                .to_pdf_deterministic_with_fonts(&rpptx::FontFile::as_refs(&fonts))
         })
         .map(|bytes| PyBytes::new(py, &bytes))
         .map_err(|error| rpptx_to_pyerr(py, error))
@@ -244,8 +244,11 @@ impl PyPresentation {
     ) -> PyResult<Option<Bound<'py, PyBytes>>> {
         let fonts = caller_fonts(fonts, font_dir)?;
         py.detach(|| {
-            self.inner
-                .slide_png_deterministic_with_fonts(slide_index, dpi, &font_refs(&fonts))
+            self.inner.slide_png_deterministic_with_fonts(
+                slide_index,
+                dpi,
+                &rpptx::FontFile::as_refs(&fonts),
+            )
         })
         .map(|bytes| bytes.map(|bytes| PyBytes::new(py, &bytes)))
         .map_err(|error| rpptx_to_pyerr(py, error))
@@ -263,7 +266,7 @@ impl PyPresentation {
         let slides = py
             .detach(|| {
                 self.inner
-                    .slide_pngs_deterministic_with_fonts(dpi, &font_refs(&fonts))
+                    .slide_pngs_deterministic_with_fonts(dpi, &rpptx::FontFile::as_refs(&fonts))
             })
             .map_err(|error| rpptx_to_pyerr(py, error))?;
         PyList::new(py, slides.iter().map(|slide| PyBytes::new(py, slide)))
@@ -280,8 +283,10 @@ impl PyPresentation {
         let fonts = caller_fonts(fonts, font_dir)?;
         let frames = py
             .detach(|| {
-                self.inner
-                    .text_layout_deterministic_with_fonts(width_factor, &font_refs(&fonts))
+                self.inner.text_layout_deterministic_with_fonts(
+                    width_factor,
+                    &rpptx::FontFile::as_refs(&fonts),
+                )
             })
             .map_err(|error| rpptx_to_pyerr(py, error))?;
         PyTuple::new(py, frames.iter().map(PyTextFrameLayout::from))
@@ -297,7 +302,7 @@ impl PyPresentation {
         let fonts = caller_fonts(fonts, font_dir)?;
         py.detach(|| {
             self.inner
-                .to_notes_pdf_deterministic_with_fonts(&font_refs(&fonts))
+                .to_notes_pdf_deterministic_with_fonts(&rpptx::FontFile::as_refs(&fonts))
         })
         .map(|bytes| PyBytes::new(py, &bytes))
         .map_err(|error| rpptx_to_pyerr(py, error))
@@ -314,8 +319,10 @@ impl PyPresentation {
         let fonts = caller_fonts(fonts, font_dir)?;
         let notes = py
             .detach(|| {
-                self.inner
-                    .notes_page_pngs_deterministic_with_fonts(dpi, &font_refs(&fonts))
+                self.inner.notes_page_pngs_deterministic_with_fonts(
+                    dpi,
+                    &rpptx::FontFile::as_refs(&fonts),
+                )
             })
             .map_err(|error| rpptx_to_pyerr(py, error))?;
         PyList::new(py, notes.iter().map(|page| PyBytes::new(py, page)))
@@ -461,11 +468,4 @@ fn caller_fonts(
         files.extend(rpptx::FontFile::load_dir(&font_dir)?);
     }
     Ok(files)
-}
-
-fn font_refs(fonts: &[rpptx::FontFile]) -> Vec<(&str, &[u8])> {
-    fonts
-        .iter()
-        .map(|font| (font.family.as_str(), font.data.as_slice()))
-        .collect()
 }

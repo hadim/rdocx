@@ -54,13 +54,6 @@ fn caller_fonts(font_dir: Option<&Path>) -> Result<Vec<FontFile>> {
     })
 }
 
-fn font_refs(fonts: &[FontFile]) -> Vec<(&str, &[u8])> {
-    fonts
-        .iter()
-        .map(|font| (font.family.as_str(), font.data.as_slice()))
-        .collect()
-}
-
 #[derive(Clone, Copy)]
 pub enum RevisionAction {
     Accept,
@@ -432,7 +425,7 @@ pub fn layout(file: &Path, json_output: bool, font_dir: Option<&Path>) -> Result
         cached = doc.layout_deterministic()?;
         &*cached
     } else {
-        owned = doc.layout_with_fonts_and_bundled_fallback(&font_refs(&fonts))?;
+        owned = doc.layout_with_fonts_and_bundled_fallback(&FontFile::as_refs(&fonts))?;
         &owned
     };
     let body_items = doc
@@ -743,7 +736,7 @@ pub fn convert(
             let bytes = if fonts.is_empty() {
                 doc.to_pdf_with_options(render_options)?
             } else {
-                doc.to_pdf_with_fonts_and_options(&font_refs(&fonts), render_options)?
+                doc.to_pdf_with_fonts_and_options(&FontFile::as_refs(&fonts), render_options)?
             };
             stage_and_publish(&[(output_path.clone(), bytes)], force)?;
         }
@@ -769,7 +762,7 @@ pub fn convert(
                 &*cached
             } else {
                 owned = doc.layout_with_fonts_and_bundled_fallback_and_options(
-                    &font_refs(&fonts),
+                    &FontFile::as_refs(&fonts),
                     render_options,
                 )?;
                 &owned
@@ -2029,7 +2022,7 @@ pub fn render(
         &*cached
     } else {
         owned = doc.layout_with_fonts_and_bundled_fallback_and_options(
-            &font_refs(&fonts),
+            &FontFile::as_refs(&fonts),
             render_options,
         )?;
         &owned

@@ -27978,14 +27978,9 @@ impl Document {
     ) -> rdocx_layout::LayoutInput {
         let mut input = self.build_layout_input();
         input.revision_view = options.revision_view;
-        input.fonts.extend(
-            font_files
-                .iter()
-                .map(|(family, data)| rdocx_layout::FontFile {
-                    family: (*family).to_owned(),
-                    data: data.to_vec(),
-                }),
-        );
+        input
+            .fonts
+            .extend(rdocx_layout::FontFile::from_refs(font_files));
         input
     }
 
