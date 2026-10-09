@@ -7,7 +7,9 @@ use smallvec::smallvec;
 
 use crate::layout::PyTextFrameLayout;
 use crate::shape::length;
-use crate::slide::{PySlideCollection, PySlideLayoutCollection};
+use crate::slide::{
+    PySlideCollection, PySlideLayoutCollection, PySlideMaster, PySlideMasterCollection,
+};
 use crate::{replacement_count_to_pyerr, rpptx_to_pyerr, rpptx_value_to_pyerr};
 
 /// The bundled 16:9 slide size, paired with the first dimension set on a deck
@@ -387,5 +389,56 @@ impl PyPresentation {
     fn slides(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<PySlideCollection>> {
         let path = slf.borrow(py).revisions.capture(smallvec![]);
         Py::new(py, PySlideCollection::new(slf, path))
+    }
+
+    // Header and footer, masters (#311).
+
+    /// Sets the date, footer and slide number of every slide, as
+    /// PowerPoint's Header and Footer dialog with Apply to All (rpptx
+    /// extension).
+    ///
+    /// `date` is `None`, fixed text, or `"auto"` for a `date_format` field
+    /// PowerPoint refreshes, cached with today's date. With `hide_on_title`,
+    /// slides on a title layout show none of them. Each slide owns the
+    /// placeholders it shows, copied from its layout, which is what both
+    /// PowerPoint and Google Slides display, and the masters and layouts
+    /// get matching `p:hf` flags so slides added later follow. The revision
+    /// advances, so held shape handles must be fetched again.
+    #[pyo3(signature = (slide_number = true, footer = None, date = None, hide_on_title = true, date_format = "datetime1"))]
+    fn set_header_footer(
+        &mut self,
+        py: Python<'_>,
+        slide_number: bool,
+        footer: Option<String>,
+        date: Option<String>,
+        hide_on_title: bool,
+        date_format: &str,
+    ) -> PyResult<()> {
+        let settings =
+            crate::slide::header_footer_settings(py, slide_number, footer, date, date_format)?;
+        self.inner
+            .set_header_footer(&settings, hide_on_title)
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(())
+    }
+
+    /// The slide masters, like python-pptx `slide_masters`.
+    #[getter]
+    fn slide_masters(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<PySlideMasterCollection>> {
+        let path = slf.borrow(py).revisions.capture(smallvec![]);
+        Py::new(py, PySlideMasterCollection::new(slf, path))
+    }
+
+    /// The first slide master, like python-pptx `slide_master`.
+    #[getter]
+    fn slide_master(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<PySlideMaster>> {
+        let path = slf.borrow(py).revisions.capture(smallvec![]);
+        if slf.borrow(py).inner.master_count() == 0 {
+            return Err(pyo3::exceptions::PyIndexError::new_err(
+                "the presentation has no slide master",
+            ));
+        }
+        PySlideMasterCollection::new(slf, path).item(py, 0)
     }
 }
