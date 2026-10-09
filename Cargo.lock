@@ -1100,6 +1100,7 @@ dependencies = [
 name = "oxml-cli-support"
 version = "0.14.0"
 dependencies = [
+ "libc",
  "serde_json",
  "thiserror",
 ]

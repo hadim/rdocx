@@ -16,6 +16,7 @@ publication, and JSON contracts.
 - Versioned JSON object envelopes shared by Word and Presentation CLIs.
 - Replacement maps, a JSON array of ordered pairs with optional expected
   counts, read the same way by both CLIs.
+- The local wall-clock time and civil date arithmetic for date arguments.
 - Bounded expansion and staged multi-output publication without replacement
   keep large or failed requests from leaving partial command results.
 
