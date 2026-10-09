@@ -14,6 +14,8 @@ publication, and JSON contracts.
   set keeps the files it has already swapped in when a later one fails, since
   the files they replaced cannot be restored.
 - Versioned JSON object envelopes shared by Word and Presentation CLIs.
+- Replacement maps, a JSON array of ordered pairs with optional expected
+  counts, read the same way by both CLIs.
 - Bounded expansion and staged multi-output publication without replacement
   keep large or failed requests from leaving partial command results.
 

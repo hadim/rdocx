@@ -24,6 +24,83 @@ pub enum Error {
     /// A JSON envelope payload tried to define the reserved schema field.
     #[error("JSON payload must not define reserved field \"schema\"")]
     ReservedSchemaField,
+    /// A replacement map is not a JSON array of replacement pairs.
+    #[error("invalid replacement map: {0}")]
+    InvalidReplacementMap(String),
+}
+
+/// One pair of a replacement map: the text to find, its replacement, and
+/// the count the caller expects, when it gives one.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReplacementPair {
+    pub placeholder: String,
+    pub value: String,
+    pub expect: Option<usize>,
+}
+
+/// Parses a replacement map, a JSON array of objects such as
+/// `{"placeholder": "{{name}}", "value": "Ada", "expect": 2}`.
+///
+/// `expect` is optional. The pairs keep their order, because a later pair
+/// sees the text an earlier one wrote. An empty array, a missing or
+/// non-string `placeholder` or `value`, an empty `placeholder`, a negative or
+/// fractional `expect`, and any other key are refused, naming the
+/// zero-based pair.
+pub fn parse_replacement_map(json: &str) -> Result<Vec<ReplacementPair>, Error> {
+    let invalid = |message: String| Error::InvalidReplacementMap(message);
+    let value: Value =
+        serde_json::from_str(json).map_err(|error| invalid(format!("not JSON: {error}")))?;
+    let Value::Array(entries) = value else {
+        return Err(invalid(
+            "expected an array of {\"placeholder\", \"value\", \"expect\"} objects".to_owned(),
+        ));
+    };
+    if entries.is_empty() {
+        return Err(invalid("the array holds no pair".to_owned()));
+    }
+    entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            let Value::Object(fields) = entry else {
+                return Err(invalid(format!("pair {index} is not an object")));
+            };
+            if let Some(key) = fields
+                .keys()
+                .find(|key| !matches!(key.as_str(), "placeholder" | "value" | "expect"))
+            {
+                return Err(invalid(format!(
+                    "pair {index} has unknown key \"{key}\" (use placeholder, value, expect)"
+                )));
+            }
+            let text = |key: &str| match fields.get(key) {
+                Some(Value::String(text)) => Ok(text.clone()),
+                _ => Err(invalid(format!("pair {index} needs a string \"{key}\""))),
+            };
+            let placeholder = text("placeholder")?;
+            if placeholder.is_empty() {
+                return Err(invalid(format!("pair {index} has an empty placeholder")));
+            }
+            let expect = match fields.get("expect") {
+                None | Some(Value::Null) => None,
+                Some(count) => Some(
+                    count
+                        .as_u64()
+                        .and_then(|count| usize::try_from(count).ok())
+                        .ok_or_else(|| {
+                            invalid(format!(
+                                "pair {index} needs a non-negative integer \"expect\""
+                            ))
+                        })?,
+                ),
+            };
+            Ok(ReplacementPair {
+                placeholder,
+                value: text("value")?,
+                expect,
+            })
+        })
+        .collect()
 }
 
 /// Parses positive one-based values and inclusive ranges.
@@ -371,6 +448,52 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn replacement_maps_keep_pair_order_and_refuse_ambiguous_entries() {
+        assert_eq!(
+            parse_replacement_map(
+                r#"[{"placeholder": "b", "value": "c", "expect": 2}, {"placeholder": "a", "value": "b"}]"#
+            )
+            .unwrap(),
+            vec![
+                ReplacementPair {
+                    placeholder: "b".to_owned(),
+                    value: "c".to_owned(),
+                    expect: Some(2),
+                },
+                ReplacementPair {
+                    placeholder: "a".to_owned(),
+                    value: "b".to_owned(),
+                    expect: None,
+                },
+            ]
+        );
+        for (json, message) in [
+            ("{}", "expected an array"),
+            ("[]", "holds no pair"),
+            (
+                r#"[{"placeholder": "a"}]"#,
+                "pair 0 needs a string \"value\"",
+            ),
+            (
+                r#"[{"placeholder": "", "value": "b"}]"#,
+                "empty placeholder",
+            ),
+            (
+                r#"[{"placeholder": "a", "value": "b", "expect": -1}]"#,
+                "non-negative integer",
+            ),
+            (
+                r#"[{"placeholder": "a", "value": "b", "count": 1}]"#,
+                "unknown key \"count\"",
+            ),
+            ("[1]", "pair 0 is not an object"),
+        ] {
+            let error = parse_replacement_map(json).unwrap_err().to_string();
+            assert!(error.contains(message), "{json}: {error}");
+        }
+    }
 
     fn temp_dir(label: &str) -> PathBuf {
         let temp = std::env::temp_dir().join(format!("oxml-cli-{label}-{}", std::process::id()));
