@@ -396,3 +396,35 @@ whether92500/0 is tried. Actual font-provider measurement and mixed/wrapped
 contexts remain required before selecting a general algorithm. Refresh and
 fit-report must ultimately use one approved evaluator and ordering. These
 observations do not authorize production, a baseline change or completion.
+
+## Taller percent-spacing boundary and fit criterion
+
+Three150-percent single-frame controls at4.35/4.5/4.65 inches produce native
+92500/10000,92500/10000 and100000/10000 respectively. Each fixture explicitly
+removes the other two controlled first-slide frames, preserves the active
+frame x/y/body/width/insets, and changes only active height. Every other input
+part, including the unrelated second slide, matches the original source.
+The complete receipt and checked artifact inventory are
+/private/tmp/S91-F-X207-native-threshold150-tall/receipt.json. The ignored
+appendix is .claude/scratch/F-X207-native-threshold150-tall-oracle.md.
+
+All three native saved slide XML files and measured glyph sizes/baselines
+are identical across normal reopen/save. Actual PDF fonts are about26/26/28pt.
+Raw page streams differ through the already documented period coalescing.
+All original inputs are unchanged and generated decks saved and closed.
+
+The4.65-inch result is a genuine fit-criterion discriminator. Its inner height
+is327.6pt, while the current seven full line advances at100000/10000 sum to
+329.28pt. Therefore the previous full-advance arithmetic cannot reproduce
+this native accepted pair. Do not attribute that difference to search ordering
+or force it with hidden padding. Existing source baseline_offset and pinned
+Arial descent predict a last-baseline-plus-font-descent extent about323.4536pt,
+a distinct measured criterion candidate. Actual glyph ink and final-line
+leading need independent evaluation before changing renderer fit semantics.
+
+The next bounded4.53/4.57/4.61-inch controls distinguish those end-extent
+criteria and whether92500/0 is eligible. After those captures, pause further
+native sweeps until an actual exact-font source measurement probe compares
+all saved controls through existing layout_shape_text. Keep the current
+reported overflow as evidence. Alternate end-extent metrics are diagnostics,
+not silently substituted successful results or an approved implementation.

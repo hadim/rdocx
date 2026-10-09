@@ -225,3 +225,22 @@ expected hash or rewrite immutable cross-viewer acceptance evidence.
 
 This refresh has eight open PRs and23 open issues, with all scope linked to
 existing owners. Issues264 and281 remain excluded.
+
+## Recently updated closed-record reconciliation
+
+The rolling intake also inspects recently updated closed records. Ten PRs
+and fourteen issues updated on2026-10-09 map to the existing completed
+F-X177, F-X179 through F-X188, F-X190 and F-X191 deliveries. All fourteen
+issues have authenticated completed close reasons. The ten unmerged closed
+PRs have explicit integrated/superseded close comments. Their S89/S90 delivery
+commits20888b7a and733ce6f7 are ancestors of this sprint. Later release comments
+account for the recent updated timestamps. They create no new S91 F-ID and
+are not reimplemented.
+
+Exact record-to-acceptance ledger citations and close-comment URLs are in
+.claude/scratch/S91-closed-delivery-reconciliation.json and its read-only
+GitHub receipt. Their source hashes were independently checked. Historical
+AS_BUILT integration-time notes are retained as checkpoint history, not
+interpreted as current issue status. This classification concerns only those
+24 authenticated closed records. Current open/new work continues through
+its existing S91 acceptance owners, with264 and281 excluded.
