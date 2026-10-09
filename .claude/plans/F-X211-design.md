@@ -665,3 +665,35 @@ PDF bytes for a family string or count nonblank pixels. Missing selected-face
 inspection is a recorded acceptance gap. Movie frame qualification remains
 unresolved. Root reviews the revised exact manifest before unchanged-hash
 Base/final source-built execution and scoring.
+
+## Revised premeasurement statement freeze
+
+Revision2 is retained in /private/tmp/S91-F-X211-frozen-corpus-r2. It
+supersedes the first candidate for future measurement while retaining that
+original evidence. Exact manifest SHA256 is
+7501e001301a703988526f76c9961b35b345a1c17f8e1d383e9477d5947b22e1,
+and complete setup/body/assertion SHA256 is
+2f4348dd55dcd1b8889badd8ca407d9f790cf38327c00ec3ae31dd5b02b3f66e.
+Independent root checks authenticate161 artifact hashes,100 syntax-valid
+scripts,24 byte-identical original examples and exactly18 amended identities
+(the14 XML cases and four planned AREA cases). Allocation remains unchanged.
+No binding body ran. There is no Base or final rate.
+
+The authentic H457 frame input preserves the native txBody qualified XML
+attributes/children except saved fontScale92500, serialized with namespace
+aliases. Root independently compared parsed XML to the authenticated slide,
+verifying that sole semantic change, exact geometry and expected92500/0.
+This is not original lexical-byte identity. XML positives now perform
+meaningful text/name/margin writes while checking retained opaque attributes,
+two children, sibling text span counts, owner relationships and unaffected
+parts. Master/slide source-name checks do not pretend a public typed name
+getter exists. Full source-span/relationship/lifetime/late-failure native
+gates remain required beyond these observations.
+
+The four AREA revisions use explicit fit/refresh and owned diagnostics, plus
+Georgia/Segoe UI/Aptos and qualified Symbol/Wingdings controls. Pinned local
+pdffonts26.09.0 records embedded face inventory. It does not prove which
+resource rendered each string, glyph outlines or caller-symbol precedence.
+Those exact native provider obligations remain explicit, as does the failed
+movie decoded-frame qualification. Neither static checks nor inventory-only
+font names may become full-acceptance credit.
