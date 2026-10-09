@@ -20654,14 +20654,26 @@ impl Document {
 
     /// Fetch the raw bytes of an embedded image by its relationship ID.
     pub fn image_data(&self, rel_id: &str) -> Option<Vec<u8>> {
+        let target = self.image_part_name(rel_id)?;
+        self.package.get_part(&target).map(|b| b.to_vec())
+    }
+
+    /// The package part name, such as `/word/media/image1.png`, of the
+    /// embedded body picture with this relationship ID.
+    ///
+    /// Several relationships, and so several drawings, can name one part.
+    /// An external or missing relationship has none.
+    pub fn image_part_name(&self, rel_id: &str) -> Option<String> {
         let rels = self.package.get_part_rels(&self.doc_part_name)?;
         let rel = rels.items.iter().find(|relationship| {
             relationship.id == rel_id
                 && relationship.rel_type == rel_types::IMAGE
                 && relationship_is_internal(relationship)
         })?;
-        let target = OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
-        self.package.get_part(&target).map(|b| b.to_vec())
+        Some(OpcPackage::resolve_rel_target(
+            &self.doc_part_name,
+            &rel.target,
+        ))
     }
 
     /// Replace an embedded body picture by its relationship ID.
@@ -38275,6 +38287,25 @@ mod tests {
         assert_eq!(outline[1].text, "Chapter 2");
         assert_eq!(outline[1].children.len(), 1); // 2.1
         assert_eq!(outline[1].children[0].children.len(), 1); // 2.1.1
+    }
+
+    #[test]
+    fn image_part_name_resolves_an_embedded_picture_relationship() {
+        let mut doc = Document::new();
+        let png = [
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
+            8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 8, 29, 99, 96, 96, 96,
+            248, 15, 0, 1, 4, 1, 0, 30, 115, 156, 64, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+        ];
+        doc.add_picture(&png, "dot.png", Length::emu(9525), Length::emu(9525));
+        let rel_id = doc.images()[0].embed_id.clone();
+        let part = doc.image_part_name(&rel_id).expect("embedded picture part");
+        assert!(
+            part.starts_with("/word/media/") && part.ends_with(".png"),
+            "{part}"
+        );
+        assert_eq!(doc.image_data(&rel_id).as_deref(), Some(png.as_slice()));
+        assert_eq!(doc.image_part_name("rIdMissing"), None);
     }
 
     #[test]
