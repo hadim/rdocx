@@ -629,8 +629,8 @@ class SprintWorkflowTests(unittest.TestCase):
             f"fonts/{path.name}"
             for path in sorted((*fonts.glob("LICENSE-*"), *fonts.glob("NOTICE-*")))
         )
-        self.assertEqual(len(expected_fonts), 27)
-        self.assertEqual(len(expected_legal), 6)
+        self.assertEqual(len(expected_fonts), 34)
+        self.assertEqual(len(expected_legal), 10)
         self.assertEqual(listed_fonts, expected_fonts)
         self.assertEqual(listed_legal, expected_legal)
         self.assertIn("diff -u", script)

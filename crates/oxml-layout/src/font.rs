@@ -1213,13 +1213,26 @@ impl FontManager {
         }
 
         if found_id.is_none() {
+            // A fallback family without an italic face, such as Selawik, gives
+            // way to a later one that has it, so italic text stays italic.
+            let mut upright = None;
             for fallback in &fallbacks {
                 let Some(id) = query_family(fallback) else {
                     continue;
                 };
+                if italic
+                    && self
+                        .db
+                        .face(id)
+                        .is_some_and(|face| face.style == fontdb::Style::Normal)
+                {
+                    upright.get_or_insert(id);
+                    continue;
+                }
                 found_id = Some(id);
                 break;
             }
+            found_id = found_id.or(upright);
         }
 
         // Last resort: try generic families
@@ -2108,12 +2121,142 @@ fn cache_file_font_bytes(
     Some(bytes)
 }
 
+/// Symbol and Wingdings bullets, and the families no open face matches.
+impl FontManager {
+    /// The text a Symbol or Wingdings run draws with the available faces.
+    ///
+    /// Word writes a symbol font's character in the U+F020 to U+F0FF
+    /// private-use block, PowerPoint as the Latin-1 character with the same
+    /// code. When the face `family` resolves to draws the private-use
+    /// character, as the real Wingdings does, that form is kept. Otherwise each
+    /// bullet character becomes its Unicode equivalent, which a bundled face
+    /// draws, so a bullet does not render as a missing-glyph box. Text in any
+    /// other family is returned unchanged.
+    pub fn symbol_font_text(
+        &mut self,
+        family: Option<&str>,
+        bold: bool,
+        italic: bool,
+        text: &str,
+    ) -> String {
+        let Some(family) = family.filter(|family| {
+            family.eq_ignore_ascii_case("Symbol") || family.eq_ignore_ascii_case("Wingdings")
+        }) else {
+            return text.to_owned();
+        };
+        let primary = self
+            .resolve_font_for_metrics(Some(family), bold, italic)
+            .ok()
+            .and_then(|id| self.index_of(id));
+        text.chars()
+            .map(|character| {
+                let code = match u32::from(character) {
+                    code @ 0xF020..=0xF0FF => code - 0xF000,
+                    code @ 0x20..=0xFF => code,
+                    _ => return character,
+                };
+                let private = char::from_u32(0xF000 + code).unwrap_or(character);
+                if primary.is_some_and(|index| self.covers(index, private)) {
+                    return private;
+                }
+                symbol_font_unicode(family, code as u8).unwrap_or(character)
+            })
+            .collect()
+    }
+
+    /// One message per family the current layout asked for that has no
+    /// metric-compatible substitute and was drawn with another face, in
+    /// family order.
+    ///
+    /// Aptos, Office's default since 2024, is the case today: no open face
+    /// shares its advance widths, so its text is measured and drawn with the
+    /// Carlito fallback and its lines can break where Office's do not.
+    #[doc(hidden)]
+    pub fn substitution_diagnostics(&self) -> Vec<String> {
+        let unmatched = |family: &str| family.to_lowercase().starts_with("aptos");
+        let mut pairs = self
+            .cache
+            .iter()
+            .filter_map(|(key, index)| {
+                let font = self.fonts.get(*index)?;
+                (unmatched(&key.family)
+                    && !unmatched(&font.family)
+                    && self.layout_fonts.contains(&font.id))
+                .then(|| (key.family.clone(), font.family.clone()))
+            })
+            .collect::<Vec<_>>();
+        pairs.sort();
+        pairs.dedup();
+        pairs
+            .into_iter()
+            .map(|(requested, actual)| {
+                format!(
+                    "font `{requested}` has no metric-compatible substitute and is drawn with `{actual}`, so its lines can break differently from Office"
+                )
+            })
+            .collect()
+    }
+}
+
+/// The Unicode character a Symbol or Wingdings code drew, for the bullets
+/// Word and PowerPoint offer.
+///
+/// `code` is the font's own 8-bit code: Word writes it in the U+F020 to
+/// U+F0FF private-use block, PowerPoint as the Latin-1 character.
+fn symbol_font_unicode(family: &str, code: u8) -> Option<char> {
+    let unicode = if family.eq_ignore_ascii_case("Symbol") {
+        match code {
+            0xA7 => '\u{2663}', // ♣
+            0xA8 => '\u{2666}', // ♦
+            0xA9 => '\u{2665}', // ♥
+            0xAA => '\u{2660}', // ♠
+            0xAE => '\u{2192}', // →
+            0xB7 => '\u{2022}', // •
+            0xE0 => '\u{25CA}', // ◊
+            _ => return None,
+        }
+    } else if family.eq_ignore_ascii_case("Wingdings") {
+        match code {
+            0x6C => '\u{25CF}', // ●
+            0x6D => '\u{274D}', // ❍
+            0x6E => '\u{25A0}', // ■
+            0x6F => '\u{25A1}', // □
+            0x70 => '\u{25FB}', // ◻
+            0x71 => '\u{2751}', // ❑
+            0x72 => '\u{2752}', // ❒
+            0x73 => '\u{2B27}', // ⬧
+            0x74 => '\u{29EB}', // ⧫
+            0x75 => '\u{25C6}', // ◆
+            0x76 => '\u{2756}', // ❖
+            0x77 => '\u{2B25}', // ⬥
+            0x9F => '\u{2022}', // •
+            0xA1 => '\u{25CB}', // ○
+            0xA7 => '\u{25AA}', // ▪
+            0xA8 => '\u{25FB}', // ◻
+            0xD8 => '\u{27A2}', // ➢
+            0xE8 => '\u{2794}', // ➔
+            0xF0 => '\u{21E8}', // ⇨
+            0xFB => '\u{2717}', // ✗
+            0xFC => '\u{2713}', // ✓
+            0xFD => '\u{2612}', // ☒
+            0xFE => '\u{2611}', // ☑
+            _ => return None,
+        }
+    } else {
+        return None;
+    };
+    Some(unicode)
+}
+
 /// Map common Word font names to metric-compatible alternatives.
 /// Returns a list of candidate names to try (including the original).
 ///
 /// Priority: original font → metric-compatible open-source clone → generic fallback.
 /// Carlito is metric-compatible with Calibri, Caladea with Cambria,
-/// Liberation Sans/Serif/Mono with Arial/Times New Roman/Courier New.
+/// Liberation Sans/Serif/Mono with Arial/Times New Roman/Courier New, Gelasio
+/// with Georgia and Selawik with Segoe UI. Aptos, Office's default since
+/// 2024, has no metric-compatible open clone: it falls back to Carlito, about
+/// 5% narrower, and [`FontManager::substitution_diagnostics`] reports it.
 fn map_font_name(name: &str) -> &[&str] {
     match name {
         "Calibri" => &["Calibri", "Carlito"],
@@ -2124,10 +2267,10 @@ fn map_font_name(name: &str) -> &[&str] {
         "Times New Roman" => &["Times New Roman", "Liberation Serif", "Times"],
         "Courier New" => &["Courier New", "Liberation Mono", "Courier"],
         "Consolas" => &["Consolas", "Liberation Mono", "DejaVu Sans Mono"],
-        "Segoe UI" => &["Segoe UI", "Carlito", "Liberation Sans"],
+        "Segoe UI" => &["Segoe UI", "Selawik", "Carlito", "Liberation Sans"],
         "Tahoma" => &["Tahoma", "Liberation Sans", "Helvetica"],
         "Verdana" => &["Verdana", "Liberation Sans", "DejaVu Sans"],
-        "Georgia" => &["Georgia", "Caladea", "Liberation Serif"],
+        "Georgia" => &["Georgia", "Gelasio", "Caladea", "Liberation Serif"],
         "Palatino Linotype" => &["Palatino Linotype", "Palatino", "Liberation Serif"],
         "Book Antiqua" => &["Book Antiqua", "Palatino", "Liberation Serif"],
         "Garamond" => &["Garamond", "Caladea", "Liberation Serif"],
@@ -3358,5 +3501,96 @@ mod tests {
                 "no bundled face covers {text}"
             );
         }
+    }
+
+    #[test]
+    fn symbol_and_wingdings_bullets_draw_their_unicode_equivalents_from_bundled_faces() {
+        let mut manager = FontManager::new_deterministic().expect("bundled fonts load");
+        for (family, text, expected) in [
+            ("Symbol", "\u{F0B7}", "\u{2022}"),
+            ("Symbol", "\u{B7}", "\u{2022}"),
+            ("Wingdings", "\u{F0A7}", "\u{25AA}"),
+            ("Wingdings", "\u{A7}", "\u{25AA}"),
+            ("wingdings", "\u{F0D8}", "\u{27A2}"),
+            ("Wingdings", "\u{F0FC}", "\u{2713}"),
+            ("Wingdings", "\u{FC}", "\u{2713}"),
+            ("Wingdings", "\u{F076}", "\u{2756}"),
+            ("Wingdings", "\u{F071}", "\u{2751}"),
+            ("Wingdings", "\u{F06E}", "\u{25A0}"),
+            ("Wingdings", "\u{F0FE}", "\u{2611}"),
+            // An unmapped symbol code, and any other family, are kept.
+            ("Wingdings", "\u{F041}", "\u{F041}"),
+            ("Arial", "\u{F0B7}", "\u{F0B7}"),
+        ] {
+            assert_eq!(
+                manager.symbol_font_text(Some(family), false, false, text),
+                expected,
+                "{family} {text:?}"
+            );
+        }
+        assert_eq!(
+            manager.symbol_font_text(None, false, false, "\u{A7}"),
+            "\u{A7}"
+        );
+
+        // Every Unicode equivalent is drawn by a bundled face.
+        for code in 0x20u8..=0xFF {
+            for family in ["Symbol", "Wingdings"] {
+                let Some(unicode) = symbol_font_unicode(family, code) else {
+                    continue;
+                };
+                let text = unicode.to_string();
+                let font_id = manager
+                    .resolve_font_for_text(Some(family), false, false, &text)
+                    .unwrap();
+                let index = manager.index_of(font_id).unwrap();
+                assert!(
+                    manager.uncovered(index, &text).is_empty(),
+                    "no bundled face draws {family} {code:#X} as {unicode}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn georgia_and_segoe_ui_resolve_to_their_metric_compatible_faces() {
+        let mut manager = FontManager::new_deterministic().expect("bundled fonts load");
+        for (requested, bold, italic, expected) in [
+            ("Georgia", false, false, "Gelasio"),
+            ("Georgia", true, true, "Gelasio"),
+            ("Segoe UI", false, false, "Selawik"),
+            ("Segoe UI", true, false, "Selawik"),
+            // Selawik has no italic, so italic Segoe UI stays italic.
+            ("Segoe UI", false, true, "Carlito"),
+        ] {
+            let font_id = manager.resolve_font(Some(requested), bold, italic).unwrap();
+            let font = &manager.fonts[manager.index_of(font_id).unwrap()];
+            assert_eq!(
+                font.family, expected,
+                "{requested} bold {bold} italic {italic}"
+            );
+        }
+    }
+
+    #[test]
+    fn aptos_is_reported_as_drawn_with_a_fallback_face() {
+        let mut manager = FontManager::new_deterministic().expect("bundled fonts load");
+        manager.begin_layout();
+        manager.resolve_font(Some("Calibri"), false, false).unwrap();
+        assert!(manager.substitution_diagnostics().is_empty());
+        manager.resolve_font(Some("Aptos"), false, false).unwrap();
+        manager.resolve_font(Some("Aptos"), true, false).unwrap();
+        manager
+            .resolve_font(Some("Aptos Display"), false, false)
+            .unwrap();
+        assert_eq!(
+            manager.substitution_diagnostics(),
+            [
+                "font `Aptos` has no metric-compatible substitute and is drawn with `Carlito`, so its lines can break differently from Office",
+                "font `Aptos Display` has no metric-compatible substitute and is drawn with `Carlito`, so its lines can break differently from Office",
+            ]
+        );
+        manager.begin_layout();
+        assert!(manager.substitution_diagnostics().is_empty());
     }
 }
