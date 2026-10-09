@@ -243,3 +243,20 @@ Unicode reference uses native Arial with normal fallback. It is not a NotoSymbol
 | symbol-reopened-export.png | 56178 | `18345936af5ab8feb860795fa645a3adefcdd127a8d664de885193f8e7a6d326` |
 
 No local rendering implementation pass, all-symbol mapping proof, gate pass or asset approval is claimed here. Native source remains untouched, original fonts remain in place, and only ignored research artifacts were created.
+
+## Cross-PR checklist glyph coverage
+
+PR320's checklist preset uses U2610 for unchecked and U2611 for checked.
+HarfBuzz14.4.0 coverage of all27 current bundled faces finds both glyphs
+missing. The exact pending3916-byte PR319 symbol subset has U2611 but
+not U2610. Its pinned full upstream Noto Sans Symbols2 face contains both,
+with equal821-unit advances at1000 units per em. The complete read-only
+receipt is .claude/scratch/S91-checklist-symbol-coverage.json.
+
+The pending asset proposal retains its exact bytes and hash. Do not treat
+its16-target coverage as acceptance for the checklist preset, silently
+change its approved-file scope, substitute an unrelated square or emit a
+missing glyph. Resolve U2610 through the existing caller-font provider or
+an exact separately reviewed asset change when needed. Native PDF/raster
+appearance and deterministic fallback acceptance remain explicit joint
+F-X200/F-X210 obligations, tested once against their actual provider.

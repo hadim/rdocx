@@ -509,3 +509,20 @@ Colours remain F-X197. Contributor passes and hashes are not local gates.
 ## Immutable contribution assessment decisions
 
 Completed immutable PR320 assessment is retained in .claude/scratch/S91-PR320-252accc-assessment.md. All18 blobs and2585720 source bytes were independently revalidated. Retain the canonical read-only TabStop snapshots. Contributor mutable handles keyed by position alias imported duplicates and can revive after deletion/reinsertion or position reuse. Installed python-docx1.2.0 actually retains two tabs at an identical position and exposes ten alignment and six leader enum members, not the contributed four each. Do not silently narrow spacing or tab positions from i64 to i32. Native list expect paths and separately published restart allocation/paragraph updates require one checked candidate transaction. Preserve docDefaults unknown wrappers and shading pattern/foreground. XML-only small caps is not native rendering acceptance. Issue264 remains excluded even where Issue303 uses overlapping clearable run setters.
+
+## Cross-PR checklist glyph coverage
+
+PR320's checklist preset uses U2610 for unchecked and U2611 for checked.
+HarfBuzz14.4.0 coverage of all27 current bundled faces finds both glyphs
+missing. The exact pending3916-byte PR319 symbol subset has U2611 but
+not U2610. Its pinned full upstream Noto Sans Symbols2 face contains both,
+with equal821-unit advances at1000 units per em. The complete read-only
+receipt is .claude/scratch/S91-checklist-symbol-coverage.json.
+
+The pending asset proposal retains its exact bytes and hash. Do not treat
+its16-target coverage as acceptance for the checklist preset, silently
+change its approved-file scope, substitute an unrelated square or emit a
+missing glyph. Resolve U2610 through the existing caller-font provider or
+an exact separately reviewed asset change when needed. Native PDF/raster
+appearance and deterministic fallback acceptance remain explicit joint
+F-X200/F-X210 obligations, tested once against their actual provider.

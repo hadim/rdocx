@@ -408,3 +408,49 @@ Resolve material decisions before approving this draft. The authorized316
 scope does not imply arbitrary new files or a full lxml compatibility promise.
 This canonical draft does not authorize implementation. No source, gate
 timeout or Cargo changes accompany it.
+
+## Bounded causal-token refinement
+
+The existing shared RevisionCounter in oxml-py-support/src/lib.rs:80 serves
+Word document.rs:1508 and PowerPoint presentation.rs:154. ContentPath owns
+only a numeric revision today. Word StoryItem at document.rs:487 bypasses
+ContentPath and builds a stale error directly at document.rs:1619, so it
+must be included. The full read-only consumer and publication inventory is
+.claude/scratch/F-X211-causal-invalidation-analysis.md.
+
+The minimal concrete candidate replaces each active counter value with an
+Arc to a RevisionState containing its immutable revision and a OnceLock of
+InvalidationCause. Captured handles retain the same Arc. A successful relevant
+structural commit fills that retiring state's actual public operation and
+transition revision once, then swaps a fresh active state. Retired states have
+no next-state link and are owned only by live captured handles. This bounds
+memory by live captured generations instead of total intervening mutations.
+The cause is one-time publication, not a literally immutable future value.
+
+A handle captured before A then B must retain A as its first cause. A handle
+captured between them reports B. No current-operation lookup or history map
+is allowed. Remove counter Copy and owner cloning. Validate bound token and
+owner identity, not equal numeric counters from different documents. Preserve
+ContentPath and StoryItem visible value equality by excluding hidden mutable
+cause state. Native StoryItems can capture authority, while publicly constructed
+snapshots cannot invent it from a supplied revision. Preserve their established
+snapshot behavior and give factual unavailable-provenance guidance when needed.
+
+Preflight successor allocation and overflow before native publication. Failed
+candidate validation, expected-count mismatch and contractual no-ops retain
+native bytes, token identity and cause. Pass real public entrypoint names
+through shared helpers and aliases, including property setters. Existing
+text-setter semantics are not changed merely because display text is equal.
+Use the same relevant generation partitions as X194/X206/X202/X209. This
+mechanism does not make a currently unstable owner survive by itself.
+
+Where multiple owner tokens can invalidate one handle, accurate chronological
+first-cause selection requires one existing document commit serial shared by
+the affected transitions. Provider coordination must prove that serial before
+claiming cross-scope first causality. Otherwise report the named owner-generation
+cause without falsely promising chronological first. Actual provider partitions,
+constructed-snapshot edit authority and stable physical selectors remain
+approval barriers. Add existing-entrypoint tests for repeated edits, cloned
+handles, Arc weak lifetime reclamation, owner survival, failure/no-op stability,
+actual alias labels and cross-document/constructed snapshots. This refinement
+settles the bounded mechanism candidate, not full F-X211 design approval.
