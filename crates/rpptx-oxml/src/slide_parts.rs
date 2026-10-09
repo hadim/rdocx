@@ -156,7 +156,7 @@ impl CT_Background {
 }
 
 #[allow(non_camel_case_types)]
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CT_MasterTextStyles {
     pub title_style: CT_TextListStyle,
     pub body_style: CT_TextListStyle,
@@ -839,6 +839,126 @@ impl CT_SlideMaster {
     }
 }
 
+/// The raw boundary that holds a master's `p:sldLayoutIdLst`.
+const MASTER_LAYOUT_ID_BOUNDARY: usize = 2;
+
+impl CT_SlideMaster {
+    /// Returns the `p:sldLayoutIdLst` entries as `(id, relationship id)`
+    /// pairs, in document order.
+    pub fn slide_layout_ids(&self) -> Result<Vec<(u32, String)>> {
+        let Some(list) = self
+            .raw_children
+            .at(MASTER_LAYOUT_ID_BOUNDARY)
+            .find(|xml| raw_root_local_name(xml) == b"sldLayoutIdLst")
+        else {
+            return Ok(Vec::new());
+        };
+        Ok(layout_id_entries(list)?
+            .into_iter()
+            .map(|(id, relationship_id, _)| (id, relationship_id))
+            .collect())
+    }
+
+    /// Replaces the `p:sldLayoutIdLst` entries. An entry whose id and
+    /// relationship id were already listed keeps its original XML.
+    pub fn set_slide_layout_ids(&mut self, entries: &[(u32, String)]) -> Result<()> {
+        let existing = self
+            .raw_children
+            .at(MASTER_LAYOUT_ID_BOUNDARY)
+            .find(|xml| raw_root_local_name(xml) == b"sldLayoutIdLst")
+            .map(layout_id_entries)
+            .transpose()?
+            .unwrap_or_default();
+        let mut list = b"<p:sldLayoutIdLst>".to_vec();
+        for (id, relationship_id) in entries {
+            if let Some((_, _, raw)) = existing.iter().find(|(old_id, old_relationship, _)| {
+                old_id == id && old_relationship == relationship_id
+            }) {
+                list.extend_from_slice(raw);
+                continue;
+            }
+            let mut writer = Writer::new(Vec::new());
+            let mut entry = BytesStart::new("p:sldLayoutId");
+            entry.push_attribute(("id", id.to_string().as_str()));
+            entry.push_attribute(("r:id", relationship_id.as_str()));
+            writer.write_event(Event::Empty(entry))?;
+            list.extend_from_slice(&writer.into_inner());
+        }
+        list.extend_from_slice(b"</p:sldLayoutIdLst>");
+        self.raw_children
+            .retain(|xml| raw_root_local_name(xml) != b"sldLayoutIdLst");
+        self.raw_children.push(MASTER_LAYOUT_ID_BOUNDARY, list);
+        Ok(())
+    }
+}
+
+/// The local name of a captured element's root tag.
+fn raw_root_local_name(xml: &[u8]) -> &[u8] {
+    let start = xml
+        .iter()
+        .position(|byte| *byte == b'<')
+        .map_or(0, |at| at + 1);
+    let rest = &xml[start..];
+    let end = rest
+        .iter()
+        .position(|byte| byte.is_ascii_whitespace() || matches!(byte, b'>' | b'/'))
+        .unwrap_or(rest.len());
+    local_name(&rest[..end])
+}
+
+/// Reads each `p:sldLayoutId` of a captured list as its id, relationship id
+/// and original XML.
+fn layout_id_entries(list: &[u8]) -> Result<Vec<(u32, String, Vec<u8>)>> {
+    let mut reader = Reader::from_reader(list);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut entries = Vec::new();
+    loop {
+        let event = reader.read_event_into(&mut buffer)?.into_owned();
+        match event {
+            Event::Start(start) if depth == 1 => {
+                let attributes = all_attributes(&start)?;
+                let raw = capture_element(&mut reader, &start)?;
+                if local_name(start.name().as_ref()) == b"sldLayoutId" {
+                    entries.push(layout_id_entry(&attributes, raw)?);
+                }
+            }
+            Event::Empty(start) if depth == 1 => {
+                let attributes = all_attributes(&start)?;
+                let raw = capture_empty_element(&start)?;
+                if local_name(start.name().as_ref()) == b"sldLayoutId" {
+                    entries.push(layout_id_entry(&attributes, raw)?);
+                }
+            }
+            Event::Start(_) => depth += 1,
+            Event::End(_) => depth = depth.saturating_sub(1),
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    Ok(entries)
+}
+
+fn layout_id_entry(
+    attributes: &[(String, String)],
+    raw: Vec<u8>,
+) -> Result<(u32, String, Vec<u8>)> {
+    let id = attributes
+        .iter()
+        .find(|(name, _)| name == "id")
+        .and_then(|(_, value)| value.parse::<u32>().ok())
+        .ok_or_else(|| {
+            OxmlError::InvalidValue("p:sldLayoutId requires a numeric @id".to_owned())
+        })?;
+    let relationship_id = attributes
+        .iter()
+        .find(|(name, _)| name.ends_with(":id"))
+        .map(|(_, value)| value.clone())
+        .ok_or_else(|| OxmlError::MissingElement("p:sldLayoutId/@r:id".to_owned()))?;
+    Ok((id, relationship_id, raw))
+}
+
 fn parse_root(xml: &[u8], kind: RootKind) -> Result<ParsedRoot> {
     let mut reader = Reader::from_reader(xml);
     let mut buffer = Vec::new();
@@ -1213,6 +1333,19 @@ fn push_optional_bool_attribute(
 }
 
 impl CT_CommonSlideData {
+    /// Sets a direct `p:bgPr` fill. An existing direct-fill background keeps
+    /// its other children and only its fill changes, and any other
+    /// background, such as a `p:bgRef` theme reference, is replaced whole.
+    pub fn set_background_fill(&mut self, fill: Fill) -> Result<()> {
+        if let Some(background) = &mut self.background
+            && background.fill_range.is_some()
+        {
+            return background.replace_fill(fill);
+        }
+        self.background = Some(CT_Background::from_fill(fill)?);
+        Ok(())
+    }
+
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         let mut reader = Reader::from_reader(xml);
         let mut buffer = Vec::new();

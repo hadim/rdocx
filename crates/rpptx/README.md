@@ -26,6 +26,11 @@ presentation, notes, handout, PDF, and animation outputs.
   both show, and insert slide-number and date fields.
 - Read each master's theme colours and fonts, and author the common slide
   transitions with direction, duration and advance timing.
+- Edit slide masters and layouts through `PartRef`: shapes and pictures such as
+  a logo on every slide, solid, gradient and picture backgrounds,
+  `showMasterSp`, master text styles, layout rename, duplicate and removal,
+  theme colours and fonts, and `apply_theme` from a deck, a `.potx` or a
+  `.thmx`.
 - Resolve master, layout, placeholder, theme, chart, SmartArt, media, notes,
   comments, and timing state while preserving unmodelled package content.
 

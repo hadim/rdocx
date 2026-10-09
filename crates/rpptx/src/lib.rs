@@ -7,6 +7,7 @@
 
 mod embedded;
 mod header_footer;
+mod masters;
 mod transition;
 
 pub use embedded::{
@@ -22,6 +23,7 @@ use diagram::{DiagramResources, ScopedDiagramResources};
 pub use header_footer::{
     HeaderFooter, HeaderFooterDate, HeaderFooterFlags, SLIDE_NUMBER_FIELD_TEXT, date_field_text,
 };
+pub use masters::{MasterTextStyle, PartRef, ThemeFontRole, ThemeFontScript};
 #[cfg(feature = "render")]
 use oxml_chart::CT_ChartSpace;
 pub use oxml_chart::{ChartData, ChartKind, RgbColor};
@@ -33,7 +35,10 @@ use oxml_drawing::color::ColorMap;
 pub use oxml_drawing::color::{ColorChoice, ColorTransform};
 pub use oxml_drawing::effect::{CT_EffectList, CT_OuterShadowEffect, RectAlignment};
 use oxml_drawing::fill::RelativeRect;
-pub use oxml_drawing::fill::{Fill, NoFill, PatternFill, SolidFill};
+pub use oxml_drawing::fill::{
+    Fill, GradientFill, GradientGeometry, GradientStop, LinearGradient, NoFill, PatternFill,
+    SolidFill,
+};
 use oxml_drawing::geometry::{CT_PresetGeometry2D, Guide, GuideOp, GuideOperand};
 pub use oxml_drawing::line::{
     CT_LineProperties, LineDash, LineEnd, LineEndSize, LineEndType, PresetDash,
@@ -52,8 +57,8 @@ use oxml_drawing::text::{
 };
 pub use oxml_drawing::text::{
     CT_TextCharacterProperties, CT_TextParagraphProperties, TextAlignment, TextAnchor, TextBullet,
-    TextBulletCharacter, TextBulletChoice, TextFont, TextNoBullet, TextSpacing, TextStrike,
-    TextUnderline,
+    TextBulletCharacter, TextBulletChoice, TextBulletColor, TextFont, TextNoBullet, TextSpacing,
+    TextStrike, TextUnderline,
 };
 #[cfg(feature = "render")]
 use oxml_drawing::theme::CT_OfficeStyleSheet;
@@ -431,6 +436,9 @@ pub enum Error {
     #[error("slide index {index} is out of range for {slide_count} slides")]
     UnknownSlideIndex { index: usize, slide_count: usize },
 
+    #[error("slide master index {index} is out of range for {master_count} masters")]
+    UnknownMasterIndex { index: usize, master_count: usize },
+
     #[error("picture {filename} has unsupported image bytes")]
     UnsupportedPicture { filename: String },
 
@@ -663,6 +671,8 @@ pub struct Presentation {
     embedded_invalidated_signatures: HashSet<(String, String)>,
     package_signatures_invalidated: bool,
     layouts: Vec<LayoutRecord>,
+    masters: Vec<MasterRecord>,
+    theme_edits: std::collections::BTreeMap<String, oxml_drawing::theme::CT_OfficeStyleSheet>,
     slides: Vec<SlideRecord>,
 }
 
@@ -670,6 +680,19 @@ pub struct Presentation {
 struct LayoutRecord {
     part_name: String,
     layout: CT_SlideLayout,
+    /// Set by an in-place edit, so saving writes the layout back.
+    dirty: bool,
+}
+
+/// One slide master in `p:sldMasterIdLst` order. A master that does not
+/// parse keeps its error, so the package still opens and only master edits
+/// and rendering report it.
+#[derive(Clone, Debug)]
+struct MasterRecord {
+    part_name: String,
+    master: std::result::Result<CT_SlideMaster, String>,
+    /// Set by an in-place edit, so saving writes the master back.
+    dirty: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -939,6 +962,7 @@ impl Presentation {
             None
         };
         let layouts = resolve_layouts(&package, &presentation_part, &presentation)?;
+        let masters = resolve_masters(&package, &presentation_part, &presentation)?;
         let (comment_authors_part, comment_authors) =
             resolve_comment_authors(&package, &presentation_part)?;
         let (notes_master_part, notes_master) = resolve_notes_master(&package, &presentation_part)?;
@@ -1001,6 +1025,8 @@ impl Presentation {
             embedded_invalidated_signatures: HashSet::new(),
             package_signatures_invalidated,
             layouts,
+            masters,
+            theme_edits: std::collections::BTreeMap::new(),
             slides,
         })
     }
@@ -1478,6 +1504,7 @@ impl Presentation {
                 })?,
             );
         }
+        self.write_master_parts(&mut package)?;
         for record in &self.slides {
             let slide_changed = self
                 .package
@@ -1817,6 +1844,21 @@ impl Presentation {
         {
             return notes.notes.to_xml().ok();
         }
+        if let Some(layout) = self
+            .layouts
+            .iter()
+            .find(|layout| layout.dirty && layout.part_name.eq_ignore_ascii_case(part_name))
+        {
+            return layout.layout.to_xml().ok();
+        }
+        if let Some(Ok(master)) = self
+            .masters
+            .iter()
+            .find(|master| master.dirty && master.part_name.eq_ignore_ascii_case(part_name))
+            .map(|master| &master.master)
+        {
+            return master.to_xml().ok();
+        }
         self.package.get_part(part_name).map(<[u8]>::to_vec)
     }
 
@@ -1847,20 +1889,7 @@ impl Presentation {
     /// own shapes down to the group, and is empty for the slide's own shapes.
     /// A missing slide or a path that does not end at a group returns `None`.
     pub fn shapes_mut(&mut self, slide_index: usize, group: &[usize]) -> Option<ShapesMut<'_>> {
-        let tree = &mut self
-            .slides
-            .get_mut(slide_index)?
-            .slide
-            .common_slide_data
-            .shape_tree;
-        if !group.is_empty() {
-            group_at_mut(&mut tree.children, group)?;
-        }
-        Some(ShapesMut {
-            presentation: self,
-            slide_index,
-            group: group.to_vec(),
-        })
+        self.part_shapes_mut(PartRef::Slide(slide_index), group)
     }
 
     /// Iterates slides in `p:sldIdLst` order.
@@ -2009,14 +2038,10 @@ impl Presentation {
     /// or for an unknown master. New slides receive the date, footer and
     /// slide-number placeholders these flags enable.
     pub fn master_header_footer(&self, master_index: usize) -> Result<Option<HeaderFooterFlags>> {
-        let Some(master_part) = self.master_part(master_index)? else {
+        if master_index >= self.masters.len() {
             return Ok(None);
-        };
-        let master = CT_SlideMaster::from_xml(required_part(&self.package, &master_part)?)
-            .map_err(|error| Error::MalformedPart {
-                part_name: master_part,
-                message: error.to_string(),
-            })?;
+        }
+        let master = self.master_model(master_index)?;
         Ok(master.header_footer.as_ref().map(HeaderFooterFlags::from))
     }
 
@@ -2040,14 +2065,17 @@ impl Presentation {
                 part_name: master_part.clone(),
                 message: "slide master has no theme relationship".to_owned(),
             })?;
-        let theme = oxml_drawing::theme::CT_OfficeStyleSheet::from_xml(required_part(
-            &self.package,
-            &theme_part,
-        )?)
-        .map_err(|error| Error::MalformedPart {
-            part_name: theme_part,
-            message: error.to_string(),
-        })?;
+        let theme = match self.theme_edits.get(&theme_part) {
+            Some(theme) => theme.clone(),
+            None => oxml_drawing::theme::CT_OfficeStyleSheet::from_xml(required_part(
+                &self.package,
+                &theme_part,
+            )?)
+            .map_err(|error| Error::MalformedPart {
+                part_name: theme_part,
+                message: error.to_string(),
+            })?,
+        };
         let elements = &theme.theme_elements;
         let fonts = |collection: &oxml_drawing::theme::CT_FontCollection| ThemeFonts {
             latin: collection.latin.typeface.clone(),
@@ -2288,19 +2316,9 @@ impl Presentation {
 
     #[cfg(feature = "render")]
     fn layout_and_master(&self, layout_index: usize) -> Result<(&CT_SlideLayout, CT_SlideMaster)> {
-        let record = &self.layouts[layout_index];
-        let master_part =
-            related_internal_part(&self.package, &record.part_name, rel_types::SLIDE_MASTER)?
-                .ok_or_else(|| Error::MalformedPart {
-                    part_name: record.part_name.clone(),
-                    message: "layout has no slide master relationship".to_owned(),
-                })?;
-        let master = CT_SlideMaster::from_xml(required_part(&self.package, &master_part)?)
-            .map_err(|error| Error::MalformedPart {
-                part_name: master_part,
-                message: error.to_string(),
-            })?;
-        Ok((&record.layout, master))
+        let master_index = self.layout_master_index(layout_index)?;
+        let master = self.master_model(master_index)?.clone();
+        Ok((&self.layouts[layout_index].layout, master))
     }
 
     /// Returns modern PowerPoint comment authors in producer order.
@@ -3517,7 +3535,7 @@ impl Presentation {
         height: Option<Emu>,
     ) -> Result<ShapeRef<'_>> {
         self.append_picture(
-            slide_index,
+            PartRef::Slide(slide_index),
             &[],
             image_data,
             image_filename,
@@ -3529,13 +3547,13 @@ impl Presentation {
         .map(|picture| shape_ref(picture))
     }
 
-    /// Stages the image part and slide relationship of a new picture, then
-    /// appends it to the slide's own shapes or to the group that `group`
-    /// indexes, which callers have checked.
+    /// Stages the image part and the relationship of a new picture on a
+    /// slide, layout or master, then appends it to the part's own shapes or
+    /// to the group that `group` indexes, which callers have checked.
     #[allow(clippy::too_many_arguments)]
     fn append_picture(
         &mut self,
-        slide_index: usize,
+        part: PartRef,
         group: &[usize],
         image_data: &[u8],
         image_filename: &str,
@@ -3544,40 +3562,19 @@ impl Presentation {
         width: Option<Emu>,
         height: Option<Emu>,
     ) -> Result<&mut ShapeTreeChild> {
-        let slide = self
-            .slides
-            .get(slide_index)
-            .ok_or(Error::UnknownSlideIndex {
-                index: slide_index,
-                slide_count: self.slides.len(),
-            })?;
-        let slide_part = slide.part_name.clone();
+        let part_name = self.part_name(part)?.to_owned();
         let (width, height) = picture_dimensions(image_data, image_filename, width, height)?;
-        let id = ShapeIdAllocator::scan(&slide.slide.common_slide_data.shape_tree).allocate();
+        let id = ShapeIdAllocator::scan(&self.common_data(part)?.shape_tree).allocate();
 
         let mut package = self.package.clone();
         let mut media_store = self.media_store.clone();
-        let media_part = media_store.insert(&mut package, image_data, image_filename);
-        let mut relationships = package
-            .get_part_rels(&slide_part)
-            .cloned()
-            .unwrap_or_default();
-        let relationship_id = relationships
-            .items
-            .iter()
-            .find(|relationship| {
-                relationship.rel_type == rel_types::IMAGE
-                    && !relationship_is_external(relationship)
-                    && OpcPackage::resolve_rel_target(&slide_part, &relationship.target)
-                        == media_part
-            })
-            .map(|relationship| relationship.id.clone())
-            .unwrap_or_else(|| {
-                relationships.add(
-                    rel_types::IMAGE,
-                    &relative_part_target(&slide_part, &media_part),
-                )
-            });
+        let relationship_id = add_image_relationship(
+            &mut package,
+            &mut media_store,
+            &part_name,
+            image_data,
+            image_filename,
+        );
         let picture = CT_Picture::new(
             id,
             &format!("Picture {id}"),
@@ -3586,10 +3583,9 @@ impl Presentation {
         )
         .map_err(|error| invalid_shape_construction("add picture", error))?;
 
-        package.set_part_rels(&slide_part, relationships);
         self.package = package;
         self.media_store = media_store;
-        let tree = &mut self.slides[slide_index].slide.common_slide_data.shape_tree;
+        let tree = &mut self.common_data_mut(part)?.shape_tree;
         Ok(append_member(tree, group, ShapeTreeChild::Picture(picture)))
     }
 
@@ -6656,10 +6652,45 @@ fn resolve_layouts(
                 part_name: part_name.clone(),
                 message: error.to_string(),
             })?;
-            layouts.push(LayoutRecord { part_name, layout });
+            layouts.push(LayoutRecord {
+                part_name,
+                layout,
+                dirty: false,
+            });
         }
     }
     Ok(layouts)
+}
+
+/// Parses every slide master in `p:sldMasterIdLst` order. A master that
+/// fails to parse keeps its error instead of failing the open.
+fn resolve_masters(
+    package: &OpcPackage,
+    presentation_part: &str,
+    presentation: &CT_Presentation,
+) -> Result<Vec<MasterRecord>> {
+    let relationships = package.get_part_rels(presentation_part);
+    presentation
+        .slide_master_ids
+        .iter()
+        .map(|master| {
+            let relationship = relationships
+                .and_then(|relationships| relationships.get_by_id(&master.relationship_id))
+                .ok_or_else(|| Error::MissingRelationship {
+                    source_part: presentation_part.to_owned(),
+                    relationship_id: master.relationship_id.clone(),
+                })?;
+            reject_external(presentation_part, relationship)?;
+            let part_name = OpcPackage::resolve_rel_target(presentation_part, &relationship.target);
+            let master = CT_SlideMaster::from_xml(required_part(package, &part_name)?)
+                .map_err(|error| error.to_string());
+            Ok(MasterRecord {
+                part_name,
+                master,
+                dirty: false,
+            })
+        })
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -7343,7 +7374,7 @@ impl<'a> SlideMut<'a> {
 /// the union of their members, as python-pptx does.
 pub struct ShapesMut<'a> {
     presentation: &'a mut Presentation,
-    slide_index: usize,
+    part: PartRef,
     group: Vec<usize>,
 }
 
@@ -7420,7 +7451,7 @@ impl ShapesMut<'_> {
     ) -> Result<ShapeMut<'_>> {
         self.presentation
             .append_picture(
-                self.slide_index,
+                self.part,
                 &self.group,
                 image_data,
                 image_filename,
@@ -7436,12 +7467,43 @@ impl ShapesMut<'_> {
         &mut self,
         build: impl FnOnce(u32) -> Result<ShapeTreeChild>,
     ) -> Result<ShapeMut<'_>> {
-        let tree = &mut self.presentation.slides[self.slide_index]
-            .slide
-            .common_slide_data
-            .shape_tree;
+        let tree = &mut self.presentation.common_data_mut(self.part)?.shape_tree;
         append_new_member(tree, &self.group, build)
     }
+}
+
+/// Adds an image part, deduplicated by content, and an image relationship
+/// on `part_name`, reusing one that already targets the same image, and
+/// returns the relationship id.
+pub(crate) fn add_image_relationship(
+    package: &mut OpcPackage,
+    media_store: &mut MediaStore,
+    part_name: &str,
+    image_data: &[u8],
+    image_filename: &str,
+) -> String {
+    let media_part = media_store.insert(package, image_data, image_filename);
+    let mut relationships = package
+        .get_part_rels(part_name)
+        .cloned()
+        .unwrap_or_default();
+    let relationship_id = relationships
+        .items
+        .iter()
+        .find(|relationship| {
+            relationship.rel_type == rel_types::IMAGE
+                && !relationship_is_external(relationship)
+                && OpcPackage::resolve_rel_target(part_name, &relationship.target) == media_part
+        })
+        .map(|relationship| relationship.id.clone())
+        .unwrap_or_else(|| {
+            relationships.add(
+                rel_types::IMAGE,
+                &relative_part_target(part_name, &media_part),
+            )
+        });
+    package.set_part_rels(part_name, relationships);
+    relationship_id
 }
 
 fn textbox_member(id: u32, left: Emu, top: Emu, width: Emu, height: Emu) -> Result<ShapeTreeChild> {
