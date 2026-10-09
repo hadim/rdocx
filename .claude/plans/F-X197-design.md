@@ -251,3 +251,22 @@ save/reopen, unknown-transform and rendering controls. Shared extraction must
 validate before any mutation. No fresh parser model, file or dependency beyond
 the already pinned workspace PyO3 is approved. If actual missing native
 transform support earns parser changes, revise the risk contract first.
+
+## PR317 reuse assessment
+
+Assess immutable head3d056f46e97e9cc1caf2969b5096eeb6775a5fa0. Reuse
+concrete Word font colour view, existing PowerPoint colour-source extension,
+actual setter inventories and installed test/typing migration scaffolding.
+Adapt duplicated Word/PPT extractors into the one approved neutral support
+helper. Keep parameter-qualified errors and all accepted legacy triples.
+
+Do not adopt Word themeTint/themeShade removal at contributor
+formatting.rs:125/127, auto-to-None scalar conversion at Word lib.rs:99/102,
+or universal None rejection for nested font RGB at PPT dml.rs:615/617.
+Preserve the approved sentinel, modifiers and font-only clearing contract.
+Both contributor format implementations lack brightness and the full308
+contract, so complete that once here. Qualified native source and existing
+transform preservation remain mandatory. No new enum file is approved.
+Use existing enum/export files for the required values, retaining public
+spelling where the existing package layout can support it without a new file.
+Contributor archive/hash records and host gate claims are not local evidence.

@@ -5,9 +5,9 @@
 **Goal**: finish S90's bibliography catalogue and numbering-aware navigation
 carryovers and resolve the new HTML, Python authoring, rendering, validation
 and alternate text-box ownership reports before templates and forms at S92.
-Issues264 and281 remain excluded. The expanded scope contains twenty-one active
+Issues264 and281 remain excluded. The expanded scope contains twenty-two active
 stories. The original nine-story estimate of 23 to 29 developer-days no longer
-covers the sprint. Estimate the twelve new large stories during detailed design
+covers the sprint. Estimate the twelve new large stories and the added medium accessibility story during detailed design
 and keep rolling contribution intake open.
 
 ## Spec references
@@ -45,6 +45,7 @@ and keep rolling contribution intake open.
 | F-X209 | Edit PowerPoint masters layouts and themes | L | pending | - |
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | pending | - |
 | F-X211 | Complete Python script compatibility and safe XML access | L | pending | - |
+| F-X212 | Align native accessibility with visible paragraph content | M | pending | - |
 
 ## Sequencing note
 
@@ -123,9 +124,8 @@ from TextFrame bodyPr anchor. Successful alternate-copy synchronization is
 reuse evidence for F-X202 beyond the completed safety refusal.
 
 Its additional native accessibility-audit change proposes three
-feature_showcase hash deltas. That behavior is outside the current read-only
-CLI contract and requires an explicit separately reviewed scope before
-adoption. Do not replace frozen fixes, duplicate their F-IDs or copy its
+feature_showcase hash deltas. F-X212 owns that added behavior outside the current read-only
+CLI contract, with a separate labelled reviewed delta before adoption. Do not replace frozen fixes, duplicate their F-IDs or copy its
 baseline/archive measurements. Reconcile qualified visibility, atomicity,
 handle generations and the shared colour extractor before reuse.
 

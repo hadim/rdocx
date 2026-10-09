@@ -339,3 +339,14 @@ possible changes. No baseline movement or implementation is approved by this dra
 
 These require reviewed technical decisions, not invented user approval gates.
 This draft does not authorize implementation or baseline changes.
+
+## PR317 cell anchor reuse
+
+Reuse the actual a:tcPr anchor slice from immutable
+3d056f46e97e9cc1caf2969b5096eeb6775a5fa0: contributor oxml-drawing/table.rs:110
+and1752, native rpptx/lib.rs:8566, binding table.rs:662 and layout
+context.rs:2356. The independent context test at6563 distinguishes tcPr
+from bodyPr and must be reproduced locally. F-X194 retains the reused
+TextFrame bodyPr surface. One owner implements actual cell anchoring.
+Do not adopt unrelated colour, accessor-read mutation, archive or hash
+records as part of this slice.

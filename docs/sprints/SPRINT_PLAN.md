@@ -2161,6 +2161,7 @@ CLI validation reports before the template and form programme resumes.
 | F-X209 | Edit PowerPoint masters layouts and themes | L |
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | L |
 | F-X211 | Complete Python script compatibility and safe XML access | L |
+| F-X212 | Align native accessibility with visible paragraph content | M |
 
 The 2026-10-09 intake includes [PR294](https://github.com/tensorbee/rdocx/pull/294)
 and Issues [295](https://github.com/tensorbee/rdocx/issues/295),
@@ -2306,7 +2307,8 @@ PR [317](https://github.com/tensorbee/rdocx/pull/317), head
 F-X194/F-X196/F-X197/F-X198 for Issues295/298/299/300/301. Its tcPr anchor
 belongs to F-X206 and paired success informs F-X202. Assess the full patch
 against these contracts. Its added native accessibility behavior and
-three-key feature_showcase delta need a separate labelled reviewed scope.
+three-key feature_showcase delta belong to F-X212 under a separate labelled
+reviewed scope.
 No contributor test, archive or baseline record substitutes for local gates.
 
 #### Sprint S92, Templates, controls, and forms

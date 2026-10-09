@@ -80,8 +80,8 @@ The consuming accessor follows `ShapeMut::into_text_frame` at
 `crates/rpptx/src/lib.rs:8086`. Reuse all current public text-frame operations:
 multiple paragraphs, runs, alignment, line spacing, spacing before/after,
 font size/name/bold/colour, vertical_anchor and word_wrap. Anchor and wrapping
-already exist at `crates/rpptx-py/src/text.rs:381` and `:415`, so a separate
-cell anchor property is unnecessary. Resolve hyperlink reads through the cell
+already exist at `crates/rpptx-py/src/text.rs:381` and `:415`. The frame
+anchor is bodyPr. Actual cell tcPr anchoring is separately owned by F-X206. Resolve hyperlink reads through the cell
 body. Cell hyperlink assignment remains unsupported by the native relationship
 setter at `crates/rpptx/src/lib.rs:3967`. Reject this assignment before creating
 or changing any slide relationship. Do not add a native hyperlink API.
@@ -228,3 +228,25 @@ None. Preserve existing explicit-grid-cell merge addressing and grid-handle
 validity. Global revision invalidation remains strict. The additional cell-text
 generation invalidates the new nested cell-text handles only. Unsupported cell
 hyperlink assignment fails before relationship mutation.
+
+## PR317 reuse assessment
+
+Assess immutable head3d056f46e97e9cc1caf2969b5096eeb6775a5fa0 before claim.
+Reuse cell-aware resolver slices, borrowed native lifetime and consuming
+accessor, signed checked indent and installed test scaffolding. Adapt the
+contributor clear_indent into the approved checked optional setter, keeping
+absent-property clearing a no-op. Do not adopt first-read txBody creation at
+contributor rpptx-py/table.rs:646 or global text bumps at text.rs:284/589/651.
+Use approved text_revision/text_revisions propagation and preserve grid
+handles. Successful Cell.set_text/merge/split must stale nested handles.
+
+The consuming native accessor eagerly creates missing txBody. For no-match,
+count mismatch or error, preflight or stage the operation before publication.
+Add missing-body byte and generation controls, including zero replacements,
+not merely counts. The cell hyperlink guard precedes native relationship
+creation and is reusable with the required no-orphan/unchanged-byte test.
+
+Actual cell vertical placement uses a:tcPr anchor, distinct from TextFrame
+bodyPr. F-X206 owns the contributor model/parser/writer/property/layout slice
+and its rendering control. Do not claim bodyPr vertical_anchor alone meets
+Issue309 cell anchor. Current F-X194 still exposes the reused frame surface.

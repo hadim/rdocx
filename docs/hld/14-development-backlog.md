@@ -7377,3 +7377,25 @@ Review its42-file diff and uncovered criteria before source reuse. Additional
 native accessibility behavior is not authorized merely by its contributor
 hash-baseline record. Keep independent labelled behavior review and derive
 all archive/baseline evidence from actual accepted source.
+
+### F-X212, Align native accessibility with visible paragraph content (M)
+
+PR317 adds a native accessibility fix beyond F-X196 read-only CLI validation.
+Adopt the accepted visible-content behavior once, preserving the completed
+CLI scan and extending its contract only where independently justified.
+Reuse the contributor native predicate and audit regression after qualifying
+raw names and typed admission. Pictures, drawings, objects, symbols, breaks,
+note references and equations interrupt an empty-paragraph run. Opaque
+producer XML, foreign lookalikes, properties, deleted text, loose field
+instructions/markers and soft hyphens do not prove visible content.
+Preserve every unmodelled byte, schema order and audit source inventory.
+
+**Depends on**: F-X196.
+**Test gate**: regression. Real picture-only paragraphs reproduce the current
+consecutive-empty audit error. Namespace/opaque/deleted/duplicate control
+cases preserve source. Native and CLI shared discriminators state any
+intentional semantic refinement explicitly. Expected feature_showcase deltas
+are limited to word/document.xml and PDF bytes/pages due to one fewer
+accessibility finding. Derive the actual49-key result, prove reverting the
+audit correction restores the old result, review the delta independently
+and make its own labelled commit. No contributor baseline is copied.
