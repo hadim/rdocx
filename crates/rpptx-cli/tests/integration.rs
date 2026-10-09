@@ -2325,6 +2325,21 @@ fn slide_move_puts_a_slide_at_its_final_position() {
     ]);
     assert_ok(&result, "slide move");
     assert_eq!(slide_texts(&output), ["Two", "Three", "One"]);
+
+    let same = temp.path.join("same.pptx");
+    let result = cli(&[
+        "slide",
+        "move",
+        path_str(&source),
+        "2",
+        "--to",
+        "2",
+        "-o",
+        path_str(&same),
+        "--json",
+    ]);
+    assert_ok(&result, "slide move to itself");
+    assert_eq!(json_stdout(&result)["changed"], false);
 }
 
 #[test]
@@ -2342,6 +2357,18 @@ fn slide_hide_and_show_toggle_the_slide_show_flag() {
         path_str(&hidden),
     ]);
     assert_ok(&result, "slide hide");
+    let again = temp.path.join("again.pptx");
+    let result = cli(&[
+        "slide",
+        "hide",
+        path_str(&hidden),
+        "2",
+        "-o",
+        path_str(&again),
+        "--json",
+    ]);
+    assert_ok(&result, "slide hide on a hidden slide");
+    assert_eq!(json_stdout(&result)["changed"], false);
     let deck = Presentation::open(&hidden).unwrap();
     assert!(!deck.slide(0).unwrap().hidden());
     assert!(deck.slide(1).unwrap().hidden());
@@ -2452,6 +2479,10 @@ fn fit_lists_each_overflowing_frame_with_the_scale_it_needs() {
         .as_f64()
         .unwrap_or_else(|| panic!("a fitting scale: {report}"));
     assert!(needed > 0.2 && needed < 1.0, "{needed}");
+    assert_eq!((needed * 10_000.0).round() / 10_000.0, needed);
+
+    let missing = cli(&["fit", path_str(&temp.path.join("missing.pptx"))]);
+    assert_eq!(missing.status.code(), Some(2));
 
     let plain = cli(&["fit", path_str(&crowded)]);
     assert_eq!(plain.status.code(), Some(1));
@@ -2482,7 +2513,7 @@ fn meta_set_writes_core_properties_that_meta_get_reads() {
     assert_ok(&result, "meta get");
     let core = &json_stdout(&result)["core"];
     assert_eq!(core["title"], "Quarterly review");
-    assert_eq!(core["creator"], "Ada");
+    assert_eq!(core["author"], "Ada");
     assert_eq!(core["keywords"], "q3, review");
 
     let empty = temp.path.join("empty.pptx");

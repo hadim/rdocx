@@ -6,8 +6,9 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use oxml_cli_support::{
-    ReplacementPair, StagedOutputSet, default_output_path, ensure_output_paths_allowed,
-    ensure_output_paths_available, json_envelope, parse_range, parse_replacement_map,
+    ReplacementPair, StagedOutputSet, civil_from_days, days_from_civil, default_output_path,
+    ensure_output_paths_allowed, ensure_output_paths_available, json_envelope, local_date_time,
+    parse_range, parse_replacement_map,
 };
 use rdocx::{
     BodyItemRef, ComparisonGranularity, ComparisonOptions, ComparisonStoryKind, CoreProperties,
@@ -1882,7 +1883,9 @@ pub fn replace(
     let counts = if input.regex {
         let mut counts = Vec::with_capacity(pairs.len());
         for (index, pair) in pairs.iter().enumerate() {
-            let found = doc.replace_regex(&pair.placeholder, &pair.value)?;
+            let found = doc
+                .replace_regex(&pair.placeholder, &pair.value)
+                .map_err(|error| format!("{}{error}", pair_prefix(&pairs, index)))?;
             if let Some(expected) = pair.expect
                 && expected != found
             {
@@ -1908,8 +1911,29 @@ pub fn replace(
             }
         }
     };
+    // A map pair without a count must replace something, as in rpptx.
+    if input.map.is_some()
+        && let Some(index) =
+            (0..pairs.len()).find(|index| pairs[*index].expect.is_none() && counts[*index] == 0)
+    {
+        return Err(format!(
+            "{}no replacements found for \"{}\", nothing written (give \"expect\": 0 to allow none)",
+            pair_prefix(&pairs, index),
+            pairs[index].placeholder
+        )
+        .into());
+    }
     publish_document(&mut doc, output)?;
     print_replacements(&pairs, &counts, input.regex, output, json_output)
+}
+
+/// `pair N: ` when the command has several pairs, nothing otherwise.
+fn pair_prefix(pairs: &[ReplacementPair], index: usize) -> String {
+    if pairs.len() == 1 {
+        String::new()
+    } else {
+        format!("pair {index}: ")
+    }
 }
 
 /// Read the pairs of a `replace` command, the single pair taking `--expect`.
@@ -1937,11 +1961,7 @@ fn count_mismatch(
     expected: usize,
     found: usize,
 ) -> Box<dyn std::error::Error> {
-    let prefix = if pairs.len() == 1 {
-        String::new()
-    } else {
-        format!("pair {index}: ")
-    };
+    let prefix = pair_prefix(pairs, index);
     format!(
         "{prefix}expected {expected} replacement(s) of \"{}\", found {found}, nothing written",
         pairs[index].placeholder
@@ -2245,46 +2265,135 @@ pub fn parse_assignment(text: &str) -> std::result::Result<(String, String), Str
     }
 }
 
-/// Parse `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS`, with an optional trailing `Z`.
-pub fn parse_field_date_time(text: &str) -> std::result::Result<FieldDateTime, String> {
-    let invalid = || format!("expected YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS, found {text:?}");
-    let trimmed = text.strip_suffix('Z').unwrap_or(text);
-    let (date, time) = trimmed.split_once('T').unwrap_or((trimmed, "00:00:00"));
+/// A date and time read from the command line, with the offset from UTC in
+/// minutes that it names, if any.
+struct ParsedDateTime {
+    value: FieldDateTime,
+    offset_minutes: Option<i32>,
+}
+
+/// Parse `YYYY-MM-DD`, optionally followed by `THH:MM`, `THH:MM:SS` or
+/// `THH:MM:SS.fff`, and by `Z` or an offset such as `+02:00` or `-0500`.
+fn parse_date_time(text: &str) -> std::result::Result<ParsedDateTime, String> {
+    let invalid = || {
+        format!(
+            "expected a date such as 2026-10-10, 2026-10-10T08:30:00, \
+             2026-10-10T08:30:00Z or 2026-10-10T08:30:00+02:00, found {text:?}"
+        )
+    };
+    let digits = |part: &str, count: usize| {
+        (part.len() == count && part.bytes().all(|byte| byte.is_ascii_digit()))
+            .then(|| part.parse::<u32>().ok())
+            .flatten()
+    };
+    let (rest, offset_minutes) = if let Some(rest) = text.strip_suffix('Z') {
+        (rest, Some(0))
+    } else {
+        // An offset follows the date, or the time when there is one.
+        let search_from = text.find('T').unwrap_or(text.len().min(10));
+        if !text.is_char_boundary(search_from) {
+            return Err(invalid());
+        }
+        match text[search_from..].rfind(['+', '-']) {
+            Some(position) => {
+                let (rest, offset) = text.split_at(search_from + position);
+                let sign = if offset.starts_with('-') { -1 } else { 1 };
+                let offset = offset[1..].replace(':', "");
+                let (hours, minutes) = (
+                    digits(offset.get(0..2).unwrap_or_default(), 2),
+                    digits(offset.get(2..).unwrap_or_default(), 2),
+                );
+                let (Some(hours), Some(minutes)) = (hours, minutes) else {
+                    return Err(invalid());
+                };
+                if hours > 23 || minutes > 59 {
+                    return Err(invalid());
+                }
+                (rest, Some(sign * (hours * 60 + minutes) as i32))
+            }
+            None => (text, None),
+        }
+    };
+    let (date, time) = rest.split_once('T').unwrap_or((rest, "00:00:00"));
+    let time = time.split_once('.').map_or(time, |(whole, fraction)| {
+        if fraction.bytes().all(|byte| byte.is_ascii_digit()) && !fraction.is_empty() {
+            whole
+        } else {
+            ""
+        }
+    });
     let date = date.split('-').collect::<Vec<_>>();
     let time = time.split(':').collect::<Vec<_>>();
-    let ([year, month, day], [hour, minute, second]) = (date.as_slice(), time.as_slice()) else {
+    let [year, month, day] = date.as_slice() else {
         return Err(invalid());
     };
-    let number = |part: &str, digits: usize| {
-        (part.len() == digits && part.bytes().all(|byte| byte.is_ascii_digit()))
-            .then(|| part.parse::<u8>().ok())
-            .flatten()
+    let (hour, minute, second) = match time.as_slice() {
+        [hour, minute] => (*hour, *minute, "00"),
+        [hour, minute, second] => (*hour, *minute, *second),
+        _ => return Err(invalid()),
     };
-    let value = FieldDateTime {
-        year: (year.len() == 4 && year.bytes().all(|byte| byte.is_ascii_digit()))
-            .then(|| year.parse().ok())
-            .flatten()
-            .ok_or_else(invalid)?,
-        month: number(month, 2)
-            .filter(|month| (1..=12).contains(month))
-            .ok_or_else(invalid)?,
-        day: number(day, 2)
-            .filter(|day| (1..=31).contains(day))
-            .ok_or_else(invalid)?,
-        hour: number(hour, 2)
-            .filter(|hour| *hour < 24)
-            .ok_or_else(invalid)?,
-        minute: number(minute, 2)
-            .filter(|minute| *minute < 60)
-            .ok_or_else(invalid)?,
-        second: number(second, 2)
-            .filter(|second| *second < 60)
-            .ok_or_else(invalid)?,
-    };
-    if value.day > days_in_month(value.year, value.month) {
+    let year = digits(year, 4).ok_or_else(invalid)?;
+    let month = digits(month, 2).filter(|month| (1..=12).contains(month));
+    let month = month.ok_or_else(invalid)? as u8;
+    let day = digits(day, 2).ok_or_else(invalid)? as u8;
+    let year = i32::try_from(year).map_err(|_| invalid())?;
+    if day == 0 || day > days_in_month(year, month) {
         return Err(invalid());
     }
-    Ok(value)
+    let hour = digits(hour, 2)
+        .filter(|hour| *hour < 24)
+        .ok_or_else(invalid)?;
+    let minute = digits(minute, 2).filter(|minute| *minute < 60);
+    let second = digits(second, 2).filter(|second| *second < 60);
+    Ok(ParsedDateTime {
+        value: FieldDateTime {
+            year,
+            month,
+            day,
+            hour: hour as u8,
+            minute: minute.ok_or_else(invalid)? as u8,
+            second: second.ok_or_else(invalid)? as u8,
+        },
+        offset_minutes,
+    })
+}
+
+/// Parse the wall-clock `--now` of a DATE or TIME field, which names no
+/// time zone.
+pub fn parse_field_date_time(text: &str) -> std::result::Result<FieldDateTime, String> {
+    let parsed = parse_date_time(text)?;
+    if parsed.offset_minutes.is_some() {
+        return Err(format!(
+            "--now is the wall-clock time the fields show, give it without Z or an offset, \
+             found {text:?}"
+        ));
+    }
+    Ok(parsed.value)
+}
+
+/// Turn a date into the UTC `YYYY-MM-DDTHH:MM:SSZ` of a `vt:filetime`
+/// property. A date without Z or an offset is read as UTC.
+fn utc_file_time(text: &str) -> std::result::Result<String, String> {
+    let ParsedDateTime {
+        value,
+        offset_minutes,
+    } = parse_date_time(text)?;
+    let local_seconds = days_from_civil(i64::from(value.year), value.month, value.day) * 86_400
+        + i64::from(value.hour) * 3_600
+        + i64::from(value.minute) * 60
+        + i64::from(value.second);
+    let seconds = local_seconds - i64::from(offset_minutes.unwrap_or(0)) * 60;
+    let (year, month, day) = civil_from_days(seconds.div_euclid(86_400));
+    let second_of_day = seconds.rem_euclid(86_400);
+    if !(1..=9999).contains(&year) {
+        return Err(format!("{text:?} is outside the years 1 to 9999"));
+    }
+    Ok(format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        second_of_day / 3_600,
+        second_of_day / 60 % 60,
+        second_of_day % 60
+    ))
 }
 
 fn days_in_month(year: i32, month: u8) -> u8 {
@@ -2296,39 +2405,6 @@ fn days_in_month(year: i32, month: u8) -> u8 {
     }
 }
 
-/// The current UTC civil date and time, from the system clock.
-fn current_utc_date_time() -> Result<FieldDateTime> {
-    let seconds = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_err(|_| "the system clock is before 1970, pass --now")?
-        .as_secs();
-    let days = i64::try_from(seconds / 86_400)?;
-    let second_of_day = seconds % 86_400;
-    // Howard Hinnant's days-to-civil conversion.
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let day_of_era = z.rem_euclid(146_097);
-    let year_of_era =
-        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_index = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
-    let month = if month_index < 10 {
-        month_index + 3
-    } else {
-        month_index - 9
-    };
-    let year = year_of_era + era * 400 + i64::from(month <= 2);
-    Ok(FieldDateTime {
-        year: i32::try_from(year)?,
-        month: u8::try_from(month)?,
-        day: u8::try_from(day)?,
-        hour: u8::try_from(second_of_day / 3_600)?,
-        minute: u8::try_from(second_of_day / 60 % 60)?,
-        second: u8::try_from(second_of_day % 60)?,
-    })
-}
-
 /// Update every supported field result, then the page-number results.
 pub fn fields_update(
     file: &Path,
@@ -2338,7 +2414,17 @@ pub fn fields_update(
 ) -> Result<()> {
     let now = match now {
         Some(now) => now,
-        None => current_utc_date_time()?,
+        None => {
+            let local = local_date_time()?;
+            FieldDateTime {
+                year: local.year,
+                month: local.month,
+                day: local.day,
+                hour: local.hour,
+                minute: local.minute,
+                second: local.second,
+            }
+        }
     };
     let mut doc = Document::open(file)?;
     let fields = doc.update_fields(&FieldEvaluationContext {
@@ -2397,26 +2483,33 @@ fn picture_json(index: usize, image: &ImageInfo) -> Value {
 /// bytes to write: its entry has a null `file`.
 pub fn images_extract(file: &Path, dir: &Path, force: bool, json_output: bool) -> Result<()> {
     let doc = Document::open(file)?;
+    // One file per media part, however many drawings show it.
     let mut written: HashMap<String, PathBuf> = HashMap::new();
-    let mut outputs = Vec::new();
+    let mut outputs: Vec<(PathBuf, Vec<u8>)> = Vec::new();
     let mut entries = Vec::new();
     for (index, image) in doc.images().iter().enumerate() {
         let mut entry = picture_json(index, image);
-        let data = (!image.embed_id.is_empty())
-            .then(|| doc.image_data(&image.embed_id))
+        let part = (!image.embed_id.is_empty())
+            .then(|| doc.image_part_name(&image.embed_id))
             .flatten();
-        if let Some(bytes) = data {
+        let data = part.as_ref().and_then(|_| doc.image_data(&image.embed_id));
+        entry["part"] = json!(part);
+        if let (Some(part), Some(bytes)) = (part, data) {
             let probe = oxml_media::probe(&bytes);
             let format = oxml_media::ImageFormat::sniff(&bytes);
-            let path = written
-                .entry(image.embed_id.clone())
-                .or_insert_with(|| {
-                    let extension = format.map_or("bin", |format| format.extension());
-                    let path = dir.join(format!("image{}.{extension}", outputs.len() + 1));
+            let path = match written.get(&part) {
+                Some(path) => path.clone(),
+                None => {
+                    let base = part.rsplit('/').next().unwrap_or("image").to_owned();
+                    let mut path = dir.join(&base);
+                    if outputs.iter().any(|(existing, _)| *existing == path) {
+                        path = dir.join(format!("{}-{base}", outputs.len() + 1));
+                    }
                     outputs.push((path.clone(), bytes.clone()));
+                    written.insert(part, path.clone());
                     path
-                })
-                .clone();
+                }
+            };
             entry["file"] = json!(path.display().to_string());
             entry["format"] = json!(format.map(|format| format.extension()));
             entry["bytes"] = json!(bytes.len());
@@ -2431,8 +2524,12 @@ pub fn images_extract(file: &Path, dir: &Path, force: bool, json_output: bool) -
         .iter()
         .map(|(path, _)| path.clone())
         .collect::<Vec<_>>();
-    std::fs::create_dir_all(dir)?;
+    // Check the input and the existing files before creating anything.
     ensure_output_paths_allowed(&paths, file, force)?;
+    if !force {
+        ensure_output_paths_available(&paths)?;
+    }
+    std::fs::create_dir_all(dir)?;
     stage_and_publish(&outputs, force)?;
     if json_output {
         return print_json(json!({
@@ -2571,6 +2668,21 @@ pub fn meta_set(
                 .into(),
         );
     }
+    let mut named = std::collections::HashSet::new();
+    for name in changes
+        .custom
+        .iter()
+        .map(|(name, _)| name)
+        .chain(&changes.remove_custom)
+    {
+        if !named.insert(name) {
+            return Err(format!(
+                "custom property \"{name}\" is named twice by --custom and --remove-custom, \
+                 give it once"
+            )
+            .into());
+        }
+    }
     let mut doc = Document::open(file)?;
     if core_changes.iter().any(|value| value.is_some()) {
         let mut core = doc.core_properties().cloned().unwrap_or_default();
@@ -2655,15 +2767,10 @@ fn custom_property_value(
             "false" | "0" => false,
             _ => return Err(refused("a Boolean (true or false)").into()),
         }),
-        Some(CustomPropertyValue::FileTime(_)) => {
-            parse_field_date_time(text).map_err(|_| refused("a date (YYYY-MM-DDTHH:MM:SSZ)"))?;
-            let date_time = if text.contains('T') {
-                text.trim_end_matches('Z').to_owned()
-            } else {
-                format!("{text}T00:00:00")
-            };
-            CustomPropertyValue::FileTime(format!("{date_time}Z"))
-        }
+        Some(CustomPropertyValue::FileTime(_)) => CustomPropertyValue::FileTime(
+            utc_file_time(text)
+                .map_err(|error| format!("custom property \"{name}\" is a date: {error}"))?,
+        ),
         Some(CustomPropertyValue::Lpstr(_)) => CustomPropertyValue::Lpstr(text.to_owned()),
         _ => CustomPropertyValue::Lpwstr(text.to_owned()),
     })

@@ -146,6 +146,7 @@ enum Command {
         command: NotesCommand,
     },
     /// Report every text frame whose text overflows it, exit 1 when one does
+    /// and 2 on an error
     ///
     /// Lays out the text of the slide shapes with rpptx's renderer. Each
     /// overflowing frame is listed with the largest font scale, in steps of
@@ -395,7 +396,13 @@ fn main() {
 
 fn run_cli() {
     let cli = Cli::parse();
-    // `validate` and `fit` carry a verdict in their exit status.
+    // `validate` and `fit` carry a verdict in their exit status. `fit` exits
+    // 2 on an error, so that 1 always means an overflow.
+    let error_status = if matches!(cli.command, Command::Fit { .. }) {
+        2
+    } else {
+        1
+    };
     let verdict = match &cli.command {
         Command::Validate { file } => Some(commands::validate(file)),
         Command::Fit { file, json } => Some(commands::fit(file, *json)),
@@ -407,7 +414,7 @@ fn run_cli() {
             Ok(false) => process::exit(1),
             Err(error) => {
                 eprintln!("Error: {error}");
-                process::exit(1);
+                process::exit(error_status);
             }
         }
     }

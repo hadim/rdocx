@@ -4440,6 +4440,72 @@ fn replace_map_and_regex_report_each_count_and_write_all_or_nothing() {
         "Error: pair 1: expected 1 replacement(s) of \"{{missing}}\", found 0, nothing written\n"
     );
     assert!(!refused.exists());
+
+    for (pairs, message) in [
+        (
+            r#"[{"placeholder": "{{name}}", "value": "Ada"}, {"placeholder": "{{nobody}}", "value": "x"}]"#,
+            "Error: pair 1: no replacements found for \"{{nobody}}\", nothing written",
+        ),
+        (
+            r#"[{"placeholder": "Dear", "value": "Hi"}, {"placeholder": "(", "value": "x"}]"#,
+            "Error: pair 1: invalid regex",
+        ),
+    ] {
+        fs::write(&map, pairs).unwrap();
+        let regex = message.contains("regex");
+        let args = [
+            &["replace", path_text(&input), "--map", path_text(&map)][..],
+            if regex { &["--regex"][..] } else { &[][..] },
+            &["-o", path_text(&refused)],
+        ]
+        .concat();
+        let result = cli(&args);
+        assert_eq!(result.status.code(), Some(1), "{pairs}");
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(stderr.starts_with(message), "{stderr}");
+        assert!(!refused.exists());
+    }
+}
+
+/// Without `--now`, DATE takes the local wall-clock time, as Word does.
+#[cfg(unix)]
+#[test]
+fn fields_update_reads_the_local_time_zone() {
+    let temp = TempWorkspace::new("fields-local");
+    let input = temp.path.join("fields.docx");
+    let mut document = fixture_document(&[]);
+    document
+        .add_paragraph("")
+        .add_run("")
+        .add_field(r#"DATE \@ "yyyy-MM-dd""#, "x")
+        .unwrap();
+    document.save(&input).unwrap();
+    let now_in = |zone: &str, name: &str| {
+        let output = temp.path.join(name);
+        let result = Command::new(env!("CARGO_BIN_EXE_rdocx"))
+            .args(["fields", "update", path_text(&input), "--json", "-o"])
+            .arg(&output)
+            .env("TZ", zone)
+            .output()
+            .unwrap();
+        assert_success(&result, zone);
+        let now = json_stdout(&result)["now"].as_str().unwrap().to_owned();
+        let date = |text: &str| {
+            let number = |range: std::ops::Range<usize>| text[range].parse::<i64>().unwrap();
+            let days = oxml_cli_support::days_from_civil(
+                number(0..4),
+                number(5..7) as u8,
+                number(8..10) as u8,
+            );
+            days * 86_400 + number(11..13) * 3_600 + number(14..16) * 60 + number(17..19)
+        };
+        date(&now)
+    };
+    // Etc/GMT-14 is UTC+14 and Etc/GMT+12 is UTC-12, 26 hours apart.
+    let ahead = now_in("Etc/GMT-14", "ahead.docx");
+    let behind = now_in("Etc/GMT+12", "behind.docx");
+    let difference = ahead - behind - 26 * 3_600;
+    assert!(difference.abs() < 60, "{ahead} {behind}");
 }
 
 #[test]
@@ -4574,10 +4640,12 @@ fn images_extract_writes_each_picture_once_with_a_listing() {
     assert_eq!(image["name"], "Logo");
     assert_eq!(image["alt_text"], "Company logo");
     assert_eq!(image["format"], "png");
+    let part = image["part"].as_str().unwrap();
+    assert!(part.starts_with("/word/media/"), "{part}");
     assert_eq!(image["width_px"], 1);
     assert_eq!(image["height_emu"], 457_200);
     let file = PathBuf::from(image["file"].as_str().unwrap());
-    assert_eq!(file, dir.join("image1.png"));
+    assert_eq!(file, dir.join(part.rsplit('/').next().unwrap()));
     assert_eq!(fs::read(&file).unwrap(), pixel_png());
 
     let again = cli(&["images", "extract", path_text(&input), path_text(&dir)]);
@@ -4606,7 +4674,42 @@ fn meta_set_writes_core_and_typed_custom_properties() {
             value: rdocx::CustomPropertyValue::I4(1),
         })
         .unwrap();
+    document
+        .set_custom_property(rdocx::CustomProperty {
+            fmtid: "{D5CDD505-2E9C-101B-9397-08002B2CF9AE}".to_owned(),
+            pid: 3,
+            name: Some("When".to_owned()),
+            value: rdocx::CustomPropertyValue::FileTime("2020-01-01T00:00:00Z".to_owned()),
+        })
+        .unwrap();
     document.save(&input).unwrap();
+
+    for (date, stored) in [
+        ("2024-05-06Z", "2024-05-06T00:00:00Z"),
+        ("2024-05-06", "2024-05-06T00:00:00Z"),
+        ("2024-05-06T08:30Z", "2024-05-06T08:30:00Z"),
+        ("2024-05-06T01:30:00+02:00", "2024-05-05T23:30:00Z"),
+        ("2024-12-31T22:00:00-0500", "2025-01-01T03:00:00Z"),
+    ] {
+        let dated = temp.path.join("dated.docx");
+        let _ = fs::remove_file(&dated);
+        let result = cli(&[
+            "meta",
+            "set",
+            path_text(&input),
+            "--custom",
+            &format!("When={date}"),
+            "-o",
+            path_text(&dated),
+        ]);
+        assert_success(&result, date);
+        let reopened = Document::open(&dated).unwrap();
+        assert_eq!(
+            reopened.custom_property("When").unwrap().value,
+            rdocx::CustomPropertyValue::FileTime(stored.to_owned()),
+            "{date}"
+        );
+    }
 
     let output = temp.path.join("out.docx");
     let result = cli(&[
@@ -4635,11 +4738,17 @@ fn meta_set_writes_core_and_typed_custom_properties() {
         record["custom"],
         json!([
             { "name": "Revision", "type": "integer", "value": 3 },
+            { "name": "When", "type": "date", "value": "2020-01-01T00:00:00Z" },
             { "name": "Client", "type": "string", "value": "Acme" },
         ])
     );
 
     for (args, message) in [
+        (&["--custom", "When=2024-05-06T25:00"][..], "is a date"),
+        (
+            &["--custom", "Client=A", "--remove-custom", "Client"][..],
+            "is named twice",
+        ),
         (&["--custom", "Revision=three"][..], "is a 32-bit integer"),
         (
             &["--remove-custom", "Missing"][..],
@@ -4730,4 +4839,106 @@ fn fill_sets_content_controls_by_tag_and_alias_or_writes_nothing() {
         "Error: no content control has tag \"missing\", nothing written (known: \"client\")\n"
     );
     assert!(!refused.exists());
+}
+
+/// Write a body of content controls, with the Word 2010 namespace declared.
+fn write_controls_document(path: &Path, controls: &[(&str, &str, &str)]) {
+    write_document(path, &["seed"]);
+    let body = controls
+        .iter()
+        .map(|(tag, properties, text)| {
+            format!(
+                r#"<w:sdt><w:sdtPr><w:tag w:val="{tag}"/>{properties}</w:sdtPr><w:sdtContent><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:sdtContent></w:sdt>"#
+            )
+        })
+        .collect::<String>();
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(fs::read(path).unwrap())).unwrap();
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w:body>{body}<w:sectPr/></w:body></w:document>"#
+        )
+        .into_bytes(),
+    );
+    package.save(path).unwrap();
+}
+
+#[test]
+fn fill_writes_each_control_type_as_word_does() {
+    let temp = TempWorkspace::new("fill-types");
+    let input = temp.path.join("form.docx");
+    write_controls_document(
+        &input,
+        &[
+            (
+                "agree",
+                r#"<w14:checkbox><w14:checked w14:val="0"/><w14:checkedState w14:val="2612" w14:font="MS Gothic"/><w14:uncheckedState w14:val="2610" w14:font="MS Gothic"/></w14:checkbox>"#,
+                "\u{2610}",
+            ),
+            (
+                "colour",
+                r#"<w:showingPlcHdr/><w:dropDownList><w:listItem w:displayText="Red" w:value="red"/><w:listItem w:displayText="Blue" w:value="blue"/></w:dropDownList>"#,
+                "Choose an item.",
+            ),
+            (
+                "due",
+                r#"<w:date><w:dateFormat w:val="yyyy-MM-dd"/><w:lid w:val="en-US"/></w:date>"#,
+                "Pick a date",
+            ),
+            ("logo", "<w:picture/>", ""),
+        ],
+    );
+    let output = temp.path.join("filled.docx");
+    let result = cli(&[
+        "fill",
+        path_text(&input),
+        "--tag",
+        "agree=yes",
+        "--tag",
+        "colour=blue",
+        "--tag",
+        "due=2026-10-31",
+        "-o",
+        path_text(&output),
+    ]);
+    assert_success(&result, "fill");
+    let xml = package_part_text(&output, "/word/document.xml");
+    assert!(
+        xml.contains(r#"<w14:checkbox><w14:checked w14:val="1"/><w14:checkedState"#),
+        "{xml}"
+    );
+    assert!(xml.contains("<w:t>\u{2612}</w:t>"), "{xml}");
+    assert!(!xml.contains("showingPlcHdr"), "{xml}");
+    assert!(
+        xml.contains(r#"<w:dropDownList w:lastValue="blue">"#),
+        "{xml}"
+    );
+    assert!(xml.contains("<w:t>Blue</w:t>"), "{xml}");
+    assert!(
+        xml.contains(r#"w:fullDate="2026-10-31T00:00:00Z""#),
+        "{xml}"
+    );
+    assert!(xml.contains("<w:t>2026-10-31</w:t>"), "{xml}");
+
+    for (assignment, message) in [
+        ("agree=maybe", "is a check box"),
+        ("colour=green", "is not one of its items"),
+        ("due=31/10/2026", "is not an ISO date"),
+        ("logo=x", "is a picture control"),
+    ] {
+        let refused = temp.path.join("refused.docx");
+        let result = cli(&[
+            "fill",
+            path_text(&input),
+            "--tag",
+            assignment,
+            "-o",
+            path_text(&refused),
+        ]);
+        assert_eq!(result.status.code(), Some(1), "{assignment}");
+        let stderr = String::from_utf8_lossy(&result.stderr);
+        assert!(stderr.contains(message), "{assignment}: {stderr}");
+        assert!(!refused.exists());
+    }
 }

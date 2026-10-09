@@ -59,7 +59,9 @@ rpptx meta set deck.pptx --title "Quarterly review" --author Ada -o titled.pptx
 Every editing command takes `-o`, refuses an output that already exists, the
 input included, and writes nothing when the edit is refused. Slide numbers are
 one-based. With `--json`, each prints a schema-1 record with its `action`, the
-one-based `slide` it produced and the `output`.
+one-based `slide` it produced and the `output`. A slide edit also reports
+`changed`, false when the deck stays as it was, such as a slide moved to its
+own position or a hidden slide hidden again.
 
 `replace --map PAIRS_JSON` reads a JSON array of
 `{"placeholder", "value", "expect"}` objects and applies the pairs in order, so
@@ -83,11 +85,14 @@ slide N, one paragraph per line, and creates its notes slide when it has none.
 frame whose text overflows it, with its slide, shape id, name, autofit mode,
 the font scale it renders at, and `needed_font_scale`: the largest scale, in
 steps of 2.5% down to 25%, at which the text fits, as PowerPoint's shrink text
-on overflow computes it, or `null` when even 25% overflows. It exits 1 when a
-frame overflows, so it can gate a script. Tables and SmartArt are not checked.
+on overflow computes it, or `null` when even 25% overflows. Measures are
+rounded to four decimals. It exits 1 when a frame overflows and 2 on an error,
+so it can gate a script. Tables and SmartArt are not checked. It wraps
+`Presentation::text_fit_report`.
 
-`meta get` prints the core properties and `meta set` writes the title, author,
-subject, keywords, description and category it is given, keeping the others.
+`meta get` prints the core properties, with the creator as `author`, and
+`meta set` writes the title, author, subject, keywords, description and
+category it is given, keeping the others.
 
 `inspect --json` keeps its existing keys and adds `shape_details` beside each
 slide's shape count. Each shape reports its z-order index, id, name, kind,

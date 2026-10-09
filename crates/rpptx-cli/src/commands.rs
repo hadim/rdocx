@@ -1325,16 +1325,18 @@ pub enum SlideEdit {
 pub fn slide_edit(file: &Path, edit: SlideEdit, output: &Path, as_json: bool) -> Result<()> {
     ensure_output_paths_available(&[output.to_path_buf()])?;
     let mut presentation = Presentation::open(file)?;
-    let (action, slide) = match edit {
+    // `changed` is false for an edit that leaves the deck as it was, such as
+    // moving a slide to its own position or hiding a hidden slide.
+    let (action, slide, changed) = match edit {
         SlideEdit::Duplicate(slide) => {
             let index = slide_index(&presentation, slide)?;
             presentation.duplicate_slide(index)?;
-            ("duplicate", slide + 1)
+            ("duplicate", slide + 1, true)
         }
         SlideEdit::Remove(slide) => {
             let index = slide_index(&presentation, slide)?;
             presentation.remove_slide(index)?;
-            ("remove", slide)
+            ("remove", slide, true)
         }
         SlideEdit::Move(slide, to) => {
             let index = slide_index(&presentation, slide)?;
@@ -1345,22 +1347,33 @@ pub fn slide_edit(file: &Path, edit: SlideEdit, output: &Path, as_json: bool) ->
                 )
             })?;
             presentation.move_slide(index, to_index)?;
-            ("move", to)
+            ("move", to, index != to_index)
         }
         SlideEdit::Hidden(slide, hidden) => {
             let index = slide_index(&presentation, slide)?;
+            let was_hidden = presentation
+                .slide(index)
+                .ok_or("slide index was checked")?
+                .hidden();
             presentation
                 .slide_mut(index)
                 .ok_or("slide index was checked")?
                 .set_hidden(hidden);
-            (if hidden { "hide" } else { "show" }, slide)
+            (
+                if hidden { "hide" } else { "show" },
+                slide,
+                was_hidden != hidden,
+            )
         }
     };
+    if !changed && !as_json {
+        eprintln!("Note: {action} left slide {slide} as it was");
+    }
     publish_presentation(&presentation, output)?;
     mutation_record(
         as_json,
         action,
-        json!({ "slide": slide, "slides": presentation.len() }),
+        json!({ "slide": slide, "slides": presentation.len(), "changed": changed }),
         output,
     )
 }
@@ -1388,87 +1401,29 @@ pub fn notes_set(
     mutation_record(as_json, "set", json!({ "slide": slide }), output)
 }
 
-/// Returns the z-order path of the shape with non-visual id `id`, through
-/// groups, on one slide.
-fn shape_path<'a>(shapes: impl Iterator<Item = ShapeRef<'a>>, id: u32) -> Option<Vec<usize>> {
-    for (index, shape) in shapes.enumerate() {
-        if shape.non_visual_id() == Some(id) {
-            return Some(vec![index]);
-        }
-        if let Some(mut path) = shape_path(shape.children(), id) {
-            path.insert(0, index);
-            return Some(path);
-        }
-    }
-    None
-}
-
 /// Reports every overflowing text frame and returns whether none overflows.
-///
-/// The needed font scale comes from a second layout of a copy in which each
-/// overflowing frame has normal autofit without a stored scale, so the
-/// renderer searches the scale as PowerPoint's shrink on overflow does.
 pub fn fit(file: &Path, as_json: bool) -> Result<bool> {
-    let presentation = Presentation::open(file)?;
-    let frames = presentation.text_layout_deterministic(1.0)?;
-    let overflowing = frames
+    let report = Presentation::open(file)?.text_fit_report()?;
+    let entries = report
+        .overflowing
         .iter()
-        .filter(|frame| frame.layout.overflow)
-        .collect::<Vec<_>>();
-    let mut shrunk = presentation.clone();
-    for frame in &overflowing {
-        let Some(id) = frame.shape_id else {
-            continue;
-        };
-        let Some(slide) = presentation.slide(frame.slide_index) else {
-            continue;
-        };
-        let Some(path) = shape_path(slide.shapes(), id) else {
-            continue;
-        };
-        let mut shape = shrunk
-            .slide_mut(frame.slide_index)
-            .and_then(|slide| slide.into_shape_mut(path[0]));
-        for index in &path[1..] {
-            shape = shape.and_then(|shape| shape.into_child_mut(*index));
-        }
-        if let Some(mut text_frame) = shape.and_then(|shape| shape.into_text_frame()) {
-            text_frame.set_autofit_mode(None);
-            text_frame.set_autofit_mode(Some(AutofitMode::Normal));
-        }
-    }
-    let shrunk_frames = if overflowing.is_empty() {
-        Vec::new()
-    } else {
-        shrunk.text_layout_deterministic(1.0)?
-    };
-    let entries = overflowing
-        .iter()
-        .map(|frame| {
-            let needed = frame.shape_id.and_then(|id| {
-                shrunk_frames
-                    .iter()
-                    .find(|shrunk| {
-                        shrunk.slide_index == frame.slide_index && shrunk.shape_id == Some(id)
-                    })
-                    .filter(|shrunk| !shrunk.layout.overflow)
-                    .map(|shrunk| shrunk.layout.font_scale)
-            });
+        .map(|overflow| {
+            let frame = &overflow.frame;
             json!({
                 "slide": frame.slide_index + 1,
                 "shape_id": frame.shape_id,
                 "name": frame.name,
                 "autofit": autofit_label(frame.autofit),
-                "font_scale": frame.layout.font_scale,
-                "text_height_points": frame.layout.height,
-                "frame_height_points": frame.layout.usable.height,
-                "needed_font_scale": needed,
+                "font_scale": round4(frame.layout.font_scale),
+                "text_height_points": round4(frame.layout.height),
+                "frame_height_points": round4(frame.layout.usable.height),
+                "needed_font_scale": overflow.needed_font_scale.map(round4),
             })
         })
         .collect::<Vec<_>>();
     // A reader that closes standard output early, as `| head` does, does not
     // change the verdict.
-    if let Err(error) = print_fit_report(&entries, frames.len(), as_json)
+    if let Err(error) = print_fit_report(&entries, report.frames_checked, as_json)
         && !error
             .downcast_ref::<io::Error>()
             .is_some_and(|error| error.kind() == io::ErrorKind::BrokenPipe)
@@ -1476,6 +1431,11 @@ pub fn fit(file: &Path, as_json: bool) -> Result<bool> {
         return Err(error);
     }
     Ok(entries.is_empty())
+}
+
+/// Rounds a layout measure to four decimals for the report.
+fn round4(value: f64) -> f64 {
+    (value * 10_000.0).round() / 10_000.0
 }
 
 fn print_fit_report(entries: &[Value], frames_checked: usize, as_json: bool) -> Result<()> {
@@ -1496,7 +1456,7 @@ fn print_fit_report(entries: &[Value], frames_checked: usize, as_json: bool) -> 
                 entry["name"].as_str().unwrap_or_default(),
                 entry["needed_font_scale"]
                     .as_f64()
-                    .map_or_else(|| "below 0.25".to_owned(), |scale| format!("{scale:.3}"))
+                    .map_or_else(|| "none (below 0.25)".to_owned(), |scale| scale.to_string())
             )?;
         }
         writeln!(
@@ -1515,7 +1475,7 @@ fn core_json(core: Option<&CoreProperties>) -> Value {
     };
     json!({
         "title": field(|core| &core.title),
-        "creator": field(|core| &core.creator),
+        "author": field(|core| &core.creator),
         "subject": field(|core| &core.subject),
         "keywords": field(|core| &core.keywords),
         "description": field(|core| &core.description),
