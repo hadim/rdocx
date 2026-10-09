@@ -1,6 +1,6 @@
 # F-X209, Edit PowerPoint masters layouts and themes
 
-**Status**: draft
+**Status**: approved
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X205, F-X206, F-X208
@@ -103,7 +103,7 @@ any cross-family use. No new source module, crate or dependency is approved.
 Existing immutable deck output should remain unchanged until callers edit
 master/layout/theme properties. Measure changed authored output separately.
 Any observed fixture delta requires an approved explicit revision before
-baseline recording. No baseline movement authorized by this draft.
+baseline recording. No baseline movement is authorized by this design.
 
 ## Exclusive file claims
 
@@ -123,12 +123,15 @@ serialize after X205, X206 and X208 completion. No worktree is claimed yet.
 
 ## Open questions
 
-Determine the smallest part-owned record/accessor API that reuses completed
-X205/X206/X208 without handle duplication. Specify apply_theme import scope,
-relationship closure and existing-slide remapping for each source kind.
-Prerequisites are unfinished, so this design remains draft and implementation
-must wait for their reviewed completion. No product approval is inferred from
-this intake record.
+Resolved by the part-owned records, live proxy semantics and selective import
+contract below. Apply_theme has explicit source/master selection and layout
+mapping, a preflighted supported relationship closure, preserved unrelated
+parts and atomic refusal of unsupported selected dependencies. One existing
+shape owner/provider serves slide, layout and master consumers. X208 owns
+its single theme provider, extended here rather than duplicated. Prerequisite
+completion is a source-claim barrier. It does not prevent approval of these
+resolved design contracts. Implementation still waits for every formal edge,
+the global design barrier and exclusive existing-file claims.
 
 ## Resolved part-owner and selective import contract
 
@@ -195,4 +198,4 @@ Installed Base reproductions for each of the three Issue312 scripts, every new c
 
 Positive apply_theme matrix PPTX/POTX/THMX, colours/fonts/four format scheme lists, images in scheme backgrounds, optional imported master/layout closure, no mapping versus explicit partial mapping, preserved destination macros outside scope and refused selected executable dependencies. Do not infer closure correctness from a simple RGB theme. Assert existing direct slide content and all unrelated original part bytes, plus actual requested inherited render changes using deterministic caller-font provider X195. Authenticate current PowerPoint no-repair normal reopen and native PDF/PNG, pinned LibreOffice round-trip and all three installed Python scripts. Preserve limits of Google Slides best effort without an unsupported compatibility claim.
 
-Run exact X205 fill and X206 group/owner/handle regression controls alongside master/layout changes. Fonts/themes consume X208/X197 one source, no Word tint/shade behavior change. Scope riders: qualified OOXML preservation/order, native archive/size actual measurements and source package dry-run, installed PyO3 typing/stubtest, both WASM checks, independent microscope and current scoped hash harness. No baseline move is assumed. All13 new plans remain draft until source-wave approval and actual prerequisite completion. No local source or test pass is claimed by this appendix.
+Run exact X205 fill and X206 group/owner/handle regression controls alongside master/layout changes. Fonts/themes consume X208/X197 one source, no Word tint/shade behavior change. Scope riders: qualified OOXML preservation/order, native archive/size actual measurements and source package dry-run, installed PyO3 typing/stubtest, both WASM checks, independent microscope and current scoped hash harness. No baseline move is assumed. The design is approved with existing-file source claims serialized against its providers. Actual prerequisite completion, installed Base reproductions and native oracle acceptance remain implementation/completion gates. No local source or test pass is claimed by this appendix.

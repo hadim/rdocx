@@ -1,12 +1,12 @@
 # F-X203, Complete Python Word document operations and validation
 
-**Status**: draft
+**Status**: approved
 **Sprint**: S91
 **Size**: L
-**Depends on**: F-X196, F-X201
+**Depends on**: F-X196, F-X201, F-X212
 
-This canonical draft cannot start implementation. Prerequisites are
-unfinished and API decisions below remain open. Source citations were checked
+The design is approved. Implementation waits for every formal dependency
+to be completed and for the global sprint design and file-claim barriers. Source citations were checked
 against canonical head `360b5b1cf77d19e7fe5c4cc26152dd55a00d12c1`.
 
 ## Problem
@@ -65,8 +65,7 @@ Document.page_count() -> int
 ExportResult owns bytes and immutable typed diagnostic records. Reuse native
 to_html/to_markdown at document.rs:28085/28097 and existing ODT/RTF/EPUB write
 results at odt.rs:137, rtf.rs:85 and epub.rs:64. Do not discard the existing
-path/message diagnostics from lossy converters. If naming is to_odt_bytes or
-save_odt instead, settle the exact signatures once before stub publication.
+path/message diagnostics from lossy converters. The approved installed names are to_odt, to_rtf and to_epub.
 Bare HTML/Markdown preserve existing native limitations and CommonMark subset,
 not a new independent Python formatter.
 
@@ -333,12 +332,16 @@ write sprint totals. Fresh dependency-prefix source is the test Base.
 
 ## Open questions
 
-Count scope, ordered diagnostic records, checked insertion, live metadata
-ownership and display-equation boundaries are resolved below. Final approval
-still requires source-wave ownership and prerequisite completion. Adopt the
-explicit CustomFileTime authoring subtype and grammar below. Existing native
-lexical dates remain inspectable without normalization. No additional date
-convenience conversion is implied by Issue306.
+Resolved. The sections below define count scope, ordered diagnostic records,
+checked insertion, live metadata, display equations and CustomFileTime.
+Use the exact to_odt/to_rtf/to_epub signatures above with typed ExportResult,
+not bare bytes or truncated strings. Undefined property dates stay inspectable
+without normalization. F-X212 owns the qualified paragraph_visibility scanner
+and is a formal prerequisite. Consume that Result API once, rather than
+extracting a second F-X196 scanner. Dependency completion and installed Base
+reproductions are implementation gates, not reasons to leave resolved design
+questions open. Shared document.rs and CLI validation edits are serialized
+with F-X201/F-X212 and the later F-X204 consumer.
 
 ## Resolved document operation contracts
 
@@ -475,3 +478,11 @@ Add source-built tests for two distinct display children including repeated iden
 ## Shared validation coordination receipt
 
 Fonts agent's `.claude/scratch/F-X201-authoring-decisions.md` proposes the same minimal native report types and section helper. Its proposed incomplete explicit pgSz warning and zero/negative explicit dimension error are X201-owned. X203 consumes them in the existing errors-then-warnings parity projection, retaining the CLI archive-open error boundary. Root reconciles exact stable messages and source claims. No duplicate section implementation or facade-to-CLI edge is proposed.
+
+## Approved provider boundary
+
+The selected operations stay in existing native document.rs/lib.rs, existing
+Python document/property projections and current CLI source/test entrypoints.
+No proposed contributor inspection.rs file is authorized. Provider completion
+is required before the source claim. Native typed export diagnostics retain
+path, code and loss information through the installed projection.

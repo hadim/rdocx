@@ -6933,7 +6933,7 @@ Resolve [Issue306](https://github.com/tensorbee/rdocx/issues/306) in S91,
 part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
 coverage checklist. Expose HTML, Markdown, all-story text, ODT/RTF/EPUB export and word/character/page counts. Add existing template rendering, document/fragment import with style policy, typed custom/app properties, validation parity, LaTeX/MathML equations, content-control list/value updates and track-revisions settings. Reuse visible paragraph validation from F-X196 and section validation from F-X201. Content-control creation and tracked-edit authoring retain their later roadmap contracts.
 
-**Depends on**: F-X196, F-X201.
+**Depends on**: F-X196, F-X201, F-X212.
 **Test gate**: regression. Reproduce each missing operation or reported defect
 through the installed public API on the claimed Base before implementation.
 Exercise all Issue306 acceptance criteria through save/reopen, native
