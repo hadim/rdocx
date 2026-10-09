@@ -121,3 +121,22 @@ content_control.rs:1197, which enters owned tables within block controls.
 The approved main-part scanner must follow this exact existing inventory:
 direct body tables excluded, control-owned tables entered through qualified
 row/cell/control paths. The source-built test distinguishes both cases.
+
+## Approved opaque-control remediation
+
+Independent microscope pass1 found duplicate sdtContent and controls with
+invalid typed properties were incorrectly admitted. The public regression
+failed with an inventory mismatch before production remediation, exit101.
+Use the existing CT_Sdt::story_raw_is_typed admission helper with the correct
+physical owner and active Word namespace prefixes before entering a control.
+A cloned read-only namespace reader bounds its source span without disturbing
+the main scan. Admit only the first expanded sdtContent container, matching
+the native RootSlot::Content rule. Self-closing containers remain raw slots
+and do not consume that typed content slot. Entire opaque controls and later
+raw containers stay excluded from paragraph inventory and visibility.
+
+Nine public discriminators cover duplicate block/inline containers, expanded
+empty versus self-closing first slots, invalid-property block/inline controls,
+namespace aliases and nested opaque controls. Preserve metadata diagnostics
+and exact input bytes. This revision uses an existing native admission API
+and adds no library surface, source module, dependency or writer.
