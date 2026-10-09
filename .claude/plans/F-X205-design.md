@@ -378,3 +378,25 @@ Canonical read HEAD: `4c2423b53735c833dc7fbb3910909389ea80922e`. Source SHA rece
 - `crates/oxml-core/src/core_properties.rs`: `32eac8c83f4b1f736260376c256d14005994a5e7df2c2541f95b6a65cea79455`.
 - `crates/oxml-core/src/app_properties.rs`: `176cd6dae588964906821d7e1d5a79e578acac1ddb2c2162aa76652aae9f3daa`.
 - `crates/oxml-core/src/custom_properties.rs`: `201fdf81d0615c2cc2d2a64e6f09bab1eadef72b0af879a2710fc46848aaa8cf`.
+
+## Independent native notes geometry comparison
+
+An authenticated PowerPoint16.113.3 control with an actual entered speaker
+note was saved, normally reopened and saved without edits. The notes master
+and notes slide owners remained structurally identical across that reopen.
+The saved deck SHA256 is438f65214a485dd9dbe6e7978be0120ca9b0f43e05573b19938e0488f2f6debf.
+Root independently projected all six qualified notes-master placeholders
+against the immutable PR318 template. Slide-image idx2 geometry exactly
+matches offset685800/1143000 and extent5486400/3086100. Body idx3 exactly
+matches offset685800/4400550 and extent5486400/3600450. Both notesSz values
+are6858000/9144000. Header/date/footer/number heights differ by1587 or1588
+EMU, so the entire master is not claimed identical. Keep those observed
+native values as the comparison control, with source namespace and absence
+facts retained. The genuine notes slide has no direct placeholder transforms.
+
+Full projection and input hashes are in
+.claude/scratch/S91-PR318-native-notes-comparison.json,
+SHA25613106840fe671a24696e933d8fbf6f5c055a05297d43c94904431b85a34102d5.
+This fills the structural provenance gap for the key slide-image/body
+rectangles. It does not establish notes-page visual output, handout export,
+renderer parity or full acceptance. Those implementation gates remain due.

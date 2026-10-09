@@ -190,3 +190,78 @@ Canonical read HEAD: `5caf36fd631fb32e2a00acb26b1625d0b99b92ca`. Source SHA rece
 - `crates/rpptx-render/src/text.rs`: `2a7570f8d9fcdbd1933625a4148ca4ae7d76f2f9773e1d25da821339043323d4`.
 - `crates/rpptx-render/src/lib.rs`: `98f646dbb7e10806140b0079298165e79c71c3dcb571e03548fea23f223a641b`.
 - `crates/oxml-drawing/src/text/body.rs`: `d9db6dd0a2dc2b61eaa7512c630ba7d33d27762eceb683f7e9a676f9541dc9cb`.
+
+## Authenticated coupled shrink observations
+
+## Method and provenance
+
+Microsoft PowerPoint `16.113.3`, build `16.113.26092714`, verified from its installed bundle metadata and used through native CUA. The scope is generated local controls only. The prior native-authored `/private/tmp/S91-X205-native-blank.pptx` was read and copied into an independent ignored study. No original control, user document, application setting, production source, tracked file or Cargo artifact was modified.
+
+Artifacts are in `/private/tmp/S91-F-X207-native-autofit`. `create_controls.py` constructs correctly ordered DrawingML shapes inside the copied native package. The initial four shapes have bare `a:normAutofit` with no earned fontScale or lnSpcReduction attributes. `input-receipt.json` records the exact native template/input hashes, every original box/property, and Arial face bytes/version/hash. A second generated input reuses only the A100 shape properties with two different heights. Its exact source/input hash and change are in `height-input-receipt.json`.
+
+PowerPoint opened both inputs without repair. Save As made separate native copies before any editing. For each control, native thumbnail and Tab selection entered the shape, F2 entered text editing, Command-End moved to the final text position, and an actual period was typed. Escape left text editing, and Command-S saved native recomputation. Saved XML proves each originally seven-line control ends in `Line seven.` and retains its original paragraph/break count. The scale pair was not inserted by the generator or a post-save XML writer.
+
+Native local `Best for printing` PDF export was selected explicitly. Each saved generated deck was closed, normally reopened by its exact local path, saved without editing, and exported again locally. `audit_capture.py` and `capture-receipt.json` assert frame/text-body, notes owner and scale-pair identity across reopen, identical extracted PDF text and unchanged original input hashes. Every input/saved copy, PDF, extracted text and owner XML has bytes/SHA-256 in the receipt. The initial/final saved package snapshots are retained separately.
+
+Both generated decks were closed only after exact generated URL and `Saved to my Mac` proof. PowerPoint had no remaining document window after closure. The UI lease is released. The existing Word APA6 study was not touched.
+
+## Original four controls
+
+All four use Arial regular, explicit size2800 hundredths of a point, black text, no bullets, identical seven short lines, fixed width5029200 EMU (5.5 inches), height2057400 EMU (2.25 inches), all four insets45720 EMU (3.6 points), wrap square and top anchor. A/B/C use one paragraph and six explicit breaks. D uses seven paragraphs. No line wraps are needed to distinguish these short explicit lines.
+
+| Control | Line spacing | Paragraph spacing | Native fontScale | Native lnSpcReduction |
+| --- | --- | --- | --- | --- |
+| A100 | explicit100000 percent | before/after0 | 77500 | 20000 |
+| BExact28 | exact2800 points | before/after0 | 25000 | 20000 |
+| C150 | explicit150000 percent | before/after0 | 47500 | 20000 |
+| DParagraph | explicit100000 percent | before/after600 points | 40000 | 20000 |
+
+PowerPoint's UI reported Arial, original28 before editing and effective displayed sizes22/7/13/11 after recomputation. Native XML retains nominal28-point run/default properties plus the scale pair. The PDF content stream uses transforms corresponding to actual drawn22/7/13/11-point glyphs. Those observed drawn sizes differ from multiplying28 by each stored scale without quantization. Do not assume arbitrary mixed-run quantization from four observations.
+
+The reopened PDF was rasterized with pinned Poppler26.01.0 and visually inspected. A/C/D fit inside their outline in this native capture. B's last line is visibly below the outline. B reaches native25-percent font floor with20-percent reduction and still overflows. Therefore the native floor pair cannot be treated as proof of fit. This directly supports an explicit unfit report/refusal in the authoring solver rather than calling every stored native pair a successful fit.
+
+`coupled-bbox.html` records actual native word bounds. B's baseline gaps stay about28 points, with print-grid rounding, despite its20-percent stored reduction. This supports the existing exact-point-spacing interpretation: the reduction does not turn exact28 into a reduced percentage spacing. It also explains why shrinking glyphs cannot fit this fixed box's seven exact-spaced lines.
+
+A and C's measured baseline spans are127-ish and122-ish points over six gaps, despite differing spacing and shrink. Normalizing by observed drawn glyph sizes is consistent with an absolute percentage-point line-spacing reduction rather than blindly multiplying150 percent by0.8. This is a bounded inference from the actual PDF, not a universal verified spacing equation. Paragraph/default font quantization and print-grid hinting prevent claiming an exact arbitrary-stack formula from these spans. The complete PDF content stream and bbox artifact are retained for independent examination.
+
+## Two-height discriminator
+
+The follow-up has two otherwise identical A100 boxes with fresh bare normAutofit, height2377440 EMU (2.6 inches) and2651760 EMU (2.9 inches). Width, all insets, text, explicit breaks, font/style, spacing, wrap and anchor remain identical to A100. Each received the same real native final-period edit.
+
+| Control | Height | Native fontScale | Native lnSpcReduction |
+| --- | --- | --- | --- |
+| AHeight260 | 2.6 inches | 92500 | 20000 |
+| AHeight290 | 2.9 inches | 92500 | 10000 |
+
+Both pairs persist across normal reopen/save and repeated native PDF export. Same fontScale with different reduction rules out a fixed reduction function based only on fontScale, including `lnSpcReduction = 1 - fontScale` and a clipped variant. The first four observations all at20-percent reduction could not discriminate that point.
+
+All six observed scales lie on the existing2.5-percent lattice, and all reductions are10 or20 percent. This is compatible with bounded candidate search that trades line spacing against font size, but does not establish the complete lattice, reduction cap or candidate priority for arbitrary paragraphs, bullets, sizes, inherited settings, wrapping and fonts. Choosing a universal font-first or reduction-first order from six pairs remains unjustified. The old scale-only computation with zero reduction cannot claim parity either.
+
+## Font authentication
+
+The selected UI face is Arial. The emitted PDF's embedded subset identifies ArialMT and retains head font revision6.8000030517578125, units-per-em2048, global bbox(-1361,-665,4096,2129) and hhea metrics(1854,-434,67). These match PowerPoint's bundled `/Applications/Microsoft PowerPoint.app/Contents/Resources/DFonts/arial.ttf`, version6.80i, SHA-256 `15663c7e8495594c6136eb51b11983eb8f5bbcdd07bb2c327e0d1e83415b0f06`.
+
+The known macOS `/System/Library/Fonts/Supplemental/Arial.ttf` is a different face revision5.0099945 with different head bbox and SHA-256 `525979822591a3447cfc49d943d6f7683508e25543407871c0ed8fed05fd2bd9`. `font-resolution-receipt.json` records the subset and both known installed candidates. This authenticates the emitted bundled face revision instead of assuming identical family names mean identical font bytes. The original bundled bytes/version/name tables are recorded for deterministic caller-provided measurement. PDF subset files, drawing-content stream and font-command receipt are retained as ignored evidence. No font was installed or system setting changed.
+
+## Native notes-master evidence for PR318
+
+The native template already contained a notes master. The study added a genuine speaker note through PowerPoint's native Notes pane on the controlled first slide, then saved and reopened. This created an actual notes slide and relationships without changing coupled frame properties. It is structural notes ownership evidence, not a notes-page rendering pass.
+
+Native slide size is12192000x6858000 EMU (16:9). Native notes size is6858000x9144000 EMU.
+
+| Owner | Placeholder | Offset x,y | Extent cx,cy |
+| --- | --- | --- | --- |
+| notesMaster1 Slide Image Placeholder3 | sldImg idx2 | 685800,1143000 | 5486400,3086100 |
+| notesMaster1 Notes Placeholder4 | body idx3, quarter | 685800,4400550 | 5486400,3600450 |
+| notesMaster1 Header Placeholder1 | hdr quarter | 0,0 | 2971800,458788 |
+| notesMaster1 Date Placeholder2 | dt idx1 | 3884613,0 | 2971800,458788 |
+| notesMaster1 Footer Placeholder5 | ftr idx4, quarter | 0,8685213 | 2971800,458787 |
+| notesMaster1 Slide Number Placeholder6 | sldNum idx5, quarter | 3884613,8685213 | 2971800,458787 |
+
+The native-created notesSlide1 has sldImg without explicit idx, body idx1, and sldNum idx5. All three have no direct xfrm. The body therefore cannot be paired with notes-master geometry using equal idx alone: its native idx1 differs from the master's body idx3. Actual type/ownership resolution remains required.
+
+Exact extracted owner files use names `coupled-autofit-after-reopen-ppt_notesMasters_notesMaster1.xml`, `coupled-autofit-after-reopen-ppt_notesSlides_notesSlide1.xml` and corresponding `_rels` filenames. `capture-receipt.json` includes the complete relationship XML and every placeholder attribute/transform. These are unchanged across normal reopen/save. The visible notes-page PDF was not captured, so PR318 visible notes layout acceptance remains pending. Do not mistake the ordinary slide PDF for a notes-page render.
+
+## Remaining provider decision barrier
+
+F-X207 now has native real-edit counterexamples and persisted scale-pair evidence. It still needs a measured, approved candidate ordering and shaping/stacking parity sufficient to reproduce the stored pair from the same exact font and text inputs. Mixed size/font runs, default versus explicit100-percent spacing, inherited flags, bullets, wrapped text and shared-owner contexts remain separate generalization controls. No universal formula, successful refresh gate, renderer parity or deterministic baseline update is asserted by this receipt. Root may reconcile the concrete observed pairs into the plan while retaining those bounded acceptance barriers.
