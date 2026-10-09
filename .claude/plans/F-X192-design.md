@@ -74,8 +74,9 @@ records223 selectors,17 kinds,3791 records per style,1475 file bindings and
 zero census errors. It does not prove arbitrary-input, sparse/context or
 comparator parity. The paired Thai/Tibetan Book capture completed F9 and
 normal reopen with equal output hashes. Its finite four-source/eight-field
-control can be independently audited. own1054/own1105 dense compact context
-working files still equal prepared inputs and need actual completed controls.
+control can be independently audited. The exact own1054/own1105 dense compact
+controls now have native F9/save and ordinary no-F9 reopen authority, as
+recorded below. Their original prepared working files remain untouched.
 
 Keep source identities, raw XML, namespaces, physical begin/separate/end
 owners, rich paragraphs and IEEE cells/grids. Stage the entire update through
@@ -230,3 +231,35 @@ comparison sign nor a universal host/backend rule. Complete-key portable
 comparator evaluation remains unproved. Retained partial-key ICU failures must
 not be misreported as complete-key failures or used to reject a backend that
 has not actually received these operands. No production dependency is selected.
+
+
+## Completed compact APA1054 and1105 authority
+
+Exactly the two existing prepared compact controls were copied, updated
+through actual APA Sixth Edition selection and F9/save in Word16.113.2,
+then normally reopened and saved without F9. Both whole packages are
+byte-identical across normal reopen. Evidence remains outside canonical at
+/private/tmp/S91-F-X192-own-dense-completion/study.md, audit-receipt.json,
+capture-receipt.json and native-UI-actions.json. Root reverified all24
+receipt-bound artifacts. Original immutable inputs, prepared mutable copies
+and the existing unrelated study window remain unchanged.
+
+Each completed control retains all18 original instructions and physical
+field owners, all17 exact qualified sources apart from native RefOrder,
+and uniquely identified entries through exact Title or PatentNumber.
+Both citation/entry text sets and entry order match the historical dense
+capture. Thai1054 retains all414 rich result runs exactly. Tibetan1105
+retains564 runs, exact text/order/boundaries/pPr, but216 complex-script runs
+replace Arial Unicode MS with Kailasa across all17 entries. Every other
+recorded property matches after this one-name replacement. Do not claim
+that compact context caused it or make Kailasa a universal style default.
+Use the newly completed rich control as its own authority, preserving the
+historical typography distinction. SourceLCID remains absent, separately
+from explicit fieldLCID1054/1105 and the UI's English language label.
+
+Saved SHA256 values are624799886a170e40fc12b36be97e86e014f2d4aff44a18d8319363560daf87c1
+anddc54ffb47d9046aad001192f925996dd74e7b0b329302a0d00dc11b6f0a14e95,
+respectively. This finite completion resolves prepared-only provenance
+for these compact controls. It does not retroactively authenticate the
+historical recovered dense document's execution, prove arbitrary context
+or demonstrate a portable complete-key comparator. Those barriers remain.
