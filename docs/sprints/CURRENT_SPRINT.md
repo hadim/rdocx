@@ -339,3 +339,18 @@ hashes. No binding body ran and no compatibility rate exists. The movie
 candidate has valid container facts but frame decoding failed. Its acceptance
 and the twelve additional native obligations remain due. The full manifest
 SHA is1889f6683eb788fc2a9007e84c66028cf5f1701a22a452de8767edbb0c8042be.
+
+The advanced318/319/324 head assessments are now complete. All three whole
+Git trees are identical to their previous captured heads, with91 retained
+blobs reauthenticated and no duplicated source downloads. F-X207 design is
+now approved after actual22-control dual-layout measurement:21 fitting
+controls select the exact native pair, and the unfit exact-spacing control
+retains explicit refusal. No production or general native parity is claimed.
+F-X210's revised asset answer remains pending, and new source claims still
+wait for every plan's material questions to be settled.
+
+PR328 source assessment is complete and remains F-X201/Issue304. Root checked
+its104 artifacts and75 blobs plus the91 reused advanced-head blobs without
+mismatch. All14 current PR heads are assessed. Its read-side story creation,
+VML-only watermarks and tiny-length refusals require adaptation to the approved
+contract. No intake item is called completed on contributor test claims.

@@ -254,3 +254,38 @@ Concrete reuse: authored_text_box_alternate_content at742 already writes qualifi
 Stage header creation/linkage policy, media relationships for picture watermarks, and both physical textbox representations atomically. Replace only API-owned watermark identity, preserve unrelated drawings/text/producer watermark owners and prune only unreferenced API media. If a representation's requested feature cannot be faithfully authored/rendered, return a named atomic error rather than fall back silently to VML-only output. Existing VML-only setters remain a documented compatibility path. Image and text new section paths share owner/anchor mechanics but are substantive writers, not forwarding-only new facades.
 
 Issue304's exact text says Google import is best effort and prefers a DrawingML picture or text box behind text in the header. Approve that concrete output policy now. Native Word/LibreOffice normal reopen/render is a required implementation gate. An actual permitted Google import study is needed only before a demonstrated Google-compatibility claim, not an infinite preapproval prerequisite or a fabricated CI guarantee. No external upload occurred in this task.
+
+## PR328 authenticated source assessment
+
+PR328 closes Issue304 at30c2e61cbdec5499546997df94b6c94e3a1e446d. Full
+38-file diff,75 base/head Git blobs, six commits and complete empty PR/Issue304
+discussions are retained in /private/tmp/S91-PR328-intake. Independent root
+checks authenticate104 artifact hashes/sizes and all75 blob identities.
+No contributor code was executed and no new F-ID is created.
+
+Reuse qualified native geometry, footer field, even/first visibility, story
+table-width, note style/separator and wrapping-clear controls in existing
+files. Contributor story.rs is not an authorized new module. Its:518 read
+creates missing stories, while this contract requires empty read-only results.
+Its section snapshots with attached ownership and packed section/story slots
+do not replace the separate live SectionHandle and F-X206 causal provider.
+Avoid a second story-specific Table/Cell hierarchy. Native document.rs:3818
+clones columns/page borders/grid beyond the selected geometry inheritance.
+Narrow that copy to the approved properties. Python document.rs:2772 rejects
+legitimate tiny EMU values using an inferred unit threshold. Use exact checked
+length extraction and range constraints instead.
+
+Contributor notes support last-run direct body references and integer IDs,
+not rich admitted run/main-table/control owners. VML-only watermark setters
+remain honestly labelled and do not meet DrawingML watermark acceptance.
+Story and even-header visibility mutations commit separately at story.rs:174
+and :259. Stage content, relationships and settings together before one
+publication. Native validation remains the shared F-X203-consumed policy,
+not the contributor's CLI-only incomplete-dimension heuristic.
+
+The note-reference renderer change at engine.rs:9607 prevents a second
+superscript shrink. It is intentional behavior, requiring its own labelled
+commit, native styled-note control and deterministic delta review. Existing
+49-fixture claims do not prove unchanged note behavior. Full source assessment
+and cited gaps remain in the retained assessment, with no local test or
+acceptance claim.

@@ -342,3 +342,13 @@ firstSlideNum is optional typed root state, absent defaults1 and explicit0 is va
 Transitions keep contributor live Slide.transition spellings type/direction/duration/advance_on_click/advance_after and apply_to_all. Preserve explicit optional presence in native/read metadata. Durations finite nonnegative seconds convert by checked truncation to milliseconds. Only the selected qualified property is patched, retaining sound, extensions, unrelated transition attributes and timing. None removes transition only. Implement typed/timeline none/fade/push/wipe/split/cover/uncover/cut/zoom with effect-specific directions and atomic all-slide rollback. Unknown retained effects remain readable with unsupported metadata. PR324 Other effects and whole-subtree replacement are implementation gaps, not an approved shortcut.
 
 Theme reads use the already approved X209 master-part live owner contract and X197 colours, not detached snapshots. X208 can implement its read extraction once and consume X209's resolved lifecycle without waiting for provider completion to approve design. Formal source claim depends on actual providers, shared file leases and global draft barrier. CLI footer/inspect remains X208's declared surface, coordinated with X204 serialization, output refusal and reference tests. No new F-ID, module/dependency, baseline movement or unpublished contributor test claim is authorized by this memo.
+
+## Latest PR324 head equivalence
+
+PR324 now points to232b5dbb63a29cfe72462a1716d2b17d79a7d252. Its entire immutable tree
+6be56b2375623e373ab8e6d0507a7d91904c65e2 is identical to the previous assessed head,
+with the same parent commit. Diverged final commit identity introduces zero
+source changes. Full current discussions and reused source blob hashes are
+authenticated in /private/tmp/S91-PR324-232b5db-intake/receipt.json.
+The prior source assessment and existing feature ownership remain applicable.
+No duplicate work, asset approval, baseline or contributor pass claim changes.

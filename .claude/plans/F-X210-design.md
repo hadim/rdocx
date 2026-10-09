@@ -351,3 +351,13 @@ render options/selection and one explicit font-files slice, with the same
 owned diagnostic vector. Do not add a variant for every font-input spelling.
 Existing SVG results retain their named diagnostics. Existing native layout
 results already expose diagnostics and require no forwarding companion.
+
+## Latest PR319 head equivalence
+
+PR319 now points to0073a154d1f72bf4ab391a5257b343a4bca61d80. Its entire immutable tree
+77b869661f0522efc6885725626ec740214604d3 is identical to the previous assessed head,
+with the same parent commit. Diverged final commit identity introduces zero
+source changes. Full current discussions and reused source blob hashes are
+authenticated in /private/tmp/S91-PR319-0073a15-intake/receipt.json.
+The prior source assessment and existing feature ownership remain applicable.
+No duplicate work, asset approval, baseline or contributor pass claim changes.

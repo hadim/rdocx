@@ -485,3 +485,13 @@ Close the real default-surface edge: notes/handout export is read-only and succe
 Geometry is resolved from the authenticated template comparison and notes comparison, not page containment guesses. Fresh master/all11-layout rectangles use the authenticated Office16:9 projection. Notes slide-image/body exact rectangles are recorded at plan:389-394. For differing header/date/footer/number heights, choose the recorded actual native values rather than claim PR318 byte equivalence. Imported geometry is unchanged. Native Print Notes/Hand-outs now supplies positive visible evidence: two notes pages including one blank-body page and one two-frame handout, even with no notesSlide2 or handoutMaster. This closes the provenance question. It does not prove local rendering.
 
 Question6 is an implementation acceptance decision: implement actual requested supported linear/path gradient and pattern rendering plus baseline/spacing/script-font/language propagation where current output demonstrably lacks it. Structure-only round trips and Google Slides advisory degradation do not satisfy native visible acceptance. Keep explicit diagnostics for imported unsupported cases without silently reducing Issue308 requested authoring support. Base repro, pixels, fonts, export signatures, typing, native reopen, package/hash deltas and gates remain implementation obligations.
+
+## Latest PR318 head equivalence
+
+PR318 now points to545cba61206b9a4535bce1e5a77cae7f9f405ebd. Its entire immutable tree
+c48923347b2f8d7eb9a95d4fd9f72a70252f7aaf is identical to the previous assessed head,
+with the same parent commit. Diverged final commit identity introduces zero
+source changes. Full current discussions and reused source blob hashes are
+authenticated in /private/tmp/S91-PR318-545cba6-intake/receipt.json.
+The prior source assessment and existing feature ownership remain applicable.
+No duplicate work, asset approval, baseline or contributor pass claim changes.
