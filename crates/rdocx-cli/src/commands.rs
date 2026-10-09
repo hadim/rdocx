@@ -2477,6 +2477,41 @@ fn picture_json(index: usize, image: &ImageInfo) -> Value {
     })
 }
 
+/// A file name for a media part that cannot leave its directory: the part's
+/// last segment, split on both slashes, keeping only ASCII letters, digits,
+/// dots, underscores and hyphens, at most 100 of them. A name that is then
+/// empty, starts with a dot or is a Windows device name becomes
+/// `image{number}.{extension}`, with the sniffed extension.
+fn safe_image_file_name(
+    part: &str,
+    number: usize,
+    format: Option<oxml_media::ImageFormat>,
+) -> String {
+    let last = part.rsplit(['/', '\\']).next().unwrap_or_default();
+    let name = last
+        .chars()
+        .filter(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
+        })
+        .take(100)
+        .collect::<String>();
+    let stem = name
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_uppercase();
+    let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((stem.starts_with("COM") || stem.starts_with("LPT"))
+            && stem.len() == 4
+            && stem.as_bytes()[3].is_ascii_digit());
+    if name.is_empty() || name.starts_with('.') || device {
+        let extension = format.map_or("bin", |format| format.extension());
+        format!("image{number}.{extension}")
+    } else {
+        name
+    }
+}
+
 /// Write each picture of the main story once into `dir` and list them.
 ///
 /// A picture whose relationship is external or names a missing part has no
@@ -2500,7 +2535,7 @@ pub fn images_extract(file: &Path, dir: &Path, force: bool, json_output: bool) -
             let path = match written.get(&part) {
                 Some(path) => path.clone(),
                 None => {
-                    let base = part.rsplit('/').next().unwrap_or("image").to_owned();
+                    let base = safe_image_file_name(&part, outputs.len() + 1, format);
                     let mut path = dir.join(&base);
                     if outputs.iter().any(|(existing, _)| *existing == path) {
                         path = dir.join(format!("{}-{base}", outputs.len() + 1));
@@ -2524,7 +2559,17 @@ pub fn images_extract(file: &Path, dir: &Path, force: bool, json_output: bool) -
         .iter()
         .map(|(path, _)| path.clone())
         .collect::<Vec<_>>();
-    // Check the input and the existing files before creating anything.
+    // A file name never leaves `dir`, whatever the package names its parts.
+    if let Some(path) = paths.iter().find(|path| path.parent() != Some(dir)) {
+        return Err(format!(
+            "refusing to write {} outside {}",
+            path.display(),
+            dir.display()
+        )
+        .into());
+    }
+    // Check the input and the existing files before creating anything. An
+    // existing output that is a symbolic link is refused even with --force.
     ensure_output_paths_allowed(&paths, file, force)?;
     if !force {
         ensure_output_paths_available(&paths)?;
@@ -2887,6 +2932,29 @@ mod tests {
             }
             assert_eq!(matches.len(), lengths[a.len()][b.len()], "{a:?} {b:?}");
         }
+    }
+
+    #[test]
+    fn extracted_image_names_never_leave_their_directory() {
+        let png = Some(oxml_media::ImageFormat::Png);
+        for (part, expected) in [
+            ("/word/media/image1.png", "image1.png"),
+            ("../../x.png", "x.png"),
+            ("..\\..\\x.png", "x.png"),
+            ("/word/media/..", "image3.png"),
+            ("/word/media/.", "image3.png"),
+            ("/word/media/", "image3.png"),
+            ("", "image3.png"),
+            ("/word/media/.hidden.png", "image3.png"),
+            ("C:x.png", "Cx.png"),
+            ("/word/media/a\u{7}b\nc.png", "abc.png"),
+            ("/word/media/NUL.png", "image3.png"),
+            ("/word/media/com1.png", "image3.png"),
+        ] {
+            assert_eq!(safe_image_file_name(part, 3, png), expected, "{part:?}");
+        }
+        assert_eq!(safe_image_file_name("..", 1, None), "image1.bin");
+        assert_eq!(safe_image_file_name(&"a".repeat(300), 1, png).len(), 100);
     }
 
     #[test]

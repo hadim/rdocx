@@ -110,6 +110,11 @@ name, alt text, size in EMU and pixels, detected format, byte length and file.
 A linked picture has a `null` part and file. Pictures in headers, footers,
 notes and text boxes are not listed yet. An existing image file is refused
 unless `--force` is given, and `DIR` is created only once those checks pass.
+A file name keeps only the ASCII letters, digits, dots, underscores and hyphens
+of the part name's last segment, so a crafted part name cannot leave `DIR`. A
+name that would be empty, hidden or a Windows device name becomes
+`image1.png`, numbered in order with its detected extension, and an existing
+symbolic link is never written through.
 
 `meta get` prints the core and custom properties. `meta set` writes the
 `--title`, `--author`, `--subject`, `--keywords`, `--description` and

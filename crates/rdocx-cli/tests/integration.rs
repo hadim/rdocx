@@ -4648,6 +4648,40 @@ fn images_extract_writes_each_picture_once_with_a_listing() {
     assert_eq!(file, dir.join(part.rsplit('/').next().unwrap()));
     assert_eq!(fs::read(&file).unwrap(), pixel_png());
 
+    // A part whose name would hide or escape the file falls back to a
+    // numbered name inside the directory.
+    let crafted = temp.path.join("crafted.docx");
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(fs::read(&input).unwrap())).unwrap();
+    let bytes = package.get_part(part).unwrap().to_vec();
+    package.set_part("/word/media/.evil.png", bytes);
+    for rel in &mut package.get_or_create_part_rels("/word/document.xml").items {
+        if rel.rel_type == rel_types::IMAGE {
+            rel.target = "media/.evil.png".to_owned();
+        }
+    }
+    package.save(&crafted).unwrap();
+    let crafted_dir = temp.path.join("crafted");
+    let result = cli(&[
+        "images",
+        "extract",
+        path_text(&crafted),
+        path_text(&crafted_dir),
+        "--json",
+    ]);
+    assert_success(&result, "images extract of a crafted part");
+    let listing = json_stdout(&result);
+    assert_eq!(listing["images"][0]["part"], "/word/media/.evil.png");
+    assert_eq!(
+        PathBuf::from(listing["images"][0]["file"].as_str().unwrap()),
+        crafted_dir.join("image1.png")
+    );
+    assert_eq!(
+        fs::read_dir(&crafted_dir).unwrap().count(),
+        1,
+        "only the numbered file is written"
+    );
+
     let again = cli(&["images", "extract", path_text(&input), path_text(&dir)]);
     assert_eq!(again.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&again.stderr).contains("output already exists"));
