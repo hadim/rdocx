@@ -6,13 +6,14 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 
 use oxml_cli_support::{
-    StagedOutputSet, default_output_path, ensure_output_paths_allowed,
-    ensure_output_paths_available, json_envelope, parse_range,
+    ReplacementPair, StagedOutputSet, default_output_path, ensure_output_paths_allowed,
+    ensure_output_paths_available, json_envelope, parse_range, parse_replacement_map,
 };
 use rdocx::{
-    BodyItemRef, ComparisonGranularity, ComparisonOptions, ComparisonStoryKind, Document,
-    HdrFtrType, HeaderFooterKind, RasterFormat, RasterOptions, RasterOutput, RevisionKind,
-    RevisionView, RunRange, StoryId, StoryItemKind, StoryKind,
+    BodyItemRef, ComparisonGranularity, ComparisonOptions, ComparisonStoryKind, CoreProperties,
+    CustomProperty, CustomPropertyValue, Document, FieldDateTime, FieldEvaluationContext,
+    HdrFtrType, HeaderFooterKind, ImageInfo, RasterFormat, RasterOptions, RasterOutput,
+    RevisionKind, RevisionView, RunRange, StoryId, StoryItemKind, StoryKind,
 };
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Document};
@@ -74,15 +75,17 @@ pub fn inspect(file: &Path, json: bool) -> Result<()> {
         }
     }
 
+    let counts = inspect_counts(&doc);
     let mut stdout = io::stdout().lock();
     if json {
-        let obj = inspect_json(file, &doc, style_ids)?;
+        let obj = inspect_json(file, &doc, style_ids, &counts)?;
         writeln!(stdout, "{}", serde_json::to_string_pretty(&obj)?)?;
     } else {
         writeln!(stdout, "File: {}", file.display())?;
         writeln!(stdout, "Paragraphs: {paragraph_count}")?;
         writeln!(stdout, "Tables: {table_count}")?;
         writeln!(stdout, "Content elements: {content_count}")?;
+        print_inspect_counts(&mut stdout, &counts)?;
         writeln!(stdout)?;
         writeln!(stdout, "Metadata:")?;
         if let Some(t) = &title {
@@ -114,12 +117,23 @@ pub fn inspect(file: &Path, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn inspect_json(file: &Path, doc: &Document, style_ids: Vec<String>) -> Result<Value> {
+fn inspect_json(
+    file: &Path,
+    doc: &Document,
+    style_ids: Vec<String>,
+    counts: &InspectCounts,
+) -> Result<Value> {
     Ok(json_envelope(json!({
         "file": file.display().to_string(),
         "paragraphs": doc.paragraph_count(),
         "tables": doc.table_count(),
         "content_elements": doc.content_count(),
+        "words": counts.words,
+        "characters": counts.characters,
+        "characters_no_spaces": counts.characters_no_spaces,
+        "pages": counts.pages,
+        "pictures": counts.pictures,
+        "content_controls": counts.content_controls,
         "metadata": {
             "title": doc.title(),
             "author": doc.author(),
@@ -128,6 +142,92 @@ fn inspect_json(file: &Path, doc: &Document, style_ids: Vec<String>) -> Result<V
         },
         "styles_used": style_ids,
     }))?)
+}
+
+/// The statistics, pictures and content controls that `inspect` adds to the
+/// structure counts.
+struct InspectCounts {
+    words: usize,
+    characters: usize,
+    characters_no_spaces: usize,
+    /// `None` when the document cannot be laid out, with a warning on stderr.
+    pages: Option<usize>,
+    pictures: Vec<Value>,
+    content_controls: Vec<Value>,
+}
+
+fn inspect_counts(doc: &Document) -> InspectCounts {
+    let pages = match doc.layout_deterministic() {
+        Ok(layout) => Some(layout.layout.pages.len()),
+        Err(error) => {
+            eprintln!("Warning: page count left out: {error}");
+            None
+        }
+    };
+    InspectCounts {
+        words: doc.word_count(),
+        characters: doc.character_count(true),
+        characters_no_spaces: doc.character_count(false),
+        pages,
+        pictures: doc
+            .images()
+            .iter()
+            .enumerate()
+            .map(|(index, image)| picture_json(index, image))
+            .collect(),
+        content_controls: doc
+            .content_controls()
+            .iter()
+            .map(|control| {
+                json!({
+                    "tag": control.tag(),
+                    "alias": control.alias(),
+                    "id": control.id(),
+                    "text": control.text(),
+                })
+            })
+            .collect(),
+    }
+}
+
+fn print_inspect_counts(stdout: &mut impl Write, counts: &InspectCounts) -> io::Result<()> {
+    writeln!(stdout, "Words: {}", counts.words)?;
+    writeln!(stdout, "Characters: {}", counts.characters)?;
+    writeln!(
+        stdout,
+        "Characters without spaces: {}",
+        counts.characters_no_spaces
+    )?;
+    match counts.pages {
+        Some(pages) => writeln!(stdout, "Pages: {pages}")?,
+        None => writeln!(stdout, "Pages: unknown")?,
+    }
+    writeln!(stdout, "Pictures: {}", counts.pictures.len())?;
+    for picture in &counts.pictures {
+        writeln!(
+            stdout,
+            "  - {} {} x {} EMU, alt text: {}",
+            picture["relationship_id"].as_str().unwrap_or_default(),
+            picture["width_emu"],
+            picture["height_emu"],
+            picture["alt_text"].as_str().unwrap_or("(none)")
+        )?;
+    }
+    writeln!(
+        stdout,
+        "Content controls: {}",
+        counts.content_controls.len()
+    )?;
+    for control in &counts.content_controls {
+        writeln!(
+            stdout,
+            "  - tag: {}, alias: {}, text: {}",
+            control["tag"].as_str().unwrap_or("(none)"),
+            control["alias"].as_str().unwrap_or("(none)"),
+            control["text"].as_str().unwrap_or_default()
+        )?;
+    }
+    Ok(())
 }
 
 /// Extract plain text from a DOCX file.
@@ -1758,30 +1858,134 @@ fn print_json(payload: Value) -> Result<()> {
     Ok(())
 }
 
-/// Replace a placeholder in a DOCX file and save to output.
+/// The pairs a `replace` command applies: one from `-p` and `-v`, or a map.
+pub struct ReplaceInput<'a> {
+    pub pair: Option<(String, String)>,
+    pub map: Option<&'a Path>,
+    pub expect: Option<usize>,
+    pub regex: bool,
+}
+
+/// Replace placeholders in a DOCX file and save to output.
+///
+/// The pairs run in order over the whole document, so a later pair sees the
+/// text an earlier one wrote. When a pair finds another count than the one it
+/// expects, nothing is written.
 pub fn replace(
     file: &Path,
-    placeholder: &str,
-    value: &str,
-    expect: Option<usize>,
+    input: ReplaceInput<'_>,
     output: &Path,
+    json_output: bool,
 ) -> Result<()> {
+    let pairs = replacement_pairs(&input)?;
     let mut doc = Document::open(file)?;
-    let count = doc.try_replace_text(placeholder, value)?;
-    if let Some(expected) = expect
-        && count != expected
-    {
-        return Err(format!(
-            "expected {expected} replacement(s) of \"{placeholder}\", found {count}"
-        )
-        .into());
-    }
+    let counts = if input.regex {
+        let mut counts = Vec::with_capacity(pairs.len());
+        for (index, pair) in pairs.iter().enumerate() {
+            let found = doc.replace_regex(&pair.placeholder, &pair.value)?;
+            if let Some(expected) = pair.expect
+                && expected != found
+            {
+                return Err(count_mismatch(&pairs, index, expected, found));
+            }
+            counts.push(found);
+        }
+        counts
+    } else {
+        let borrowed = pairs
+            .iter()
+            .map(|pair| (pair.placeholder.as_str(), pair.value.as_str(), pair.expect))
+            .collect::<Vec<_>>();
+        match doc.try_replace_all_expected(&borrowed)? {
+            Ok(counts) => counts,
+            Err(mismatch) => {
+                return Err(count_mismatch(
+                    &pairs,
+                    mismatch.index,
+                    mismatch.expected,
+                    mismatch.found,
+                ));
+            }
+        }
+    };
     publish_document(&mut doc, output)?;
+    print_replacements(&pairs, &counts, input.regex, output, json_output)
+}
+
+/// Read the pairs of a `replace` command, the single pair taking `--expect`.
+fn replacement_pairs(input: &ReplaceInput<'_>) -> Result<Vec<ReplacementPair>> {
+    match (&input.pair, input.map) {
+        (Some((placeholder, value)), None) => Ok(vec![ReplacementPair {
+            placeholder: placeholder.clone(),
+            value: value.clone(),
+            expect: input.expect,
+        }]),
+        (None, Some(map)) => {
+            let text = std::fs::read_to_string(map)
+                .map_err(|error| format!("cannot read --map {}: {error}", map.display()))?;
+            Ok(parse_replacement_map(&text)?)
+        }
+        _ => Err("give -p and -v, or --map".into()),
+    }
+}
+
+/// The error of a pair that found another count than the one it expects,
+/// naming the pair when the command has several.
+fn count_mismatch(
+    pairs: &[ReplacementPair],
+    index: usize,
+    expected: usize,
+    found: usize,
+) -> Box<dyn std::error::Error> {
+    let prefix = if pairs.len() == 1 {
+        String::new()
+    } else {
+        format!("pair {index}: ")
+    };
+    format!(
+        "{prefix}expected {expected} replacement(s) of \"{}\", found {found}, nothing written",
+        pairs[index].placeholder
+    )
+    .into()
+}
+
+/// Print the count of each pair, as text or as a schema-1 record.
+fn print_replacements(
+    pairs: &[ReplacementPair],
+    counts: &[usize],
+    regex: bool,
+    output: &Path,
+    json_output: bool,
+) -> Result<()> {
+    if json_output {
+        let entries = pairs
+            .iter()
+            .zip(counts)
+            .map(|(pair, count)| {
+                json!({
+                    "placeholder": pair.placeholder,
+                    "value": pair.value,
+                    "expect": pair.expect,
+                    "count": count,
+                })
+            })
+            .collect::<Vec<_>>();
+        return print_json(json!({
+            "action": "replace",
+            "regex": regex,
+            "pairs": entries,
+            "total": counts.iter().sum::<usize>(),
+            "output": output.display().to_string(),
+        }));
+    }
     let mut stdout = io::stdout().lock();
-    writeln!(
-        stdout,
-        "Replaced {count} occurrence(s) of \"{placeholder}\" -> \"{value}\""
-    )?;
+    for (pair, count) in pairs.iter().zip(counts) {
+        writeln!(
+            stdout,
+            "Replaced {count} occurrence(s) of \"{}\" -> \"{}\"",
+            pair.placeholder, pair.value
+        )?;
+    }
     writeln!(stdout, "Written to {}", output.display())?;
     Ok(())
 }
@@ -2031,6 +2235,512 @@ fn print_validation_report(file: &Path, errors: &[String], warnings: &[String]) 
     Ok(())
 }
 
+// ---- One-shot editing commands: fields, images, metadata, content controls ----
+
+/// Parse a `NAME=VALUE` assignment, splitting at the first `=`.
+pub fn parse_assignment(text: &str) -> std::result::Result<(String, String), String> {
+    match text.split_once('=') {
+        Some((name, value)) if !name.is_empty() => Ok((name.to_owned(), value.to_owned())),
+        _ => Err(format!("expected NAME=VALUE, found {text:?}")),
+    }
+}
+
+/// Parse `YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS`, with an optional trailing `Z`.
+pub fn parse_field_date_time(text: &str) -> std::result::Result<FieldDateTime, String> {
+    let invalid = || format!("expected YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS, found {text:?}");
+    let trimmed = text.strip_suffix('Z').unwrap_or(text);
+    let (date, time) = trimmed.split_once('T').unwrap_or((trimmed, "00:00:00"));
+    let date = date.split('-').collect::<Vec<_>>();
+    let time = time.split(':').collect::<Vec<_>>();
+    let ([year, month, day], [hour, minute, second]) = (date.as_slice(), time.as_slice()) else {
+        return Err(invalid());
+    };
+    let number = |part: &str, digits: usize| {
+        (part.len() == digits && part.bytes().all(|byte| byte.is_ascii_digit()))
+            .then(|| part.parse::<u8>().ok())
+            .flatten()
+    };
+    let value = FieldDateTime {
+        year: (year.len() == 4 && year.bytes().all(|byte| byte.is_ascii_digit()))
+            .then(|| year.parse().ok())
+            .flatten()
+            .ok_or_else(invalid)?,
+        month: number(month, 2)
+            .filter(|month| (1..=12).contains(month))
+            .ok_or_else(invalid)?,
+        day: number(day, 2)
+            .filter(|day| (1..=31).contains(day))
+            .ok_or_else(invalid)?,
+        hour: number(hour, 2)
+            .filter(|hour| *hour < 24)
+            .ok_or_else(invalid)?,
+        minute: number(minute, 2)
+            .filter(|minute| *minute < 60)
+            .ok_or_else(invalid)?,
+        second: number(second, 2)
+            .filter(|second| *second < 60)
+            .ok_or_else(invalid)?,
+    };
+    if value.day > days_in_month(value.year, value.month) {
+        return Err(invalid());
+    }
+    Ok(value)
+}
+
+fn days_in_month(year: i32, month: u8) -> u8 {
+    match month {
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        _ => 31,
+    }
+}
+
+/// The current UTC civil date and time, from the system clock.
+fn current_utc_date_time() -> Result<FieldDateTime> {
+    let seconds = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| "the system clock is before 1970, pass --now")?
+        .as_secs();
+    let days = i64::try_from(seconds / 86_400)?;
+    let second_of_day = seconds % 86_400;
+    // Howard Hinnant's days-to-civil conversion.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let day_of_era = z.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_index = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+    let month = if month_index < 10 {
+        month_index + 3
+    } else {
+        month_index - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    Ok(FieldDateTime {
+        year: i32::try_from(year)?,
+        month: u8::try_from(month)?,
+        day: u8::try_from(day)?,
+        hour: u8::try_from(second_of_day / 3_600)?,
+        minute: u8::try_from(second_of_day / 60 % 60)?,
+        second: u8::try_from(second_of_day % 60)?,
+    })
+}
+
+/// Update every supported field result, then the page-number results.
+pub fn fields_update(
+    file: &Path,
+    now: Option<FieldDateTime>,
+    output: &Path,
+    json_output: bool,
+) -> Result<()> {
+    let now = match now {
+        Some(now) => now,
+        None => current_utc_date_time()?,
+    };
+    let mut doc = Document::open(file)?;
+    let fields = doc.update_fields(&FieldEvaluationContext {
+        now: Some(now),
+        file_name: output
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned()),
+        ..FieldEvaluationContext::default()
+    })?;
+    let pages = doc.update_layout_backed_fields()?;
+    publish_document(&mut doc, output)?;
+    let now = format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
+        now.year, now.month, now.day, now.hour, now.minute, now.second
+    );
+    if json_output {
+        return print_json(json!({
+            "action": "update",
+            "now": now,
+            "fields": fields,
+            "page_fields": pages.page_fields,
+            "num_pages_fields": pages.num_pages_fields,
+            "page_reference_fields": pages.page_reference_fields,
+            "section_fields": pages.section_fields,
+            "section_pages_fields": pages.section_pages_fields,
+            "diagnostics": pages.diagnostics,
+            "output": output.display().to_string(),
+        }));
+    }
+    let mut stdout = io::stdout().lock();
+    writeln!(stdout, "Fields: {fields}")?;
+    writeln!(stdout, "Page fields: {}", pages.updated_count())?;
+    writeln!(stdout, "Date and time: {now}")?;
+    writeln!(stdout, "Diagnostics: {}", pages.diagnostics.len())?;
+    writeln!(stdout, "Written to {}", output.display())?;
+    Ok(())
+}
+
+/// Describe one picture of [`Document::images`], which reads the main story.
+fn picture_json(index: usize, image: &ImageInfo) -> Value {
+    json!({
+        "index": index,
+        "story": "body",
+        "relationship_id": image.embed_id,
+        "name": image.name,
+        "alt_text": image.description,
+        "width_emu": image.width_emu,
+        "height_emu": image.height_emu,
+        "anchored": image.is_anchor,
+    })
+}
+
+/// Write each picture of the main story once into `dir` and list them.
+///
+/// A picture whose relationship is external or names a missing part has no
+/// bytes to write: its entry has a null `file`.
+pub fn images_extract(file: &Path, dir: &Path, force: bool, json_output: bool) -> Result<()> {
+    let doc = Document::open(file)?;
+    let mut written: HashMap<String, PathBuf> = HashMap::new();
+    let mut outputs = Vec::new();
+    let mut entries = Vec::new();
+    for (index, image) in doc.images().iter().enumerate() {
+        let mut entry = picture_json(index, image);
+        let data = (!image.embed_id.is_empty())
+            .then(|| doc.image_data(&image.embed_id))
+            .flatten();
+        if let Some(bytes) = data {
+            let probe = oxml_media::probe(&bytes);
+            let format = oxml_media::ImageFormat::sniff(&bytes);
+            let path = written
+                .entry(image.embed_id.clone())
+                .or_insert_with(|| {
+                    let extension = format.map_or("bin", |format| format.extension());
+                    let path = dir.join(format!("image{}.{extension}", outputs.len() + 1));
+                    outputs.push((path.clone(), bytes.clone()));
+                    path
+                })
+                .clone();
+            entry["file"] = json!(path.display().to_string());
+            entry["format"] = json!(format.map(|format| format.extension()));
+            entry["bytes"] = json!(bytes.len());
+            entry["width_px"] = json!(probe.map(|info| info.width_px));
+            entry["height_px"] = json!(probe.map(|info| info.height_px));
+        } else {
+            entry["file"] = Value::Null;
+        }
+        entries.push(entry);
+    }
+    let paths = outputs
+        .iter()
+        .map(|(path, _)| path.clone())
+        .collect::<Vec<_>>();
+    std::fs::create_dir_all(dir)?;
+    ensure_output_paths_allowed(&paths, file, force)?;
+    stage_and_publish(&outputs, force)?;
+    if json_output {
+        return print_json(json!({
+            "scope": "main",
+            "images": entries,
+            "files": paths.len(),
+            "directory": dir.display().to_string(),
+        }));
+    }
+    let mut stdout = io::stdout().lock();
+    for entry in &entries {
+        writeln!(
+            stdout,
+            "Picture {} ({}): {}",
+            entry["index"],
+            entry["relationship_id"].as_str().unwrap_or_default(),
+            entry["file"].as_str().unwrap_or("(no embedded bytes)")
+        )?;
+    }
+    writeln!(stdout, "Wrote {} file(s) to {}", paths.len(), dir.display())?;
+    Ok(())
+}
+
+/// The fixed format identifier of custom properties that Word writes.
+const CUSTOM_PROPERTY_FMTID: &str = "{D5CDD505-2E9C-101B-9397-08002B2CF9AE}";
+
+fn core_properties_json(core: Option<&CoreProperties>) -> Value {
+    let field = |value: fn(&CoreProperties) -> &Option<String>| {
+        core.and_then(|core| value(core).as_deref())
+    };
+    json!({
+        "title": field(|core| &core.title),
+        "author": field(|core| &core.creator),
+        "subject": field(|core| &core.subject),
+        "keywords": field(|core| &core.keywords),
+        "description": field(|core| &core.description),
+        "category": field(|core| &core.category),
+        "last_modified_by": field(|core| &core.last_modified_by),
+        "created": field(|core| &core.created),
+        "modified": field(|core| &core.modified),
+        "content_status": field(|core| &core.content_status),
+        "identifier": field(|core| &core.identifier),
+        "language": field(|core| &core.language),
+        "last_printed": field(|core| &core.last_printed),
+        "revision": field(|core| &core.revision),
+        "version": field(|core| &core.version),
+    })
+}
+
+fn custom_property_json(property: &CustomProperty) -> Value {
+    let (kind, value) = match &property.value {
+        CustomPropertyValue::Lpstr(text) | CustomPropertyValue::Lpwstr(text) => {
+            ("string", json!(text))
+        }
+        CustomPropertyValue::I4(value) => ("integer", json!(value)),
+        CustomPropertyValue::R8(value) => ("number", json!(value)),
+        CustomPropertyValue::Bool(value) => ("boolean", json!(value)),
+        CustomPropertyValue::FileTime(value) => ("date", json!(value)),
+        CustomPropertyValue::Empty => ("empty", Value::Null),
+        CustomPropertyValue::Raw(_) => ("other", Value::Null),
+    };
+    json!({ "name": property.name, "type": kind, "value": value })
+}
+
+/// Print the core and custom properties.
+pub fn meta_get(file: &Path, json_output: bool) -> Result<()> {
+    let doc = Document::open(file)?;
+    let core = core_properties_json(doc.core_properties());
+    let custom = doc
+        .custom_properties()
+        .iter()
+        .map(custom_property_json)
+        .collect::<Vec<_>>();
+    if json_output {
+        return print_json(json!({ "core": core, "custom": custom }));
+    }
+    let mut stdout = io::stdout().lock();
+    if let Value::Object(fields) = &core {
+        for (name, value) in fields {
+            if let Some(value) = value.as_str() {
+                writeln!(stdout, "{name}: {value}")?;
+            }
+        }
+    }
+    for property in &custom {
+        writeln!(
+            stdout,
+            "custom {} ({}): {}",
+            property["name"].as_str().unwrap_or_default(),
+            property["type"].as_str().unwrap_or_default(),
+            match &property["value"] {
+                Value::String(text) => text.clone(),
+                Value::Null => String::new(),
+                other => other.to_string(),
+            }
+        )?;
+    }
+    Ok(())
+}
+
+/// The property changes of one `meta set` command.
+pub struct MetaChanges {
+    pub title: Option<String>,
+    pub author: Option<String>,
+    pub subject: Option<String>,
+    pub keywords: Option<String>,
+    pub description: Option<String>,
+    pub category: Option<String>,
+    pub custom: Vec<(String, String)>,
+    pub remove_custom: Vec<String>,
+}
+
+/// Set core properties and add, replace or remove custom properties.
+pub fn meta_set(
+    file: &Path,
+    changes: &MetaChanges,
+    output: &Path,
+    json_output: bool,
+) -> Result<()> {
+    let core_changes = [
+        &changes.title,
+        &changes.author,
+        &changes.subject,
+        &changes.keywords,
+        &changes.description,
+        &changes.category,
+    ];
+    if core_changes.iter().all(|value| value.is_none())
+        && changes.custom.is_empty()
+        && changes.remove_custom.is_empty()
+    {
+        return Err(
+            "meta set needs at least one property: --title, --author, --subject, \
+                    --keywords, --description, --category, --custom NAME=VALUE or \
+                    --remove-custom NAME"
+                .into(),
+        );
+    }
+    let mut doc = Document::open(file)?;
+    if core_changes.iter().any(|value| value.is_some()) {
+        let mut core = doc.core_properties().cloned().unwrap_or_default();
+        let slots = [
+            &mut core.title,
+            &mut core.creator,
+            &mut core.subject,
+            &mut core.keywords,
+            &mut core.description,
+            &mut core.category,
+        ];
+        for (value, slot) in core_changes.into_iter().zip(slots) {
+            if let Some(value) = value {
+                *slot = Some(value.clone());
+            }
+        }
+        doc.set_core_properties(core)?;
+    }
+    for (name, text) in &changes.custom {
+        let existing = doc.custom_property(name);
+        let value = custom_property_value(name, existing.map(|property| &property.value), text)?;
+        let pid = match existing {
+            Some(property) => property.pid,
+            None => doc
+                .custom_properties()
+                .iter()
+                .map(|property| property.pid + 1)
+                .max()
+                .unwrap_or(2)
+                .max(2),
+        };
+        doc.set_custom_property(CustomProperty {
+            fmtid: existing.map_or_else(
+                || CUSTOM_PROPERTY_FMTID.to_owned(),
+                |property| property.fmtid.clone(),
+            ),
+            pid,
+            name: Some(name.clone()),
+            value,
+        })?;
+    }
+    for name in &changes.remove_custom {
+        if doc.remove_custom_property(name)?.is_none() {
+            return Err(format!("no custom property is named \"{name}\", nothing written").into());
+        }
+    }
+    publish_document(&mut doc, output)?;
+    let custom = doc
+        .custom_properties()
+        .iter()
+        .map(custom_property_json)
+        .collect::<Vec<_>>();
+    mutation_record(
+        json_output,
+        "main",
+        "set",
+        json!({ "core": core_properties_json(doc.core_properties()), "custom": custom }),
+        output,
+    )
+}
+
+/// The value of a custom property set from text, keeping the type of the
+/// property it replaces.
+fn custom_property_value(
+    name: &str,
+    existing: Option<&CustomPropertyValue>,
+    text: &str,
+) -> Result<CustomPropertyValue> {
+    let refused = |kind: &str| format!("custom property \"{name}\" is {kind}, found {text:?}");
+    Ok(match existing {
+        Some(CustomPropertyValue::I4(_)) => {
+            CustomPropertyValue::I4(text.parse().map_err(|_| refused("a 32-bit integer"))?)
+        }
+        Some(CustomPropertyValue::R8(_)) => CustomPropertyValue::R8(
+            text.parse::<f64>()
+                .ok()
+                .filter(|value| value.is_finite())
+                .ok_or_else(|| refused("a finite number"))?,
+        ),
+        Some(CustomPropertyValue::Bool(_)) => CustomPropertyValue::Bool(match text {
+            "true" | "1" => true,
+            "false" | "0" => false,
+            _ => return Err(refused("a Boolean (true or false)").into()),
+        }),
+        Some(CustomPropertyValue::FileTime(_)) => {
+            parse_field_date_time(text).map_err(|_| refused("a date (YYYY-MM-DDTHH:MM:SSZ)"))?;
+            let date_time = if text.contains('T') {
+                text.trim_end_matches('Z').to_owned()
+            } else {
+                format!("{text}T00:00:00")
+            };
+            CustomPropertyValue::FileTime(format!("{date_time}Z"))
+        }
+        Some(CustomPropertyValue::Lpstr(_)) => CustomPropertyValue::Lpstr(text.to_owned()),
+        _ => CustomPropertyValue::Lpwstr(text.to_owned()),
+    })
+}
+
+/// Set content controls by tag, then by alias, refusing a name no control has.
+pub fn fill(
+    file: &Path,
+    tags: &[(String, String)],
+    aliases: &[(String, String)],
+    output: &Path,
+    json_output: bool,
+) -> Result<()> {
+    if tags.is_empty() && aliases.is_empty() {
+        return Err("fill needs at least one --tag NAME=VALUE or --alias NAME=VALUE".into());
+    }
+    let mut doc = Document::open(file)?;
+    let mut entries = Vec::new();
+    for (selector, assignments) in [("tag", tags), ("alias", aliases)] {
+        for (name, value) in assignments {
+            let count = if selector == "tag" {
+                doc.set_content_control_value_by_tag(name, value)?
+            } else {
+                doc.set_content_control_value_by_alias(name, value)?
+            };
+            if count == 0 {
+                let known = doc
+                    .content_controls()
+                    .iter()
+                    .filter_map(|control| {
+                        if selector == "tag" {
+                            control.tag()
+                        } else {
+                            control.alias()
+                        }
+                    })
+                    .map(|name| format!("\"{name}\""))
+                    .collect::<Vec<_>>();
+                return Err(format!(
+                    "no content control has {selector} \"{name}\", nothing written \
+                     (known: {})",
+                    if known.is_empty() {
+                        "none".to_owned()
+                    } else {
+                        known.join(", ")
+                    }
+                )
+                .into());
+            }
+            entries.push(json!({ selector: name, "value": value, "count": count }));
+        }
+    }
+    publish_document(&mut doc, output)?;
+    if json_output {
+        return print_json(json!({
+            "action": "fill",
+            "controls": entries,
+            "output": output.display().to_string(),
+        }));
+    }
+    let mut stdout = io::stdout().lock();
+    for entry in &entries {
+        let (selector, name) = if let Some(tag) = entry["tag"].as_str() {
+            ("tag", tag)
+        } else {
+            ("alias", entry["alias"].as_str().unwrap_or_default())
+        };
+        writeln!(
+            stdout,
+            "Set {} control(s) with {selector} \"{name}\"",
+            entry["count"]
+        )?;
+    }
+    writeln!(stdout, "Written to {}", output.display())?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2076,7 +2786,9 @@ mod tests {
     fn inspect_json_uses_the_shared_schema_one_envelope() {
         let document = Document::new();
         let styles = vec!["Heading1".to_owned(), "Normal".to_owned()];
-        let value = inspect_json(Path::new("input.docx"), &document, styles.clone()).unwrap();
+        let counts = inspect_counts(&document);
+        let value =
+            inspect_json(Path::new("input.docx"), &document, styles.clone(), &counts).unwrap();
 
         assert_eq!(
             value,
@@ -2086,6 +2798,12 @@ mod tests {
                 "paragraphs": document.paragraph_count(),
                 "tables": document.table_count(),
                 "content_elements": document.content_count(),
+                "words": 0,
+                "characters": 0,
+                "characters_no_spaces": 0,
+                "pages": 1,
+                "pictures": [],
+                "content_controls": [],
                 "metadata": {
                     "title": document.title(),
                     "author": document.author(),

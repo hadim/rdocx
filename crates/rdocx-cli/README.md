@@ -18,6 +18,9 @@ and produces fixed or flow output without an Office host.
 - Tracked revision inspection, filtered resolution, table-of-contents rebuilds,
   and document comparison at run, word, or character granularity with ignore
   options.
+- One-shot edits: batch and regular-expression replacement, field updates,
+  picture extraction, core and custom properties, and content-control values,
+  with word, character, and page counts in `inspect`.
 - Package-preserving edits cover the final S74 paragraph, run, typography,
   table, section, settings, field, form, equation, and drawing surface.
 
@@ -67,7 +70,55 @@ rdocx compare original.docx edited.docx --author Reviewer \
   --timestamp 2026-09-13T12:00:00Z --granularity word --ignore-comments \
   --ignore-story header -o redline.docx
 rdocx toc rebuild report.docx -o refreshed.docx
+rdocx replace template.docx --map pairs.json -o report.docx --json
+rdocx replace report.docx --regex -p '(\d{4})-(\d{2})-(\d{2})' -v '$3/$2/$1' -o dated.docx
+rdocx fields update report.docx --now 2026-10-10 -o refreshed.docx
+rdocx images extract report.docx pictures --json
+rdocx meta set report.docx --title 'Final report' --custom Client=Acme -o titled.docx
+rdocx fill form.docx --tag client=Acme --alias 'Due date=2026-10-31' -o filled.docx
 ```
+
+`inspect` reports the word count, the character count with spaces, the page
+count from rdocx's pagination, the pictures of the main story with their
+relationship id, name, alt text, size in EMU and anchoring, and the content
+controls of the body with their tag, alias, id and text. When the document
+cannot be laid out, the page count is `null` with a warning on stderr.
+
+`replace --map PAIRS_JSON` reads a JSON array of
+`{"placeholder", "value", "expect"}` objects and applies the pairs in order
+over the whole document, so a later pair sees the text an earlier one wrote.
+When a pair that gives `expect` finds another count, nothing is written and the
+error names the zero-based pair. `--regex` reads each placeholder as a regular
+expression whose value may name capture groups as `$1`, and searches what the
+literal replacement searches except chart labels. `--json` reports the count
+of each pair and the total.
+
+`fields update` evaluates every supported field result, SEQ, REF, DATE, TIME,
+FILENAME and the others, then writes PAGE, NUMPAGES, PAGEREF, SECTION and
+SECTIONPAGES results from rdocx's own pagination. DATE and TIME use `--now`
+(`YYYY-MM-DD` or `YYYY-MM-DDTHH:MM:SS`), or the current UTC time, and FILENAME
+the output file name. A field that needs a value the document does not hold,
+such as a mail-merge field, keeps its cached result. PAGE and NUMPAGES in
+headers and footers keep their caches, which Word recomputes on every page.
+
+`images extract FILE DIR` writes each picture of the main story once into
+`DIR` as `image1.png`, `image2.jpeg` and so on, named by its detected format,
+and lists every picture with its `story`, relationship id, name, alt text,
+size in EMU and pixels, byte length and file. A linked picture has a `null`
+file. Pictures in headers, footers, notes and text boxes are not listed yet.
+An existing image file is refused unless `--force` is given.
+
+`meta get` prints the core and custom properties. `meta set` writes the
+`--title`, `--author`, `--subject`, `--keywords`, `--description` and
+`--category` it is given, adds or replaces `--custom NAME=VALUE` properties and
+removes `--remove-custom NAME` ones. A new custom property is a string, and an
+existing integer, number, Boolean or date property keeps its type, so a value
+of another type is refused. Removing a property that does not exist is refused.
+
+`fill` sets the value of every body content control whose tag matches
+`--tag NAME=VALUE` or whose alias (title) matches `--alias NAME=VALUE`, and
+writes a control bound to custom XML into its bound part too. A name that no
+control has is refused, naming the known ones, and nothing is written.
 
 Comment `add` ranges use zero-based body paragraph and run boundaries. The
 start is inclusive and the end is exclusive. Run boundaries count the runs that

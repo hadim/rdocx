@@ -1498,6 +1498,7 @@ dependencies = [
  "clap",
  "oxml-cli-support",
  "oxml-layout",
+ "oxml-media",
  "oxml-opc",
  "oxml-pdf",
  "rdocx",
