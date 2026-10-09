@@ -33,6 +33,7 @@ mod error;
 mod field;
 mod flat_opc;
 mod html;
+mod inspection;
 mod math;
 mod odt;
 pub mod paragraph;
@@ -93,6 +94,7 @@ pub use html::{
     HtmlDiagnostic, HtmlFragmentInsertResult, HtmlImageResource, HtmlReadResult, MhtmlDiagnostic,
     MhtmlReadResult, MhtmlWriteResult,
 };
+pub use inspection::{StoryText, StoryTextExport, StoryTextItem, ValidationReport};
 pub use math::{
     MathConversionDiagnostic, MathConversionResult, equation_from_latex, equation_from_mathml,
     equation_to_latex, equation_to_mathml,
