@@ -24,7 +24,7 @@ Issues264 and281 remain excluded. The eight initial stories are estimated at
 |------|-------|------|--------|-------|
 | F-X192 | Complete the remaining Word bibliography catalogue | L | pending | - |
 | F-283 | Complete numbering-aware navigation fields | L | pending | - |
-| F-X193 | Preserve semantic mark highlights through nested HTML runs | S | pending | - |
+| F-X193 | Preserve semantic mark highlights through nested HTML runs | S | in-progress | codex |
 | F-X194 | Complete Python table text and indentation APIs | M | pending | - |
 | F-X195 | Honor caller fonts and variable styles across render paths | L | pending | - |
 | F-X196 | Validate visible paragraph content without false empty warnings | S | pending | - |
