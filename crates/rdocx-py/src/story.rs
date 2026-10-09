@@ -298,12 +298,33 @@ fn install_story(py: Python<'_>, document: &mut PyDocument, slot: StorySlot) -> 
     let story = py
         .detach(|| inner.create_section_story(slot.section, slot.kind, slot.variant))
         .map_err(|error| rdocx_to_pyerr(py, error))?;
-    document
+    let index = document
         .inner
         .add_header_footer_paragraph(&story, "")
         .map_err(|error| rdocx_to_pyerr(py, error))?;
+    if let Some(style) = story_paragraph_style(&document.inner, slot) {
+        document
+            .inner
+            .edit_header_footer_paragraph(
+                &story,
+                rdocx::HeaderFooterParagraph::Direct(index),
+                |paragraph| paragraph.set_style(&style),
+            )
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+    }
     document.revisions.bump();
     Ok(())
+}
+
+/// Word's "Header" or "Footer" paragraph style, which a new header or footer
+/// paragraph takes when the document defines it.
+fn story_paragraph_style(document: &rdocx::Document, slot: StorySlot) -> Option<String> {
+    let name = if slot.kind == rdocx::HeaderFooterKind::Header {
+        "Header"
+    } else {
+        "Footer"
+    };
+    style_id_of_type(document, name, rdocx::StyleType::Paragraph).ok()
 }
 
 /// Split a page-number template into literal text and field names.
@@ -346,6 +367,49 @@ fn page_number_pieces(template: &str) -> PyResult<Vec<(bool, String)>> {
     Ok(pieces)
 }
 
+/// The sections a handle saw: inserting or removing a section renumbers
+/// them, so a handle that names a section by its index goes stale.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SectionLayout {
+    epoch: u64,
+    count: usize,
+}
+
+impl SectionLayout {
+    pub(crate) fn of(document: &PyDocument) -> Self {
+        Self {
+            epoch: document.section_epoch,
+            count: document.inner.section_count(),
+        }
+    }
+
+    /// Raise `StaleElementError` when the document's sections changed since
+    /// the handle was made.
+    pub(crate) fn check(
+        self,
+        py: Python<'_>,
+        document: &PyDocument,
+        kind: &str,
+        section: usize,
+        attribute: &str,
+    ) -> PyResult<()> {
+        if Self::of(document) == self {
+            return Ok(());
+        }
+        Err(stale_to_pyerr(
+            py,
+            oxml_py_support::StaleElementError {
+                element_kind: kind.to_owned(),
+                captured_revision: self.epoch,
+                current_revision: document.section_epoch,
+                recovery_hint: format!(
+                    "A section was inserted or removed. Re-fetch it with doc.sections[{section}]{attribute}."
+                ),
+            },
+        ))
+    }
+}
+
 /// A section's header or footer, python-docx's `_Header` and `_Footer`.
 ///
 /// The handle names a section and a variant, not a story part, so it stays
@@ -357,11 +421,27 @@ fn page_number_pieces(template: &str) -> PyResult<Vec<(bool, String)>> {
 pub struct PyHeaderFooter {
     document: Py<PyDocument>,
     slot: StorySlot,
+    layout: SectionLayout,
 }
 
 impl PyHeaderFooter {
-    pub(crate) fn new(document: Py<PyDocument>, slot: StorySlot) -> Self {
-        Self { document, slot }
+    pub(crate) fn new(document: Py<PyDocument>, slot: StorySlot, layout: SectionLayout) -> Self {
+        Self {
+            document,
+            slot,
+            layout,
+        }
+    }
+
+    /// Refuse to act once the sections this handle numbers have changed.
+    fn check(&self, py: Python<'_>) -> PyResult<()> {
+        self.layout.check(
+            py,
+            &self.document.borrow(py),
+            "header or footer",
+            self.slot.section,
+            &format!(".{}", self.slot.attribute()),
+        )
     }
 
     fn paragraph_handle(
@@ -402,6 +482,7 @@ impl PyHeaderFooter {
     /// paragraph, as python-docx does.
     #[getter]
     fn is_linked_to_previous(&self, py: Python<'_>) -> PyResult<bool> {
+        self.check(py)?;
         let document = self.document.borrow(py);
         if self.slot.section >= document.inner.section_count() {
             return Err(PyIndexError::new_err("section index out of range"));
@@ -435,6 +516,7 @@ impl PyHeaderFooter {
     /// without any story up to it gets one first, as in python-docx.
     #[getter]
     fn paragraphs<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        self.check(py)?;
         let count = {
             let mut document = self.document.borrow_mut(py);
             let story = story_or_create(py, &mut document, self.slot)?;
@@ -475,6 +557,7 @@ impl PyHeaderFooter {
         cols: usize,
         width: Option<i64>,
     ) -> PyResult<Py<PyHeaderFooterTable>> {
+        self.check(py)?;
         let mut document = self.document.borrow_mut(py);
         let story = story_or_create(py, &mut document, self.slot)?;
         let table = document
@@ -501,6 +584,7 @@ impl PyHeaderFooter {
     /// The story's direct tables.
     #[getter]
     fn tables<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        self.check(py)?;
         let document = self.document.borrow(py);
         let count = match self.slot.story(py, &document.inner)? {
             Some(story) => document
@@ -545,10 +629,18 @@ impl PyHeaderFooter {
         let alignment = alignment
             .map(crate::formatting::alignment_from_int)
             .transpose()?;
-        let at = self.append_paragraph(py, "", None)?;
+        let at = self.page_number_paragraph(py)?;
         {
             let mut document = self.document.borrow_mut(py);
+            let unstyled = read_paragraph(py, &document, self.slot, at, |paragraph| {
+                paragraph.style_id().is_none()
+            })?
+            .unwrap_or(false);
+            let style = story_paragraph_style(&document.inner, self.slot).filter(|_| unstyled);
             let written = edit_paragraph(py, &mut document, self.slot, at, |paragraph| {
+                if let Some(style) = style.as_deref() {
+                    paragraph.set_style(style);
+                }
                 if let Some(alignment) = alignment {
                     paragraph.set_alignment(alignment);
                 }
@@ -570,6 +662,38 @@ impl PyHeaderFooter {
 }
 
 impl PyHeaderFooter {
+    /// The paragraph a page number goes in: the story's lone empty
+    /// paragraph, such as the one a new story holds, or a new last one.
+    fn page_number_paragraph(&self, py: Python<'_>) -> PyResult<rdocx::HeaderFooterParagraph> {
+        self.check(py)?;
+        {
+            let mut document = self.document.borrow_mut(py);
+            let story = story_or_create(py, &mut document, self.slot)?;
+            let lone = rdocx::HeaderFooterParagraph::Direct(0);
+            let only_paragraph = document
+                .inner
+                .header_footer_paragraph_count(&story)
+                .map_err(|error| rdocx_to_pyerr(py, error))?
+                == 1
+                && document
+                    .inner
+                    .header_footer_table_count(&story)
+                    .map_err(|error| rdocx_to_pyerr(py, error))?
+                    == 0;
+            let empty = document
+                .inner
+                .read_header_footer_paragraph(&story, lone, |paragraph| {
+                    paragraph.run_count() == 0 && paragraph.text().is_empty()
+                })
+                .map_err(|error| rdocx_to_pyerr(py, error))?
+                .unwrap_or(false);
+            if only_paragraph && empty {
+                return Ok(lone);
+            }
+        }
+        self.append_paragraph(py, "", None)
+    }
+
     /// Append one paragraph and return where it is.
     fn append_paragraph(
         &self,
@@ -577,6 +701,7 @@ impl PyHeaderFooter {
         text: &str,
         style: Option<&str>,
     ) -> PyResult<rdocx::HeaderFooterParagraph> {
+        self.check(py)?;
         let mut document = self.document.borrow_mut(py);
         let style = style
             .map(|style| style_id_of_type(&document.inner, style, rdocx::StyleType::Paragraph))
@@ -639,10 +764,74 @@ impl PyHeaderFooterTable {
             .map_err(|error| rdocx_to_pyerr(py, error))?
             .ok_or_else(|| PyIndexError::new_err("table index out of range"))
     }
+
+    fn cell_handle(
+        &self,
+        py: Python<'_>,
+        row: usize,
+        col: usize,
+    ) -> PyResult<Py<PyHeaderFooterCell>> {
+        Py::new(
+            py,
+            PyHeaderFooterCell {
+                document: self.document.clone_ref(py),
+                slot: self.slot,
+                table: self.table,
+                row,
+                cell: col,
+                path: self.path.clone(),
+            },
+        )
+    }
 }
 
 #[pymethods]
 impl PyHeaderFooterTable {
+    /// The rows, each with its `cells`, as python-docx `Table.rows` lists them.
+    #[getter]
+    fn rows<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let counts = self.read(py, |table| {
+            (0..table.row_count())
+                .map(|row| table.row(row).map_or(0, |row| row.cell_count()))
+                .collect::<Vec<_>>()
+        })?;
+        let rows = counts
+            .into_iter()
+            .enumerate()
+            .map(|(row, cells)| {
+                let cells = (0..cells)
+                    .map(|col| self.cell_handle(py, row, col))
+                    .collect::<PyResult<Vec<_>>>()?;
+                Py::new(py, PyHeaderFooterRow { cells })
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        PyList::new(py, rows)
+    }
+
+    /// The table style ID, or `None`.
+    #[getter]
+    fn style(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        self.read(py, |table| table.style_id().map(str::to_owned))
+    }
+
+    /// Set the table style by ID or name, such as "Table Grid".
+    #[setter]
+    fn set_style(&self, py: Python<'_>, value: &str) -> PyResult<()> {
+        self.validate(py)?;
+        let mut document = self.document.borrow_mut(py);
+        let style = style_id_of_type(&document.inner, value, rdocx::StyleType::Table)?;
+        let story = self
+            .slot
+            .story(py, &document.inner)?
+            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
+        document
+            .inner
+            .edit_header_footer_table(&story, self.table, |table| table.set_style(&style))
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
+        show_written_variant(py, &mut document, self.slot)
+    }
+
     /// The number of rows.
     #[getter]
     fn row_count(&self, py: Python<'_>) -> PyResult<usize> {
@@ -661,17 +850,21 @@ impl PyHeaderFooterTable {
         if !exists {
             return Err(PyIndexError::new_err("cell index out of range"));
         }
-        Py::new(
-            py,
-            PyHeaderFooterCell {
-                document: self.document.clone_ref(py),
-                slot: self.slot,
-                table: self.table,
-                row,
-                cell: col,
-                path: self.path.clone(),
-            },
-        )
+        self.cell_handle(py, row, col)
+    }
+}
+
+/// A row of a header or footer table, python-docx's `_Row` with its `cells`.
+#[pyclass(name = "HeaderFooterRow", frozen)]
+pub struct PyHeaderFooterRow {
+    cells: Vec<Py<PyHeaderFooterCell>>,
+}
+
+#[pymethods]
+impl PyHeaderFooterRow {
+    #[getter]
+    fn cells<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        PyList::new(py, self.cells.iter().map(|cell| cell.clone_ref(py)))
     }
 }
 
@@ -833,13 +1026,17 @@ impl PySettings {
 
 /// The run break a python-docx `WD_BREAK` value names.
 pub(crate) fn break_kind(value: i32) -> PyResult<rdocx::run::BreakKind> {
+    use rdocx::run::BreakKind;
     match value {
-        6 => Ok(rdocx::run::BreakKind::Line),
-        7 => Ok(rdocx::run::BreakKind::Page),
-        8 => Ok(rdocx::run::BreakKind::Column),
+        6 => Ok(BreakKind::Line),
+        7 => Ok(BreakKind::Page),
+        8 => Ok(BreakKind::Column),
+        9 => Ok(BreakKind::TextWrapping(rdocx::BreakClear::Left)),
+        10 => Ok(BreakKind::TextWrapping(rdocx::BreakClear::Right)),
+        11 => Ok(BreakKind::TextWrapping(rdocx::BreakClear::All)),
         _ => Err(PyValueError::new_err(
-            "break type must be WD_BREAK.LINE, WD_BREAK.PAGE or WD_BREAK.COLUMN, \
-             start a section with Document.insert_section",
+            "break type must be WD_BREAK.LINE, PAGE, COLUMN, LINE_CLEAR_LEFT, \
+             LINE_CLEAR_RIGHT or LINE_CLEAR_ALL, start a section with Document.insert_section",
         )),
     }
 }
@@ -850,7 +1047,12 @@ pub(crate) fn check_break_location(
     location: ParagraphLocation,
     kind: rdocx::run::BreakKind,
 ) -> PyResult<()> {
-    if matches!(location, ParagraphLocation::Story { .. }) && kind != rdocx::run::BreakKind::Line {
+    if matches!(location, ParagraphLocation::Story { .. })
+        && matches!(
+            kind,
+            rdocx::run::BreakKind::Page | rdocx::run::BreakKind::Column
+        )
+    {
         return Err(PyValueError::new_err(
             "a page or column break has no effect in a header or footer, use WD_BREAK.LINE",
         ));
@@ -887,10 +1089,18 @@ pub(crate) fn note_reference_paragraph(
             "a note reference goes after a Paragraph or a Run",
         ));
     };
-    let ParagraphLocation::Body(paragraph) = location else {
-        return Err(PyValueError::new_err(
-            "a note reference must be in a body paragraph, not a table cell, header or footer",
-        ));
+    let paragraph = match location {
+        ParagraphLocation::Body(paragraph) => paragraph,
+        ParagraphLocation::Cell { .. } => {
+            return Err(PyValueError::new_err(
+                "a note reference must be in a body paragraph, not in a table cell",
+            ));
+        }
+        ParagraphLocation::Story { .. } => {
+            return Err(PyValueError::new_err(
+                "a note reference must be in a body paragraph, not in a header or footer",
+            ));
+        }
     };
     if let Some(run) = run {
         let count = document
@@ -976,17 +1186,28 @@ pub(crate) fn note_policy(
     })
 }
 
-/// Six hexadecimal digits from an `RGBColor` or a string.
-pub(crate) fn hex_color(value: &Bound<'_, PyAny>) -> PyResult<String> {
-    if let Ok(text) = value.extract::<String>() {
-        return Ok(text);
-    }
+/// Six upper-case hexadecimal digits from an `RGBColor` or a string such as
+/// `"FFF2CC"` or `"#fff2cc"`, or `auto` when `allow_auto` is set.
+pub(crate) fn hex_color(value: &Bound<'_, PyAny>, allow_auto: bool) -> PyResult<String> {
     if let Ok((red, green, blue)) = value.extract::<(u8, u8, u8)>() {
         return Ok(format!("{red:02X}{green:02X}{blue:02X}"));
     }
-    Err(PyTypeError::new_err(
-        "a colour is an RGBColor or six hexadecimal digits, such as \"FFF2CC\"",
-    ))
+    let Ok(text) = value.extract::<String>() else {
+        return Err(PyTypeError::new_err(
+            "a colour is an RGBColor or six hexadecimal digits, such as \"FFF2CC\"",
+        ));
+    };
+    if allow_auto && text.eq_ignore_ascii_case("auto") {
+        return Ok("auto".to_owned());
+    }
+    let digits = text.strip_prefix('#').unwrap_or(&text);
+    if digits.len() == 6 && digits.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Ok(digits.to_ascii_uppercase());
+    }
+    Err(PyValueError::new_err(format!(
+        "colour {text:?} must be an RGBColor or six hexadecimal digits, such as \"FFF2CC\"{}",
+        if allow_auto { " or \"auto\"" } else { "" }
+    )))
 }
 
 /// A page border side.

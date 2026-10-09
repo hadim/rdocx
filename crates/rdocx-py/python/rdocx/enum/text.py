@@ -33,6 +33,10 @@ class WD_BREAK(IntEnum):
     LINE = 6
     PAGE = 7
     COLUMN = 8
+    LINE_CLEAR_LEFT = 9
+    LINE_CLEAR_RIGHT = 10
+    LINE_CLEAR_ALL = 11
+    TEXT_WRAPPING = 11
 
 
 WD_BREAK_TYPE = WD_BREAK

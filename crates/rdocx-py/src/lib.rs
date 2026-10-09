@@ -23,7 +23,9 @@ use document::{
 use formatting::{PyFont, PyParagraphFormat};
 use paragraph::{PyParagraph, PyParagraphCollection};
 use run::{PyRun, PyRunCollection};
-use story::{PyHeaderFooter, PyHeaderFooterCell, PyHeaderFooterTable, PySettings};
+use story::{
+    PyHeaderFooter, PyHeaderFooterCell, PyHeaderFooterRow, PyHeaderFooterTable, PySettings,
+};
 use table::{
     PyCell, PyCellCollection, PyCellParagraphCollection, PyRow, PyRowCollection, PyTable,
     PyTableCollection,
@@ -158,6 +160,7 @@ fn _rdocx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyCellParagraphCollection>()?;
     module.add_class::<PyHeaderFooter>()?;
     module.add_class::<PyHeaderFooterTable>()?;
+    module.add_class::<PyHeaderFooterRow>()?;
     module.add_class::<PyHeaderFooterCell>()?;
     module.add_class::<PySettings>()?;
     Ok(())

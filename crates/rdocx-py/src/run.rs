@@ -134,7 +134,8 @@ impl PyRun {
     }
 
     /// Append a break inside this run, as python-docx `Run.add_break` does:
-    /// `WD_BREAK.LINE` (the default), `WD_BREAK.PAGE` or `WD_BREAK.COLUMN`.
+    /// `WD_BREAK.LINE` (the default), `PAGE`, `COLUMN`, or a text-wrapping
+    /// `LINE_CLEAR_LEFT`, `LINE_CLEAR_RIGHT` or `LINE_CLEAR_ALL` break.
     /// No run index moves, so live handles stay valid.
     #[pyo3(signature = (break_type = 6))]
     fn add_break(&self, py: Python<'_>, break_type: i32) -> PyResult<()> {

@@ -19,7 +19,7 @@ _Margins = tuple[
 __all__ = [
     "Bookmark", "BoundingBox", "Cell", "CellCollection", "CellParagraphCollection",
     "Comment", "ComparisonDiagnostic", "ContentFragment", "CoreProperties", "Document", "Font",
-    "HeaderFooter", "HeaderFooterCell", "HeaderFooterTable", "HeaderFooterVariant", "Hyperlink", "LayoutBackedFieldUpdateReport", "LayoutFragment", "LayoutPage", "ListLevel", "Paragraph", "ParagraphCollection",
+    "HeaderFooter", "HeaderFooterCell", "HeaderFooterRow", "HeaderFooterTable", "HeaderFooterVariant", "Hyperlink", "LayoutBackedFieldUpdateReport", "LayoutFragment", "LayoutPage", "ListLevel", "Paragraph", "ParagraphCollection",
     "ParagraphFormat", "Revision", "Row", "RowCollection", "Run", "RunCollection", "RunPosition",
     "RunRange", "Section", "Settings", "Story", "StoryItem", "StoryRunPosition", "StoryRunRange", "Style",
     "SvgDiagnostic", "SvgRenderResult", "Table", "TableCollection", "TocRebuildReport",
@@ -526,7 +526,20 @@ class HeaderFooterTable:
     def row_count(self) -> int: ...
     @property
     def column_count(self) -> int: ...
+    @property
+    def rows(self) -> list[HeaderFooterRow]: ...
+    @property
+    def style(self) -> str | None: ...
+    @style.setter
+    def style(self, value: str) -> None: ...
     def cell(self, row: int, col: int) -> HeaderFooterCell: ...
+
+
+@_final
+class HeaderFooterRow:
+    def __new__(cls, *, _private: _Never) -> HeaderFooterRow: ...
+    @property
+    def cells(self) -> list[HeaderFooterCell]: ...
 
 
 @_final

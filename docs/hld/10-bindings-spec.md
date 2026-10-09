@@ -1184,10 +1184,10 @@ with the default that layout already assumes for it, so the written element
 carries all seven attributes `CT_PageMar` requires. `Document` adds
 `section_count`, `sections`, total `section` and `section_mut` lookup, and
 fallible staged `insert_section` and `remove_section` operations. An inserted
-section copies the page size, orientation, margins, gutter and header and
-footer distances of the section before it, or of the section it precedes when
-it becomes the first one, so every section writes a complete `w:pgSz` and
-`w:pgMar`. Setting an orientation on a section without both page dimensions
+section copies the page size, orientation, margins, gutter, header and
+footer distances, page borders, columns and document grid of the section
+before it, or of the section it precedes when it becomes the first one, so
+every section writes a complete `w:pgSz` and `w:pgMar`. Setting an orientation on a section without both page dimensions
 takes the Letter default first, then normalizes it. Its older
 final-section geometry convenience setters remain infallible and unchecked.
 
@@ -1242,17 +1242,27 @@ story up to its section gives the first section one, holding one empty
 paragraph, and writing through a linked header edits the earlier story.
 Writing into a first-page story turns the section's title page on, and writing
 into an even story turns `w:evenAndOddHeaders` on. `add_page_number(template)`
-appends a centred paragraph of `PAGE`, `NUMPAGES` and `SECTIONPAGES` simple
-fields. Paragraph, run, font and paragraph-format handles inside a header or
+fills the story's lone empty paragraph, or appends one, with centred `PAGE`,
+`NUMPAGES` and `SECTIONPAGES` simple fields. A paragraph a new story holds and
+a page-number paragraph take the "Header" or "Footer" paragraph style when the
+document defines it. Paragraph, run, font and paragraph-format handles inside a header or
 footer are the body types, with the story slot in their path, and
-`HeaderFooterTable.cell(row, col)` returns a `HeaderFooterCell` with `text` and
-`paragraphs`. Appending paragraphs and tables, or setting a cell's text, moves
+`HeaderFooterTable.cell(row, col)` and `rows[i].cells` return a
+`HeaderFooterCell` with `text` and `paragraphs`, and its `style` reads and
+sets the table style by ID or name. A `HeaderFooter` handle and a `Section`
+snapshot record the document's sections when made, so after
+`insert_section` or `remove_section` they raise `StaleElementError` rather
+than reach a renumbered section. Appending paragraphs and tables, or setting a cell's text, moves
 no index and keeps live handles valid. `Section.different_first_page_header_footer`
 reads and writes the document, and setting any other `Section` attribute
 raises `AttributeError` naming the `update_section` keyword.
 `Document.settings.odd_and_even_pages_header_footer` reads and writes
-`w:evenAndOddHeaders`. `Run.add_break(WD_BREAK.LINE, PAGE or COLUMN)` follows
-python-docx and refuses a page or column break in a header or footer.
+`w:evenAndOddHeaders`. `Run.add_break` follows python-docx: `WD_BREAK.LINE`,
+`PAGE`, `COLUMN`, and `LINE_CLEAR_LEFT`, `LINE_CLEAR_RIGHT` and
+`LINE_CLEAR_ALL` (alias `TEXT_WRAPPING`) for a `textWrapping` break with its
+`w:clear`. It refuses a page or column break in a header or footer. Native
+`BreakType` and `BreakKind` gain `TextWrapping(BreakClear)`, which keeps
+`w:clear` through a round trip and lays out as a line break.
 
 Native Rust `Document::create_footnote(&ContentLocation, &str)` appends a normal
 footnote and its reference to one direct body paragraph in a staged operation.
@@ -1261,7 +1271,14 @@ to its current checked `StoryId`. `move_footnote_before(i32, i32)` reorders the
 note elements without changing IDs, and `remove_footnote(i32)` removes the note
 and all matching body references together. All four methods are fallible.
 Rich paragraphs, tables, fields, links, pictures, content controls, and
-comments use the common story APIs on the resolved footnote story. This is an
+comments use the common story APIs on the resolved footnote story. A created
+note follows Word: the reference run and the note mark take the
+`FootnoteReference` character style, the note paragraph `FootnoteText`, and a
+space follows the mark. The styles are added when missing, superscript and
+10 point, and a document without note separators gains the separator and
+continuation separator records, IDs -1 and 0, which the settings reference.
+Endnotes do the same with `EndnoteReference` and `EndnoteText`. The renderer
+no longer shrinks a reference run that its style already raises. This is an
 additive pre-1.0 native API. Python `Document.add_footnote(paragraph or last
 run, text)` and `remove_footnote(id)` call it, and refuse a run that is not the
 last of its paragraph and a paragraph outside the body. WASM and CLI gain no
@@ -1305,8 +1322,12 @@ Page size applies before orientation, which then normalizes
 the dimensions as the native setter does. A bare int is read as EMU, and
 `Twips`, `Pt`, `Inches`, `Cm`, `Mm` and `Emu` build one. A page width or
 height under a tenth of an inch, the mark of a twips or points int, raises
-`ValueError` naming the Length constructors before any change.
-`Document.page_color` takes an `RGBColor`, six hexadecimal digits or `None`.
+`ValueError` naming the Length constructors before any change, and so does a
+margin, gutter, column gap or header or footer distance above zero but under
+a hundredth of an inch.
+`Document.page_color` takes an `RGBColor`, six hexadecimal digits with or
+without `#`, or `None`, and a border `color` also takes `auto`. Any other
+string raises `ValueError`.
 `Document.set_text_watermark`, `set_image_watermark` and
 `set_page_borders(section, style, width, color, space, offset_from)` call the
 native operations, the last refusing a width outside a quarter point to twelve

@@ -4441,8 +4441,12 @@ def test_page_colour_watermarks_and_page_borders():
     assert b"<w:displayBackgroundShape/>" in _package_part_bytes(document, "word/settings.xml")
     document.page_color = "dde4ee"
     assert str(document.page_color) == "DDE4EE"
-    with pytest.raises(rdocx.RdocxError, match="six hexadecimal digits"):
+    with pytest.raises(ValueError, match="six hexadecimal digits"):
         document.page_color = "blue"
+    with pytest.raises(ValueError, match="six hexadecimal digits"):
+        document.page_color = "auto"
+    document.page_color = "#dde4ee"
+    assert str(document.page_color) == "DDE4EE"
     document.page_color = None
     assert document.page_color is None
 
@@ -4459,6 +4463,13 @@ def test_page_colour_watermarks_and_page_borders():
     assert '<w:top w:val="double" w:sz="12" w:space="20" w:color="FF0000"/>' in body
     with pytest.raises(ValueError, match="Pt\\(0.25\\) to Pt\\(12\\)"):
         document.set_page_borders(0, width=Pt(20))
+    for bad in ("red", "#FF00", "FF0000FF"):
+        with pytest.raises(ValueError, match="six hexadecimal digits"):
+            document.set_page_borders(0, color=bad)
+    document.set_page_borders(0, color="#00ff00")
+    assert 'w:color="00FF00"' in _document_xml(document).decode()
+    document.set_page_borders(0, color="auto")
+    assert 'w:color="auto"' in _document_xml(document).decode()
     document.set_page_borders(0, None)
     assert "w:pgBorders" not in _document_xml(document).decode()
 
@@ -4474,3 +4485,89 @@ def test_section_lengths_accept_length_objects_and_refuse_a_twips_int():
         document.update_section(0, page_width=12240)
     updated = document.update_section(0, page_width=Twips(11906), page_height=Twips(16838))
     assert (updated.page_width, updated.page_height) == (Twips(11906), Twips(16838))
+
+
+
+def test_notes_carry_word_styles_space_and_separators():
+    import rdocx
+
+    document = rdocx.Document()
+    paragraph = document.add_paragraph("Claim")
+    document.add_footnote(paragraph, "Source")
+    # The reference is appended, so the paragraph handle stays valid.
+    assert paragraph.text == "Claim"
+    document.add_endnote(paragraph, "Closing")
+    body = _document_xml(document).decode()
+    assert '<w:rStyle w:val="FootnoteReference"/>' in body
+    assert '<w:rStyle w:val="EndnoteReference"/>' in body
+    footnotes = _package_part_bytes(document, "word/footnotes.xml").decode()
+    assert '<w:pStyle w:val="FootnoteText"/>' in footnotes
+    assert '<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteRef/></w:r>' in footnotes
+    assert '<w:t xml:space="preserve"> </w:t>' in footnotes
+    assert 'w:type="separator" w:id="-1"' in footnotes or 'w:id="-1" w:type="separator"' in footnotes
+    assert "<w:continuationSeparator/>" in footnotes
+    assert "<w:separator/>" in _package_part_bytes(document, "word/endnotes.xml").decode()
+    settings = _package_part_bytes(document, "word/settings.xml").decode()
+    assert '<w:footnote w:id="-1"/><w:footnote w:id="0"/>' in settings
+    assert '<w:endnote w:id="-1"/><w:endnote w:id="0"/>' in settings
+    styles = {style.style_id: style for style in document.styles}
+    for style_id in ("FootnoteReference", "FootnoteText", "EndnoteReference", "EndnoteText"):
+        assert style_id in styles
+    # A second note reuses the styles and separators.
+    document.add_footnote(document.paragraphs[0], "Another")
+    footnotes = _package_part_bytes(document, "word/footnotes.xml").decode()
+    assert footnotes.count("<w:separator/>") == 1
+    pages = _pdf_pages(document)
+    assert "Claim1" in pages[0].replace(" ", "")
+
+
+def test_header_footer_details_follow_word_and_python_docx():
+    import rdocx
+    from rdocx import Inches, WD_BREAK
+
+    document = rdocx.Document()
+    document.add_paragraph("body")
+    document.add_style("Header")
+    document.add_style("Footer")
+    footer = document.sections[0].footer
+    paragraph = footer.add_page_number()
+    # The page number fills the new story's lone empty paragraph.
+    assert [p.text for p in footer.paragraphs] == ["Page 1 of 1"]
+    assert paragraph.style == "Footer"
+    header = document.sections[0].header
+    assert header.paragraphs[0].style == "Header"
+
+    table = header.add_table(2, 2, Inches(6))
+    rows = table.rows
+    assert [len(row.cells) for row in rows] == [2, 2]
+    rows[1].cells[0].text = "Bottom left"
+    assert table.cell(1, 0).text == "Bottom left"
+    assert table.style is None
+    table.style = "Table Grid"
+    assert header.tables[0].style == "TableGrid"
+    with pytest.raises(KeyError):
+        table.style = "No such style"
+
+    held = document.sections[0].footer
+    stale_section = document.sections[0]
+    document.insert_section(0)
+    with pytest.raises(rdocx.StaleElementError, match=r"sections\[0\]\.footer"):
+        held.paragraphs
+    with pytest.raises(rdocx.StaleElementError, match="section was inserted or removed"):
+        stale_section.header
+
+    run = document.paragraphs[-1].runs[0]
+    run.add_break(WD_BREAK.LINE_CLEAR_ALL)
+    run = document.paragraphs[-1].runs[0]
+    run.add_break(WD_BREAK.LINE_CLEAR_LEFT)
+    body = _document_xml(document).decode()
+    assert '<w:br w:type="textWrapping" w:clear="all"/>' in body
+    assert '<w:br w:type="textWrapping" w:clear="left"/>' in body
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert '<w:br w:type="textWrapping" w:clear="all"/>' in _document_xml(reopened).decode()
+
+    with pytest.raises(ValueError, match="margin_left=1440 .*Twips"):
+        document.update_section(0, margin_left=1440)
+    with pytest.raises(ValueError, match="header_distance"):
+        document.update_section(0, header_distance=720)
+    document.update_section(0, margin_left=0)
