@@ -30,7 +30,7 @@ Issues264 and281 remain excluded. The nine included stories are estimated at
 | F-X196 | Validate visible paragraph content without false empty warnings | S | pending | - |
 | F-X197 | Unify Python colour inputs and font colour formats | L | pending | - |
 | F-X198 | Preserve alternate text-box copies during scoped replacement | M | in-progress | codex |
-| F-X199 | Model namespace-qualified empty table cell margins | S | pending | - |
+| F-X199 | Model namespace-qualified empty table cell margins | S | in-progress | codex |
 
 ## Sequencing note
 
