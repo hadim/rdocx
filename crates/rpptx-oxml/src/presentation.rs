@@ -365,6 +365,20 @@ impl CT_Presentation {
             .unwrap_or(1)
     }
 
+    /// Sets `showSpecialPlsOnTitleSld`, PowerPoint's record of "Don't show
+    /// on title slide". `Some(false)` writes `"0"`, `None` removes the
+    /// attribute, which reads as the default true.
+    pub fn set_show_special_placeholders_on_title_slide(&mut self, value: Option<bool>) {
+        self.raw_attributes
+            .retain(|(name, _)| name != "showSpecialPlsOnTitleSld");
+        if let Some(value) = value {
+            self.raw_attributes.push((
+                "showSpecialPlsOnTitleSld".to_owned(),
+                if value { "1" } else { "0" }.to_owned(),
+            ));
+        }
+    }
+
     pub fn sections(&self) -> &[Section] {
         &self.sections
     }

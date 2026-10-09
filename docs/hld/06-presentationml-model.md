@@ -1195,11 +1195,13 @@ target without changing the public `TimingCondition` fields. Both queries read
 the existing namespace-aware projection, and the captured subtree remains the
 serialization source.
 
-Readers reject duplicate or out-of-order modelled timing children. One narrow
-PowerPoint compatibility case accepts an attribute-free empty layout
-`p:transition` immediately before `p:hf`, keeps both values typed, and writes
-them in canonical `p:hf`, `p:transition` order. This is the producer shape in
-the pinned `ArtisticEffectSample.pptx` corpus deck.
+Readers reject duplicate or out-of-order modelled timing children. A slide
+layout follows `CT_SlideLayout`: `p:cSld`, `p:clrMapOvr`, `p:transition`,
+`p:timing`, `p:hf`, `p:extLst`. A master follows `CT_SlideMaster`: `p:cSld`,
+`p:clrMap`, `p:sldLayoutIdLst`, `p:transition`, `p:timing`, `p:hf`,
+`p:txStyles`, `p:extLst`. Both read and write in that order, as the pinned
+`ArtisticEffectSample.pptx` corpus deck writes a layout transition before its
+`p:hf`.
 
 Modern Office 2021 comment authors, comments, threaded replies, and
 `p14:sectionLst` are typed only at the fields callers inspect or mutate. Their
