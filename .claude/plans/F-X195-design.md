@@ -319,3 +319,28 @@ notes/handout/timeline checks. Rederive actual local archive measurements.
 The minimum subsetter0.2.6 requirement needs explicit manifest review, with
 no new dependency or lock delta inferred. Source ownership stays exclusive
 after the first wave and table work, with X207 and X210 following this story.
+
+## Single contributing-resolution trace provider
+
+F-X195 also owns the existing bounded paragraph trace/cache event identity
+needed by X210 diagnostics. Extend actual contributing measurement/shaping
+events with exact requested family, selected face/instance and selected actual
+family, retaining current FontId validation. Replay those bounded events
+inside the same layout lifecycle, not a historical FontId-to-request map.
+Update actual cache carrier footprint/budget accounting when owned strings
+are added. Preserve bounds and overflow bypass. No global diagnostic registry,
+new source module or duplicated resolver. X210 owns substitution rules and
+message policy, byte-output diagnostic companions and consumer projection.
+
+Require warm/cold Aptos-then-Calibri and reverse ordering, Aptos/Aptos Display
+sharing a fallback without attribution collapse, supplied genuine Aptos,
+missing supplied glyphs selecting another actual face, probe-only/empty
+requests and measurement versus PDF/PNG/SVG/raster exact selected instance
+controls. Approximation facts arise only from contributing actual choices,
+not a speculative attempted family lookup. These acceptance controls run
+under this provider once. X207/X210 consume their reviewed result.
+
+The diagnosed unmatched_requests defect belongs to unintegrated PR319.
+Current canonical font.rs has no such map, so it is not a claimed live bug
+or a reason to adopt contributor diagnostic code unchanged. Retain actual
+request context and selected-instance identity through cache reuse.

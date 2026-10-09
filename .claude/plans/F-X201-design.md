@@ -1,6 +1,6 @@
 # F-X201, Complete Python section stories and page authoring
 
-**Status**: draft
+**Status**: approved
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X206
@@ -138,11 +138,15 @@ X203, X192 and F-283 before assigning the wave. No new source module or crate.
 
 ## Open questions
 
-Snapshot compatibility, concrete live-owner signatures, checked run-boundary
-note operations and the single X201/X203 validation representation are
-resolved below from actual source. Before final approval, reconcile rich
-related-story cell path admission, the DrawingML watermark acceptance
-evidence and exact output policy. This draft is not approved for implementation.
+Resolved by the live/snapshot, note/section and checked related-story contracts
+below. Admit ordinary rich related-story tables/cells through qualified
+same-owner staged source spans, not main-body ordinals or detached wrappers.
+New watermark authoring is real DrawingML text/picture behind header text,
+with exact named style/opacity and checked owner relationships. Existing VML
+compatibility methods remain accurately exposed. Native/LibreOffice output,
+installed binding, late failure and optional claimed Google import evidence
+are implementation gates, not waived tests. F-X206's completed token provider
+supplies originating owner/cause authority once before this source claim.
 
 ## Resolved authoring contracts
 
@@ -226,3 +230,27 @@ Build a footer entirely through installed Python: PAGE X of NUMPAGES, styled run
 Notes require main paragraph and run-boundary controls, accepted inserted runs, controls/cells where admitted, reference positions, custom marks, id allocation, numbering restarts, separators, deletion with references, failed foreign/stale/header host and preserved other owners. Test source-preserving namespace aliases, unknown attributes/children and schema sequence. Use actual pinned python-docx object-model comparisons for sections and footer relationships where its API overlaps. Pin Word and LibreOffice for independent rendered page-number, orientation, first/Even story and note controls, deterministic font mode for native baselines. Both WASM target checks and actual affected package archive measurements remain earned riders.
 
 Genuine unresolved acceptance evidence: existing VML watermark methods do not establish the requested Google-compatible DrawingML path, and current rich related-story cell paths need proved physical ownership admission before a public claim. Neither is a reason to invent another approval gate. Parent can approve the concrete additive design, then implementation must obtain real controls and refuse unsupported routes honestly. No baseline change is authorized here. Actual harness deltas must be measured and separately reviewed.
+
+## Approved related-story and DrawingML output contract
+
+## X201 rich related-story cells
+
+Admit cells in the actual linked header/footer and footnote/endnote parts through a checked physical owner, not an ordinal borrowed from the main document. Existing story_sources at document.rs:15867 resolves related parts through actual relationships. story_source_and_owner at15960 accepts TableCell in those sources and validates kind, owner index and fingerprint. The namespace-qualified scanner permits cell/textbox owners at8713. story_range_paragraph_source at16952 resolves one checked paragraph item or a bounded content-control paragraph path. These are real reusable source mechanisms, not a completed Python rich authoring API.
+
+The current mutable borrow helper is unsuitable for that API: story_paragraph_mut at16140 computes a modeled cell route only for the main part at16199 and refuses other parts at16205. Python ParagraphLocation at paragraph.rs:12 stores only Body or main-table cell ordinals. Choose the existing plan's concrete story-aware location alternative carrying a native ContentLocation plus originating document authority/revision. Extend the existing Paragraph/Run/Table/Cell classes and their common owner resolver once. It will require removing ParagraphLocation's Copy assumption when it gains owned location data, not introducing a second class hierarchy or generic path engine.
+
+For each access, validate document identity/revision before physical resolution, resolve the current qualified owner and unique item/span, parse the latest selected paragraph/table, apply the requested typed edit, then replace that same owner span on a staged candidate. The proposed replace_story_content operation in existing document.rs must enforce same-kind replacement, complete containing-cell/source correspondence, namespace closure and owner-scoped relationships, prepare/reopen and one publication. Native insert_content at18377 already demonstrates the source-splice/reopen transaction, while set_story_source_xml at7779 reconciles existing modeled part state. Do not retain a borrowed native paragraph across Python calls or silently route a footer cell into the body table vector.
+
+Supported initial admission is direct paragraphs/tables and independently checked cell owners inside related-story tables, including nested tables where the scanner proves their unique enclosing physical cell. Supported modeled control paragraphs use the existing bounded control path. Refuse ambiguous/opaque ownership, unsupported path depth or stale/foreign owners before mutation. This refusal protects imported unsupported content, but does not excuse failure to implement the ordinary rich footer table/cell case explicitly required by Issue304. Note references themselves remain allowed only at admitted main-story hosts, not in a footer/note merely because those parts support rich editing.
+
+No native capture is required to decide this ownership contract. The implementation gate is one installed Python footer containing styled PAGE/NUMPAGES runs, a logo, a table/cell paragraph and a nested-table admitted route, across linked/unlinked variants. Assert owning-part media/hyperlink targets, unknown XML preservation, save/reopen/render, no body contamination, failed/refetched handles and late-failure atomicity. Use original-source namespace tests. Do not treat scanner availability alone as a passed rich-cell test.
+
+## X201 DrawingML watermark output policy
+
+Keep legacy native VML methods and their existing behavior. Current set_text_watermark_for at document.rs:20963 explicitly constructs VmlWatermark::Text at20983. Expose them accurately. New rich section watermark authoring selects a DrawingML anchored text box or picture in the section's actual header variant, behind text, page-relative positioning, no text wrap, checked dimensions/rotation/colour/opacity and reserved drawing identity. Reuse the existing native file and ownership/transaction code. Do not insert the anchor in the main body, convert text to pixels, or replace unrelated header content.
+
+Concrete reuse: authored_text_box_alternate_content at742 already writes qualified WPS DrawingML plus VML fallback, and add_text_box_to_story at17789 validates, reserves identity and writes to the chosen story before reopen. CT_Anchor.background at rdocx-oxml/drawing.rs:473 supplies page-relative behind-text picture geometry. These are implementation ingredients, not a ready watermark writer: the current text helper accepts plain text and does not carry all TextWatermarkOptions styling/opacity. The new path must retain real text and add the named formatting in its actual run/shape representation. Word2010 text fill is a run-property extension, not ordinary w:color alpha, as documented by [Microsoft's w14:textFill reference](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.linq.w14.textfill?view=openxml-3.0.1). Validate exact extension/schema order and actual renderer handling rather than silently discarding opacity.
+
+Stage header creation/linkage policy, media relationships for picture watermarks, and both physical textbox representations atomically. Replace only API-owned watermark identity, preserve unrelated drawings/text/producer watermark owners and prune only unreferenced API media. If a representation's requested feature cannot be faithfully authored/rendered, return a named atomic error rather than fall back silently to VML-only output. Existing VML-only setters remain a documented compatibility path. Image and text new section paths share owner/anchor mechanics but are substantive writers, not forwarding-only new facades.
+
+Issue304's exact text says Google import is best effort and prefers a DrawingML picture or text box behind text in the header. Approve that concrete output policy now. Native Word/LibreOffice normal reopen/render is a required implementation gate. An actual permitted Google import study is needed only before a demonstrated Google-compatibility claim, not an infinite preapproval prerequisite or a fabricated CI guarantee. No external upload occurred in this task.

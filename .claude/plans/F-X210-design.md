@@ -92,11 +92,14 @@ Existing cases that request Georgia, Segoe UI, Aptos or verified symbol fallback
 
 ## Open questions
 
-1. Resolved: Issue313 explicitly requests ordered font_dirs. F-X195 owns it and preserves singular font_dir compatibility.
-2. Resolved: user approved the exact eight-file core inventory. Genuine regular/bold Selawik and F-X195 synthesis cover this approved inventory.
-3. What pinned Segoe UI reference and truthful measured tolerance satisfy acceptance given the upstream kerning limitation? Do not declare compatibility without reference evidence.
-4. Resolved: the refreshed issue explicitly defers a distributed font pack. Caller-provided fonts are the supported route.
-5. Which exact family/codepoint denotes the issue's section-square bullet, and what installed diagnostic surface consumes fallback reports after byte-only rendering?
+Ordered font_dirs, eight core assets, caller-only optional-pack route,
+section-square identity, bounded Selawik metrics and same-pass diagnostic
+consumers are resolved below. The exact3968-byte revised subset approval
+remains pending. It adds onlyU2610 to the same authorized ninth asset path.
+Do not adopt that revision under the older3916-byte hash approval. All27
+existing bundled faces lack a nonzero Unicode U2610 glyph in their eligible
+format4/12 cmaps, as authenticated in existing-bundled-checkbox-coverage.json.
+No other new file, family/axis modification or pack machinery is proposed.
 
 ## Performed bounded shaping experiment
 
@@ -339,3 +342,12 @@ a95e7d7421e30e8ad304a0eb48aa18aefabcfec568a0f652c1039d72da999373.
 Its actual approval answer remains pending. Original3916-byte approval and
 all eight core approvals remain valid for their exact bytes. Neither research
 nor elapsed time authorizes copying revised bytes.
+
+Use diagnostic companion names by adding _with_diagnostics to the existing
+Python byte-render methods, with their exact original parameters plus the
+F-X195 caller-font keywords. Return (existing_payload,tuple[str,...]) from
+one owned output. Native companion signatures retain corresponding native
+render options/selection and one explicit font-files slice, with the same
+owned diagnostic vector. Do not add a variant for every font-input spelling.
+Existing SVG results retain their named diagnostics. Existing native layout
+results already expose diagnostics and require no forwarding companion.
