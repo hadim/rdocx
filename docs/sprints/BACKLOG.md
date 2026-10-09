@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 220 | 196 | 4 | 16 |
-| **Total** | **545** | **470** | **4** | **67** |
+| X, Cross-cutting | 221 | 196 | 4 | 17 |
+| **Total** | **546** | **470** | **4** | **68** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -769,4 +769,5 @@ HLD14 contract before adopting contributor changes.
 | F-X208 | Author PowerPoint footer fields themes and transitions | S91 | L | pending |
 | F-X209 | Edit PowerPoint masters layouts and themes | S91 | L | pending |
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | S91 | L | pending |
+| F-X211 | Complete Python script compatibility and safe XML access | S91 | L | pending |
 <!-- AUTOGEN:backlog-MX END -->

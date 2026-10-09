@@ -435,5 +435,5 @@ unexplained hash delta to CLI work or move the exclusive baseline.
    addition to existing nonzero exit, without corrupting success stdout.
 
 All unresolved questions remain in draft. No approval, source, baseline or
-Cargo action is implied by this ignored proposal. F-X193's scoped gate
+Cargo action is implied by this canonical draft. F-X193's scoped gate
 remains incomplete and its reviewed source is untouched.

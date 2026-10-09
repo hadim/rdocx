@@ -7334,3 +7334,35 @@ line end, and a top-and-bottom drawing pushes the following text below its
 bottom edge plus `distB`. Unwrapped and `wrapNone` drawings lay out exactly as
 before, which the hash harness proves by leaving every baseline without a
 wrapped drawing unchanged.
+
+### F-X211, Complete Python script compatibility and safe XML access (L)
+
+Resolve the uncovered acceptance in [Issue316](https://github.com/tensorbee/rdocx/issues/316),
+part of Issue314. Keep the existing17 python-docx and7 python-pptx examples
+as a subset of roughly100 idiomatic short first-draft scripts spanning
+Issues303 through313. Each checks the saved file. Print per-area unmodified
+correct-file success rates in CI and record the final integrated rates.
+Failures receive a fix under their owning story or a deliberate divergence
+whose error names the supported call.
+
+Expose validated element.xml read and element.replace_xml(str) for paragraphs,
+runs, tables, cells, section properties, shapes, text bodies, slides, layouts
+and masters. Reject wrong qualified element types and invalid ownership,
+relationships or schema order atomically. Preserve opaque XML and package
+relationships. Extend stable handles across supported structural edits,
+including Word hyperlink insertion/removal and table grid changes in both
+bindings. When survival cannot be proved, name the invalidating call in the
+error. Existing F-X194 and F-X206 own their already requested stability fixes.
+
+Audit accepted ignored options, invalid units and inconsistent OOXML. Known
+caller-font, internal-link and section repairs stay with F-X195, F-X202 and
+F-X201. Add a public regression for each case and actionable errors for
+differently spelled upstream calls. Do not implement those fixes twice.
+
+**Depends on**: F-X200 through F-X210 for final corpus acceptance, with
+source and prerequisite capability edges refined in the detailed design.
+**Test gate**: regression. Installed isolated bindings run the full corpus
+and assert saved package structure. All requested element kinds round-trip
+opaque content and refuse wrong types atomically. Handles survive supported
+edits, unsupported invalidations name the triggering operation, and each
+silent failure has a failing-before/fixed-after public control.

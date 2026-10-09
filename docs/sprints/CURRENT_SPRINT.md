@@ -5,9 +5,9 @@
 **Goal**: finish S90's bibliography catalogue and numbering-aware navigation
 carryovers and resolve the new HTML, Python authoring, rendering, validation
 and alternate text-box ownership reports before templates and forms at S92.
-Issues264 and281 remain excluded. The expanded scope contains twenty active
+Issues264 and281 remain excluded. The expanded scope contains twenty-one active
 stories. The original nine-story estimate of 23 to 29 developer-days no longer
-covers the sprint. Estimate the eleven new large stories during detailed design
+covers the sprint. Estimate the twelve new large stories during detailed design
 and keep rolling contribution intake open.
 
 ## Spec references
@@ -44,6 +44,7 @@ and keep rolling contribution intake open.
 | F-X208 | Author PowerPoint footer fields themes and transitions | L | pending | - |
 | F-X209 | Edit PowerPoint masters layouts and themes | L | pending | - |
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | pending | - |
+| F-X211 | Complete Python script compatibility and safe XML access | L | pending | - |
 
 ## Sequencing note
 
@@ -103,6 +104,14 @@ caller-font handout/PDF-A paths. Its fallback on subset failure, directory
 precedence and synthesis geometry must be reconciled against the approved
 plan. Contributor gate claims are not local evidence. Archive measurements
 will be generated from actual integrated source.
+
+Issue [316](https://github.com/tensorbee/rdocx/issues/316) entered the next
+refresh. Existing stories retain the known font, link, section and selected
+handle fixes. F-X211 owns the uncovered first-draft script corpus and CI
+metric, validated writable XML, remaining stable-handle cases, actionable
+errors and systematic silent-failure audit. Its evidence depends on the
+provider stories, with no duplicate repair under this story. Detailed design
+and resource routing precede implementation.
 
 ## Parallel implementation resources
 

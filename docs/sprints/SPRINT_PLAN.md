@@ -2160,6 +2160,7 @@ CLI validation reports before the template and form programme resumes.
 | F-X208 | Author PowerPoint footer fields themes and transitions | L |
 | F-X209 | Edit PowerPoint masters layouts and themes | L |
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | L |
+| F-X211 | Complete Python script compatibility and safe XML access | L |
 
 The 2026-10-09 intake includes [PR294](https://github.com/tensorbee/rdocx/pull/294)
 and Issues [295](https://github.com/tensorbee/rdocx/issues/295),
@@ -2291,6 +2292,14 @@ caller-font handout/PDF-A paths. Its fallback on subset failure, directory
 precedence and synthesis geometry must be reconciled against the approved
 plan. Contributor gate claims are not local evidence. Archive measurements
 will be generated from actual integrated source.
+
+Issue [316](https://github.com/tensorbee/rdocx/issues/316) adds F-X211 for
+roughly100 first-draft Python scripts with per-area CI success metrics,
+validated element XML read/replace across the requested owners, remaining
+stable handles, operation-named invalidation and actionable-error audits.
+Known font, link, section and selected handle repairs remain with their
+existing F-IDs. Measure the integrated provider result once and avoid a
+second implementation of those fixes.
 
 #### Sprint S92, Templates, controls, and forms
 
