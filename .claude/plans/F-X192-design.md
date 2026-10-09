@@ -263,3 +263,35 @@ respectively. This finite completion resolves prepared-only provenance
 for these compact controls. It does not retroactively authenticate the
 historical recovered dense document's execution, prove arbitrary context
 or demonstrate a portable complete-key comparator. Those barriers remain.
+
+
+## Genuine complete-key ICU counterexample
+
+Bounded complete-key research now measures installed ICU C78.3 against
+actual fully assembled corporate SortingString operands. This evidence is
+separate from the earlier partial-key3900-option grid. Root authenticated
+all five artifacts under /private/tmp/S91-F-X192-complete-key-comparator.
+Full source identities, native/reopen hashes, key bytes, runtime/API/header
+hashes and resolved locale/options are in measurement-receipt.json,
+SHA2561ab6125d27fe5bdb1ce88643491497c2a6dfc4d165bcfed9d007c31bf5ad90b9.
+
+Both installed styles produce exactly the same two full keys in the
+corporate controls: " 王 2020 Same title" and " Иванов 2020 Same title".
+All four completed Harvard/APA forward/reversed-source controls put the
+Chinese source first. ICU en_US resolves valid locale en_US/actual root,
+with its recorded default warning. Default Tertiary, targeted Primary and
+Identical strengths with normalization enabled each compare the first key
+strictly Greater and reverse the native order. Source-stable equal-key
+handling cannot explain that strict reversal. This rejects those three
+measured configurations of this runtime, not every portable backend or
+ICU4X. Do not infer an unmeasured style/script bucket or universal locale rule.
+
+The bounded36 comparisons include five genuine complete Harvard21-source
+vectors, three Harvard identity/tie vectors and these four corporate vectors.
+There are27 failures and nine tie-vector matches. Complete-key concatenation
+collisions and source-stable tie behavior remain separately established.
+APA person author0 depends on runtime locale formatting properties, so its
+sixteen localized non-Case operands per own control remain explicitly
+unproved. Corporate and Case assembly is genuine, not a guessed author key.
+No dependency, production comparator, baseline or native recapture follows.
+A demonstrated complete formatter/comparator route remains required.
