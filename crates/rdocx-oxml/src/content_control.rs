@@ -233,6 +233,62 @@ impl CT_SdtPr {
         }
     }
 
+    /// Set the `w14:checked` state of a check box control.
+    ///
+    /// The `checked` child is written first, as the Word 2010 schema orders
+    /// the children of `w14:checkbox`, with the prefix the type element's
+    /// children already use. Its other children, such as `checkedState` and
+    /// `uncheckedState`, are kept as they are.
+    pub fn set_checkbox_checked(&mut self, checked: bool) -> Result<()> {
+        if self.control_type != Some(SdtType::CheckBox) {
+            return Err(OxmlError::InvalidValue(
+                "only a check box content control has a checked state".to_owned(),
+            ));
+        }
+        let element = self.type_element.get_or_insert_with(|| TypeElement {
+            control_type: SdtType::CheckBox,
+            attributes: Vec::new(),
+            children: Vec::new(),
+        });
+        let mut reader = Reader::from_reader(element.children.as_slice());
+        let mut kept = Vec::with_capacity(element.children.len());
+        let mut prefix: Option<String> = None;
+        let mut copied_to = 0usize;
+        loop {
+            let before = reader.buffer_position() as usize;
+            let event = reader.read_event()?;
+            let (start, empty) = match &event {
+                Event::Start(start) => (start.to_owned(), false),
+                Event::Empty(start) => (start.to_owned(), true),
+                Event::Eof => break,
+                _ => continue,
+            };
+            let name = start.name();
+            if prefix.is_none() {
+                prefix = name
+                    .prefix()
+                    .map(|prefix| String::from_utf8_lossy(prefix.as_ref()).into_owned());
+            }
+            if !empty {
+                reader.read_to_end(name)?;
+            }
+            if oxml_core::xml::local_name(name.as_ref()) == b"checked" {
+                kept.extend_from_slice(&element.children[copied_to..before]);
+                copied_to = reader.buffer_position() as usize;
+            }
+        }
+        kept.extend_from_slice(&element.children[copied_to..]);
+        let prefix = prefix.unwrap_or_else(|| "w14".to_owned());
+        let mut children = format!(
+            r#"<{prefix}:checked {prefix}:val="{}"/>"#,
+            u8::from(checked)
+        )
+        .into_bytes();
+        children.extend(kept);
+        element.children = children;
+        Ok(())
+    }
+
     /// The local name and attributes of every direct child of the type element.
     #[allow(clippy::type_complexity)]
     fn type_children(&self) -> Result<Vec<(Vec<u8>, Vec<(Vec<u8>, String)>)>> {
