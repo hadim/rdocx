@@ -261,3 +261,17 @@ directory-first and explicit-last loading, retains default CJK regular
 coordinates, declares the required pre-1.0 output-identity source break and
 introduces no dependency. Synthetic constants are deliberate choices gated
 on independent controls.
+
+## Contributor intake, PR315
+
+PR [315](https://github.com/tensorbee/rdocx/pull/315) entered the next rolling
+refresh at immutable head `af388f255d3b178aaa0aef03313034b815c71eb2`. It closes
+Issues296 and297 and belongs to existing F-X195, with Issue313 crediting that
+same implementation. No new story is created. Read the complete changed
+files, comments and reviews before claiming font work. Reuse accepted loader,
+render-path and instance changes, then implement uncovered approved criteria.
+Its stated omissions include synthetic italic, bundled variable instances and
+caller-font handout/PDF-A paths. Its fallback on subset failure, directory
+precedence and synthesis geometry must be reconciled against the approved
+plan. Contributor gate claims are not local evidence. Archive measurements
+will be generated from actual integrated source.

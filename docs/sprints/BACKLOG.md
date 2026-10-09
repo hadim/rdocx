@@ -541,6 +541,11 @@ regenerated, never hand-edited.
 
 ### X, Cross-cutting
 
+Rolling intake PR315 maps to F-X195 for Issues296 and297, also consumed by
+Issue313. It adds no F-ID or status change. See its existing approved plan and
+HLD14 contract before adopting contributor changes.
+
+
 <!-- AUTOGEN:backlog-MX START -->
 | F-ID | Title | Sprint | Size | Status |
 |------|-------|--------|------|--------|
