@@ -40,6 +40,13 @@ The scan is read-only and never rewrites the source or changes revision.
 Malformed snapshot input reports the existing CLI error rather than being
 silently classified as empty. Preserve the original counting scope.
 
+The required repository-policy archive inventory checks exact normalized
+member bytes. Rederive the affected rdocx-cli archive in the existing local
+measurement generator before preparation, update only its observed README
+row and scripts/readme_doctests.py tuple, and rebuild until the actual records
+agree. Keep inventory and tolerances unchanged. Integration rederives shared
+records after combining workers. This is gate maintenance, not publication.
+
 ## Rejected alternatives
 
 - Test only drawings, which leaves every other listed content kind broken.
@@ -73,6 +80,10 @@ integration entrypoint. Use source-built XML and generated image bytes.
 - Published CLI behavior changes only the incorrect advisory warning. No
   library API, version, dependency, flag, trait, generic, module or file change.
 
+- Archive measurement carrier: HLD15 Packaging and the release command.
+  Actual local archive records, exact members and existing size ceilings.
+  No manifest, lockfile, version, tolerance or publication changes.
+
 ## Hash harness
 
 Expected unchanged. Validation reads documents without rendering or mutation.
@@ -82,6 +93,8 @@ Expected unchanged. Validation reads documents without rendering or mutation.
 - `crates/rdocx-cli/src/commands.rs`
 - Existing CLI integration test entrypoint
 - HLD files above and shared Cargo/test execution
+
+- Existing README rdocx-cli archive row and script measurement tuple
 
 ## Implementation checklist
 

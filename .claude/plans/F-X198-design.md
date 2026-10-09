@@ -30,12 +30,14 @@ existing namespace-qualified story scanner conventions and exact span
 containment, not matching text or a global substring search.
 
 Add a small private detector in existing document.rs. It returns whether the
-selected StoryKind::TextBox owner lies in an MC AlternateContent Choice with
+selected owner is contained by a qualified text box in an MC AlternateContent Choice with
 another compatible text-box representation in a Choice or Fallback. Refuse
 with Error::Other explaining that scoped edits of alternate text-box copies
 require document-wide replacement. This maps through the existing Python
 adapter to RdocxError. Standalone/single-representation text boxes keep their
 supported scoped behavior. Opaque foreign lookalikes do not masquerade as MC.
+A selected table cell inside that text box follows the same containment guard.
+Main-body cells outside text boxes retain their existing scoped behavior.
 Ambiguous alternate ownership refuses rather than selecting an identical box.
 
 Perform the guard before splicing/publishing the candidate. Existing invalid
@@ -43,6 +45,13 @@ text, checked source selection, expected-count mismatch and zero no-op retain
 atomic semantics. Candidate preparation never changes the live document.
 Preserve source bytes, comments, formatting, revisions and unrelated members.
 No public method, type, module, file or dependency is added.
+
+The required repository-policy archive inventory checks exact normalized
+member bytes. Rederive the affected rdocx archive in the existing local
+measurement generator before preparation, update only its observed README
+row and scripts/readme_doctests.py tuple, and rebuild until the actual records
+agree. Keep inventory and tolerances unchanged. Integration rederives shared
+records after combining workers. This is gate maintenance, not publication.
 
 ## Rejected alternatives
 
@@ -85,6 +94,10 @@ before implementing and attach a later Issue301 PR to this F-ID.
   not a new public API. Package dry-run and 10 MiB gate for affected carriers.
 - No new file, crate, module, trait, generic, flag or dependency.
 
+- Archive measurement carrier: HLD15 Packaging and the release command.
+  Actual local archive records, exact members and existing size ceilings.
+  No manifest, lockfile, version, tolerance or publication changes.
+
 ## Hash harness
 
 Expected unchanged. No sample scoped alternate-text-box replacement is used.
@@ -95,6 +108,8 @@ Expected unchanged. No sample scoped alternate-text-box replacement is used.
 - `crates/rdocx/tests/regression_test.rs`
 - Existing Python replacement test entrypoint
 - Listed HLD files and all Cargo/binding/test execution
+
+- Existing README rdocx archive row and script measurement tuple
 
 ## Implementation checklist
 
