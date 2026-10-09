@@ -27,4 +27,15 @@ class WD_UNDERLINE(IntEnum):
     WAVY = 11
 
 
-__all__ = ["WD_ALIGN_PARAGRAPH", "WD_UNDERLINE"]
+class WD_BREAK(IntEnum):
+    """Break types for ``Run.add_break``, with python-docx's values."""
+
+    LINE = 6
+    PAGE = 7
+    COLUMN = 8
+
+
+WD_BREAK_TYPE = WD_BREAK
+
+
+__all__ = ["WD_ALIGN_PARAGRAPH", "WD_BREAK", "WD_BREAK_TYPE", "WD_UNDERLINE"]

@@ -17,6 +17,7 @@ use crate::paragraph::{
     ParagraphLocation, PyParagraph, PyParagraphCollection, defined_style, style_id_of_type,
 };
 use crate::rdocx_to_pyerr;
+use crate::story::{PyHeaderFooter, PySettings, StorySlot};
 use crate::table::{PyTable, PyTableCollection};
 
 #[pyclass(name = "RunPosition", frozen, get_all, eq, skip_from_py_object)]
@@ -790,27 +791,69 @@ impl PyHeaderFooterVariant {
     }
 }
 
-#[pyclass(name = "Section", frozen, get_all, eq, skip_from_py_object)]
+#[pyclass(name = "Section", frozen, eq, skip_from_py_object)]
 #[derive(Clone, PartialEq, Eq)]
 pub struct PySection {
+    #[pyo3(get)]
     pub ordinal: usize,
+    #[pyo3(get)]
     pub is_final: bool,
+    #[pyo3(get)]
     pub orientation: Option<String>,
+    #[pyo3(get)]
     pub page_width: Option<i64>,
+    #[pyo3(get)]
     pub page_height: Option<i64>,
+    #[pyo3(get)]
     pub margin_top: Option<i64>,
+    #[pyo3(get)]
     pub margin_right: Option<i64>,
+    #[pyo3(get)]
     pub margin_bottom: Option<i64>,
+    #[pyo3(get)]
     pub margin_left: Option<i64>,
+    #[pyo3(get)]
     pub gutter: Option<i64>,
+    #[pyo3(get)]
     pub column_count: Option<u32>,
+    #[pyo3(get)]
     pub column_spacing: Option<i64>,
+    #[pyo3(get)]
     pub page_number_start: Option<u32>,
+    #[pyo3(get)]
     pub header_distance: Option<i64>,
+    #[pyo3(get)]
     pub footer_distance: Option<i64>,
+    #[pyo3(get)]
     pub different_first_page: Option<bool>,
+    #[pyo3(get)]
     pub break_type: Option<String>,
+    /// The document a section read from `Document.sections` belongs to,
+    /// which its header and footer accessors edit.
+    pub(crate) owner: SectionOwner,
 }
+
+/// The document of a section snapshot, ignored when snapshots are compared.
+#[derive(Default)]
+pub(crate) struct SectionOwner(Option<Py<PyDocument>>);
+
+impl Clone for SectionOwner {
+    fn clone(&self) -> Self {
+        Self(
+            self.0
+                .as_ref()
+                .map(|document| Python::attach(|py| document.clone_ref(py))),
+        )
+    }
+}
+
+impl PartialEq for SectionOwner {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl Eq for SectionOwner {}
 
 #[pymethods]
 impl PySection {
@@ -854,7 +897,124 @@ impl PySection {
             footer_distance,
             different_first_page,
             break_type,
+            owner: SectionOwner::default(),
         }
+    }
+
+    // ---- Headers, footers and python-docx section names ----
+
+    #[getter]
+    fn header(&self, py: Python<'_>) -> PyResult<Py<PyHeaderFooter>> {
+        self.header_footer(
+            py,
+            rdocx::HeaderFooterKind::Header,
+            rdocx::HdrFtrType::Default,
+        )
+    }
+
+    #[getter]
+    fn footer(&self, py: Python<'_>) -> PyResult<Py<PyHeaderFooter>> {
+        self.header_footer(
+            py,
+            rdocx::HeaderFooterKind::Footer,
+            rdocx::HdrFtrType::Default,
+        )
+    }
+
+    #[getter]
+    fn first_page_header(&self, py: Python<'_>) -> PyResult<Py<PyHeaderFooter>> {
+        self.header_footer(
+            py,
+            rdocx::HeaderFooterKind::Header,
+            rdocx::HdrFtrType::First,
+        )
+    }
+
+    #[getter]
+    fn first_page_footer(&self, py: Python<'_>) -> PyResult<Py<PyHeaderFooter>> {
+        self.header_footer(
+            py,
+            rdocx::HeaderFooterKind::Footer,
+            rdocx::HdrFtrType::First,
+        )
+    }
+
+    #[getter]
+    fn even_page_header(&self, py: Python<'_>) -> PyResult<Py<PyHeaderFooter>> {
+        self.header_footer(py, rdocx::HeaderFooterKind::Header, rdocx::HdrFtrType::Even)
+    }
+
+    #[getter]
+    fn even_page_footer(&self, py: Python<'_>) -> PyResult<Py<PyHeaderFooter>> {
+        self.header_footer(py, rdocx::HeaderFooterKind::Footer, rdocx::HdrFtrType::Even)
+    }
+
+    /// Whether the section's first page shows its first-page header and
+    /// footer, read from and written to the document.
+    #[getter]
+    fn different_first_page_header_footer(&self, py: Python<'_>) -> PyResult<bool> {
+        let Some(document) = &self.owner.0 else {
+            return Ok(self.different_first_page.unwrap_or(false));
+        };
+        let document = document.borrow(py);
+        let section = document
+            .inner
+            .section(self.ordinal)
+            .ok_or_else(|| PyIndexError::new_err("section index out of range"))?;
+        Ok(section.different_first_page().unwrap_or(false))
+    }
+
+    // A section is a snapshot: only the python-docx header and footer switch
+    // writes through, and every other name says how to change it.
+    fn __setattr__(&self, py: Python<'_>, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        if name == "different_first_page_header_footer" {
+            let enabled = value.extract::<bool>()?;
+            let document = self.owned_document()?;
+            let mut document = document.borrow_mut(py);
+            document
+                .inner
+                .section_mut(self.ordinal)
+                .ok_or_else(|| PyIndexError::new_err("section index out of range"))?
+                .set_different_first_page(enabled);
+            return Ok(());
+        }
+        let field = match name {
+            "left_margin" => "margin_left",
+            "right_margin" => "margin_right",
+            "top_margin" => "margin_top",
+            "bottom_margin" => "margin_bottom",
+            "start_type" => "break_type",
+            other => other,
+        };
+        Err(pyo3::exceptions::PyAttributeError::new_err(format!(
+            "Section is a snapshot and {name} cannot be set on it, use \
+             document.update_section({}, {field}=...) with a Length such as Inches(1)",
+            self.ordinal
+        )))
+    }
+}
+
+impl PySection {
+    fn owned_document(&self) -> PyResult<&Py<PyDocument>> {
+        self.owner.0.as_ref().ok_or_else(|| {
+            PyValueError::new_err(
+                "this Section was built by hand, read one from document.sections to reach its \
+                 headers and footers",
+            )
+        })
+    }
+
+    fn header_footer(
+        &self,
+        py: Python<'_>,
+        kind: rdocx::HeaderFooterKind,
+        variant: rdocx::HdrFtrType,
+    ) -> PyResult<Py<PyHeaderFooter>> {
+        let document = self.owned_document()?.clone_ref(py);
+        Py::new(
+            py,
+            PyHeaderFooter::new(document, StorySlot::new(self.ordinal, kind, variant)),
+        )
     }
 }
 
@@ -1776,7 +1936,8 @@ impl PyDocument {
             }
             let paragraph_index = match paragraph.validate(py)? {
                 crate::paragraph::ParagraphLocation::Body(index) => index,
-                crate::paragraph::ParagraphLocation::Cell { .. } => {
+                crate::paragraph::ParagraphLocation::Cell { .. }
+                | crate::paragraph::ParagraphLocation::Story { .. } => {
                     return Err(PyValueError::new_err(
                         "content handle is not a direct body child",
                     ));
@@ -1982,7 +2143,7 @@ fn body_index_argument(value: &Bound<'_, PyAny>, message: &'static str) -> PyRes
     })
 }
 
-fn section_snapshot(section: rdocx::SectionRef<'_>) -> PySection {
+fn section_snapshot(section: rdocx::SectionRef<'_>, owner: Option<Py<PyDocument>>) -> PySection {
     let (page_width, page_height) = section.page_size().map_or((None, None), |(width, height)| {
         (Some(width.to_emu()), Some(height.to_emu()))
     });
@@ -2024,6 +2185,7 @@ fn section_snapshot(section: rdocx::SectionRef<'_>) -> PySection {
         footer_distance,
         different_first_page: section.different_first_page(),
         break_type: section.break_type().map(|value| value.to_str().to_owned()),
+        owner: SectionOwner(owner),
     }
 }
 
@@ -2499,11 +2661,13 @@ impl PyDocument {
     }
 
     #[getter]
-    fn sections<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
-        let sections = self
+    fn sections<'py>(slf: &Bound<'py, Self>) -> PyResult<Bound<'py, PyTuple>> {
+        let py = slf.py();
+        let this = slf.borrow();
+        let sections = this
             .inner
             .sections()
-            .map(section_snapshot)
+            .map(|section| section_snapshot(section, Some(slf.clone().unbind())))
             .collect::<Vec<_>>();
         PyTuple::new(py, sections)
     }
@@ -2529,7 +2693,7 @@ impl PyDocument {
     ))]
     #[allow(clippy::too_many_arguments)]
     fn update_section(
-        &mut self,
+        mut slf: PyRefMut<'_, Self>,
         py: Python<'_>,
         index: usize,
         orientation: Option<&str>,
@@ -2563,7 +2727,21 @@ impl PyDocument {
                 })
             })
             .transpose()?;
-        let mut section = self
+        // Section lengths are EMU. A bare int meant as twips or points is
+        // thousands of times too small, so a page under Word's minimum of a
+        // tenth of an inch is refused rather than written.
+        for (name, value) in [("page_width", page_width), ("page_height", page_height)] {
+            if let Some(value) = value
+                && (1..91_440).contains(&value)
+            {
+                return Err(PyValueError::new_err(format!(
+                    "{name}={value} is {:.4} inch: section lengths are EMU, pass a Length such \
+                     as Inches(8.5), Pt(612) or Twips(12240)",
+                    value as f64 / 914_400.0
+                )));
+            }
+        }
+        let mut section = slf
             .inner
             .section_mut(index)
             .ok_or_else(|| PyIndexError::new_err("section index out of range"))?;
@@ -2691,12 +2869,14 @@ impl PyDocument {
             *section.properties_mut() = saved;
             return Err(rdocx_to_pyerr(py, error));
         }
-        Ok(self
+        let mut updated = slf
             .inner
             .sections()
             .nth(index)
-            .map(section_snapshot)
-            .expect("the updated section exists"))
+            .map(|section| section_snapshot(section, None))
+            .expect("the updated section exists");
+        updated.owner = SectionOwner(Some(slf.into()));
+        Ok(updated)
     }
 
     fn insert_section(&mut self, py: Python<'_>, index: usize) -> PyResult<()> {
@@ -3938,6 +4118,205 @@ impl PyDocument {
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         slf.borrow_mut(py).revisions.bump();
         Ok(())
+    }
+
+    // ---- Settings, notes and page decoration ----
+
+    /// The document settings, python-docx's `document.settings`.
+    #[getter]
+    fn settings(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<PySettings>> {
+        Py::new(py, PySettings::new(slf))
+    }
+
+    /// Add a footnote whose reference ends a body paragraph, given as the
+    /// paragraph or its last run, and return the note ID.
+    fn add_footnote(
+        slf: Py<Self>,
+        py: Python<'_>,
+        target: &Bound<'_, PyAny>,
+        text: &str,
+    ) -> PyResult<i32> {
+        Self::add_note(slf, py, target, text, rdocx::NoteFamily::Footnote)
+    }
+
+    /// Add an endnote whose reference ends a body paragraph, given as the
+    /// paragraph or its last run, and return the note ID.
+    fn add_endnote(
+        slf: Py<Self>,
+        py: Python<'_>,
+        target: &Bound<'_, PyAny>,
+        text: &str,
+    ) -> PyResult<i32> {
+        Self::add_note(slf, py, target, text, rdocx::NoteFamily::Endnote)
+    }
+
+    /// Remove a footnote and every reference to it.
+    fn remove_footnote(&mut self, py: Python<'_>, id: i32) -> PyResult<()> {
+        py.detach(|| self.inner.remove_footnote(id))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(())
+    }
+
+    /// Remove an endnote and every reference to it.
+    fn remove_endnote(&mut self, py: Python<'_>, id: i32) -> PyResult<()> {
+        py.detach(|| self.inner.remove_endnote(id))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(())
+    }
+
+    /// Set how footnotes or endnotes are numbered and placed, for the whole
+    /// document or, with `section`, for one section.
+    #[pyo3(signature = (kind, *, number_format = "decimal", start = 1, restart = "continuous", placement = None, section = None))]
+    #[allow(clippy::too_many_arguments)]
+    fn set_note_numbering(
+        &mut self,
+        py: Python<'_>,
+        kind: &str,
+        number_format: &str,
+        start: u32,
+        restart: &str,
+        placement: Option<&str>,
+        section: Option<usize>,
+    ) -> PyResult<()> {
+        let family = crate::story::note_family(kind)?;
+        let policy = crate::story::note_policy(family, number_format, start, restart, placement)?;
+        match section {
+            None => self.inner.set_note_policy(family, policy),
+            Some(index) => self
+                .inner
+                .section_mut(index)
+                .ok_or_else(|| PyIndexError::new_err("section index out of range"))?
+                .set_note_policy(family, policy),
+        }
+        .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    /// The page colour as an `RGBColor`, or `None`.
+    #[getter]
+    fn page_color(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.inner
+            .page_color()
+            .map(|hex| {
+                py.import("rdocx")?
+                    .getattr("RGBColor")?
+                    .call_method1("from_string", (hex,))
+                    .map(Bound::unbind)
+            })
+            .transpose()
+    }
+
+    /// Set the page colour from an `RGBColor` or six hexadecimal digits, or
+    /// remove it with `None`.
+    #[setter]
+    fn set_page_color(&mut self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        let color = value.map(crate::story::hex_color).transpose()?;
+        self.inner
+            .set_page_color(color.as_deref())
+            .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    /// Put a diagonal text watermark in every header variant in use.
+    fn set_text_watermark(&mut self, py: Python<'_>, text: &str) -> PyResult<()> {
+        py.detach(|| self.inner.set_text_watermark(text))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(())
+    }
+
+    /// Put a picture watermark of `width` by `height` in every header variant
+    /// in use.
+    fn set_image_watermark(
+        &mut self,
+        py: Python<'_>,
+        data: &[u8],
+        filename: &str,
+        width: i64,
+        height: i64,
+    ) -> PyResult<()> {
+        py.detach(|| {
+            self.inner.set_image_watermark(
+                data,
+                filename,
+                rdocx::Length::emu(width),
+                rdocx::Length::emu(height),
+            )
+        })
+        .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(())
+    }
+
+    /// Frame every page of one section with a border on all four sides, or
+    /// remove the frame with `style=None`.
+    #[pyo3(
+        signature = (section, style = Some("single"), *, width = 6_350, color = None, space = 304_800, offset_from = "page"),
+        text_signature = "($self, section, style='single', *, width=6350, color=None, space=304800, offset_from='page')"
+    )]
+    #[allow(clippy::too_many_arguments)]
+    fn set_page_borders(
+        &mut self,
+        section: usize,
+        style: Option<&str>,
+        width: i64,
+        color: Option<&Bound<'_, PyAny>>,
+        space: i64,
+        offset_from: &str,
+    ) -> PyResult<()> {
+        let borders = style
+            .map(|style| -> PyResult<_> {
+                let color = color.map(crate::story::hex_color).transpose()?;
+                let edge = crate::story::page_border_edge(style, width, color, space)?;
+                let offset_from = rdocx_oxml::document::ST_PageBorderOffset::from_str(offset_from)
+                    .ok_or_else(|| PyValueError::new_err("offset_from must be page or text"))?;
+                Ok(rdocx_oxml::document::CT_PageBorders {
+                    offset_from: Some(offset_from),
+                    top: Some(edge.clone()),
+                    left: Some(edge.clone()),
+                    bottom: Some(edge.clone()),
+                    right: Some(edge),
+                    ..Default::default()
+                })
+            })
+            .transpose()?;
+        let mut target = self
+            .inner
+            .section_mut(section)
+            .ok_or_else(|| PyIndexError::new_err("section index out of range"))?;
+        match borders {
+            Some(borders) => target.set_page_borders(borders),
+            None => target.properties_mut().page_borders = None,
+        }
+        Ok(())
+    }
+}
+
+impl PyDocument {
+    fn add_note(
+        slf: Py<Self>,
+        py: Python<'_>,
+        target: &Bound<'_, PyAny>,
+        text: &str,
+        family: rdocx::NoteFamily,
+    ) -> PyResult<i32> {
+        let paragraph = crate::story::note_reference_paragraph(py, &slf, target)?;
+        let mut document = slf.borrow_mut(py);
+        let location = document
+            .inner
+            .paragraph_story_location(paragraph)
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
+        let inner = &mut document.inner;
+        let id = py
+            .detach(|| match family {
+                rdocx::NoteFamily::Footnote => inner.create_footnote(&location, text),
+                rdocx::NoteFamily::Endnote => inner.create_endnote(&location, text),
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        // The reference run becomes a story item of its own.
+        document.revisions.bump();
+        Ok(id)
     }
 }
 
