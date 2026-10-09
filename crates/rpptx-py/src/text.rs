@@ -5,10 +5,11 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBool, PyFloat, PyList, PySlice, PyString};
 use rpptx::{
     AutofitMode, CT_TextCharacterProperties, CT_TextParagraphProperties, ColorChoice, Emu, Fill,
-    RgbColor, SolidFill, TextAlignment, TextAnchor, TextBulletCharacter, TextBulletChoice,
-    TextFont, TextNoBullet, TextSpacing, TextStrike, TextUnderline,
+    SolidFill, TextAlignment, TextAnchor, TextBulletCharacter, TextBulletChoice, TextFont,
+    TextNoBullet, TextSpacing, TextStrike, TextUnderline,
 };
 
+use crate::dml::{ColorSource, PyColorFormat, rgb_color};
 use crate::normalize_index;
 use crate::presentation::PyPresentation;
 use crate::replacement_count_to_pyerr;
@@ -173,7 +174,7 @@ fn frame_mut_at<'a>(
     shape_mut_at(presentation, path)?.into_text_frame()
 }
 
-fn font_properties(
+pub(crate) fn font_properties(
     presentation: &rpptx::Presentation,
     path: &ContentPath,
 ) -> Option<rpptx::CT_TextCharacterProperties> {
@@ -1133,6 +1134,10 @@ pub struct PyFont {
 }
 
 impl PyFont {
+    pub(crate) fn new(presentation: Py<PyPresentation>, path: ContentPath) -> Self {
+        Self { presentation, path }
+    }
+
     fn validate(&self, py: Python<'_>) -> PyResult<()> {
         validate_path(
             py,
@@ -1156,7 +1161,7 @@ impl PyFont {
     /// Applies `update` to the direct run or paragraph default properties,
     /// writing them only when they change, so clearing an absent value
     /// inserts no `a:rPr` or `a:defRPr`.
-    fn update(
+    pub(crate) fn update(
         &self,
         py: Python<'_>,
         update: impl FnOnce(&mut CT_TextCharacterProperties),
@@ -1242,28 +1247,6 @@ fn underline_value(underline: TextUnderline) -> i32 {
         TextUnderline::WavyHeavy => 16,
         TextUnderline::WavyDouble => 17,
     }
-}
-
-/// Reads a font colour: an `RGBColor` or any triple of 0 to 255 integers,
-/// or a six-digit hexadecimal string such as `3C2F80`.
-fn font_color(value: &Bound<'_, PyAny>) -> PyResult<RgbColor> {
-    if value.is_instance_of::<PyString>() {
-        return RgbColor::parse(&value.extract::<String>()?).map_err(|_| {
-            PyValueError::new_err("font color strings must contain six hexadecimal digits")
-        });
-    }
-    let (red, green, blue) = value.extract::<(i64, i64, i64)>().map_err(|_| {
-        PyTypeError::new_err("font color must be an RGBColor, a six-digit hex string, or None")
-    })?;
-    let channel = |value: i64| {
-        u8::try_from(value)
-            .map_err(|_| PyValueError::new_err("font color channels must be from 0 to 255"))
-    };
-    Ok(RgbColor::new(
-        channel(red)?,
-        channel(green)?,
-        channel(blue)?,
-    ))
 }
 
 #[pymethods]
@@ -1380,25 +1363,28 @@ impl PyFont {
         })
     }
 
+    /// The font colour as a `ColorFormat`, as python-pptx returns it.
     #[getter]
-    fn color(&self, py: Python<'_>) -> PyResult<Option<String>> {
-        self.read(py, |properties| {
-            let Some(Fill::Solid(fill)) = properties?.fill.as_ref() else {
-                return None;
-            };
-            let Some(ColorChoice::Srgb { value, .. }) = fill.color.as_ref() else {
-                return None;
-            };
-            Some(value.to_string())
-        })
+    fn color(&self, py: Python<'_>) -> PyResult<Py<PyColorFormat>> {
+        self.validate(py)?;
+        Py::new(
+            py,
+            PyColorFormat::new(
+                self.presentation.clone_ref(py),
+                self.path.clone(),
+                ColorSource::Font,
+            ),
+        )
     }
 
+    /// Assigning an `RGBColor` or a hex string sets `color.rgb` directly, and
+    /// `None` removes the font fill.
     #[setter]
     fn set_color(&self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
         let color = match value {
             None => None,
             Some(value) if value.is_none() => None,
-            Some(value) => Some(font_color(value)?),
+            Some(value) => Some(rgb_color(value, "color")?),
         };
         self.update(py, |properties| {
             let Some(color) = color else {

@@ -14,8 +14,10 @@ from .enum.dml import (
     MSO_ARROWHEAD_LENGTH as _MSO_ARROWHEAD_LENGTH,
     MSO_ARROWHEAD_STYLE as _MSO_ARROWHEAD_STYLE,
     MSO_ARROWHEAD_WIDTH as _MSO_ARROWHEAD_WIDTH,
+    MSO_COLOR_TYPE as _MSO_COLOR_TYPE,
     MSO_FILL_TYPE as _MSO_FILL_TYPE,
     MSO_LINE_DASH_STYLE as _MSO_LINE_DASH_STYLE,
+    MSO_THEME_COLOR_INDEX as _MSO_THEME_COLOR,
 )
 from .enum.shapes import (
     MSO_CONNECTOR_TYPE as _MSO_CONNECTOR_TYPE,
@@ -31,6 +33,7 @@ from .enum.text import (
 from .util import Length as _Length
 
 _Path = str | _os.PathLike[str]
+_Color = _RGBColor | tuple[int, int, int] | str
 _ImageFile = _Path | bytes | _IO[bytes]
 __all__ = [
     "Presentation", "CommentAuthor", "Comment", "CommentReply",
@@ -510,7 +513,13 @@ class ColorFormat:
     @property
     def rgb(self) -> _RGBColor | None: ...
     @rgb.setter
-    def rgb(self, value: _RGBColor) -> None: ...
+    def rgb(self, value: _Color) -> None: ...
+    @property
+    def type(self) -> _MSO_COLOR_TYPE | None: ...
+    @property
+    def theme_color(self) -> _MSO_THEME_COLOR | None: ...
+    @theme_color.setter
+    def theme_color(self, value: _MSO_THEME_COLOR) -> None: ...
 
 
 _RectAlignment = _Literal["tl", "t", "tr", "l", "ctr", "r", "bl", "b", "br"]
@@ -722,9 +731,9 @@ class Font:
     @name.setter
     def name(self, value: str | None) -> None: ...
     @property
-    def color(self) -> str | None: ...
+    def color(self) -> ColorFormat: ...
     @color.setter
-    def color(self, value: _RGBColor | str | None) -> None: ...
+    def color(self, value: _Color | None) -> None: ...
     @property
     def bold(self) -> bool | None: ...
     @bold.setter
