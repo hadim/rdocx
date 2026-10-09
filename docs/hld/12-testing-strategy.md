@@ -3794,6 +3794,20 @@ handles, zero no-op and positive publication. Typed call shapes independently
 cover Paragraph, Cell and detached StoryItem operations. All 49 deterministic
 hash entries remain unchanged. These controls require no external native oracle.
 
+`scoped_text_box_replacement_refuses_alternate_copies_atomically` authors the
+paired DrawingML/VML box through the public API and proves explicit refusal
+with complete byte preservation, retained comment threads and an unchanged
+live story. Controls distinguish namespace aliases, shadows, opaque children,
+multiple identical boxes, unequal alternates and multiple Choices by physical
+ownership. Standalone and single-representation boxes retain scoped edits.
+`scoped_cell_inside_alternate_text_box_refuses_without_mutation` inserts an
+actual table through the public story API and covers its descendant cell.
+Count mismatch, zero no-op, invalid text and stale locations remain atomic.
+Document-wide replacement still edits both copies with count one through
+save/reopen. The installed Python control verifies `RdocxError`, byte equality
+and usable existing handles after refusal. These controls leave all 49 hash
+entries unchanged and require no external native oracle.
+
 
 ### Whole-story comment ownership and glossary transfer
 

@@ -4127,3 +4127,41 @@ def test_whole_story_comment_refusals_preserve_bytes_and_revision(kind):
             getattr(document, f"set_{kind}")(text)
         assert document.to_bytes() == before
         assert held.text == "main retained"
+
+
+def test_scoped_alternate_text_box_refusal_is_rdocxerror_without_mutation():
+    import rdocx
+
+    content = '<w:txbxContent><w:p><w:r><w:rPr><w:b/></w:rPr><w:t>box NEEDLE</w:t></w:r></w:p></w:txbxContent>'
+    body = (
+        '<w:p><w:r><w:t>held outside</w:t></w:r></w:p><w:p><w:r>'
+        '<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" '
+        'xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" '
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+        'xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" '
+        'xmlns:v="urn:schemas-microsoft-com:vml">'
+        '<mc:Choice Requires="wps"><w:drawing><wp:inline><wp:extent cx="914400" cy="457200"/>'
+        '<wp:docPr id="1" name="scoped box"/><a:graphic><a:graphicData '
+        'uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">'
+        f'<wps:wsp><wps:txbx>{content}</wps:txbx></wps:wsp>'
+        '</a:graphicData></a:graphic></wp:inline></w:drawing></mc:Choice>'
+        f'<mc:Fallback><w:pict><v:shape id="fallback"><v:textbox>{content}</v:textbox></v:shape>'
+        '</w:pict><!--preserve alternate producer--></mc:Fallback></mc:AlternateContent></w:r></w:p>'
+    )
+    document = _replace_document_body(rdocx.Document(), body)
+    item = next(item for item in document.story_items
+                if item.story.kind == "text_box" and item.kind == "paragraph")
+    held = document.paragraphs[0]
+    before = document.to_bytes()
+    assert document.replace_text_at(item, "absent", "PIN", expect=0) == 0
+    with pytest.raises(rdocx.ReplacementCountError) as raised:
+        document.replace_text_at(item, "NEEDLE", "PIN", expect=2)
+    assert (raised.value.expected, raised.value.found) == (2, 1)
+    with pytest.raises(rdocx.RdocxError, match="alternate text-box"):
+        document.replace_text_at(item, "NEEDLE", "PIN", expect=1)
+    assert document.to_bytes() == before
+    assert held.text == "held outside"
+    assert document.replace_text_at(item, "absent", "PIN", expect=0) == 0
+    assert document.to_bytes() == before
+    reopened = rdocx.Document.from_bytes(before)
+    assert _story_paragraph_texts(reopened, "text_box") == ["box NEEDLE"]

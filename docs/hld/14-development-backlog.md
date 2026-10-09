@@ -6830,17 +6830,21 @@ brightness using existing transforms. Later parity stories reuse this result.
 ### F-X198, Preserve alternate text-box copies during scoped replacement (M)
 
 Resolve `hadim`'s [Issue301](https://github.com/tensorbee/rdocx/issues/301), a
-follow-up to Issue285. Scoped replacement of a checked text-box paragraph must
-update both the DrawingML Choice and VML Fallback of the same box, counting
-it once, or refuse with an explicit error and leave the document unchanged.
+follow-up to Issue285. Positive scoped replacement of a checked text-box
+paragraph refuses with an explicit error when another qualified Choice or
+Fallback text-box representation shares its physical MC AlternateContent.
+The same guard covers a selected table cell inside the text box and leaves
+the complete live document and package unchanged. Count mismatches and zero
+no-ops retain their existing outcomes before this guard.
 Preserve run formatting, sibling text boxes, comments, namespace contexts and
 opaque producer XML. Match physical alternate ownership rather than identical
 text. Existing document-wide replacement semantics remain unchanged.
 
 **Depends on**: F-X187.
-**Test gate**: regression. A public checked text-box paragraph containing
-NEEDLE in both alternate branches produces PIN in both with one replacement,
-or atomic refusal with complete byte preservation. Installed Python maps
+**Test gate**: regression.
+`scoped_text_box_replacement_refuses_alternate_copies_atomically` proves the
+Issue301 Choice-only failure at the claimed Base, then atomic refusal with
+complete byte preservation. Installed Python maps
 refusal to RdocxError. Controls distinguish single-representation boxes,
 multiple identical boxes, stale locations, count mismatch and unequal or
 ambiguous alternates through save/reopen.

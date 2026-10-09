@@ -1,6 +1,6 @@
 # F-X198, Preserve alternate text-box copies during scoped replacement
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: M
 **Depends on**: F-X187
@@ -38,6 +38,8 @@ adapter to RdocxError. Standalone/single-representation text boxes keep their
 supported scoped behavior. Opaque foreign lookalikes do not masquerade as MC.
 A selected table cell inside that text box follows the same containment guard.
 Main-body cells outside text boxes retain their existing scoped behavior.
+The detector uses the containing text-box span rather than StoryKind alone.
+Count mismatches and zero no-ops retain their existing outcomes in these cells.
 Ambiguous alternate ownership refuses rather than selecting an identical box.
 
 Perform the guard before splicing/publishing the candidate. Existing invalid
@@ -70,6 +72,7 @@ records after combining workers. This is gate maintenance, not publication.
 | regression | scoped_single_representation_text_boxes_keep_their_supported_edit | Nonpaired box still edits selected paragraph and counts once |
 | regression | alternate_text_box_refusal_tracks_physical_owner_and_namespace | Multiple identical boxes, aliases, shadows, unequal fallback and opaque siblings cannot redirect ownership |
 | integration | scoped_text_box_count_mismatch_and_zero_noop_preserve_every_copy | Count mismatch, stale locations, invalid text and zero matches remain atomic |
+| regression | scoped_cell_inside_alternate_text_box_refuses_without_mutation | Publicly inserted cell inside a paired box retains count mismatch and zero no-op outcomes, and refuses a positive edit atomically |
 | round-trip | document_wide_text_box_replacement_updates_both_copies_once | Existing global replacement produces both PIN copies with count1 after save/reopen |
 | regression | test_scoped_alternate_text_box_refusal_is_rdocxerror_without_mutation | Installed Python StoryItem refusal, unchanged revision, handles and bytes |
 
@@ -113,12 +116,12 @@ Expected unchanged. No sample scoped alternate-text-box replacement is used.
 
 ## Implementation checklist
 
-- [ ] Prove Choice-only failure at exact Base.
-- [ ] Add qualified physical-owner alternate detector and atomic refusal.
-- [ ] Cover standalone, multiple boxes, namespaces and producer topology.
-- [ ] Verify global replacement, count mismatches and save/reopen retention.
-- [ ] Run native/installed Python gates, scoped verify and clean microscope.
-- [ ] Prepare validated handoff.
+- [x] Prove Choice-only failure at exact Base.
+- [x] Add qualified physical-owner alternate detector and atomic refusal.
+- [x] Cover standalone, multiple boxes, namespaces and producer topology.
+- [x] Verify global replacement, count mismatches and save/reopen retention.
+- [x] Run native/installed Python gates, scoped verify and clean microscope.
+- [x] Prepare validated handoff.
 
 ## Open questions
 

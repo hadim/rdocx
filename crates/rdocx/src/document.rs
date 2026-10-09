@@ -8306,6 +8306,94 @@ fn first_text_box_start(xml: &[u8], start: usize) -> Result<Option<usize>> {
     }
 }
 
+fn scoped_owner_has_alternate_text_box(xml: &[u8], owner: &StoryOwnerSpan) -> Result<bool> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut stack = Vec::<XmlElementFrame>::new();
+    let mut copies = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("alternate text-box scan failed: {error}")))?;
+        let empty = matches!(event, Event::Empty(_));
+        match event {
+            Event::Start(element) | Event::Empty(element) => {
+                let (namespace, local) = reader.resolver().resolve_element(element.name());
+                let namespace = story_namespace(&namespace);
+                let local = local.as_ref();
+                // Inspect both representations using the same qualified structural
+                // routes as story discovery, without selecting or rewriting Fallback.
+                let alternate_branch = namespace == StoryNamespace::MarkupCompatibility
+                    && matches!(local, b"Choice" | b"Fallback")
+                    && stack.last().is_some_and(|parent| {
+                        parent.namespace == StoryNamespace::MarkupCompatibility
+                            && parent.local_name == b"AlternateContent"
+                    });
+                let branch_content = namespace == StoryNamespace::Word
+                    && matches!(local, b"drawing" | b"pict")
+                    && stack.last().is_some_and(|parent| {
+                        parent.namespace == StoryNamespace::MarkupCompatibility
+                            && matches!(parent.local_name.as_slice(), b"Choice" | b"Fallback")
+                    });
+                let modeled = stack.last().is_none_or(|parent| !parent.opaque)
+                    && (alternate_branch
+                        || branch_content
+                        || modeled_story_child(&stack, namespace, local));
+                if modeled && namespace == StoryNamespace::Word && local == b"txbxContent" {
+                    let end = if empty {
+                        reader.buffer_position() as usize
+                    } else {
+                        story_element_end(xml, before)?
+                    };
+                    for (index, alternate) in stack.iter().enumerate() {
+                        if alternate.namespace != StoryNamespace::MarkupCompatibility
+                            || alternate.local_name != b"AlternateContent"
+                            || alternate.opaque
+                        {
+                            continue;
+                        }
+                        if let Some(branch) = stack.get(index + 1)
+                            && branch.namespace == StoryNamespace::MarkupCompatibility
+                            && matches!(branch.local_name.as_slice(), b"Choice" | b"Fallback")
+                        {
+                            copies.push((alternate.full_start, branch.full_start, before..end));
+                        }
+                    }
+                }
+                if !empty {
+                    let sdt_context = story_element_sdt_context(&stack, namespace, local);
+                    stack.push(XmlElementFrame {
+                        namespace,
+                        local_name: local.to_vec(),
+                        is_word: namespace == StoryNamespace::Word,
+                        full_start: before,
+                        owner_kind: None,
+                        item_kind: None,
+                        direct_owner_child: false,
+                        sdt_context,
+                        word_prefixes: Vec::new(),
+                        opaque: !modeled,
+                    });
+                }
+            }
+            Event::End(_) => {
+                stack.pop();
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    Ok(copies.iter().any(|(alternate, branch, range)| {
+        range.start <= owner.full.start
+            && owner.full.end <= range.end
+            && copies.iter().any(|(other_alternate, other_branch, _)| {
+                alternate == other_alternate && branch != other_branch
+            })
+    }))
+}
+
 fn opaque_story_event(
     stack: &[XmlElementFrame],
     namespace: StoryNamespace,
@@ -27014,6 +27102,12 @@ impl Document {
         }
         if count == 0 {
             return Ok(Ok(0));
+        }
+        if scoped_owner_has_alternate_text_box(&xml, &owner)? {
+            return Err(Error::Other(
+                "scoped replacement of alternate text-box copies requires document-wide replacement"
+                    .into(),
+            ));
         }
         xml.splice(span, raw);
         set_story_source_xml(&mut candidate, &part, xml)?;

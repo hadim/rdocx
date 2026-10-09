@@ -1545,7 +1545,7 @@ insertion or move destination is replaced inside it, and deleted text is never
 matched. The Rust facade, Python `try_replace_text` and `replace_all_regex`,
 the WASM replacement method, and `rdocx replace --expect` share these counts.
 
-Every Word replacement, literal, regular
+Every document-wide Word replacement, literal, regular
 expression, or template, edits every copy of a text box that Word writes in
 `mc:AlternateContent`. The count is that of the first `mc:Choice` that holds a
 text box, the DrawingML copy that layout draws and the story walkers read. The
@@ -1558,6 +1558,17 @@ another text box, while the story walkers read it only as a child of a run.
 A story edit of such a text box changes the Choice only, see
 `03-architecture.md`. `redact_text` removes the literal from every copy and
 still counts each copy.
+
+A positive checked scoped replacement refuses when its physical owner lies
+inside a qualified text box with another Choice or Fallback text-box
+representation in the same MC AlternateContent. This includes a selected
+table cell inside that text box. Rust returns an explicit error and Python
+raises `RdocxError`, preserving the live model, revision and complete package
+bytes. Expected-count mismatches and zero-match no-ops retain their existing
+outcomes before this guard. Invalid replacement text and stale locations still
+fail without publication. Single-representation text boxes and cells outside
+text boxes retain their supported scoped edits. Foreign namespace lookalikes
+and opaque extension children cannot establish alternate ownership.
 
 `Document::try_replace_all_expected` takes ordered `(placeholder, replacement,
 expected)` pairs and returns the count of each pair. Each pair runs over the

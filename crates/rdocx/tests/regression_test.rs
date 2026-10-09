@@ -397739,3 +397739,340 @@ fn bibliography_apa_gurmukhi_gujarati_odia_1096_recovered_cache_is_preserved_wit
     let mut reopened = Document::from_bytes(&bytes).unwrap();
     assert_eq!(reopened.to_bytes().unwrap(), bytes);
 }
+
+fn fx198_authored_boxes(count: usize) -> Document {
+    let mut document = Document::new();
+    document.add_paragraph("host outside NEEDLE");
+    let zero = Length::pt(0.0);
+    for _ in 0..count {
+        let body = f254_story(&document, StoryKind::Body);
+        document
+            .add_text_box_to_story(
+                &body,
+                "box NEEDLE",
+                rdocx::TextBoxOptions {
+                    width: Length::pt(144.0),
+                    height: Length::pt(54.0),
+                    anchor: rdocx::PictureAnchor {
+                        horizontal_relative_from: rdocx::DrawingHorizontalRelativeFrom::Column,
+                        horizontal_offset: zero,
+                        horizontal_alignment: None,
+                        vertical_relative_from: rdocx::DrawingVerticalRelativeFrom::Paragraph,
+                        vertical_offset: zero,
+                        vertical_alignment: None,
+                        wrap: rdocx::DrawingWrap::TopAndBottom,
+                        distance_top: zero,
+                        distance_bottom: zero,
+                        distance_left: zero,
+                        distance_right: zero,
+                        relative_height: 1,
+                        behind_text: false,
+                    },
+                    rotation_degrees: 0.0,
+                    text_direction: rdocx::TextBoxDirection::Horizontal,
+                    fill_color: None,
+                },
+            )
+            .unwrap();
+    }
+    document
+}
+
+#[test]
+fn scoped_text_box_replacement_refuses_alternate_copies_atomically() {
+    let mut document = fx198_authored_boxes(1);
+    let location = f254_item(&document, &f254_story(&document, StoryKind::TextBox), 0);
+    let comment = document
+        .add_story_comment(
+            StoryRunRange {
+                start: StoryRunPosition {
+                    location: location.clone(),
+                    run_index: 0,
+                },
+                end: StoryRunPosition {
+                    location,
+                    run_index: 1,
+                },
+            },
+            "Ada",
+            None,
+            "retained root",
+        )
+        .unwrap();
+    document.reply_to(comment, "Ben", "retained reply").unwrap();
+    let bytes = document.to_bytes().unwrap();
+    let story = f254_story(&document, StoryKind::TextBox);
+    let location = f254_item(&document, &story, 0);
+    let error = document
+        .try_replace_text_at(&location, "NEEDLE", "PIN", Some(1))
+        .expect_err("paired text box replacement must refuse before publishing Choice alone");
+    assert!(error.to_string().contains("alternate text-box"));
+    assert_eq!(document.to_bytes().unwrap(), bytes);
+    assert_eq!(
+        document.story_items(&story).unwrap()[0].text().unwrap(),
+        Some("box NEEDLE".into())
+    );
+}
+
+#[test]
+fn scoped_single_representation_text_boxes_keep_their_supported_edit() {
+    use quick_xml::name::ResolveResult;
+
+    let mut seed = fx198_authored_boxes(1);
+    let xml = document_xml(&mut seed);
+    let alternate_start = xml.find("<mc:AlternateContent").unwrap();
+    let alternate_end =
+        xml.find("</mc:AlternateContent>").unwrap() + "</mc:AlternateContent>".len();
+    let choice_start = xml.find("<mc:Choice").unwrap();
+    let choice_content = choice_start + xml[choice_start..].find('>').unwrap() + 1;
+    let choice_end = xml.find("</mc:Choice>").unwrap();
+    let fallback_start = xml.find("<mc:Fallback>").unwrap();
+    let fallback_end = xml.find("</mc:Fallback>").unwrap() + "</mc:Fallback>".len();
+    // The standalone drawing serializer inherits its graphic namespaces from
+    // the document root, instead of retaining the removed MC wrapper's scope.
+    let standalone = format!(
+        "{}{}{}",
+        &xml[..alternate_start],
+        &xml[choice_content..choice_end],
+        &xml[alternate_end..]
+    ).replacen(
+        "<w:document ",
+        r#"<w:document xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" "#,
+        1,
+    );
+    let single_choice = format!("{}{}", &xml[..fallback_start], &xml[fallback_end..]);
+    let foreign_fallback = xml.replacen(
+        "<mc:Fallback>",
+        r#"<mc:Fallback xmlns:w="urn:foreign-word-lookalike">"#,
+        1,
+    );
+    let opaque_fallback = format!(
+        "{}<mc:Fallback><x:opaque xmlns:x=\"urn:opaque\">{}</x:opaque></mc:Fallback>{}",
+        &xml[..fallback_start],
+        &xml[fallback_start + "<mc:Fallback>".len()..fallback_end - "</mc:Fallback>".len()],
+        &xml[fallback_end..]
+    );
+    let foreign_alternate = single_choice.replacen("</mc:AlternateContent>", &format!(r#"</mc:AlternateContent><shadow:AlternateContent xmlns:shadow="urn:foreign-mc" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><shadow:Fallback>{}</shadow:Fallback></shadow:AlternateContent>"#, &xml[fallback_start + "<mc:Fallback>".len()..fallback_end - "</mc:Fallback>".len()]), 1);
+    for (variant, source) in [
+        standalone,
+        single_choice,
+        foreign_fallback,
+        opaque_fallback,
+        foreign_alternate,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut reader = quick_xml::NsReader::from_str(&source);
+        loop {
+            let (namespace, event) = reader.read_resolved_event().unwrap();
+            assert!(
+                !matches!(namespace, ResolveResult::Unknown(_)),
+                "unbound element prefix in variant {variant}"
+            );
+            match event {
+                XmlEvent::Start(element) | XmlEvent::Empty(element) => {
+                    for attribute in element.attributes() {
+                        let (namespace, _) =
+                            reader.resolver().resolve_attribute(attribute.unwrap().key);
+                        assert!(
+                            !matches!(namespace, ResolveResult::Unknown(_)),
+                            "unbound attribute prefix in variant {variant}"
+                        );
+                    }
+                }
+                XmlEvent::Eof => break,
+                _ => {}
+            }
+        }
+        let retained_copies = source.matches("box NEEDLE").count() - 1;
+        let mut document = document_with_content_controls(&source);
+        let story = document
+            .stories()
+            .unwrap()
+            .into_iter()
+            .find(|story| story.kind() == StoryKind::TextBox)
+            .unwrap_or_else(|| panic!("single-representation variant {variant} has no text box"));
+        let location = f254_item(&document, &story, 0);
+        assert_eq!(
+            document
+                .try_replace_text_at(&location, "NEEDLE", "PIN", Some(1))
+                .unwrap()
+                .unwrap(),
+            1
+        );
+        let saved = document_xml(&mut document);
+        assert_eq!(saved.matches("box PIN").count(), 1);
+        assert_eq!(saved.matches("box NEEDLE").count(), retained_copies);
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let story = f254_story(&reopened, StoryKind::TextBox);
+        assert_eq!(
+            reopened.story_items(&story).unwrap()[0].text().unwrap(),
+            Some("box PIN".into())
+        );
+        assert_eq!(reopened.paragraphs()[0].text(), "host outside NEEDLE");
+    }
+}
+
+#[test]
+fn alternate_text_box_refusal_tracks_physical_owner_and_namespace() {
+    let mut seed = fx198_authored_boxes(2);
+    let xml = document_xml(&mut seed);
+    let fallback_start = xml.find("<mc:Fallback>").unwrap();
+    let fallback_end = xml.find("</mc:Fallback>").unwrap() + "</mc:Fallback>".len();
+    let unequal = format!(
+        "{}{}{}",
+        &xml[..fallback_start],
+        xml[fallback_start..fallback_end].replace("box NEEDLE", "different fallback"),
+        &xml[fallback_end..]
+    );
+    let alias = xml
+        .replace("mc:", "alternate:")
+        .replace("xmlns:mc=", "xmlns:alternate=");
+    let choice_start = xml.find("<mc:Choice").unwrap();
+    let choice_end = xml.find("</mc:Choice>").unwrap() + "</mc:Choice>".len();
+    let multiple_choices = format!(
+        "{}{}{}",
+        &xml[..choice_end],
+        &xml[choice_start..choice_end],
+        &xml[choice_end..]
+    );
+    for source in [xml.clone(), unequal, alias, multiple_choices] {
+        let mut document = document_with_content_controls(&source);
+        let bytes = document.to_bytes().unwrap();
+        let boxes = document
+            .stories()
+            .unwrap()
+            .into_iter()
+            .filter(|s| s.kind() == StoryKind::TextBox)
+            .collect::<Vec<_>>();
+        assert_eq!(boxes.len(), 2);
+        for story in boxes {
+            let location = f254_item(&document, &story, 0);
+            let error = document
+                .try_replace_text_at(&location, "NEEDLE", "PIN", Some(1))
+                .unwrap_err();
+            assert!(error.to_string().contains("alternate text-box"));
+            assert_eq!(document.to_bytes().unwrap(), bytes);
+        }
+    }
+    // A later paired owner cannot make an unrelated single-copy owner refuse.
+    let source = format!("{}{}", &xml[..fallback_start], &xml[fallback_end..]);
+    let mut document = document_with_content_controls(&source);
+    let boxes = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .filter(|s| s.kind() == StoryKind::TextBox)
+        .collect::<Vec<_>>();
+    let first = f254_item(&document, &boxes[0], 0);
+    assert_eq!(
+        document
+            .try_replace_text_at(&first, "NEEDLE", "PIN", Some(1))
+            .unwrap()
+            .unwrap(),
+        1
+    );
+    let boxes = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .filter(|s| s.kind() == StoryKind::TextBox)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        document.story_items(&boxes[1]).unwrap()[0].text().unwrap(),
+        Some("box NEEDLE".into())
+    );
+}
+
+#[test]
+fn scoped_text_box_count_mismatch_and_zero_noop_preserve_every_copy() {
+    let mut document = fx198_authored_boxes(1);
+    let bytes = document.to_bytes().unwrap();
+    let story = f254_story(&document, StoryKind::TextBox);
+    let location = f254_item(&document, &story, 0);
+    let mismatch = document
+        .try_replace_text_at(&location, "NEEDLE", "PIN", Some(2))
+        .unwrap()
+        .unwrap_err();
+    assert_eq!((mismatch.expected, mismatch.found), (2, 1));
+    assert_eq!(
+        document
+            .try_replace_text_at(&location, "absent", "PIN", Some(0))
+            .unwrap()
+            .unwrap(),
+        0
+    );
+    assert!(
+        document
+            .try_replace_text_at(&location, "absent", "\u{1}", None)
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), bytes);
+    while document.content_count() > 0 {
+        document.try_remove_content(0).unwrap();
+    }
+    let deleted = document.to_bytes().unwrap();
+    assert!(
+        document
+            .try_replace_text_at(&location, "NEEDLE", "PIN", Some(1))
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), deleted);
+}
+
+#[test]
+fn document_wide_text_box_replacement_updates_both_copies_once() {
+    let mut document = fx198_authored_boxes(1);
+    assert_eq!(
+        document.try_replace_text("box NEEDLE", "box PIN").unwrap(),
+        1
+    );
+    let xml = document_xml(&mut document);
+    assert_eq!(xml.matches("box PIN").count(), 2);
+    assert!(!xml.contains("box NEEDLE"));
+    let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(document_xml(&mut reopened).matches("box PIN").count(), 2);
+    assert_eq!(reopened.paragraphs()[0].text(), "host outside NEEDLE");
+}
+
+#[test]
+fn scoped_cell_inside_alternate_text_box_refuses_without_mutation() {
+    let mut document = fx198_authored_boxes(1);
+    let story = f254_story(&document, StoryKind::TextBox);
+    let mut table = rdocx_oxml::table::CT_Tbl::new();
+    let mut row = rdocx_oxml::table::CT_Row::new();
+    let mut cell = rdocx_oxml::table::CT_Tc::new();
+    cell.paragraphs_mut()[0].add_run("cell NEEDLE");
+    row.cells.push(cell);
+    table.rows.push(row);
+    document
+        .insert_content(
+            &ContentLocation::end(story),
+            ContentFragment::table(table).unwrap(),
+        )
+        .unwrap();
+    let bytes = document.to_bytes().unwrap();
+    let cell = f254_story(&document, StoryKind::TableCell);
+    let location = f254_item(&document, &cell, 0);
+    assert_eq!(
+        document
+            .try_replace_text_at(&location, "absent", "PIN", Some(0))
+            .unwrap()
+            .unwrap(),
+        0
+    );
+    let mismatch = document
+        .try_replace_text_at(&location, "NEEDLE", "PIN", Some(2))
+        .unwrap()
+        .unwrap_err();
+    assert_eq!((mismatch.expected, mismatch.found), (2, 1));
+    assert!(
+        document
+            .try_replace_text_at(&location, "NEEDLE", "PIN", Some(1))
+            .unwrap_err()
+            .to_string()
+            .contains("alternate text-box")
+    );
+    assert_eq!(document.to_bytes().unwrap(), bytes);
+}
