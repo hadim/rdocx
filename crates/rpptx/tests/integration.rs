@@ -9776,12 +9776,13 @@ fn text_layout_reports_the_scale_and_fit_each_autofit_mode_draws() {
     let stored = by_name("Stored normal");
     assert_eq!(stored.autofit, rpptx::AutofitMode::Normal);
     assert_eq!(stored.layout.font_scale, 0.625);
+    // PowerPoint draws 18 points at 62.5 % at 11 whole points.
     assert!(
         stored
             .layout
             .lines
             .iter()
-            .all(|line| line.font_size == 11.25)
+            .all(|line| line.font_size == 11.0)
     );
 
     let shape_autofit = by_name("Shape autofit");
