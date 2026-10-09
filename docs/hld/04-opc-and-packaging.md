@@ -225,8 +225,8 @@ joins paragraphs or searches another textbox story. A text box item also edits
 the VML copy of the box in each later `mc:AlternateContent` branch, paired by
 item slot after proving the same items and paragraph texts, and counts once.
 Copies that cannot be paired, or a cell inside a text box with copies, are
-refused. Count mismatch and zero matches publish nothing. Positive edits serialize and reopen the complete
-candidate before one commit.
+refused. Count mismatch and zero matches publish nothing. Positive edits
+serialize and reopen the complete candidate before one commit.
 
 Main-source selection preserves original unselected bytes. Existing strict
 namespace replay proves the current canonical physical owner inventory. Two

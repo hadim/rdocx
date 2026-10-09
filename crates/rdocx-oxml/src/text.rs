@@ -2311,12 +2311,14 @@ impl CT_R {
     /// Whether this run shows anything: text other than white space, or a
     /// child that draws without text, such as a drawing, a picture, an
     /// object, a field, a symbol, a tab, a break or a note reference.
-    /// Deleted text, comment references, field characters and the last
-    /// rendered page break show nothing.
+    /// Deleted text, comment references, soft hyphens, field characters and
+    /// the last rendered page break show nothing.
     fn has_visible_content(&self) -> bool {
         let visible_item = |content: &RunContent| match content {
             RunContent::Text(text) => !text.text.trim().is_empty(),
-            RunContent::DeletedText(_) | RunContent::CommentReference { .. } => false,
+            RunContent::DeletedText(_)
+            | RunContent::CommentReference { .. }
+            | RunContent::SpecialCharacter(SpecialCharacter::SoftHyphen) => false,
             _ => true,
         };
         let visible_raw = |(raw, position): (&Vec<u8>, &usize)| {
@@ -5429,13 +5431,19 @@ fn is_run_wrapper(raw: &[u8]) -> bool {
 /// content [`with_run_wrapper_content`] could not write back, because `w`
 /// does not name WordprocessingML there.
 pub(crate) fn run_wrapper_paragraph(raw: &[u8], inherited: &[String]) -> Option<CT_P> {
+    wrapper_content_paragraph(raw, inherited, &["smartTag", "customXml", "fldSimple"])
+}
+
+/// The content of `raw`, a Word element named by one of `wrappers`, parsed
+/// as a paragraph, see [`run_wrapper_paragraph`].
+fn wrapper_content_paragraph(raw: &[u8], inherited: &[String], wrappers: &[&str]) -> Option<CT_P> {
     let mut reader = Reader::from_reader(raw);
     let mut buffer = Vec::new();
     let Ok(Event::Start(start)) = reader.read_event_into(&mut buffer) else {
         return None;
     };
     let prefixes = word_prefixes_at(&start, inherited).ok()?;
-    if !["smartTag", "customXml", "fldSimple"]
+    if !wrappers
         .iter()
         .any(|local| is_word_element(start.name().as_ref(), local.as_bytes(), &prefixes))
         || !prefixes.iter().any(|prefix| prefix == "w")
@@ -6052,8 +6060,9 @@ impl CT_P {
     /// a paragraph without it reads as empty: text other than white space,
     /// an equation, or a run that draws without text, such as a drawing, a
     /// picture, an object, a field, a symbol, a tab, a break or a note
-    /// reference. The runs inside content controls, insertions, smart tags
-    /// and inline custom XML elements count, deleted runs do not.
+    /// reference. The runs inside content controls, insertions, smart tags,
+    /// inline custom XML elements and bidirectional embeddings or overrides
+    /// count, deleted runs do not.
     pub fn has_visible_content(&self) -> bool {
         !self.equations.is_empty()
             || self
@@ -6061,8 +6070,12 @@ impl CT_P {
                 .into_iter()
                 .any(CT_R::has_visible_content)
             || self.extra_xml.iter().any(|(_, raw)| {
-                Self::raw_run_wrapper_content(raw)
-                    .is_some_and(|content| content.has_visible_content())
+                wrapper_content_paragraph(
+                    raw,
+                    &["w".to_owned()],
+                    &["smartTag", "customXml", "bdo", "dir"],
+                )
+                .is_some_and(|content| content.has_visible_content())
             })
     }
 
@@ -17355,6 +17368,8 @@ mod tests {
             r#"<w:ins w:id="1" w:author="A"><w:r><w:br/></w:r></w:ins>"#,
             r#"<w:smartTag w:element="place"><w:r><w:tab/></w:r></w:smartTag>"#,
             r#"<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:r><m:t>x</m:t></m:r></m:oMath>"#,
+            r#"<w:bdo w:val="rtl"><w:r><w:t>abc</w:t></w:r></w:bdo>"#,
+            r#"<w:dir w:val="rtl"><w:r><w:pict/></w:r></w:dir>"#,
         ];
         for xml in visible {
             assert!(parse_paragraph(xml).has_visible_content(), "{xml}");
@@ -17367,6 +17382,8 @@ mod tests {
             r#"<w:del w:id="1" w:author="A"><w:r><w:delText>gone</w:delText></w:r></w:del>"#,
             r#"<w:bookmarkStart w:id="0" w:name="b"/><w:bookmarkEnd w:id="0"/>"#,
             r#"<w:sdt><w:sdtContent><w:r><w:t> </w:t></w:r></w:sdtContent></w:sdt>"#,
+            r#"<w:r><w:softHyphen/></w:r>"#,
+            r#"<w:bdo w:val="rtl"><w:r><w:t> </w:t></w:r></w:bdo>"#,
         ];
         for xml in empty {
             assert!(!parse_paragraph(xml).has_visible_content(), "{xml}");
