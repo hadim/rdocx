@@ -354,3 +354,14 @@ its104 artifacts and75 blobs plus the91 reused advanced-head blobs without
 mismatch. All14 current PR heads are assessed. Its read-side story creation,
 VML-only watermarks and tiny-length refusals require adaptation to the approved
 contract. No intake item is called completed on contributor test claims.
+
+## Continued rolling intake
+
+The23:30:53UTC snapshot contains15 open PRs and24 issues, with22 issues
+in scope and264/281 still excluded. New PR330 at
+274e3ca82b3db0393f0b3e0833b640ae2bbf9dc8 closes Issue307 and attaches
+to F-X204. It is stacked on PR325, whose inherited F-X203 work is counted
+once. PR318 advanced again to1eab7066b69203e36df3782a2d343ff1ae1defd2
+and stays F-X205. Both fresh heads are under immutable source/discussion
+assessment. Added author/draft metadata is capture enrichment, not changed
+issue acceptance. No new implementation or duplicate F-ID is created.
