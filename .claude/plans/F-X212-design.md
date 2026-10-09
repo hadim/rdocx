@@ -164,9 +164,74 @@ Review the generated finding count and reverse-control proof independently.
 
 ## Open questions
 
-Stored-prefix provenance and source-aware preparation are resolved above.
-Finalize the exact shared native visibility operation signature and source
-projection errors with F-X203 validation. Establish loose field display
-semantics against qualified controls before changing the CLI contract. These are
-technical evidence gaps, not additional user permission requirements.
-This draft does not authorize source or baseline changes.
+The exact shared native operation, two private inventory modes and X203
+error projection are resolved below. Complete and integrate F-X196 before
+approving and claiming this dependent story. The required field-display
+controls are implementation gates, and must fail before any semantic edit.
+This draft authorizes neither source changes nor baseline movement.
+
+## Resolved shared operation and inventory contract
+
+
+Select this additive native operation in existing crates/rdocx/src/document.rs:
+
+```rust
+impl Document {
+    pub fn paragraph_visibility(&self) -> Result<Vec<bool>>;
+}
+
+enum ParagraphVisibilityScope {
+    FacadeRecursive,
+    DirectBody,
+}
+
+fn paragraph_visibility_from_main_source(
+    document: &Document,
+    xml: &[u8],
+    scope: ParagraphVisibilityScope,
+) -> Result<Vec<bool>>;
+```
+
+These are proposed signatures. The public method performs the actual unpublished clone, current-model source flush, resolved main-part lookup and checked classification. It is not an unused ParagraphRef predicate or a forwarding-only public wrapper. It returns final visibility, including accepted text and nontext, not just the contributor's raw-child heuristic. The private concrete mode has two actual callers: the CLI-facing native operation uses FacadeRecursive, and audit_accessibility uses DirectBody. No new public mode, record type, CT_P/CT_R field, module, trait, generic or dependency is required.
+
+Public preparation is exactly one `clone_for_staging`, one `flush_document_to_package`, then `candidate.package.get_part(&candidate.doc_part_name)` or explicit missing-main-part Error. Call the scanner with the candidate model, not with an independently reparsed body or stale package. Native audit performs the same bounded preparation inline in its existing method, then calls the private scanner in DirectBody mode. Three preparation statements in these two consumer paths are preferable to another forwarding source wrapper. Both source and authoritative typed inventory belong to the unpublished candidate. No save, to_bytes, reopen or repeated per-paragraph serialization is involved.
+
+FacadeRecursive output is exactly one final visibility bool for each `Document::paragraphs()` item, in the same order. The actual current implementation at facade document.rs:18666 delegates to CT_Body::paragraphs. That iterator at rdocx-oxml/document.rs:2518 includes direct body paragraphs and modeled block-control paragraphs, including tables owned by those admitted controls. It skips ordinary direct body tables. Do not broaden the operation to every paragraph in the OPC package. The CLI's current independent scan is commands.rs:2365 and its model-length check is :2330. Preserve expanded typed SDT admission and the first expanded content slot at :2392 and :2427, including opaque controls and duplicate slots.
+
+DirectBody output has one bool for each direct `BodyContent::Paragraph` only, in document.body.content order. It contains no table/control descendants and no sentinel rows. Audit already walks that actual body vector at document.rs:29094. Consume the next bool only for a Paragraph, and reset the streak for every other body item exactly as today. Validate complete count and typed/source ownership correspondence inside the helper before returning. After helper success, there cannot be a partial iterator or invented default false for a missing paragraph. Avoid introducing public Vec<Option<bool>> merely to encode resets the existing body inventory already supplies.
+
+The scanner retains the NsReader source stack and admitted physical routes. Scope selection changes only which outer paragraph owners are admitted and emitted. Once an admitted paragraph begins, both modes use the same qualified child rules, typed control admission, accepted revisions and visibility computation. DirectBody mode rejects entering an outer block control or body table, while an inline control within its paragraph still receives qualified typed admission. Same count alone is insufficient where imported opaque owners might shift correspondence. Match emitted owner order/path and admitted typed slots against the selected model inventory, and return Error for ambiguity rather than guessing based on similar text.
+
+The extracted scanner's Vec<bool> remains a private implementation result until inventory and typed correspondence are proved. Field/raw/typed classification is performed in that same core operation. Do not export raw xml offsets or introduce a second facade projection type. No field-display cache survives a call, so unsaved edits cannot leave a stale visibility value.
+
+## Errors and X203 consumption
+
+Source flush, missing source, XML parse, unexpected EOF, typed/raw admission mismatch or paragraph inventory mismatch returns native Error. Existing unexpected-EOF scanner behavior is commands.rs:2530. Modified namespace shadow refusal is native document.rs:15203. Never return `Ok(vec![false; count])` for one of these errors.
+
+CLI consumer replaces its current `paragraph.text().trim().is_empty() && !nontext` pairing at commands.rs:2335 with false visibility counting. Preserve its recursive inventory and report ordering. If visibility errors and there are no independently collected structural errors, retain a Result error rather than claiming a complete validation report. If structural errors are already collected, retain those findings, add a Warning describing indeterminate paragraph visibility and omit the empty-count advisory. Explicitly remove the current all-false fallback at commands.rs:2326 under this story's reviewed refinement, since it fabricates empty warnings when scanning fails.
+
+Native infallible audit keeps Vec<AccessibilityIssue>. On any helper failure, emit exactly one IssueSeverity::Warning with `Paragraph visibility could not be determined: {error}`, retain title/author/image-alt/heading checks and skip the entire consecutive-empty check. Existing audit content resets and warning severity remain distinct from CLI aggregate empty-count advisories. The helper does not evaluate fields, alter settings, populate live layout caches or mutate source/revision/identifiers.
+
+X203's shared ValidationSeverity/ValidationFinding/ValidationReport is report assembly, not an alternative visibility representation. X203 consumes the public Result<Vec<bool>> in native validation assembly and projects its existing errors/warnings policy. It does not call audit_accessibility to reconstruct CLI semantics, enter direct-body mode, or depend on the CLI crate. Its existing OPC-open Result error boundary and conditional Document-open diagnostic remain separate from visibility indeterminacy. The current CLI returns a Document-open error finding only when other errors already exist at commands.rs:2290, otherwise it returns Err. Preserve that exact condition when reconciling X203, rather than an unconditional Document-open finding claim.
+
+## Extraction and behavior boundaries
+
+First extract the existing F-X196 qualified scanner and wire the shared native operation while retaining the current CLI text-plus-nontext decision exactly. This mechanically equivalent stage may temporarily preserve the existing fldChar/fldSimple affirmative list and accepted text projection. Derive all49 unchanged hashes locally and label it as the code move. Do not silently fix field display, standalone deleted-text projection or scanner-error advisory semantics inside that move.
+
+Then add final typed accepted visibility, direct-body audit use and the explicitly reviewed CLI refinements in the separate intentional behavior stage. The public final signature stays Result<Vec<bool>> throughout. A code-move implementation may compute the old p.text().trim plus extracted nontext flags before the final behavior changes, but its final contract is the shared accepted visibility specified here. Native audit is its first new consumer after the labelled move, while CLI is the existing consumer. Independently review every final semantic difference and actual hash attribution before baseline movement.
+
+## Required field-display discriminators
+
+Current CT_R::content_text at rdocx-oxml/text.rs:2318 uses Field::projected_text, which returns a cache only for complex fields at :1108. Parsed simple fields can contribute ordinary result runs instead. Therefore `projected_text().unwrap_or("")` alone is not a general field visibility operation. `Field.cached_result` is the actual public effective cache at :408, and cached_result_runs at :651 supplies typed result runs only when their display string agrees with that effective cache. The latter deliberately rejects stale typed cache and preserves ordered result content. Do not assume every instruction names an already displayed or evaluated value.
+
+Required source-built controls before changing the F-X196 list at commands.rs:2457:
+
+- A loose qualified fldChar begin/separate/end with no complete field result, and loose instrText or delInstrText, remains empty. Foreign same-local-name markers remain opaque. Repeat in aliases/default bindings and accepted/rejected wrappers.
+- Complete simple and complex fields with non-whitespace displayed cached text count visible. An instruction-only PAGE or NUMPAGES field with no effective result does not become visible merely because evaluation could produce text later. This read-only operation does not call update_fields.
+- Whitespace-only cache remains empty unless a typed accepted result run contains an independently visible nontext item. Empty simple fldSimple is not affirmative by its element name alone.
+- A complex field with a drawing, symbol, tab or break in its accepted result must count even when its text cache is empty. Follow cached_result_runs recursively for that actual typed display, excluding instruction and deleted content. Establish the equivalent parsed simple-field result behavior rather than counting its root unconditionally.
+- A stale typed result after direct public cached_result mutation must follow the effective current cache and the consistency-filtered cached_result_runs contract, not the stale parse-time result. Non-whitespace changed cache is visible, changed whitespace/empty cache is empty unless the current result representation proves nontext display.
+- A nested field result, a field spanning ordinary runs, an incomplete complex sequence and unmatched delimiters require actual accepted parser projections. Do not reconstruct field ownership from a local fldChar list or scan instruction XML as display text. Nested results terminate structurally by owned source, not arbitrary repeated marker recursion.
+- A standalone DeletedText typed item can contribute to CT_R::text at :2314 today. Its exclusion from final accepted visibility is a separately reviewed CLI refinement, not an unnoticed consequence of the extraction. Insertion/moveTo accepted content and deletion/moveFrom rejection must agree across raw wrappers and typed projections.
+
+Prove each discriminator through the existing native audit and public CLI validation entrypoints, before and after source edits, with exact no-mutation bytes and unchanged other findings. No discriminator, test or Cargo command has run during this design task. Only the later approved intentional audit behavior may earn the already proposed three feature_showcase hash deltas, and all46 other keys must remain unchanged unless a new measured and reviewed contract explicitly supersedes that expectation.

@@ -97,3 +97,24 @@ Existing cases that request Georgia, Segoe UI, Aptos or verified symbol fallback
 3. What pinned Segoe UI reference and truthful measured tolerance satisfy acceptance given the upstream kerning limitation? Do not declare compatibility without reference evidence.
 4. Resolved: the refreshed issue explicitly defers a distributed font pack. Caller-provided fonts are the supported route.
 5. Which exact family/codepoint denotes the issue's section-square bullet, and what installed diagnostic surface consumes fallback reports after byte-only rendering?
+
+## Performed bounded shaping experiment
+
+Pinned HarfBuzz14.4.0 shaped five exact Latin controls in each of four
+Gelasio styles at wght400 or700, compared with the installed licensed Georgia
+faces read in place. Controls cover kerning pairs, ligatures, numerals,
+punctuation and longer strings, with explicit LTR/Latn/en, font-size=upem
+and kern0/kern1. All40 pairs have genuine glyph coverage. Maximum absolute
+string-advance deltas are0.28857421875em regular,0.48486328125em bold,
+0.32470703125em italic and0.38427734375em bold-italic across these controls.
+These are observed differences, not acceptable universal tolerances or a
+claim that every line wraps identically. Compare the existing substitute,
+line metrics and actual layout selection before final compatibility claims.
+
+The exact commands, font versions, hashes, glyph results and normalized
+advances are retained in S91-F-X210-font-intake/independent-shaping-controls.json,
+SHA256ecb815b27f26ecb27b6a1690ce0d595efdd4bf5dff0895e97f82d4d154a11a6e.
+HarfBuzz failed to load the licensed Segoe WOFF reference directly in all10
+controls. Those are explicit failed controls, with no numerical shaping
+claim and no font conversion or redistribution. Selawik shaping parity
+remains unproved by this experiment. No production or baseline changed.
