@@ -5,6 +5,10 @@
 **Size**: M
 **Depends on**: none
 
+The shared generation field names were reconciled with F-X206 before either
+story was claimed. F-X194 still owns cell traversal and cell-only generation
+validation. F-X206 owns the later shape-text and layout-inventory partition.
+
 ## Problem
 
 PowerPoint `PyCell` exposes text and cell formatting but no `text_frame`.
@@ -36,7 +40,7 @@ negative values and removal, without replacing Word's placement policy.
 
 Extend existing types and files. Add `Cell.text_frame -> TextFrame` to the
 PowerPoint binding. Capture its existing cell path including Row and Cell. Set the new optional
-`ContentPath.cell_text_revision` directly to the current cell-text generation.
+`ContentPath.text_revision` directly to the current cell-text generation.
 Retrieving the handle validates ownership and both applicable generations
 without creating a text body, mutating source or advancing a generation.
 
@@ -83,9 +87,12 @@ setter at `crates/rpptx/src/lib.rs:3967`. Reject this assignment before creating
 or changing any slide relationship. Do not add a native hyperlink API.
 
 Extend the actual owner `PyPresentation` in existing `presentation.rs:152` with
-`cell_text_revisions: RevisionCounter`. Extend shared `ContentPath` in
-`crates/oxml-py-support/src/lib.rs:29` with `cell_text_revision: Option<u64>`.
-Existing constructors and captures set it to None. The new cell-backed frame
+`text_revisions: RevisionCounter`. Extend shared `ContentPath` in
+`crates/oxml-py-support/src/lib.rs:29` with `text_revision: Option<u64>`.
+Ordinary shape constructors and captures set it to None in this story.
+F-X206 reuses these exact fields for existing shape-text consumers when it
+implements the ancestor-handle partition. Do not add a second shape counter
+or rename a field during that later implementation. The new cell-backed frame
 sets Some directly, and paragraph, run, font and collection descendants inherit
 that value rather than dropping it on capture. These concrete current consumers
 justify one additional generation field. No per-cell map, generic revision

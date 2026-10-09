@@ -167,8 +167,10 @@ Preferred smallest direction for design review:
 2. Generalize the proposed X194 cell-text generation into one concrete text
    topology RevisionCounter in PyPresentation and one optional text revision
    field on existing ContentPath. The current approved X194 field is named
-   cell_text_revision and is not implemented yet. Changing its scope/name
-   requires amending that design before either story writes source.
+   text_revision with PyPresentation.text_revisions, reconciled in F-X194
+   before either story is claimed. F-X194 initially captures Some for cell
+   text only. This story adds actual shape-text consumers to the same fields,
+   without a second counter or another field migration.
 3. Shape-backed and cell-backed TextFrame paragraph/run/font consumers
    capture that optional generation directly and inherit it into descendants.
    Text replacement, paragraph/run insertion and cell replacement/merge/split
@@ -203,7 +205,8 @@ unless a concrete accepted operation requires handle survival across reorder.
 Alternative retaining X194's cell-only field would need a second shape-text
 field/counter and duplicate inheritance logic. That increases cases readers
 must consider. Do not choose it merely because the earlier draft existed.
-Root must reconcile the final shared contract before workers start.
+The field names are reconciled with F-X194. Complete the mutation and
+constructor audit before implementing the additional shape partition.
 
 ## Ownership and affected paths
 
