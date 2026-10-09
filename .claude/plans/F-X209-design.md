@@ -199,3 +199,25 @@ Installed Base reproductions for each of the three Issue312 scripts, every new c
 Positive apply_theme matrix PPTX/POTX/THMX, colours/fonts/four format scheme lists, images in scheme backgrounds, optional imported master/layout closure, no mapping versus explicit partial mapping, preserved destination macros outside scope and refused selected executable dependencies. Do not infer closure correctness from a simple RGB theme. Assert existing direct slide content and all unrelated original part bytes, plus actual requested inherited render changes using deterministic caller-font provider X195. Authenticate current PowerPoint no-repair normal reopen and native PDF/PNG, pinned LibreOffice round-trip and all three installed Python scripts. Preserve limits of Google Slides best effort without an unsupported compatibility claim.
 
 Run exact X205 fill and X206 group/owner/handle regression controls alongside master/layout changes. Fonts/themes consume X208/X197 one source, no Word tint/shade behavior change. Scope riders: qualified OOXML preservation/order, native archive/size actual measurements and source package dry-run, installed PyO3 typing/stubtest, both WASM checks, independent microscope and current scoped hash harness. No baseline move is assumed. The design is approved with existing-file source claims serialized against its providers. Actual prerequisite completion, installed Base reproductions and native oracle acceptance remain implementation/completion gates. No local source or test pass is claimed by this appendix.
+
+## PR327 immutable contribution assessment
+
+PR327 closes Issue312 at3231c0c32ec42be781192fef07cbff52dee4394f. Its
+exact ancestor is refreshed PR324 head232b5dbb63a29cfe72462a1716d2b17d79a7d252.
+Retained capture /private/tmp/S91-PR327-intake authenticates39 cumulative
+changed files and the24-file, seven-commit feature-only delta. Full trees,
+base/head blobs, patches and empty paginated discussions are retained.
+Do not reimplement or recount inherited F-X208 work under this F-ID.
+
+Reuse concrete owner-aware mutation, dirty master/layout records, live theme
+lookup, typed layout lists and staged copy/reopen scaffolds in existing files.
+The contributor's new masters.rs is not authorization for a new module.
+Source masters.rs:1148 chooses the first master, :1262 replaces existing
+masters/layouts and :1215 overwrites complete themes. Those choices conflict
+with the explicit selection, fresh import and selective scheme contract above.
+Its lib.rs:2723 serializes with preserve_unchanged_modelled_parts=false.
+Retain exact unaffected modeled bytes. Cached slide-index usage checks and
+unqualified external payload retention cannot replace complete package graph
+checks and explicit unsupported-dependency refusals. Index/global-revision
+Python proxies must consume F-X206's causal owner provider. Contributor native
+and rendering claims remain unverified local acceptance gates.

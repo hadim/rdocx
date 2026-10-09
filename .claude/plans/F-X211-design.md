@@ -601,3 +601,37 @@ Saved-file assertions must reopen through both binding/native relevant paths and
 - P-AREA-24: footer-title-date-first-zero
 - P-AREA-25: master-layout-theme-apply
 - P-AREA-26: all-transitions-retained-sound
+
+## Full statement freeze, independent static checkpoint
+
+The100-script pre-measurement review candidate is retained under
+/private/tmp/S91-F-X211-frozen-corpus. Allocation remains exactly the approved
+49 Word/51 PowerPoint IDs. Full manifest SHA256 is
+1889f6683eb788fc2a9007e84c66028cf5f1701a22a452de8767edbb0c8042be, and
+complete setup/body/assertion JSON SHA256 is
+10e1c6dc3d7bf0ca02ac185d54fa9fbfd01fc9488e8a82885fae4f99861ff106.
+This supersedes the earlier absence of a full statement digest. Independent
+root checks authenticate156 artifact hashes/sizes,100 syntax-valid bodies,
+seven pinned upstream PPT code blocks and three original read-in-place font
+or media hashes. No binding execution, selected source-built Base, native
+obligation acceptance or rate is asserted.
+
+The17 Word originals remain exact local oracle bodies. The seven PPT originals
+are literal code blocks from python-pptx1.0.2 commit
+278b47b1dedd5b46ee84c286e77cdfb0bf4594be, blob
+a24b8bc63ca6fefaa7df8f4ba0c6cff1f4dc797d. Original indented bytes and line
+citations remain retained. Executable bodies dedent, remove trailing blank
+lines and substitute import namespaces only. Seeded extraction input and
+controlled PNG are documented fixture exceptions. Original reconstructed or
+refetched adaptations remain separate and cannot earn original-body credit.
+
+Causal tests explicitly assert the first invalidating operation and exclude
+the later different operation. Stress edits do not prove weak-state memory
+reclamation. Twelve cases require separate concrete native acceptance. The
+movie case remains in the fixed denominator with qualification incomplete:
+its real installed MP4 has container/sample facts, but actual frame decode
+failed. Do not admit playable/movie-render credit or a complete corpus metric
+until that input has authentic successful qualification. No further font copy,
+media distribution or production fixture file is authorized by this record.
+Final body freeze/admission and unchanged-hash Base/final execution remain
+required in existing integration entrypoints, once over the integrated result.

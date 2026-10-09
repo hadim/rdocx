@@ -309,3 +309,33 @@ reverse edge or provider-to-F-X211 edge is introduced. F-X211 audits residuals
 and the final corpus after providers, with exactly100 allocated script IDs.
 Its allocation digest is not a full statement-body freeze or executed rate.
 Formal completion and exclusive file claims remain required before source work.
+
+## Latest rolling PR intake
+
+The23:18:12UTC refresh contains14 open PRs and24 issues. All14 PRs and
+22 issues are included, with264 and281 still excluded. New PR327 attaches
+to Issue312/F-X209, PR328 to Issue304/F-X201 and PR329 to Issue310/F-X207.
+No new F-ID or duplicate implementation is created. Advanced heads318,319
+and324 retain F-X205, F-X210 and F-X208 respectively. Immutable source and
+discussion assessment is complete for327/329 and pending for328 and the
+three advanced heads at this checkpoint. Intake is not acceptance evidence.
+
+PR327 at3231c0c32ec42be781192fef07cbff52dee4394f has fresh PR324 head
+232b5dbb63a29cfe72462a1716d2b17d79a7d252 as its exact ancestor. Its seven
+new commits and24-file feature delta belong to F-X209. The inherited F-X208
+work is counted once. Preserve explicit master selection/layout mapping,
+fresh imported owners, destination theme opaque data and full package usage
+checks rather than adopting its replacement policy.
+
+PR329 atd6cd56d6554119ea4cfc4b4897a56d660dbe44af remains source reference
+for shared stacking and explicit native fit operations. Its implicit save and
+read-only refresh, globally rounded stored sizes and unfit-floor writes do
+not meet F-X207. Retain exact existing62500 stored rendering and authentic
+92500/0 native controls. Contributor pass counts are not local oracle proof.
+
+Independent root review verified all156 frozen F-X211 artifacts,100 syntax
+checks, seven exact pinned upstream PPT blocks and three read-in-place input
+hashes. No binding body ran and no compatibility rate exists. The movie
+candidate has valid container facts but frame decoding failed. Its acceptance
+and the twelve additional native obligations remain due. The full manifest
+SHA is1889f6683eb788fc2a9007e84c66028cf5f1701a22a452de8767edbb0c8042be.

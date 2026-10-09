@@ -531,3 +531,24 @@ layout of rounded explicit-size clones. Compile and actual execution remain
 required before selecting this producer policy. Width, wrapped text, bullets,
 mixed/default run styles, shared owners and anchored resizing remain actual
 implementation acceptance gates. No additional height sweep is needed.
+
+## PR329 source reconciliation
+
+PR329 closes Issue310 atd6cd56d6554119ea4cfc4b4897a56d660dbe44af. Full
+18-file source capture, four commits and empty complete discussions are
+authenticated in /private/tmp/S91-PR329-intake. This is source assessment,
+not execution or native parity acceptance. Reuse shared stacking, explicit
+refresh/fit APIs and concrete owned plans within existing files.
+
+Reject implicit autofit marks before save/to_bytes/PDF/PNG/layout at contributor
+presentation.rs:185 and :253. Ordinary output remains read-only. Contributor
+text.rs:525 globally rounds stored Normal sizes and replaces the62500
+regression. Preserve exact F-100 fractional stored rendering. Its candidate
+table at:539 omits our authentic92500/0 controls, and :580 writes an unfit
+floor. Retain bounded candidate evidence and atomic refusal. Sequential
+apply_autofit_plan writes and unchecked float/EMU conversions at lib.rs:1443
+and :1494 require checked clone-stage/reopen publication once. The1034/1024
+geometry factor at render/lib.rs:484 has no authenticated local native
+receipt and cannot become universal resize policy. Caller-font preparation
+uses the actual F-X195 context for every measurement and output. The claimed
+285 frames/244 matches are contributor assertions, not our oracle results.
