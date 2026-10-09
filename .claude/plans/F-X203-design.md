@@ -333,20 +333,145 @@ write sprint totals. Fresh dependency-prefix source is the test Base.
 
 ## Open questions
 
-1. Final count scope and character definition need one explicit contract.
-   Proposed native word/body scope and Unicode scalar character count differ
-   from all-story text presentation. Do not count CLI labels as content.
-2. Approve the immutable TextReport and export/math diagnostic result names,
-   plus the Python bytes/path validation entrypoint for malformed unopened
-   packages. Document.validate alone cannot represent every failed-open input.
-3. Final fragment constructors and insertion bounds must match native owned
-   closure and FragmentConflictPolicy methods, with a checked panic-free
-   entrypoint. No new conflict policy is assumed.
-4. Decide exact timezone/value conversion for typed custom dates and whether
-   app-property writes use a live proxy or full typed snapshot replacement.
-5. Equation insertion remains paragraph-owned. Confirm the convenience surface
-   and supported conversions from existing native diagnostics.
-6. Native content-control inventory currently means typed main body. If every
-   story is requested, design that native expansion explicitly before approval.
-7. Resolve shared document.rs/CLI/Python file ownership with X200/X201/X202/X204.
-   Split into dependent children if necessary without omitting Issue306 items.
+Count scope, ordered diagnostic records, checked insertion, live metadata
+ownership and display-equation boundaries are resolved below. Final approval
+still requires source-wave ownership and prerequisite completion. Adopt the
+explicit CustomFileTime authoring subtype and grammar below. Existing native
+lexical dates remain inspectable without normalization. No additional date
+convenience conversion is implied by Issue306.
+
+## Resolved document operation contracts
+
+
+Keep `Document.word_count() -> int` identical to native whitespace token counting over accepted main-body paragraph visitation. Native document.rs:29025 sums each paragraph's split_whitespace count, including tables and typed controls and excluding removed rows. Do not replace this with tokenizing concatenated text, since accepted paragraph joins can change tokens.
+
+Define `Document.character_count(*, include_spaces: bool = True) -> int` as the sum of Unicode scalar values in the same accepted paragraph text visitation. True includes actual text whitespace. False excludes every character satisfying Rust char::is_whitespace, explicitly including tabs, line breaks and nonbreaking spaces. Combining marks count individually, supplementary-plane characters count once, and no grapheme or UTF-16 interpretation is claimed. Synthetic paragraph newlines, table tabs and story labels do not count. Native text formatting inserts these separators at document.rs:11775, document.rs:11801 and document.rs:11809, so counting Document.text() is unsuitable. Add exact scalar/whitespace examples to the stub and HLD.
+
+`Document.text() -> str` remains the new CLI presentation parity operation, not the source for those body counts. `Document.text_report() -> TextReport` exposes immutable text, scope Literal['main','all-supported-stories'], revision_view Literal['accepted'] and ordered diagnostics. Retain exact CLI text labels, grouping and newlines, commands.rs:206. On failed other-story extraction, return main text and one omission diagnostic with the same detail used by the CLI warning, commands.rs:230. CLI consumes the shared result and writes its diagnostic to stderr. No all-story count API is silently added.
+
+`Document.page_count() -> int` uses fresh deterministic native layout and returns actual layout pages. Producer app-properties pages are separate cached metadata. Final font-option signature must reuse integrated F-X195 options rather than inventing a second font selection rule.
+
+## Diagnostic result names
+
+Use format-specific concrete immutable result types:
+
+- `OdtExportResult.bytes: bytes`, `diagnostics: tuple[OdtDiagnostic, ...]`, each diagnostic path/message.
+- `RtfExportResult.bytes: bytes`, `diagnostics: tuple[RtfDiagnostic, ...]`, each diagnostic offset/destination/message.
+- `EpubExportResult.bytes: bytes`, `diagnostics: tuple[EpubDiagnostic, ...]`, each diagnostic path/message.
+- `MathConversionResult.value: str`, `diagnostics: tuple[MathConversionDiagnostic, ...]`, each diagnostic path/message.
+- `TextDiagnostic.message: str`, retained native extraction detail. TextReport diagnostics are immutable ordered values.
+
+Important correction: native RTF diagnostics are NOT path/message records. rtf.rs:33 has offset:usize and destination:Option<String>. Native odt.rs:46, epub.rs:51 and math.rs:30 use path/message. Do not discard or synthesize RTF source location fields to fit a generic ExportResult. The bindings expose existing native results using these exact public Python names, with no new Rust generic or forwarding module.
+
+Signatures: `Document.to_odt() -> OdtExportResult`, `to_rtf() -> RtfExportResult`, `to_epub() -> EpubExportResult`. Keep errors as RdocxError and diagnostics as successful-result data.
+
+## Validation input and ownership
+
+Proposed native existing-file surface:
+
+```rust
+pub enum ValidationSeverity { Error, Warning }
+pub struct ValidationFinding { pub severity: ValidationSeverity, pub message: String }
+pub struct ValidationReport { pub findings: Vec<ValidationFinding> }
+impl ValidationReport { pub fn is_valid(&self) -> bool; }
+pub fn validate_document_bytes(bytes: &[u8]) -> Result<ValidationReport>;
+pub fn validate_document_path(path: &std::path::Path) -> Result<ValidationReport>;
+impl Document { pub fn validate_sections(&self) -> Vec<ValidationFinding>; }
+```
+
+These signatures are proposals only. X201 owns the minimal report types and checked section helper. X203 owns the full CLI assembly relocation and bytes/path entrypoints, using the X201 helper without a second section scanner. Native facade never depends on CLI. Existing document.rs/lib.rs are sufficient, with no new module.
+
+Python module signatures: `validate_bytes(data: bytes) -> ValidationReport` and `validate_file(path: str | os.PathLike[str]) -> ValidationReport`. Also `Document.validate() -> ValidationReport` over a serialized immutable snapshot. bytes must not require an opened Document. Path conversion is explicit and does not invoke arbitrary object stringification. Snapshot serialization uses native to_bytes staging (document.rs:14674), not mutations of the source revision or handles.
+
+Preserve actual CLI failure boundaries. OpcPackage::open failure propagates at commands.rs:2188, so non-ZIP/failed archive decoding and path I/O remain RdocxError. Once package inspection succeeds, failed Document opening adds the existing error finding at commands.rs:2290. This supports malformed XML and missing-owner findings without claiming every arbitrary byte sequence produces a report. Preserve exact messages and deterministic ordering of all existing error groups, then warnings. A Warning does not make is_valid false. CLI alone formats stdout/stderr and exit status. Bytes input and equivalent path input must agree on findings where both decode.
+
+## Checked whole-document import
+
+Bind the actual concrete FragmentConflictPolicy struct, document.rs:1036, with reuse_equivalent/rename_all and three independent immutable-returning toggles at1044,1053,1062,1068,1074. None selects native Default at1092. Do not invent fail or replace these controls with style-only policy.
+
+Proposed `DocumentFragment.from_range(document, start: ContentLocation, end: ContentLocation, *, include_final_section_properties: bool = False) -> DocumentFragment` directly reuses native document.rs:1144. It captures a nonempty half-open range of direct items from one checked story. Section-inclusive closure is allowed only at the final main-body boundary. Fragment remains owned and usable independently of later source edits. Existing native ContentLocation::new/end are at1278/1288.
+
+Proposed `Document.import_fragment(destination, fragment, *, policy=None) -> None` directly reuses checked native import_fragment at18411, which stages the supported dependency closure and reopens before publication at18458. Do not wrap infallible insert_document at26198, which calls expect and clamps.
+
+For `insert_document(other, *, at: int, policy=None)`, add a minimal checked native `try_insert_document(&mut self, index: usize, other: &Document, policy: FragmentConflictPolicy) -> Result<()>` only if whole-body fragment capture cannot express the complete existing insertion contract. Define at as physical direct body-child index, including preserved body items, not the filtered paragraph index. Accept 0 through body length inclusive and reject larger/negative Python indices. Destination end remains before final sectPr. Ordinary insertion does not silently import final source sectPr. Section-owning input content and empty source need explicit regression fixtures before choosing their compatibility behavior. This is a real implementation question: document.rs:26248 currently clones body content and merges styles/numbering, while the checked fragment route has stronger dependency and section-owner rules. Do not claim the two are already equivalent.
+
+## Custom properties and date policy
+
+Native CustomPropertyValue::FileTime is String, custom_properties.rs:34. Parsing reads its text at307, and writing returns that text at403. There is no native calendar/timezone validation or UTC normalization. This is the actual native policy and should remain unchanged for existing packages.
+
+Choose a concrete `CustomProperty` immutable read snapshot carrying name, pid, fmtid, type and value, alongside a document-owned CustomProperties collection proxy. `get(name) -> CustomProperty | None` avoids conflating a missing property with native Empty. Expose unsupported Raw values as read-only bytes with explicit type, never silently map them to None or ordinary strings. Preserve lpstr versus lpwstr when updating an existing string, PID, fmtid and ordering. New strings use Lpwstr and a newly available PID >=2. Native set_custom_property validates name/PID collision, document.rs:25965, but does not preserve those metadata automatically if passed a freshly constructed replacement.
+
+For newly authored dates, prefer an explicit `CustomFileTime(value: str)` with a documented checked RFC3339 authoring subset and no timezone conversion, rather than accepting datetime implicitly. Require an explicit Z or numeric offset, valid Gregorian date/time, optional fractional seconds, no timezone-naive value and no leap second. Preserve accepted lexical offset/fraction spelling when written. A preexisting native FileTime outside that authoring subset remains inspectable and unchanged by unrelated writes. This adds Python authoring validation, not a claim that native String already validates dates. The exact CustomFileTime name and grammar are selected by this design revision. If datetime convenience is requested later, its timezone/precision normalization is a separate explicit conversion, not hidden in property access.
+
+Bool dispatch precedes int, I4 is signed32-bit, R8 rejects nonfinite newly authored values, unsupported object conversions fail before mutation. Missing deletion is a no-op. Explicit native Empty and Raw need distinct reading representations.
+
+## App-properties ownership
+
+Choose a document-owned AppProperties proxy, following the existing CoreProperties proxy pattern at rdocx-py/document.rs:1305. Each setter borrows the owning document, clones the latest native model or uses default only when absent, changes one supported field and invokes native set_application_properties. That preserves private child_order/extra_xml/extra_namespaces from app_properties.rs:152, and avoids stale whole-snapshot overwrite.
+
+Expose supported native fields with their actual Optional types, app_properties.rs:130. Cached pages/words/characters are metadata, never calculated counts. Getter access does not create a part. Assigning the same value is a no-op. A failed application_version shape is rejected by native document.rs:25919 without publication. Metadata writes retain existing nonstructural Python handle usability, matching CoreProperties behavior at rdocx-py/document.rs:1321. Do not expose a detached mutable model as though mutations reached the document.
+
+## Equations and content-control boundaries
+
+Proposed `Paragraph.add_equation(source: str, *, format: Literal['latex','mathml']) -> EquationInsertResult`, where the immutable result has equation:Equation and diagnostics:tuple[MathConversionDiagnostic,...]. Returning only Equation would discard native import diagnostics, math.rs:115/182. Convert before mutable document borrow, then append through paragraph-owned native add_equation at paragraph.rs:981. Initial convenience insertion creates inline OfficeMath using native OfficeMath::inline, rdocx-oxml/math.rs:227. Do not invent display conversion by treating source whitespace as layout intent. Any display convenience needs an explicit display parameter and native supported shape.
+
+`Paragraph.equations() -> tuple[Equation, ...]` follows native source order, paragraph.rs:960. Equation is an immutable owned snapshot, not a mutable detached proxy. `Equation.to_latex()/to_mathml() -> MathConversionResult` retain diagnostics from the existing native conversion. A native display equation may contain multiple CT_OMath children, so conversion must preserve each equation boundary or report a bounded diagnostic rather than silently selecting its first child. The follow-up below resolves display conversion with an ordered per-equation result.
+
+`Document.content_controls() -> tuple[ContentControl, ...]` means every typed main-body control in native recursive document order, including paragraph, table and nested controls. Native content_control.rs:69 delegates CT_Body inventory; rdocx-oxml/document.rs:2671 skips raw body XML and enumerates typed controls. It covers typed main-body controls. Related stories and accepted-revision filtering are separate native capabilities. Return immutable tag/alias/id/type/text snapshots. Native by-tag/by-alias setters at content_control.rs:95/102 retain duplicate-selection, custom XML binding and atomic refusal semantics. Do not expand all-story control discovery silently under Python parity.
+
+## Evidence and remaining decisions
+
+No native Word, converter or Python oracle was run for this appendix. References describe current source only. The concrete insertion and display conversion decisions are resolved by the follow-up below. The contracts below supersede the initial singular equation result and conditional insertion proposal above. Source-wave ownership must still be reconciled with X201/X202 before approval.
+
+## Source receipt
+
+Canonical read HEAD: `33ec5f18e83b71028d0b8e33f233ef07c4f4965c`. Working-source hashes:
+
+- `crates/rdocx/src/document.rs`: `3b8eec9fc3980a9dc743be2faef39d1126c819be102a61b58a4f6ae798a59620`
+- `crates/rdocx/src/content_control.rs`: `c240eddc91a81cd833afa5ebfc1cf7c27c987801824faf5d4457278d55ff3c0c`
+- `crates/rdocx/src/paragraph.rs`: `83198917fce911d18c1cdcf732c9f6e992feae279cf3092f1c43a48084a6da0c`
+- `crates/rdocx/src/math.rs`: `fbe4314cf25a23ff48aac68419ea3e83cc081878f5b325f474df668812842cab`
+- `crates/rdocx-cli/src/commands.rs`: `72b89954de46fda52b2287e3914f84230ec354d798999aa457ebfc57c3c1b6a4`
+- `crates/oxml-core/src/custom_properties.rs`: `201fdf81d0615c2cc2d2a64e6f09bab1eadef72b0af879a2710fc46848aaa8cf`
+- `crates/oxml-core/src/app_properties.rs`: `176cd6dae588964906821d7e1d5a79e578acac1ddb2c2162aa76652aae9f3daa`
+- `crates/rdocx-py/src/document.rs`: `07566b1b259fe7fc736e22e842b999d898907db8d3cd1da2f14832bc207e5aa3`
+
+## Follow-up: checked whole-document insertion resolved
+
+Choose one checked native `try_insert_document(&mut self, index: usize, other: &Document, policy: FragmentConflictPolicy) -> Result<()>` in existing document.rs. Bind Python insert_document to it, never to the existing infallible wrapper. The helper composes the existing checked capture/import route. It does not duplicate dependency import or use the old staged clone-and-style merge as a fallback.
+
+1. Resolve the destination physical body owner and its direct content list. Define index as that list's ordinal, excluding final body sectPr but including preserved direct children. Reject index greater than the direct count even when the source is empty. Map a nonfinal direct ordinal to the corresponding full projected scanner location, not `ContentLocation::new(..., vec![index])` blindly. `validated_content_boundary` at document.rs:7494 indexes scan_story_items first and only then translates to direct ordinal. Nested controls can make these indices differ. Use ContentLocation::end for index equal to count.
+2. Obtain the source's staged authoritative main body and direct content list using existing internal scanner helpers. An empty list is a valid no-op after destination/source preflight. Return without importing unused styles/parts, changing source or destination bytes, incrementing revision, or invalidating handles. Existing from_range intentionally requires a nonempty range, document.rs:1169, and package_authoritative_body_fragment rejects an empty list at document.rs:6952. Do not broaden either public primitive solely to express this no-op.
+3. For a nonempty source, capture its first direct item through ContentLocation::end(body), with include_final_section_properties=false, via DocumentFragment::from_range at document.rs:1144. Source remains unmodified because capture uses staging. Import with the requested complete native policy using import_fragment at document.rs:18411. That route stages closure and reopens before a single publication.
+4. Preserve paragraph-owned and nested section particles already in selected body blocks. Import the related references through the existing dependency closure, which scans the selected authoritative content, field.rs:3240, and records its referenced internal parts at field.rs:3270. Do not strip paragraph sectPr to make insertion simpler. Unreconcilable schema/dependency ownership is an atomic checked error from the existing route, never a panic or legacy merge fallback.
+5. Ordinary insert_document excludes the source's terminal body sectPr. The destination terminal body sectPr remains final. To explicitly include the source final section, callers use DocumentFragment.from_range(..., include_final_section_properties=True) and import_fragment. Existing native package_authoritative_body_fragment at document.rs:6971 wraps an included final section in a new paragraph's pPr, retaining the destination final section. Native field.rs:3192 performs the corresponding typed dependency projection. This existing explicit API avoids another insert_document flag or ambiguous geometry replacement.
+
+Existing source test regression_test.rs:37645 constructs a final-section-inclusive fragment and asserts that import yields two sections. This is source evidence only, not a newly observed test pass. Add checked insertion regressions for genuinely empty body plus terminal sectPr, empty invalid destination index, sections-only source no-op, internal paragraph section with header/footer dependencies, insertion before/middle/end, preserved direct children and nested controls whose projected positions differ from direct ordinals, unsupported closure rollback, source byte equality, and success versus no-op handle revision behavior. The Issue306 convenience operation remains insertion of selected body content rather than an implicit replacement of destination geometry.
+
+## Follow-up: display equation conversion boundaries resolved
+
+Keep Paragraph.equations inventory one snapshot per native OfficeMath occurrence. Add immutable `Equation.is_display: bool` and use one boundary-preserving result shape for both inline and display conversion:
+
+```python
+Equation.to_latex() -> EquationConversionResult
+Equation.to_mathml() -> EquationConversionResult
+EquationConversionResult.is_display: bool
+EquationConversionResult.equations: tuple[MathConversionResult, ...]
+EquationConversionResult.diagnostics: tuple[MathConversionDiagnostic, ...]
+```
+
+For inline OfficeMath, equations has one result. For display OfficeMath, it has one result for each CT_OMath child in native source order. CT_OMathPara stores that ordered Vec at rdocx-oxml/math.rs:113 and pushes each parsed oMath at153. No flattening, implicit separators, first-child selection, equation-array reconstruction or joined TeX string is needed. This corrects the earlier singular Equation.to_latex/to_mathml -> MathConversionResult proposal while retaining MathConversionResult as the concrete per-child value/diagnostic record. Native converters at rdocx/math.rs:137 and200 remain unchanged.
+
+For each child, pass its cloned expressions through MathArgument::new and existing converters. Keep converter diagnostic paths unchanged within their child's result, where tuple position identifies the boundary. This expression projection alone loses CT_OMath-level preserved attributes or raw siblings, because CT_OMath owns private Preservation independently of its expressions, rdocx-oxml/math.rs:37/65. Before projection, clone the child and clear expressions, then call its public has_unsupported_content at83. If that isolated container still retains content, attach an explicit conversion loss diagnostic to that child's result. Existing math.rs:1436 already uses the analogous clone/clear/check pattern for MathArgument. Do not claim that cloning expressions preserved the outer container.
+
+At the display wrapper, clone CT_OMathPara and clear equations. Its public has_unsupported_content at175 detects opaque wrapper/property content independently of child content. Emit a wrapper-level diagnostic if that remainder has unsupported content. Also emit a wrapper-level layout-loss diagnostic when its typed justification is present, since canonical per-child MathML or LaTeX export does not represent native oMathParaPr group justification, rdocx-oxml/math.rs:1144. The is_display flag retains display ownership classification without pretending these plain conversion values preserve all layout metadata. A read-only Equation snapshot retains the complete cloned OfficeMath for native document preservation. Conversion never rewrites its owning paragraph or strips stored OMML.
+
+Existing invalid/default empty display is not normalized into one empty equation: CT_OMathPara serialization rejects no-equation display at rdocx-oxml/math.rs:189. For a nonempty display, every child still gets a result even if a bounded converter returns empty text and diagnostics. This preserves cardinality as well as ordering.
+
+Paragraph.add_equation source conversion remains `-> EquationInsertResult` with import diagnostics and one inline OfficeMath child. Existing native conversions return a MathArgument, while OfficeMath::inline consumes its expressions at rdocx-oxml/math.rs:227. No new multi-equation authoring syntax or display inference is introduced. Initial insertion's format selector remains latex or mathml. A display authoring extension is outside this binding parity convenience, but reading and converting existing multi-equation display content is covered completely by the tuple result.
+
+Add source-built tests for two distinct display children including repeated identical children, typed group justification, opaque wrapper attributes/children, opaque CT_OMath-level siblings, nested expression diagnostics, one failed bounded conversion among successful siblings, unchanged source bytes after export, insertion diagnostics and save/reopen equation order. No oracle or test has run for this design follow-up.
+
+## Shared validation coordination receipt
+
+Fonts agent's `.claude/scratch/F-X201-authoring-decisions.md` proposes the same minimal native report types and section helper. Its proposed incomplete explicit pgSz warning and zero/negative explicit dimension error are X201-owned. X203 consumes them in the existing errors-then-warnings parity projection, retaining the CLI archive-open error boundary. Root reconciles exact stable messages and source claims. No duplicate section implementation or facade-to-CLI edge is proposed.
