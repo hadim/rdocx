@@ -3270,7 +3270,7 @@ def test_python_round_three_authoring_and_inspection_is_typed_and_lossless():
     before_bad_picture = document.to_bytes()
     with pytest.raises(rdocx.RdocxError):
         document.add_picture(
-            _one_pixel_png(), "pixel.png", width=rdocx.Inches(1), after=picture
+            _one_pixel_png(), "pixel.png", width=rdocx.Inches(1), height=0, after=picture
         )
     assert document.to_bytes() == before_bad_picture
 
@@ -4127,3 +4127,112 @@ def test_whole_story_comment_refusals_preserve_bytes_and_revision(kind):
             getattr(document, f"set_{kind}")(text)
         assert document.to_bytes() == before
         assert held.text == "main retained"
+
+
+def _two_by_one_png():
+    def chunk(kind, data):
+        crc = struct.pack(">I", zlib.crc32(kind + data))
+        return struct.pack(">I", len(data)) + kind + data + crc
+
+    header = struct.pack(">IIBBBBB", 2, 1, 8, 2, 0, 0, 0)
+    pixels = zlib.compress(b"\x00" + b"\xff\x00\x00" * 2)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", header)
+        + chunk(b"IDAT", pixels)
+        + chunk(b"IEND", b"")
+    )
+
+
+def test_pictures_take_alt_text_crop_and_floating_placement(tmp_path):
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("pictures")
+    path = tmp_path / "wide.png"
+    path.write_bytes(_two_by_one_png())
+    # python-docx's call shape: a path and only a width keeps the aspect ratio.
+    inline = document.add_picture(
+        str(path), width=rdocx.Inches(2), description="A wide chart", title="Chart"
+    )
+    document.add_picture(
+        _one_pixel_png(), "rule.png", 12700, 12700, decorative=True, after=inline
+    )
+    document.add_picture(
+        io.BytesIO(_two_by_one_png()),
+        rdocx.Inches(1),
+        crop=(0.1, 0, 0.1, 0),
+        wrap="square",
+        position=("right", rdocx.Inches(0.25)),
+        relative_to=("margin", "paragraph"),
+    )
+    document.add_picture(_one_pixel_png(), "back.png", 12700, 12700, wrap="behind")
+
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    pictures = reopened.pictures
+    assert [picture.inline for picture in pictures] == [True, True, False, False]
+    first, rule, floating, behind = pictures
+    assert (first.description, first.title, first.decorative) == (
+        "A wide chart",
+        "Chart",
+        False,
+    )
+    assert (first.width, first.height) == (rdocx.Inches(2), rdocx.Inches(1))
+    assert first.content_type == "image/png"
+    assert first.filename.endswith(".png")
+    assert first.blob == _two_by_one_png()
+    assert rule.decorative and rule.description is None
+    assert floating.width == rdocx.Inches(1)
+    xml = _document_xml(reopened)
+    assert b'<a:srcRect l="10000" r="10000"/>' in xml or b'l="10000"' in xml
+    assert b"<wp:wrapSquare" in xml
+    assert b"<wp:align>right</wp:align>" in xml
+    assert b'behindDoc="1"' in xml
+
+    with pytest.raises(ValueError, match="wrap"):
+        document.add_picture(_one_pixel_png(), position=(0, 0))
+    with pytest.raises(ValueError, match="unknown wrap"):
+        document.add_picture(_one_pixel_png(), wrap="floating")
+    with pytest.raises(ValueError, match="not both"):
+        document.add_picture(_one_pixel_png(), description="x", decorative=True)
+    with pytest.raises(ValueError, match="fractions"):
+        document.add_picture(_one_pixel_png(), crop=(10, 0, 0, 0))
+
+
+def test_run_pictures_land_in_body_and_cell_runs_and_resize_one_at_a_time():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("Logo: ").add_run("").add_picture(
+        _one_pixel_png(), rdocx.Inches(1), rdocx.Inches(1), description="Logo"
+    )
+    document.add_table(1, 1)
+    cell = document.tables[0].cell(0, 0)
+    cell.paragraphs[0].add_run("x").add_picture(
+        _one_pixel_png(), width=rdocx.Inches(0.5), title="Cell picture"
+    )
+    pictures = document.pictures
+    assert [picture.description for picture in pictures] == ["Logo", None]
+    assert pictures[1].title == "Cell picture"
+    assert pictures[1].height == rdocx.Inches(0.5)
+    xml = _document_xml(document)
+    ids = re.findall(rb'<wp:docPr id="(\d+)"', xml)
+    assert len(ids) == len(set(ids)) == 2
+
+    # Two pictures showing one image: a Picture resizes only itself.
+    relationship = pictures[0].relationship_id
+    document.add_paragraph("").add_run("").add_picture(
+        _one_pixel_png(), rdocx.Inches(1), rdocx.Inches(1)
+    )
+    shared = [
+        picture for picture in document.pictures if picture.blob == _one_pixel_png()
+    ]
+    assert len(shared) == 3
+    target = document.pictures[2]
+    assert document.set_picture_size(target, rdocx.Inches(3), rdocx.Inches(3)) == 1
+    sizes = [picture.width for picture in document.pictures]
+    assert sizes == [rdocx.Inches(1), rdocx.Inches(0.5), rdocx.Inches(3)]
+    with pytest.raises(rdocx.StaleElementError):
+        document.add_paragraph("later")
+        document.set_picture_size(target, 1, 1)
+    assert relationship

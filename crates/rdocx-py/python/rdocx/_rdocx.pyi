@@ -1,6 +1,7 @@
 import datetime as _datetime
 import os as _os
 from collections.abc import Iterator as _Iterator, Sequence as _Sequence
+from typing import BinaryIO as _BinaryIO
 from typing import Literal as _Literal, NoReturn as _Never, final as _final, overload as _overload
 
 from . import shared as _shared
@@ -8,6 +9,20 @@ from .enum import table as _table
 from .enum import text as _text
 
 _Path = str | _os.PathLike[str]
+_Image = bytes | str | _os.PathLike[str] | _BinaryIO
+_PictureWrap = _Literal[
+    "inline", "square", "tight", "through", "top_and_bottom", "behind", "in_front"
+]
+_HorizontalAlign = _Literal["left", "center", "right", "inside", "outside"]
+_VerticalAlign = _Literal["top", "center", "bottom", "inside", "outside"]
+_HorizontalFrom = _Literal[
+    "page", "margin", "column", "character", "left_margin", "right_margin",
+    "inside_margin", "outside_margin",
+]
+_VerticalFrom = _Literal[
+    "page", "margin", "paragraph", "line", "top_margin", "bottom_margin",
+    "inside_margin", "outside_margin",
+]
 _RevisionView = _Literal["accepted", "tracked"]
 _BorderStyle = _Literal[
     "none", "single", "thick", "double", "dotted", "dashed", "dotDash", "wave"
@@ -20,7 +35,7 @@ __all__ = [
     "Bookmark", "BoundingBox", "Cell", "CellCollection", "CellParagraphCollection",
     "Comment", "ComparisonDiagnostic", "ContentFragment", "CoreProperties", "Document", "Font",
     "HeaderFooterVariant", "Hyperlink", "LayoutBackedFieldUpdateReport", "LayoutFragment", "LayoutPage", "ListLevel", "Paragraph", "ParagraphCollection",
-    "ParagraphFormat", "Revision", "Row", "RowCollection", "Run", "RunCollection", "RunPosition",
+    "ParagraphFormat", "Picture", "Revision", "Row", "RowCollection", "Run", "RunCollection", "RunPosition",
     "RunRange", "Section", "Story", "StoryItem", "StoryRunPosition", "StoryRunRange", "Style",
     "SvgDiagnostic", "SvgRenderResult", "Table", "TableCollection", "TocRebuildReport",
 ]
@@ -341,6 +356,33 @@ class ContentFragment:
 
 
 @_final
+class Picture:
+    def __new__(cls, *, _private: _Never) -> Picture: ...
+    @property
+    def relationship_id(self) -> str: ...
+    @property
+    def name(self) -> str | None: ...
+    @property
+    def description(self) -> str | None: ...
+    @property
+    def title(self) -> str | None: ...
+    @property
+    def decorative(self) -> bool: ...
+    @property
+    def width(self) -> _shared.Length: ...
+    @property
+    def height(self) -> _shared.Length: ...
+    @property
+    def inline(self) -> bool: ...
+    @property
+    def content_type(self) -> str | None: ...
+    @property
+    def filename(self) -> str | None: ...
+    @property
+    def blob(self) -> bytes | None: ...
+
+
+@_final
 class Hyperlink:
     def __new__(
         cls,
@@ -603,7 +645,12 @@ class Document:
     def replace_image_for_story(
         self, story: Story, relationship_id: str, data: bytes
     ) -> None: ...
-    def set_picture_size(self, relationship_id: str, width: int, height: int) -> int: ...
+    # A Picture resizes only itself, a relationship ID every picture showing it.
+    def set_picture_size(
+        self, picture: str | Picture, width: int, height: int
+    ) -> int: ...
+    @property
+    def pictures(self) -> tuple[Picture, ...]: ...
     def split_run(
         self, body_index: int | Paragraph, run_index: int, character_offset: int
     ) -> int: ...
@@ -860,12 +907,20 @@ class Document:
     def remove_hyperlink(self, hyperlink: Hyperlink) -> None: ...
     def add_picture(
         self,
-        data: bytes,
-        filename: str,
+        image: _Image,
+        filename: str | int | None = None,
         width: int | None = None,
         height: int | None = None,
         *,
         after: StoryItem | None = None,
+        description: str | None = None,
+        title: str | None = None,
+        decorative: bool = False,
+        name: str | None = None,
+        crop: tuple[float, float, float, float] | None = None,
+        wrap: _PictureWrap = "inline",
+        position: tuple[int | _HorizontalAlign, int | _VerticalAlign] | None = None,
+        relative_to: tuple[_HorizontalFrom, _VerticalFrom] | None = None,
     ) -> StoryItem: ...
     def update_page_fields(self) -> int: ...
     def update_layout_backed_fields(self) -> LayoutBackedFieldUpdateReport: ...
@@ -943,6 +998,22 @@ class ParagraphCollection:
 @_final
 class Run:
     def __new__(cls, *, _private: _Never) -> Run: ...
+    def add_picture(
+        self,
+        image: _Image,
+        width: int | None = None,
+        height: int | None = None,
+        *,
+        filename: str | None = None,
+        description: str | None = None,
+        title: str | None = None,
+        decorative: bool = False,
+        name: str | None = None,
+        crop: tuple[float, float, float, float] | None = None,
+        wrap: _PictureWrap = "inline",
+        position: tuple[int | _HorizontalAlign, int | _VerticalAlign] | None = None,
+        relative_to: tuple[_HorizontalFrom, _VerticalFrom] | None = None,
+    ) -> None: ...
     @property
     def text(self) -> str: ...
     @text.setter

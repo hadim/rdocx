@@ -27,6 +27,7 @@ from rdocx import (
     Paragraph,
     ParagraphCollection,
     ParagraphFormat,
+    Picture,
     Revision,
     Row,
     RowCollection,
@@ -217,6 +218,20 @@ def exercise_rdocx_types(path: Path) -> None:
     document.replace_image("rId1", b"image")
     document.replace_image_for_story(stories[0], "rId1", b"image")
     resized: int = document.set_picture_size("rId1", width=Inches(1), height=Inches(1))
+    pictures: tuple[Picture, ...] = document.pictures
+    resized_one: int = document.set_picture_size(pictures[0], Inches(1), Inches(1))
+    assert_type(pictures[0].blob, bytes | None)
+    assert_type(pictures[0].width, Length)
+    floating: StoryItem = document.add_picture(
+        "chart.png",
+        width=Inches(2),
+        description="Chart",
+        wrap="square",
+        position=("right", 0),
+        relative_to=("margin", "paragraph"),
+        crop=(0.1, 0.0, 0.1, 0.0),
+    )
+    document.paragraphs[0].add_run("").add_picture(b"png", Inches(1), title="Logo")
     story_items: tuple[StoryItem, ...] = document.story_items
     inserted_picture: StoryItem = document.add_picture(
         b"png", "image.png", Inches(1), Inches(1), after=story_items[0]

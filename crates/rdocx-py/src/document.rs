@@ -726,6 +726,324 @@ impl PyHyperlink {
     }
 }
 
+/// One body picture, as `Document.pictures` lists it.
+#[pyclass(name = "Picture", frozen, skip_from_py_object)]
+pub struct PyPicture {
+    relationship_id: String,
+    /// The position among the body pictures showing the same relationship,
+    /// which selects this one for `Document.set_picture_size`.
+    occurrence: usize,
+    revision: u64,
+    name: Option<String>,
+    description: Option<String>,
+    title: Option<String>,
+    decorative: bool,
+    width: i64,
+    height: i64,
+    inline: bool,
+    content_type: Option<String>,
+    filename: Option<String>,
+    blob: Option<Py<PyBytes>>,
+}
+
+#[pymethods]
+impl PyPicture {
+    #[getter]
+    fn relationship_id(&self) -> &str {
+        &self.relationship_id
+    }
+
+    #[getter]
+    fn name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    /// The alt text.
+    #[getter]
+    fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
+    #[getter]
+    fn title(&self) -> Option<&str> {
+        self.title.as_deref()
+    }
+
+    #[getter]
+    fn decorative(&self) -> bool {
+        self.decorative
+    }
+
+    #[getter]
+    fn width(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        crate::length_object(py, rdocx::Length::emu(self.width))
+    }
+
+    #[getter]
+    fn height(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        crate::length_object(py, rdocx::Length::emu(self.height))
+    }
+
+    /// Whether the picture sits in a line of text rather than floating.
+    #[getter]
+    fn inline(&self) -> bool {
+        self.inline
+    }
+
+    #[getter]
+    fn content_type(&self) -> Option<&str> {
+        self.content_type.as_deref()
+    }
+
+    /// The image part's file name, such as `image1.png`.
+    #[getter]
+    fn filename(&self) -> Option<&str> {
+        self.filename.as_deref()
+    }
+
+    /// The image bytes, `None` for a linked picture whose image lives
+    /// outside the package.
+    #[getter]
+    fn blob(&self, py: Python<'_>) -> Option<Py<PyBytes>> {
+        self.blob.as_ref().map(|blob| blob.clone_ref(py))
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "Picture(relationship_id={:?}, filename={:?}, description={:?})",
+            self.relationship_id, self.filename, self.description
+        )
+    }
+}
+
+/// Read picture bytes and a file name from what python-docx accepts: bytes,
+/// a path or a binary stream. A name is only a format hint, because the
+/// format is read from the bytes first.
+pub(crate) fn picture_source(
+    image: &Bound<'_, PyAny>,
+    filename: Option<&str>,
+) -> PyResult<(Vec<u8>, String)> {
+    if let Ok(bytes) = image.cast::<PyBytes>() {
+        return Ok((
+            bytes.as_bytes().to_vec(),
+            filename.unwrap_or("image").to_owned(),
+        ));
+    }
+    if let Ok(path) = image.extract::<PathBuf>() {
+        let data = std::fs::read(&path).map_err(|error| {
+            PyFileNotFoundError::new_err(format!("cannot read picture {}: {error}", path.display()))
+        })?;
+        let name = filename.map(str::to_owned).unwrap_or_else(|| {
+            path.file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "image".to_owned())
+        });
+        return Ok((data, name));
+    }
+    if image.hasattr("read")? {
+        let data = image.call_method0("read")?;
+        let bytes = data
+            .cast::<PyBytes>()
+            .map_err(|_| PyTypeError::new_err("a picture stream must be opened in binary mode"))?;
+        return Ok((
+            bytes.as_bytes().to_vec(),
+            filename.unwrap_or("image").to_owned(),
+        ));
+    }
+    Err(PyTypeError::new_err(
+        "a picture is bytes, a file path or a binary stream",
+    ))
+}
+
+/// The keyword options shared by `Document.add_picture` and `Run.add_picture`.
+pub(crate) struct PictureArguments<'py> {
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub description: Option<String>,
+    pub title: Option<String>,
+    pub decorative: bool,
+    pub name: Option<String>,
+    pub crop: Option<(f64, f64, f64, f64)>,
+    pub wrap: String,
+    pub position: Option<(Bound<'py, PyAny>, Bound<'py, PyAny>)>,
+    pub relative_to: Option<(String, String)>,
+}
+
+impl PictureArguments<'_> {
+    /// Check every option and build the native picture options.
+    ///
+    /// A missing dimension keeps the image's aspect ratio, as python-docx
+    /// does, and both missing give its native size.
+    pub(crate) fn options(self, data: &[u8], filename: &str) -> PyResult<rdocx::PictureOptions> {
+        let native = || {
+            rdocx::Document::picture_extent(data, filename, None, None)
+                .map(|(width, height)| (width.to_emu(), height.to_emu()))
+                .map_err(|error| PyValueError::new_err(error.to_string()))
+        };
+        let scaled = |value: i64, numerator: i64, denominator: i64| {
+            (i128::from(value) * i128::from(numerator) / i128::from(denominator.max(1))) as i64
+        };
+        let (width, height) = match (self.width, self.height) {
+            (Some(width), Some(height)) => (width, height),
+            (Some(width), None) => {
+                let (native_width, native_height) = native()?;
+                (width, scaled(native_height, width, native_width))
+            }
+            (None, Some(height)) => {
+                let (native_width, native_height) = native()?;
+                (scaled(native_width, height, native_height), height)
+            }
+            (None, None) => native()?,
+        };
+        if self.decorative && self.description.is_some() {
+            return Err(PyValueError::new_err(
+                "a decorative picture has no alt text, pass description or decorative=True, not both",
+            ));
+        }
+        let mut options =
+            rdocx::PictureOptions::new(rdocx::Length::emu(width), rdocx::Length::emu(height));
+        options.description = self.description;
+        options.title = self.title;
+        options.decorative = self.decorative;
+        options.name = self.name;
+        options.crop = self
+            .crop
+            .map(|(left, top, right, bottom)| {
+                let fraction = |value: f64| {
+                    if value.is_finite() && (0.0..1.0).contains(&value) {
+                        Ok((value * 100_000.0).round() as i32)
+                    } else {
+                        Err(PyValueError::new_err(
+                            "crop values are fractions of the image from 0 up to 1, such as 0.1",
+                        ))
+                    }
+                };
+                Ok::<_, PyErr>(rdocx::PictureCrop {
+                    left: fraction(left)?,
+                    top: fraction(top)?,
+                    right: fraction(right)?,
+                    bottom: fraction(bottom)?,
+                })
+            })
+            .transpose()?;
+        let (wrap, behind_text) = match self.wrap.as_str() {
+            "inline" => {
+                if self.position.is_some() || self.relative_to.is_some() {
+                    return Err(PyValueError::new_err(
+                        "position and relative_to place a floating picture, pass a wrap such as \
+                         wrap=\"square\" with them",
+                    ));
+                }
+                return Ok(options);
+            }
+            "square" => (rdocx::DrawingWrap::Square, false),
+            "tight" => (rdocx::DrawingWrap::Tight, false),
+            "through" => (rdocx::DrawingWrap::Through, false),
+            "top_and_bottom" => (rdocx::DrawingWrap::TopAndBottom, false),
+            "behind" => (rdocx::DrawingWrap::None, true),
+            "in_front" => (rdocx::DrawingWrap::None, false),
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown wrap {other:?}, use inline, square, tight, through, \
+                     top_and_bottom, behind or in_front"
+                )));
+            }
+        };
+        let (horizontal_from, vertical_from) = self
+            .relative_to
+            .unwrap_or_else(|| ("column".to_owned(), "paragraph".to_owned()));
+        let horizontal_relative_from = match horizontal_from.as_str() {
+            "page" => rdocx::DrawingHorizontalRelativeFrom::Page,
+            "margin" => rdocx::DrawingHorizontalRelativeFrom::Margin,
+            "column" => rdocx::DrawingHorizontalRelativeFrom::Column,
+            "character" => rdocx::DrawingHorizontalRelativeFrom::Character,
+            "left_margin" => rdocx::DrawingHorizontalRelativeFrom::LeftMargin,
+            "right_margin" => rdocx::DrawingHorizontalRelativeFrom::RightMargin,
+            "inside_margin" => rdocx::DrawingHorizontalRelativeFrom::InsideMargin,
+            "outside_margin" => rdocx::DrawingHorizontalRelativeFrom::OutsideMargin,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown horizontal relative_to {other:?}, use page, margin, column, \
+                     character, left_margin, right_margin, inside_margin or outside_margin"
+                )));
+            }
+        };
+        let vertical_relative_from = match vertical_from.as_str() {
+            "page" => rdocx::DrawingVerticalRelativeFrom::Page,
+            "margin" => rdocx::DrawingVerticalRelativeFrom::Margin,
+            "paragraph" => rdocx::DrawingVerticalRelativeFrom::Paragraph,
+            "line" => rdocx::DrawingVerticalRelativeFrom::Line,
+            "top_margin" => rdocx::DrawingVerticalRelativeFrom::TopMargin,
+            "bottom_margin" => rdocx::DrawingVerticalRelativeFrom::BottomMargin,
+            "inside_margin" => rdocx::DrawingVerticalRelativeFrom::InsideMargin,
+            "outside_margin" => rdocx::DrawingVerticalRelativeFrom::OutsideMargin,
+            other => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown vertical relative_to {other:?}, use page, margin, paragraph, line, \
+                     top_margin, bottom_margin, inside_margin or outside_margin"
+                )));
+            }
+        };
+        let (mut horizontal_offset, mut vertical_offset) = (0, 0);
+        let (mut horizontal_alignment, mut vertical_alignment) = (None, None);
+        if let Some((horizontal, vertical)) = self.position {
+            if let Ok(offset) = horizontal.extract::<i64>() {
+                horizontal_offset = offset;
+            } else {
+                horizontal_alignment = Some(match horizontal.extract::<String>()?.as_str() {
+                    "left" => rdocx::DrawingHorizontalAlignment::Left,
+                    "center" => rdocx::DrawingHorizontalAlignment::Center,
+                    "right" => rdocx::DrawingHorizontalAlignment::Right,
+                    "inside" => rdocx::DrawingHorizontalAlignment::Inside,
+                    "outside" => rdocx::DrawingHorizontalAlignment::Outside,
+                    other => {
+                        return Err(PyValueError::new_err(format!(
+                            "unknown horizontal position {other:?}, use a length or left, \
+                             center, right, inside or outside"
+                        )));
+                    }
+                });
+            }
+            if let Ok(offset) = vertical.extract::<i64>() {
+                vertical_offset = offset;
+            } else {
+                vertical_alignment = Some(match vertical.extract::<String>()?.as_str() {
+                    "top" => rdocx::DrawingVerticalAlignment::Top,
+                    "center" => rdocx::DrawingVerticalAlignment::Center,
+                    "bottom" => rdocx::DrawingVerticalAlignment::Bottom,
+                    "inside" => rdocx::DrawingVerticalAlignment::Inside,
+                    "outside" => rdocx::DrawingVerticalAlignment::Outside,
+                    other => {
+                        return Err(PyValueError::new_err(format!(
+                            "unknown vertical position {other:?}, use a length or top, center, \
+                             bottom, inside or outside"
+                        )));
+                    }
+                });
+            }
+        }
+        // Word's distances for a new floating picture: an eighth of an inch
+        // beside it and none above or below.
+        let side = rdocx::Length::emu(114_300);
+        options.anchor = Some(rdocx::PictureAnchor {
+            horizontal_relative_from,
+            horizontal_offset: rdocx::Length::emu(horizontal_offset),
+            horizontal_alignment,
+            vertical_relative_from,
+            vertical_offset: rdocx::Length::emu(vertical_offset),
+            vertical_alignment,
+            wrap,
+            distance_top: rdocx::Length::emu(0),
+            distance_bottom: rdocx::Length::emu(0),
+            distance_left: side,
+            distance_right: side,
+            relative_height: 251_658_240,
+            behind_text,
+        });
+        Ok(options)
+    }
+}
+
 #[pyclass(name = "HeaderFooterVariant", frozen, eq, skip_from_py_object)]
 #[derive(Clone, PartialEq, Eq)]
 pub struct PyHeaderFooterVariant {
@@ -2150,22 +2468,87 @@ impl PyDocument {
             .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
+    /// Resize every body picture showing an image relationship, or only one
+    /// `Picture` from `Document.pictures`, and return how many were resized.
     fn set_picture_size(
         &mut self,
         py: Python<'_>,
-        relationship_id: &str,
+        picture: &Bound<'_, PyAny>,
         width: i64,
         height: i64,
     ) -> PyResult<usize> {
+        let (width, height) = (rdocx::Length::emu(width), rdocx::Length::emu(height));
         // No content moves, so live handles stay valid.
-        py.detach(|| {
-            self.inner.set_picture_size(
-                relationship_id,
-                rdocx::Length::emu(width),
-                rdocx::Length::emu(height),
+        if let Ok(picture) = picture.cast::<PyPicture>() {
+            let picture = picture.get();
+            if picture.revision != self.revisions.current() {
+                return Err(crate::stale_to_pyerr(
+                    py,
+                    StaleElementError {
+                        element_kind: "picture".to_owned(),
+                        captured_revision: picture.revision,
+                        current_revision: self.revisions.current(),
+                        recovery_hint: "Re-fetch it with document.pictures.".to_owned(),
+                    },
+                ));
+            }
+            let (relationship_id, occurrence) =
+                (picture.relationship_id.clone(), picture.occurrence);
+            return py
+                .detach(|| {
+                    self.inner
+                        .set_picture_size_at(&relationship_id, occurrence, width, height)
+                })
+                .map(|()| 1)
+                .map_err(|error| rdocx_to_pyerr(py, error));
+        }
+        let relationship_id = picture.extract::<String>().map_err(|_| {
+            PyTypeError::new_err(
+                "pass an image relationship ID or a Picture from document.pictures",
             )
-        })
-        .map_err(|error| rdocx_to_pyerr(py, error))
+        })?;
+        py.detach(|| self.inner.set_picture_size(&relationship_id, width, height))
+            .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    /// The body pictures in document order, with their image bytes, content
+    /// type, size and alt text.
+    #[getter]
+    fn pictures<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let mut occurrences = HashMap::<String, usize>::new();
+        let pictures = self
+            .inner
+            .images()
+            .into_iter()
+            .filter(|image| !image.embed_id.is_empty())
+            .map(|image| {
+                let occurrence = occurrences.entry(image.embed_id.clone()).or_default();
+                let part = self.inner.image_content_type(&image.embed_id);
+                let picture = PyPicture {
+                    occurrence: *occurrence,
+                    revision: self.revisions.current(),
+                    content_type: part.as_ref().map(|(content_type, _)| content_type.clone()),
+                    filename: part
+                        .as_ref()
+                        .and_then(|(_, name)| name.rsplit('/').next().map(str::to_owned)),
+                    blob: self
+                        .inner
+                        .image_data(&image.embed_id)
+                        .map(|bytes| PyBytes::new(py, &bytes).unbind()),
+                    relationship_id: image.embed_id,
+                    name: image.name,
+                    description: image.description,
+                    title: image.title,
+                    decorative: image.decorative,
+                    width: image.width_emu,
+                    height: image.height_emu,
+                    inline: !image.is_anchor,
+                };
+                *occurrence += 1;
+                picture
+            })
+            .collect::<Vec<_>>();
+        PyTuple::new(py, pictures)
     }
 
     fn split_run(
@@ -3215,16 +3598,71 @@ impl PyDocument {
         Ok(())
     }
 
-    #[pyo3(signature = (data, filename, width=None, height=None, *, after=None))]
-    fn add_picture(
+    /// Add a picture paragraph to the body, or after `after` in its story.
+    ///
+    /// `image` is bytes, a path or a binary stream, as python-docx takes it,
+    /// and `filename` an optional format hint. A python-docx call that passes
+    /// the width second, `add_picture(path, Inches(2))`, is read that way.
+    #[pyo3(signature = (
+        image,
+        filename=None,
+        width=None,
+        height=None,
+        *,
+        after=None,
+        description=None,
+        title=None,
+        decorative=false,
+        name=None,
+        crop=None,
+        wrap="inline",
+        position=None,
+        relative_to=None,
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn add_picture<'py>(
         &mut self,
-        py: Python<'_>,
-        data: &[u8],
-        filename: &str,
+        py: Python<'py>,
+        image: &Bound<'py, PyAny>,
+        filename: Option<&Bound<'py, PyAny>>,
         width: Option<i64>,
         height: Option<i64>,
         after: Option<PyRef<'_, PyStoryItem>>,
+        description: Option<String>,
+        title: Option<String>,
+        decorative: bool,
+        name: Option<String>,
+        crop: Option<(f64, f64, f64, f64)>,
+        wrap: &str,
+        position: Option<(Bound<'py, PyAny>, Bound<'py, PyAny>)>,
+        relative_to: Option<(String, String)>,
     ) -> PyResult<PyStoryItem> {
+        let (filename, width, height) = match filename {
+            Some(value) if value.extract::<i64>().is_ok() => {
+                if height.is_some() {
+                    return Err(PyTypeError::new_err(
+                        "pass the picture size as add_picture(image, width=..., height=...)",
+                    ));
+                }
+                (None, Some(value.extract::<i64>()?), width)
+            }
+            Some(value) => (Some(value.extract::<String>()?), width, height),
+            None => (None, width, height),
+        };
+        let (data, filename) = picture_source(image, filename.as_deref())?;
+        let options = PictureArguments {
+            width,
+            height,
+            description,
+            title,
+            decorative,
+            name,
+            crop,
+            wrap: wrap.to_owned(),
+            position,
+            relative_to,
+        }
+        .options(&data, &filename)?;
         let after = after
             .as_deref()
             .map(|item| self.native_location(py, item))
@@ -3235,13 +3673,12 @@ impl PyDocument {
         };
         let location = py
             .detach(|| {
-                self.inner.insert_picture_to_story(
+                self.inner.insert_picture_with_options(
                     &story,
                     after.as_ref(),
-                    data,
-                    filename,
-                    width.map(rdocx::Length::emu),
-                    height.map(rdocx::Length::emu),
+                    &data,
+                    &filename,
+                    options,
                 )
             })
             .map_err(|error| rdocx_to_pyerr(py, error))?;
