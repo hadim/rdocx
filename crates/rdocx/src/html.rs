@@ -172,6 +172,7 @@ struct ComputedStyle {
     strike: Option<bool>,
     color: Option<String>,
     background: Option<String>,
+    mark_highlight: Option<String>,
     alignment: Option<Alignment>,
     space_before: Option<Length>,
     space_after: Option<Length>,
@@ -192,6 +193,7 @@ impl ComputedStyle {
             underline: self.underline,
             strike: self.strike,
             color: self.color.clone(),
+            mark_highlight: self.mark_highlight.clone(),
             alignment: self.alignment,
             vertical: self.vertical,
             hyperlink: self.hyperlink.clone(),
@@ -3329,6 +3331,9 @@ impl Importer<'_> {
                 change.apply(&mut style);
             }
         }
+        if element.value().name() == "mark" {
+            style.mark_highlight = style.background.clone();
+        }
         Ok(style)
     }
 
@@ -3527,7 +3532,7 @@ fn apply_run_style(run: &mut Run<'_>, style: &ComputedStyle) {
     if let Some(color) = &style.color {
         run.set_color(color);
     }
-    if let Some(background) = &style.background {
+    if let Some(background) = style.background.as_ref().or(style.mark_highlight.as_ref()) {
         run.set_highlight(background);
     }
     match style.vertical {
@@ -3895,6 +3900,112 @@ mod tests {
         Document, Length, Limits, MhtmlLimits, from_html_with_limits, from_mhtml_with_limits,
         parse_mhtml, preflight_markup, read_bounded, to_mhtml_with_limits,
     };
+
+    #[test]
+    fn mark_highlight_reaches_formatted_children_without_leaking_to_siblings() {
+        let parsed = Document::from_html(
+            "<p>Before <mark>key <strong>fact</strong> <em>here</em></mark> after</p>",
+        )
+        .unwrap();
+        let paragraph = parsed.document.paragraph(0).unwrap();
+        let runs = paragraph.runs().collect::<Vec<_>>();
+        assert_eq!(
+            runs.iter().map(|run| run.text()).collect::<Vec<_>>(),
+            ["Before", " key", " fact", " here", " after"]
+        );
+        assert_eq!(runs[0].highlight(), None);
+        for run in &runs[1..4] {
+            assert_eq!(run.highlight().as_deref(), Some("FFFF00"));
+        }
+        assert_eq!(runs[4].highlight(), None);
+        assert_eq!(runs[2].bold_value(), Some(true));
+        assert_eq!(runs[3].italic_value(), Some(true));
+    }
+
+    #[test]
+    fn semantic_marks_preserve_css_precedence_without_inheriting_ordinary_backgrounds() {
+        let parsed = Document::from_html(concat!(
+            r#"<p><mark style="background-color:#112233">A<strong>B</strong>"#,
+            r#"<mark style="background-color:#445566"><em>C</em></mark>"#,
+            r#"<span style="background-color:#0000FF">D<b>E</b></span>F</mark>"#,
+            r#"<span style="background-color:#ABCDEF">G<em>H</em></span>I</p>"#,
+        ))
+        .unwrap();
+        let paragraph = parsed.document.paragraph(0).unwrap();
+        let actual = paragraph
+            .runs()
+            .map(|run| (run.text(), run.highlight()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            actual,
+            vec![
+                ("A".into(), Some("112233".into())),
+                ("B".into(), Some("112233".into())),
+                ("C".into(), Some("445566".into())),
+                ("D".into(), Some("0000FF".into())),
+                ("E".into(), Some("112233".into())),
+                ("F".into(), Some("112233".into())),
+                ("G".into(), Some("ABCDEF".into())),
+                ("H".into(), None),
+                ("I".into(), None),
+            ]
+        );
+    }
+
+    #[test]
+    fn semantic_mark_highlights_reopen_with_nested_run_formatting() {
+        let mut imported = Document::from_html(
+            "<p>before<mark>key<strong>bold</strong><em>italic</em></mark>after</p>",
+        )
+        .unwrap()
+        .document;
+        let formats = |document: &Document| {
+            document
+                .paragraph(0)
+                .unwrap()
+                .runs()
+                .map(|run| {
+                    (
+                        run.text(),
+                        run.highlight(),
+                        run.bold_value(),
+                        run.italic_value(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let expected = formats(&imported);
+        assert_eq!(expected[2].1.as_deref(), Some("FFFF00"));
+        assert_eq!(expected[2].2, Some(true));
+        assert_eq!(expected[3].1.as_deref(), Some("FFFF00"));
+        assert_eq!(expected[3].3, Some(true));
+        let mut package =
+            OpcPackage::from_reader(Cursor::new(imported.to_bytes().unwrap())).unwrap();
+        let opaque =
+            r#"<x:opaque xmlns:x="urn:mark-regression" x:keep="exact"><x:child /></x:opaque>"#;
+        let document_xml =
+            String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec())
+                .unwrap()
+                .replace("</w:body>", &format!("{opaque}</w:body>"));
+        package.set_part("/word/document.xml", document_xml.into_bytes());
+        let opaque_part = b"<producer xmlns='urn:mark-regression' keep='exact' />";
+        package.set_part("/customXml/mark-control.xml", opaque_part.to_vec());
+        let mut source = Cursor::new(Vec::new());
+        package.write_to(&mut source).unwrap();
+        let mut preserved = Document::from_bytes(source.get_ref()).unwrap();
+        let saved = preserved.to_bytes().unwrap();
+        let saved_package = OpcPackage::from_reader(Cursor::new(&saved)).unwrap();
+        assert_eq!(
+            saved_package.get_part("/customXml/mark-control.xml"),
+            Some(opaque_part.as_slice())
+        );
+        assert!(
+            String::from_utf8_lossy(saved_package.get_part("/word/document.xml").unwrap())
+                .contains(opaque)
+        );
+        let reopened = Document::from_bytes(&saved).unwrap();
+        assert_eq!(formats(&reopened), expected);
+    }
 
     fn one_pixel_png() -> Vec<u8> {
         vec![

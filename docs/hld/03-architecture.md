@@ -97,6 +97,10 @@ not claim a codec decoder.
 content directly into the one owned WordprocessingML document model. The edge
 does not enter `rdocx-html`, which remains an outbound emitter. This avoids a
 dependency cycle and avoids a second public intermediate document model.
+Semantic `mark` highlighting carries its final cascaded background through
+nested inline formatting. A child's own background takes precedence on that
+child, while ordinary CSS backgrounds remain scoped to their own elements.
+Nested marks choose their own highlight, and unmarked siblings inherit none.
 `Document::insert_html_fragment` reuses that importer against a staged document
 and emits concrete body content at a checked `ContentLocation`. Body and
 main-document cell destinations mutate their typed owners so retained sibling

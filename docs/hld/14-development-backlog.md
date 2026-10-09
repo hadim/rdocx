@@ -6694,7 +6694,10 @@ inline formatting, importer behavior and producer XML on unrelated paths.
 
 **Test gate**: regression. Nested bold and italic marked runs retain their
 highlight after public import and save/reopen, with unmarked siblings and
-ordinary CSS backgrounds as discriminating controls. Assess the contribution
+ordinary CSS backgrounds as discriminating controls. Custom mark colours,
+nested marks and child background precedence retain their distinct scopes.
+Unrelated opaque sibling XML and package parts retain exact source bytes
+through save/reopen. Assess the contribution
 against current main and record actual scoped verification and clean review.
 
 ### F-X194, Complete Python table text and indentation APIs (M)

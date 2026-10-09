@@ -1,6 +1,6 @@
 # F-X193, Preserve semantic mark highlights through nested HTML runs
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: S
 **Depends on**: none
@@ -92,9 +92,9 @@ Expected unchanged. The sample generator does not import semantic mark HTML.
 - [x] Add contributed reproducer and prove failure at immutable Base.
 - [x] Assess and adapt exact PR294 semantic highlight change.
 - [x] Add CSS precedence and save/reopen controls.
-- [ ] Rederive local rdocx archive measurements and pass repository policy.
-- [ ] Run scoped verification and independent zero-finding microscope.
-- [ ] Prepare validated handoff, preserving contributor provenance.
+- [x] Rederive local rdocx archive measurements and pass repository policy.
+- [x] Run scoped verification and independent zero-finding microscope.
+- [x] Prepare validated handoff, preserving contributor provenance.
 
 ## Open questions
 
