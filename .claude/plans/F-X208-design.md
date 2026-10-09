@@ -295,3 +295,17 @@ with legal flags only on their actual supported owners. Title suppression,
 date cache context, authored templates with supported existing slide fields,
 notes-page output and transition contracts retain their separate tests.
 No source, renderer baseline or completion verdict is changed by this study.
+
+
+## Rolling PR324 linked contribution
+
+[PR324](https://github.com/tensorbee/rdocx/pull/324) closes Issue311 and belongs
+to this existing F-ID. Initial head is b4786dc9211f36a48e64b38d4277a07b21e11354.
+It contributes slide-owned footer/date/number placeholders, firstSlideNum,
+fields, theme reads, common transitions, Python and CLI operations and
+layout child-order corrections. Complete immutable source assessment is
+in progress. Its native and test results are contributor claims to verify
+against our authenticated controls and actual integrated implementation.
+Do not adopt new source files, the libc dependency, public struct changes,
+archive values or output hashes implicitly. Shared colours remain X197 and
+theme editing remains X209. No additional F-ID is created.

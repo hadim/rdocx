@@ -4,7 +4,7 @@
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X194, F-X197
-**Issue**: 309, captured in S91-intake-issues.json on 2026-10-09
+**Issue**: 309 and 323, captured in S91-intake-issues.json on 2026-10-09
 **Prerequisites**: F-X194 and F-X197
 **Implementation**: not claimed, no source changes or new gate evidence
 
@@ -437,3 +437,23 @@ The final generated deck was safely closed, and PowerPoint returned to its new/r
 `/private/tmp/S91-F-X206-native-alignment` retains the original input, original transform receipt, native Left snapshot, native Left-plus-Top before/after reopen packages, two native PDFs, rendered PNG, extracted owner XML, PDF path streams, `audit.py` and `capture-receipt.json`. The receipt records file sizes and SHA-256 values, exact native action sequence, every original/final transform, numerical bounds and actual emitted PDF vertices. Running `audit.py` independently validates all assertions without opening PowerPoint.
 
 This answers the core native selection-alignment question: Align Left and Align Top align the transformed visual bounding boxes of these differently rotated rectangles. It does not prove behavior for slide-relative alignment, distribution spacing, nested-group selections, nonuniform scaling, lines/connectors, arbitrary freeform paths, cropped pictures, shadows, stroke extents or unsupported shapes. Root may choose the measured visual frame-bound policy for the declared API and retain those operation-specific cases in its acceptance tests. No claim about arbitrary painted-ink bounds or automatic generalization to distribution is made.
+
+
+## Rolling Issue323 connector-in-group defect
+
+[Issue323](https://github.com/tensorbee/rdocx/issues/323) is included in this
+existing shape/connector story. Its reported reproduction adds a connector
+inside a group rotated30 degrees, horizontally flipped and scaled2x through
+unequal a:chExt/a:ext. Rendering or PDF conversion then drops every member.
+LibreOffice is reported to retain the group. This is additional acceptance
+for the existing nested transform and connector work, not a new F-ID.
+
+Capture a real Base failure through the installed public operation. Compare
+the actual connector and retained rectangle positions with pinned
+LibreOffice output and an authenticated PowerPoint control. A member that
+cannot be resolved must produce an owner-specific render diagnostic and
+must not suppress resolvable siblings. Test nonuniform/unequal child extents,
+rotation and flips together, not only the existing unit-scale markers.
+Retain member IDs, z-order, opaque XML and save/reopen evidence. Reuse the
+shared group transform and connector implementation once. This intake has
+not reproduced the defect or changed production source.

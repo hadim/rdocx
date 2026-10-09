@@ -262,3 +262,23 @@ SHA2567f5a31d932df09902c1097af020569b63d6296c067bc804ae6a597ef9b3ad21b.
 Together with the earlier eight-file approval, this authorizes nine exact new
 asset files. Actual font-story adoption remains behind its normal provider,
 design, source and verification gates. The unchecked-box coverage gap remains.
+
+
+## Rolling Issue323 and PR324 intake
+
+The latest open inventory has nine PRs and24 issues, including excluded264
+and281. Issue323 joins F-X206's existing group/connector acceptance: preserve
+resolvable members when a connector is added inside a rotated, flipped and
+scaled group, with an owner-specific diagnostic on unresolved members.
+PR324 closes Issue311 and joins F-X208. PR322 advanced to
+347091e6c9f2747c73de4b1b171c84203a9041ae and retains F-X202 ownership.
+Complete new contribution and incremental source assessment is in progress.
+No additional F-ID, duplicate implementation or completed acceptance is claimed.
+
+F-X205 now retains actual native positive Notes and two-slide Hand-outs PDF
+outputs under /private/tmp/S91-F-X205-native-notes-handout. Root authenticated
+all45 artifacts. The two-page notes and one-page handout content streams
+remain identical after native normal reopen/save. No handoutMaster exists
+in the source or saved deck, establishing a default-print compatibility case
+that the current native exporter must still resolve. These bounded native
+controls are design evidence, not local renderer or sprint verification.

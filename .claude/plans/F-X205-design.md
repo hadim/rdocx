@@ -434,3 +434,41 @@ then justify and review its expectation. The foreign7d19b5b4 hash is not a
 passing local result. Legacy unsigned/static and corrected signed native
 manifest constants remain immutable and are untouched by this commit.
 No rendering code, baseline or source adoption occurs in this intake.
+
+
+## Actual native notes and handout positive exports
+
+The bounded PowerPoint16.113.3 study now includes actual local Print to PDF,
+using Notes and Hand-outs with two slides per page. Evidence is retained in
+/private/tmp/S91-F-X205-native-notes-handout/study.md and receipt.json.
+Root reverified all45 retained artifact sizes and SHA256 values, plus the
+original source SHA438f65214a485dd9dbe6e7978be0120ca9b0f43e05573b19938e0488f2f6debf.
+The actual two Notes PDFs each contain two A4 portrait pages, with the real
+speaker note below the first slide image. The two Hand-outs PDFs each
+contain one A4 portrait page with both slide frames. Each mode's actual page
+content streams and extracted text are identical after normal reopen/save.
+Notes owner XML and relationships remain identical. No notesSlide2 or
+handoutMaster is saved. Native printing synthesizes the blank second notes
+page and a default handout surface. Thus the earlier structural-only notes
+control now has a positive visible-output counterpart, while successful
+native handout printing does not imply a populated handoutMaster part.
+
+The measured notes slide frame is x73.9/y141.625/w447.2/h251.4375 points.
+The handout frames are x58/y123.5/w480/h270 and x58/y447.5/w480/h270.
+The actual speaker-note body uses Aptos2.0099945 at12pt horizontally, with
+native print scaling recorded separately. Arial6.8000031 and handout
+Calibri6.1999969 are authenticated from the actual embedded PDF fonts.
+These paper/print frame measurements do not replace master EMU geometry.
+Do not copy native print dates, fonts or PDF bytes into deterministic baselines.
+Use the authenticated owner graph, notes text, page counts and visible
+regions for implementation controls, then measure accepted local output
+with the shared X195 caller-font provider.
+
+The current render_handout_pages requires a related handoutMaster at
+crates/rpptx/src/lib.rs:10241. Native successful default-handout printing
+without that part establishes a distinct default-surface compatibility case,
+not a passing local result. Resolve that explicit contract before approval,
+while preserving malformed existing-owner refusal and imported master
+geometry. The study performs no renderer comparison and covers only this
+two-slide deck. The original exact-line-spacing overflow remains visible
+inside its slide image. Other export and rendering gates remain due.

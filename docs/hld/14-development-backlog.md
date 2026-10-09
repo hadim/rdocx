@@ -6985,9 +6985,12 @@ independent local derivation.
 
 ### F-X206, Complete PowerPoint shape authoring and live handles (L)
 
-Resolve [Issue309](https://github.com/tensorbee/rdocx/issues/309) in S91,
+Resolve [Issue309](https://github.com/tensorbee/rdocx/issues/309) and
+[Issue323](https://github.com/tensorbee/rdocx/issues/323) in S91,
 part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
-coverage checklist. Expose alt text/title/decorative, flips, group/ungroup preserving rotated/flipped positions, glued connector endpoints, cropped picture placeholder insertion, cell vertical anchor, internal run slide links, highlight/small caps, alignment/distribution and native placeholder names. Keep layout handles across slide insertion and slide handles across title text changes without weakening stale-path safety.
+coverage checklist. Resolve the rotated/flipped/scaled connector-group
+render defect without dropping resolvable siblings, with owner diagnostics.
+Expose alt text/title/decorative, flips, group/ungroup preserving rotated/flipped positions, glued connector endpoints, cropped picture placeholder insertion, cell vertical anchor, internal run slide links, highlight/small caps, alignment/distribution and native placeholder names. Keep layout handles across slide insertion and slide handles across title text changes without weakening stale-path safety.
 
 **Depends on**: F-X194, F-X197.
 **Test gate**: regression. Reproduce each missing operation or reported defect
