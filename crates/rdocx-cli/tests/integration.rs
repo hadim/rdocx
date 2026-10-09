@@ -1900,8 +1900,9 @@ fn validate_reports_a_page_size_without_dimensions_and_an_ignored_even_story() {
     properties.orientation = Some(rdocx_oxml::shared::ST_PageOrientation::Landscape);
     document.save(&path).unwrap();
 
+    // Both findings are schema-valid, so they warn without failing.
     let output = cli(&["validate", path_text(&path)]);
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(0));
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
         stdout.contains("section 0 has a w:pgSz without both w:w and w:h"),

@@ -146,9 +146,9 @@ pub use redaction::RedactionReport;
 pub use revision::{RevisionKind, RevisionRef, StoryRevision};
 pub use rtf::{RtfDiagnostic, RtfReadResult, RtfWriteResult};
 pub use run::{
-    BreakKind, DrawingKind, DrawingRef, DrawingRelationshipKind, FieldDisplaySegmentRef, FieldKind,
-    FieldRef, LegacyHorizontalRuleRef, Run, RunFontSlot, RunItemRef, RunProperties, RunRef,
-    UnderlineStyle,
+    BreakClear, BreakKind, DrawingKind, DrawingRef, DrawingRelationshipKind,
+    FieldDisplaySegmentRef, FieldKind, FieldRef, LegacyHorizontalRuleRef, Run, RunFontSlot,
+    RunItemRef, RunProperties, RunRef, UnderlineStyle,
 };
 pub use style::{ConditionalTableStyle, Style, StyleBuilder};
 pub use svg::{SvgDiagnostic, SvgRenderResult};

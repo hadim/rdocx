@@ -22497,7 +22497,8 @@ fn rich_footnotes_match_word_after_create_edit_reorder_and_remove() {
     assert!(notes.contains("rich continuation"));
     document.remove_footnote(first).unwrap();
     let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
-    assert_eq!(reopened.footnotes(), vec![(second, "second".to_owned())]);
+    // A created note starts with its mark and a space, as Word writes it.
+    assert_eq!(reopened.footnotes(), vec![(second, " second".to_owned())]);
     let package =
         OpcPackage::from_reader(std::io::Cursor::new(reopened.to_bytes().unwrap())).unwrap();
     let body = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
@@ -23262,7 +23263,9 @@ fn removing_note_policy_keeps_special_record_selection() {
     let properties = document
         .note_properties(rdocx::NoteFamily::Footnote)
         .unwrap();
-    assert_eq!(properties.special_references, vec![id]);
+    // The first footnote also wrote Word's continuation separator, which
+    // keeps its own reference.
+    assert_eq!(properties.special_references, vec![id, 0]);
     assert_eq!(properties.num_fmt, None);
     let layout = document.layout_deterministic().unwrap();
     let mut found = false;
@@ -24379,6 +24382,7 @@ mod issue_304_stories_and_pages {
         section
             .set_header_footer_distance(Length::twips(500), Length::twips(600))
             .unwrap();
+        section.set_columns(2, Length::twips(360)).unwrap();
 
         // Appended after the last section, ahead of the first, and between two.
         document.insert_section(1).unwrap();
@@ -24413,6 +24417,8 @@ mod issue_304_stories_and_pages {
                 "section {}",
                 section.ordinal()
             );
+            // Word copies the columns, page borders and grid too.
+            assert_eq!(section.columns(), Some((2, Length::twips(360))));
         }
         let xml = String::from_utf8(document_xml(&mut document)).unwrap();
         assert_eq!(xml.matches(r#"<w:pgSz w:w="11906" w:h="16838""#).count(), 4);

@@ -3705,6 +3705,65 @@ fn empty_section_properties() -> CT_SectPr {
     }
 }
 
+/// The reference character style and note text paragraph style Word uses
+/// for one note family, as IDs and names.
+fn note_style_names(
+    family: NoteFamily,
+) -> (&'static str, &'static str, &'static str, &'static str) {
+    match family {
+        NoteFamily::Footnote => (
+            "FootnoteReference",
+            "footnote reference",
+            "FootnoteText",
+            "footnote text",
+        ),
+        NoteFamily::Endnote => (
+            "EndnoteReference",
+            "endnote reference",
+            "EndnoteText",
+            "endnote text",
+        ),
+    }
+}
+
+/// An empty run in the note reference character style.
+fn note_reference_run(family: NoteFamily) -> CT_R {
+    let mut run = CT_R::new("");
+    run.properties = Some(CT_RPr {
+        style_id: Some(note_style_names(family).0.to_owned()),
+        ..CT_RPr::default()
+    });
+    run
+}
+
+/// The paragraph of a new note as Word writes it: the note text style, the
+/// note mark, or `mark` when the reference shows a custom one, in the
+/// reference style, a space, then `text`.
+fn new_note_paragraph(family: NoteFamily, mark: Option<&str>, text: &str) -> CT_P {
+    let mut paragraph = CT_P::new();
+    paragraph.properties = Some(CT_PPr {
+        style_id: Some(note_style_names(family).2.to_owned()),
+        ..CT_PPr::default()
+    });
+    let mut marker = note_reference_run(family);
+    match mark {
+        Some(mark) => marker.content = CT_R::new(mark).content,
+        None => {
+            marker.content.clear();
+            marker.extra_xml.push(match family {
+                NoteFamily::Footnote => b"<w:footnoteRef/>".to_vec(),
+                NoteFamily::Endnote => b"<w:endnoteRef/>".to_vec(),
+            });
+            // After the run properties, which come first in a run.
+            marker.extra_xml_positions.push(1);
+        }
+    }
+    paragraph.runs.push(marker);
+    paragraph.add_run(" ");
+    paragraph.add_run(text);
+    paragraph
+}
+
 /// Edit one paragraph of a parsed header or footer part, or return `None`
 /// when the part has no paragraph there.
 fn edit_header_footer_model_paragraph<R>(
@@ -3735,9 +3794,9 @@ fn edit_header_footer_model_paragraph<R>(
 ///
 /// The page size, orientation, margins, gutter and header and footer
 /// distances are copied, and a value `source` lacks takes its layout default,
-/// so the new section always writes a complete `w:pgSz` and `w:pgMar`.
-/// Header and footer references are not copied: the new section inherits
-/// them.
+/// so the new section always writes a complete `w:pgSz` and `w:pgMar`. The
+/// page borders, columns and document grid are copied as they are. Header
+/// and footer references are not copied: the new section inherits them.
 fn section_properties_with_geometry_of(source: Option<&CT_SectPr>) -> CT_SectPr {
     let defaults = CT_SectPr::default_letter();
     let value =
@@ -3755,6 +3814,11 @@ fn section_properties_with_geometry_of(source: Option<&CT_SectPr>) -> CT_SectPr 
     properties.gutter = value(|section| section.gutter);
     properties.header_distance = value(|section| section.header_distance);
     properties.footer_distance = value(|section| section.footer_distance);
+    if let Some(source) = source {
+        properties.page_borders = source.page_borders.clone();
+        properties.columns = source.columns.clone();
+        properties.doc_grid = source.doc_grid.clone();
+    }
     properties
 }
 
@@ -18879,6 +18943,8 @@ impl Document {
         }
         let mut candidate = self.clone_for_staging();
         candidate.story_paragraph_mut(reference)?;
+        candidate.prepare_note_family(NoteFamily::Footnote)?;
+        let reference = &candidate.current_location(reference)?;
         let occupied = candidate
             .footnotes
             .footnotes
@@ -18892,13 +18958,7 @@ impl Document {
                 .ok_or_else(|| Error::Other("footnote ID range is exhausted".to_owned()))?;
         }
         candidate.reserve_footnotes_bundle()?;
-        let mut paragraph = CT_P::new();
-        let mut note_marker = CT_R::new("");
-        note_marker.content.clear();
-        note_marker.extra_xml.push(b"<w:footnoteRef/>".to_vec());
-        note_marker.extra_xml_positions.push(0);
-        paragraph.runs.push(note_marker);
-        paragraph.add_run(text);
+        let paragraph = new_note_paragraph(NoteFamily::Footnote, None, text);
         candidate
             .footnotes
             .footnotes
@@ -18911,7 +18971,7 @@ impl Document {
         candidate.flush_dirty_related_story_models()?;
         candidate.refresh_related_story_caches()?;
         candidate.invalidate_layout();
-        let mut run = CT_R::new("");
+        let mut run = note_reference_run(NoteFamily::Footnote);
         run.content = vec![RunContent::FootnoteRef {
             id,
             custom_mark: None,
@@ -18932,6 +18992,8 @@ impl Document {
         }
         let mut candidate = self.clone_for_staging();
         candidate.story_paragraph_mut(reference)?;
+        candidate.prepare_note_family(NoteFamily::Endnote)?;
+        let reference = &candidate.current_location(reference)?;
         candidate.flush_to_package()?;
         let existing_part = candidate.note_part_name(StoryKind::Endnote)?;
         let part_name = candidate.reserve_document_part_bundle(
@@ -18956,13 +19018,7 @@ impl Document {
                 .checked_add(1)
                 .ok_or_else(|| Error::Other("endnote ID range is exhausted".to_owned()))?;
         }
-        let mut paragraph = CT_P::new();
-        let mut note_marker = CT_R::new("");
-        note_marker.content.clear();
-        note_marker.extra_xml.push(b"<w:endnoteRef/>".to_vec());
-        note_marker.extra_xml_positions.push(0);
-        paragraph.runs.push(note_marker);
-        paragraph.add_run(text);
+        let paragraph = new_note_paragraph(NoteFamily::Endnote, None, text);
         let note = rdocx_oxml::footnotes::CT_Footnote {
             id,
             note_type: rdocx_oxml::footnotes::NoteType::Normal,
@@ -18973,7 +19029,7 @@ impl Document {
             append_story_fragments_to_root(&source, b"endnotes", b"endnote", &[fragment])?;
         set_story_source_xml(&mut candidate, &part_name, updated)?;
         candidate.invalidate_layout();
-        let mut run = CT_R::new("");
+        let mut run = note_reference_run(NoteFamily::Endnote);
         run.content = vec![RunContent::EndnoteRef {
             id,
             custom_mark: None,
@@ -19061,10 +19117,7 @@ impl Document {
             .into_iter()
             .find(|owner| owner.kind == kind && owner.owner_index == story.owner_index)
             .ok_or_else(|| Error::Other("new note owner is missing".to_owned()))?;
-        let mut paragraph = CT_P::new();
-        let marker_run = CT_R::new(mark);
-        paragraph.runs.push(marker_run);
-        paragraph.add_run(text);
+        let paragraph = new_note_paragraph(family, Some(mark), text);
         let note = rdocx_oxml::footnotes::CT_Footnote {
             id,
             note_type: rdocx_oxml::footnotes::NoteType::Normal,
@@ -19076,6 +19129,111 @@ impl Document {
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
         Ok(id)
+    }
+
+    /// The same location in the story as it is now, after a staged edit of
+    /// another part republished the package and refreshed story identities.
+    fn current_location(&self, location: &ContentLocation) -> Result<ContentLocation> {
+        let story = self
+            .stories()?
+            .into_iter()
+            .find(|story| {
+                story.kind == location.story.kind
+                    && story.part_name == location.story.part_name
+                    && story.owner_index == location.story.owner_index
+            })
+            .ok_or_else(|| StoryError::OwnerNotFound {
+                story: location.story.clone(),
+            })?;
+        Ok(ContentLocation {
+            story,
+            ..location.clone()
+        })
+    }
+
+    /// Give the document what Word writes with a first note of `family`:
+    /// the reference character style and note text paragraph style, and the
+    /// separator and continuation separator records the settings name.
+    fn prepare_note_family(&mut self, family: NoteFamily) -> Result<()> {
+        let (reference, reference_name, text, text_name) = note_style_names(family);
+        if self.styles.get_by_id(reference).is_none() {
+            let mut builder = StyleBuilder::character(reference, reference_name)
+                .priority(99)
+                .semi_hidden(true)
+                .unhide_when_used(true)
+                .run_properties(CT_RPr {
+                    vert_align: Some("superscript".to_owned()),
+                    ..CT_RPr::default()
+                });
+            if self.styles.get_by_id("DefaultParagraphFont").is_some() {
+                builder = builder.based_on("DefaultParagraphFont");
+            }
+            self.add_style(builder)?;
+        }
+        if self.styles.get_by_id(text).is_none() {
+            let mut builder = StyleBuilder::paragraph(text, text_name)
+                .priority(99)
+                .semi_hidden(true)
+                .unhide_when_used(true)
+                .paragraph_properties(CT_PPr {
+                    space_after: Some(Twips(0)),
+                    line_spacing: Some(Twips(240)),
+                    line_rule: Some("auto".to_owned()),
+                    ..CT_PPr::default()
+                })
+                .size(10.0);
+            if self.styles.get_by_id("Normal").is_some() {
+                builder = builder.based_on("Normal");
+            }
+            self.add_style(builder)?;
+        }
+        let records = match family {
+            NoteFamily::Footnote => self
+                .footnotes
+                .footnotes
+                .iter()
+                .map(|note| note.note_type)
+                .collect::<Vec<_>>(),
+            NoteFamily::Endnote => match self.note_part_name(StoryKind::Endnote)? {
+                Some(part) => match self.package.get_part(&part) {
+                    Some(xml) => rdocx_oxml::footnotes::CT_Footnotes::from_xml(xml)?
+                        .footnotes
+                        .iter()
+                        .map(|note| note.note_type)
+                        .collect(),
+                    None => Vec::new(),
+                },
+                None => Vec::new(),
+            },
+        };
+        if records
+            .iter()
+            .any(|kind| *kind != rdocx_oxml::footnotes::NoteType::Normal)
+        {
+            return Ok(());
+        }
+        for (record, element) in [
+            (NoteSpecialRecord::Separator, b"<w:separator/>".as_slice()),
+            (
+                NoteSpecialRecord::ContinuationSeparator,
+                b"<w:continuationSeparator/>".as_slice(),
+            ),
+        ] {
+            let mut paragraph = CT_P::new();
+            paragraph.properties = Some(CT_PPr {
+                space_after: Some(Twips(0)),
+                line_spacing: Some(Twips(240)),
+                line_rule: Some("auto".to_owned()),
+                ..CT_PPr::default()
+            });
+            let mut run = CT_R::new("");
+            run.content.clear();
+            run.extra_xml.push(element.to_vec());
+            run.extra_xml_positions.push(0);
+            paragraph.runs.push(run);
+            self.set_note_special_record(family, record, vec![paragraph])?;
+        }
+        Ok(())
     }
 
     /// Create or replace an authored note separator or continuation record.

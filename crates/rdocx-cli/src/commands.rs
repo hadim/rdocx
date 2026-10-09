@@ -2310,14 +2310,15 @@ pub fn validate(file: &Path) -> Result<bool> {
     }
 
     // A `w:pgSz` that names an orientation or one dimension without both a
-    // width and a height leaves the page size to each consumer's default.
+    // width and a height is schema-valid but leaves the page size to each
+    // consumer's default.
     for section in doc.sections() {
         let properties = section.properties();
         let has_page_size = properties.orientation.is_some()
             || properties.page_width.is_some()
             || properties.page_height.is_some();
         if has_page_size && (properties.page_width.is_none() || properties.page_height.is_none()) {
-            errors.push(format!(
+            warnings.push(format!(
                 "section {} has a w:pgSz without both w:w and w:h",
                 section.ordinal()
             ));
