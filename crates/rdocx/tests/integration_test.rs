@@ -5500,6 +5500,41 @@ fn html_fragment_rejects_unreviewed_story_kinds_atomically() {
 }
 
 #[test]
+fn internal_links_target_a_heading_bookmark_created_once() {
+    let mut document = Document::new();
+    document.add_paragraph("Results and Discussion");
+    document.add_paragraph("See ");
+    let name = document.heading_bookmark(0).unwrap();
+    assert_eq!(name, "Heading_Results_and_Discussion");
+    assert_eq!(document.heading_bookmark(0).unwrap(), name);
+    document
+        .last_paragraph_mut()
+        .unwrap()
+        .add_internal_hyperlink("the results", &name, Some("Jump to the results"));
+    // A second heading with the same text gets a numbered name.
+    document.add_paragraph("Results and Discussion");
+    assert_eq!(
+        document.heading_bookmark(2).unwrap(),
+        "Heading_Results_and_Discussion_2"
+    );
+    assert!(document.heading_bookmark(9).is_err());
+
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let links = reopened.links();
+    assert_eq!(links.len(), 1);
+    assert_eq!(links[0].anchor.as_deref(), Some(name.as_str()));
+    assert_eq!(links[0].url, None);
+    assert_eq!(links[0].rel_id, None);
+    assert_eq!(links[0].tooltip.as_deref(), Some("Jump to the results"));
+    let bookmark = reopened
+        .bookmarks()
+        .into_iter()
+        .find(|bookmark| bookmark.name() == Some(name.as_str()))
+        .unwrap();
+    assert_eq!(bookmark.text(), "Results and Discussion");
+}
+
+#[test]
 fn configured_pictures_insert_resize_one_at_a_time_and_list_their_alt_text() {
     let mut document = Document::new();
     document.add_paragraph("pictures");

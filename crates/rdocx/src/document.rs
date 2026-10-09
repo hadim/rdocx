@@ -5854,6 +5854,7 @@ struct StoryLinkSpan {
     full: Range<usize>,
     rel_id: Option<String>,
     anchor: Option<String>,
+    tooltip: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -6817,6 +6818,7 @@ fn scan_story_item_links_with_scope(
                 full,
                 rel_id: link.rel_id,
                 anchor: link.anchor,
+                tooltip: link.tooltip,
             })
         })
         .collect()
@@ -9743,8 +9745,8 @@ fn scan_story_item_links(xml: &[u8], item: &StoryItemSpan) -> Result<Vec<StoryLi
                     && is_word_namespace
                     && local_name == b"hyperlink"
                 {
-                    let (rel_id, anchor) = story_hyperlink_attributes(&reader, &element)?;
-                    open_links.push((before, rel_id, anchor));
+                    let (rel_id, anchor, tooltip) = story_hyperlink_attributes(&reader, &element)?;
+                    open_links.push((before, rel_id, anchor, tooltip));
                 }
                 let inherited = stack
                     .last()
@@ -9788,11 +9790,12 @@ fn scan_story_item_links(xml: &[u8], item: &StoryItemSpan) -> Result<Vec<StoryLi
                     && is_word_namespace
                     && local_name.as_ref() == b"hyperlink"
                 {
-                    let (rel_id, anchor) = story_hyperlink_attributes(&reader, &element)?;
+                    let (rel_id, anchor, tooltip) = story_hyperlink_attributes(&reader, &element)?;
                     links.push(StoryLinkSpan {
                         full: before..after,
                         rel_id,
                         anchor,
+                        tooltip,
                     });
                 }
             }
@@ -9807,13 +9810,14 @@ fn scan_story_item_links(xml: &[u8], item: &StoryItemSpan) -> Result<Vec<StoryLi
                     && frame.namespace == StoryNamespace::Word
                     && frame.local_name == b"hyperlink"
                 {
-                    let (start, rel_id, anchor) = open_links.pop().ok_or_else(|| {
+                    let (start, rel_id, anchor, tooltip) = open_links.pop().ok_or_else(|| {
                         Error::Other("story hyperlink has no matching start".to_owned())
                     })?;
                     links.push(StoryLinkSpan {
                         full: start..after,
                         rel_id,
                         anchor,
+                        tooltip,
                     });
                 }
                 if !frame.opaque
@@ -9843,9 +9847,10 @@ fn scan_story_item_links(xml: &[u8], item: &StoryItemSpan) -> Result<Vec<StoryLi
 fn story_hyperlink_attributes(
     reader: &NsReader<&[u8]>,
     element: &BytesStart<'_>,
-) -> Result<(Option<String>, Option<String>)> {
+) -> Result<(Option<String>, Option<String>, Option<String>)> {
     let mut rel_id = None;
     let mut anchor = None;
+    let mut tooltip = None;
     for attribute in element.attributes() {
         let attribute = attribute.map_err(|error| {
             Error::Other(format!("story hyperlink attribute scan failed: {error}"))
@@ -9859,6 +9864,8 @@ fn story_hyperlink_attributes(
             &mut rel_id
         } else if word_element(&namespace) && local_name.as_ref() == b"anchor" {
             &mut anchor
+        } else if word_element(&namespace) && local_name.as_ref() == b"tooltip" {
+            &mut tooltip
         } else {
             continue;
         };
@@ -9871,7 +9878,7 @@ fn story_hyperlink_attributes(
                 .into_owned(),
         );
     }
-    Ok((rel_id, anchor))
+    Ok((rel_id, anchor, tooltip))
 }
 
 /// Return the start tag range of one hyperlink element and, unless it is
@@ -17438,6 +17445,7 @@ impl Document {
             url,
             anchor: link.anchor,
             rel_id: link.rel_id,
+            tooltip: link.tooltip,
         })
     }
 
@@ -29147,6 +29155,7 @@ impl Document {
                     url,
                     anchor: hl.anchor.clone(),
                     rel_id: hl.rel_id.clone(),
+                    tooltip: hl.tooltip.clone(),
                 });
             }
             for field in p.complex_field_hyperlinks() {
@@ -29158,6 +29167,7 @@ impl Document {
                     url: Some(field.target),
                     anchor: None,
                     rel_id: None,
+                    tooltip: None,
                 });
             }
         }
@@ -30838,6 +30848,8 @@ pub struct LinkInfo {
     pub anchor: Option<String>,
     /// The relationship ID.
     pub rel_id: Option<String>,
+    /// The hover tooltip (`w:tooltip`).
+    pub tooltip: Option<String>,
 }
 
 /// Severity level for accessibility issues.
@@ -38474,6 +38486,7 @@ mod tests {
                 url: Some("https://example.test".to_owned()),
                 anchor: None,
                 rel_id: None,
+                tooltip: None,
             }]
         );
     }
