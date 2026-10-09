@@ -513,6 +513,7 @@ class ListLevel:
         start: int | None = None,
         left_indent: int | None = None,
         hanging_indent: int | None = None,
+        font: str | None = None,
     ) -> ListLevel: ...
     @property
     def format(self) -> str: ...
@@ -524,6 +525,9 @@ class ListLevel:
     def left_indent(self) -> int | None: ...
     @property
     def hanging_indent(self) -> int | None: ...
+    @property
+    def font(self) -> str | None:
+        """The marker font, written to every `w:rFonts` slot of the level."""
     @staticmethod
     def checklist(
         checked: bool = False,
@@ -531,7 +535,7 @@ class ListLevel:
         left_indent: int | None = None,
         hanging_indent: int | None = None,
     ) -> ListLevel:
-        """A bullet level whose glyph is an empty box, or a checked box."""
+        """A bullet level whose glyph is an empty box, or a checked box, in Segoe UI Symbol."""
 
 
 @_final
@@ -799,24 +803,26 @@ class Document:
         `level`. `restart_numbering` does this for a paragraph in one call.
         """
     def add_bullet_list_item(self, text: str, level: int = 0) -> Paragraph:
-        """Append an item to the last bullet list in the body.
+        """Append an item to the document's plain bullet list.
 
-        The first item uses the document's shared bullet list, created when
-        missing.
+        It continues the last body paragraph on that list's definition, so a
+        checklist or another custom list is never continued.
         """
     def add_numbered_list_item(
         self, text: str, level: int = 0, *, restart: bool = False
     ) -> Paragraph:
-        """Append an item to the last numbered list in the body.
+        """Append an item to the document's plain decimal list.
 
-        The first item uses the document's shared decimal list, created when
-        missing. `restart=True` starts a new count at 1 from this item.
+        It continues the last body paragraph on that list's definition, so a
+        numbered heading or another custom list is never continued.
+        `restart=True` starts a new count at 1 from this item.
         """
     def restart_numbering(self, paragraph: Paragraph, start: int = 1) -> int:
-        """Restart the list at a body paragraph, as Word's "Restart at 1" does.
+        """Restart the list at a paragraph, as Word's "Restart at 1" does.
 
-        The paragraph and every later body paragraph of its list move to a
-        new list instance whose level starts at `start`. Returns its ID.
+        The paragraph and every later paragraph of its list, in the body or a
+        table cell, move to a new list instance whose level starts at `start`.
+        Returns its ID.
         """
     @property
     def default_font_name(self) -> str | None:
@@ -1152,14 +1158,23 @@ class Font:
 
 @_final
 class TabStop:
+    """A live tab stop, found by its position, as in python-docx."""
+
     def __new__(cls, *, _private: _Never) -> TabStop: ...
     @property
     def position(self) -> _shared.Length: ...
+    @position.setter
+    def position(self, value: int) -> None:
+        """Move the tab stop, keeping position order. A taken position raises."""
     @property
     def alignment(self) -> _text.WD_TAB_ALIGNMENT | None:
         """`None` for a bar, clear or num tab, which rdocx does not model."""
+    @alignment.setter
+    def alignment(self, value: _text.WD_TAB_ALIGNMENT | int) -> None: ...
     @property
-    def leader(self) -> _text.WD_TAB_LEADER | None: ...
+    def leader(self) -> _text.WD_TAB_LEADER: ...
+    @leader.setter
+    def leader(self, value: _text.WD_TAB_LEADER | int) -> None: ...
 
 
 @_final
@@ -1175,7 +1190,11 @@ class TabStops:
         alignment: _text.WD_TAB_ALIGNMENT | int = 0,
         leader: _text.WD_TAB_LEADER | int = 0,
     ) -> TabStop:
-        """Add a tab stop in position order, as python-docx does."""
+        """Add a tab stop in position order, as python-docx does.
+
+        Unlike python-docx, a second tab stop at one position raises
+        `ValueError`: change the existing one through `tab_stops[i]`.
+        """
     def clear_all(self) -> None: ...
 
 

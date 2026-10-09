@@ -1307,3 +1307,102 @@ def test_issue_303_list_helpers_continue_restart_and_offer_checklists():
     document.add_paragraph("todo").numbering = (todo, 0)
     assert '<w:lvlText w:val="☐"/>' in _part(document, "word/numbering.xml")
     assert document.to_pdf().startswith(b"%PDF")
+
+
+def test_issue_303_list_helpers_never_continue_checklists_or_numbered_headings():
+    from rdocx import Document, ListLevel
+
+    document = Document()
+    checklist = document.add_numbering_definition([ListLevel.checklist()])
+    document.add_paragraph("todo").numbering = (document.add_numbering_instance(checklist), 0)
+    document.add_paragraph("Next heading")
+    document.add_bullet_list_item("plain bullet")
+    roman = document.add_numbering_definition([ListLevel(format="upperRoman", text="%1.")])
+    heading = document.add_paragraph("Chapter")
+    heading.numbering = (document.add_numbering_instance(roman), 0)
+    document.add_numbered_list_item("first step")
+
+    numbering = [paragraph.numbering for paragraph in document.paragraphs]
+    assert numbering[2][0] != numbering[0][0]
+    assert numbering[4][0] != numbering[3][0]
+    numbering_xml = _part(document, "word/numbering.xml")
+    assert '<w:lvlText w:val="\u2610"/>' in numbering_xml
+    assert (
+        '<w:rPr><w:rFonts w:hint="default" w:ascii="Segoe UI Symbol" w:hAnsi="Segoe UI Symbol" '
+        'w:eastAsia="Segoe UI Symbol" w:cs="Segoe UI Symbol"/></w:rPr>'
+    ) in numbering_xml
+    assert document.to_pdf().startswith(b"%PDF")
+
+
+def test_issue_303_restart_numbering_moves_later_items_in_table_cells():
+    from rdocx import Document
+
+    document = Document()
+    document.add_numbered_list_item("one")
+    document.add_numbered_list_item("two")
+    table = document.add_table(1, 1)
+    cell_paragraph = table.cell(0, 0).paragraphs[0]
+    first = document.paragraphs[0].numbering[0]
+    cell_paragraph.numbering = (first, 0)
+    document.add_numbered_list_item("three")
+
+    restarted = document.restart_numbering(document.paragraphs[1])
+    assert document.paragraphs[0].numbering == (first, 0)
+    assert document.paragraphs[1].numbering == (restarted, 0)
+    assert document.tables[0].cell(0, 0).paragraphs[0].numbering == (restarted, 0)
+    assert document.paragraphs[2].numbering == (restarted, 0)
+
+
+def test_issue_303_tab_stops_are_live_and_reject_a_second_tab_at_one_position():
+    from rdocx import Document, Inches, WD_TAB_ALIGNMENT, WD_TAB_LEADER
+
+    document = Document()
+    tab_stops = document.add_paragraph("x").paragraph_format.tab_stops
+    tab = tab_stops.add_tab_stop(Inches(1))
+    tab_stops.add_tab_stop(Inches(2))
+    assert repr(tab) == (
+        "TabStop(position=Twips(1440), alignment=WD_TAB_ALIGNMENT.LEFT, "
+        "leader=WD_TAB_LEADER.SPACES)"
+    )
+    tab.alignment = WD_TAB_ALIGNMENT.RIGHT
+    tab.leader = WD_TAB_LEADER.DOTS
+    tab.position = Inches(3)
+    assert [(stop.position, stop.alignment, stop.leader) for stop in tab_stops] == [
+        (Inches(2), WD_TAB_ALIGNMENT.LEFT, WD_TAB_LEADER.SPACES),
+        (Inches(3), WD_TAB_ALIGNMENT.RIGHT, WD_TAB_LEADER.DOTS),
+    ]
+    with pytest.raises(ValueError, match="already exists at this position"):
+        tab_stops.add_tab_stop(Inches(2))
+    with pytest.raises(ValueError, match="already exists at this position"):
+        tab.position = Inches(2)
+    del tab_stops[1]
+    with pytest.raises(ValueError, match="re-read paragraph_format.tab_stops"):
+        tab.alignment
+
+
+def test_issue_303_style_and_font_arguments_are_checked_like_their_setters():
+    from rdocx import Document, Inches, Pt
+
+    document = Document()
+    document.add_style("Ordered", tab_stops=[(Inches(2), 1), (Inches(1), 0)])
+    styles = _part(document, "word/styles.xml")
+    assert '<w:tabs><w:tab w:val="left" w:pos="1440"/><w:tab w:val="center" w:pos="2880"/>' in styles
+
+    before = document.to_bytes()
+    with pytest.raises(ValueError, match="one per position"):
+        document.add_style("Twice", tab_stops=[(Inches(1), 0), (Inches(1), 2)])
+    with pytest.raises(ValueError, match="1 to 96"):
+        document.add_style("Thin", borders={"top": ("single", 0, "000000")})
+    with pytest.raises(ValueError, match="positive"):
+        document.add_style("Negative", line_spacing=-1.0)
+    paragraph_format = document.add_paragraph("x").paragraph_format
+    with pytest.raises(ValueError, match="positive"):
+        paragraph_format.line_spacing = -Pt(12)
+    font = document.add_paragraph("y").add_run("z").font
+    with pytest.raises(ValueError, match="language tag"):
+        font.language = "english!!"
+    font.language = "zh-Hant-TW"
+    assert font.language == "zh-Hant-TW"
+    assert [style.style_id for style in Document.from_bytes(before).styles] == [
+        style.style_id for style in document.styles
+    ]

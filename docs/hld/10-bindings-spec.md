@@ -372,12 +372,14 @@ revision and every handle stay valid.
 `add_numbering_instance(definition_id, start=n, level=i)` adds a
 `w:lvlOverride/w:startOverride` for that level. Word continues the count across
 plain instances of one definition. `add_bullet_list_item` and
-`add_numbered_list_item(text, level, restart=False)` append an item to the list
-of the last body paragraph of that kind, or to the native shared bullet or
-decimal list for the first item. `restart_numbering(paragraph, start=1)` gives
-a body paragraph and every later body paragraph of its instance a new
+`add_numbered_list_item(text, level, restart=False)` append an item to the
+plain bullet or decimal list the native helpers create. An item continues the
+last body paragraph on that definition, so a checklist or a numbered heading
+is never continued. `restart_numbering(paragraph, start=1)` gives a paragraph
+and every later paragraph of its instance, in the body or a table cell, a new
 instance with a start override, as Word's "Restart at 1" does.
-`ListLevel.checklist(checked)` is a bullet level with an empty or checked box.
+`ListLevel(font=...)` sets the marker font, and `ListLevel.checklist(checked)`
+is a bullet level with an empty or checked box in Segoe UI Symbol.
 
 The Python `Document` also exposes the current native comparison, main-body
 comment, deterministic layout, TOC rebuild, revision, counted replacement, and

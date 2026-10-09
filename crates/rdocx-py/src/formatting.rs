@@ -120,6 +120,62 @@ pub(crate) fn paragraph_border_edge(value: &str) -> PyResult<rdocx::ParagraphBor
     }
 }
 
+/// Line spacing as `ParagraphFormat.line_spacing` takes it: a float is a
+/// multiple of single spacing and a `Length` an exact height.
+pub(crate) enum LineSpacing {
+    Multiple(f64),
+    Exact(rdocx::Length),
+}
+
+pub(crate) fn checked_line_spacing(value: &Bound<'_, PyAny>) -> PyResult<LineSpacing> {
+    let spacing = if value.is_instance_of::<pyo3::types::PyFloat>() {
+        let multiple = value.extract::<f64>()?;
+        (multiple.is_finite() && multiple > 0.0).then_some(LineSpacing::Multiple(multiple))
+    } else {
+        let emu = value.extract::<i64>()?;
+        (emu > 0).then_some(LineSpacing::Exact(rdocx::Length::emu(emu)))
+    };
+    spacing.ok_or_else(|| {
+        PyValueError::new_err(
+            "line_spacing must be a positive Length such as Pt(18) or a positive float multiple such as 1.5",
+        )
+    })
+}
+
+/// A paragraph border style and size, `size` in eighths of a point.
+pub(crate) fn checked_border(style: &str, size: u32) -> PyResult<rdocx::BorderStyle> {
+    let style = crate::table::border_style_from_name(style)?;
+    if size > 96 || (style != rdocx::BorderStyle::None && size == 0) {
+        return Err(PyValueError::new_err(
+            "border size must be 1 to 96 eighths of a point for a visible edge",
+        ));
+    }
+    Ok(style)
+}
+
+/// A language tag such as `en-US`: letters, digits and hyphens in segments
+/// of one to eight characters, starting with two to eight letters.
+fn checked_language<'a>(param: &str, value: Option<&'a str>) -> PyResult<Option<&'a str>> {
+    let Some(tag) = value else {
+        return Ok(None);
+    };
+    let mut segments = tag.split('-');
+    let primary = segments.next().unwrap_or_default();
+    let valid = (2..=8).contains(&primary.len())
+        && primary.bytes().all(|byte| byte.is_ascii_alphabetic())
+        && segments.all(|segment| {
+            (1..=8).contains(&segment.len())
+                && segment.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        });
+    if valid {
+        Ok(Some(tag))
+    } else {
+        Err(PyValueError::new_err(format!(
+            "{param} must be a language tag such as \"en-US\" or \"ja-JP\", got {tag:?}"
+        )))
+    }
+}
+
 /// Read a `bool | None` toggle the way python-docx's tri-state properties
 /// take it.
 fn optional_bool(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<bool>> {
@@ -616,6 +672,7 @@ impl PyFont {
 
     #[setter]
     fn set_language(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
+        let value = checked_language("language", value)?;
         self.apply(py, FontUpdate::Language(value))
     }
 
@@ -626,6 +683,7 @@ impl PyFont {
 
     #[setter]
     fn set_east_asian_language(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
+        let value = checked_language("east_asian_language", value)?;
         self.apply(py, FontUpdate::EastAsianLanguage(value))
     }
 
@@ -636,6 +694,7 @@ impl PyFont {
 
     #[setter]
     fn set_complex_script_language(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
+        let value = checked_language("complex_script_language", value)?;
         self.apply(py, FontUpdate::ComplexScriptLanguage(value))
     }
 
@@ -800,7 +859,7 @@ pub(crate) fn paragraph_snapshot(
 }
 
 /// Read from the paragraph at a location the caller has validated.
-fn read_paragraph<T>(
+pub(crate) fn read_paragraph<T>(
     py: Python<'_>,
     document: &Py<PyDocument>,
     location: ParagraphLocation,
@@ -833,7 +892,7 @@ pub(crate) fn apply_paragraph_update(
 }
 
 /// Edit the paragraph at a location the caller has validated.
-fn edit_paragraph<T>(
+pub(crate) fn edit_paragraph<T>(
     py: Python<'_>,
     document: &Py<PyDocument>,
     location: ParagraphLocation,
@@ -869,25 +928,86 @@ fn edit_paragraph<T>(
     }
 }
 
-/// One tab stop, as `ParagraphFormat.tab_stops` lists it.
-#[pyclass(name = "TabStop", frozen, eq, skip_from_py_object)]
-#[derive(Clone, PartialEq)]
+/// One stored tab stop: its position in twips, its alignment (`None` for a
+/// `bar`, `clear` or `num` tab) and its leader (`None` for none or one rdocx
+/// does not model).
+#[derive(Clone, Copy)]
+struct TabData {
+    twips: i32,
+    alignment: Option<rdocx::TabAlignment>,
+    leader: Option<rdocx::TabLeader>,
+}
+
+impl TabData {
+    fn from_ref(tab: rdocx::TabStopRef<'_>) -> Self {
+        Self {
+            twips: tab.position().as_twips().0,
+            alignment: tab.alignment(),
+            leader: tab
+                .leader()
+                .filter(|leader| *leader != rdocx::TabLeader::None),
+        }
+    }
+}
+
+fn tab_alignment_name(value: Option<rdocx::TabAlignment>) -> &'static str {
+    match value {
+        Some(rdocx::TabAlignment::Left) => "WD_TAB_ALIGNMENT.LEFT",
+        Some(rdocx::TabAlignment::Center) => "WD_TAB_ALIGNMENT.CENTER",
+        Some(rdocx::TabAlignment::Right) => "WD_TAB_ALIGNMENT.RIGHT",
+        Some(rdocx::TabAlignment::Decimal) => "WD_TAB_ALIGNMENT.DECIMAL",
+        None => "None",
+    }
+}
+
+fn tab_leader_name(value: Option<rdocx::TabLeader>) -> &'static str {
+    match value {
+        None | Some(rdocx::TabLeader::None) => "WD_TAB_LEADER.SPACES",
+        Some(rdocx::TabLeader::Dot) => "WD_TAB_LEADER.DOTS",
+        Some(rdocx::TabLeader::Hyphen) => "WD_TAB_LEADER.DASHES",
+        Some(rdocx::TabLeader::Underscore) => "WD_TAB_LEADER.LINES",
+    }
+}
+
+/// One tab stop of a paragraph, a live handle as in python-docx.
+///
+/// It is found by its position, which no other tab stop of the paragraph
+/// shares, so adding or deleting another tab stop keeps it valid.
+#[pyclass(name = "TabStop")]
 pub struct PyTabStop {
-    position: i64,
-    alignment: Option<i32>,
-    leader: Option<i32>,
+    format: PyParagraphFormat,
+    twips: i32,
 }
 
 impl PyTabStop {
-    fn from_ref(tab: rdocx::TabStopRef<'_>) -> Self {
-        Self {
-            position: tab.position().to_emu(),
-            alignment: tab.alignment().map(tab_alignment_to_int),
-            leader: match tab.leader() {
-                None => Some(0),
-                Some(leader) => Some(tab_leader_to_int(leader)),
-            },
-        }
+    fn find(&self, py: Python<'_>) -> PyResult<(usize, TabData)> {
+        tab_list(py, &self.format)?
+            .into_iter()
+            .enumerate()
+            .find(|(_, tab)| tab.twips == self.twips)
+            .ok_or_else(|| {
+                PyValueError::new_err(
+                    "this tab stop was deleted or moved; re-read paragraph_format.tab_stops",
+                )
+            })
+    }
+
+    fn replace(&self, py: Python<'_>, index: usize, tab: TabData) -> PyResult<()> {
+        let Some(alignment) = tab.alignment else {
+            return Err(PyValueError::new_err(
+                "rdocx does not model this bar, clear or num tab; delete it with del tab_stops[i] and add a new one",
+            ));
+        };
+        let location = self.format.validate(py)?;
+        edit_paragraph(py, &self.format.document, location, |paragraph| {
+            paragraph.set_tab_stop(
+                index,
+                alignment,
+                rdocx::Length::twips(tab.twips),
+                tab.leader,
+            )
+        })?;
+        Ok(())
     }
 }
 
@@ -895,30 +1015,102 @@ impl PyTabStop {
 impl PyTabStop {
     #[getter]
     fn position(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
-        length_object(py, rdocx::Length::emu(self.position))
+        length_object(py, rdocx::Length::twips(self.find(py)?.1.twips))
+    }
+
+    /// Move the tab stop, keeping the tab stops in position order.
+    #[setter]
+    fn set_position(&mut self, py: Python<'_>, value: i64) -> PyResult<()> {
+        let (index, tab) = self.find(py)?;
+        let twips = rdocx::Length::emu(value).as_twips().0;
+        if twips == tab.twips {
+            return Ok(());
+        }
+        let tabs = tab_list(py, &self.format)?;
+        if tabs.iter().any(|other| other.twips == twips) {
+            return Err(duplicate_tab_error());
+        }
+        let Some(alignment) = tab.alignment else {
+            return Err(PyValueError::new_err(
+                "rdocx does not model this bar, clear or num tab; delete it with del tab_stops[i] and add a new one",
+            ));
+        };
+        let target = tabs
+            .iter()
+            .enumerate()
+            .filter(|(other, _)| *other != index)
+            .filter(|(_, other)| other.twips < twips)
+            .count();
+        let location = self.format.validate(py)?;
+        edit_paragraph(py, &self.format.document, location, |paragraph| {
+            paragraph.remove_tab_stop(index);
+            paragraph.insert_tab_stop(target, alignment, rdocx::Length::twips(twips), tab.leader)
+        })?;
+        self.twips = twips;
+        Ok(())
     }
 
     /// `None` for a `bar`, `clear` or `num` tab, which rdocx does not model.
     #[getter]
     fn alignment(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
-        self.alignment
-            .map(|value| enum_object(py, "WD_TAB_ALIGNMENT", value))
+        self.find(py)?
+            .1
+            .alignment
+            .map(|value| enum_object(py, "WD_TAB_ALIGNMENT", tab_alignment_to_int(value)))
             .transpose()
+    }
+
+    #[setter]
+    fn set_alignment(&self, py: Python<'_>, value: i32) -> PyResult<()> {
+        let alignment = tab_alignment_from_int(value)?;
+        let (index, tab) = self.find(py)?;
+        self.replace(
+            py,
+            index,
+            TabData {
+                alignment: Some(alignment),
+                ..tab
+            },
+        )
     }
 
     #[getter]
-    fn leader(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
-        self.leader
-            .map(|value| enum_object(py, "WD_TAB_LEADER", value))
-            .transpose()
+    fn leader(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let leader = self.find(py)?.1.leader.map_or(0, tab_leader_to_int);
+        enum_object(py, "WD_TAB_LEADER", leader)
     }
 
-    fn __repr__(&self) -> String {
-        format!(
-            "TabStop(position={}, alignment={:?}, leader={:?})",
-            self.position, self.alignment, self.leader
-        )
+    #[setter]
+    fn set_leader(&self, py: Python<'_>, value: i32) -> PyResult<()> {
+        let leader = tab_leader_from_int(value)?;
+        let (index, tab) = self.find(py)?;
+        self.replace(py, index, TabData { leader, ..tab })
     }
+
+    fn __repr__(&self, py: Python<'_>) -> PyResult<String> {
+        let tab = self.find(py)?.1;
+        Ok(format!(
+            "TabStop(position=Twips({}), alignment={}, leader={})",
+            tab.twips,
+            tab_alignment_name(tab.alignment),
+            tab_leader_name(tab.leader)
+        ))
+    }
+}
+
+fn duplicate_tab_error() -> PyErr {
+    PyValueError::new_err(
+        "a tab stop already exists at this position; change it through tab_stops[i] or delete it with del tab_stops[i]",
+    )
+}
+
+fn tab_list(py: Python<'_>, format: &PyParagraphFormat) -> PyResult<Vec<TabData>> {
+    let location = format.validate(py)?;
+    read_paragraph(py, &format.document, location, |paragraph| {
+        (0..paragraph.tab_stop_count())
+            .filter_map(|index| paragraph.tab_stop(index).map(TabData::from_ref))
+            .collect()
+    })
 }
 
 /// The direct tab stops of one paragraph, as python-docx's
@@ -929,34 +1121,39 @@ pub struct PyTabStops {
 }
 
 impl PyTabStops {
-    fn tabs(&self, py: Python<'_>) -> PyResult<Vec<PyTabStop>> {
-        let location = self.format.validate(py)?;
-        read_paragraph(py, &self.format.document, location, |paragraph| {
-            (0..paragraph.tab_stop_count())
-                .filter_map(|index| paragraph.tab_stop(index).map(PyTabStop::from_ref))
-                .collect()
-        })
+    fn handle(&self, py: Python<'_>, tab: TabData) -> PyTabStop {
+        PyTabStop {
+            format: PyParagraphFormat::new(
+                self.format.document.clone_ref(py),
+                self.format.path.clone(),
+            ),
+            twips: tab.twips,
+        }
     }
 }
 
 #[pymethods]
 impl PyTabStops {
     fn __len__(&self, py: Python<'_>) -> PyResult<usize> {
-        Ok(self.tabs(py)?.len())
+        Ok(tab_list(py, &self.format)?.len())
     }
 
     fn __getitem__(&self, py: Python<'_>, index: isize) -> PyResult<PyTabStop> {
-        let mut tabs = self.tabs(py)?;
+        let tabs = tab_list(py, &self.format)?;
         let index = normalize_index(index, tabs.len(), "tab stop")?;
-        Ok(tabs.swap_remove(index))
+        Ok(self.handle(py, tabs[index]))
     }
 
     fn __iter__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyIterator>> {
-        PyList::new(py, self.tabs(py)?)?.try_iter()
+        let handles = tab_list(py, &self.format)?
+            .into_iter()
+            .map(|tab| self.handle(py, tab))
+            .collect::<Vec<_>>();
+        PyList::new(py, handles)?.try_iter()
     }
 
     fn __delitem__(&self, py: Python<'_>, index: isize) -> PyResult<()> {
-        let count = self.tabs(py)?.len();
+        let count = tab_list(py, &self.format)?.len();
         let index = normalize_index(index, count, "tab stop")?;
         let location = self.format.validate(py)?;
         edit_paragraph(py, &self.format.document, location, |paragraph| {
@@ -966,6 +1163,7 @@ impl PyTabStops {
     }
 
     /// Add a tab stop in position order, as python-docx does, and return it.
+    /// Unlike python-docx, a second tab stop at one position raises.
     #[pyo3(signature = (position, alignment = 0, leader = 0))]
     fn add_tab_stop(
         &self,
@@ -977,16 +1175,24 @@ impl PyTabStops {
         let alignment = tab_alignment_from_int(alignment)?;
         let leader = tab_leader_from_int(leader)?;
         let position = rdocx::Length::emu(position);
-        let index = self
-            .tabs(py)?
-            .iter()
-            .take_while(|tab| tab.position <= position.to_emu())
-            .count();
+        let twips = position.as_twips().0;
+        let tabs = tab_list(py, &self.format)?;
+        if tabs.iter().any(|tab| tab.twips == twips) {
+            return Err(duplicate_tab_error());
+        }
+        let index = tabs.iter().filter(|tab| tab.twips < twips).count();
         let location = self.format.validate(py)?;
         edit_paragraph(py, &self.format.document, location, |paragraph| {
             paragraph.insert_tab_stop(index, alignment, position, leader)
         })?;
-        self.__getitem__(py, index as isize)
+        Ok(self.handle(
+            py,
+            TabData {
+                twips,
+                alignment: Some(alignment),
+                leader,
+            },
+        ))
     }
 
     fn clear_all(&self, py: Python<'_>) -> PyResult<()> {
@@ -1118,17 +1324,14 @@ impl PyParagraphFormat {
 
     #[setter]
     fn set_line_spacing(&self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
-        match value {
-            None => self.apply(py, ParagraphUpdate::LineSpacing(None)),
-            Some(value) if value.is_none() => self.apply(py, ParagraphUpdate::LineSpacing(None)),
-            Some(value) if value.is_instance_of::<pyo3::types::PyFloat>() => {
-                self.apply(py, ParagraphUpdate::LineSpacingMultiple(value.extract()?))
-            }
-            Some(value) => self.apply(
-                py,
-                ParagraphUpdate::LineSpacing(Some(rdocx::Length::emu(value.extract()?))),
-            ),
-        }
+        let update = match value.filter(|value| !value.is_none()) {
+            None => ParagraphUpdate::LineSpacing(None),
+            Some(value) => match checked_line_spacing(value)? {
+                LineSpacing::Multiple(multiple) => ParagraphUpdate::LineSpacingMultiple(multiple),
+                LineSpacing::Exact(length) => ParagraphUpdate::LineSpacing(Some(length)),
+            },
+        };
+        self.apply(py, update)
     }
 
     #[getter]
@@ -1253,12 +1456,7 @@ impl PyParagraphFormat {
         color: &str,
     ) -> PyResult<()> {
         let edge = paragraph_border_edge(edge)?;
-        let style = crate::table::border_style_from_name(style)?;
-        if size > 96 || (style != rdocx::BorderStyle::None && size == 0) {
-            return Err(PyValueError::new_err(
-                "border size must be 1 to 96 eighths of a point for a visible edge",
-            ));
-        }
+        let style = checked_border(style, size)?;
         let color = checked_hex_or_auto("color", color)?;
         let location = self.validate(py)?;
         edit_paragraph(py, &self.document, location, |paragraph| {
