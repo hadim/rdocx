@@ -1,6 +1,6 @@
 # F-X204, Shared CLI one-shot editing commands
 
-**Status**: draft
+**Status**: approved
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X202, F-X203, F-X205, F-X207
@@ -412,13 +412,14 @@ unexplained hash delta to CLI work or move the exclusive baseline.
 
 ## Open questions
 
-Ordered cascading maps, family-specific empty matching, checked counted regex,
-field time, extraction identity/rollback, typed metadata, slide positions and
-fit-report projection are resolved below. Final approval requires provider
-completion and exact fit inventory ownership. Map object duplicate keys use
-the existing JSON parser's last occurrence wins behavior, explicitly stated
-in help and tested. Repeated array entries remain separate ordered operations.
-No new parser dependency or duplicate-detection claim is implied.
+Resolved by the one-shot operation contracts below. Cascading ordered arrays,
+repeated entries and existing parser last-key-wins behavior are explicit.
+Counts/exports/picture identities consume completed native providers, and fit
+reports consume the single F-X207 solver and physical owner inventory.
+No second CLI fitting engine, JSON parser or lifetime implementation.
+Serialize the two command files and native/Python additions against their
+providers. Formal dependencies remain completion barriers before source claims,
+not unresolved product choices or a reason to reimplement their capabilities.
 
 ## Resolved one-shot operation contracts
 

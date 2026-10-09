@@ -1,6 +1,6 @@
 # F-X200, Complete Python Word formatting and list parity
 
-**Status**: draft
+**Status**: approved
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X197
@@ -224,12 +224,14 @@ possible changes. No baseline movement or implementation is approved by this dra
 
 ## Open questions
 
-The authenticated Word continuation/restart/multilevel oracle is complete.
-The remaining decision is how the requested parity supersedes the explicit
-independent-numId rendering contract, including bounded missing controls,
-actual fixture deltas and the F-283 dependency. Technical signatures, vertical
-mode tri-state behavior, document defaults, tabs and checked list helpers
-are resolved below. The plan remains draft until prerequisite completion and final source-wave approval.
+Resolved by the selected Issue303 Word-parity scope and authenticated
+counter contracts below. Definition-owned counts, concrete override consumption,
+ancestor rearming and deferred section reset are specified independently.
+F-283 consumes completed F-X200 once. The deliberate compatibility change
+requires a separately labelled behavior commit, source-built native expected
+values and reviewed actual harness attribution. F-X197 completion and shared
+file/baseline claims remain source gates. Checkbox glyph coverage follows
+F-X210's exact authorized provider bytes, never an inferred asset approval.
 
 ## Resolved technical decisions
 
@@ -377,7 +379,7 @@ therefore requires a deliberate compatibility-contract decision and a
 separate labeled behavior commit, rather than treating current behavior as
 an unexplained defect. Final approval must reconcile that decision, actual
 affected fixture keys and F-283 resolved-counter dependency before claiming
-X200. No implementation or baseline update is authorized by this draft.
+X200. Implementation waits for completed dependencies and exclusive claims. No baseline update is preapproved.
 
 ## Selected continuation scope and scheduling
 
