@@ -20,10 +20,13 @@ containing pictures and other visible nontext content trigger empty warnings.
 
 Keep the advisory body-paragraph inventory and metadata warnings. Replace
 its text-only predicate with a private content-aware check in existing
-commands.rs. Text-bearing paragraphs remain nonempty. For otherwise blank
-paragraphs, obtain their existing checked paragraph story location and source
-snapshot, then inspect the namespace-qualified preserved XML using existing
-quick-xml. No new public facade surface or dependency is needed.
+commands.rs. Text-bearing paragraphs remain nonempty. Scan the existing main-part XML
+read-only with quick-xml to build one visible-nontext flag per admitted body
+paragraph. Follow direct body paragraphs and recursively typed block-control
+content, while excluding tables, properties and unsupported wrappers. Zip the
+flags with the existing facade paragraph inventory and reject an inventory
+mismatch. This preserves its exact counting scope, including nested block
+controls. No new public facade surface or dependency is needed.
 
 The scanner detects actual text and Word drawing/pict/object, field elements,
 symbols, tabs, breaks, footnote/endnote references and OfficeMath content.
@@ -91,3 +94,7 @@ Expected unchanged. Validation reads documents without rendering or mutation.
 ## Open questions
 
 None. Empty means no visible content, as explicitly requested in Issue298.
+
+## Approved approach revision
+
+Inspection found paragraph_story_location deliberately returns None for nested block-control paragraphs at document.rs:20117. The original per-paragraph snapshot approach cannot cover the existing recursive body paragraph inventory at document.rs:11744. The read-only main-part scan above keeps the same source and counting scope without a forwarding public API. This technical revision has no product ambiguity and adds nested block controls and table-exclusion inventory controls to the existing test plan.
