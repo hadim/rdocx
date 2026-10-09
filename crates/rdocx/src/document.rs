@@ -29095,7 +29095,7 @@ impl Document {
         let mut consecutive_empty = 0u32;
         for content in &self.document.body.content {
             if let BodyContent::Paragraph(p) = content {
-                if p.text().trim().is_empty() {
+                if !p.has_visible_content() {
                     consecutive_empty += 1;
                     if consecutive_empty >= 3 {
                         issues.push(AccessibilityIssue {
@@ -38275,6 +38275,31 @@ mod tests {
                 .iter()
                 .any(|i| i.message.contains("Heading level gap"))
         );
+    }
+
+    /// #298: a paragraph that holds only a picture is not empty.
+    #[test]
+    fn audit_counts_picture_paragraphs_as_content() {
+        let consecutive_empty = |doc: &Document| {
+            doc.audit_accessibility()
+                .iter()
+                .filter(|issue| issue.message.contains("consecutive empty paragraphs"))
+                .count()
+        };
+        let mut doc = Document::new();
+        for _ in 0..3 {
+            doc.add_picture(
+                b"picture",
+                "red.png",
+                Length::inches(1.0),
+                Length::inches(0.5),
+            );
+        }
+        assert_eq!(consecutive_empty(&doc), 0);
+        for _ in 0..3 {
+            doc.add_paragraph("");
+        }
+        assert_eq!(consecutive_empty(&doc), 1);
     }
 
     #[test]
