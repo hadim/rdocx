@@ -1,6 +1,6 @@
 # F-X212, Align native accessibility with visible paragraph content
 
-**Status**: draft
+**Status**: approved
 **Sprint**: S91
 **Size**: M
 **Depends on**: F-X196
@@ -49,8 +49,8 @@ For raw pict/object/AlternateContent and preserved Word wrappers, prove the
 actual namespace and accepted physical path. Preserve inherited bindings,
 alias/default/rebound cases and native content-control slot admission.
 Unknown XML is retained, not assumed visible. Do not turn local-name matching
-into a second namespace parser. Finish the minimal existing-helper design
-against actual model prefix provenance before approving the plan.
+into a second namespace parser. Use the resolved minimal existing-helper contract below, with model prefix
+provenance verified by its mandatory source-built controls.
 
 The existing CT_R/CT_P raw storage loses inherited namespace scope. Two
 otherwise identical raw fragments under Word and foreign aliases cannot be
@@ -137,7 +137,7 @@ Describe deterministic delta attribution, not historical change prose.
   opaque source, alias/default/rebound and schema child-order controls.
 - Visible behavior/hash: HLD08/HLD12, exclusive baseline owner, labelled
   intentional audit commit and independent expected-key review.
-- Published native API if exposed: HLD10/HLD15, actual affected-package
+- Additive published native API: HLD10/HLD15, actual affected-package
   patched dry runs, membership/size checks and actual archive measurements.
 - No binding API, new asset, dependency, version or structural file change.
 
@@ -152,7 +152,7 @@ Review the generated finding count and reverse-control proof independently.
 
 ## Implementation checklist
 
-- [ ] Complete F-X196 and approve the qualified native predicate design.
+- [x] Complete F-X196 and approve the qualified native predicate design.
 - [ ] Claim this story and observe real failing public audit regression.
 - [ ] Reuse/adapt native predicate and audit wiring in existing files.
 - [ ] Prove raw/typed admission and unchanged source controls.
@@ -164,11 +164,13 @@ Review the generated finding count and reverse-control proof independently.
 
 ## Open questions
 
-The exact shared native operation, two private inventory modes and X203
-error projection are resolved below. Complete and integrate F-X196 before
-approving and claiming this dependent story. The required field-display
-controls are implementation gates, and must fail before any semantic edit.
-This draft authorizes neither source changes nor baseline movement.
+No unresolved design question remains. F-X196 is completed and integrated
+at852f8387 with scoped dependency-prefix evidence. The exact shared native
+operation, two private inventory modes and X203 error projection below are
+approved. Mandatory field-display controls remain implementation gates and
+must establish real Base failures before semantic edits. Claiming still waits
+for global sprint design approval and conflict-free source/baseline leases.
+Approval does not claim that any regression, hash delta or gate has passed.
 
 ## Resolved shared operation and inventory contract
 
@@ -192,7 +194,7 @@ fn paragraph_visibility_from_main_source(
 ) -> Result<Vec<bool>>;
 ```
 
-These are proposed signatures. The public method performs the actual unpublished clone, current-model source flush, resolved main-part lookup and checked classification. It is not an unused ParagraphRef predicate or a forwarding-only public wrapper. It returns final visibility, including accepted text and nontext, not just the contributor's raw-child heuristic. The private concrete mode has two actual callers: the CLI-facing native operation uses FacadeRecursive, and audit_accessibility uses DirectBody. No new public mode, record type, CT_P/CT_R field, module, trait, generic or dependency is required.
+These are approved signatures. The public method performs the actual unpublished clone, current-model source flush, resolved main-part lookup and checked classification. It is not an unused ParagraphRef predicate or a forwarding-only public wrapper. It returns final visibility, including accepted text and nontext, not just the contributor's raw-child heuristic. The private concrete mode has two actual callers: the CLI-facing native operation uses FacadeRecursive, and audit_accessibility uses DirectBody. No new public mode, record type, CT_P/CT_R field, module, trait, generic or dependency is required.
 
 Public preparation is exactly one `clone_for_staging`, one `flush_document_to_package`, then `candidate.package.get_part(&candidate.doc_part_name)` or explicit missing-main-part Error. Call the scanner with the candidate model, not with an independently reparsed body or stale package. Native audit performs the same bounded preparation inline in its existing method, then calls the private scanner in DirectBody mode. Three preparation statements in these two consumer paths are preferable to another forwarding source wrapper. Both source and authoritative typed inventory belong to the unpublished candidate. No save, to_bytes, reopen or repeated per-paragraph serialization is involved.
 
