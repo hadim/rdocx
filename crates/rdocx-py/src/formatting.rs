@@ -1,11 +1,11 @@
 use oxml_py_support::ContentPath;
 use pyo3::exceptions::{PyIndexError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyAny;
+use pyo3::types::{PyAny, PyIterator, PyList};
 
 use crate::document::PyDocument;
 use crate::paragraph::{ParagraphLocation, paragraph_location};
-use crate::{enum_object, length_object, stale_to_pyerr};
+use crate::{enum_object, length_object, normalize_index, stale_to_pyerr};
 
 pub(crate) fn alignment_from_int(value: i32) -> PyResult<rdocx::Alignment> {
     match value {
@@ -45,14 +45,88 @@ fn checked_highlight(value: &str) -> PyResult<&str> {
 }
 
 fn checked_shading(value: &str) -> PyResult<&str> {
+    checked_hex_or_auto("shading", value)
+}
+
+/// A colour as the hex-string setters take it: six hex digits or `auto`.
+pub(crate) fn checked_hex_or_auto<'a>(param: &str, value: &'a str) -> PyResult<&'a str> {
     if value.eq_ignore_ascii_case("auto") {
         Ok("auto")
     } else if value.len() == 6 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         Ok(value)
     } else {
-        Err(PyValueError::new_err(
-            "shading must be six hexadecimal digits or auto",
-        ))
+        Err(PyValueError::new_err(format!(
+            "{param} must be six hexadecimal digits or auto, such as \"FF0000\""
+        )))
+    }
+}
+
+/// A tab stop alignment as `WD_TAB_ALIGNMENT` numbers it.
+pub(crate) fn tab_alignment_from_int(value: i32) -> PyResult<rdocx::TabAlignment> {
+    match value {
+        0 => Ok(rdocx::TabAlignment::Left),
+        1 => Ok(rdocx::TabAlignment::Center),
+        2 => Ok(rdocx::TabAlignment::Right),
+        3 => Ok(rdocx::TabAlignment::Decimal),
+        _ => Err(PyValueError::new_err(
+            "tab alignment must be WD_TAB_ALIGNMENT.LEFT, CENTER, RIGHT or DECIMAL",
+        )),
+    }
+}
+
+fn tab_alignment_to_int(value: rdocx::TabAlignment) -> i32 {
+    match value {
+        rdocx::TabAlignment::Left => 0,
+        rdocx::TabAlignment::Center => 1,
+        rdocx::TabAlignment::Right => 2,
+        rdocx::TabAlignment::Decimal => 3,
+    }
+}
+
+/// A tab leader as `WD_TAB_LEADER` numbers it, `SPACES` writing none.
+pub(crate) fn tab_leader_from_int(value: i32) -> PyResult<Option<rdocx::TabLeader>> {
+    match value {
+        0 => Ok(None),
+        1 => Ok(Some(rdocx::TabLeader::Dot)),
+        2 => Ok(Some(rdocx::TabLeader::Hyphen)),
+        3 => Ok(Some(rdocx::TabLeader::Underscore)),
+        _ => Err(PyValueError::new_err(
+            "tab leader must be WD_TAB_LEADER.SPACES, DOTS, DASHES or LINES",
+        )),
+    }
+}
+
+fn tab_leader_to_int(value: rdocx::TabLeader) -> i32 {
+    match value {
+        rdocx::TabLeader::None => 0,
+        rdocx::TabLeader::Dot => 1,
+        rdocx::TabLeader::Hyphen => 2,
+        rdocx::TabLeader::Underscore => 3,
+    }
+}
+
+/// A paragraph border edge by its `w:pBdr` child name.
+pub(crate) fn paragraph_border_edge(value: &str) -> PyResult<rdocx::ParagraphBorderEdge> {
+    match value {
+        "top" => Ok(rdocx::ParagraphBorderEdge::Top),
+        "bottom" => Ok(rdocx::ParagraphBorderEdge::Bottom),
+        "left" => Ok(rdocx::ParagraphBorderEdge::Left),
+        "right" => Ok(rdocx::ParagraphBorderEdge::Right),
+        "between" => Ok(rdocx::ParagraphBorderEdge::Between),
+        "bar" => Ok(rdocx::ParagraphBorderEdge::Bar),
+        _ => Err(PyValueError::new_err(
+            "border edge must be top, bottom, left, right, between or bar",
+        )),
+    }
+}
+
+/// Read a `bool | None` toggle the way python-docx's tri-state properties
+/// take it.
+fn optional_bool(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<bool>> {
+    match value {
+        None => Ok(None),
+        Some(value) if value.is_none() => Ok(None),
+        Some(value) => value.extract::<bool>().map(Some),
     }
 }
 
@@ -67,11 +141,39 @@ pub(crate) struct FontSnapshot {
     highlight: Option<String>,
     shading: Option<String>,
     pub(crate) style_id: Option<String>,
+    vertical_alignment: Option<String>,
+    all_caps: Option<bool>,
+    small_caps: Option<bool>,
+    double_strike: Option<bool>,
+    hidden: Option<bool>,
+    character_spacing: Option<rdocx::Twips>,
+    language: Option<String>,
+    east_asian_language: Option<String>,
+    complex_script_language: Option<String>,
+    east_asian_name: Option<String>,
+    complex_script_name: Option<String>,
+    rtl: Option<bool>,
 }
 
 impl FontSnapshot {
     fn from_run(run: rdocx::RunRef<'_>) -> Self {
         Self {
+            vertical_alignment: run.vert_align().map(str::to_owned),
+            all_caps: run.all_caps_value(),
+            small_caps: run.small_caps_value(),
+            double_strike: run.double_strike_value(),
+            hidden: run.hidden_value(),
+            character_spacing: run.character_spacing(),
+            language: run.language().map(str::to_owned),
+            east_asian_language: run.language_east_asia().map(str::to_owned),
+            complex_script_language: run.language_bidi().map(str::to_owned),
+            east_asian_name: run
+                .slot_font(rdocx::RunFontSlot::EastAsia)
+                .map(str::to_owned),
+            complex_script_name: run
+                .slot_font(rdocx::RunFontSlot::ComplexScript)
+                .map(str::to_owned),
+            rtl: run.rtl_value(),
             name: run.font_name().map(str::to_owned),
             size: run.size(),
             color: run.color().map(str::to_owned),
@@ -97,6 +199,17 @@ pub(crate) enum FontUpdate<'a> {
     Highlight(Option<&'a str>),
     Shading(Option<&'a str>),
     Style(Option<&'a str>),
+    VerticalAlignment(Option<rdocx::RunVerticalAlignment>),
+    AllCaps(Option<bool>),
+    SmallCaps(Option<bool>),
+    DoubleStrike(Option<bool>),
+    Hidden(Option<bool>),
+    CharacterSpacing(Option<rdocx::Length>),
+    Language(Option<&'a str>),
+    EastAsianLanguage(Option<&'a str>),
+    ComplexScriptLanguage(Option<&'a str>),
+    SlotFont(rdocx::RunFontSlot, Option<&'a str>),
+    Rtl(Option<bool>),
 }
 
 impl FontUpdate<'_> {
@@ -118,6 +231,17 @@ impl FontUpdate<'_> {
             }
             Self::Shading(value) => run.set_shading_value(value),
             Self::Style(value) => run.set_style_value(value),
+            Self::VerticalAlignment(value) => run.set_vertical_alignment_value(value),
+            Self::AllCaps(value) => run.set_all_caps_value(value),
+            Self::SmallCaps(value) => run.set_small_caps_value(value),
+            Self::DoubleStrike(value) => run.set_double_strike_value(value),
+            Self::Hidden(value) => run.set_hidden_value(value),
+            Self::CharacterSpacing(value) => run.set_character_spacing_value(value),
+            Self::Language(value) => run.set_language_value(value),
+            Self::EastAsianLanguage(value) => run.set_language_east_asia_value(value),
+            Self::ComplexScriptLanguage(value) => run.set_language_bidi_value(value),
+            Self::SlotFont(slot, value) => run.set_slot_font(slot, value),
+            Self::Rtl(value) => run.set_rtl_value(value),
         }
     }
 }
@@ -171,6 +295,33 @@ impl PyFont {
     fn apply(&self, py: Python<'_>, update: FontUpdate<'_>) -> PyResult<()> {
         let (location, _) = self.validate(py)?;
         apply_run_update(py, &self.document, location, &self.run_path, update)
+    }
+
+    /// Read `superscript` or `subscript` as python-docx does: `None` without
+    /// `w:vertAlign`, otherwise whether it holds `wanted`.
+    fn vertical_alignment_is(&self, py: Python<'_>, wanted: &str) -> PyResult<Option<bool>> {
+        Ok(self
+            .snapshot(py)?
+            .vertical_alignment
+            .map(|value| value == wanted))
+    }
+
+    /// Write `superscript` or `subscript` as python-docx does: `True` sets
+    /// `wanted`, `False` removes `w:vertAlign` only when it holds `wanted`,
+    /// and `None` removes it.
+    fn set_vertical_alignment(
+        &self,
+        py: Python<'_>,
+        wanted: rdocx::RunVerticalAlignment,
+        name: &str,
+        value: Option<bool>,
+    ) -> PyResult<()> {
+        let update = match value {
+            Some(true) => Some(wanted),
+            Some(false) if self.vertical_alignment_is(py, name)? != Some(true) => return Ok(()),
+            Some(false) | None => None,
+        };
+        self.apply(py, FontUpdate::VerticalAlignment(update))
     }
 }
 
@@ -371,6 +522,158 @@ impl PyFont {
         let value = value.map(checked_shading).transpose()?;
         self.apply(py, FontUpdate::Shading(value))
     }
+
+    #[getter]
+    fn superscript(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+        self.vertical_alignment_is(py, "superscript")
+    }
+
+    #[setter]
+    fn set_superscript(&self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.set_vertical_alignment(
+            py,
+            rdocx::RunVerticalAlignment::Superscript,
+            "superscript",
+            optional_bool(value)?,
+        )
+    }
+
+    #[getter]
+    fn subscript(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+        self.vertical_alignment_is(py, "subscript")
+    }
+
+    #[setter]
+    fn set_subscript(&self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        self.set_vertical_alignment(
+            py,
+            rdocx::RunVerticalAlignment::Subscript,
+            "subscript",
+            optional_bool(value)?,
+        )
+    }
+
+    #[getter]
+    fn all_caps(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+        Ok(self.snapshot(py)?.all_caps)
+    }
+
+    #[setter]
+    fn set_all_caps(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        self.apply(py, FontUpdate::AllCaps(value))
+    }
+
+    #[getter]
+    fn small_caps(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+        Ok(self.snapshot(py)?.small_caps)
+    }
+
+    #[setter]
+    fn set_small_caps(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        self.apply(py, FontUpdate::SmallCaps(value))
+    }
+
+    #[getter]
+    fn double_strike(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+        Ok(self.snapshot(py)?.double_strike)
+    }
+
+    #[setter]
+    fn set_double_strike(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        self.apply(py, FontUpdate::DoubleStrike(value))
+    }
+
+    #[getter]
+    fn hidden(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+        Ok(self.snapshot(py)?.hidden)
+    }
+
+    #[setter]
+    fn set_hidden(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        self.apply(py, FontUpdate::Hidden(value))
+    }
+
+    #[getter]
+    fn character_spacing(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.snapshot(py)?
+            .character_spacing
+            .map(|twips| length_object(py, rdocx::Length::twips(twips.0)))
+            .transpose()
+    }
+
+    #[setter]
+    fn set_character_spacing(&self, py: Python<'_>, value: Option<i64>) -> PyResult<()> {
+        self.apply(
+            py,
+            FontUpdate::CharacterSpacing(value.map(rdocx::Length::emu)),
+        )
+    }
+
+    #[getter]
+    fn language(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        Ok(self.snapshot(py)?.language)
+    }
+
+    #[setter]
+    fn set_language(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
+        self.apply(py, FontUpdate::Language(value))
+    }
+
+    #[getter]
+    fn east_asian_language(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        Ok(self.snapshot(py)?.east_asian_language)
+    }
+
+    #[setter]
+    fn set_east_asian_language(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
+        self.apply(py, FontUpdate::EastAsianLanguage(value))
+    }
+
+    #[getter]
+    fn complex_script_language(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        Ok(self.snapshot(py)?.complex_script_language)
+    }
+
+    #[setter]
+    fn set_complex_script_language(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
+        self.apply(py, FontUpdate::ComplexScriptLanguage(value))
+    }
+
+    #[getter]
+    fn east_asian_name(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        Ok(self.snapshot(py)?.east_asian_name)
+    }
+
+    #[setter]
+    fn set_east_asian_name(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
+        self.apply(
+            py,
+            FontUpdate::SlotFont(rdocx::RunFontSlot::EastAsia, value),
+        )
+    }
+
+    #[getter]
+    fn complex_script_name(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        Ok(self.snapshot(py)?.complex_script_name)
+    }
+
+    #[setter]
+    fn set_complex_script_name(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
+        self.apply(
+            py,
+            FontUpdate::SlotFont(rdocx::RunFontSlot::ComplexScript, value),
+        )
+    }
+
+    #[getter]
+    fn rtl(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+        Ok(self.snapshot(py)?.rtl)
+    }
+
+    #[setter]
+    fn set_rtl(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        self.apply(py, FontUpdate::Rtl(value))
+    }
 }
 
 pub(crate) struct ParagraphSnapshot {
@@ -493,24 +796,30 @@ pub(crate) fn paragraph_snapshot(
     document: &Py<PyDocument>,
     location: ParagraphLocation,
 ) -> PyResult<ParagraphSnapshot> {
+    read_paragraph(py, document, location, ParagraphSnapshot::from_paragraph)
+}
+
+/// Read from the paragraph at a location the caller has validated.
+fn read_paragraph<T>(
+    py: Python<'_>,
+    document: &Py<PyDocument>,
+    location: ParagraphLocation,
+    read: impl FnOnce(rdocx::ParagraphRef<'_>) -> T,
+) -> PyResult<T> {
     let document = document.borrow(py);
-    let snapshot = match location {
-        ParagraphLocation::Body(index) => document
-            .inner
-            .paragraph(index)
-            .map(ParagraphSnapshot::from_paragraph),
+    let value = match location {
+        ParagraphLocation::Body(index) => document.inner.paragraph(index).map(read),
         ParagraphLocation::Cell {
             table,
             row,
             cell,
             paragraph,
-        } => document.inner.table(table).and_then(|table| {
-            let cell = table.cell(row, cell)?;
-            cell.paragraph(paragraph)
-                .map(ParagraphSnapshot::from_paragraph)
-        }),
+        } => document
+            .inner
+            .table(table)
+            .and_then(|table| table.cell(row, cell)?.paragraph(paragraph).map(read)),
     };
-    snapshot.ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))
+    value.ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))
 }
 
 /// Apply one paragraph property update at a location the caller has validated.
@@ -520,6 +829,16 @@ pub(crate) fn apply_paragraph_update(
     location: ParagraphLocation,
     update: ParagraphUpdate,
 ) -> PyResult<()> {
+    edit_paragraph(py, document, location, |paragraph| update.apply(paragraph))
+}
+
+/// Edit the paragraph at a location the caller has validated.
+fn edit_paragraph<T>(
+    py: Python<'_>,
+    document: &Py<PyDocument>,
+    location: ParagraphLocation,
+    edit: impl FnOnce(&mut rdocx::Paragraph<'_>) -> T,
+) -> PyResult<T> {
     let mut document = document.borrow_mut(py);
     match location {
         ParagraphLocation::Body(index) => {
@@ -527,7 +846,7 @@ pub(crate) fn apply_paragraph_update(
                 .inner
                 .paragraph_mut(index)
                 .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
-            update.apply(&mut paragraph);
+            Ok(edit(&mut paragraph))
         }
         ParagraphLocation::Cell {
             table,
@@ -545,11 +864,142 @@ pub(crate) fn apply_paragraph_update(
             let mut paragraph = cell
                 .paragraph_mut(paragraph)
                 .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
-            update.apply(&mut paragraph);
+            Ok(edit(&mut paragraph))
         }
     }
-    Ok(())
 }
+
+/// One tab stop, as `ParagraphFormat.tab_stops` lists it.
+#[pyclass(name = "TabStop", frozen, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq)]
+pub struct PyTabStop {
+    position: i64,
+    alignment: Option<i32>,
+    leader: Option<i32>,
+}
+
+impl PyTabStop {
+    fn from_ref(tab: rdocx::TabStopRef<'_>) -> Self {
+        Self {
+            position: tab.position().to_emu(),
+            alignment: tab.alignment().map(tab_alignment_to_int),
+            leader: match tab.leader() {
+                None => Some(0),
+                Some(leader) => Some(tab_leader_to_int(leader)),
+            },
+        }
+    }
+}
+
+#[pymethods]
+impl PyTabStop {
+    #[getter]
+    fn position(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        length_object(py, rdocx::Length::emu(self.position))
+    }
+
+    /// `None` for a `bar`, `clear` or `num` tab, which rdocx does not model.
+    #[getter]
+    fn alignment(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.alignment
+            .map(|value| enum_object(py, "WD_TAB_ALIGNMENT", value))
+            .transpose()
+    }
+
+    #[getter]
+    fn leader(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.leader
+            .map(|value| enum_object(py, "WD_TAB_LEADER", value))
+            .transpose()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "TabStop(position={}, alignment={:?}, leader={:?})",
+            self.position, self.alignment, self.leader
+        )
+    }
+}
+
+/// The direct tab stops of one paragraph, as python-docx's
+/// `paragraph_format.tab_stops` exposes them.
+#[pyclass(name = "TabStops")]
+pub struct PyTabStops {
+    format: PyParagraphFormat,
+}
+
+impl PyTabStops {
+    fn tabs(&self, py: Python<'_>) -> PyResult<Vec<PyTabStop>> {
+        let location = self.format.validate(py)?;
+        read_paragraph(py, &self.format.document, location, |paragraph| {
+            (0..paragraph.tab_stop_count())
+                .filter_map(|index| paragraph.tab_stop(index).map(PyTabStop::from_ref))
+                .collect()
+        })
+    }
+}
+
+#[pymethods]
+impl PyTabStops {
+    fn __len__(&self, py: Python<'_>) -> PyResult<usize> {
+        Ok(self.tabs(py)?.len())
+    }
+
+    fn __getitem__(&self, py: Python<'_>, index: isize) -> PyResult<PyTabStop> {
+        let mut tabs = self.tabs(py)?;
+        let index = normalize_index(index, tabs.len(), "tab stop")?;
+        Ok(tabs.swap_remove(index))
+    }
+
+    fn __iter__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyIterator>> {
+        PyList::new(py, self.tabs(py)?)?.try_iter()
+    }
+
+    fn __delitem__(&self, py: Python<'_>, index: isize) -> PyResult<()> {
+        let count = self.tabs(py)?.len();
+        let index = normalize_index(index, count, "tab stop")?;
+        let location = self.format.validate(py)?;
+        edit_paragraph(py, &self.format.document, location, |paragraph| {
+            paragraph.remove_tab_stop(index)
+        })?;
+        Ok(())
+    }
+
+    /// Add a tab stop in position order, as python-docx does, and return it.
+    #[pyo3(signature = (position, alignment = 0, leader = 0))]
+    fn add_tab_stop(
+        &self,
+        py: Python<'_>,
+        position: i64,
+        alignment: i32,
+        leader: i32,
+    ) -> PyResult<PyTabStop> {
+        let alignment = tab_alignment_from_int(alignment)?;
+        let leader = tab_leader_from_int(leader)?;
+        let position = rdocx::Length::emu(position);
+        let index = self
+            .tabs(py)?
+            .iter()
+            .take_while(|tab| tab.position <= position.to_emu())
+            .count();
+        let location = self.format.validate(py)?;
+        edit_paragraph(py, &self.format.document, location, |paragraph| {
+            paragraph.insert_tab_stop(index, alignment, position, leader)
+        })?;
+        self.__getitem__(py, index as isize)
+    }
+
+    fn clear_all(&self, py: Python<'_>) -> PyResult<()> {
+        let location = self.format.validate(py)?;
+        edit_paragraph(py, &self.format.document, location, |paragraph| {
+            paragraph.clear_tab_stops()
+        })
+    }
+}
+
+/// A border edge as `(style, size in eighths of a point, color)`, as
+/// `Table.border` reads one.
+type BorderSnapshot = (String, Option<u32>, Option<String>);
 
 #[pymethods]
 impl PyParagraphFormat {
@@ -712,5 +1162,122 @@ impl PyParagraphFormat {
     #[setter]
     fn set_widow_control(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
         self.apply(py, ParagraphUpdate::WidowControl(value))
+    }
+
+    #[getter]
+    fn tab_stops(&self, py: Python<'_>) -> PyResult<PyTabStops> {
+        self.validate(py)?;
+        Ok(PyTabStops {
+            format: Self::new(self.document.clone_ref(py), self.path.clone()),
+        })
+    }
+
+    #[getter]
+    fn outline_level(&self, py: Python<'_>) -> PyResult<Option<u32>> {
+        let location = self.validate(py)?;
+        read_paragraph(py, &self.document, location, |paragraph| {
+            paragraph.outline_level()
+        })
+    }
+
+    #[setter]
+    fn set_outline_level(&self, py: Python<'_>, value: Option<u32>) -> PyResult<()> {
+        if value.is_some_and(|level| level > 9) {
+            return Err(PyValueError::new_err("outline_level must be from 0 to 9"));
+        }
+        let location = self.validate(py)?;
+        let applied = edit_paragraph(py, &self.document, location, |paragraph| {
+            paragraph.set_outline_level_value(value)
+        })?;
+        debug_assert!(applied);
+        Ok(())
+    }
+
+    #[getter]
+    fn right_to_left(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+        let location = self.validate(py)?;
+        read_paragraph(py, &self.document, location, |paragraph| {
+            paragraph.right_to_left_value()
+        })
+    }
+
+    #[setter]
+    fn set_right_to_left(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        let location = self.validate(py)?;
+        edit_paragraph(py, &self.document, location, |paragraph| {
+            paragraph.set_right_to_left_value(value)
+        })
+    }
+
+    /// The direct shading fill, six hex digits or `auto`.
+    #[getter]
+    fn shading(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        let location = self.validate(py)?;
+        read_paragraph(py, &self.document, location, |paragraph| {
+            paragraph.shading_fill().map(str::to_owned)
+        })
+    }
+
+    /// Write a clear `w:shd` with this fill, or remove the shading.
+    #[setter]
+    fn set_shading(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
+        let fill = value.map(checked_shading).transpose()?;
+        let location = self.validate(py)?;
+        edit_paragraph(py, &self.document, location, |paragraph| {
+            paragraph.set_shading_value(fill.map(|fill| ("clear", fill, "auto")))
+        })
+    }
+
+    fn border(&self, py: Python<'_>, edge: &str) -> PyResult<Option<BorderSnapshot>> {
+        let edge = paragraph_border_edge(edge)?;
+        let location = self.validate(py)?;
+        read_paragraph(py, &self.document, location, |paragraph| {
+            paragraph.border(edge).map(|border| {
+                (
+                    border.style().to_owned(),
+                    border.size_eighths_pt(),
+                    border.color().map(str::to_owned),
+                )
+            })
+        })
+    }
+
+    /// Set one border edge, a single line by default as Google Docs reads it.
+    #[pyo3(signature = (edge, style = "single", *, size = 4, color = "auto"))]
+    fn set_border(
+        &self,
+        py: Python<'_>,
+        edge: &str,
+        style: &str,
+        size: u32,
+        color: &str,
+    ) -> PyResult<()> {
+        let edge = paragraph_border_edge(edge)?;
+        let style = crate::table::border_style_from_name(style)?;
+        if size > 96 || (style != rdocx::BorderStyle::None && size == 0) {
+            return Err(PyValueError::new_err(
+                "border size must be 1 to 96 eighths of a point for a visible edge",
+            ));
+        }
+        let color = checked_hex_or_auto("color", color)?;
+        let location = self.validate(py)?;
+        edit_paragraph(py, &self.document, location, |paragraph| {
+            paragraph.set_border_value(edge, Some((style, size, color)))
+        })
+    }
+
+    fn remove_border(&self, py: Python<'_>, edge: &str) -> PyResult<()> {
+        let edge = paragraph_border_edge(edge)?;
+        let location = self.validate(py)?;
+        edit_paragraph(py, &self.document, location, |paragraph| {
+            paragraph.set_border_value(edge, None)
+        })
+    }
+
+    fn clear_borders(&self, py: Python<'_>) -> PyResult<()> {
+        let location = self.validate(py)?;
+        edit_paragraph(py, &self.document, location, |paragraph| {
+            paragraph.clear_borders()
+        })
     }
 }

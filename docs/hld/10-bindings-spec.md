@@ -369,6 +369,15 @@ given by ID or name, to one level through the native method of that name, so
 every paragraph of that style is numbered. Native checks raise `RdocxError`
 and publish nothing. Style and numbering authoring changes no content, so the
 revision and every handle stay valid.
+`add_numbering_instance(definition_id, start=n, level=i)` adds a
+`w:lvlOverride/w:startOverride` for that level. Word continues the count across
+plain instances of one definition. `add_bullet_list_item` and
+`add_numbered_list_item(text, level, restart=False)` append an item to the list
+of the last body paragraph of that kind, or to the native shared bullet or
+decimal list for the first item. `restart_numbering(paragraph, start=1)` gives
+a body paragraph and every later body paragraph of its instance a new
+instance with a start override, as Word's "Restart at 1" does.
+`ListLevel.checklist(checked)` is a bullet level with an empty or checked box.
 
 The Python `Document` also exposes the current native comparison, main-body
 comment, deterministic layout, TOC rebuild, revision, counted replacement, and
