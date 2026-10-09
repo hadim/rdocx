@@ -33833,6 +33833,76 @@ mod tests {
         );
     }
 
+    /// Issue 297: a bold run of a variable caller face is drawn at the face's
+    /// bold instance, and one of a regular-only caller face is emboldened, in
+    /// the PDF and the SVG alike.
+    #[test]
+    fn caller_bold_runs_use_a_variable_instance_or_synthetic_bold() {
+        let variable = include_bytes!("../../oxml-layout/fonts/NotoSansSC-FX058-subset.ttf");
+        let mono = include_bytes!("../../oxml-layout/fonts/LiberationMono-Regular.ttf");
+        let mut document = Document::new();
+        for (family, bold) in [
+            ("Rdocx Variable", false),
+            ("Rdocx Variable", true),
+            ("Rdocx Mono", true),
+        ] {
+            document
+                .add_paragraph("")
+                .add_run("Hill")
+                .font(family)
+                .bold(bold);
+        }
+        let fonts = [
+            ("Rdocx Variable", variable.as_slice()),
+            ("Rdocx Mono", mono.as_slice()),
+        ];
+        let options = RenderOptions::default();
+
+        let layout = document
+            .layout_with_fonts_over_normal_fonts(&fonts, options)
+            .unwrap();
+        let mut instances = layout
+            .layout
+            .fonts
+            .iter()
+            .filter(|font| font.data.as_ref() == variable.as_slice())
+            .map(|font| (font.bold, font.variations.clone(), font.synthetic_bold))
+            .collect::<Vec<_>>();
+        instances.sort_by_key(|(bold, _, _)| *bold);
+        assert_eq!(
+            instances,
+            [
+                (false, vec![(*b"wght", 400.0)], false),
+                (true, vec![(*b"wght", 700.0)], false),
+            ]
+        );
+        assert!(
+            layout
+                .layout
+                .fonts
+                .iter()
+                .any(|font| font.data.as_ref() == mono.as_slice()
+                    && font.bold
+                    && font.synthetic_bold
+                    && font.variations.is_empty())
+        );
+
+        let pdf = document
+            .to_pdf_with_fonts_and_options(&fonts, options)
+            .unwrap();
+        let pdf = String::from_utf8_lossy(&pdf);
+        assert!(pdf.contains("/BaseFont /NotoSansSC-Bold"));
+        assert!(pdf.contains("/BaseFont /LiberationMono-Bold"));
+        let svg = document
+            .render_page_to_svg_with_fonts_and_options(0, &fonts, options)
+            .unwrap()
+            .unwrap()
+            .svg;
+        assert!(svg.contains("style=\"font-variation-settings:'wght' 700\""));
+        assert!(svg.contains("style=\"font-variation-settings:'wght' 400\""));
+        assert_eq!(svg.matches("stroke-linejoin=\"round\"").count(), 1);
+    }
+
     /// `to_pdf_with_fonts` documents caller fonts over the fonts `to_pdf`
     /// uses. It rendered through the caller-only layout instead, so a family
     /// that neither the caller nor the document supplies failed the render.

@@ -528,6 +528,52 @@ struct LoadedFont {
     /// HarfRust's per-face shaping caches. Building these is the expensive
     /// part of shaping, so it happens once per face instead of once per run.
     shaper_data: harfrust::ShaperData,
+    /// See [`crate::output::FontData::variations`].
+    variations: Vec<([u8; 4], f32)>,
+    /// The shaping instance of `variations`, `None` at the default instance.
+    shaper_instance: Option<harfrust::ShaperInstance>,
+    /// See [`crate::output::FontData::synthetic_bold`].
+    synthetic_bold: bool,
+}
+
+/// How a face is drawn to match a run's bold and italic request: the
+/// variation coordinates to apply and whether to embolden the outlines.
+///
+/// A variable face is set on its `wght` axis to 700 for a bold run and 400
+/// otherwise, and for an italic run on an upright face on its `ital` axis, or
+/// failing that its `slnt` axis at the 14 degree slant of CSS `oblique`. An
+/// axis already at the value is left unset. A bold run on a face whose weight
+/// stays below 600 is emboldened, as Word does when no bold face exists.
+fn face_style_adjustment(
+    face: &ttf_parser::Face<'_>,
+    bold: bool,
+    italic: bool,
+) -> (Vec<([u8; 4], f32)>, bool) {
+    let axis = |tag: &[u8; 4]| {
+        face.variation_axes()
+            .into_iter()
+            .find(|axis| axis.tag == ttf_parser::Tag::from_bytes(tag))
+    };
+    let mut variations = Vec::new();
+    let mut set = |tag: [u8; 4], axis: ttf_parser::VariationAxis, value: f32| {
+        let value = value.clamp(axis.min_value, axis.max_value);
+        if value != axis.def_value {
+            variations.push((tag, value));
+        }
+        value
+    };
+    let weight = match axis(b"wght") {
+        Some(wght) => set(*b"wght", wght, if bold { 700.0 } else { 400.0 }),
+        None => f32::from(face.weight().to_number()),
+    };
+    if italic && face.style() == ttf_parser::Style::Normal {
+        if let Some(ital) = axis(b"ital").filter(|ital| ital.max_value >= 1.0) {
+            set(*b"ital", ital, 1.0);
+        } else if let Some(slnt) = axis(b"slnt").filter(|slnt| slnt.min_value < 0.0) {
+            set(*b"slnt", slnt, -14.0);
+        }
+    }
+    (variations, bold && weight < 600.0)
 }
 
 /// A face's line metrics as Windows reports them to Word, in design units.
@@ -1154,6 +1200,19 @@ impl FontManager {
         }
     }
 
+    /// Whether a face comes from the bundled set rather than from a caller,
+    /// a document, or the system.
+    fn is_bundled_face(&self, db_id: fontdb::ID) -> bool {
+        matches!(
+            self.db.face(db_id).map(|face| &face.source),
+            Some(fontdb::Source::Binary(_))
+        ) && !self
+            .caller_families
+            .values()
+            .chain(self.caller_aliases.values())
+            .any(|ids| ids.contains(&db_id))
+    }
+
     /// Index into `fonts` for a FontId.
     fn index_of(&self, id: FontId) -> Option<usize> {
         self.fonts.iter().position(|f| f.id == id)
@@ -1317,15 +1376,28 @@ impl FontManager {
         let (data, face_index) = font_data_for_face(&self.db, db_id, &mut self.memory_face_data)
             .ok_or_else(|| LayoutError::FontParse("Failed to load font data".into()))?;
 
-        let (units_per_em, ascender, descender, line_gap, word_line) = {
-            let face = ttf_parser::Face::parse(&data, face_index)
+        // Bundled faces keep their default instance and are never emboldened,
+        // so deterministic baselines do not move.
+        let bundled = self.is_bundled_face(db_id);
+        let (units_per_em, ascender, descender, line_gap, word_line, variations, synthetic_bold) = {
+            let mut face = ttf_parser::Face::parse(&data, face_index)
                 .map_err(|e| LayoutError::FontParse(format!("ttf-parser error: {e}")))?;
+            let (variations, synthetic_bold) = if bundled {
+                (Vec::new(), false)
+            } else {
+                face_style_adjustment(&face, bold, italic)
+            };
+            for (tag, value) in &variations {
+                face.set_variation(ttf_parser::Tag::from_bytes(tag), *value);
+            }
             (
                 face.units_per_em(),
                 face.ascender(),
                 face.descender(),
                 face.line_gap(),
                 WordLineUnits::of(&face),
+                variations,
+                synthetic_bold,
             )
         };
 
@@ -1337,10 +1409,19 @@ impl FontManager {
             )));
         }
 
-        let shaper_data = {
+        let (shaper_data, shaper_instance) = {
             let face = harfrust::FontRef::from_index(&data, face_index)
                 .map_err(|e| LayoutError::FontParse(format!("failed to read font face: {e}")))?;
-            harfrust::ShaperData::new(&face)
+            let instance = (!variations.is_empty()).then(|| {
+                harfrust::ShaperInstance::from_variations(
+                    &face,
+                    variations.iter().map(|(tag, value)| harfrust::Variation {
+                        tag: harfrust::Tag::new(tag),
+                        value: *value,
+                    }),
+                )
+            });
+            (harfrust::ShaperData::new(&face), instance)
         };
 
         let actual_family = self
@@ -1369,6 +1450,9 @@ impl FontManager {
             line_gap,
             word_line,
             shaper_data,
+            variations,
+            shaper_instance,
+            synthetic_bold,
         });
         self.remember_font_key(key, idx);
         if record_layout_use {
@@ -1471,7 +1555,11 @@ impl FontManager {
         let face = harfrust::FontRef::from_index(&font.data, font.face_index)
             .map_err(|e| LayoutError::Shaping(format!("failed to read font face: {e}")))?;
 
-        let shaper = font.shaper_data.shaper(&face).build();
+        let shaper = font
+            .shaper_data
+            .shaper(&face)
+            .instance(font.shaper_instance.as_ref())
+            .build();
 
         let mut buffer = harfrust::UnicodeBuffer::new();
         buffer.push_str(text);
@@ -1778,7 +1866,11 @@ impl FontManager {
         let font = self.get_font(font_id)?;
         let face = harfrust::FontRef::from_index(&font.data, font.face_index)
             .map_err(|error| LayoutError::Shaping(format!("failed to read font face: {error}")))?;
-        let shaper = font.shaper_data.shaper(&face).build();
+        let shaper = font
+            .shaper_data
+            .shaper(&face)
+            .instance(font.shaper_instance.as_ref())
+            .build();
         let mut buffer = harfrust::UnicodeBuffer::new();
         buffer.push_str(text);
         buffer.set_script(harfrust_script(script));
@@ -1834,6 +1926,8 @@ impl FontManager {
             face_index: font.face_index,
             bold: font.bold,
             italic: font.italic,
+            variations: font.variations.clone(),
+            synthetic_bold: font.synthetic_bold,
         })
     }
 
@@ -1848,6 +1942,8 @@ impl FontManager {
                 face_index: f.face_index,
                 bold: f.bold,
                 italic: f.italic,
+                variations: f.variations.clone(),
+                synthetic_bold: f.synthetic_bold,
             })
             .collect()
     }
@@ -2192,6 +2288,58 @@ mod tests {
     use super::*;
     use crate::Color;
     use crate::bundled_fonts::bundled_font_data;
+
+    /// Issue 297: a caller variable face is drawn at the instance a run asks
+    /// for, a caller face without a bold weight is emboldened, and bundled
+    /// faces keep drawing as before.
+    #[test]
+    fn caller_faces_match_bold_through_their_variation_axes_or_synthetic_bold() {
+        let variable = include_bytes!("../fonts/NotoSansSC-FX058-subset.ttf").to_vec();
+        let mono = include_bytes!("../fonts/LiberationMono-Regular.ttf").to_vec();
+        let mut manager = FontManager::new_deterministic().unwrap();
+        manager.load_additional_fonts(&[
+            FontFile {
+                family: "Caller Variable".to_owned(),
+                data: variable,
+            },
+            FontFile {
+                family: "Caller Mono".to_owned(),
+                data: mono,
+            },
+        ]);
+        let mut style = |family: &str, bold: bool| {
+            let id = manager.resolve_font(Some(family), bold, false).unwrap();
+            let data = manager.font_data(id).unwrap();
+            let width = manager.shape_text(id, "Hello", 12.0).unwrap().width;
+            (data.variations, data.synthetic_bold, width)
+        };
+
+        // The subset's default instance is weight 100. A regular run asks for
+        // 400 and a bold run for 700, and the bold instance is wider.
+        let (regular, regular_synthetic, regular_width) = style("Caller Variable", false);
+        let (bold, bold_synthetic, bold_width) = style("Caller Variable", true);
+        assert_eq!(regular, [(*b"wght", 400.0)]);
+        assert_eq!(bold, [(*b"wght", 700.0)]);
+        assert!(!regular_synthetic && !bold_synthetic);
+        assert!(bold_width > regular_width);
+
+        let (mono_variations, mono_synthetic, _) = style("Caller Mono", true);
+        assert!(mono_variations.is_empty() && mono_synthetic);
+        assert!(!style("Caller Mono", false).1);
+
+        // Bundled faces, variable or static, draw as they always did.
+        let mut bundled = FontManager::new_deterministic().unwrap();
+        for family in ["Noto Sans SC", "Noto Sans Arabic", "Carlito"] {
+            for bold in [false, true] {
+                let id = bundled.resolve_font(Some(family), bold, false).unwrap();
+                let data = bundled.font_data(id).unwrap();
+                assert!(
+                    data.variations.is_empty() && !data.synthetic_bold,
+                    "{family} bold={bold}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn font_dir_loads_font_files_in_name_order_and_refuses_a_missing_directory() {

@@ -19,7 +19,8 @@ pub struct LayoutResult { pages: Vec<Arc<PageFrame>>, fonts: Vec<FontData>,
                           diagnostics: Vec<Diagnostic>,
                           structure: Option<DocumentStructure> }
 pub struct FontData { id: FontId, family: String, data: Arc<[u8]>,
-                      face_index: u32, bold: bool, italic: bool }
+                      face_index: u32, bold: bool, italic: bool,
+                      variations: Vec<([u8; 4], f32)>, synthetic_bold: bool }
 pub struct PageFrame { page_number: usize, width: f64, height: f64,
                        elements: Vec<PositionedElement>, background: Option<Paint> }
 pub struct SourceNodeId(NonZeroU32)
@@ -28,6 +29,21 @@ pub struct DocumentStructure { root: StructureId, nodes: Vec<StructureNode> }
 pub struct StructureNode { id: StructureId, role: StructureRole,
                            children: Vec<StructureId>, alternate_text: Option<String> }
 ```
+
+A caller, document-embedded, or system face is drawn at the style its run
+asks for. A variable face is set on its `wght` axis to 700 for a bold run and
+400 otherwise, and for an italic run on an upright face on its `ital` axis or,
+failing that, its `slnt` axis at -14 degrees. `variations` records the axes
+that differ from the default instance. Shaping and the vertical metrics use
+that instance, the PDF writer embeds it through `subsetter`'s instancing and
+declares its widths, and the rasterizer and the SVG writer draw it. A bold run
+whose face stays below weight 600 sets `synthetic_bold`, as Word emboldens a
+family without a bold face. The PDF writer then fills and strokes the glyphs
+in their colour (text render mode 2) and the rasterizer and SVG writer stroke
+the outlines, each with a stroke `SYNTHETIC_BOLD_STROKE_EM` of the font size
+wide. Advances stay the face's own, so layout and drawing agree. Bundled
+faces keep their default instance and are never emboldened, so deterministic
+baselines do not move, even though the bundled Noto subsets are variable.
 
 `TextSegment` and `GlyphRun` each carry `source: Option<SourceSpan>`. The node
 is meaningful only within the result that allocated it. `char_start` and
