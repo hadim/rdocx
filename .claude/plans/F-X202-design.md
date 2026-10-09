@@ -331,3 +331,23 @@ dependency prefix, and update this draft's citations at the actual claim Base.
 6. Split implementation into dependency-safe children if the full native plus
    Python/oracle contract exceeds the approved L estimate. No criterion can be
    dropped merely to complete a smaller patch.
+
+## PR317 synchronization reuse assessment
+
+Immutable document.rs head3d056f46e97e9cc1caf2969b5096eeb6775a5fa0 offers
+useful namespace-closed fragment edits, each physical replacement count
+equal to the logical count at27195/27210, descending splice offsets at
+27212/27215 and prepare/reopen before publication at27216/27229. Reuse
+those mechanics with the existing F-X198 qualified owner router.
+
+Do not adopt local txbxContent routing at8275/8292 or unqualified
+AlternateContent/branch admission at8323/8335 and8419/8433. Opaque earlier
+Choice content must not suppress a later qualified modeled owner. Paired
+cell, nested topology and whole-box equality checks at27101/27130 and
+8363/8370 currently precede expected-count/noop checks at27180/27191.
+Preserve the existing proven count/noop/stale ordering before synchronized
+preflight. Genuine success and unsupported atomic refusal both require
+qualified multiple-choice/grouped/identical/foreign/opaque controls,
+asymmetric box counts, nested cells and unselected-paragraph divergence.
+Contributor claimed regression tests have not been independently verified
+by this static source assessment. Do not claim local success from them.

@@ -124,3 +124,15 @@ Expected unchanged. No sample scoped alternate-text-box replacement is used.
 
 None. Issue301 expressly permits atomic refusal. Use that outcome to retain
 opaque XML without guessing equivalent alternate structure.
+
+## PR317 reconciliation
+
+Contributor head3d056f46e97e9cc1caf2969b5096eeb6775a5fa0 supplies staged
+paired-success mechanics for F-X202. Keep the independently tested qualified
+owner guard and atomic refusal in this story. Do not replace it with the
+contributor local-name-only txbxContent/AlternateContent routing, or move
+whole-box topology refusal ahead of established expected-count/noop checks.
+F-X202 reuses namespace-closing fragments, per-copy match counts, descending
+splices and prepare/reopen publication only after proving physical pairing.
+The contributor matcher is not adopted here and no new source change is
+needed to finish the approved safety contract.
