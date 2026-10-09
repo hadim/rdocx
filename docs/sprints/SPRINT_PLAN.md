@@ -2188,7 +2188,7 @@ F-X196 and F-X198. Colour consistency precedes the table/font visual acceptance
 recheck. Shared source, bindings, tests and the hash baseline have one owner
 at a time. New stories require approved designs, scoped gates and clean
 microscope reviews. The original nine-story estimate was 23 to 29 developer-days. The expanded
-twenty-story scope requires a new estimate after detailed design, not an
+twenty-two-story scope requires a new estimate after detailed design, not an
 unchanged two-week duration. The inserted boundary moves the previous S91
 through S104 to S92 through S105. S90 delivered history remains intact.
 

@@ -18,7 +18,7 @@ and keep rolling contribution intake open.
 - `docs/hld/08-rendering-spec.md`, PDF backend, rasteriser, shape text, tables and Word bookmark field pagination, for fonts and shared metrics.
 - `docs/hld/10-bindings-spec.md`, Python API shape and invalidation, for table, colour and render parity.
 - `docs/hld/12-testing-strategy.md`, binding tests and checked Word scoped literal replacement, for installed public regressions and atomic failures.
-- `docs/hld/14-development-backlog.md`, F-X192 through F-X199 and F-283, for exact acceptance and test gates.
+- `docs/hld/14-development-backlog.md`, F-X192 through F-X212 and F-283, for exact acceptance and test gates.
 
 ## The wave
 

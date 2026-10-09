@@ -75,8 +75,8 @@ X207 and X208. The following is the proposed capability-based reduction:
 | PowerPoint literal replace map | No counted batch common method | X204 owns minimal native/Python addition |
 | Footer inspection/theme commands | Separate acceptance | X208 owns, no X204 dependency |
 
-Remove X200, X201, X206 and X208 as blanket dependencies if this inventory is
-confirmed. Their file overlap is a serialization concern, not a capability
+The actual API inventory removes X200, X201, X206 and X208 as blanket
+dependencies. Their file overlap is a serialization concern, not a capability
 requirement. X202/X203/X205/X207 are real requirements only for the named
 capability checkpoints. The final canonical plan may depend on those stories
 or their formally reviewed dependency-prefix checkpoints. Do not wait for
@@ -412,9 +412,10 @@ unexplained hash delta to CLI work or move the exclusive baseline.
 
 ## Open questions
 
-1. Confirm which provider checkpoints are independently reviewable and can
-   replace blanket story dependencies. Canonical backlog changes belong to
-   root, not this scratch writer.
+1. Resolved dependency inventory: X202 images, X203 text/counts/custom
+   properties/tagged controls, X205 core metadata and X207 fit/report are
+   the actual capability barriers. Other overlapping stories remain source
+   resources, not automatic formal prerequisites.
 2. Choose exact map keys and Python counted regex signature. The proposed
    keys mirror existing CLI placeholder/value names and preserve current
    Python total-count compatibility.

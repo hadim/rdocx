@@ -34,8 +34,9 @@ predicate or recorded baseline.
 
 Complete F-X196 before claiming this source wave. Preserve its reviewed
 namespace-qualified scan, typed control admission, first expanded content
-slot and recursive facade inventory. Add the native semantic predicate in
-existing rdocx-oxml/src/text.rs and use it from the existing audit. No new
+slot and recursive facade inventory. Use a private current-source-aware audit helper in existing
+rdocx/src/document.rs, retaining typed accepted semantics and exact raw
+namespace provenance. No new
 module, file, crate, generic parameter, trait or dependency is needed.
 
 Typed accepted-view runs and equations are primary. Reuse concrete content
@@ -51,11 +52,41 @@ Unknown XML is retained, not assumed visible. Do not turn local-name matching
 into a second namespace parser. Finish the minimal existing-helper design
 against actual model prefix provenance before approving the plan.
 
-A CT_P::has_visible_content method is useful to the actual audit consumer.
-Only add a ParagraphRef projection if an actual facade/CLI consumer uses it.
-Do not add an unused forwarding surface. Retain audit body inventory and
-other accessibility checks. No layout, source mutation or traversal expansion
-is implied by changing visibility.
+The existing CT_R/CT_P raw storage loses inherited namespace scope. Two
+otherwise identical raw fragments under Word and foreign aliases cannot be
+qualified by a no-argument model predicate. Do not add public model fields,
+a struct-literal break or an unused ParagraphRef projection.
+
+Use the existing one unpublished clone_for_staging at document.rs:13031,
+then flush_document_to_package at15177, then get_part(doc_part_name). The
+flush uses exact original main source when it parses equal to the current
+model. After edits it serializes current model once and replays retained
+nested bindings, or explicitly refuses unsafe/ambiguous shadows. Never use
+stale original package bytes or independently serialize each paragraph.
+Do not call save, to_bytes or full prepare merely to audit. Existing nested
+namespace replay has candidate matching costs, so only the added scan is
+one pass, not a claim that complete preparation is globally linear.
+
+Extract the existing qualified CLI scanner into existing native document.rs
+under an actual native facade operation consumed by CLI and audit. Keep
+facade recursive paragraph inventory and direct-body audit inventory as
+two explicit concrete call modes of one scanner. The direct mode emits only
+direct BodyContent::Paragraph facts, with each nonparagraph resetting the
+audit streak. Scanner mode is private and has two actual consumers, with
+no new generic parser, module or future-use switch. Verify the emitted fact
+count matches each actual native inventory before consumption.
+
+Native visibility source construction returns Result. The infallible audit
+retains metadata/image/heading checks on failure, adds one Warning that
+paragraph visibility could not be determined with the actual error detail,
+and skips consecutive-empty findings. Never convert failure to all-false,
+plain-text-only or a stale-source fallback. Add after-edit and ambiguous
+namespace failure controls proving unchanged document/package state.
+
+Separate extraction from behavior. First make a labelled code move retaining
+F-X196 CLI behavior and unchanged49 hashes. Then make the intentional audit
+and any field-display refinement in its own labelled commit, declaring the
+expected three-key delta. Independent review covers both final paths.
 
 Native and CLI public controls share the core semantics. Where PR317 differs
 from approved F-X196, such as loose field markers, establish the display
@@ -133,8 +164,9 @@ Review the generated finding count and reverse-control proof independently.
 
 ## Open questions
 
-Resolve actual stored-prefix provenance for raw CT_R/CT_P fragments before
-choosing minimal helpers. Establish loose field display semantics against
-qualified source controls before changing the CLI contract. These are
+Stored-prefix provenance and source-aware preparation are resolved above.
+Finalize the exact shared native visibility operation signature and source
+projection errors with F-X203 validation. Establish loose field display
+semantics against qualified controls before changing the CLI contract. These are
 technical evidence gaps, not additional user permission requirements.
 This draft does not authorize source or baseline changes.

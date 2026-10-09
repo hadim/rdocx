@@ -6940,7 +6940,7 @@ Resolve [Issue307](https://github.com/tensorbee/rdocx/issues/307) in S91,
 part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
 coverage checklist. Add Word multi-pair expected-count replacement, regex and JSON reports, field updates, image extraction/inventory, core/custom metadata, content-control fill and counts. Add PowerPoint slide lifecycle commands, notes text/file updates, overflow fit reports, metadata and multi-pair replacement. Every command uses a Python-visible API, refuses input overwrite and commits counted edits all or nothing. Do not duplicate footer/theme commands owned by F-X208.
 
-**Depends on**: F-X200, F-X201, F-X202, F-X203, F-X205, F-X206, F-X207, F-X208.
+**Depends on**: F-X202, F-X203, F-X205, F-X207.
 **Test gate**: regression. Reproduce each missing operation or reported defect
 through the installed public API on the claimed Base before implementation.
 Exercise all Issue307 acceptance criteria through save/reopen, native
