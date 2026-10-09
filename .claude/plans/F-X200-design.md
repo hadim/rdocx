@@ -222,11 +222,12 @@ possible changes. No baseline movement or implementation is approved by this dra
 
 ## Open questions
 
-Only the authenticated pinned Word continuation/restart/multilevel oracle
-remains unresolved. Technical signatures, vertical-mode tri-state behavior,
-document defaults, tab/border/shading projections and checked list helpers
-are resolved below from actual sources and the pinned Python oracle. The
-plan remains draft until native evidence and final contract review complete.
+The authenticated Word continuation/restart/multilevel oracle is complete.
+The remaining decision is how the requested parity supersedes the explicit
+independent-numId rendering contract, including bounded missing controls,
+actual fixture deltas and the F-283 dependency. Technical signatures, vertical
+mode tri-state behavior, document defaults, tabs and checked list helpers
+are resolved below. The plan remains draft until final contract review.
 
 ## Resolved technical decisions
 
@@ -341,8 +342,37 @@ Checklist preset uses existing PyListLevel: ListLevel.checklist(*, checked=False
 
 Add the executed super/sub transition matrix to existing test_formatting_tables.py, including explicit baseline, direct absent/inherited facts and None-no-node controls. Add tabs sorting/equal positions/negative positions/index errors/None leader/read-only source, full paragraph slot paths, style atomic validation/preservation, document-default no-restyle/foreign-wrapper preservation, numbering startOverride XML and malformed imported helper atomicity controls. Existing entrypoints only, installed runtime and strict mypy/stubtest required. Font and paragraph edits preserve parent text topology, existing structural edits remain loudly stale. Consume F-X197 once for all new colours.
 
-Only unresolved empirical question: authenticated pinned Word behavior for separate plain instances of the same abstract definition, including interruption and multilevel controls. Python-docx XML creation and this read-only investigation do not resolve it. Keep current numbering behavior unchanged until actual Word evidence is captured, then label and review any intentional renderer behavior delta through the hash harness. Do not cite a proposed experiment as a passed oracle.
+The authenticated Word evidence below resolves the original plain-instance, interruption and multilevel experiment. Keep current production behavior unchanged until the explicit existing compatibility contract, additional affected constructs and measured output policy are reconciled. Any intentional renderer behavior change requires a labeled commit and reviewed hash delta.
 
 Existing rdocx-oxml/src/styles.rs is an additional exclusive source owner
 for minimal default-wrapper preservation. Run parser/serializer namespace
 and raw child-order riders on that repair. No new module is proposed.
+
+## Authenticated Word numbering result
+
+Native Word 16.113.2, build 16.113.26092012, displayed and exported all
+21 labeled numbering controls consistently before and after normal reopening.
+The corrected input puts all abstract definitions before concrete instances,
+uses distinct independent definition identities, and opened without repair.
+Plain fresh instances sharing one abstract definition printed 1,2,3,4.
+Explicit level-zero startOverride1 printed 1,2,1,2. The same instance
+continued after an unnumbered interruption. Multilevel controls printed
+1 / 1.1 / 1.2 / 2 / 2.1, then a plain fresh instance printed 3 / 3.1,
+and an explicit root restart printed 1 / 1.1. Both exported PDFs preserve
+the same 21-number map. Native display and pinned Poppler 26.01.0 extraction
+are authoritative here, since accessibility list numerals differed.
+
+Evidence and hashes are in the existing ignored
+.claude/scratch/F-X200-word-numbering-oracle.md and the local
+S91-F-X200-word-numbering/audit-receipt.json. The preliminary malformed
+interleaved-definition fixture is excluded from acceptance. These controls
+do not establish returning to old instances after overrides, style-linked
+lists or every lvlRestart variant. Add controls if a change touches them.
+
+The current independent-numId rendering is an intentional existing contract
+in HLD12 and HLD08, with an explicit style-resolver test. This evidence
+therefore requires a deliberate compatibility-contract decision and a
+separate labeled behavior commit, rather than treating current behavior as
+an unexplained defect. Final approval must reconcile that decision, actual
+affected fixture keys and F-283 resolved-counter dependency before claiming
+X200. No implementation or baseline update is authorized by this draft.

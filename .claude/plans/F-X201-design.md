@@ -138,9 +138,91 @@ X203, X192 and F-283 before assigning the wave. No new source module or crate.
 
 ## Open questions
 
-Technical design remains unfinished: determine the smallest live section and
-story accessors compatible with existing snapshot consumers, and determine
-which validation finding representation can be shared with F-X203 without
-introducing a forwarding wrapper or library dependency on the CLI. Verify
-requested note APIs can address run locations without reducing native safety.
-This draft is not approved for implementation.
+Snapshot compatibility, concrete live-owner signatures, checked run-boundary
+note operations and the single X201/X203 validation representation are
+resolved below from actual source. Before final approval, reconcile rich
+related-story cell path admission, the DrawingML watermark acceptance
+evidence and exact output policy. This draft is not approved for implementation.
+
+## Resolved authoring contracts
+
+## Preserve snapshots and add live owners
+
+`PySection` is the existing snapshot at `crates/rdocx-py/src/document.rs:795`. `Document.sections` returns a tuple of those snapshots at :2502. `PyStory` is explicitly frozen, comparable and manually constructible at :459, and `PyHeaderFooterVariant` is a snapshot at :737. Preserve these constructors, equality, fields, existing tuple return and existing `update_section` calls. Do not silently convert those public values into live handles.
+
+Add `Document.section(index: int) -> SectionHandle` in the existing document binding file. This is a concrete owner handle with the document object, section ordinal and captured document revision. Its geometry getters and setters delegate to the same checked native properties used by `update_section`. Its six accessors are `header`, `first_page_header`, `even_page_header`, `footer`, `first_page_footer`, `even_page_footer`, each returning `HeaderFooter`. Add `different_first_page_header_footer: bool` and note-policy setters on this handle. No new module, trait, generic, crate or forwarding-only builder is needed.
+
+`HeaderFooter` owns a section slot, kind and variant, rather than a detached XML snapshot. Expose `is_linked_to_previous: bool`, `paragraphs`, `tables`, `add_paragraph(text: str = "") -> Paragraph`, `add_table(rows: int, cols: int) -> Table`. Resolve the actual effective story through `Document::section_story(section_index, kind, hdr_type) -> Result<Option<SectionStory>>` at native document.rs:23432. Read access never creates a part. An absent slot has empty collections. First mutation creates its explicit story if none exists. Mutation of an inherited slot uses the effective owning part, matching linked header/footer semantics. Setting linkage false uses `unlink_section_story` at :23576 when inherited, or `create_section_story` at :23480 when absent. Setting true uses `inherit_section_story` at :23558. Creating an explicit empty slot is not the same as removing its reference, per `remove_section_story` at :23619.
+
+Handles reject another document by object identity and reject changed revision before ordinal/path resolution. A mutating handle refreshes its own revision after a successful structural publication, so subsequent calls on that owner can continue. Previously fetched paragraph, run and table handles remain stale and must be fetched again. Failed edits change neither revisions nor source. Keep the pre-existing `create_section_story` revision policy intact for its old entrypoint, and document the new live owner policy separately.
+
+## Rich story authoring needs a concrete checked resolver
+
+Current `ParagraphLocation` covers only body and table cells at `crates/rdocx-py/src/paragraph.rs:12`. `PyParagraph` stores `ContentPath` at :129. `PyRun::edit` resolves only those same two cases at run.rs:60. Shared `PathSeg` at `crates/oxml-py-support/src/lib.rs:10` has no story discriminator. Adding a HeaderFooter class alone cannot make these existing Paragraph/Run operations use a footer.
+
+Extend the existing local concrete paragraph/table location representation with a checked story location carrying native `ContentLocation` plus the document revision. Do not encode a footer index as a body index, add a parallel detached paragraph class or retain a borrowed Rust facade across a Python call. Reuse the ordinary Python Paragraph, Run, Table, Cell and formatting classes after their owner resolver understands the actual story part. Every picture and hyperlink must allocate its relationship in that owning part.
+
+Available native primitives are `story_items(&StoryId) -> Result<Vec<StoryItemRef>>` at document.rs:16916, `story_range_paragraph_snapshot(&ContentLocation)` at :17047, `ContentFragment::paragraph(CT_P)` and `ContentFragment::table(CT_Tbl)` at :1234 and :1239, and `insert_content(&ContentLocation, ContentFragment) -> Result<()>` at :18289. The last stages, validates a direct-child boundary, closes inserted namespaces, reconciles and reopens before publishing. Use it for owner-level paragraph/table insertion.
+
+There is no current public checked arbitrary rich story paragraph mutation facade. `story_paragraph_mut` at :16052 is private and its current path admission is narrower than every related-story cell. Add one concrete public checked replacement operation in the existing document module, proposed `replace_story_content(&ContentLocation, ContentFragment) -> Result<()>`, with same-kind validation, source-owner validation, unchanged surrounding bytes, relationship validity, namespace closure and one staged reopen. Use it for actual paragraph and table mutations, not a body transfer. A paragraph replacement must retain the original parsed opaque children and attributes. Table cells resolve within that checked table owner. Do not advertise nested routes until existing physical span resolution admits and tests them.
+
+Pictures need one native run-boundary operation. Existing `insert_picture_to_story(&StoryId, Option<&ContentLocation>, &[u8], &str, Option<Length>, Option<Length>) -> Result<ContentLocation>` at :17496 inserts a picture paragraph, not inside a selected run. Proposed `insert_picture_at(&StoryRunPosition, &[u8], &str, Option<Length>, Option<Length>) -> Result<()>` stages media, the owner relationship and the checked inline run together. Reuse current image dimension probing and validation. Python `Run.add_picture` passes the checked run boundary, rather than appending a new paragraph. This operation is justified by the requested rich footer use case.
+
+Generic PAGE and NUMPAGES authoring can use a proposed public `insert_field(&StoryRunPosition, Field) -> Result<()>` in existing field.rs. Existing `insert_checked_story_field` at field.rs:619 already stages a complex field and calls `insert_story_run_staged`. Preserve its validation, allow the requested cached result and run properties, and avoid making callers depend on a private helper. Native `Run::add_field` at run.rs:507 works for an already resolved ordinary run. PAGE X of NUMPAGES must preserve separate runs and style rather than flattening footer text.
+
+## Checked note creation at run boundaries
+
+Current `create_footnote(&ContentLocation, &str) -> Result<i32>` and `create_endnote` at native document.rs:18745 and :18798 admit only a direct body paragraph and append a reference run at its end. Custom-mark creation at :18878 calls those operations and modifies the last marker. Neither currently promises an arbitrary run boundary. The legacy `add_footnote` at :18709 has an unchecked expect and is not the binding target.
+
+Add `create_footnote_at(&StoryRunPosition, &str) -> Result<i32>` and `create_endnote_at(&StoryRunPosition, &str) -> Result<i32>`, plus custom-mark variants only where the requested API needs them. Keep old paragraph APIs unchanged. New checked position creation uses the existing private `insert_story_run_staged(&StoryRunPosition, CT_R) -> Result<()>` at :16176, which obtains the physical owner source, closes namespace scope, parses the selected paragraph, validates `insert_accepted_run`, and replaces only that span. Allocate the note record and reference in one candidate before the sole reopen/publication. Do not create a note first, commit, then move its reference. Reject header/footer/note reference locations as invalid note hosts. Admit checked main-story paragraphs, including table cells or modeled controls only when their physical path resolver proves ownership. Unsupported opaque and invalid routes refuse atomically.
+
+Python proposed `Document.add_footnote(reference: Paragraph | Run, text: str = "") -> FootnoteEndnote`, and `add_endnote` equivalent. A paragraph means its accepted end boundary, a run means the boundary immediately after that accepted run. Explicit same-document identity and captured revision are required before conversion. Existing `StoryRunPosition` accepts a paragraph or StoryItem at Python document.rs:552, but a detached snapshot alone does not prove document identity. The returned concrete note owner retains its note id and family, provides rich paragraphs/tables through the same owner resolver, and has `delete()` using native `remove_footnote` or `remove_endnote` at :19509 and :19514. Note deletion must invalidate both reference and related-story handles.
+
+Numbering uses existing `NotePolicy` at native document.rs:168, `NoteRestart` at :130, `Document::set_note_policy` at :24390 and `Section::set_note_policy` at :3406. Expose format, positive start, restart and family-valid placement. Reuse native refusal of zero start and incompatible placement, do not hand-write numbering XML in Python. Preserve custom marks, separator records and existing unrelated note owners.
+
+## Geometry and unit choices
+
+Actual layout defaults are native `rdocx-layout/src/engine.rs:11096`: width 612pt, height 792pt, each margin 72pt, header/footer distances 36pt. `section_page_geometry` at :11223 uses gutter zero when absent and applies it according to existing mirror/gutter settings. Therefore persist new geometry in integer twips: 12240 by 15840, margins 1440, distances 720 and gutter zero. Do not inherit a gutter-adjusted margin and also persist the gutter, which would apply it twice.
+
+Before native `insert_section_in_place` at document.rs:23892 changes ownership, select prior section index minus one, current first for insertion at zero, or defaults when no section exists. Resolve each optional geometry field against the defaults above. Copy orientation with geometry, so a landscape predecessor remains landscape. Copy only page width/height, four margins, gutter, header/footer distances and orientation. Existing ownership, columns, page-number starts, title-page flag, break type, note policy, borders and opaque metadata stay on their existing sections. The new section receives none of those unrelated owners or metadata. This is a deliberate geometry inheritance rule, not a claim that rendering currently searches previous sections for missing pgSz.
+
+`Section::set_orientation` at :3230 already swaps present dimensions only when necessary. Keep it. Apply complete dimensions before orientation when a caller supplies both. Do not change incomplete existing source merely by opening or reading it. Emit an incomplete-pgSz validation finding instead.
+
+Python shared.py:11 defines Length as an EMU-valued int subclass. Inches, Cm, Mm, Pt and Emu exist at :57 onward. There is currently no Twips subclass. Add `Twips` in this existing file and export/stub it consistently, constructing `int(twips * 635)` under the same integer semantics as other Length classes. Existing integer EMU inputs and every existing subclass remain accepted. Reject bool, nonintegral values and overflow explicitly. Conversion to signed 32-bit twips truncates toward zero at 635 EMU per twip, as required by HLD01:68. Test positive, negative, fractional-EMU boundaries and each property's own positive/nonnegative constraint rather than changing the global unit representation.
+
+## Even settings and remaining page authoring
+
+Existing `even_and_odd_headers() -> bool` and `set_even_and_odd_headers(bool) -> Result<()>` at native document.rs:24357 and :24364 are the settings API. Add the setting within the same staged candidate as `create_section_story` for an Even variant. Cover both a newly allocated story and an already-direct story when the setting was disabled. A failure publishes neither story nor settings. Expose the requested Python `settings.odd_and_even_pages_header_footer` property through an existing-document-owned concrete settings handle in document.rs.
+
+Native `Run::add_break(BreakKind)` at run.rs:488 already handles breaks. Expose its exact line/page/column choices through the checked body/cell/story run resolver. Page color needs a staged native operation that changes retained `CT_Document.background_xml` and the qualified settings displayBackgroundShape element together. This property currently has no native page-color setter. Keep unknown background/settings attributes and children, write schema order and reconcile settings relationship through existing staging. Do not treat the allowlisted settings child at rdocx-oxml/settings.rs:2472 as an already available typed setter.
+
+Native page borders are Section methods at document.rs:3134 and :3479. Existing watermarks are `set_text_watermark` at :20855, `set_text_watermark_for` at :20876 and `set_image_watermark` at :20913, all VML. Expose them accurately. The requested Google-compatible DrawingML header watermark is an additional implementation path, not already provided by those VML methods. Reuse native DrawingML background anchor semantics and owning-header relationship allocation, retain other header children, and obtain actual Word/LibreOffice plus Google import evidence before claiming that compatibility. No Google UI or external upload is authorized by this read-only research task.
+
+## Shared X203 validation ownership
+
+Aligned with the X203 researcher. X201 owns these minimal concrete native types in existing document.rs and exports from existing lib.rs:
+
+```rust
+pub enum ValidationSeverity { Error, Warning }
+pub struct ValidationFinding {
+    pub severity: ValidationSeverity,
+    pub message: String,
+}
+pub struct ValidationReport { pub findings: Vec<ValidationFinding> }
+impl ValidationReport { pub fn is_valid(&self) -> bool }
+impl Document { pub fn validate_sections(&self) -> Vec<ValidationFinding> }
+```
+
+Incomplete explicit pgSz, with exactly one of width or height, is a Warning in section ordinal order, proposed stable message `section {ordinal} has incomplete page size: width or height is missing`. Completely absent pgSz is default geometry and produces no incomplete finding. Negative or zero explicit dimensions produce an Error with a separate stable message. Read source values without filling or writing them. These findings do not reuse AccessibilityIssue, which is a different audit at native document.rs:30704.
+
+X203 owns `validate_document_bytes(&[u8]) -> Result<ValidationReport>` and `validate_document_path(&Path) -> Result<ValidationReport>`, existing CLI assembly migration, Python module bytes/path wrappers and immutable current-Document validation. Existing OPC-open failure remains Result Err, per CLI commands.rs:2188. Existing native Document-open failure becomes the current error finding at :2290 after collected package findings. Report order stays existing errors followed by warnings. X203 includes section findings in that order without calling or depending on the CLI library. No duplicate report representation or forwarding report wrapper.
+
+## Required focused evidence and actual barriers
+
+Reproduce new-section orientation and Even creation defects on the claimed Base before production edits. Matrix: empty/first/middle/append insertion, partial source geometry, portrait and landscape, odd/even/mirrored/gutter placement, checked units and failed atomic setters. Keep unrelated section refs, page-number starts, columns and unknown XML exact through save/reopen.
+
+Build a footer entirely through installed Python: PAGE X of NUMPAGES, styled runs, inline picture, table and cell text. Assert each part relationship targets actual footer media and no body contamination. Exercise default/first/Even inherited and unlinked slots across three sections, mutation/refetch behavior, stale and foreign owners, malformed references and refused atomic operations. Freshly build/install the worker wheel, strict mypy and stubtest are required.
+
+Notes require main paragraph and run-boundary controls, accepted inserted runs, controls/cells where admitted, reference positions, custom marks, id allocation, numbering restarts, separators, deletion with references, failed foreign/stale/header host and preserved other owners. Test source-preserving namespace aliases, unknown attributes/children and schema sequence. Use actual pinned python-docx object-model comparisons for sections and footer relationships where its API overlaps. Pin Word and LibreOffice for independent rendered page-number, orientation, first/Even story and note controls, deterministic font mode for native baselines. Both WASM target checks and actual affected package archive measurements remain earned riders.
+
+Genuine unresolved acceptance evidence: existing VML watermark methods do not establish the requested Google-compatible DrawingML path, and current rich related-story cell paths need proved physical ownership admission before a public claim. Neither is a reason to invent another approval gate. Parent can approve the concrete additive design, then implementation must obtain real controls and refuse unsupported routes honestly. No baseline change is authorized here. Actual harness deltas must be measured and separately reviewed.
