@@ -203,3 +203,43 @@ pending and is not copied into the repository. Its copyright, pinned recipe
 and hashes will use the existing NOTICE-Noto, with no new documentation file.
 This proposal does not authorize the different four static Gelasio faces,
 new font installation or unverified original Symbol/Wingdings mappings.
+
+## Authenticated native symbol mapping
+
+## Eight measured code rows
+
+Each row displays low8-bit w:sym, F000+code w:sym, actual F000+code numbering bullet and a separate Unicode reference. Low/PUA/list original glyphs match visually within every row.
+
+| Original font/code | Native visible glyph | Contributor Unicode target | Measured conclusion |
+| --- | --- | --- | --- |
+| Wingdings A7/F0A7 | Small filled square | U25AA | Semantic shape matches, reference has different size |
+| Wingdings D8/F0D8 | Right-pointing arrowhead with asymmetric filled lower half | U27A2 | Matching semantic arrowhead, reference geometry differs |
+| Wingdings FC/F0FC | Curved check with thick heel | U2713 | Matching semantic check, reference stroke differs |
+| Wingdings76/F076 | Four filled diamonds | U2756 | Matching semantic diamond cluster |
+| Wingdings71/F071 | Shadowed outlined square | U2751 | Matching semantic shadowed square |
+| Wingdings6E/F06E | Larger filled square | U25A0 | Matching semantic filled square |
+| WingdingsFE/F0FE | Square box with check | U2611 | Target is semantic box-check, but generic native Arial reference falls back to colored emoji |
+| SymbolB7/F0B7 | Filled circular bullet | U2022 | Matching semantic circular bullet, reference size differs |
+
+Complete immutable contributor mapping is at S91-PR319 source crates/oxml-layout/src/font.rs:2253 through2291. This is bounded independent appearance confirmation for these eight rows, not a complete Wingdings map oracle. Wingdings2/3 are distinct families and were not loaded, remapped or inferred. Unknown codes remain outside this evidence.
+
+An ordinary Wingdings w:t run contains unchanged source characters §Øüv (A7/D8/FC/76). Native glyphs are the same square/arrow/check/four-diamond symbols. Its source text is not rewritten to Unicode. The fallback contract must distinguish preserving original OOXML/text facts from interpreting an explicitly requested symbol font for display. Do not conclude ordinary Wingdings renders Latin §Øüv merely because native AX or PDF text extraction reports those characters. AX also reports bogus 迨 or bullets for visible checks/diamonds. Native printing PDF pixels are authoritative.
+
+## Font provenance and fallback boundary
+
+Original fonts were read in place only. Correct system Symbol path is /System/Library/Fonts/Symbol.ttf. System Wingdings5.00x at Supplemental/Wingdings.ttf SHA709d5848799239f0c51c0544c471c8d02bcbf9f2bcdc49702ebca1691a4c760e/fsType8. System Symbol13.0d2e2 SHA fbd16f271abb9bb55708a15c138e3a45924dec215541e95595f7a6918304d867/fsType4. Word also ships Wingdings5.03 SHA472858c86b3af58a8d46d96ac423f861717c8164a8104432eb92278bbf921a73 and Symbol5.00i SHA08253a10a93a80f978d88087000e6a6f4952aeffc2e972e81f6f84bbfa679fe4, both fsType8. Candidate metadata is exact, but this study has not traced which same-family installed original face version Word selected. Native displayed glyph morphology remains genuine original-family appearance.
+
+Unicode reference uses native Arial with normal fallback. It is not a NotoSymbols visual acceptance result. In particular, U2611 emoji demonstrates why a monochrome dedicated symbols face is needed. The proposed NotoSansSymbols2-bullets-subset.ttf is3916bytes, SHA7f5a31d932df09902c1097af020569b63d6296c067bc804ae6a597ef9b3ad21b, with supplied receipt stating16 contributed targets have no missing glyphs. Its tracked asset approval remains pending and it is not copied or installed by this study. Coverage proves availability, not original Wingdings outline/metric equivalence. After approval and X195 provider integration, compare actual deterministic PDF/raster glyphs to these native shape references and require non-emoji monochrome output. Retain bounded tolerances for geometric substitutions instead of claiming font-exact parity. Supplied genuine symbol face coverage wins over the Unicode substitute as already designed.
+
+## Artifact hashes
+
+| Artifact | Bytes | SHA-256 |
+| --- | --- | --- |
+| symbol-input.docx | 37353 | `cf89afd62caae73ed1b1914a99b06a2970f8e70f9d240627b8a42d2f248c7e66` |
+| symbol-native.docx | 28027 | `4c6b1c446b5557b8736b6467449549fc3cc0d1ada84c36027a5c6b38636d8042` |
+| symbol-first-export.pdf | 48525 | `50d84b6dcc1d408e8d85d45eb61530d217eae94c3c83d1202d2dcc4fe265c2c2` |
+| symbol-reopened-export.pdf | 48525 | `5cfe26f7a27bb90235968972b951a09cf59502af7141d5f0132cacd908311afd` |
+| symbol-first-export.png | 56178 | `18345936af5ab8feb860795fa645a3adefcdd127a8d664de885193f8e7a6d326` |
+| symbol-reopened-export.png | 56178 | `18345936af5ab8feb860795fa645a3adefcdd127a8d664de885193f8e7a6d326` |
+
+No local rendering implementation pass, all-symbol mapping proof, gate pass or asset approval is claimed here. Native source remains untouched, original fonts remain in place, and only ignored research artifacts were created.

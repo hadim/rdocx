@@ -315,3 +315,47 @@ Keep canonical atomic unfit contract. An operation requiring all requested norma
 Before claiming the native ordering is settled, capture a near-full-size boundary using the identical seven lines, same exact Arial face, width, insets and explicit100% spacing. Heights3.2/3.3/3.4in give inner223.2/230.4/237.6pt, straddling the unshrunk source235.2pt. Native edits/recompute must establish whether first overflow chooses initial.925, a.975 first rung, reduction before shrink, or another joint rule. A controlled150% spacing partner distinguishes compression priority at the same font scale. Keep exact output/source receipts and ordinary reopen. These are bounded research operations to be scheduled with the current native UI owner, not a question for the user.
 
 Then replay every actual pair and next-boundary output with the exact original font bytes through the current measurement provider. Compare line baseline advances, glyph point sizes, physical first/last bounds and fit decisions separately. A current source-model mismatch is not solved by replacing the native oracle with the library. Expand only where a new production branch actually requires mixed sizes, percentage paragraph spacing, wrapping, bullets or shared master/layout contexts. Record every unsupported/unmeasured case, never silently skip it. Existing saved six-pair controls can be promoted to authored regression expected values only after the chosen algorithm's true source-model fit correspondence is established. No universal six-control parity, scoped gate, baseline update or source approval is asserted here.
+
+## Authenticated near-full shrink threshold
+
+## Input and native actions
+
+The prior bare-normAutofit A100 seven-line control was copied from `/private/tmp/S91-F-X207-native-autofit/coupled-autofit-input.pptx`. Three identical text bodies retain Arial regular28-point run/default properties, explicit100-percent line spacing, zero paragraph before/after spacing, square wrap, top anchor, width5029200 EMU and four45720 EMU insets. Only height changes between the controls. Offsets differ to place all three on one slide and do not alter their internal text geometry.
+
+Input heights are2926080,3017520 and3108960 EMU, exactly3.2,3.3 and3.4 inches. Every initial normAutofit has no attributes. The body SHA-256 is identical for all three. Exact original package and source package hashes are in `input-receipt.json`.
+
+Microsoft PowerPoint16.113.3, build16.113.26092714, opened the generated input without repair. Save As created a separate native copy. Each measured box was selected at its observed frame border, F2 entered text editing, Command-End moved to the final position, and a period was genuinely typed. Escape left editing. An explicit native toolbar Save persisted all three results. Saved XML proves exactly seven lines with the final text `Line seven.` in every measured control.
+
+An initial thumbnail/Tab attempt had selected the unrelated second template slide and typed a period into its title. That local action was immediately undone before any Save. Subsequent edits used the visible measured frame borders. Saved XML for the second slide contains no period title, and that slide is outside all measurement assertions. A coordinate attempt on a ribbon Section button was dismissed with Escape and made no document change.
+
+Native local Best for printing PDF was explicitly selected for both exports. The saved generated deck was safely closed and normally reopened using its observed recent-file entry in the exact generated directory. An explicit native Save after reopen and a second local PDF export produced the comparison. The original input and prior source package remain byte unchanged.
+
+## Persisted native pairs
+
+| Control | Height inches | Actual normAutofit attributes | Effective fontScale | Effective lnSpcReduction |
+| --- | --- | --- | --- | --- |
+| AHeight320 | 3.2 | lnSpcReduction=10000 | 100000 | 10000 |
+| AHeight330 | 3.3 | lnSpcReduction=10000 | 100000 | 10000 |
+| AHeight340 | 3.4 | none | 100000 | 0 |
+
+fontScale absent means the defined100-percent default. It is not an unknown observation or a hand-authored100000 attribute. All three native UI font-size readings remained28. Nominal28-point run/default attributes, width, insets, anchor, paragraph/break count and line-spacing properties remain present. Native slide1.xml is byte identical across normal reopen/save.
+
+These observations show that the native engine can apply10-percent line-spacing reduction with no font-size reduction at3.2 and3.3 inches, and remove that reduction at3.4 inches for this exact control. Together with the earlier2.9-inch92500/10000 pair, this constrains a candidate policy but does not prove all intermediate scale candidates or the universal candidate priority.
+
+## Actual native PDF sizes and baselines
+
+The page-one PDF text commands use a0.24 scale and116.6667 text-matrix scale with font-size1. This yields28.000008 points at emitted decimal precision for all three controls. There is no hidden26-point or27-point actual drawn size. The actual page-one font resource is ArialMT, authenticated by the embedded subset's head revision6.8000030517578125 and units-per-em2048. This matches the previously authenticated PowerPoint-bundled Arial6.80i. An Aptos subset belongs to the preserved second template slide and is not used by the measured first-page text commands.
+
+AHeight320 and AHeight330 have top-origin baselines41.99999,71.99999,102,132.96,162.96,192.96,222.96 points. Their six gaps are30,30.00001,30.96,30,30,30 points. Both start at the same slide y offset.
+
+AHeight340 has baselines304.08,338.16,371.28,405.12,439.2,472.08,506.16 points. Its gaps are34.08,33.12,33.84,34.08,32.88,34.08 points. Its different slide y offset accounts for the absolute baseline positions. The observed reduction changes the stack spacing while preserving actual28-point glyphs. Print-grid variation is retained rather than replaced by an invented exact gap equation.
+
+First and reopened PDFs have identical actual font sizes and all twenty-one baselines. Their raw page-one content streams differ: the first export splits the newly typed final period into another text command, while the reopened export combines that line into one command. This is a bounded native export representation difference, not identical PDF bytes. The receipt explicitly records stream identity as false and geometry identity as true. Both complete content streams are retained.
+
+Pinned Poppler26.01.0 produced bbox HTML and a rasterized reopened page, which was visually inspected. All three seven-line frames fit visibly within their outlines in this native render. This observation does not supply arbitrary mixed-font, inherited, wrapped or bullet solver acceptance.
+
+## Evidence and cleanup
+
+`/private/tmp/S91-F-X207-native-threshold` retains the input/provenance receipt, native before/after reopen packages, both native PDFs, extracted slide owner XML, complete page-one text commands, embedded subset fonts, bbox HTML, rendered PNG, `audit.py` and `capture-receipt.json`. The receipt includes bytes/SHA-256 values, exact persisted attributes and defaults, every frame/property/text value, actual PDF font sizes/baselines, and source/input immutability assertions. `audit.py` recomputes the assertions without opening PowerPoint.
+
+The final generated deck was closed only after its exact generated URL and Saved to my Mac state were visible. PowerPoint returned to new/recent files with no document remaining. The UI lease is released. No tracked file, production source, Cargo artifact, native application setting, font or user document was modified.
