@@ -7,7 +7,7 @@ use crate::dml::{FillTarget, PyFillFormat, PyLineFormat};
 use crate::normalize_index;
 use crate::presentation::PyPresentation;
 use crate::shape::{length, shape_mut_at, shape_ref_at};
-use crate::{rpptx_to_pyerr, validate_path};
+use crate::{Scope, rpptx_to_pyerr, validate_path};
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyTable>()?;
@@ -50,8 +50,8 @@ fn insertion_index(index: Option<isize>, len: usize, kind: &str) -> PyResult<usi
     Ok(resolved as usize)
 }
 
-/// Applies one row or column edit to the table at `path` and advances the
-/// revision, because every row, column, and cell handle names an index.
+/// Applies one row or column edit to the table at `path` and invalidates
+/// row, column, cell, and text handles, because each names an index.
 fn restructure(
     py: Python<'_>,
     presentation: &Py<PyPresentation>,
@@ -63,7 +63,9 @@ fn restructure(
         .and_then(rpptx::ShapeMut::into_table_mut)
         .ok_or_else(|| PyValueError::new_err("shape has no table"))?;
     edit(&mut table).map_err(|error| rpptx_to_pyerr(py, error))?;
-    presentation.revisions.bump();
+    presentation
+        .revisions
+        .invalidate(Scope::Tables, "a row or column edit");
     Ok(())
 }
 
@@ -262,8 +264,8 @@ impl PyColumnCollection {
     ///
     /// The column copies the width and cell formatting, without the text, of
     /// the column left of it, or of the first column when it becomes the
-    /// first, and the table frame grows by its width. The revision advances
-    /// once.
+    /// first, and the table frame grows by its width. Row, column, cell, and
+    /// text handles are invalidated.
     #[pyo3(signature = (index=None))]
     fn add_column(&self, py: Python<'_>, index: Option<isize>) -> PyResult<Py<PyColumn>> {
         let index = insertion_index(index, self.len(py)?, "column")?;
@@ -274,7 +276,7 @@ impl PyColumnCollection {
     }
 
     /// Removes one column of this table and shrinks the table frame by its
-    /// width. The revision advances once.
+    /// width. Row, column, cell, and text handles are invalidated.
     fn remove(&self, py: Python<'_>, column: &Bound<'_, PyAny>) -> PyResult<()> {
         self.len(py)?;
         let column = column.extract::<PyRef<'_, PyColumn>>()?;
@@ -439,7 +441,8 @@ impl PyRowCollection {
     ///
     /// The row copies the height and cell formatting, without the text, of
     /// the row above it, or of the first row when it becomes the first, and
-    /// the table frame grows by its height. The revision advances once.
+    /// the table frame grows by its height. Row, column, cell, and text
+    /// handles are invalidated.
     #[pyo3(signature = (index=None))]
     fn add_row(&self, py: Python<'_>, index: Option<isize>) -> PyResult<Py<PyRow>> {
         let index = insertion_index(index, self.len(py)?, "row")?;
@@ -450,7 +453,7 @@ impl PyRowCollection {
     }
 
     /// Removes one row of this table and shrinks the table frame by its
-    /// height. The revision advances once.
+    /// height. Row, column, cell, and text handles are invalidated.
     fn remove(&self, py: Python<'_>, row: &Bound<'_, PyAny>) -> PyResult<()> {
         self.len(py)?;
         let row = row.extract::<PyRef<'_, PyRow>>()?;

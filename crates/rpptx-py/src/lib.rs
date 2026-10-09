@@ -12,7 +12,7 @@ use pyo3::exceptions::{PyIndexError, PyRuntimeError};
 use pyo3::prelude::*;
 use pyo3::types::PyType;
 
-use oxml_py_support::{ContentPath, PathSeg, StaleElementError};
+use oxml_py_support::{ContentPath, PathSeg, RevisionCounter, StaleElementError};
 use presentation::{PyComment, PyCommentAuthor, PyCommentReply, PyPresentation, PyValidationIssue};
 
 pub(crate) fn normalize_index(index: isize, len: usize, kind: &str) -> PyResult<usize> {
@@ -88,6 +88,69 @@ pub(crate) fn recovery_hint(path: &ContentPath, suffix: &str) -> String {
     format!("Re-fetch it with {public_path}.")
 }
 
+/// How far a structural edit reaches, from the widest scope to the narrowest.
+///
+/// A handle belongs to the scope of the last step of its path: a slide to
+/// `Slides`, a shape to `Shapes`, a table row or cell to `Tables`, a paragraph
+/// to `Paragraphs`, and a run to `Runs`. An edit invalidates the handles of
+/// its scope and of every narrower one, so replacing a text frame's text
+/// invalidates its paragraph and run handles but keeps its shape and slide
+/// handles, as python-pptx keeps them. Collections without a path, such as
+/// `prs.slides` and `prs.slide_layouts`, read the presentation live and stay
+/// valid.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub(crate) enum Scope {
+    Slides = 0,
+    Shapes = 1,
+    Tables = 2,
+    Paragraphs = 3,
+    Runs = 4,
+}
+
+impl Scope {
+    fn of(path: &ContentPath) -> Option<Self> {
+        Some(match path.segs.last()? {
+            PathSeg::Slide(_) => Self::Slides,
+            PathSeg::Shape(_) => Self::Shapes,
+            PathSeg::Row(_) | PathSeg::Cell(_) => Self::Tables,
+            PathSeg::Body(_) | PathSeg::Para(_) => Self::Paragraphs,
+            PathSeg::Run(_) => Self::Runs,
+        })
+    }
+}
+
+/// One revision counter per [`Scope`], with the call that last advanced it.
+#[derive(Debug)]
+pub(crate) struct HandleRevisions {
+    counters: [RevisionCounter; 5],
+    causes: [&'static str; 5],
+}
+
+impl HandleRevisions {
+    pub(crate) fn new() -> Self {
+        Self {
+            counters: [RevisionCounter::new(); 5],
+            causes: [""; 5],
+        }
+    }
+
+    /// Invalidates the handles of `scope` and of every narrower scope,
+    /// recording `cause`, the public call, for the stale-handle message.
+    pub(crate) fn invalidate(&mut self, scope: Scope, cause: &'static str) {
+        for level in scope as usize..self.counters.len() {
+            self.counters[level].bump();
+            self.causes[level] = cause;
+        }
+    }
+
+    /// Captures `segs` at the revision of the scope its last step belongs to.
+    pub(crate) fn capture(&self, segs: smallvec::SmallVec<[PathSeg; 5]>) -> ContentPath {
+        let path = ContentPath::new(segs, 0);
+        let revision = Scope::of(&path).map_or(0, |scope| self.counters[scope as usize].current());
+        ContentPath::new(path.segs, revision)
+    }
+}
+
 pub(crate) fn validate_path(
     py: Python<'_>,
     presentation: &PyPresentation,
@@ -95,12 +158,17 @@ pub(crate) fn validate_path(
     kind: &str,
     suffix: &str,
 ) -> PyResult<()> {
-    path.validate_revision(
-        presentation.revisions.current(),
-        kind,
-        &recovery_hint(path, suffix),
-    )
-    .map_err(|error| stale_to_pyerr(py, error))
+    let Some(scope) = Scope::of(path) else {
+        return Ok(());
+    };
+    let revisions = &presentation.revisions;
+    let hint = format!(
+        "{} The last call that invalidated it was {}.",
+        recovery_hint(path, suffix),
+        revisions.causes[scope as usize]
+    );
+    path.validate_revision(revisions.counters[scope as usize].current(), kind, &hint)
+        .map_err(|error| stale_to_pyerr(py, error))
 }
 
 pub(crate) fn rpptx_to_pyerr(py: Python<'_>, error: rpptx::Error) -> PyErr {
