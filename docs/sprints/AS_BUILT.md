@@ -18814,3 +18814,61 @@ without force followed integration recording. Retain work/f-x198-codex
 through sprint verification and close. Exact exits/source/package receipts
 remain under /private/tmp/S91-F-X198-*. Later final sprint gates remain due.
 No issue closure, push, main merge, tag or release occurred.
+
+### F-X193, Preserve semantic mark highlights through nested HTML runs
+
+**Sprint.** S91
+**Completed.** 2026-10-09
+**Size.** S, estimated1 day, actual not recorded.
+
+**What was built.** Semantic HTML mark highlights survive nested bold,
+italic and span runs. Child backgrounds and nested marks retain their own
+precedence. Ordinary CSS backgrounds and unmarked siblings keep their
+existing behavior. Save and reopen preserve formatting and opaque source.
+
+**Non-obvious choices.** Adapted Pedro Assumpcao's PR294 at immutable
+head63cd119dcb8fa9c367bf93141f79780db7f64886. Semantic highlight is inherited
+separately from ordinary background in the existing private computed style.
+No public API, dependency or production module was added.
+
+**Deviations from the design plan.** None. Local archive measurements were
+rederived without relaxing inventory checks or compression tolerance.
+The earlier F-X193 archive row is historical feature evidence. Current
+combined measurements and source equality use the final post-row F-X198
+archives, not the earlier worker archive.
+
+**Spec sections touched.** HLD03 inbound HTML and HLD14 F-X193.
+
+**Tests.** The exact contributor reproducer failed at Base. All11 HTML
+controls passed after adaptation. Both production microscope passes and
+independent integration pass1 have zero defects/smells. Library514 passed.
+The initial integration run was interrupted, a retry had four missing
+pinned-viewer failures plus the unchanged external consumer timeout, and
+the pinned-viewer rerun passed363 with that consumer still timing out.
+Diagnostic prewarm and the unchanged exact consumer then passed, providing
+364 successful integration controls across retained attempts. These failed
+commands remain failures. Default-stack regression aborted and exited101.
+The documented CI8MiB-stack regression passed2331 with7 existing ignores,
+and2 doctests passed. Own policy log reports141 tests in496.024s, OK with2
+existing skips. Tool-session exit79317 is unavailable after daemon restart,
+so no successful process exit is invented. Final fmt, prose, skill drift
+and diff checks have actual exit0.
+
+**Hash harness.** Actual hash exit0 matched all49 entries without changing
+the baseline. Current HTML bytes match the reviewed worker. Both retained
+final post-row F-X198 archives authenticate at3529438 compressed bytes,
+50785422 normalized member bytes and37 members. All34 ordinary packaged
+members, including current README, match canonical bytes. Current measured
+carrier3529449 differs by11 compressed bytes within the unchanged64-byte
+tolerance. Source, README and measurement carrier are unchanged since the
+F-X198 integration. This is scoped completion evidence, not final full
+sprint verification or sprint review. Generated archive VCS metadata retains its older package-time HEAD.
+F-X199's later combined archive check remains separate.
+
+**Notes for future sessions.** Source head e8ca5c70, consumed handoff tip
+e11a5c5f and integration f84d9b7a are recorded. The clean completed worktree
+was removed without force. Retain work/f-x193-codex through sprint gates
+and close. Hash/policy, regression and unchanged-consumer receipts remain
+under /private/tmp/S91-F-X193-*. Current archive authority is
+/private/tmp/S91-F-X198-final-post-row-archive-receipt.json. No GitHub
+closure, push, main merge, tag or publication occurred.
