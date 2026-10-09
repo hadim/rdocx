@@ -6843,6 +6843,204 @@ table retains all 21 cell texts and correct reader facts before and after
 save/reopen. Use existing unit and integration entrypoints and require the
 deterministic hash harness to remain unchanged. Issues264 and281 stay excluded.
 
+### F-X200, Complete Python Word formatting and list parity (L)
+
+Resolve [Issue303](https://github.com/tensorbee/rdocx/issues/303) in S91,
+part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
+coverage checklist. Expose superscript, subscript, caps, spacing, strike, hidden, language/script fonts and RTL. Add paragraph tabs, borders, shading, outline and bidi, extended style properties, document defaults, list helpers, restart/start overrides and checklists. Reuse F-X197 for both bindings' colour contract. Confirm plain-instance numbering continuation against Word before changing rendering.
+
+**Depends on**: F-X197.
+**Test gate**: regression. Reproduce each missing operation or reported defect
+through the installed public API on the claimed Base before implementation.
+Exercise all Issue303 acceptance criteria through save/reopen, native
+rendering where applicable, malformed/atomic refusal controls and preserved
+unmodelled XML. Python surfaces require accurate stubs, strict typing and
+stubtest. CLI surfaces require help/reference and existing integration tests.
+Use deterministic fonts and pinned native oracles for output claims. Record
+Google Docs/Slides import compatibility as best effort, never a CI guarantee.
+Reuse prerequisite evidence for shared fixes and test the integrated behavior.
+Require scoped verification and independent zero-defect, zero-smell review.
+
+### F-X201, Complete Python section stories and page authoring (L)
+
+Resolve [Issue304](https://github.com/tensorbee/rdocx/issues/304) in S91,
+part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
+coverage checklist. Repair inherited section geometry, orientation dimension swaps and incomplete pgSz validation. Enable even-page stories coherently. Add live header/footer paragraphs, tables, pictures and fields, first-page/link controls, footnote/endnote creation, deletion and numbering, run page/column breaks, page colour, watermarks and borders. Accept documented Length values without silent unit confusion.
+
+**Depends on**: none.
+**Test gate**: regression. Reproduce each missing operation or reported defect
+through the installed public API on the claimed Base before implementation.
+Exercise all Issue304 acceptance criteria through save/reopen, native
+rendering where applicable, malformed/atomic refusal controls and preserved
+unmodelled XML. Python surfaces require accurate stubs, strict typing and
+stubtest. CLI surfaces require help/reference and existing integration tests.
+Use deterministic fonts and pinned native oracles for output claims. Record
+Google Docs/Slides import compatibility as best effort, never a CI guarantee.
+Reuse prerequisite evidence for shared fixes and test the integrated behavior.
+Require scoped verification and independent zero-defect, zero-smell review.
+
+### F-X202, Complete Word tables pictures and internal links (L)
+
+Resolve [Issue305](https://github.com/tensorbee/rdocx/issues/305) in S91,
+part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
+coverage checklist. Reuse signed removable table indentation from F-X194. Add empty rows, nested tables, table look/style/layout, merge-aware column insertion/deletion and cell splitting. Expose picture options, run/cell pictures, identity-specific resize and picture inventory. Add bookmark/heading hyperlinks and tooltips. Complete synchronized scoped alternate text-box edits beyond F-X198's safe refusal, preserving physical owner identity and atomicity.
+
+**Depends on**: F-X194, F-X198.
+**Test gate**: regression. Reproduce each missing operation or reported defect
+through the installed public API on the claimed Base before implementation.
+Exercise all Issue305 acceptance criteria through save/reopen, native
+rendering where applicable, malformed/atomic refusal controls and preserved
+unmodelled XML. Python surfaces require accurate stubs, strict typing and
+stubtest. CLI surfaces require help/reference and existing integration tests.
+Use deterministic fonts and pinned native oracles for output claims. Record
+Google Docs/Slides import compatibility as best effort, never a CI guarantee.
+Reuse prerequisite evidence for shared fixes and test the integrated behavior.
+Require scoped verification and independent zero-defect, zero-smell review.
+
+### F-X203, Complete Python Word document operations and validation (L)
+
+Resolve [Issue306](https://github.com/tensorbee/rdocx/issues/306) in S91,
+part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
+coverage checklist. Expose HTML, Markdown, all-story text, ODT/RTF/EPUB export and word/character/page counts. Add existing template rendering, document/fragment import with style policy, typed custom/app properties, validation parity, LaTeX/MathML equations, content-control list/value updates and track-revisions settings. Reuse visible paragraph validation from F-X196 and section validation from F-X201. Content-control creation and tracked-edit authoring retain their later roadmap contracts.
+
+**Depends on**: F-X196, F-X201.
+**Test gate**: regression. Reproduce each missing operation or reported defect
+through the installed public API on the claimed Base before implementation.
+Exercise all Issue306 acceptance criteria through save/reopen, native
+rendering where applicable, malformed/atomic refusal controls and preserved
+unmodelled XML. Python surfaces require accurate stubs, strict typing and
+stubtest. CLI surfaces require help/reference and existing integration tests.
+Use deterministic fonts and pinned native oracles for output claims. Record
+Google Docs/Slides import compatibility as best effort, never a CI guarantee.
+Reuse prerequisite evidence for shared fixes and test the integrated behavior.
+Require scoped verification and independent zero-defect, zero-smell review.
+
+### F-X204, Complete shared CLI one-shot editing commands (L)
+
+Resolve [Issue307](https://github.com/tensorbee/rdocx/issues/307) in S91,
+part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
+coverage checklist. Add Word multi-pair expected-count replacement, regex and JSON reports, field updates, image extraction/inventory, core/custom metadata, content-control fill and counts. Add PowerPoint slide lifecycle commands, notes text/file updates, overflow fit reports, metadata and multi-pair replacement. Every command uses a Python-visible API, refuses input overwrite and commits counted edits all or nothing. Do not duplicate footer/theme commands owned by F-X208.
+
+**Depends on**: F-X200, F-X201, F-X202, F-X203, F-X205, F-X206, F-X207, F-X208.
+**Test gate**: regression. Reproduce each missing operation or reported defect
+through the installed public API on the claimed Base before implementation.
+Exercise all Issue307 acceptance criteria through save/reopen, native
+rendering where applicable, malformed/atomic refusal controls and preserved
+unmodelled XML. Python surfaces require accurate stubs, strict typing and
+stubtest. CLI surfaces require help/reference and existing integration tests.
+Use deterministic fonts and pinned native oracles for output claims. Record
+Google Docs/Slides import compatibility as best effort, never a CI guarantee.
+Reuse prerequisite evidence for shared fixes and test the integrated behavior.
+Require scoped verification and independent zero-defect, zero-smell review.
+
+### F-X205, Complete Python PowerPoint text fill and export parity (L)
+
+Resolve [Issue308](https://github.com/tensorbee/rdocx/issues/308) in S91,
+part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
+coverage checklist. Reuse cell text frames and colour formats. Add run baseline/spacing/language/script fonts, numbered bullets and bullet attributes, gradient/pattern/picture/transparency fills, background fills, table style/banding, core/app/custom properties, sections, media lifecycle, JPEG/TIFF, notes/handout PDF, PDF/A and ODP. Repair inherited template metadata and 16:9 placeholder geometry with reviewed deterministic behavior deltas.
+
+**Depends on**: F-X194, F-X197.
+**Test gate**: regression. Reproduce each missing operation or reported defect
+through the installed public API on the claimed Base before implementation.
+Exercise all Issue308 acceptance criteria through save/reopen, native
+rendering where applicable, malformed/atomic refusal controls and preserved
+unmodelled XML. Python surfaces require accurate stubs, strict typing and
+stubtest. CLI surfaces require help/reference and existing integration tests.
+Use deterministic fonts and pinned native oracles for output claims. Record
+Google Docs/Slides import compatibility as best effort, never a CI guarantee.
+Reuse prerequisite evidence for shared fixes and test the integrated behavior.
+Require scoped verification and independent zero-defect, zero-smell review.
+
+### F-X206, Complete PowerPoint shape authoring and live handles (L)
+
+Resolve [Issue309](https://github.com/tensorbee/rdocx/issues/309) in S91,
+part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
+coverage checklist. Expose alt text/title/decorative, flips, group/ungroup preserving rotated/flipped positions, glued connector endpoints, cropped picture placeholder insertion, cell vertical anchor, internal run slide links, highlight/small caps, alignment/distribution and native placeholder names. Keep layout handles across slide insertion and slide handles across title text changes without weakening stale-path safety.
+
+**Depends on**: F-X194, F-X197.
+**Test gate**: regression. Reproduce each missing operation or reported defect
+through the installed public API on the claimed Base before implementation.
+Exercise all Issue309 acceptance criteria through save/reopen, native
+rendering where applicable, malformed/atomic refusal controls and preserved
+unmodelled XML. Python surfaces require accurate stubs, strict typing and
+stubtest. CLI surfaces require help/reference and existing integration tests.
+Use deterministic fonts and pinned native oracles for output claims. Record
+Google Docs/Slides import compatibility as best effort, never a CI guarantee.
+Reuse prerequisite evidence for shared fixes and test the integrated behavior.
+Require scoped verification and independent zero-defect, zero-smell review.
+
+### F-X207, Persist PowerPoint autofit and implement fit_text (L)
+
+Resolve [Issue310](https://github.com/tensorbee/rdocx/issues/310) in S91,
+part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
+coverage checklist. Persist computed normAutofit fontScale and line-space reduction, resize spAutoFit frames while keeping the anchor, implement fit_text and deck-wide refresh_autofit. Measure with the same caller fonts as rendering and expose fallback diagnostics. Compare stored values with pinned PowerPoint ground truth and verify rendered containment. F-X204 consumes this API for CLI fit.
+
+**Depends on**: F-X194, F-X195.
+**Test gate**: regression. Reproduce each missing operation or reported defect
+through the installed public API on the claimed Base before implementation.
+Exercise all Issue310 acceptance criteria through save/reopen, native
+rendering where applicable, malformed/atomic refusal controls and preserved
+unmodelled XML. Python surfaces require accurate stubs, strict typing and
+stubtest. CLI surfaces require help/reference and existing integration tests.
+Use deterministic fonts and pinned native oracles for output claims. Record
+Google Docs/Slides import compatibility as best effort, never a CI guarantee.
+Reuse prerequisite evidence for shared fixes and test the integrated behavior.
+Require scoped verification and independent zero-defect, zero-smell review.
+
+### F-X208, Author PowerPoint footer fields themes and transitions (L)
+
+Resolve [Issue311](https://github.com/tensorbee/rdocx/issues/311) in S91,
+part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
+coverage checklist. Implement layout/master hf-aware slide-owned footer/date/number placeholder creation, deck/per-slide controls, skip-title and add_field. Expose placeholder format and theme colours/fonts. Render uncached slidenum and firstSlideNum correctly. Confirm actual PowerPoint hf-only behavior before changing the renderer. Author the requested common transitions with direction, duration and advance controls, lifting the specific existing non-goal. Add footer CLI and inspection using Python-visible operations.
+
+**Depends on**: F-X197.
+**Test gate**: regression. Reproduce each missing operation or reported defect
+through the installed public API on the claimed Base before implementation.
+Exercise all Issue311 acceptance criteria through save/reopen, native
+rendering where applicable, malformed/atomic refusal controls and preserved
+unmodelled XML. Python surfaces require accurate stubs, strict typing and
+stubtest. CLI surfaces require help/reference and existing integration tests.
+Use deterministic fonts and pinned native oracles for output claims. Record
+Google Docs/Slides import compatibility as best effort, never a CI guarantee.
+Reuse prerequisite evidence for shared fixes and test the integrated behavior.
+Require scoped verification and independent zero-defect, zero-smell review.
+
+### F-X209, Edit PowerPoint masters layouts and themes (L)
+
+Resolve [Issue312](https://github.com/tensorbee/rdocx/issues/312) in S91,
+part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
+coverage checklist. Address shape edits and image relationships by owning slide/layout/master part. Add persisted master/layout backgrounds and shapes, master text styles, layout rename/duplicate/delete with usage refusal, showMasterSp, theme colours/fonts and apply_theme from deck, potx or thmx with optional masters/layouts. Verify logo inheritance, branded backgrounds and theme application without losing slide content.
+
+**Depends on**: F-X205, F-X206, F-X208.
+**Test gate**: regression. Reproduce each missing operation or reported defect
+through the installed public API on the claimed Base before implementation.
+Exercise all Issue312 acceptance criteria through save/reopen, native
+rendering where applicable, malformed/atomic refusal controls and preserved
+unmodelled XML. Python surfaces require accurate stubs, strict typing and
+stubtest. CLI surfaces require help/reference and existing integration tests.
+Use deterministic fonts and pinned native oracles for output claims. Record
+Google Docs/Slides import compatibility as best effort, never a CI guarantee.
+Reuse prerequisite evidence for shared fixes and test the integrated behavior.
+Require scoped verification and independent zero-defect, zero-smell review.
+
+### F-X210, Extend metric-compatible fonts and bullet fallbacks (L)
+
+Resolve [Issue313](https://github.com/tensorbee/rdocx/issues/313) in S91,
+part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
+coverage checklist. Reuse caller-font and real variable-instance work from F-X195 for Issues296 and297. Add licensed Gelasio and Selawik with verified metric-compatible mapping, truthful Aptos fallback diagnostics, and documented common Symbol/Wingdings private-use bullet mappings to bundled Unicode glyphs. Assess the optional Google font pack proposal separately before any new crate, downloaded distribution or dependencies. Existing caller-font ingestion remains the supported route until that design decision is settled.
+
+**Depends on**: F-X195.
+**Test gate**: regression. Reproduce each missing operation or reported defect
+through the installed public API on the claimed Base before implementation.
+Exercise all Issue313 acceptance criteria through save/reopen, native
+rendering where applicable, malformed/atomic refusal controls and preserved
+unmodelled XML. Python surfaces require accurate stubs, strict typing and
+stubtest. CLI surfaces require help/reference and existing integration tests.
+Use deterministic fonts and pinned native oracles for output claims. Record
+Google Docs/Slides import compatibility as best effort, never a CI guarantee.
+Reuse prerequisite evidence for shared fixes and test the integrated behavior.
+Require scoped verification and independent zero-defect, zero-smell review.
+
 ### F-X191, Ignore namespace declarations in numbering reader completeness (S)
 
 Resolve the native reader false positive contributed by Pedro Assumpcao

@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 209 | 196 | 4 | 5 |
-| **Total** | **534** | **470** | **4** | **56** |
+| X, Cross-cutting | 220 | 196 | 4 | 16 |
+| **Total** | **545** | **470** | **4** | **67** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -753,4 +753,15 @@ regenerated, never hand-edited.
 | F-X197 | Unify Python colour inputs and font colour formats | S91 | L | pending |
 | F-X198 | Preserve alternate text-box copies during scoped replacement | S91 | M | in-progress |
 | F-X199 | Model namespace-qualified empty table cell margins | S91 | S | in-progress |
+| F-X200 | Complete Python Word formatting and list parity | S91 | L | pending |
+| F-X201 | Complete Python section stories and page authoring | S91 | L | pending |
+| F-X202 | Complete Word tables pictures and internal links | S91 | L | pending |
+| F-X203 | Complete Python Word document operations and validation | S91 | L | pending |
+| F-X204 | Complete shared CLI one-shot editing commands | S91 | L | pending |
+| F-X205 | Complete Python PowerPoint text fill and export parity | S91 | L | pending |
+| F-X206 | Complete PowerPoint shape authoring and live handles | S91 | L | pending |
+| F-X207 | Persist PowerPoint autofit and implement fit_text | S91 | L | pending |
+| F-X208 | Author PowerPoint footer fields themes and transitions | S91 | L | pending |
+| F-X209 | Edit PowerPoint masters layouts and themes | S91 | L | pending |
+| F-X210 | Extend metric-compatible fonts and bullet fallbacks | S91 | L | pending |
 <!-- AUTOGEN:backlog-MX END -->

@@ -5,8 +5,10 @@
 **Goal**: finish S90's bibliography catalogue and numbering-aware navigation
 carryovers and resolve the new HTML, Python authoring, rendering, validation
 and alternate text-box ownership reports before templates and forms at S92.
-Issues264 and281 remain excluded. The nine included stories are estimated at
-23 to 29 developer-days, with rolling contribution intake kept open.
+Issues264 and281 remain excluded. The expanded scope contains twenty active
+stories. The original nine-story estimate of 23 to 29 developer-days no longer
+covers the sprint. Estimate the eleven new large stories during detailed design
+and keep rolling contribution intake open.
 
 ## Spec references
 
@@ -31,6 +33,17 @@ Issues264 and281 remain excluded. The nine included stories are estimated at
 | F-X197 | Unify Python colour inputs and font colour formats | L | pending | - |
 | F-X198 | Preserve alternate text-box copies during scoped replacement | M | in-progress | codex |
 | F-X199 | Model namespace-qualified empty table cell margins | S | in-progress | codex |
+| F-X200 | Complete Python Word formatting and list parity | L | pending | - |
+| F-X201 | Complete Python section stories and page authoring | L | pending | - |
+| F-X202 | Complete Word tables pictures and internal links | L | pending | - |
+| F-X203 | Complete Python Word document operations and validation | L | pending | - |
+| F-X204 | Complete shared CLI one-shot editing commands | L | pending | - |
+| F-X205 | Complete Python PowerPoint text fill and export parity | L | pending | - |
+| F-X206 | Complete PowerPoint shape authoring and live handles | L | pending | - |
+| F-X207 | Persist PowerPoint autofit and implement fit_text | L | pending | - |
+| F-X208 | Author PowerPoint footer fields themes and transitions | L | pending | - |
+| F-X209 | Edit PowerPoint masters layouts and themes | L | pending | - |
+| F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | pending | - |
 
 ## Sequencing note
 
@@ -57,6 +70,27 @@ Before implementation its head advanced to
 `7ac2851cb61b5e7b26427004517cc0cd4db0dbd9`. The native patch is unchanged.
 Archive records will use actual integrated local measurements.
 
+## Expanded everyday coverage intake
+
+The 2026-10-09 refresh adds Issues303 through313 as F-X200 throughF-X210.
+Issue314 is the umbrella acceptance checklist for these stories and the
+existing fixes, not another implementation. No additional open PR was found.
+PR294 and PR302 retain their previously assessed immutable heads.
+
+Reuse existing issue work: Issue303 consumes F-X197 colours, Issue305 consumes
+F-X194 indentation and F-X198 alternate-owner safety, Issue306 consumes
+F-X196 validation, Issue308 consumes F-X194 cell text and F-X197 colours, and
+Issue313 consumes F-X195 caller fonts and variable instances. Issue305 requires
+synchronized alternate updates beyond the earlier permitted atomic refusal.
+Keep the completed refusal safety and implement only that uncovered capability.
+
+Detailed designs and resource waves for the added scope must be approved
+before its implementation starts. Existing first-wave work continues under
+its approved contracts. No new rendering baseline, asset, crate or module is
+authorized merely by recording intake. Google import compatibility remains
+best effort with explicit evidence limits. Charts, scripting, Excel, SmartArt,
+OLE and signatures retain their existing scope boundaries.
+
 ## Parallel implementation resources
 
 The source phase of wave 1 can run F-X193, F-X196, F-X198 and F-X199 in separate
@@ -79,5 +113,6 @@ entrypoints. Other conflicting stories retain their approved later waves.
 - Issue299 provides consistent colour inputs/getters and nested font colour formats across both installed bindings.
 - Issue301 synchronizes alternate text-box copies and counts once, or refuses atomically with retained bytes.
 - PR302 models qualified, attribute-free empty cell margins while foreign or attributed lookalikes remain exact opaque XML. Namespace, schema-order and all 21 cell texts survive save/reopen.
+- Issues303 through313 satisfy their full linked everyday coverage contracts, with shared acceptance credited once and Issue314 checked against the resulting APIs.
 - Every feature has clean independent microscope review and scoped evidence. Final full verification and sprint review cover actual integrated HEAD and declared hash deltas.
 - GitHub closure waits for verified sprint close. This run creates no release tags or publication.

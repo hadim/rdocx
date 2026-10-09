@@ -2149,6 +2149,17 @@ CLI validation reports before the template and form programme resumes.
 | F-X197 | Unify Python colour inputs and font colour formats | L |
 | F-X198 | Preserve alternate text-box copies during scoped replacement | M |
 | F-X199 | Model namespace-qualified empty table cell margins | S |
+| F-X200 | Complete Python Word formatting and list parity | L |
+| F-X201 | Complete Python section stories and page authoring | L |
+| F-X202 | Complete Word tables pictures and internal links | L |
+| F-X203 | Complete Python Word document operations and validation | L |
+| F-X204 | Complete shared CLI one-shot editing commands | L |
+| F-X205 | Complete Python PowerPoint text fill and export parity | L |
+| F-X206 | Complete PowerPoint shape authoring and live handles | L |
+| F-X207 | Persist PowerPoint autofit and implement fit_text | L |
+| F-X208 | Author PowerPoint footer fields themes and transitions | L |
+| F-X209 | Edit PowerPoint masters layouts and themes | L |
+| F-X210 | Extend metric-compatible fonts and bullet fallbacks | L |
 
 The 2026-10-09 intake includes [PR294](https://github.com/tensorbee/rdocx/pull/294)
 and Issues [295](https://github.com/tensorbee/rdocx/issues/295),
@@ -2174,8 +2185,9 @@ actual prerequisites and saved evidence, then F-X193, F-X194, F-X197, F-X195
 F-X196 and F-X198. Colour consistency precedes the table/font visual acceptance
 recheck. Shared source, bindings, tests and the hash baseline have one owner
 at a time. New stories require approved designs, scoped gates and clean
-microscope reviews. The nine included stories are estimated at 23 to 29 developer-days,
-not a fixed calendar duration. The inserted boundary moves the previous S91
+microscope reviews. The original nine-story estimate was 23 to 29 developer-days. The expanded
+twenty-story scope requires a new estimate after detailed design, not an
+unchanged two-week duration. The inserted boundary moves the previous S91
 through S104 to S92 through S105. S90 delivered history remains intact.
 
 Issues264 and281 are excluded from S91. F-X178 remains pending at S92 and
@@ -2243,6 +2255,29 @@ F-X194 follows wave 1 because its native evidence uses integration_test.rs and
 regression_test.rs. Later source conflicts remain exclusive, and the exclusive
 hash baseline retains its designated owner. Independent draft and review work
 can continue while implementation and Cargo resources are occupied.
+
+**Expanded intake, 2026-10-09**: Issues303 through313 are included as
+F-X200 throughF-X210, respectively. Issue314 is their umbrella checklist and
+adds no duplicate implementation story. The new open PR inventory still
+contains only PR294 and PR302 at their already assessed heads. Preserve the
+existing four active workers and their evidence while drafting the added scope.
+The issue-specific HLD14 contracts retain all requested acceptance. No work
+is silently deferred from S91. Designs must map shared criteria to the existing
+F-ID first, with later contributor PRs attached to that owner.
+
+F-X200 reuses F-X197 colours. F-X202 reuses F-X194 indentation and F-X198
+physical alternate safety, then adds the synchronized editing demanded by
+Issue305. F-X203 reuses F-X196 and F-X201 validation. F-X205 reuses F-X194 and
+F-X197. F-X207 consumes caller-font measurement from F-X195. F-X210 contains
+only the new metric-compatible face, diagnostics and bullet mapping criteria
+from Issue313. Its caller-font and variable-font acceptance remains F-X195.
+F-X209 follows F-X208 as explicitly required by Issues312 and311. F-X204 CLI
+commands follow their Python-visible API providers, and do not duplicate the
+footer/inspection CLI owned by F-X208. Record detailed file conflicts and
+waves before claiming any added worker. All new stories are provisionally L,
+with measured estimates pending design. The optional font pack needs a design
+decision before adding any new crate or distribution. No publication is part
+of this sprint.
 
 #### Sprint S92, Templates, controls, and forms
 
