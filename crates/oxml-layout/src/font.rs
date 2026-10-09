@@ -583,6 +583,12 @@ pub struct FontManager {
     paragraph_font_trace: Option<ParagraphFontTrace>,
     /// Distinct current-layout fonts in first-resolution order.
     layout_fonts: Vec<FontId>,
+    /// The face each family without a metric-compatible substitute, such as
+    /// Aptos, resolved to, so a replayed paragraph reports it again.
+    unmatched_requests: HashMap<FontId, String>,
+    /// `(requested, drawn)` families the current layout asked for and drew
+    /// with another face. See [`FontManager::substitution_diagnostics`].
+    layout_unmatched: Vec<(String, String)>,
 }
 
 /// Families with broad non-Latin coverage, tried before scanning everything.
@@ -695,6 +701,8 @@ impl FontManager {
             shaping_memo: Mutex::new(ShapingMemo::new()),
             paragraph_font_trace: None,
             layout_fonts: Vec::new(),
+            unmatched_requests: HashMap::new(),
+            layout_unmatched: Vec::new(),
         }
     }
 
@@ -756,6 +764,7 @@ impl FontManager {
         self.next_id = 0;
         self.coverage_fallbacks.clear();
         self.coverage_misses.clear();
+        self.unmatched_requests.clear();
         self.additional_fonts = font_files.to_vec();
         if self.shaping_memo.is_poisoned() {
             self.shaping_memo.clear_poison();
@@ -858,6 +867,7 @@ impl FontManager {
     pub fn begin_layout(&mut self) {
         self.paragraph_font_trace = None;
         self.layout_fonts = Vec::new();
+        self.layout_unmatched.clear();
     }
 
     /// Begin recording the exact resolution events for one cache candidate.
@@ -885,6 +895,9 @@ impl FontManager {
     pub fn replay_layout_font_trace(&mut self, trace: &[FontId]) {
         for &font_id in trace {
             self.record_layout_font(font_id);
+            if let Some(requested) = self.unmatched_requests.get(&font_id).cloned() {
+                self.note_unmatched_request(&requested, font_id);
+            }
         }
     }
 
@@ -1120,7 +1133,9 @@ impl FontManager {
         bold: bool,
         italic: bool,
     ) -> Result<FontId> {
-        self.resolve_font_inner(family, bold, italic, true)
+        let font_id = self.resolve_font_inner(family, bold, italic, true)?;
+        self.note_unmatched_request(family.unwrap_or("Arial"), font_id);
+        Ok(font_id)
     }
 
     /// Resolve a font for metrics without claiming that it emitted glyphs.
@@ -2147,7 +2162,10 @@ impl FontManager {
         let primary = self
             .resolve_font_for_metrics(Some(family), bold, italic)
             .ok()
-            .and_then(|id| self.index_of(id));
+            .and_then(|id| self.index_of(id))
+            .map(|index| &self.fonts[index]);
+        let face =
+            primary.and_then(|font| ttf_parser::Face::parse(&font.data, font.face_index).ok());
         text.chars()
             .map(|character| {
                 let code = match u32::from(character) {
@@ -2156,7 +2174,10 @@ impl FontManager {
                     _ => return character,
                 };
                 let private = char::from_u32(0xF000 + code).unwrap_or(character);
-                if primary.is_some_and(|index| self.covers(index, private)) {
+                if face
+                    .as_ref()
+                    .is_some_and(|face| draws_symbol_code(face, private))
+                {
                     return private;
                 }
                 symbol_font_unicode(family, code as u8).unwrap_or(character)
@@ -2165,30 +2186,16 @@ impl FontManager {
     }
 
     /// One message per family the current layout asked for that has no
-    /// metric-compatible substitute and was drawn with another face, in
-    /// family order.
+    /// metric-compatible substitute and was drawn with another face, in the
+    /// order the layout first asked for it.
     ///
     /// Aptos, Office's default since 2024, is the case today: no open face
     /// shares its advance widths, so its text is measured and drawn with the
     /// Carlito fallback and its lines can break where Office's do not.
     #[doc(hidden)]
     pub fn substitution_diagnostics(&self) -> Vec<String> {
-        let unmatched = |family: &str| family.to_lowercase().starts_with("aptos");
-        let mut pairs = self
-            .cache
+        self.layout_unmatched
             .iter()
-            .filter_map(|(key, index)| {
-                let font = self.fonts.get(*index)?;
-                (unmatched(&key.family)
-                    && !unmatched(&font.family)
-                    && self.layout_fonts.contains(&font.id))
-                .then(|| (key.family.clone(), font.family.clone()))
-            })
-            .collect::<Vec<_>>();
-        pairs.sort();
-        pairs.dedup();
-        pairs
-            .into_iter()
             .map(|(requested, actual)| {
                 format!(
                     "font `{requested}` has no metric-compatible substitute and is drawn with `{actual}`, so its lines can break differently from Office"
@@ -2196,6 +2203,47 @@ impl FontManager {
             })
             .collect()
     }
+
+    /// Record a request for a family without a metric-compatible substitute
+    /// that `font_id`, another family, answered.
+    fn note_unmatched_request(&mut self, requested: &str, font_id: FontId) {
+        let unmatched = |family: &str| family.to_lowercase().starts_with("aptos");
+        if !unmatched(requested) {
+            return;
+        }
+        let Some(actual) = self
+            .index_of(font_id)
+            .map(|index| self.fonts[index].family.clone())
+            .filter(|actual| !unmatched(actual))
+        else {
+            return;
+        };
+        self.unmatched_requests
+            .entry(font_id)
+            .or_insert_with(|| requested.to_owned());
+        let pair = (requested.to_owned(), actual);
+        if !self.layout_unmatched.contains(&pair) {
+            self.layout_unmatched.push(pair);
+        }
+    }
+}
+
+/// Whether `face` draws the private-use character of a symbol font code.
+///
+/// A real Symbol or Wingdings maps its codes only in a Windows Symbol
+/// (3, 0) cmap subtable, which `Face::glyph_index` skips, so that subtable is
+/// read too. The Macintosh (1, 0) table is not, since every Latin face has one.
+fn draws_symbol_code(face: &ttf_parser::Face<'_>, private: char) -> bool {
+    face.glyph_index(private).is_some()
+        || face.tables().cmap.is_some_and(|cmap| {
+            cmap.subtables.into_iter().any(|subtable| {
+                subtable.platform_id == ttf_parser::PlatformId::Windows
+                    && subtable.encoding_id == 0
+                    && subtable
+                        .glyph_index(u32::from(private))
+                        .is_some_and(|glyph| glyph.0 != 0)
+            })
+        })
 }
 
 /// The Unicode character a Symbol or Wingdings code drew, for the bullets
@@ -3592,5 +3640,115 @@ mod tests {
         );
         manager.begin_layout();
         assert!(manager.substitution_diagnostics().is_empty());
+    }
+
+    /// A minimal face whose only cmap is a Windows Symbol (3, 0) subtable
+    /// mapping U+F0FC to glyph 1, as the real Wingdings maps its codes.
+    fn symbol_cmap_face_bytes() -> Vec<u8> {
+        fn be16(bytes: &mut Vec<u8>, value: u16) {
+            bytes.extend(value.to_be_bytes());
+        }
+        let mut head = vec![
+            0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0x5F, 0x0F, 0x3C, 0xF5, 0, 0,
+        ];
+        be16(&mut head, 1000);
+        head.extend([0; 16 + 8 + 6]);
+        be16(&mut head, 0);
+        be16(&mut head, 0);
+        let mut hhea = vec![0, 1, 0, 0];
+        hhea.extend([0; 30]);
+        be16(&mut hhea, 1);
+        let mut maxp = vec![0, 0, 0x50, 0];
+        be16(&mut maxp, 2);
+        let mut cmap = Vec::new();
+        for value in [0, 1, 3, 0] {
+            be16(&mut cmap, value);
+        }
+        cmap.extend(12u32.to_be_bytes());
+        for value in [4, 32, 0, 4, 4, 1, 0, 0xF0FC, 0xFFFF, 0, 0xF0FC, 0xFFFF] {
+            be16(&mut cmap, value);
+        }
+        for value in [1u16.wrapping_sub(0xF0FC), 1, 0, 0] {
+            be16(&mut cmap, value);
+        }
+        let tables = [
+            (b"cmap", cmap),
+            (b"head", head),
+            (b"hhea", hhea),
+            (b"maxp", maxp),
+        ];
+        let mut font = vec![0, 1, 0, 0];
+        for value in [tables.len() as u16, 64, 2, 0] {
+            be16(&mut font, value);
+        }
+        let mut offset = 12 + 16 * tables.len();
+        let mut data = Vec::new();
+        for (tag, table) in &tables {
+            font.extend(*tag);
+            font.extend(0u32.to_be_bytes());
+            font.extend((offset as u32).to_be_bytes());
+            font.extend((table.len() as u32).to_be_bytes());
+            data.extend(table);
+            while data.len() % 4 != 0 {
+                data.push(0);
+            }
+            offset = 12 + 16 * tables.len() + data.len();
+        }
+        font.extend(data);
+        font
+    }
+
+    #[test]
+    fn a_real_symbol_font_keeps_its_own_private_use_glyph() {
+        let bytes = symbol_cmap_face_bytes();
+        let face = ttf_parser::Face::parse(&bytes, 0).expect("synthetic symbol face parses");
+        // ttf-parser's lookup skips the symbol subtable, the bullet check does not.
+        assert!(face.glyph_index('\u{F0FC}').is_none());
+        assert!(draws_symbol_code(&face, '\u{F0FC}'));
+        assert!(!draws_symbol_code(&face, '\u{F0A7}'));
+        // A Latin face draws none of the private-use codes.
+        let carlito = bundled_font_data()
+            .into_iter()
+            .find(|(family, _)| *family == "Carlito")
+            .unwrap()
+            .1;
+        let carlito = ttf_parser::Face::parse(carlito, 0).unwrap();
+        assert!(!draws_symbol_code(&carlito, '\u{F0FC}'));
+        assert!(!draws_symbol_code(&carlito, '\u{F0A7}'));
+    }
+
+    #[test]
+    fn aptos_is_reported_only_for_the_layouts_that_ask_for_it() {
+        let mut manager = FontManager::new_deterministic().expect("bundled fonts load");
+        manager.begin_layout();
+        let aptos = manager.resolve_font(Some("Aptos"), false, false).unwrap();
+        assert_eq!(manager.substitution_diagnostics().len(), 1);
+
+        // A later layout drawing the same Carlito face for another family is
+        // not reported, while a replayed Aptos paragraph is.
+        manager.begin_layout();
+        manager.resolve_font(Some("Calibri"), false, false).unwrap();
+        manager.record_layout_font(aptos);
+        assert!(manager.substitution_diagnostics().is_empty());
+        manager.replay_layout_font_trace(&[aptos]);
+        assert_eq!(manager.substitution_diagnostics().len(), 1);
+    }
+
+    /// Where the real Wingdings is installed, as macOS and Windows ship it,
+    /// its own glyphs draw the bullets.
+    #[cfg(feature = "system-fonts")]
+    #[test]
+    fn an_installed_wingdings_keeps_its_own_bullet_glyphs() {
+        let mut manager = FontManager::new();
+        let Ok(font_id) = manager.resolve_font_for_metrics(Some("Wingdings"), false, false) else {
+            return;
+        };
+        if manager.fonts[manager.index_of(font_id).unwrap()].family != "Wingdings" {
+            return;
+        }
+        assert_eq!(
+            manager.symbol_font_text(Some("Wingdings"), false, false, "\u{F0FC}\u{A7}"),
+            "\u{F0FC}\u{F0A7}"
+        );
     }
 }

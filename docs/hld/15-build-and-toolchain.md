@@ -292,9 +292,9 @@ include = [
 The dedicated package CI job compares `cargo package -p oxml-layout --list`
 against all 34 TTFs, the six family licence files, the Caladea, Gelasio, Noto
 and Selawik notices. The manifest also includes the Simplified Chinese,
-Hebrew, Korean, Japanese and Symbols 2 subset records. The job then runs verified packaging without
-`--no-verify` and rejects a missing archive or one larger than the crates.io
-10 MiB limit. `oxml-layout` is a published 0.1.2 package, while the release
+Hebrew, Korean, Japanese and Symbols 2 subset records. The job then runs
+verified packaging without `--no-verify` and rejects a missing archive or one
+larger than the crates.io 10 MiB limit. `oxml-layout` is a published 0.1.2 package, while the release
 workflow remains the authority for every later publication.
 
 The external PowerPoint and Word corpora remain outside every published crate

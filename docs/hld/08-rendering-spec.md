@@ -683,9 +683,10 @@ Symbol and Wingdings bullets go through `FontManager::symbol_font_text` before
 resolution, in both renderers: an `a:buChar` whose `a:buFont` is one of them,
 a Word numbering marker whose run font is one of them, and a `w:sym` naming
 one. Word writes the font's code in the U+F020 to U+F0FF private-use block and
-PowerPoint as the Latin-1 character. When the resolved face draws the
-private-use character, as the real Wingdings does, that form is kept.
-Otherwise the common bullet codes take their Unicode equivalents, such as
+PowerPoint as the Latin-1 character. When the resolved face maps the
+private-use character, in a Unicode cmap or in the Windows Symbol (3, 0)
+subtable that the real Symbol and Wingdings use, that form is kept and the
+shaper draws the font's own glyph. Otherwise the common bullet codes take their Unicode equivalents, such as
 Symbol B7 to U+2022, Wingdings A7 to U+25AA, D8 to U+27A2, FC to U+2713 and 76
 to U+2756, which the bundled Latin faces or the bundled Noto Sans Symbols 2
 subset draw. A code outside that table keeps its character.
