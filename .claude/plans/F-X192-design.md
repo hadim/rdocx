@@ -202,3 +202,31 @@ Last-name comparator. Portable comparator parity, nonempty/repeated initials,
 all source kinds/locales and remaining dense grammar branches are still
 unproved. No dependency or production change is authorized by this finite
 study. Preserve the existing exact-evidence implementation barrier.
+
+## Complete-key corporate host discriminator
+
+Four additional native controls vary Harvard/APA and forward/reversed source
+collection order while holding citation order fixed. Preserved corporate and
+title whitespace makes each style assemble the same complete source-established
+keys: ' 王 2020 Same title' and ' Иванов 2020 Same title'. Native Word preserves
+the exact leading/trailing U+0020 source operands. All four complete results
+place the Chinese-key source before the Cyrillic-key source regardless of
+collection reversal. Unique selected entries authenticate source identity.
+
+The full capture receipt is
+/private/tmp/S91-F192-complete-key-host-study/capture-receipt.json. Exact raw
+source XML, UTF8 keys and assembly facts are complete-key-audit.json in that
+same folder. Artifact and installed-style hashes were independently checked.
+All four explicit native style/F9 results are byte-identical to their normal
+no-F9 reopen/save. All five field instructions and source trees survive,
+apart from native RefOrder. Generated controls were saved and closed and the
+existing APA6 study restored unchanged.
+
+The earlier Harvard-person Cyrillic-before-Chinese order disappears under
+these equal complete-key inputs across styles. Therefore an unconditional
+style-specific script bucket is unsupported. Key/context assembly can explain
+the prior difference, but this two-key intervention proves neither a strict
+comparison sign nor a universal host/backend rule. Complete-key portable
+comparator evaluation remains unproved. Retained partial-key ICU failures must
+not be misreported as complete-key failures or used to reject a backend that
+has not actually received these operands. No production dependency is selected.

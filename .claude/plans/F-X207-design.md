@@ -359,3 +359,40 @@ Pinned Poppler26.01.0 produced bbox HTML and a rasterized reopened page, which w
 `/private/tmp/S91-F-X207-native-threshold` retains the input/provenance receipt, native before/after reopen packages, both native PDFs, extracted slide owner XML, complete page-one text commands, embedded subset fonts, bbox HTML, rendered PNG, `audit.py` and `capture-receipt.json`. The receipt includes bytes/SHA-256 values, exact persisted attributes and defaults, every frame/property/text value, actual PDF font sizes/baselines, and source/input immutability assertions. `audit.py` recomputes the assertions without opening PowerPoint.
 
 The final generated deck was closed only after its exact generated URL and Saved to my Mac state were visible. PowerPoint returned to new/recent files with no document remaining. The UI lease is released. No tracked file, production source, Cargo artifact, native application setting, font or user document was modified.
+
+## Native 150-percent near-full partners
+
+The three previously captured100-percent frames now have matching150-percent
+partners. Inputs differ only in the three paragraph spacing values. Native
+PowerPoint16.113.3 build16.113.26092714 real final-period edits produce
+70000/20000 at heights3.2 and3.3 inches and77500/20000 at3.4 inches. Their
+100-percent counterparts are100000/10000,100000/10000 and100000/0.
+The complete artifact receipt is
+/private/tmp/S91-F-X207-native-threshold150/capture-receipt.json, independently
+checked before this record. The ignored appendix is
+.claude/scratch/F-X207-native-threshold150-oracle.md.
+
+Saved slide XML, actual PDF glyph sizes and all21 baselines agree across
+normal reopen/save. Original inputs are unchanged. Native draws about20/20/22pt
+while saved nominal runs remain28pt. This is an observed export quantization,
+not a global font-size rounding rule. Raw PDF streams differ because the
+initial separately typed period is coalesced on reopen. Do not claim byte
+identity for those streams. Both ArialMT subsets authenticate to the previously
+identified native bundled Arial generation.
+
+Across all12 current coupled/near-full observations, every reduced scale is
+100000 minus7500 times an integer. The earlier2500 lattice contains those
+values but does not prove the native step. Under the current simplified
+source height equations, the candidate sequence100000/0,100000/10000,
+92500/10000,92500/20000,85000/20000,77500/20000 and subsequent7500 scale
+steps reproduces these bounded saved pairs. This is a new discriminating
+hypothesis, not a demonstrated producer search order. No hidden padding,
+weighted objective or universal spacing cap is approved. Exact-spacing floor
+B remains unfit and must not become a successful result.
+
+Three further150-percent height controls around the first reduction/shrink
+boundary are scheduled to distinguish full-scale20000 from92500/10000 and
+whether92500/0 is tried. Actual font-provider measurement and mixed/wrapped
+contexts remain required before selecting a general algorithm. Refresh and
+fit-report must ultimately use one approved evaluator and ordering. These
+observations do not authorize production, a baseline change or completion.
