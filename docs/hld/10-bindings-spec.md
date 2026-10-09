@@ -635,6 +635,19 @@ of `Row` handles, like `columns`. `Row.height` reads the stored height as
 as a column width keeps the frame width. A height that is not positive raises
 `RpptxError`. None of these writes advances the revision.
 
+`Cell.text_frame` returns the same `TextFrame` a shape returns, over the cell's
+`a:txBody`, so its paragraphs, runs and fonts format table text as python-pptx's
+`_Cell.text_frame` does. Its handles carry the cell's `Row` and `Cell` path
+segments and follow the same revision rules as a shape's. A cell without a
+text body gets an empty one when the frame is first read, as python-pptx adds
+one. `Cell.vertical_anchor` reads and writes `a:tcPr/@anchor` as an
+`MSO_ANCHOR` member, which is where PowerPoint reads a cell's anchor, while
+`text_frame.vertical_anchor` writes the `a:bodyPr` anchor that PowerPoint
+ignores in a table. The renderer places cell text by `a:tcPr/@anchor` when it
+is present and by the body anchor otherwise. Assigning a hyperlink address to
+a run in a cell raises `ValueError`, because the native hyperlink setter
+addresses a shape text frame.
+
 python-pptx has no public API to add or remove table rows and columns, and its
 users call `table._tbl.add_tr(height)`, which appends a row without cell
 formatting and leaves the frame height unchanged.

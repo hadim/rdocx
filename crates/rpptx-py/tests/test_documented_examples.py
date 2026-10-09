@@ -2494,6 +2494,69 @@ def test_table_cells_merge_split_fill_and_margins_like_python_pptx(tmp_path):
     assert read.fill.fore_color.rgb == RGBColor(0xAB, 0xCD, 0xEF)
 
 
+def test_table_cell_text_frame_formats_cell_text_and_survives_save_render_and_pdf(tmp_path):
+    import rpptx
+    from rpptx import MSO_ANCHOR, PP_ALIGN, Inches, Pt
+
+    prs = rpptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    table = slide.shapes.add_table(2, 2, Inches(1), Inches(1), Inches(4), Inches(1.5)).table
+    cell = table.cell(0, 0)
+    cell.text = "Header"
+    plain_png = prs.render_slide_to_png(0, dpi=36.0)
+    plain_pdf = prs.to_pdf()
+
+    frame = cell.text_frame
+    assert isinstance(frame, rpptx._rpptx.TextFrame)
+    assert frame.text == "Header"
+    second = frame.add_paragraph()
+    second.alignment = PP_ALIGN.CENTER
+    second.text = "second line"
+    cell = prs.slides[0].shapes[0].table.cell(0, 0)
+    font = cell.text_frame.paragraphs[0].runs[0].font
+    font.size = Pt(18)
+    font.bold = True
+    font.name = "Arial"
+    cell.text_frame.word_wrap = False
+    assert cell.vertical_anchor is None
+    cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+    assert cell.text == "Header\nsecond line"
+    assert cell.vertical_anchor == MSO_ANCHOR.MIDDLE
+    assert prs.render_slide_to_png(0, dpi=36.0) != plain_png
+    assert prs.to_pdf() != plain_pdf
+
+    path = tmp_path / "cell-text.pptx"
+    prs.save(path)
+    with zipfile.ZipFile(path) as archive:
+        xml = archive.read("ppt/slides/slide1.xml").decode()
+    assert '<a:tcPr anchor="ctr"/>' in xml
+    assert 'sz="1800" b="1"' in xml
+
+    reopened = rpptx.Presentation(path)
+    cell = reopened.slides[0].shapes[0].table.cell(0, 0)
+    font = cell.text_frame.paragraphs[0].runs[0].font
+    assert (font.size, font.bold, font.name) == (Pt(18), True, "Arial")
+    paragraphs = cell.text_frame.paragraphs
+    assert [paragraph.text for paragraph in paragraphs] == ["Header", "second line"]
+    assert paragraphs[1].alignment == PP_ALIGN.CENTER
+    assert cell.text_frame.word_wrap is False
+    assert cell.vertical_anchor == MSO_ANCHOR.MIDDLE
+    cell.vertical_anchor = None
+    assert cell.vertical_anchor is None
+
+    empty = reopened.slides[0].shapes[0].table.cell(1, 1)
+    assert empty.text_frame.text == ""
+    held_paragraphs = cell.text_frame.paragraphs
+    held_run = held_paragraphs[0].runs[0]
+    with pytest.raises(ValueError, match="table cell"):
+        held_run.hyperlink.address = "https://example.com"
+    reopened.slides.add_slide(reopened.slide_layouts[6])
+    with pytest.raises(
+        rpptx.StaleElementError, match=r"table\.cell\(0, 0\)\.text_frame\.paragraphs"
+    ):
+        len(held_paragraphs)
+
+
 def test_table_row_heights_and_cell_borders_write_what_python_pptx_reads(tmp_path):
     import rpptx
     from rpptx.dml.color import RGBColor

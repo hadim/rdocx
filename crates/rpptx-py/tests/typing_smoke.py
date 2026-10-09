@@ -403,7 +403,11 @@ def exercise_rpptx_table_types(table: Table) -> None:
         origin.border_bottom,
     )
     borders[0].width = Pt(1)
-    (spans, cell_margins, row_heights, rows[:])
+    cell_frame: TextFrame = origin.text_frame
+    cell_frame.paragraphs[0].font.size = Pt(18)
+    origin.vertical_anchor = MSO_ANCHOR.MIDDLE
+    cell_anchor: MSO_ANCHOR | None = origin.vertical_anchor
+    (spans, cell_margins, row_heights, rows[:], cell_anchor)
 
 
 def exercise_rpptx_table_structure_types(table: Table) -> None:
