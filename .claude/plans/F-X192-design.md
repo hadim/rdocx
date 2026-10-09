@@ -47,8 +47,10 @@ bibliography_sort_key. The installed Harvard XSL assembles Last+initials for
 up to four people, Year/no-date and Title without delimiters. APA uses its
 formatted contributor representation and source-kind-specific title keys.
 IEEE uses numeric RefOrder. Existing tuple Last/Title probes do not establish
-those string keys. Corrected Harvard key ICU probes still fail complete native
-ordering. Default ICU, Core Foundation and ASCII fallback remain prohibited.
+those string keys. Retained ICU probes tested partial operands and tuples,
+not complete Harvard or APA SortingString values. Their failure does not prove
+complete-key ICU failure. No complete-key comparator receipt is authenticated.
+Default ICU, Core Foundation and ASCII fallback remain prohibited.
 The approved implementation route is source-kind-specific native sort-key
 assembly plus an independently demonstrated portable comparator and stable
 source/citation tie policy. No comparator backend is presumed approved.

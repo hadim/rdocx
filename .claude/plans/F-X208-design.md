@@ -257,3 +257,41 @@ Use explicit owned-placeholder authoring and a separately reviewed renderer
 correction, with intentional hash deltas declared before implementation.
 This evidence is one blank-theme control, not the complete hf matrix,
 branded potx or native PDF acceptance. Keep those remaining gates.
+
+## Ten-control native footer ownership matrix
+
+PowerPoint16.113.3 build16.113.26092714 accepted ten controlled inputs that
+preserve the native OPC graph and existing part/master/slide IDs, modifying
+only existing owner XML. The read-only appendix is
+.claude/scratch/F-X208-footer-matrix-oracle.md. The complete owner facts,
+40 artifact hashes and immutable original source hash are recorded in
+/private/tmp/S91-F-X208-native-matrix/receipt.json and independently checked.
+All ten generated documents were saved and closed. Three prior synthetic
+multi-master inputs failed native validation and were cancelled without
+repair. They provide no visibility evidence.
+
+With zero slide shapes, occupied dt/ftr/sldNum placeholders on master or
+layout remain invisible under absent, empty, enabled and disabled legal hf,
+opposing master/layout flags, exact matching indices2/3/4, distinct indices,
+and title layouts with showSpecialPlsOnTitleSld1. Normal native save/reopen
+does not materialize slide placeholders. Enabled hf normalizes to empty hf
+because true is the default. Disabled flags remain explicit0. The ordinary
+master-text positive control removes only its ftr placeholder marker and
+renders that footer text despite disabled hf. Therefore do not treat occupied
+latent footer placeholders as ordinary inherited master/layout text.
+
+Every accepted case has explicit local Best for printing PDF before and after
+normal reopen/save. All ten extracted page-text pairs agree. Visible positive
+and blank conflict pages were rasterized and inspected. No intermediate owner
+XML snapshot was frozen before the second save, so this matrix does not assert
+byte-identical owner XML or PDFs across reopen. Preserve the earlier captured
+Apply/ApplyAll owner evidence separately. Historical ConflictSame actually
+has distinct native indices10/11/12 on layout. ConflictMatchingIdx supplies
+the real equal-index discriminator. Do not infer semantics from filenames.
+
+This resolves the bounded latent-placeholder visibility gap. Authoring must
+create/update slide-owned footer placeholders through the approved candidate,
+with legal flags only on their actual supported owners. Title suppression,
+date cache context, authored templates with supported existing slide fields,
+notes-page output and transition contracts retain their separate tests.
+No source, renderer baseline or completion verdict is changed by this study.
