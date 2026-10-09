@@ -413,3 +413,24 @@ actual affected local authored artifact after reviewed template adoption.
 A foreign expected hash is not evidence that our artifact passes. Preserve
 immutable cross-viewer control hashes and separately justify any current
 authored-output expectation update. No source or baseline adoption occurred.
+
+## PR318 second incremental head refresh
+
+PR318 advanced to b8e212f8db1841a5533646aa7190847724c73733 with one additional
+commit and one path beyond bfdd6ab: crates/rpptx/tests/integration.rs. The
+complete1069136-byte Git blob95945f1d397581cb377e67179ca12417a2aa542b has
+SHA2562c1b4f0a94c6c319b01e9393a126e06ca37c731289ac257eced840b111d56f58.
+The complete non-truncated head tree authenticates its path/size. Exact
+metadata, complete incremental diff and source assessment are retained in
+/private/tmp/S91-PR318-b8e212f-intake. Prior24-file source assessment remains
+valid. The new full PR base diff has25 paths. No new F-ID is added.
+
+The sole additional edit updates M21_CURRENT_MINIMAL_SOURCE_SHA256 for the
+currently generated SmartArt fallback deck. Existing Unsupported SmartArt
+text and single ink-band checks remain unchanged. This is another derived
+current-template expectation. Independently regenerate the actual local
+current artifact after accepted template and fixed-date metadata changes,
+then justify and review its expectation. The foreign7d19b5b4 hash is not a
+passing local result. Legacy unsigned/static and corrected signed native
+manifest constants remain immutable and are untouched by this commit.
+No rendering code, baseline or source adoption occurs in this intake.

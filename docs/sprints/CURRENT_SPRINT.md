@@ -244,3 +244,21 @@ AS_BUILT integration-time notes are retained as checkpoint history, not
 interpreted as current issue status. This classification concerns only those
 24 authenticated closed records. Current open/new work continues through
 its existing S91 acceptance owners, with264 and281 excluded.
+
+## Rolling head refresh for PR318 and PR319
+
+PR318 now points to b8e212f8db1841a5533646aa7190847724c73733 and stays with
+F-X205/Issue308. Its additional edit is the current authored SmartArt fallback
+artifact hash. PR319 now points to f0e6be942d4e958f4a07014466c57e7e03f6b8b7
+and stays with F-X210/Issue313. Its additional edit is three deterministic
+pixel expectations and attribution. Both complete incremental assessments
+are recorded in those canonical plans, retaining unchanged prior findings.
+No new story, repeated implementation or contributor baseline adoption is
+introduced. The rolling inventory remains eight open PRs and23 open issues,
+with264 and281 excluded.
+
+The user separately approved the exact3916-byte Noto symbols asset,
+SHA2567f5a31d932df09902c1097af020569b63d6296c067bc804ae6a597ef9b3ad21b.
+Together with the earlier eight-file approval, this authorizes nine exact new
+asset files. Actual font-story adoption remains behind its normal provider,
+design, source and verification gates. The unchecked-box coverage gap remains.

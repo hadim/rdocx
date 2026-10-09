@@ -514,12 +514,12 @@ Completed immutable PR320 assessment is retained in .claude/scratch/S91-PR320-25
 
 PR320's checklist preset uses U2610 for unchecked and U2611 for checked.
 HarfBuzz14.4.0 coverage of all27 current bundled faces finds both glyphs
-missing. The exact pending3916-byte PR319 symbol subset has U2611 but
+missing. The exact approved3916-byte PR319 symbol subset has U2611 but
 not U2610. Its pinned full upstream Noto Sans Symbols2 face contains both,
 with equal821-unit advances at1000 units per em. The complete read-only
 receipt is .claude/scratch/S91-checklist-symbol-coverage.json.
 
-The pending asset proposal retains its exact bytes and hash. Do not treat
+The approved asset retains its exact bytes and hash. Do not treat
 its16-target coverage as acceptance for the checklist preset, silently
 change its approved-file scope, substitute an unrelated square or emit a
 missing glyph. Resolve U2610 through the existing caller-font provider or

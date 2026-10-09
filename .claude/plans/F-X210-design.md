@@ -198,9 +198,11 @@ reproduction output and one-file proposal are retained under
 /private/tmp/S91-F-X210-symbol-proposal. The completed temporary tool
 environment was removed after reproduction to save disk space.
 
-Approval was requested for this one exact new tracked binary. It remains
-pending and is not copied into the repository. Its copyright, pinned recipe
-and hashes will use the existing NOTICE-Noto, with no new documentation file.
+The user approved this one exact new tracked binary on2026-10-09, answering
+"Approve this one additional asset". Approval is limited to3916 bytes and
+SHA2567f5a31d932df09902c1097af020569b63d6296c067bc804ae6a597ef9b3ad21b.
+It is not yet copied into the repository. Its copyright, pinned recipe and
+hashes will use the existing NOTICE-Noto, with no new documentation file.
 This proposal does not authorize the different four static Gelasio faces,
 new font installation or unverified original Symbol/Wingdings mappings.
 
@@ -229,7 +231,7 @@ An ordinary Wingdings w:t run contains unchanged source characters §Øüv (A7/D
 
 Original fonts were read in place only. Correct system Symbol path is /System/Library/Fonts/Symbol.ttf. System Wingdings5.00x at Supplemental/Wingdings.ttf SHA709d5848799239f0c51c0544c471c8d02bcbf9f2bcdc49702ebca1691a4c760e/fsType8. System Symbol13.0d2e2 SHA fbd16f271abb9bb55708a15c138e3a45924dec215541e95595f7a6918304d867/fsType4. Word also ships Wingdings5.03 SHA472858c86b3af58a8d46d96ac423f861717c8164a8104432eb92278bbf921a73 and Symbol5.00i SHA08253a10a93a80f978d88087000e6a6f4952aeffc2e972e81f6f84bbfa679fe4, both fsType8. Candidate metadata is exact, but this study has not traced which same-family installed original face version Word selected. Native displayed glyph morphology remains genuine original-family appearance.
 
-Unicode reference uses native Arial with normal fallback. It is not a NotoSymbols visual acceptance result. In particular, U2611 emoji demonstrates why a monochrome dedicated symbols face is needed. The proposed NotoSansSymbols2-bullets-subset.ttf is3916bytes, SHA7f5a31d932df09902c1097af020569b63d6296c067bc804ae6a597ef9b3ad21b, with supplied receipt stating16 contributed targets have no missing glyphs. Its tracked asset approval remains pending and it is not copied or installed by this study. Coverage proves availability, not original Wingdings outline/metric equivalence. After approval and X195 provider integration, compare actual deterministic PDF/raster glyphs to these native shape references and require non-emoji monochrome output. Retain bounded tolerances for geometric substitutions instead of claiming font-exact parity. Supplied genuine symbol face coverage wins over the Unicode substitute as already designed.
+Unicode reference uses native Arial with normal fallback. It is not a NotoSymbols visual acceptance result. In particular, U2611 emoji demonstrates why a monochrome dedicated symbols face is needed. The proposed NotoSansSymbols2-bullets-subset.ttf is3916bytes, SHA7f5a31d932df09902c1097af020569b63d6296c067bc804ae6a597ef9b3ad21b, with supplied receipt stating16 contributed targets have no missing glyphs. The user approved this exact tracked asset on2026-10-09. It is not copied or installed by this study. Coverage proves availability, not original Wingdings outline/metric equivalence. After approval and X195 provider integration, compare actual deterministic PDF/raster glyphs to these native shape references and require non-emoji monochrome output. Retain bounded tolerances for geometric substitutions instead of claiming font-exact parity. Supplied genuine symbol face coverage wins over the Unicode substitute as already designed.
 
 ## Artifact hashes
 
@@ -248,15 +250,40 @@ No local rendering implementation pass, all-symbol mapping proof, gate pass or a
 
 PR320's checklist preset uses U2610 for unchecked and U2611 for checked.
 HarfBuzz14.4.0 coverage of all27 current bundled faces finds both glyphs
-missing. The exact pending3916-byte PR319 symbol subset has U2611 but
+missing. The exact approved3916-byte PR319 symbol subset has U2611 but
 not U2610. Its pinned full upstream Noto Sans Symbols2 face contains both,
 with equal821-unit advances at1000 units per em. The complete read-only
 receipt is .claude/scratch/S91-checklist-symbol-coverage.json.
 
-The pending asset proposal retains its exact bytes and hash. Do not treat
+The approved asset retains its exact bytes and hash. Do not treat
 its16-target coverage as acceptance for the checklist preset, silently
 change its approved-file scope, substitute an unrelated square or emit a
 missing glyph. Resolve U2610 through the existing caller-font provider or
 an exact separately reviewed asset change when needed. Native PDF/raster
 appearance and deterministic fallback acceptance remain explicit joint
 F-X200/F-X210 obligations, tested once against their actual provider.
+
+## PR319 incremental golden-pixel refresh
+
+PR319 advanced to f0e6be942d4e958f4a07014466c57e7e03f6b8b7. Its sixth commit
+changes only scripts/golden_pixel_manifest.json beyond9a36bc9: attribution
+and three contract/proposal/report pixel hashes. Four other sample hashes,
+dimensions, DPI and pinned rasterizer remain unchanged. Full immutable trees,
+31 authenticated complete source blobs totaling3935436 bytes, binary-capable
+base patch, incremental patch and complete metadata/discussion receipts are
+retained in /private/tmp/S91-PR319-f0e6be9-intake. Unchanged prior source
+assessment still applies. This remains F-X210/Issue313, with no new F-ID.
+
+Font bytes, mappings and diagnostic implementation are unchanged. The four
+contributed modified static Gelasio faces still differ from the approved two
+original variable Gelasio assets. The approved3916-byte Noto subset remains
+exact and still lacks U2610. The requested-family cache provenance finding is
+not fixed by re-recording pixels. Recompute actual deterministic baselines
+from the integrated approved font graph under the exclusive baseline lease,
+with declared and reviewed attribution. Do not copy contributor expected
+hashes or reinterpret them as native metric-compatibility acceptance.
+
+The read-only assessment predates the separate user approval of the exact
+3916-byte subset. That approval is recorded above and does not expand to the
+extra static faces, altered notices or a changed subset. No asset is copied,
+font installed, source changed or baseline adopted by this refresh.
