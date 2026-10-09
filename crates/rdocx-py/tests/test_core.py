@@ -3760,8 +3760,9 @@ def test_comment_removal_paths_preserve_atomicity_and_revisions():
     held = document.tables[0].cell(0, 0)
     held.text = "replacement"
     assert len(document.comments) == 3
-    with pytest.raises(rdocx.StaleElementError):
-        held.text
+    # Setting a cell's text moves nothing outside the cell, so the cell
+    # handle itself stays valid.
+    assert held.text == "replacement"
     assert document.tables[0].cell(0, 0).text == "replacement"
     assert len(rdocx.Document.from_bytes(document.to_bytes()).comments) == 3
 
@@ -4278,3 +4279,73 @@ def test_hyperlinks_point_inside_the_document_and_carry_tooltips():
     body = next(story for story in reopened.stories if story.kind == "body")
     with pytest.raises(ValueError, match="anchor=name"):
         reopened.add_hyperlink_to_story(body, "x", "#Heading_Methods")
+
+
+def test_pictures_and_resizing_count_the_same_visible_drawings():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("a").add_run("").add_picture(
+        _one_pixel_png(), width=914400, height=914400
+    )
+    xml = _document_xml(document).decode()
+    drawing = re.search(r"<w:drawing>.*?</w:drawing>", xml, re.S).group(0)
+
+    def sized(cx):
+        return drawing.replace('cx="914400"', f'cx="{cx}"')
+
+    deleted = (
+        '<w:p><w:del w:id="90" w:author="x" w:date="2024-01-01T00:00:00Z">'
+        f"<w:r>{sized(111111)}</w:r></w:del></w:p>"
+    )
+    inserted = (
+        '<w:p><w:ins w:id="91" w:author="x" w:date="2024-01-01T00:00:00Z">'
+        f"<w:r>{sized(222222)}</w:r></w:ins></w:p>"
+    )
+    edited = xml.replace("<w:body>", "<w:body>" + deleted + inserted, 1)
+    source = io.BytesIO(document.to_bytes())
+    target = io.BytesIO()
+    with zipfile.ZipFile(source) as archive, zipfile.ZipFile(target, "w") as out:
+        for name in archive.namelist():
+            data = archive.read(name)
+            out.writestr(name, edited.encode() if name == "word/document.xml" else data)
+    document = rdocx.Document.from_bytes(target.getvalue())
+    pictures = document.pictures
+    # The deleted picture is not listed, the inserted one is.
+    assert [picture.width for picture in pictures] == [222222, 914400]
+    assert document.set_picture_size(pictures[-1], 5 * 914400, 5 * 914400) == 1
+    widths = re.findall(rb'<wp:extent cx="(\d+)"', _document_xml(document))
+    assert widths == [b"111111", b"222222", b"4572000"]
+
+
+def test_run_pictures_return_the_picture_and_refuse_bad_options_cleanly():
+    import rdocx
+
+    document = rdocx.Document()
+    run = document.add_paragraph("").add_run("")
+    picture = run.add_picture(_one_pixel_png(), 914400, 914400, description="Logo")
+    assert isinstance(picture, rdocx.Picture)
+    assert (picture.description, picture.width) == ("Logo", rdocx.Inches(1))
+    before = zipfile.ZipFile(io.BytesIO(document.to_bytes())).namelist()
+    run = document.paragraphs[0].runs[0]
+    with pytest.raises(rdocx.RdocxError):
+        run.add_picture(_one_pixel_png(), 914400, 914400, crop=(0.6, 0, 0.6, 0))
+    after = zipfile.ZipFile(io.BytesIO(document.to_bytes())).namelist()
+    assert after == before
+
+
+def test_a_link_to_a_heading_reuses_a_bookmark_at_its_start():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("Intro")
+    document.add_bookmark(
+        "h_1",
+        rdocx.RunRange(
+            start=rdocx.RunPosition(body_index=0, run_index=0),
+            end=rdocx.RunPosition(body_index=0, run_index=0),
+        ),
+    )
+    document.add_paragraph("x").add_hyperlink("intro", anchor=document.paragraphs[0])
+    assert [bookmark.name for bookmark in document.bookmarks] == ["h_1"]
+    assert document.hyperlinks[0].anchor == "h_1"

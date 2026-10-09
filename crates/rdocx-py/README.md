@@ -68,9 +68,11 @@ with open("report.pdf", "wb") as output:
   or every picture of an image relationship. Pictures are also replaced by
   image relationship.
 - Table edits that keep the grid, merges and widths consistent: `add_row`,
-  `add_column`, `insert_column`, `remove_column` and `Cell.split`, nested
-  tables through `Cell.add_table` and `Cell.tables`, table styles by name,
-  `autofit` and the table style region flags.
+  `add_column`, `columns`, `insert_column`, `remove_column` and `Cell.split`,
+  nested tables through `Cell.add_table` and `Cell.tables`, table styles by
+  name, `autofit` and the table style region flags. These edits and cell text
+  edits keep the table handle, and the row and cell handles they cannot move,
+  valid.
 - Hyperlinks to a web address or, with `anchor=`, to a bookmark or a heading
   that gets a bookmark when it has none, with optional tooltips.
 - Complete paragraph and run formatting, multilingual and vertical typography,

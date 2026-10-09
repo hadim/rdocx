@@ -8,6 +8,7 @@ from rdocx import (
     Cell,
     CellCollection,
     CellParagraphCollection,
+    Column,
     Comment,
     ComparisonDiagnostic,
     ContentFragment,
@@ -106,7 +107,9 @@ def exercise_rdocx_types(path: Path) -> None:
     assert_type(table.first_row, bool)
     table.horz_banding = True
     added_row: Row = table.add_row()
-    table.add_column(Inches(1))
+    column: Column = table.add_column(Inches(1))
+    column_cells: list[Cell] = table.columns[0].cells
+    assert_type(column.width, Length | None)
     table.insert_column(0)
     table.remove_column(0)
     nested: Table = cell.add_table(1, 1)
@@ -231,7 +234,9 @@ def exercise_rdocx_types(path: Path) -> None:
         relative_to=("margin", "paragraph"),
         crop=(0.1, 0.0, 0.1, 0.0),
     )
-    document.paragraphs[0].add_run("").add_picture(b"png", Inches(1), title="Logo")
+    logo: Picture = document.paragraphs[0].add_run("").add_picture(
+        b"png", Inches(1), title="Logo"
+    )
     internal: Run = document.paragraphs[0].add_hyperlink(
         "see", anchor=document.paragraphs[0], tooltip="Jump"
     )
@@ -377,11 +382,13 @@ if TYPE_CHECKING:
     Cell()  # type: ignore[call-arg]
     CellCollection()  # type: ignore[call-arg]
     CellParagraphCollection()  # type: ignore[call-arg]
+    Column()  # type: ignore[call-arg]
     CoreProperties()  # type: ignore[call-arg]
     Font()  # type: ignore[call-arg]
     Paragraph()  # type: ignore[call-arg]
     ParagraphCollection()  # type: ignore[call-arg]
     ParagraphFormat()  # type: ignore[call-arg]
+    Picture()  # type: ignore[call-arg]
     Row()  # type: ignore[call-arg]
     RowCollection()  # type: ignore[call-arg]
     Run()  # type: ignore[call-arg]

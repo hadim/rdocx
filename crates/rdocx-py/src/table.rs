@@ -81,6 +81,73 @@ impl TableAddress {
     }
 }
 
+/// What a revision bump inside one table moved, so that table, row and cell
+/// handles it cannot have moved stay valid.
+pub(crate) struct TableEdit {
+    table: Vec<PathSeg>,
+    scope: TableEditScope,
+}
+
+enum TableEditScope {
+    /// Rows or columns appended at the end: no existing index moved.
+    Appended,
+    /// Rows, columns or cells moved: only the table itself keeps its path.
+    Grid,
+    /// One cell's content changed: paths below that cell moved.
+    Cell(usize, usize),
+}
+
+impl TableEdit {
+    fn keeps(&self, path: &[PathSeg]) -> bool {
+        let below = |prefix: &[PathSeg]| path.len() > prefix.len() && path.starts_with(prefix);
+        match self.scope {
+            TableEditScope::Appended => true,
+            TableEditScope::Grid => !below(&self.table),
+            TableEditScope::Cell(row, cell) => {
+                let mut prefix = self.table.clone();
+                prefix.extend([PathSeg::Row(row), PathSeg::Cell(cell)]);
+                !below(&prefix)
+            }
+        }
+    }
+}
+
+/// Check a table, row or cell handle: it is valid at its own revision and
+/// after every later bump that was a table edit leaving its path in place.
+fn check_table_path(
+    py: Python<'_>,
+    document: &PyDocument,
+    path: &ContentPath,
+    kind: &str,
+    hint: &str,
+) -> PyResult<()> {
+    let current = document.revisions.current();
+    let kept = path.revision <= current
+        && (path.revision + 1..=current).all(|revision| {
+            document
+                .table_edits
+                .get(&revision)
+                .is_some_and(|edit| edit.keeps(&path.segs))
+        });
+    if kept {
+        return Ok(());
+    }
+    path.validate_revision(current, kind, hint)
+        .map_err(|error| stale_to_pyerr(py, error))
+}
+
+/// Advance the revision for an edit inside the table at `table`.
+fn bump_table(document: &mut PyDocument, table: &[PathSeg], scope: TableEditScope) {
+    let revision = document.revisions.bump();
+    document.table_edits.insert(
+        revision,
+        TableEdit {
+            table: table.to_vec(),
+            scope,
+        },
+    );
+}
+
 fn alignment_from_int(value: i32) -> PyResult<rdocx::Alignment> {
     match value {
         0 => Ok(rdocx::Alignment::Left),
@@ -328,14 +395,13 @@ impl PyTable {
 
     /// Check the handle's revision and resolve where its table is.
     fn address(&self, py: Python<'_>) -> PyResult<TableAddress> {
-        let document = self.document.borrow(py);
-        self.path
-            .validate_revision(
-                document.revisions.current(),
-                "table",
-                "Re-fetch it with doc.tables[i] or cell.tables[i].",
-            )
-            .map_err(|error| stale_to_pyerr(py, error))?;
+        check_table_path(
+            py,
+            &self.document.borrow(py),
+            &self.path,
+            "table",
+            "Re-fetch it with doc.tables[i] or cell.tables[i].",
+        )?;
         Ok(TableAddress::parse(&self.path)?.0)
     }
 
@@ -372,16 +438,22 @@ impl PyTable {
         edit(&mut table).map_err(|error| rdocx_to_pyerr(py, error))
     }
 
-    /// Apply one native edit that moves rows or cells, then advance the
-    /// revision so every live handle is re-fetched.
+    /// Apply one native edit that adds or moves rows or cells, then advance
+    /// the revision. This table handle stays valid, and so do the row and
+    /// cell handles the edit cannot have moved.
     fn edit_structure<T>(
         &self,
         py: Python<'_>,
+        scope: TableEditScope,
         edit: impl FnOnce(&mut rdocx::Table<'_>) -> rdocx::Result<T>,
     ) -> PyResult<T> {
         let value = self.edit(py, edit)?;
-        self.document.borrow_mut(py).revisions.bump();
+        self.bump(py, scope);
         Ok(value)
+    }
+
+    fn bump(&self, py: Python<'_>, scope: TableEditScope) {
+        bump_table(&mut self.document.borrow_mut(py), &self.path.segs, scope);
     }
 
     /// Capture a path below this table at the current revision.
@@ -389,6 +461,20 @@ impl PyTable {
         let mut path = self.path.segs.clone();
         path.extend_from_slice(segments);
         self.document.borrow(py).revisions.capture(path)
+    }
+
+    fn column(&self, py: Python<'_>, index: usize) -> PyResult<Py<PyColumn>> {
+        // The column sits below the table, so an edit that moves cells
+        // retires it as it retires row and cell handles.
+        let path = self.child_path(py, &[PathSeg::Row(usize::MAX)]);
+        Py::new(
+            py,
+            PyColumn {
+                document: self.document.clone_ref(py),
+                path,
+                index,
+            },
+        )
     }
 
     /// Resolve possibly negative row and cell indexes against this table.
@@ -701,7 +787,7 @@ impl PyTable {
         })?;
         // Absorbed or restored cells shift the indexes after this one.
         if changed {
-            self.document.borrow_mut(py).revisions.bump();
+            self.bump(py, TableEditScope::Grid);
         }
         Ok(())
     }
@@ -720,9 +806,10 @@ impl PyTable {
     }
 
     /// Append an empty row with the last row's row and cell formatting, as
-    /// python-docx `Table.add_row` does.
+    /// python-docx `Table.add_row` does. The table and its other row and
+    /// cell handles stay valid.
     fn add_row(&self, py: Python<'_>) -> PyResult<Py<PyRow>> {
-        let row = self.edit_structure(py, |table| {
+        let row = self.edit_structure(py, TableEditScope::Appended, |table| {
             table.add_row()?;
             Ok(table.row_count() - 1)
         })?;
@@ -730,12 +817,24 @@ impl PyTable {
         Py::new(py, PyRow::new(self.document.clone_ref(py), path))
     }
 
-    /// Append a grid column, `width` wide or as wide as the last column, as
-    /// python-docx `Table.add_column` does.
+    /// Append a grid column, `width` wide or as wide as the last column, and
+    /// return it, as python-docx `Table.add_column` does. The table and its
+    /// row and cell handles stay valid.
     #[pyo3(signature = (width = None))]
-    fn add_column(&self, py: Python<'_>, width: Option<i64>) -> PyResult<()> {
+    fn add_column(&self, py: Python<'_>, width: Option<i64>) -> PyResult<Py<PyColumn>> {
         let columns = self.read(py, |table| table.column_count())?;
-        self.insert_column(py, columns as isize, width)
+        self.insert_column(py, columns as isize, width)?;
+        self.column(py, columns)
+    }
+
+    /// The grid columns, as python-docx `Table.columns` lists them.
+    #[getter]
+    fn columns<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let columns = self.read(py, |table| table.column_count())?;
+        let columns = (0..columns)
+            .map(|index| self.column(py, index))
+            .collect::<PyResult<Vec<_>>>()?;
+        PyList::new(py, columns)
     }
 
     /// Insert a grid column before grid column `index`, or append one when
@@ -748,7 +847,14 @@ impl PyTable {
         } else {
             normalize_index(index, columns, "column")?
         };
-        self.edit_structure(py, |table| {
+        // An appended column moves no cell, an inserted one shifts the
+        // cells after it.
+        let scope = if index == columns {
+            TableEditScope::Appended
+        } else {
+            TableEditScope::Grid
+        };
+        self.edit_structure(py, scope, |table| {
             table.insert_column(index, width.map(rdocx::Length::emu))
         })
     }
@@ -763,7 +869,7 @@ impl PyTable {
             .inner
             .remove_table_column(table, column)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        document.revisions.bump();
+        bump_table(&mut document, &self.path.segs, TableEditScope::Grid);
         Ok(())
     }
 
@@ -786,7 +892,7 @@ impl PyTable {
                 .inner
                 .clone_table_row(table_index, source, insert_at)
                 .map_err(|error| rdocx_to_pyerr(py, error))?;
-            document.revisions.bump();
+            bump_table(&mut document, &self.path.segs, TableEditScope::Grid);
             let mut segments = self.path.segs.clone();
             segments.push(PathSeg::Row(inserted));
             document.revisions.capture(segments)
@@ -807,8 +913,83 @@ impl PyTable {
             .inner
             .remove_table_row(table_index, row_index)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        document.revisions.bump();
+        bump_table(&mut document, &self.path.segs, TableEditScope::Grid);
         Ok(())
+    }
+}
+
+/// One grid column of a table, as python-docx `_Column` is.
+#[pyclass(name = "Column")]
+pub struct PyColumn {
+    document: Py<PyDocument>,
+    /// The table path followed by a placeholder row.
+    path: ContentPath,
+    index: usize,
+}
+
+impl PyColumn {
+    fn table(&self, py: Python<'_>) -> PyResult<PyTable> {
+        check_table_path(
+            py,
+            &self.document.borrow(py),
+            &self.path,
+            "column",
+            "Re-fetch it with table.columns[i].",
+        )?;
+        let segments = self.path.segs[..self.path.segs.len() - 1].to_vec();
+        let path = ContentPath::new(segments.into_iter().collect(), self.path.revision);
+        Ok(PyTable::new(self.document.clone_ref(py), path))
+    }
+}
+
+#[pymethods]
+impl PyColumn {
+    #[getter]
+    fn index(&self) -> usize {
+        self.index
+    }
+
+    #[getter]
+    fn width(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        let width = self
+            .table(py)?
+            .read(py, |table| table.grid_widths().get(self.index).copied())?;
+        width.map(|width| length_object(py, width)).transpose()
+    }
+
+    #[setter]
+    fn set_width(&self, py: Python<'_>, value: i64) -> PyResult<()> {
+        self.table(py)?
+            .set_column_width(py, self.index as isize, value)
+    }
+
+    /// The cell covering this grid column in each row, skipping rows that
+    /// omit it. A merged cell appears in each column it spans.
+    #[getter]
+    fn cells<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let table = self.table(py)?;
+        let positions = table.read(py, |table| {
+            (0..table.row_count())
+                .filter_map(|row| {
+                    let cells = table.row(row)?;
+                    let mut start = cells.grid_before().unwrap_or(0) as usize;
+                    (0..cells.cell_count()).find_map(|cell| {
+                        let span = cells.cell(cell)?.grid_span().unwrap_or(1).max(1) as usize;
+                        let found = (start..start + span).contains(&self.index);
+                        start += span;
+                        found.then_some((row, cell))
+                    })
+                })
+                .collect::<Vec<_>>()
+        })?;
+        let cells = positions
+            .into_iter()
+            .map(|(row, cell)| {
+                let path = table.child_path(py, &[PathSeg::Row(row), PathSeg::Cell(cell)]);
+                Py::new(py, PyCell::new(self.document.clone_ref(py), path))
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        PyList::new(py, cells)
     }
 }
 
@@ -826,14 +1007,13 @@ impl PyRowCollection {
         }
     }
     fn validate(&self, py: Python<'_>) -> PyResult<TableAddress> {
-        let document = self.document.borrow(py);
-        self.table_path
-            .validate_revision(
-                document.revisions.current(),
-                "row collection",
-                "Re-fetch it with table.rows.",
-            )
-            .map_err(|error| stale_to_pyerr(py, error))?;
+        check_table_path(
+            py,
+            &self.document.borrow(py),
+            &self.table_path,
+            "row collection",
+            "Re-fetch it with table.rows.",
+        )?;
         Ok(TableAddress::parse(&self.table_path)?.0)
     }
     fn len(&self, py: Python<'_>) -> PyResult<usize> {
@@ -924,14 +1104,13 @@ impl PyRow {
         Self { document, path }
     }
     fn validate(&self, py: Python<'_>) -> PyResult<(TableAddress, usize)> {
-        let document = self.document.borrow(py);
-        self.path
-            .validate_revision(
-                document.revisions.current(),
-                "row",
-                "Re-fetch it with table.rows[i].",
-            )
-            .map_err(|error| stale_to_pyerr(py, error))?;
+        check_table_path(
+            py,
+            &self.document.borrow(py),
+            &self.path,
+            "row",
+            "Re-fetch it with table.rows[i].",
+        )?;
         let (address, row, _) = TableAddress::parse(&self.path)?;
         Ok((
             address,
@@ -1058,14 +1237,13 @@ impl PyCellCollection {
         Self { document, row_path }
     }
     fn validate(&self, py: Python<'_>) -> PyResult<(TableAddress, usize)> {
-        let document = self.document.borrow(py);
-        self.row_path
-            .validate_revision(
-                document.revisions.current(),
-                "cell collection",
-                "Re-fetch it with row.cells.",
-            )
-            .map_err(|error| stale_to_pyerr(py, error))?;
+        check_table_path(
+            py,
+            &self.document.borrow(py),
+            &self.row_path,
+            "cell collection",
+            "Re-fetch it with row.cells.",
+        )?;
         let (address, row, _) = TableAddress::parse(&self.row_path)?;
         Ok((
             address,
@@ -1164,14 +1342,13 @@ impl PyCell {
         Self { document, path }
     }
     fn validate(&self, py: Python<'_>) -> PyResult<(TableAddress, usize, usize)> {
-        let document = self.document.borrow(py);
-        self.path
-            .validate_revision(
-                document.revisions.current(),
-                "cell",
-                "Re-fetch it with row.cells[i].",
-            )
-            .map_err(|error| stale_to_pyerr(py, error))?;
+        check_table_path(
+            py,
+            &self.document.borrow(py),
+            &self.path,
+            "cell",
+            "Re-fetch it with row.cells[i].",
+        )?;
         match TableAddress::parse(&self.path)? {
             (address, Some(row), Some(cell)) => Ok((address, row, cell)),
             _ => Err(PyIndexError::new_err("cell path is incomplete")),
@@ -1222,6 +1399,21 @@ impl PyCell {
         })
     }
 
+    /// Advance the revision for an edit inside this cell, or across its
+    /// table for `TableEditScope::Grid`. Handles outside what the edit
+    /// moved stay valid.
+    fn bump(&self, py: Python<'_>, grid: bool) -> PyResult<()> {
+        let (_, row, cell) = self.validate(py)?;
+        let table = &self.path.segs[..self.path.segs.len() - 2];
+        let scope = if grid {
+            TableEditScope::Grid
+        } else {
+            TableEditScope::Cell(row, cell)
+        };
+        bump_table(&mut self.document.borrow_mut(py), table, scope);
+        Ok(())
+    }
+
     /// A handle on the `index`-th table nested directly in this cell.
     fn nested_table(&self, py: Python<'_>, index: usize) -> PyResult<Py<PyTable>> {
         let mut segments = self.path.segs.clone();
@@ -1265,8 +1457,9 @@ impl PyCell {
         } else {
             self.edit(py, |cell| cell.try_set_text(value))?;
         }
-        self.document.borrow_mut(py).revisions.bump();
-        Ok(())
+        // Only handles inside this cell moved, so its siblings, its row and
+        // its table stay valid, as in `table.add_row().cells` loops.
+        self.bump(py, false)
     }
     #[getter]
     fn paragraphs(&self, py: Python<'_>) -> PyResult<Py<PyCellParagraphCollection>> {
@@ -1278,6 +1471,7 @@ impl PyCell {
     }
     fn add_paragraph(&self, py: Python<'_>, text: &str) -> PyResult<Py<PyParagraph>> {
         let (table, row, cell) = self.top_level(py, "Cell.add_paragraph")?;
+        self.bump(py, false)?;
         let path = {
             let mut document = self.document.borrow_mut(py);
             let paragraph = {
@@ -1292,7 +1486,6 @@ impl PyCell {
                 cell.add_paragraph(text);
                 paragraph
             };
-            document.revisions.bump();
             document.revisions.capture(smallvec![
                 PathSeg::Body(table),
                 PathSeg::Row(row),
@@ -1315,13 +1508,51 @@ impl PyCell {
 
     /// Add a nested table after this cell's content, followed by the empty
     /// paragraph Word requires at the end of a cell.
+    ///
+    /// As in python-docx, the table is as wide as the cell, its columns
+    /// equal, when the cell has a fixed width.
     fn add_table(&self, py: Python<'_>, rows: usize, cols: usize) -> PyResult<Py<PyTable>> {
-        let index = self.read(py, |cell| cell.tables().count())?;
+        let (index, width) = self.read(py, |cell| (cell.tables().count(), cell.width()))?;
+        // A cell without a fixed width is as wide as the grid columns it
+        // covers.
+        let width = match width {
+            Some(width) => Some(width),
+            None => {
+                let (address, row, cell) = self.validate(py)?;
+                let document = self.document.borrow(py);
+                let table = address.get(&document.inner)?;
+                let grid = table.grid_widths();
+                table.row(row).and_then(|cells| {
+                    let mut start = cells.grid_before().unwrap_or(0) as usize;
+                    for index in 0..cell {
+                        start += cells.cell(index)?.grid_span().unwrap_or(1).max(1) as usize;
+                    }
+                    let span = cells.cell(cell)?.grid_span().unwrap_or(1).max(1) as usize;
+                    let covered = grid.get(start..start + span)?;
+                    Some(rdocx::Length::twips(
+                        covered.iter().map(|width| width.to_twips()).sum(),
+                    ))
+                })
+            }
+        };
         self.edit_table(py, |table, row, cell| {
             let mut cell = table.cell(row, cell).expect("the cell was checked");
-            cell.add_table_checked(rows, cols).map(|_| ())
+            let mut nested = cell.add_table_checked(rows, cols)?;
+            if let Some(width) = width.filter(|width| width.to_twips() > 0) {
+                let twips = width.to_twips();
+                let columns = cols as i32;
+                let widths = (0..columns)
+                    .map(|column| {
+                        rdocx::Length::twips(twips / columns + i32::from(column < twips % columns))
+                    })
+                    .collect::<Vec<_>>();
+                if widths.iter().all(|width| width.to_twips() > 0) {
+                    nested.set_grid_widths(&widths)?;
+                }
+            }
+            Ok(())
         })?;
-        self.document.borrow_mut(py).revisions.bump();
+        self.bump(py, false)?;
         self.nested_table(py, index)
     }
 
@@ -1330,7 +1561,7 @@ impl PyCell {
     /// many cells the merge became.
     fn split(&self, py: Python<'_>) -> PyResult<usize> {
         let cells = self.edit_table(py, |table, row, cell| table.split_cell(row, cell))?;
-        self.document.borrow_mut(py).revisions.bump();
+        self.bump(py, true)?;
         Ok(cells)
     }
 
@@ -1442,14 +1673,13 @@ impl PyCellParagraphCollection {
         }
     }
     fn validate(&self, py: Python<'_>) -> PyResult<(usize, usize, usize)> {
-        let document = self.document.borrow(py);
-        self.cell_path
-            .validate_revision(
-                document.revisions.current(),
-                "cell paragraph collection",
-                "Re-fetch it with cell.paragraphs.",
-            )
-            .map_err(|error| stale_to_pyerr(py, error))?;
+        check_table_path(
+            py,
+            &self.document.borrow(py),
+            &self.cell_path,
+            "cell paragraph collection",
+            "Re-fetch it with cell.paragraphs.",
+        )?;
         match TableAddress::parse(&self.cell_path)? {
             (address, Some(row), Some(cell)) => {
                 Ok((address.top_level("Cell.paragraphs")?, row, cell))

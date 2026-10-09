@@ -1138,13 +1138,13 @@ def _shape(table):
 
 
 def test_table_columns_are_inserted_and_removed_through_merges():
-    from rdocx import Document, Inches, RdocxError, StaleElementError
+    from rdocx import Document, Inches, RdocxError
 
     document = _merged_table()
     table = document.tables[0]
     table.insert_column(1)
-    with pytest.raises(StaleElementError):
-        table.grid_widths
+    # The table handle stays valid across its own column edits.
+    assert len(table.grid_widths) == 4
     table = Document.from_bytes(document.to_bytes()).tables[0]
     assert table.grid_widths == (Inches(1),) * 4
     assert table.width == Inches(4)
@@ -1256,3 +1256,62 @@ def test_nested_tables_are_added_and_edited_through_their_cell():
         inner.remove_row(0)
     with pytest.raises(ValueError, match="not a direct body child"):
         reopened.find_content_index(inner)
+
+
+def test_python_docx_row_and_column_idioms_keep_handles_valid():
+    from rdocx import Document, Inches, StaleElementError
+
+    document = Document()
+    table = document.add_table(1, 3)
+    header = table.rows[0].cells
+    header[0].text = "Name"
+    header[1].text = "Qty"
+    header[2].text = "Price"
+    for name, qty, price in [("apple", "3", "1.0"), ("pear", "5", "2.5")]:
+        cells = table.add_row().cells
+        cells[0].text = name
+        cells[1].text = qty
+        cells[2].text = price
+    table.add_row()
+    table.add_row()
+    column = table.add_column(Inches(1))
+    assert column.index == 3
+    assert column.width == Inches(1)
+    column.cells[0].text = "Note"
+    assert len(table.columns) == 4
+    assert [cell.text for cell in table.columns[0].cells] == [
+        "Name",
+        "apple",
+        "pear",
+        "",
+        "",
+    ]
+    held = table.cell(1, 2)
+    table.cell(1, 0).text = "apples"
+    assert held.text == "1.0"
+    # An inserted column moves cells, so cell handles retire but the
+    # table handle stays.
+    table.insert_column(0)
+    with pytest.raises(StaleElementError):
+        held.text
+    assert table.cell(1, 1).text == "apples"
+    reopened = Document.from_bytes(document.to_bytes())
+    assert [cell.text for cell in reopened.tables[0].rows[0].cells] == [
+        "",
+        "Name",
+        "Qty",
+        "Price",
+        "Note",
+    ]
+    assert len(reopened.tables[0].rows) == 5
+
+
+def test_nested_tables_take_the_cell_width_and_a_bookmark_survives_column_removal():
+    from rdocx import Document, Inches
+
+    document = Document()
+    table = document.add_table(1, 2)
+    table.grid_widths = [Inches(2), Inches(3)]
+    nested = table.cell(0, 1).add_table(1, 3)
+    assert nested.grid_widths == (Inches(1),) * 3
+    assert nested.width == Inches(3)

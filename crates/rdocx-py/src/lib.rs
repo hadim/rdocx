@@ -23,7 +23,7 @@ use formatting::{PyFont, PyParagraphFormat};
 use paragraph::{PyParagraph, PyParagraphCollection};
 use run::{PyRun, PyRunCollection};
 use table::{
-    PyCell, PyCellCollection, PyCellParagraphCollection, PyRow, PyRowCollection, PyTable,
+    PyCell, PyCellCollection, PyCellParagraphCollection, PyColumn, PyRow, PyRowCollection, PyTable,
     PyTableCollection,
 };
 
@@ -149,6 +149,7 @@ fn _rdocx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyFont>()?;
     module.add_class::<PyParagraphFormat>()?;
     module.add_class::<PyTable>()?;
+    module.add_class::<PyColumn>()?;
     module.add_class::<PyTableCollection>()?;
     module.add_class::<PyRow>()?;
     module.add_class::<PyRowCollection>()?;

@@ -739,10 +739,10 @@ impl PyHyperlink {
 /// One body picture, as `Document.pictures` lists it.
 #[pyclass(name = "Picture", frozen, skip_from_py_object)]
 pub struct PyPicture {
-    relationship_id: String,
-    /// The position among the body pictures showing the same relationship,
-    /// which selects this one for `Document.set_picture_size`.
-    occurrence: usize,
+    pub(crate) relationship_id: String,
+    /// The position in `Document.pictures`, which selects this picture for
+    /// `Document.set_picture_size`.
+    index: usize,
     revision: u64,
     name: Option<String>,
     description: Option<String>,
@@ -1834,6 +1834,8 @@ impl PyCoreProperties {
 pub struct PyDocument {
     pub(crate) inner: rdocx::Document,
     pub(crate) revisions: RevisionCounter,
+    /// The bumps that only moved content inside one table, by revision.
+    pub(crate) table_edits: BTreeMap<u64, crate::table::TableEdit>,
 }
 
 impl PyDocument {
@@ -1841,6 +1843,7 @@ impl PyDocument {
         Self {
             inner,
             revisions: RevisionCounter::new(),
+            table_edits: BTreeMap::new(),
         }
     }
 
@@ -2199,6 +2202,42 @@ impl PyDocument {
 
     // Both checked item and physical cell routes share singular count/error and
     // publication policy. The concrete closures are the two actual consumers.
+    /// Snapshot the pictures a reader sees, in the order
+    /// `rdocx::Document::set_picture_size_at` counts them.
+    pub(crate) fn picture_snapshots(&self, py: Python<'_>) -> PyResult<Vec<PyPicture>> {
+        let drawings = self
+            .inner
+            .picture_drawings()
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        Ok(drawings
+            .into_iter()
+            .enumerate()
+            .map(|(index, image)| {
+                let part = self.inner.image_content_type(&image.embed_id);
+                PyPicture {
+                    index,
+                    revision: self.revisions.current(),
+                    content_type: part.as_ref().map(|(content_type, _)| content_type.clone()),
+                    filename: part
+                        .as_ref()
+                        .and_then(|(_, name)| name.rsplit('/').next().map(str::to_owned)),
+                    blob: self
+                        .inner
+                        .image_data(&image.embed_id)
+                        .map(|bytes| PyBytes::new(py, &bytes).unbind()),
+                    relationship_id: image.embed_id,
+                    name: image.name,
+                    description: image.description,
+                    title: image.title,
+                    decorative: image.decorative,
+                    width: image.width_emu,
+                    height: image.height_emu,
+                    inline: !image.is_anchor,
+                }
+            })
+            .collect())
+    }
+
     pub(crate) fn scoped_replacement<F>(&mut self, py: Python<'_>, mutation: F) -> PyResult<usize>
     where
         F: FnOnce(
@@ -2502,13 +2541,9 @@ impl PyDocument {
                     },
                 ));
             }
-            let (relationship_id, occurrence) =
-                (picture.relationship_id.clone(), picture.occurrence);
+            let index = picture.index;
             return py
-                .detach(|| {
-                    self.inner
-                        .set_picture_size_at(&relationship_id, occurrence, width, height)
-                })
+                .detach(|| self.inner.set_picture_size_at(index, width, height))
                 .map(|()| 1)
                 .map_err(|error| rdocx_to_pyerr(py, error));
         }
@@ -2525,40 +2560,7 @@ impl PyDocument {
     /// type, size and alt text.
     #[getter]
     fn pictures<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
-        let mut occurrences = HashMap::<String, usize>::new();
-        let pictures = self
-            .inner
-            .images()
-            .into_iter()
-            .filter(|image| !image.embed_id.is_empty())
-            .map(|image| {
-                let occurrence = occurrences.entry(image.embed_id.clone()).or_default();
-                let part = self.inner.image_content_type(&image.embed_id);
-                let picture = PyPicture {
-                    occurrence: *occurrence,
-                    revision: self.revisions.current(),
-                    content_type: part.as_ref().map(|(content_type, _)| content_type.clone()),
-                    filename: part
-                        .as_ref()
-                        .and_then(|(_, name)| name.rsplit('/').next().map(str::to_owned)),
-                    blob: self
-                        .inner
-                        .image_data(&image.embed_id)
-                        .map(|bytes| PyBytes::new(py, &bytes).unbind()),
-                    relationship_id: image.embed_id,
-                    name: image.name,
-                    description: image.description,
-                    title: image.title,
-                    decorative: image.decorative,
-                    width: image.width_emu,
-                    height: image.height_emu,
-                    inline: !image.is_anchor,
-                };
-                *occurrence += 1;
-                picture
-            })
-            .collect::<Vec<_>>();
-        PyTuple::new(py, pictures)
+        PyTuple::new(py, self.picture_snapshots(py)?)
     }
 
     fn split_run(
