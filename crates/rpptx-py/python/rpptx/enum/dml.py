@@ -89,6 +89,9 @@ class MSO_COLOR_TYPE(IntEnum):
     SYSTEM = 104
 
 
+MSO_COLOR = MSO_COLOR_TYPE
+
+
 class MSO_THEME_COLOR_INDEX(IntEnum):
     """A theme colour, as `ColorFormat.theme_color` reads and writes it.
 
@@ -124,6 +127,7 @@ __all__ = [
     "MSO_ARROWHEAD_LENGTH",
     "MSO_ARROWHEAD_STYLE",
     "MSO_ARROWHEAD_WIDTH",
+    "MSO_COLOR",
     "MSO_COLOR_TYPE",
     "MSO_FILL",
     "MSO_FILL_TYPE",

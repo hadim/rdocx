@@ -1512,6 +1512,11 @@ def test_font_color_is_a_color_format_and_every_color_takes_rgbcolor_or_hex(tmp_
         shape.line.color.rgb = "red"
     with pytest.raises(ValueError, match="theme_color must be an MSO_THEME_COLOR member"):
         font.color.theme_color = MSO_THEME_COLOR.MIXED
+    # As in python-pptx, None does not clear a colour.
+    with pytest.raises(TypeError, match="theme_color must be an MSO_THEME_COLOR member, got NoneType"):
+        font.color.theme_color = None
+    with pytest.raises(TypeError, match='rgb must be an RGBColor or a hex string such as "FF0000", got NoneType'):
+        font.color.rgb = None
     assert presentation.to_bytes() == before
 
     pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
@@ -1520,6 +1525,7 @@ def test_font_color_is_a_color_format_and_every_color_takes_rgbcolor_or_hex(tmp_
         pptx.enum.dml.MSO_THEME_COLOR.ACCENT_2
     )
     assert oracle.line.color.rgb == pptx.dml.color.RGBColor(0, 0, 0xFF)
+    assert rpptx.enum.dml.MSO_COLOR is MSO_COLOR_TYPE
     for name in ("MSO_COLOR_TYPE", "MSO_THEME_COLOR"):
         expected = {member.name: int(member) for member in getattr(pptx.enum.dml, name)}
         assert {member.name: int(member) for member in getattr(rpptx.enum.dml, name)} == expected

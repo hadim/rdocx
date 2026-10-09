@@ -271,11 +271,11 @@ colour rule above. `border(edge)` reads a `(style, size, color)` tuple or
 `set_column_width(column, width)` changes one. Both keep the table width and
 every covering cell width in step. `Table.indent` reads and writes `w:tblInd`
 as a `Length`. A negative indent pulls the table into the left margin, as Word
-writes and honours it, and `None` removes the indent. `Row.height` and `Row.height_rule` follow
-python-docx with `WD_ROW_HEIGHT_RULE.AT_LEAST` and `EXACTLY`. Assigning a
-height keeps an exact rule, and a rule needs a height to apply to. Unlike
-python-docx, a row whose `w:trHeight` has an `auto` rule or no value reads no
-height, and assigning one writes a minimum.
+writes and honours it, and `None` removes the indent. `Row.height` and
+`Row.height_rule` follow python-docx with `WD_ROW_HEIGHT_RULE.AT_LEAST` and
+`EXACTLY`. Assigning a height keeps an exact rule, and a rule needs a height to
+apply to. Unlike python-docx, a row whose `w:trHeight` has an `auto` rule or no
+value reads no height, and assigning one writes a minimum.
 `Row.cant_split` and `Row.is_header` are tri-state. `Cell.shading`,
 `Cell.border(edge)`, `Cell.set_border`, `Cell.margins` and `Cell.set_margins`
 are the same forms for one cell. These edits move no content, so they keep
@@ -534,8 +534,12 @@ the transforms of an existing sRGB colour. It takes any form of the colour rule
 in the rdocx section above, so a hex string works too. `ColorFormat.type` reads
 an `MSO_COLOR_TYPE` member and `theme_color` reads and writes an
 `a:schemeClr` as an `MSO_THEME_COLOR` member, keeping the transforms of an
-existing theme colour. Both enumerations live in `rpptx.enum.dml` with
-python-pptx's values. Reading `LineFormat.color` changes
+existing theme colour. Unlike rdocx, where `None` on `rgb` or `theme_color`
+removes the colour, rpptx follows python-pptx: `None` clears nothing and
+raises `TypeError` naming the parameter and the accepted forms. Both
+enumerations live in `rpptx.enum.dml` with python-pptx's values, and
+`MSO_COLOR` aliases `MSO_COLOR_TYPE` as in rdocx. Reading
+`LineFormat.color` changes
 nothing, and assigning its `rgb` makes the line fill solid. `LineFormat.width`
 reads zero without a width, writes `None` as zero, and rejects values above
 the `ST_LineWidth` maximum. `LineFormat.dash_style` reads the `a:prstDash`

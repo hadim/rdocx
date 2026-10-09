@@ -609,7 +609,8 @@ impl PyColorFormat {
         }
     }
 
-    /// Sets an sRGB colour from an `RGBColor` or a hex string.
+    /// Sets an sRGB colour from an `RGBColor` or a hex string. As in
+    /// python-pptx, `None` does not clear the colour and raises `TypeError`.
     #[setter]
     fn set_rgb(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
         let rgb = rgb_color(value, "rgb")?;
@@ -646,9 +647,16 @@ impl PyColorFormat {
     }
 
     /// Sets a theme colour, an `a:schemeClr`. An existing theme colour keeps
-    /// its transforms, such as a brightness.
+    /// its transforms, such as a brightness. As in python-pptx, `None` does
+    /// not clear the colour and raises `TypeError`.
     #[setter]
-    fn set_theme_color(&self, py: Python<'_>, value: i32) -> PyResult<()> {
+    fn set_theme_color(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let Ok(value) = value.extract::<i32>() else {
+            return Err(PyTypeError::new_err(format!(
+                "theme_color must be an MSO_THEME_COLOR member, got {}",
+                value.get_type().name()?
+            )));
+        };
         let token = THEME_COLORS
             .iter()
             .find(|(member, _)| *member == value)
