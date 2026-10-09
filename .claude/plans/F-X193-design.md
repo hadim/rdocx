@@ -29,6 +29,15 @@ Nested marks choose their own effective highlight. Unmarked siblings and
 ordinary CSS backgrounds retain existing behavior. No public type or method
 is added. The native pre-1.0 API is unchanged.
 
+The required repository-policy unittest regenerates published archives and
+checks exact normalized member bytes. Source additions therefore require a
+fresh local rdocx archive measurement in existing
+`scripts/readme_doctests.py` and the root README footprint row. Rebuild the
+actual archive with the reviewed local graph, update only the observed rdocx
+measurement, and rerun the policy suite. Do not widen compression tolerances
+or change package inventories to make the measurement pass. Integration must
+regenerate any shared measurement after combining workers.
+
 ## Rejected alternatives
 
 - Inherit all backgrounds, which makes normal CSS paint unrelated children.
@@ -58,6 +67,12 @@ adopt the contributor's test claims as local evidence.
   `docs/hld/06-presentationml-model.md` reader/writer conventions. No OOXML
   parser/serializer changes. Round-trip imported formatting and retain opaque
   unrelated source through save/reopen controls.
+- Archive measurement carrier: read `docs/hld/15-build-and-toolchain.md`,
+  Packaging, and `.claude/commands/release.md`. The existing required policy
+  suite checks the measured archive, exact member bytes/count and size ceiling.
+  Rebuild the actual local rdocx archive and inspect the README and script
+  measurement diff. Confirm no manifest, lockfile, version or publication
+  behavior changes. This is reversible gate maintenance, not publication.
 - No new file, module, dependency, trait, generic or feature flag.
 
 ## Hash harness
@@ -68,13 +83,16 @@ Expected unchanged. The sample generator does not import semantic mark HTML.
 
 - `crates/rdocx/src/html.rs`
 - HLD files listed above
+- `scripts/readme_doctests.py` rdocx archive measurement
+- Root README rdocx footprint row
 - Scoped rdocx Cargo and the shared regression/test gate execution
 
 ## Implementation checklist
 
-- [ ] Add contributed reproducer and prove failure at immutable Base.
-- [ ] Assess and adapt exact PR294 semantic highlight change.
-- [ ] Add CSS precedence and save/reopen controls.
+- [x] Add contributed reproducer and prove failure at immutable Base.
+- [x] Assess and adapt exact PR294 semantic highlight change.
+- [x] Add CSS precedence and save/reopen controls.
+- [ ] Rederive local rdocx archive measurements and pass repository policy.
 - [ ] Run scoped verification and independent zero-finding microscope.
 - [ ] Prepare validated handoff, preserving contributor provenance.
 

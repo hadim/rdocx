@@ -35,9 +35,10 @@ negative values and removal, without replacing Word's placement policy.
 ## Approach
 
 Extend existing types and files. Add `Cell.text_frame -> TextFrame` to the
-PowerPoint binding. Capture its existing cell path including Row and Cell.
-Retrieving the handle validates ownership and revision without creating a text
-body, mutating source or advancing revision.
+PowerPoint binding. Capture its existing cell path including Row and Cell. Set the new optional
+`ContentPath.cell_text_revision` directly to the current cell-text generation.
+Retrieving the handle validates ownership and both applicable generations
+without creating a text body, mutating source or advancing a generation.
 
 Add two concrete resolution functions in existing `text.rs`:
 
@@ -76,12 +77,39 @@ The consuming accessor follows `ShapeMut::into_text_frame` at
 multiple paragraphs, runs, alignment, line spacing, spacing before/after,
 font size/name/bold/colour, vertical_anchor and word_wrap. Anchor and wrapping
 already exist at `crates/rpptx-py/src/text.rs:381` and `:415`, so a separate
-cell anchor property is unnecessary. Retain existing hyperlink ownership
-behavior while resolving its text properties through the cell body.
+cell anchor property is unnecessary. Resolve hyperlink reads through the cell
+body. Cell hyperlink assignment remains unsupported by the native relationship
+setter at `crates/rpptx/src/lib.rs:3967`. Reject this assignment before creating
+or changing any slide relationship. Do not add a native hyperlink API.
 
-Structural changes advance the global revision once. Return new handles at
-the new revision where the established API does so. Value-only formatting
-retains live handles. Cell recovery paths already have the right shape at
+Extend the actual owner `PyPresentation` in existing `presentation.rs:152` with
+`cell_text_revisions: RevisionCounter`. Extend shared `ContentPath` in
+`crates/oxml-py-support/src/lib.rs:29` with `cell_text_revision: Option<u64>`.
+Existing constructors and captures set it to None. The new cell-backed frame
+sets Some directly, and paragraph, run, font and collection descendants inherit
+that value rather than dropping it on capture. These concrete current consumers
+justify one additional generation field. No per-cell map, generic revision
+framework or forwarding builder is needed.
+
+`validate_path` checks the existing global document revision first, then the
+optional cell-text generation. Global structural changes retain the established
+all-handle invalidation behavior. Cell text replacement and successful merge or
+split advance only the cell-text generation, preserving existing Table, Row,
+Column and Cell grid handles. Native merge rejects a same-cell rectangle and
+split rejects an unmerged cell at `crates/rpptx/src/lib.rs:8860` and `:8911`.
+Those failures advance neither generation and leave source unchanged.
+
+For cell-backed TextFrame or Paragraph text replacement and paragraph/run
+addition, advance the cell-text generation only after success. Return new
+handles with the new generation where the established API does so. Shape-backed
+operations retain their current global behavior. `try_replace_text` with no
+match advances neither generation. Run text replacement preserves run topology
+as it does today at `crates/rpptx-py/src/text.rs:904`. Font, paragraph formatting,
+anchor and wrapping edits retain both generations. The presentation-wide
+cell-text counter conservatively invalidates nested handles in other cells,
+while their Cell and Table handles stay live. A cell-generation mismatch raises
+StaleElementError with a cell-text topology explanation and a fresh-cell-frame
+recovery hint. Existing recovery paths already have the right shape at
 `crates/rpptx-py/src/lib.rs:71`.
 
 Use the existing signed twip checker for Word table indentation. Add:
@@ -123,7 +151,10 @@ only rendering policy.
 |---|---|---|
 | regression | `test_table_cells_expose_the_same_editable_text_frame_surface_as_shapes` | Two paragraphs and runs, font size/name/bold/colour, alignment, spacing, anchor and wrapping survive save/reopen while the table remains editable. |
 | regression | `test_cell_text_frame_edits_preserve_merge_origin_and_continuation_ownership` | Origin visible content, continuation addressing and unrelated cells preserve explicit grid-cell ownership. |
-| regression | `test_cell_text_frame_structural_edits_stale_every_earlier_nested_handle` | Frame, collections, paragraph, run and font stale after successful structure changes, formatting alone retains validity. |
+| regression | `test_cell_text_frame_structural_edits_stale_every_earlier_nested_handle` | Frame, collections, paragraph, run and font stale after successful cell-text topology changes, including other-cell nested handles. Table and Cell handles remain live. |
+| regression | `test_cell_text_topology_failures_and_no_match_preserve_source_and_handles` | Same-cell merge, invalid merge, unmerged split and unmatched replacement advance neither generation. Failed mutations preserve package source. |
+| regression | `test_cell_text_value_edits_retain_handles_and_global_structure_stales_them` | Run text, formatting, anchor and wrapping retain handles. Existing global structural changes still stale both ordinary and cell-backed text handles. |
+| regression | `test_cell_hyperlink_assignment_rejects_before_relationship_mutation` | Unsupported assignment leaves text, slide relationships and package bytes unchanged, with no orphan relationship. |
 | regression | `test_cell_text_frame_edits_reach_pdf_and_raster_output` | Actual deterministic PDF and PNG show multi-paragraph cell edits and formatting. |
 | regression | `test_table_indent_accepts_negative_zero_positive_and_none` | Length inspection, signed values, truncation and direct indent removal survive save/reopen. |
 | regression | `test_invalid_table_indent_leaves_source_and_handles_unchanged` | Wrong types and signed twip overflow fail atomically without advancing revision. |
@@ -141,8 +172,9 @@ APIs against the claimed base before implementation.
 ## HLD impact
 
 - `docs/hld/10-bindings-spec.md`: Python cell-backed TextFrame ownership,
-  complete reused surface, native consuming accessor and signed table indent
-  authoring/removal. No HLD08 placement change is intended.
+  complete reused surface, optional cell-text generation and unchanged grid
+  handle validity, unsupported cell hyperlink assignment, native consuming
+  accessor and signed table indent authoring/removal. No HLD08 placement change is intended.
 
 ## Risk routing
 
@@ -176,12 +208,16 @@ inputs or layout rules. An unexplained delta blocks completion.
 - [ ] Run installed Python/native regressions and risk riders.
 - [ ] Complete scoped verify and a zero-finding microscope.
 
-Exclusive implementation paths are the existing native `rpptx/src/lib.rs`,
+Exclusive implementation paths include shared `oxml-py-support/src/lib.rs`,
+`rpptx-py/src/presentation.rs` and path validation in `rpptx-py/src/lib.rs`,
+plus the existing native `rpptx/src/lib.rs`,
 `rdocx/src/table.rs`, both families' binding table/text files, existing Python
 stubs/tests and native Word integration/regression entrypoints. F-X197 must
 follow this story for overlapping PowerPoint text/font paths.
 
 ## Open questions
 
-None. Preserve existing explicit-grid-cell merge addressing and strict global
-revision invalidation. Both decisions follow the established binding model.
+None. Preserve existing explicit-grid-cell merge addressing and grid-handle
+validity. Global revision invalidation remains strict. The additional cell-text
+generation invalidates the new nested cell-text handles only. Unsupported cell
+hyperlink assignment fails before relationship mutation.
