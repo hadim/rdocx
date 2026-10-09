@@ -890,3 +890,5 @@ The rolling intake procedure is defined in SPRINT_PLAN.md under S91.
 At S91 opening, the rolling refresh adds hadim Issue301 through F-X198. The
 scope is eight pending stories, estimated at 22 to 28 developer-days. No
 implementation or acceptance is claimed by this intake.
+
+| F-X196 | S91 | S | 1 | not recorded | 2026-10-09 | Dependency-prefix completion, private qualified CLI scan, ALL pass2 clean,4unit/67integration and141policy passes, hash49 unchanged, exact integrated source congruence. Final sprint gate remains due |

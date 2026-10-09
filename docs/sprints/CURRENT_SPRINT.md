@@ -29,7 +29,7 @@ and keep rolling contribution intake open.
 | F-X193 | Preserve semantic mark highlights through nested HTML runs | S | in-progress | codex |
 | F-X194 | Complete Python table text and indentation APIs | M | pending | - |
 | F-X195 | Honor caller fonts and variable styles across render paths | L | pending | - |
-| F-X196 | Validate visible paragraph content without false empty warnings | S | in-progress | codex |
+| F-X196 | Validate visible paragraph content without false empty warnings | S | done | - |
 | F-X197 | Unify Python colour inputs and font colour formats | L | pending | - |
 | F-X198 | Preserve alternate text-box copies during scoped replacement | M | in-progress | codex |
 | F-X199 | Model namespace-qualified empty table cell margins | S | in-progress | codex |

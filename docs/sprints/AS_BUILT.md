@@ -18717,3 +18717,52 @@ CLI assets. Close-sprint owns main and the sprint tag. Each release requires
 read-only closed-main preflight and its own immediate final approval. Retain
 work/f-x189-codex through close. Its consumed handoff and recorded integration
 allowed clean worktree removal without force. No release tag or upload occurred.
+
+### F-X196, Validate visible paragraph content without false empty warnings
+
+**Sprint.** S91
+**Completed.** 2026-10-09
+**Size.** S, estimated1 day, actual not recorded.
+
+**What was built.** CLI validation recognizes qualified visible nontext
+content while preserving its recursive body paragraph inventory and existing
+metadata advisories. Pictures, drawings, objects, symbols, tabs, breaks, notes,
+fields and equations no longer cause false empty warnings. The scan preserves
+source bytes and excludes foreign elements, deleted content, producer hints,
+opaque controls and duplicate control content slots.
+
+**Non-obvious choices.** Direct body tables remain outside the existing
+inventory, while control-owned tables are included. Native typed-control
+admission and the first expanded content slot determine membership. The
+scanner is private beside its actual CLI consumer. Native accessibility
+expansion belongs to F-X212 and was not folded into this behavior.
+
+**Deviations from the design plan.** Approved revisions replaced repeated
+paragraph snapshots with one qualified main-part scan after the existing
+checked location API proved unable to address nested controls. Independent
+review D1 was reproduced before remediation, then resolved with nine public
+admission discriminators. Shared roadmap policy maintenance separately
+corrected the S91 insertion assertion under a clean independent review.
+
+**Spec sections touched.** HLD10 CLI validation advisories and HLD14 F-X196.
+
+**Tests.** The actual three-picture Base regression failed with three false
+warnings, exit101. Final scoped evidence has4 unit and67 integration passes,
+no ignores, all-target/all-feature clippy, formatting, prose and26 synchronized
+adapters. The corrected complete repository-policy module passed141 tests
+with2 existing skips in500.696s. Actual affected archive observations are
+76692/347960/8 and76691/347960/8, satisfying unchanged inventory and tolerance
+rules. Independent ALL pass2 has0 defects and0 smells. Source head3a2c12b9,
+validated handoff tip70f235ca and consumed integration852f8387 are recorded.
+
+**Hash harness.** All49 deterministic entries match. The dependency-prefix
+comparison confirms exact worker and integrated production, dependency,
+measurement and policy bytes, with no semantic integration conflict. This is
+scoped prefix evidence, not final sprint verification or sprint review.
+
+**Notes for future sessions.** The clean worker worktree was removed without
+force after its consumed handoff and local integration were recorded. Retain
+work/f-x196-codex through sprint verification and close. Later F-X212 may
+extract the scanner and intentionally change native audit output only through
+its separately reviewed contract. No GitHub issue closure, push or release
+occurred. Final integrated full verification and sprint review remain due.
