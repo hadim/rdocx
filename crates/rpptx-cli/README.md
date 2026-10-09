@@ -85,6 +85,10 @@ takes a thread id, which also removes its replies, or a reply id. Every
 mutation requires `-o/--output`, refuses an existing output, publishes only a
 complete presentation, and supports a schema-1 record through `--json`.
 
+`convert`, `render`, and `thumbnail` take `--font-dir DIR`, a directory of
+`.ttf`, `.otf`, and `.ttc` files, each labelled with its file name, whose faces
+come before the bundled fonts. A missing directory is an error.
+
 `convert`, `render`, and `thumbnail` refuse an output file that already exists
 unless `--force` is given. Even with `--force` they refuse their own input file
 under any spelling of its path, and an output that is not a regular file, such

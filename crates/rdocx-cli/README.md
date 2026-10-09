@@ -154,6 +154,13 @@ default. `--revision-view tracked` shows both sides of tracked changes.
 Unknown view names are usage errors. HTML and Markdown conversion refuse
 the tracked view before creating output.
 
+`--font-dir DIR` gives `convert` to PDF or images, `render`, and `layout` a
+directory of `.ttf`, `.otf`, and `.ttc` files, each labelled with its file
+name, whose faces come before every other font. A family the directory does
+not provide resolves as without it: from the installed and bundled fonts for
+PDF, from the bundled fonts for images and `layout`. A missing directory is an
+error, and HTML and Markdown conversion refuse the option.
+
 `validate` exits unsuccessfully when a relationship of the main document points
 at a missing part, when a part has no declared content type, when an XML part
 that the main document relates to is not well formed, or when the main

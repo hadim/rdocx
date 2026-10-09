@@ -1176,7 +1176,14 @@ cannot observe bundled or system fonts. Caller-font access returns an owned
 bundle. `to_pdf_with_fonts` instead lays out uncached in a fresh normal-font
 engine with the caller fonts loaded over it, so a family the caller does not
 supply resolves as `to_pdf` resolves it, from system fonts when the
-`system-fonts` feature is enabled and then from the bundled fonts. The separate
+`system-fonts` feature is enabled and then from the bundled fonts. The PNG,
+image, and SVG `*_with_fonts_and_options` renderers share that layout, so a
+preview draws the faces the PDF embeds. The CLIs read `--font-dir` with
+`FontFile::load_dir`, in file name order, and refuse a missing directory.
+`rdocx` image output and `layout` load it over the bundled fonts. The `rpptx`
+`*_deterministic_with_fonts` renderers load caller fonts into the one
+deterministic font manager that lowers the slides and measures
+`text_layout_deterministic_with_fonts`. The separate
 bundled-fallback caller-font mode retains one reusable deterministic-base
 engine. Caller faces have highest priority, missing families
 resolve from bundled faces, and system fonts remain unavailable. Its owned

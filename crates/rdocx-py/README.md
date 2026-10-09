@@ -68,9 +68,10 @@ with open("report.pdf", "wb") as output:
 - Tracked comparison, main-body comment threads, bookmarks, revision
   resolution, and TOC insertion and rebuilding.
 - Deterministic layout fragments, page geometry, and PDF, PDF/A, SVG, PNG,
-  JPEG, and TIFF output through the native document engine, with caller fonts
-  or a font directory for PDF. PDF and raster methods accept keyword-only
-  `revision_view="tracked"` to show tracked changes.
+  JPEG, and TIFF output through the native document engine. Every render and
+  layout method takes caller fonts as keyword-only `fonts=` and `font_dir=`,
+  so a PNG preview draws the faces the PDF embeds. PDF and raster methods
+  accept keyword-only `revision_view="tracked"` to show tracked changes.
 - Python collections with negative indexes, slices, iteration, and explicit
   stale-handle errors after structural changes.
 

@@ -27,6 +27,53 @@ pub struct FontFile {
     pub data: Vec<u8>,
 }
 
+impl FontFile {
+    /// Read every `.ttf`, `.otf`, and `.ttc` file of a directory, in file name
+    /// order, each labelled with its file stem.
+    ///
+    /// This is what a `--font-dir` option or a `font_dir=` argument loads. A
+    /// missing path is a `NotFound` error and a file a `NotADirectory` error,
+    /// so a mistyped directory is not read as one without fonts. A font file
+    /// that cannot be read is skipped.
+    pub fn load_dir(dir: &std::path::Path) -> std::io::Result<Vec<FontFile>> {
+        if !dir.is_dir() {
+            let (kind, problem) = if dir.exists() {
+                (std::io::ErrorKind::NotADirectory, "is not a directory")
+            } else {
+                (std::io::ErrorKind::NotFound, "does not exist")
+            };
+            return Err(std::io::Error::new(
+                kind,
+                format!("font directory {} {problem}", dir.display()),
+            ));
+        }
+        let mut paths = std::fs::read_dir(dir)?
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension()
+                    .and_then(|extension| extension.to_str())
+                    .is_some_and(|extension| {
+                        ["ttf", "otf", "ttc"].contains(&extension.to_lowercase().as_str())
+                    })
+            })
+            .collect::<Vec<_>>();
+        paths.sort();
+        Ok(paths
+            .into_iter()
+            .filter_map(|path| {
+                let data = std::fs::read(&path).ok()?;
+                let family = path
+                    .file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .unwrap_or("Unknown")
+                    .to_owned();
+                Some(FontFile { family, data })
+            })
+            .collect())
+    }
+}
+
 /// Key for caching resolved fonts.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct FontKey {
@@ -2145,6 +2192,38 @@ mod tests {
     use super::*;
     use crate::Color;
     use crate::bundled_fonts::bundled_font_data;
+
+    #[test]
+    fn font_dir_loads_font_files_in_name_order_and_refuses_a_missing_directory() {
+        let dir = std::env::temp_dir().join(format!("rdocx-font-dir-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("b.ttf"), b"second").unwrap();
+        std::fs::write(dir.join("A.TTF"), b"first").unwrap();
+        std::fs::write(dir.join("notes.txt"), b"not a font").unwrap();
+
+        let loaded = FontFile::load_dir(&dir).unwrap();
+        let missing = FontFile::load_dir(&dir.join("missing")).unwrap_err();
+        let file = FontFile::load_dir(&dir.join("b.ttf")).unwrap_err();
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        assert_eq!(
+            loaded,
+            [
+                FontFile {
+                    family: "A".to_owned(),
+                    data: b"first".to_vec(),
+                },
+                FontFile {
+                    family: "b".to_owned(),
+                    data: b"second".to_vec(),
+                },
+            ]
+        );
+        assert_eq!(missing.kind(), std::io::ErrorKind::NotFound);
+        assert!(missing.to_string().ends_with("missing does not exist"));
+        assert_eq!(file.kind(), std::io::ErrorKind::NotADirectory);
+        assert!(file.to_string().ends_with("b.ttf is not a directory"));
+    }
 
     fn multilingual_test_segment(
         manager: &mut FontManager,
