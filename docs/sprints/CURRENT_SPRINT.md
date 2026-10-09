@@ -156,3 +156,15 @@ entrypoints. Other conflicting stories retain their approved later waves.
 - Issues303 through313 satisfy their full linked everyday coverage contracts, with shared acceptance credited once and Issue314 checked against the resulting APIs.
 - Every feature has clean independent microscope review and scoped evidence. Final full verification and sprint review cover actual integrated HEAD and declared hash deltas.
 - GitHub closure waits for verified sprint close. This run creates no release tags or publication.
+
+PR [318](https://github.com/tensorbee/rdocx/pull/318) entered rolling intake at
+immutable head b1aa842bf531a65c70a49d4ef282033d26e64020, based on733ce6f7.
+It closes Issue308 and is attached to existing F-X205. It contributes text,
+fill, table, metadata, media and export binding surfaces plus the existing
+16:9 template repair. Its stated App/custom-property omission remains part
+of F-X205 acceptance. Shared colours retain F-X197 ownership, cell text
+retains F-X194 ownership and structural-handle improvements retain F-X211
+ownership. Assess all24 changed files and the actual native template before
+reuse. Contributor tests, archive values and artifact hashes are claims to
+verify locally, not completed sprint evidence. No additional F-ID or asset
+inventory is created by this contribution.

@@ -6970,6 +6970,12 @@ Google Docs/Slides import compatibility as best effort, never a CI guarantee.
 Reuse prerequisite evidence for shared fixes and test the integrated behavior.
 Require scoped verification and independent zero-defect, zero-smell review.
 
+Contribution PR318 at b1aa842bf531a65c70a49d4ef282033d26e64020 closes
+Issue308 and belongs to this existing owner. Reconcile its full source with
+this complete acceptance, retaining omitted App/custom properties and shared
+prerequisite ownership. Contributor gate and template artifact values require
+independent local derivation.
+
 ### F-X206, Complete PowerPoint shape authoring and live handles (L)
 
 Resolve [Issue309](https://github.com/tensorbee/rdocx/issues/309) in S91,
