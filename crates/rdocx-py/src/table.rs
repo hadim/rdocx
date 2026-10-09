@@ -1,56 +1,84 @@
 use oxml_py_support::{ContentPath, PathSeg};
-use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
+use pyo3::exceptions::{
+    PyIndexError, PyKeyError, PyNotImplementedError, PyTypeError, PyValueError,
+};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyList, PySlice, PyTuple};
 use smallvec::smallvec;
 
 use crate::document::PyDocument;
-use crate::paragraph::PyParagraph;
+use crate::paragraph::{PyParagraph, style_id_of_type};
 use crate::{enum_object, length_object, normalize_index, rdocx_to_pyerr, stale_to_pyerr};
 
-fn path_index(
-    path: &ContentPath,
-    expected: fn(PathSeg) -> Option<usize>,
-    kind: &str,
-) -> PyResult<usize> {
-    path.segs
-        .iter()
-        .copied()
-        .find_map(expected)
-        .ok_or_else(|| PyIndexError::new_err(format!("{kind} index is missing")))
+/// Where a table handle points: a table counted as `Document::table`
+/// counts, then, for a nested table, the `(row, cell, nested table)` steps
+/// into it.
+#[derive(Clone)]
+struct TableAddress {
+    table: usize,
+    nested: Vec<(usize, usize, usize)>,
 }
 
-fn table_index(path: &ContentPath) -> PyResult<usize> {
-    path_index(
-        path,
-        |segment| match segment {
-            PathSeg::Body(index) => Some(index),
-            _ => None,
-        },
-        "table",
-    )
-}
+impl TableAddress {
+    /// Split a table, row or cell path into its table address and the row
+    /// and cell indexes that follow it.
+    ///
+    /// A table path is `Body(table)`, and each nested table adds
+    /// `Row, Cell, Body(nested table)` after the cell that holds it.
+    fn parse(path: &ContentPath) -> PyResult<(Self, Option<usize>, Option<usize>)> {
+        let mut segments = path.segs.iter().copied();
+        let Some(PathSeg::Body(table)) = segments.next() else {
+            return Err(PyIndexError::new_err("table index is missing"));
+        };
+        let mut address = Self {
+            table,
+            nested: Vec::new(),
+        };
+        let (mut row, mut cell) = (None, None);
+        for segment in segments {
+            match segment {
+                PathSeg::Row(index) => row = Some(index),
+                PathSeg::Cell(index) => cell = Some(index),
+                PathSeg::Body(index) => {
+                    let (Some(row), Some(cell)) = (row.take(), cell.take()) else {
+                        return Err(PyIndexError::new_err("nested table path is incomplete"));
+                    };
+                    address.nested.push((row, cell, index));
+                }
+                _ => break,
+            }
+        }
+        Ok((address, row, cell))
+    }
 
-fn row_index(path: &ContentPath) -> PyResult<usize> {
-    path_index(
-        path,
-        |segment| match segment {
-            PathSeg::Row(index) => Some(index),
-            _ => None,
-        },
-        "row",
-    )
-}
+    fn get<'d>(&self, document: &'d rdocx::Document) -> PyResult<rdocx::TableRef<'d>> {
+        let mut table = document.table(self.table);
+        for &(row, cell, index) in &self.nested {
+            table = table.and_then(|table| table.nested_table(row, cell, index));
+        }
+        table.ok_or_else(|| PyIndexError::new_err("table index out of range"))
+    }
 
-fn cell_index(path: &ContentPath) -> PyResult<usize> {
-    path_index(
-        path,
-        |segment| match segment {
-            PathSeg::Cell(index) => Some(index),
-            _ => None,
-        },
-        "cell",
-    )
+    fn get_mut<'d>(&self, document: &'d mut rdocx::Document) -> PyResult<rdocx::Table<'d>> {
+        let mut table = document.table_mut(self.table);
+        for &(row, cell, index) in &self.nested {
+            table = table.and_then(|table| table.into_nested_table(row, cell, index));
+        }
+        table.ok_or_else(|| PyIndexError::new_err("table index out of range"))
+    }
+
+    /// The table index of a top-level table, for the edits that run as a
+    /// checked document transaction and address top-level tables only.
+    fn top_level(&self, operation: &str) -> PyResult<usize> {
+        if self.nested.is_empty() {
+            Ok(self.table)
+        } else {
+            Err(PyNotImplementedError::new_err(format!(
+                "{operation} works on top-level tables only. In a nested table, set \
+                 text with cell.text, add rows with add_row and columns with insert_column"
+            )))
+        }
+    }
 }
 
 fn alignment_from_int(value: i32) -> PyResult<rdocx::Alignment> {
@@ -298,20 +326,38 @@ impl PyTable {
         Self { document, path }
     }
 
-    pub(crate) fn validate(&self, py: Python<'_>) -> PyResult<usize> {
+    /// Check the handle's revision and resolve where its table is.
+    fn address(&self, py: Python<'_>) -> PyResult<TableAddress> {
         let document = self.document.borrow(py);
         self.path
             .validate_revision(
                 document.revisions.current(),
                 "table",
-                "Re-fetch it with doc.tables[i].",
+                "Re-fetch it with doc.tables[i] or cell.tables[i].",
             )
             .map_err(|error| stale_to_pyerr(py, error))?;
-        table_index(&self.path)
+        Ok(TableAddress::parse(&self.path)?.0)
+    }
+
+    /// The index of this top-level table among `doc.tables`.
+    pub(crate) fn validate(&self, py: Python<'_>) -> PyResult<usize> {
+        let address = self.address(py)?;
+        if !address.nested.is_empty() {
+            return Err(PyValueError::new_err(
+                "a nested table is not a direct body child",
+            ));
+        }
+        Ok(address.table)
     }
 
     pub(crate) fn belongs_to(&self, py: Python<'_>, document: &Py<PyDocument>) -> bool {
         self.document.bind(py).is(document.bind(py))
+    }
+
+    fn read<T>(&self, py: Python<'_>, read: impl FnOnce(rdocx::TableRef<'_>) -> T) -> PyResult<T> {
+        let address = self.address(py)?;
+        let document = self.document.borrow(py);
+        Ok(read(address.get(&document.inner)?))
     }
 
     /// Apply one checked native table edit without advancing the revision.
@@ -320,38 +366,79 @@ impl PyTable {
         py: Python<'_>,
         edit: impl FnOnce(&mut rdocx::Table<'_>) -> rdocx::Result<T>,
     ) -> PyResult<T> {
-        let index = self.validate(py)?;
+        let address = self.address(py)?;
         let mut document = self.document.borrow_mut(py);
-        let mut table = document
-            .inner
-            .table_mut(index)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
+        let mut table = address.get_mut(&mut document.inner)?;
         edit(&mut table).map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    /// Apply one native edit that moves rows or cells, then advance the
+    /// revision so every live handle is re-fetched.
+    fn edit_structure<T>(
+        &self,
+        py: Python<'_>,
+        edit: impl FnOnce(&mut rdocx::Table<'_>) -> rdocx::Result<T>,
+    ) -> PyResult<T> {
+        let value = self.edit(py, edit)?;
+        self.document.borrow_mut(py).revisions.bump();
+        Ok(value)
+    }
+
+    /// Capture a path below this table at the current revision.
+    fn child_path(&self, py: Python<'_>, segments: &[PathSeg]) -> ContentPath {
+        let mut path = self.path.segs.clone();
+        path.extend_from_slice(segments);
+        self.document.borrow(py).revisions.capture(path)
     }
 
     /// Resolve possibly negative row and cell indexes against this table.
     fn cell_coordinates(&self, py: Python<'_>, row: isize, col: isize) -> PyResult<(usize, usize)> {
-        let table_index = self.validate(py)?;
-        let document = self.document.borrow(py);
-        let table = document
-            .inner
-            .table(table_index)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
-        let row = normalize_index(row, table.row_count(), "row")?;
-        let col = normalize_index(
-            col,
-            table.row(row).map(|row| row.cell_count()).unwrap_or(0),
-            "cell",
-        )?;
+        let (rows, cells) = self.read(py, |table| {
+            let rows = table.row_count();
+            let cells = (0..rows)
+                .map(|row| table.row(row).map_or(0, |row| row.cell_count()))
+                .collect::<Vec<_>>();
+            (rows, cells)
+        })?;
+        let row = normalize_index(row, rows, "row")?;
+        let col = normalize_index(col, cells[row], "cell")?;
         Ok((row, col))
     }
+
+    fn look_flag(&self, py: Python<'_>, flag: fn(&rdocx::TableLook) -> bool) -> PyResult<bool> {
+        self.read(py, |table| flag(&table_look(&table)))
+    }
+
+    fn set_look_flag(
+        &self,
+        py: Python<'_>,
+        set: impl FnOnce(&mut rdocx::TableLook),
+    ) -> PyResult<()> {
+        let mut look = self.read(py, |table| table_look(&table))?;
+        set(&mut look);
+        self.edit(py, |table| {
+            table.set_look(look);
+            Ok(())
+        })
+    }
+}
+
+/// The table's `w:tblLook` selection. An absent element selects no
+/// conditional region and leaves banding on, which is what its attribute
+/// defaults mean.
+fn table_look(table: &rdocx::TableRef<'_>) -> rdocx::TableLook {
+    table.look().unwrap_or(rdocx::TableLook {
+        horizontal_banding: true,
+        vertical_banding: true,
+        ..Default::default()
+    })
 }
 
 #[pymethods]
 impl PyTable {
     #[getter]
     fn rows(&self, py: Python<'_>) -> PyResult<Py<PyRowCollection>> {
-        self.validate(py)?;
+        self.address(py)?;
         Py::new(
             py,
             PyRowCollection::new(self.document.clone_ref(py), self.path.clone()),
@@ -360,46 +447,45 @@ impl PyTable {
 
     fn cell(&self, py: Python<'_>, row: isize, col: isize) -> PyResult<Py<PyCell>> {
         let (row, col) = self.cell_coordinates(py, row, col)?;
-        let table_index = table_index(&self.path)?;
-        let path = self.document.borrow(py).revisions.capture(smallvec![
-            PathSeg::Body(table_index),
-            PathSeg::Row(row),
-            PathSeg::Cell(col)
-        ]);
+        let path = self.child_path(py, &[PathSeg::Row(row), PathSeg::Cell(col)]);
         Py::new(py, PyCell::new(self.document.clone_ref(py), path))
     }
 
     #[getter]
     fn style(&self, py: Python<'_>) -> PyResult<Option<String>> {
-        let index = self.validate(py)?;
-        Ok(self
-            .document
-            .borrow(py)
-            .inner
-            .table(index)
-            .and_then(|table| table.style_id().map(str::to_owned)))
+        self.read(py, |table| table.style_id().map(str::to_owned))
     }
 
+    /// Set the table style from its style ID or, as python-docx accepts, its
+    /// name.
     #[setter]
     fn set_style(&self, py: Python<'_>, value: &str) -> PyResult<()> {
-        let index = self.validate(py)?;
-        self.document
-            .borrow_mut(py)
-            .inner
-            .table_mut(index)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?
-            .set_style(value);
-        Ok(())
+        // Word ignores a style reference that names no defined style, so an
+        // unknown value raises instead of writing one.
+        let style = style_id_of_type(
+            &self.document.borrow(py).inner,
+            value,
+            rdocx::StyleType::Table,
+        )
+        .map_err(|error| {
+            if error.is_instance_of::<PyKeyError>(py) {
+                PyKeyError::new_err(format!(
+                    "no table style is named or identified by '{value}', define it first with \
+                     Document.add_style(..., style_type=\"table\") or pick one of Document.styles"
+                ))
+            } else {
+                error
+            }
+        })?;
+        self.edit(py, |table| {
+            table.set_style(&style);
+            Ok(())
+        })
     }
 
     #[getter]
     fn alignment(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
-        let index = self.validate(py)?;
-        self.document
-            .borrow(py)
-            .inner
-            .table(index)
-            .and_then(|table| table.alignment())
+        self.read(py, |table| table.alignment())?
             .and_then(alignment_to_int)
             .map(|value| enum_object(py, "WD_TABLE_ALIGNMENT", value))
             .transpose()
@@ -407,39 +493,107 @@ impl PyTable {
 
     #[setter]
     fn set_alignment(&self, py: Python<'_>, value: i32) -> PyResult<()> {
-        let index = self.validate(py)?;
         let value = alignment_from_int(value)?;
-        self.document
-            .borrow_mut(py)
-            .inner
-            .table_mut(index)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?
-            .set_alignment(value);
-        Ok(())
+        self.edit(py, |table| {
+            table.set_alignment(value);
+            Ok(())
+        })
     }
 
     #[getter]
     fn width(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
-        let index = self.validate(py)?;
-        self.document
-            .borrow(py)
-            .inner
-            .table(index)
-            .and_then(|table| table.width())
+        self.read(py, |table| table.width())?
             .map(|value| length_object(py, value))
             .transpose()
     }
 
     #[setter]
     fn set_width(&self, py: Python<'_>, value: i64) -> PyResult<()> {
-        let index = self.validate(py)?;
-        self.document
-            .borrow_mut(py)
-            .inner
-            .table_mut(index)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?
-            .set_width(rdocx::Length::emu(value));
-        Ok(())
+        self.edit(py, |table| {
+            table.set_width(rdocx::Length::emu(value));
+            Ok(())
+        })
+    }
+
+    /// Whether Word may resize columns to fit their content, as python-docx
+    /// `Table.autofit` reads it. `False` writes a fixed layout.
+    #[getter]
+    fn autofit(&self, py: Python<'_>) -> PyResult<bool> {
+        self.read(py, |table| {
+            table.layout() != Some(rdocx::TableLayout::Fixed)
+        })
+    }
+
+    #[setter]
+    fn set_autofit(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        self.edit(py, |table| {
+            table.set_layout(if value {
+                rdocx::TableLayout::AutoFit
+            } else {
+                rdocx::TableLayout::Fixed
+            });
+            Ok(())
+        })
+    }
+
+    #[getter]
+    fn first_row(&self, py: Python<'_>) -> PyResult<bool> {
+        self.look_flag(py, |look| look.first_row)
+    }
+
+    #[setter]
+    fn set_first_row(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        self.set_look_flag(py, |look| look.first_row = value)
+    }
+
+    #[getter]
+    fn last_row(&self, py: Python<'_>) -> PyResult<bool> {
+        self.look_flag(py, |look| look.last_row)
+    }
+
+    #[setter]
+    fn set_last_row(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        self.set_look_flag(py, |look| look.last_row = value)
+    }
+
+    #[getter]
+    fn first_col(&self, py: Python<'_>) -> PyResult<bool> {
+        self.look_flag(py, |look| look.first_column)
+    }
+
+    #[setter]
+    fn set_first_col(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        self.set_look_flag(py, |look| look.first_column = value)
+    }
+
+    #[getter]
+    fn last_col(&self, py: Python<'_>) -> PyResult<bool> {
+        self.look_flag(py, |look| look.last_column)
+    }
+
+    #[setter]
+    fn set_last_col(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        self.set_look_flag(py, |look| look.last_column = value)
+    }
+
+    #[getter]
+    fn horz_banding(&self, py: Python<'_>) -> PyResult<bool> {
+        self.look_flag(py, |look| look.horizontal_banding)
+    }
+
+    #[setter]
+    fn set_horz_banding(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        self.set_look_flag(py, |look| look.horizontal_banding = value)
+    }
+
+    #[getter]
+    fn vert_banding(&self, py: Python<'_>) -> PyResult<bool> {
+        self.look_flag(py, |look| look.vertical_banding)
+    }
+
+    #[setter]
+    fn set_vert_banding(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        self.set_look_flag(py, |look| look.vertical_banding = value)
     }
 
     #[pyo3(signature = (style, *, size, color))]
@@ -468,25 +622,12 @@ impl PyTable {
 
     fn border(&self, py: Python<'_>, edge: &str) -> PyResult<Option<BorderSnapshot>> {
         let edge = table_border_edge(edge)?;
-        let index = self.validate(py)?;
-        Ok(self
-            .document
-            .borrow(py)
-            .inner
-            .table(index)
-            .and_then(|table| table.border(edge).map(border_snapshot)))
+        self.read(py, |table| table.border(edge).map(border_snapshot))
     }
 
     #[getter]
     fn cell_margins(&self, py: Python<'_>) -> PyResult<Option<MarginSnapshot>> {
-        let index = self.validate(py)?;
-        let margins = self
-            .document
-            .borrow(py)
-            .inner
-            .table(index)
-            .and_then(|table| table.cell_margins());
-        margins
+        self.read(py, |table| table.cell_margins())?
             .map(|margins| margin_snapshot(py, margins))
             .transpose()
     }
@@ -512,15 +653,8 @@ impl PyTable {
 
     #[getter]
     fn grid_widths<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
-        let index = self.validate(py)?;
         let widths = self
-            .document
-            .borrow(py)
-            .inner
-            .table(index)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?
-            .grid_widths();
-        let widths = widths
+            .read(py, |table| table.grid_widths())?
             .into_iter()
             .map(|width| length_object(py, width))
             .collect::<PyResult<Vec<_>>>()?;
@@ -537,15 +671,7 @@ impl PyTable {
     }
 
     fn set_column_width(&self, py: Python<'_>, column: isize, width: i64) -> PyResult<()> {
-        let index = self.validate(py)?;
-        let columns = self
-            .document
-            .borrow(py)
-            .inner
-            .table(index)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?
-            .grid_widths()
-            .len();
+        let columns = self.read(py, |table| table.column_count())?;
         let column = normalize_index(column, columns, "column")?;
         let applied = self.edit(py, |table| {
             Ok(table.set_column_width(column, rdocx::Length::emu(width)))
@@ -593,9 +719,57 @@ impl PyTable {
         self.edit(py, |table| table.set_cell_vertical_merge(row, col, merge))
     }
 
+    /// Append an empty row with the last row's row and cell formatting, as
+    /// python-docx `Table.add_row` does.
+    fn add_row(&self, py: Python<'_>) -> PyResult<Py<PyRow>> {
+        let row = self.edit_structure(py, |table| {
+            table.add_row()?;
+            Ok(table.row_count() - 1)
+        })?;
+        let path = self.child_path(py, &[PathSeg::Row(row)]);
+        Py::new(py, PyRow::new(self.document.clone_ref(py), path))
+    }
+
+    /// Append a grid column, `width` wide or as wide as the last column, as
+    /// python-docx `Table.add_column` does.
+    #[pyo3(signature = (width = None))]
+    fn add_column(&self, py: Python<'_>, width: Option<i64>) -> PyResult<()> {
+        let columns = self.read(py, |table| table.column_count())?;
+        self.insert_column(py, columns as isize, width)
+    }
+
+    /// Insert a grid column before grid column `index`, or append one when
+    /// `index` is the column count.
+    #[pyo3(signature = (index, width = None))]
+    fn insert_column(&self, py: Python<'_>, index: isize, width: Option<i64>) -> PyResult<()> {
+        let columns = self.read(py, |table| table.column_count())?;
+        let index = if index == columns as isize {
+            columns
+        } else {
+            normalize_index(index, columns, "column")?
+        };
+        self.edit_structure(py, |table| {
+            table.insert_column(index, width.map(rdocx::Length::emu))
+        })
+    }
+
+    /// Remove grid column `index` with the cells that cover only it.
+    fn remove_column(&self, py: Python<'_>, index: isize) -> PyResult<()> {
+        let table = self.address(py)?.top_level("remove_column")?;
+        let columns = self.read(py, |table| table.column_count())?;
+        let column = normalize_index(index, columns, "column")?;
+        let mut document = self.document.borrow_mut(py);
+        document
+            .inner
+            .remove_table_column(table, column)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        document.revisions.bump();
+        Ok(())
+    }
+
     #[pyo3(signature = (index, at = None))]
     fn clone_row(&self, py: Python<'_>, index: isize, at: Option<usize>) -> PyResult<Py<PyRow>> {
-        let table_index = self.validate(py)?;
+        let table_index = self.address(py)?.top_level("clone_row")?;
         let path = {
             let mut document = self.document.borrow_mut(py);
             let row_count = document
@@ -621,7 +795,7 @@ impl PyTable {
     }
 
     fn remove_row(&self, py: Python<'_>, index: isize) -> PyResult<()> {
-        let table_index = self.validate(py)?;
+        let table_index = self.address(py)?.top_level("remove_row")?;
         let mut document = self.document.borrow_mut(py);
         let row_count = document
             .inner
@@ -651,7 +825,7 @@ impl PyRowCollection {
             table_path,
         }
     }
-    fn validate(&self, py: Python<'_>) -> PyResult<usize> {
+    fn validate(&self, py: Python<'_>) -> PyResult<TableAddress> {
         let document = self.document.borrow(py);
         self.table_path
             .validate_revision(
@@ -660,16 +834,11 @@ impl PyRowCollection {
                 "Re-fetch it with table.rows.",
             )
             .map_err(|error| stale_to_pyerr(py, error))?;
-        table_index(&self.table_path)
+        Ok(TableAddress::parse(&self.table_path)?.0)
     }
     fn len(&self, py: Python<'_>) -> PyResult<usize> {
-        let index = self.validate(py)?;
-        self.document
-            .borrow(py)
-            .inner
-            .table(index)
-            .map(|table| table.row_count())
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))
+        let address = self.validate(py)?;
+        Ok(address.get(&self.document.borrow(py).inner)?.row_count())
     }
     fn item(&self, py: Python<'_>, index: usize) -> PyResult<Py<PyRow>> {
         self.validate(py)?;
@@ -754,7 +923,7 @@ impl PyRow {
     fn new(document: Py<PyDocument>, path: ContentPath) -> Self {
         Self { document, path }
     }
-    fn validate(&self, py: Python<'_>) -> PyResult<(usize, usize)> {
+    fn validate(&self, py: Python<'_>) -> PyResult<(TableAddress, usize)> {
         let document = self.document.borrow(py);
         self.path
             .validate_revision(
@@ -763,16 +932,17 @@ impl PyRow {
                 "Re-fetch it with table.rows[i].",
             )
             .map_err(|error| stale_to_pyerr(py, error))?;
-        Ok((table_index(&self.path)?, row_index(&self.path)?))
+        let (address, row, _) = TableAddress::parse(&self.path)?;
+        Ok((
+            address,
+            row.ok_or_else(|| PyIndexError::new_err("row index is missing"))?,
+        ))
     }
 
     fn read<T>(&self, py: Python<'_>, read: impl FnOnce(rdocx::RowRef<'_>) -> T) -> PyResult<T> {
-        let (table, row) = self.validate(py)?;
+        let (address, row) = self.validate(py)?;
         let document = self.document.borrow(py);
-        let table = document
-            .inner
-            .table(table)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
+        let table = address.get(&document.inner)?;
         let row = table
             .row(row)
             .ok_or_else(|| PyIndexError::new_err("row index out of range"))?;
@@ -786,12 +956,9 @@ impl PyRow {
         py: Python<'_>,
         edit: impl FnOnce(&mut rdocx::Row<'_>) -> rdocx::Result<()>,
     ) -> PyResult<()> {
-        let (table, row) = self.validate(py)?;
+        let (address, row) = self.validate(py)?;
         let mut document = self.document.borrow_mut(py);
-        let mut table = document
-            .inner
-            .table_mut(table)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
+        let mut table = address.get_mut(&mut document.inner)?;
         let mut row = table
             .row(row)
             .ok_or_else(|| PyIndexError::new_err("row index out of range"))?;
@@ -890,7 +1057,7 @@ impl PyCellCollection {
     fn new(document: Py<PyDocument>, row_path: ContentPath) -> Self {
         Self { document, row_path }
     }
-    fn validate(&self, py: Python<'_>) -> PyResult<(usize, usize)> {
+    fn validate(&self, py: Python<'_>) -> PyResult<(TableAddress, usize)> {
         let document = self.document.borrow(py);
         self.row_path
             .validate_revision(
@@ -899,15 +1066,18 @@ impl PyCellCollection {
                 "Re-fetch it with row.cells.",
             )
             .map_err(|error| stale_to_pyerr(py, error))?;
-        Ok((table_index(&self.row_path)?, row_index(&self.row_path)?))
+        let (address, row, _) = TableAddress::parse(&self.row_path)?;
+        Ok((
+            address,
+            row.ok_or_else(|| PyIndexError::new_err("row index is missing"))?,
+        ))
     }
     fn len(&self, py: Python<'_>) -> PyResult<usize> {
-        let (table, row) = self.validate(py)?;
-        self.document
-            .borrow(py)
-            .inner
-            .table(table)
-            .and_then(|table| table.row(row).map(|row| row.cell_count()))
+        let (address, row) = self.validate(py)?;
+        address
+            .get(&self.document.borrow(py).inner)?
+            .row(row)
+            .map(|row| row.cell_count())
             .ok_or_else(|| PyIndexError::new_err("row index out of range"))
     }
     fn item(&self, py: Python<'_>, index: usize) -> PyResult<Py<PyCell>> {
@@ -993,7 +1163,7 @@ impl PyCell {
     fn new(document: Py<PyDocument>, path: ContentPath) -> Self {
         Self { document, path }
     }
-    fn validate(&self, py: Python<'_>) -> PyResult<(usize, usize, usize)> {
+    fn validate(&self, py: Python<'_>) -> PyResult<(TableAddress, usize, usize)> {
         let document = self.document.borrow(py);
         self.path
             .validate_revision(
@@ -1002,24 +1172,42 @@ impl PyCell {
                 "Re-fetch it with row.cells[i].",
             )
             .map_err(|error| stale_to_pyerr(py, error))?;
-        Ok((
-            table_index(&self.path)?,
-            row_index(&self.path)?,
-            cell_index(&self.path)?,
-        ))
+        match TableAddress::parse(&self.path)? {
+            (address, Some(row), Some(cell)) => Ok((address, row, cell)),
+            _ => Err(PyIndexError::new_err("cell path is incomplete")),
+        }
+    }
+
+    /// The `(table, row, cell)` coordinates of a cell of a top-level table,
+    /// for the edits that only address top-level tables.
+    fn top_level(&self, py: Python<'_>, operation: &str) -> PyResult<(usize, usize, usize)> {
+        let (address, row, cell) = self.validate(py)?;
+        Ok((address.top_level(operation)?, row, cell))
     }
 
     fn read<T>(&self, py: Python<'_>, read: impl FnOnce(rdocx::CellRef<'_>) -> T) -> PyResult<T> {
-        let (table, row, cell) = self.validate(py)?;
+        let (address, row, cell) = self.validate(py)?;
         let document = self.document.borrow(py);
-        let table = document
-            .inner
-            .table(table)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
+        let table = address.get(&document.inner)?;
         let cell = table
             .cell(row, cell)
             .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?;
         Ok(read(cell))
+    }
+
+    /// Apply one checked native edit to the table that holds this cell.
+    fn edit_table<T>(
+        &self,
+        py: Python<'_>,
+        edit: impl FnOnce(&mut rdocx::Table<'_>, usize, usize) -> rdocx::Result<T>,
+    ) -> PyResult<T> {
+        let (address, row, cell) = self.validate(py)?;
+        let mut document = self.document.borrow_mut(py);
+        let mut table = address.get_mut(&mut document.inner)?;
+        if table.cell(row, cell).is_none() {
+            return Err(PyIndexError::new_err("cell index out of range"));
+        }
+        edit(&mut table, row, cell).map_err(|error| rdocx_to_pyerr(py, error))
     }
 
     /// Apply one checked native cell edit that moves no content, so live
@@ -1029,16 +1217,17 @@ impl PyCell {
         py: Python<'_>,
         edit: impl FnOnce(&mut rdocx::Cell<'_>) -> rdocx::Result<()>,
     ) -> PyResult<()> {
-        let (table, row, cell) = self.validate(py)?;
-        let mut document = self.document.borrow_mut(py);
-        let mut table = document
-            .inner
-            .table_mut(table)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
-        let mut cell = table
-            .cell(row, cell)
-            .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?;
-        edit(&mut cell).map_err(|error| rdocx_to_pyerr(py, error))
+        self.edit_table(py, |table, row, cell| {
+            edit(&mut table.cell(row, cell).expect("the cell was checked"))
+        })
+    }
+
+    /// A handle on the `index`-th table nested directly in this cell.
+    fn nested_table(&self, py: Python<'_>, index: usize) -> PyResult<Py<PyTable>> {
+        let mut segments = self.path.segs.clone();
+        segments.push(PathSeg::Body(index));
+        let path = self.document.borrow(py).revisions.capture(segments);
+        Py::new(py, PyTable::new(self.document.clone_ref(py), path))
     }
 }
 
@@ -1053,7 +1242,7 @@ impl PyCell {
         new: &str,
         expect: Option<usize>,
     ) -> PyResult<usize> {
-        let cell = self.validate(py)?;
+        let cell = self.top_level(py, "Cell.replace_text")?;
         self.document
             .borrow_mut(py)
             .scoped_replacement(py, |document| {
@@ -1063,34 +1252,32 @@ impl PyCell {
 
     #[getter]
     fn text(&self, py: Python<'_>) -> PyResult<String> {
-        let (table, row, cell) = self.validate(py)?;
-        self.document
-            .borrow(py)
-            .inner
-            .table(table)
-            .and_then(|table| table.cell(row, cell).map(|cell| cell.text()))
-            .ok_or_else(|| PyIndexError::new_err("cell index out of range"))
+        self.read(py, |cell| cell.text())
     }
     #[setter]
     fn set_text(&self, py: Python<'_>, value: &str) -> PyResult<()> {
-        let (table, row, cell) = self.validate(py)?;
-        let mut document = self.document.borrow_mut(py);
-        let inner = &mut document.inner;
-        py.detach(|| inner.try_set_cell_text(table, row, cell, value))
-            .map_err(|error| rdocx_to_pyerr(py, error))?;
-        document.revisions.bump();
+        let (address, row, cell) = self.validate(py)?;
+        if address.nested.is_empty() {
+            let mut document = self.document.borrow_mut(py);
+            let inner = &mut document.inner;
+            py.detach(|| inner.try_set_cell_text(address.table, row, cell, value))
+                .map_err(|error| rdocx_to_pyerr(py, error))?;
+        } else {
+            self.edit(py, |cell| cell.try_set_text(value))?;
+        }
+        self.document.borrow_mut(py).revisions.bump();
         Ok(())
     }
     #[getter]
     fn paragraphs(&self, py: Python<'_>) -> PyResult<Py<PyCellParagraphCollection>> {
-        self.validate(py)?;
+        self.top_level(py, "Cell.paragraphs")?;
         Py::new(
             py,
             PyCellParagraphCollection::new(self.document.clone_ref(py), self.path.clone()),
         )
     }
     fn add_paragraph(&self, py: Python<'_>, text: &str) -> PyResult<Py<PyParagraph>> {
-        let (table, row, cell) = self.validate(py)?;
+        let (table, row, cell) = self.top_level(py, "Cell.add_paragraph")?;
         let path = {
             let mut document = self.document.borrow_mut(py);
             let paragraph = {
@@ -1115,60 +1302,64 @@ impl PyCell {
         };
         Py::new(py, PyParagraph::new(self.document.clone_ref(py), path))
     }
+
+    /// The tables nested directly in this cell, in source order.
+    #[getter]
+    fn tables<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let count = self.read(py, |cell| cell.tables().count())?;
+        let tables = (0..count)
+            .map(|index| self.nested_table(py, index))
+            .collect::<PyResult<Vec<_>>>()?;
+        PyList::new(py, tables)
+    }
+
+    /// Add a nested table after this cell's content, followed by the empty
+    /// paragraph Word requires at the end of a cell.
+    fn add_table(&self, py: Python<'_>, rows: usize, cols: usize) -> PyResult<Py<PyTable>> {
+        let index = self.read(py, |cell| cell.tables().count())?;
+        self.edit_table(py, |table, row, cell| {
+            let mut cell = table.cell(row, cell).expect("the cell was checked");
+            cell.add_table_checked(rows, cols).map(|_| ())
+        })?;
+        self.document.borrow_mut(py).revisions.bump();
+        self.nested_table(py, index)
+    }
+
+    /// Split this merged cell into one cell per grid column and row it
+    /// covers, undoing its horizontal and vertical merges, and return how
+    /// many cells the merge became.
+    fn split(&self, py: Python<'_>) -> PyResult<usize> {
+        let cells = self.edit_table(py, |table, row, cell| table.split_cell(row, cell))?;
+        self.document.borrow_mut(py).revisions.bump();
+        Ok(cells)
+    }
+
     #[getter]
     fn width(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
-        let (table, row, cell) = self.validate(py)?;
-        self.document
-            .borrow(py)
-            .inner
-            .table(table)
-            .and_then(|table| table.cell(row, cell).and_then(|cell| cell.width()))
+        self.read(py, |cell| cell.width())?
             .map(|value| length_object(py, value))
             .transpose()
     }
     #[setter]
     fn set_width(&self, py: Python<'_>, value: i64) -> PyResult<()> {
-        let (table, row, cell) = self.validate(py)?;
-        let mut document = self.document.borrow_mut(py);
-        let mut table = document
-            .inner
-            .table_mut(table)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
-        table
-            .cell(row, cell)
-            .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?
-            .set_width(rdocx::Length::emu(value));
-        Ok(())
+        self.edit(py, |cell| {
+            cell.set_width(rdocx::Length::emu(value));
+            Ok(())
+        })
     }
     #[getter]
     fn vertical_alignment(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
-        let (table, row, cell) = self.validate(py)?;
-        self.document
-            .borrow(py)
-            .inner
-            .table(table)
-            .and_then(|table| {
-                table
-                    .cell(row, cell)
-                    .and_then(|cell| cell.vertical_alignment())
-            })
+        self.read(py, |cell| cell.vertical_alignment())?
             .map(|value| enum_object(py, "WD_CELL_VERTICAL_ALIGNMENT", vertical_to_int(value)))
             .transpose()
     }
     #[setter]
     fn set_vertical_alignment(&self, py: Python<'_>, value: i32) -> PyResult<()> {
-        let (table, row, cell) = self.validate(py)?;
         let value = vertical_from_int(value)?;
-        let mut document = self.document.borrow_mut(py);
-        let mut table = document
-            .inner
-            .table_mut(table)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
-        table
-            .cell(row, cell)
-            .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?
-            .set_vertical_alignment(value);
-        Ok(())
+        self.edit(py, |cell| {
+            cell.set_vertical_alignment(value);
+            Ok(())
+        })
     }
 
     #[getter]
@@ -1259,11 +1450,12 @@ impl PyCellParagraphCollection {
                 "Re-fetch it with cell.paragraphs.",
             )
             .map_err(|error| stale_to_pyerr(py, error))?;
-        Ok((
-            table_index(&self.cell_path)?,
-            row_index(&self.cell_path)?,
-            cell_index(&self.cell_path)?,
-        ))
+        match TableAddress::parse(&self.cell_path)? {
+            (address, Some(row), Some(cell)) => {
+                Ok((address.top_level("Cell.paragraphs")?, row, cell))
+            }
+            _ => Err(PyIndexError::new_err("cell path is incomplete")),
+        }
     }
     fn len(&self, py: Python<'_>) -> PyResult<usize> {
         let (table, row, cell) = self.validate(py)?;

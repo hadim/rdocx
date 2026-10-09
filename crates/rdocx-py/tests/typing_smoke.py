@@ -101,6 +101,16 @@ def exercise_rdocx_types(path: Path) -> None:
     assert_type(table.grid_widths, tuple[Length, ...])
     table.grid_widths = [Inches(1)]
     table.set_column_width(0, Inches(2))
+    table.autofit = False
+    assert_type(table.first_row, bool)
+    table.horz_banding = True
+    added_row: Row = table.add_row()
+    table.add_column(Inches(1))
+    table.insert_column(0)
+    table.remove_column(0)
+    nested: Table = cell.add_table(1, 1)
+    nested_tables: list[Table] = cell.tables
+    assert_type(cell.split(), int)
     assert_type(row.height, Length | None)
     assert_type(row.height_rule, WD_ROW_HEIGHT_RULE | None)
     assert_type(row.cant_split, bool | None)
