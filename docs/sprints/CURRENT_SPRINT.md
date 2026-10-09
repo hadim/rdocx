@@ -5,8 +5,8 @@
 **Goal**: finish S90's bibliography catalogue and numbering-aware navigation
 carryovers and resolve the new HTML, Python authoring, rendering, validation
 and alternate text-box ownership reports before templates and forms at S92.
-Issues264 and281 remain excluded. The eight initial stories are estimated at
-22 to 28 developer-days, with rolling contribution intake kept open.
+Issues264 and281 remain excluded. The nine included stories are estimated at
+23 to 29 developer-days, with rolling contribution intake kept open.
 
 ## Spec references
 
@@ -16,7 +16,7 @@ Issues264 and281 remain excluded. The eight initial stories are estimated at
 - `docs/hld/08-rendering-spec.md`, PDF backend, rasteriser, shape text, tables and Word bookmark field pagination, for fonts and shared metrics.
 - `docs/hld/10-bindings-spec.md`, Python API shape and invalidation, for table, colour and render parity.
 - `docs/hld/12-testing-strategy.md`, binding tests and checked Word scoped literal replacement, for installed public regressions and atomic failures.
-- `docs/hld/14-development-backlog.md`, F-X192 through F-X198 and F-283, for exact acceptance and test gates.
+- `docs/hld/14-development-backlog.md`, F-X192 through F-X199 and F-283, for exact acceptance and test gates.
 
 ## The wave
 
@@ -30,6 +30,7 @@ Issues264 and281 remain excluded. The eight initial stories are estimated at
 | F-X196 | Validate visible paragraph content without false empty warnings | S | pending | - |
 | F-X197 | Unify Python colour inputs and font colour formats | L | pending | - |
 | F-X198 | Preserve alternate text-box copies during scoped replacement | M | pending | - |
+| F-X199 | Model namespace-qualified empty table cell margins | S | pending | - |
 
 ## Sequencing note
 
@@ -49,6 +50,20 @@ and implement uncovered acceptance only. New independent scope receives a
 new F-ID. Reconcile the plan, backlog, HLD14 and this record before proceeding.
 Issues264 and281 stay excluded at every refresh. SPRINT_PLAN.md defines the
 full rolling procedure. PR294 and Issues295 through301 are included at opening.
+PR302 entered the rolling intake at immutable head
+`30e4a93df7549990c5838da9c95866d19f1247b0`, adding independent F-X199.
+It has no linked issue and remains a draft contribution by `pedroassumpcao`.
+
+## Parallel implementation resources
+
+The source phase of wave 1 can run F-X193, F-X198 and F-X199 in separate
+worktrees. Their exclusive files are respectively html.rs, document.rs and
+regression_test.rs, and rdocx-oxml/table.rs and integration_test.rs.
+F-X198 uses its approved regression entrypoint, not integration_test.rs.
+Serialize shared HLD completion edits and delivery-record integration.
+Queue Cargo execution against the shared target to avoid duplicate build
+artifacts. F-X194 follows this wave because it uses both native Word test
+entrypoints. Other conflicting stories retain their approved later waves.
 
 ## Definition of done for this sprint
 
@@ -59,5 +74,6 @@ full rolling procedure. PR294 and Issues295 through301 are included at opening.
 - Issue298 distinguishes visible nontext paragraph content from genuinely empty paragraphs.
 - Issue299 provides consistent colour inputs/getters and nested font colour formats across both installed bindings.
 - Issue301 synchronizes alternate text-box copies and counts once, or refuses atomically with retained bytes.
+- PR302 models qualified, attribute-free empty cell margins while foreign or attributed lookalikes remain exact opaque XML. Namespace, schema-order and all 21 cell texts survive save/reopen.
 - Every feature has clean independent microscope review and scoped evidence. Final full verification and sprint review cover actual integrated HEAD and declared hash deltas.
 - GitHub closure waits for verified sprint close. This run creates no release tags or publication.

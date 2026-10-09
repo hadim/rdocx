@@ -6819,6 +6819,30 @@ refusal to RdocxError. Controls distinguish single-representation boxes,
 multiple identical boxes, stale locations, count mismatch and unequal or
 ambiguous alternates through save/reopen.
 
+### F-X199, Model namespace-qualified empty table cell margins (S)
+
+Adopt `pedroassumpcao`'s independent
+[PR302](https://github.com/tensorbee/rdocx/pull/302) at immutable head
+`30e4a93df7549990c5838da9c95866d19f1247b0`, based on
+`733ce6f7b2b816c5760692abf5c99d68b29ae897`. Qualified self-closing `w:tcMar`
+with no attributes except namespace declarations must model the same empty
+`CT_TblCellMar` as the expanded empty form. Ordinary cells therefore expose
+`has_cell_margins()` without falsely reporting unmodeled properties.
+Preserve real unknown attributes and foreign or rebound namespace lookalikes
+as exact raw XML. Keep existing absolute cell-property schema slots and all
+unrelated source content. No public API, dependency or release version change
+is required. Assess updated contributor heads before implementing uncovered
+criteria and record actual local evidence rather than contributor test claims.
+
+**Depends on**: none.
+**Test gate**: regression. Both self-closing spellings, expanded empty margins,
+Word aliases and default namespaces produce the same typed value. Foreign,
+rebound and genuinely attributed controls retain exact bytes. Existing typed
+mutation keeps unsupported siblings in schema order. A source-built 7-by-3
+table retains all 21 cell texts and correct reader facts before and after
+save/reopen. Use existing unit and integration entrypoints and require the
+deterministic hash harness to remain unchanged. Issues264 and281 stay excluded.
+
 ### F-X191, Ignore namespace declarations in numbering reader completeness (S)
 
 Resolve the native reader false positive contributed by Pedro Assumpcao

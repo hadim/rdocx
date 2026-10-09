@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 208 | 196 | 1 | 7 |
-| **Total** | **533** | **470** | **1** | **58** |
+| X, Cross-cutting | 209 | 196 | 1 | 8 |
+| **Total** | **534** | **470** | **1** | **59** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -752,4 +752,5 @@ regenerated, never hand-edited.
 | F-X196 | Validate visible paragraph content without false empty warnings | S91 | S | pending |
 | F-X197 | Unify Python colour inputs and font colour formats | S91 | L | pending |
 | F-X198 | Preserve alternate text-box copies during scoped replacement | S91 | M | pending |
+| F-X199 | Model namespace-qualified empty table cell margins | S91 | S | pending |
 <!-- AUTOGEN:backlog-MX END -->

@@ -2148,6 +2148,7 @@ CLI validation reports before the template and form programme resumes.
 | F-X196 | Validate visible paragraph content without false empty warnings | S |
 | F-X197 | Unify Python colour inputs and font colour formats | L |
 | F-X198 | Preserve alternate text-box copies during scoped replacement | M |
+| F-X199 | Model namespace-qualified empty table cell margins | S |
 
 The 2026-10-09 intake includes [PR294](https://github.com/tensorbee/rdocx/pull/294)
 and Issues [295](https://github.com/tensorbee/rdocx/issues/295),
@@ -2173,7 +2174,7 @@ actual prerequisites and saved evidence, then F-X193, F-X194, F-X197, F-X195
 F-X196 and F-X198. Colour consistency precedes the table/font visual acceptance
 recheck. Shared source, bindings, tests and the hash baseline have one owner
 at a time. New stories require approved designs, scoped gates and clean
-microscope reviews. The eight included stories are estimated at 22 to 28 developer-days,
+microscope reviews. The nine included stories are estimated at 23 to 29 developer-days,
 not a fixed calendar duration. The inserted boundary moves the previous S91
 through S104 to S92 through S105. S90 delivered history remains intact.
 
@@ -2224,6 +2225,24 @@ at the opening refresh and adds F-X198 for alternate text-box ownership. It
 follows completed F-X187 and runs in its own exclusive wave. This expands the
 initial seven-story intake to eight without weakening acceptance or carrying
 new scope away from this sprint.
+
+[PR302](https://github.com/tensorbee/rdocx/pull/302), by `pedroassumpcao`, entered
+the rolling refresh on 2026-10-09 at head
+`30e4a93df7549990c5838da9c95866d19f1247b0`, based on
+`733ce6f7b2b816c5760692abf5c99d68b29ae897`. It is a draft with no linked issue
+or discussion at assessment. F-X199 adopts its narrow qualified empty-cell
+margin correction and tests, then verifies preservation and public save/reopen
+locally. This is independent scope, not a duplicate of the table authoring
+or validation issues.
+
+Wave 1 permits separate source worktrees for F-X193, F-X198 and F-X199.
+Their source and test file sets are disjoint when F-X198 retains its approved
+regression_test.rs boundary. Shared HLD completion edits, delivery records and
+integration are serialized. Cargo commands queue against one shared target.
+F-X194 follows wave 1 because its native evidence uses integration_test.rs and
+regression_test.rs. Later source conflicts remain exclusive, and the exclusive
+hash baseline retains its designated owner. Independent draft and review work
+can continue while implementation and Cargo resources are occupied.
 
 #### Sprint S92, Templates, controls, and forms
 
