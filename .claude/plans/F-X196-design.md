@@ -23,10 +23,12 @@ its text-only predicate with a private content-aware check in existing
 commands.rs. Text-bearing paragraphs remain nonempty. Scan the existing main-part XML
 read-only with quick-xml to build one visible-nontext flag per admitted body
 paragraph. Follow direct body paragraphs and recursively typed block-control
-content, while excluding tables, properties and unsupported wrappers. Zip the
+content. Direct body tables remain excluded. Tables inside block controls are
+entered, matching CT_Body::paragraphs and CT_Sdt::collect_paragraphs exactly.
+Properties and unsupported wrappers remain excluded. Zip the
 flags with the existing facade paragraph inventory and reject an inventory
 mismatch. This preserves its exact counting scope, including nested block
-controls. No new public facade surface or dependency is needed.
+controls and their owned table cells. No new public facade surface or dependency is needed.
 
 The scanner detects actual text and Word drawing/pict/object, field elements,
 symbols, tabs, breaks, footnote/endnote references and OfficeMath content.
@@ -110,4 +112,12 @@ None. Empty means no visible content, as explicitly requested in Issue298.
 
 ## Approved approach revision
 
-Inspection found paragraph_story_location deliberately returns None for nested block-control paragraphs at document.rs:20117. The original per-paragraph snapshot approach cannot cover the existing recursive body paragraph inventory at document.rs:11744. The read-only main-part scan above keeps the same source and counting scope without a forwarding public API. This technical revision has no product ambiguity and adds nested block controls and table-exclusion inventory controls to the existing test plan.
+Inspection found paragraph_story_location deliberately returns None for nested block-control paragraphs at document.rs:20117. The original per-paragraph snapshot approach cannot cover the existing recursive body paragraph inventory at document.rs:11744. The read-only main-part scan above keeps the same source and counting scope without a forwarding public API. This technical revision has no product ambiguity and adds nested block controls and table inventory controls to the existing test plan.
+
+The nested-scope regression found that block_paragraphs is the heading/link
+inventory, not Document::paragraphs. The latter calls CT_Body::paragraphs at
+rdocx-oxml/document.rs:2518 and CT_Sdt::collect_paragraphs at
+content_control.rs:1197, which enters owned tables within block controls.
+The approved main-part scanner must follow this exact existing inventory:
+direct body tables excluded, control-owned tables entered through qualified
+row/cell/control paths. The source-built test distinguishes both cases.
