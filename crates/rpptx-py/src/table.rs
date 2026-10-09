@@ -104,6 +104,21 @@ pub(crate) fn cell_mut_at<'a>(
         .into_cell_mut(row, column)
 }
 
+/// Whether `value` is a GUID in braces, `{XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX}`.
+pub(crate) fn is_braced_guid(value: &str) -> bool {
+    let Some(inner) = value
+        .strip_prefix('{')
+        .and_then(|value| value.strip_suffix('}'))
+    else {
+        return false;
+    };
+    let groups = inner.split('-').collect::<Vec<_>>();
+    groups.len() == 5
+        && groups.iter().zip([8, 4, 4, 4, 12]).all(|(group, length)| {
+            group.len() == length && group.bytes().all(|byte| byte.is_ascii_hexdigit())
+        })
+}
+
 /// Left, right, top, and bottom cell margins, as the facade reports them.
 type Margins = (
     Option<rpptx::Emu>,
@@ -136,6 +151,26 @@ impl PyTable {
             .map(|table| (table.row_count(), table.column_count()))
             .ok_or_else(|| PyValueError::new_err("shape has no table"))
     }
+
+    fn read<T>(&self, py: Python<'_>, read: impl FnOnce(rpptx::TableRef<'_>) -> T) -> PyResult<T> {
+        self.dimensions(py)?;
+        shape_ref_at(&self.presentation.borrow(py).inner, &self.path)
+            .and_then(|shape| shape.table())
+            .map(read)
+            .ok_or_else(|| PyValueError::new_err("shape has no table"))
+    }
+
+    /// Changes table properties that move no row, column, or cell, so every
+    /// handle stays valid.
+    fn edit(&self, py: Python<'_>, edit: impl FnOnce(&mut rpptx::TableMut<'_>)) -> PyResult<()> {
+        self.dimensions(py)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        let mut table = shape_mut_at(&mut presentation.inner, &self.path)
+            .and_then(rpptx::ShapeMut::into_table_mut)
+            .ok_or_else(|| PyValueError::new_err("shape has no table"))?;
+        edit(&mut table);
+        Ok(())
+    }
 }
 
 #[pymethods]
@@ -162,6 +197,88 @@ impl PyTable {
                 path: self.path.clone(),
             },
         )
+    }
+
+    /// Whether the first row gets the table style's header formatting.
+    #[getter]
+    fn first_row(&self, py: Python<'_>) -> PyResult<bool> {
+        self.read(py, |table| table.first_row())
+    }
+
+    #[setter]
+    fn set_first_row(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        self.edit(py, |table| table.set_first_row(value))
+    }
+
+    #[getter]
+    fn last_row(&self, py: Python<'_>) -> PyResult<bool> {
+        self.read(py, |table| table.last_row())
+    }
+
+    #[setter]
+    fn set_last_row(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        self.edit(py, |table| table.set_last_row(value))
+    }
+
+    #[getter]
+    fn first_col(&self, py: Python<'_>) -> PyResult<bool> {
+        self.read(py, |table| table.first_column())
+    }
+
+    #[setter]
+    fn set_first_col(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        self.edit(py, |table| table.set_first_column(value))
+    }
+
+    #[getter]
+    fn last_col(&self, py: Python<'_>) -> PyResult<bool> {
+        self.read(py, |table| table.last_column())
+    }
+
+    #[setter]
+    fn set_last_col(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        self.edit(py, |table| table.set_last_column(value))
+    }
+
+    #[getter]
+    fn horz_banding(&self, py: Python<'_>) -> PyResult<bool> {
+        self.read(py, |table| table.horizontal_banding())
+    }
+
+    #[setter]
+    fn set_horz_banding(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        self.edit(py, |table| table.set_horizontal_banding(value))
+    }
+
+    #[getter]
+    fn vert_banding(&self, py: Python<'_>) -> PyResult<bool> {
+        self.read(py, |table| table.vertical_banding())
+    }
+
+    #[setter]
+    fn set_vert_banding(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        self.edit(py, |table| table.set_vertical_banding(value))
+    }
+
+    /// The `a:tableStyleId` GUID of the applied table style, such as
+    /// `{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}` (Medium Style 2, Accent 1),
+    /// or `None` for the presentation's default style.
+    #[getter]
+    fn style_id(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        self.read(py, |table| table.style_id().map(str::to_owned))
+    }
+
+    #[setter]
+    fn set_style_id(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        if let Some(value) = value.as_deref()
+            && !is_braced_guid(value)
+        {
+            return Err(PyValueError::new_err(format!(
+                "table style id must be a braced GUID such as \
+                 {{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}}, got {value:?}"
+            )));
+        }
+        self.edit(py, |table| table.set_style_id(value.as_deref()))
     }
 
     fn cell(&self, py: Python<'_>, row: isize, col: isize) -> PyResult<Py<PyCell>> {
