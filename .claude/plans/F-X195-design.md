@@ -36,6 +36,16 @@ retain normal font discovery and bundled fallback. Deterministic Word CLI
 and PowerPoint APIs retain bundled fallback. Existing caller-only native
 layout methods remain caller-only.
 
+Issue313 explicitly adds ordered Python font_dirs inputs. Keep singular
+font_dir compatible and add keyword-only font_dirs=None to every listed
+render and measurement method in both families. Supplying non-None font_dir
+and font_dirs together is a named ValueError before output. Reject a scalar
+string for font_dirs rather than iterating its characters. Validate each path
+without dropping unreadable entries. Process directories in caller sequence
+order and each directory in lexical path order. Later same-rank directory
+faces win, then explicit fonts inputs win last. Empty sequences and valid
+empty directories retain the ordinary fallback policy.
+
 Directory inputs load in lexical path order before explicit `fonts` inputs.
 Explicit inputs load last and override same-family directory faces. Caller
 faces override document-embedded and fallback faces. Validate missing
@@ -62,7 +72,7 @@ owned layout bundle.
 Add caller-font native output variants for single PNG, SVG, selected raster
 pages and all PNG pages. The variants retain existing render parameters and
 add `font_files: &[(&str, &[u8])]` and `RenderOptions` where applicable. Add
-keyword-only `fonts=None` and `font_dir=None` to Word Python PDF, PNG, SVG,
+keyword-only `fonts=None`, `font_dir=None` and `font_dirs=None` to Word Python PDF, PNG, SVG,
 selected and all-page rendering, `layout` and `layout_page`. Preserve existing
 positional parameters, revision selection and return shapes. Copy Python font
 bytes before releasing the GIL. Perform directory reads and layout and render
@@ -80,7 +90,7 @@ without introducing a separate font resolver. Fit checks use the same manager
 configuration as PDF and previews.
 
 Add keyword-only caller arguments to every corresponding PowerPoint Python
-method, including `to_pdf`, `to_notes_pdf`, `render_slide_to_png`,
+method, including the same font_dirs ordered input, `to_pdf`, `to_notes_pdf`, `render_slide_to_png`,
 `render_all_slides`, `render_all_notes` and `text_layout`. Update installed
 typing signatures and method documentation in the same change.
 

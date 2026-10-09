@@ -113,6 +113,22 @@ errors and systematic silent-failure audit. Its evidence depends on the
 provider stories, with no duplicate repair under this story. Detailed design
 and resource routing precede implementation.
 
+PR [317](https://github.com/tensorbee/rdocx/pull/317) entered the next refresh
+at immutable head `3d056f46e97e9cc1caf2969b5096eeb6775a5fa0`, based on
+main `733ce6f7b2b816c5760692abf5c99d68b29ae897`. Its42 changed files and
+complete comments/reviews are captured for assessment. Issues295 and300 map
+to F-X194, Issue298 CLI validation to F-X196, Issue299 to F-X197 and
+Issue301 to F-X198. Its cell tcPr anchor maps to existing F-X206, distinct
+from TextFrame bodyPr anchor. Successful alternate-copy synchronization is
+reuse evidence for F-X202 beyond the completed safety refusal.
+
+Its additional native accessibility-audit change proposes three
+feature_showcase hash deltas. That behavior is outside the current read-only
+CLI contract and requires an explicit separately reviewed scope before
+adoption. Do not replace frozen fixes, duplicate their F-IDs or copy its
+baseline/archive measurements. Reconcile qualified visibility, atomicity,
+handle generations and the shared colour extractor before reuse.
+
 ## Parallel implementation resources
 
 The source phase of wave 1 can run F-X193, F-X196, F-X198 and F-X199 in separate

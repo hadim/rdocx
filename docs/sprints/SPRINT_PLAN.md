@@ -2301,6 +2301,14 @@ Known font, link, section and selected handle repairs remain with their
 existing F-IDs. Measure the integrated provider result once and avoid a
 second implementation of those fixes.
 
+PR [317](https://github.com/tensorbee/rdocx/pull/317), head
+`3d056f46e97e9cc1caf2969b5096eeb6775a5fa0`, attaches to existing
+F-X194/F-X196/F-X197/F-X198 for Issues295/298/299/300/301. Its tcPr anchor
+belongs to F-X206 and paired success informs F-X202. Assess the full patch
+against these contracts. Its added native accessibility behavior and
+three-key feature_showcase delta need a separate labelled reviewed scope.
+No contributor test, archive or baseline record substitutes for local gates.
+
 #### Sprint S92, Templates, controls, and forms
 
 **Goal**: freeze the container-wide template grammar, create and bind content

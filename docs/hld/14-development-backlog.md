@@ -7366,3 +7366,14 @@ and assert saved package structure. All requested element kinds round-trip
 opaque content and refuse wrong types atomically. Handles survive supported
 edits, unsupported invalidations name the triggering operation, and each
 silent failure has a failing-before/fixed-after public control.
+
+#### S91 PR317 reconciliation
+
+PR317 at head3d056f46e97e9cc1caf2969b5096eeb6775a5fa0 closes Issues295,
+298,299,300 and301. Existing F-X194/F-X196/F-X197/F-X198 remain their
+implementation owners. Cell tcPr anchor is F-X206, while successful paired
+replacement is reusable input for F-X202 beyond F-X198 safety.
+Review its42-file diff and uncovered criteria before source reuse. Additional
+native accessibility behavior is not authorized merely by its contributor
+hash-baseline record. Keep independent labelled behavior review and derive
+all archive/baseline evidence from actual accepted source.

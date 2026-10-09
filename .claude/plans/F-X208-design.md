@@ -229,3 +229,31 @@ Then specify title suppression and missing-placeholder synthesis, legal flag
 owner updates, displayed-number plumbing and supported automatic date cache
 context. Synchronize X209 theme-owner/proxy design before source claims and
 X204 CLI command ownership before shared main.rs/commands.rs writes.
+
+## Actual native design evidence
+
+PowerPoint16.113.3 build16.113.26092714 produced the controlled blank
+16:9 baseline and authenticated Apply/ApplyAll captures in
+/private/tmp/S91-X208-native-footer-controls, with input/output hashes and
+owner facts. Apply on the title slide with suppression false creates three
+slide-owned placeholders. Fixed dates are ordinary text, slide numbers are
+a:fld type slidenum. Setting start0 writes presentation firstSlideNum=0 and
+the visible first-slide field0. A newly added slide after Apply only has no
+footer/date/number placeholders.
+
+ApplyAll with automatic date, footer and numbers plus title suppression
+removes the title slide placeholders, writes all three on the ordinary slide,
+updates master/layout placeholder content and stores legal master hf hdr=0.
+Neither slide has a root p:hf. Automatic date uses a:fld type datetime1 in
+this native locale control. Normal same-path reopen/Save preserves all14
+slide/layout/master XML parts byte-for-byte and firstSlideNum0, with no
+repair dialog. The ordinary slide visibly shows date, footer and number1.
+
+A source-built comparison removes only the three ordinary-slide owned
+placeholders, retaining exact master/layout inputs. Native normal open shows
+none of the three footer fields and Save does not materialize them. This
+contradicts unconditional latent inheritance for this concrete control.
+Use explicit owned-placeholder authoring and a separately reviewed renderer
+correction, with intentional hash deltas declared before implementation.
+This evidence is one blank-theme control, not the complete hf matrix,
+branded potx or native PDF acceptance. Keep those remaining gates.
