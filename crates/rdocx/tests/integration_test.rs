@@ -5500,6 +5500,102 @@ fn html_fragment_rejects_unreviewed_story_kinds_atomically() {
 }
 
 #[test]
+fn configured_pictures_insert_resize_one_at_a_time_and_list_their_alt_text() {
+    let mut document = Document::new();
+    document.add_paragraph("pictures");
+    let body = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Body)
+        .unwrap();
+    let png = mhtml_pixel_png();
+    let mut floating = rdocx::PictureOptions::new(Length::pt(90.0), Length::pt(45.0));
+    floating.description = Some("A floating chart".to_owned());
+    floating.title = Some("Chart".to_owned());
+    floating.anchor = Some(rdocx::PictureAnchor {
+        horizontal_relative_from: rdocx::DrawingHorizontalRelativeFrom::Column,
+        horizontal_offset: Length::pt(0.0),
+        horizontal_alignment: Some(rdocx::DrawingHorizontalAlignment::Right),
+        vertical_relative_from: rdocx::DrawingVerticalRelativeFrom::Paragraph,
+        vertical_offset: Length::pt(6.0),
+        vertical_alignment: None,
+        wrap: rdocx::DrawingWrap::TopAndBottom,
+        distance_top: Length::pt(0.0),
+        distance_bottom: Length::pt(0.0),
+        distance_left: Length::pt(9.0),
+        distance_right: Length::pt(9.0),
+        relative_height: 1,
+        behind_text: false,
+    });
+    let first = document
+        .insert_picture_with_options(&body, None, &png, "chart.png", floating)
+        .unwrap();
+    let mut decorative = rdocx::PictureOptions::new(Length::pt(20.0), Length::pt(20.0));
+    decorative.decorative = true;
+    let body = first.story().clone();
+    document
+        .insert_picture_with_options(&body, Some(&first), &png, "rule.png", decorative)
+        .unwrap();
+
+    // A run picture shares the first picture's relationship.
+    let relationship = document.images()[0].embed_id.clone();
+    let drawing_id = document.reserve_drawing_id().unwrap();
+    let mut inline = rdocx::PictureOptions::new(Length::pt(10.0), Length::pt(10.0));
+    inline.description = Some("Inline copy".to_owned());
+    document
+        .add_paragraph("")
+        .add_run("")
+        .add_picture_with_options(&relationship, drawing_id, inline)
+        .unwrap();
+
+    document
+        .set_picture_size_at(&relationship, 1, Length::pt(30.0), Length::pt(30.0))
+        .unwrap();
+    assert!(
+        document
+            .set_picture_size_at(&relationship, 2, Length::pt(1.0), Length::pt(1.0))
+            .is_err()
+    );
+    let bytes = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    let images = reopened.images();
+    assert_eq!(images.len(), 3);
+    assert!(images[0].is_anchor);
+    assert_eq!(images[0].description.as_deref(), Some("A floating chart"));
+    assert_eq!(images[0].title.as_deref(), Some("Chart"));
+    assert_eq!(images[0].width_emu, Length::pt(90.0).to_emu());
+    assert!(images[1].decorative && !images[1].is_anchor);
+    assert_eq!(images[2].description.as_deref(), Some("Inline copy"));
+    assert_eq!(images[2].width_emu, Length::pt(30.0).to_emu());
+    let (content_type, part) = reopened.image_content_type(&images[0].embed_id).unwrap();
+    assert_eq!(content_type, "image/png");
+    assert!(part.starts_with("/word/media/") || part.starts_with("word/media/"));
+
+    let xml = String::from_utf8(
+        OpcPackage::from_reader(std::io::Cursor::new(bytes))
+            .unwrap()
+            .get_part("word/document.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(xml.contains("<wp:wrapTopAndBottom/>"));
+    assert!(xml.contains("adec:decorative"));
+    let ids = xml
+        .match_indices("<wp:docPr id=\"")
+        .map(|(at, found)| {
+            xml[at + found.len()..]
+                .split('"')
+                .next()
+                .unwrap()
+                .to_owned()
+        })
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(ids.len(), 3);
+}
+
+#[test]
 fn m23_drawings_text_boxes_and_watermarks_match_word() {
     let mut document = Document::new();
     document.add_paragraph("drawing matrix");
@@ -5528,6 +5624,8 @@ fn m23_drawings_text_boxes_and_watermarks_match_word() {
                 anchor: None,
                 name: Some("Cropped inline".to_owned()),
                 description: Some("inline corpus picture".to_owned()),
+                title: None,
+                decorative: false,
             },
         )
         .unwrap();
@@ -5563,6 +5661,8 @@ fn m23_drawings_text_boxes_and_watermarks_match_word() {
                 }),
                 name: Some("Floating picture".to_owned()),
                 description: None,
+                title: None,
+                decorative: false,
             },
         )
         .unwrap();
@@ -5693,6 +5793,8 @@ fn drawing_option_matrix_round_trips_with_story_relationships() {
                 anchor: None,
                 name: None,
                 description: None,
+                title: None,
+                decorative: false,
             },
         )
         .unwrap();
@@ -5794,6 +5896,8 @@ fn staged_drawing_invariants_reject_invalid_inputs_atomically() {
         anchor: None,
         name: None,
         description: None,
+        title: None,
+        decorative: false,
     };
     assert!(
         document
@@ -5838,6 +5942,8 @@ fn staged_drawing_invariants_reject_invalid_inputs_atomically() {
         anchor: None,
         name: None,
         description: None,
+        title: None,
+        decorative: false,
     };
     assert!(
         document

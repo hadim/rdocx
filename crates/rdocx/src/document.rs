@@ -507,7 +507,28 @@ pub struct PictureOptions {
     pub crop: Option<PictureCrop>,
     pub anchor: Option<PictureAnchor>,
     pub name: Option<String>,
+    /// Alt text (`wp:docPr/@descr`).
     pub description: Option<String>,
+    /// Alt-text title (`wp:docPr/@title`).
+    pub title: Option<String>,
+    /// Mark the picture decorative, so screen readers skip it.
+    pub decorative: bool,
+}
+
+impl PictureOptions {
+    /// An inline picture of this size with no crop, name or alt text.
+    pub fn new(width: Length, height: Length) -> Self {
+        Self {
+            width,
+            height,
+            crop: None,
+            anchor: None,
+            name: None,
+            description: None,
+            title: None,
+            decorative: false,
+        }
+    }
 }
 
 /// Text flow direction inside an authored Word text box.
@@ -620,7 +641,7 @@ impl From<DrawingWrap> for WrapType {
     }
 }
 
-fn validate_picture_options(options: &PictureOptions) -> Result<()> {
+pub(crate) fn validate_picture_options(options: &PictureOptions) -> Result<()> {
     if options.width.to_emu() <= 0 || options.height.to_emu() <= 0 {
         return Err(Error::Other(
             "picture width and height must be positive".to_owned(),
@@ -721,6 +742,51 @@ fn validate_text_watermark_options(options: &TextWatermarkOptions) -> Result<()>
 
 fn is_rgb_hex(value: &str) -> bool {
     value.len() == 6 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+/// Build the drawing of one authored picture from checked options.
+pub(crate) fn picture_drawing(
+    relationship_id: &str,
+    drawing_id: u32,
+    options: PictureOptions,
+) -> CT_Drawing {
+    let source_rect = options.crop.map(|crop| SourceRect {
+        left: crop.left,
+        top: crop.top,
+        right: crop.right,
+        bottom: crop.bottom,
+    });
+    match options.anchor {
+        Some(anchor_options) => {
+            let mut anchor = CT_Anchor::background(
+                relationship_id,
+                options.width.to_emu(),
+                options.height.to_emu(),
+            );
+            apply_picture_anchor(&mut anchor, anchor_options);
+            anchor.doc_pr_id = drawing_id;
+            anchor.name = options.name;
+            anchor.description = options.description;
+            anchor.title = options.title;
+            anchor.decorative = options.decorative;
+            anchor.source_rect = source_rect;
+            CT_Drawing::anchor(anchor)
+        }
+        None => {
+            let mut inline = CT_Inline::new(
+                relationship_id,
+                options.width.to_emu(),
+                options.height.to_emu(),
+            );
+            inline.doc_pr_id = drawing_id;
+            inline.name = options.name;
+            inline.description = options.description;
+            inline.title = options.title;
+            inline.decorative = options.decorative;
+            inline.source_rect = source_rect;
+            CT_Drawing::inline(inline)
+        }
+    }
 }
 
 fn apply_picture_anchor(anchor: &mut CT_Anchor, options: PictureAnchor) {
@@ -10070,9 +10136,12 @@ fn unwrap_story_hyperlink(
 ///
 /// `wp:extent` and the `a:ext` of `pic:spPr/a:xfrm` take the new size, and
 /// `wp:effectExtent` scales with the extent on each axis.
+/// Resize the picture drawings that show `relationship_id`, or only the
+/// `occurrence`-th of them in document order, and count the resized ones.
 fn resize_story_pictures(
     xml: &[u8],
     relationship_id: &str,
+    occurrence: Option<usize>,
     cx: i64,
     cy: i64,
 ) -> Result<(Vec<u8>, usize)> {
@@ -10120,6 +10189,7 @@ fn resize_story_pictures(
     let mut drawings: Vec<Drawing> = Vec::new();
     let mut edits = Vec::new();
     let mut resized = 0usize;
+    let mut seen = 0usize;
     loop {
         let before = reader.buffer_position() as usize;
         let (namespace, event) = reader
@@ -10199,6 +10269,10 @@ fn resize_story_pictures(
                     && let Some(drawing) = drawings.pop()
                     && drawing.shows_image
                     && let Some(extent) = drawing.extent
+                    && {
+                        seen += 1;
+                        occurrence.is_none_or(|wanted| wanted + 1 == seen)
+                    }
                 {
                     let (cx_range, old_cx) = attribute_value(extent.clone(), b"cx")?;
                     let (cy_range, old_cy) = attribute_value(extent, b"cy")?;
@@ -17502,7 +17576,25 @@ impl Document {
         width: Option<Length>,
         height: Option<Length>,
     ) -> Result<ContentLocation> {
-        let (width, height) = match (width, height) {
+        let (width, height) = Self::picture_extent(image_data, image_filename, width, height)?;
+        self.insert_picture_with_options(
+            story,
+            after,
+            image_data,
+            image_filename,
+            PictureOptions::new(width, height),
+        )
+    }
+
+    /// The display size of a picture: `width` and `height` when both are
+    /// given, or the image's native size at 72 DPI when both are omitted.
+    pub fn picture_extent(
+        image_data: &[u8],
+        image_filename: &str,
+        width: Option<Length>,
+        height: Option<Length>,
+    ) -> Result<(Length, Length)> {
+        Ok(match (width, height) {
             (Some(width), Some(height)) => (width, height),
             (None, None) => {
                 let native_size = oxml_media::probe(image_data)
@@ -17520,7 +17612,23 @@ impl Document {
                     "picture width and height must both be provided or both be omitted".to_owned(),
                 ));
             }
-        };
+        })
+    }
+
+    /// Insert a configured picture paragraph after checked story content,
+    /// or append it when `after` is omitted.
+    ///
+    /// The options carry the size, crop, alt text, title, decorative marker
+    /// and, for a floating picture, its anchor and wrapping.
+    pub fn insert_picture_with_options(
+        &mut self,
+        story: &StoryId,
+        after: Option<&ContentLocation>,
+        image_data: &[u8],
+        image_filename: &str,
+        options: PictureOptions,
+    ) -> Result<ContentLocation> {
+        validate_picture_options(&options)?;
         let mut candidate = self.clone_for_staging();
         candidate.flush_to_package()?;
         let (source, mut story_owner) = candidate.story_source_and_owner(story)?;
@@ -17562,13 +17670,11 @@ impl Document {
         let relationship_id =
             candidate.add_image_relationship_checked(&part_name, image_data, image_filename)?;
         let drawing_id = candidate.identifiers.reserve_drawing_id()?;
-
-        let mut inline = CT_Inline::new(&relationship_id, width.to_emu(), height.to_emu());
-        inline.doc_pr_id = drawing_id;
+        let drawing = picture_drawing(&relationship_id, drawing_id, options);
         let run = CT_R {
             alt_drawings: Vec::new(),
             properties: None,
-            content: vec![RunContent::Drawing(CT_Drawing::inline(inline))],
+            content: vec![RunContent::Drawing(drawing)],
             extra_xml: Vec::new(),
             extra_xml_positions: Vec::new(),
         };
@@ -17642,39 +17748,7 @@ impl Document {
         let relationship_id =
             candidate.add_image_relationship_checked(&owner, image_data, image_filename)?;
         let drawing_id = candidate.identifiers.reserve_drawing_id()?;
-        let source_rect = options.crop.map(|crop| SourceRect {
-            left: crop.left,
-            top: crop.top,
-            right: crop.right,
-            bottom: crop.bottom,
-        });
-        let drawing = match options.anchor {
-            Some(anchor_options) => {
-                let mut anchor = CT_Anchor::background(
-                    &relationship_id,
-                    options.width.to_emu(),
-                    options.height.to_emu(),
-                );
-                apply_picture_anchor(&mut anchor, anchor_options);
-                anchor.doc_pr_id = drawing_id;
-                anchor.name = options.name;
-                anchor.description = options.description;
-                anchor.source_rect = source_rect;
-                CT_Drawing::anchor(anchor)
-            }
-            None => {
-                let mut inline = CT_Inline::new(
-                    &relationship_id,
-                    options.width.to_emu(),
-                    options.height.to_emu(),
-                );
-                inline.doc_pr_id = drawing_id;
-                inline.name = options.name;
-                inline.description = options.description;
-                inline.source_rect = source_rect;
-                CT_Drawing::inline(inline)
-            }
-        };
+        let drawing = picture_drawing(&relationship_id, drawing_id, options);
         let mut paragraph = CT_P::new();
         paragraph.runs.push(CT_R {
             alt_drawings: Vec::new(),
@@ -20669,6 +20743,27 @@ impl Document {
         self.package.get_part(&target).map(|b| b.to_vec())
     }
 
+    /// The content type and part name of an embedded body image, by its
+    /// relationship ID.
+    pub fn image_content_type(&self, rel_id: &str) -> Option<(String, String)> {
+        let rels = self.package.get_part_rels(&self.doc_part_name)?;
+        let rel = rels.items.iter().find(|relationship| {
+            relationship.id == rel_id
+                && relationship.rel_type == rel_types::IMAGE
+                && relationship_is_internal(relationship)
+        })?;
+        let target = OpcPackage::resolve_rel_target(&self.doc_part_name, &rel.target);
+        let content_type = self.package.content_types.content_type_for(&target)?;
+        Some((content_type.to_owned(), target))
+    }
+
+    /// Reserve a document-unique drawing identifier for a picture authored
+    /// with [`crate::Run::add_picture_with_options`].
+    #[doc(hidden)]
+    pub fn reserve_drawing_id(&mut self) -> Result<u32> {
+        self.identifiers.reserve_drawing_id()
+    }
+
     /// Replace an embedded body picture by its relationship ID.
     ///
     /// The relationship and every drawing that shows the picture, with its
@@ -20697,6 +20792,33 @@ impl Document {
         width: Length,
         height: Length,
     ) -> Result<usize> {
+        self.resize_pictures(rel_id, None, width, height)
+    }
+
+    /// Resize one main-document picture: the `occurrence`-th drawing, from
+    /// zero in document order, that shows image relationship `rel_id`.
+    ///
+    /// The other pictures sharing the relationship keep their size. The
+    /// extents change as [`Self::set_picture_size`] changes them, and a
+    /// missing occurrence is an error that leaves the document unchanged.
+    pub fn set_picture_size_at(
+        &mut self,
+        rel_id: &str,
+        occurrence: usize,
+        width: Length,
+        height: Length,
+    ) -> Result<()> {
+        self.resize_pictures(rel_id, Some(occurrence), width, height)
+            .map(|_| ())
+    }
+
+    fn resize_pictures(
+        &mut self,
+        rel_id: &str,
+        occurrence: Option<usize>,
+        width: Length,
+        height: Length,
+    ) -> Result<usize> {
         const MAX_POSITIVE_COORDINATE: i64 = 27_273_042_316_900;
         let (cx, cy) = (width.to_emu(), height.to_emu());
         if !(1..=MAX_POSITIVE_COORDINATE).contains(&cx)
@@ -20720,7 +20842,7 @@ impl Document {
         let mut candidate = self.clone_for_staging();
         candidate.flush_to_package()?;
         let (updated, resized) =
-            resize_story_pictures(&candidate.document.to_xml()?, rel_id, cx, cy)?;
+            resize_story_pictures(&candidate.document.to_xml()?, rel_id, occurrence, cx, cy)?;
         if resized == 0 {
             return Err(Error::Other(format!(
                 "no picture drawing shows image relationship {rel_id}"
@@ -28966,6 +29088,8 @@ impl Document {
                     embed_id: inline.embed_id.clone(),
                     name: inline.name.clone(),
                     description: inline.description.clone(),
+                    title: inline.title.clone(),
+                    decorative: inline.decorative,
                     width_emu: inline.extent_cx.0,
                     height_emu: inline.extent_cy.0,
                     is_anchor: false,
@@ -28976,6 +29100,8 @@ impl Document {
                     embed_id: anchor.embed_id.clone(),
                     name: anchor.name.clone(),
                     description: anchor.description.clone(),
+                    title: anchor.title.clone(),
+                    decorative: anchor.decorative,
                     width_emu: anchor.extent_cx.0,
                     height_emu: anchor.extent_cy.0,
                     is_anchor: true,
@@ -30689,6 +30815,10 @@ pub struct ImageInfo {
     pub name: Option<String>,
     /// Optional description (alt text).
     pub description: Option<String>,
+    /// Optional alt-text title.
+    pub title: Option<String>,
+    /// Whether the picture is marked decorative.
+    pub decorative: bool,
     /// Width in EMUs (English Metric Units, 914400 EMU = 1 inch).
     pub width_emu: i64,
     /// Height in EMUs.
@@ -32649,6 +32779,8 @@ mod tests {
                 anchor: None,
                 name: None,
                 description: None,
+                title: None,
+                decorative: false,
             },
         );
         assert!(result.is_err());
