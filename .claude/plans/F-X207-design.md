@@ -428,3 +428,32 @@ native sweeps until an actual exact-font source measurement probe compares
 all saved controls through existing layout_shape_text. Keep the current
 reported overflow as evidence. Alternate end-extent metrics are diagnostics,
 not silently substituted successful results or an approved implementation.
+
+## Final bounded spacing boundary
+
+The final150-percent controls at4.53/4.57/4.61 inches produce92500/10000,
+92500/0 and100000/10000. Reduction0 and full scale100000 are omitted in
+native XML where they are defaults. Their exact final artifact receipt is
+/private/tmp/S91-F-X207-native-threshold150-boundary/receipt.json and the
+ignored appendix is .claude/scratch/F-X207-native-threshold150-boundary-oracle.md.
+Artifact hashes are independently checked. Every saved first-slide XML and
+all actual PDF glyph sizes/baselines agree across normal reopen/save.
+Input/source hashes remain unchanged and unrelated input parts match source.
+All three final page rasters were inspected and generated decks saved/closed.
+
+The92500/0 middle result falsifies the earlier candidate sequence that omitted
+that trial. With inner height321.84pt, its seven full line advances total
+326.34pt, while existing-source baseline plus pinned font descent predicts
+about320.1736pt. Full100000/10000 at4.61 inches similarly distinguishes full
+advances329.28pt from end extent323.4536pt within324.72pt. These controls
+support testing end-extent semantics rather than hidden padding, but actual
+source measurement remains necessary. Native PDF font sizes about26/26/28pt
+are reported separately from unrounded scaled nominal sizes.
+
+There are now18 bounded native coupled/near-full observations. Pause native
+sweeps until the prepared exact-font diagnostic runs through the current
+public layout_shape_text with immutable saved decks and the authenticated
+installed Arial bytes read in place. Retain current renderer overflow and
+last-baseline-plus-font-descent as separate outputs. Glyph ink is unmeasured
+where the public API does not expose it. No general candidate order or
+production change is approved by these finite boundary observations.
