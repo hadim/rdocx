@@ -937,6 +937,14 @@ fn text_views_and_validate_print_what_the_library_returns() {
         assert_eq!(findings, expected, "{printed}");
         assert_eq!(output.status.success(), report.is_valid());
     }
+
+    // A file that is not a package keeps the message of the package error.
+    let text_file = temp.path.join("not-a-package.docx");
+    fs::write(&text_file, "plain text").unwrap();
+    let output = cli(&["validate", path_text(&text_file)]);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.starts_with("Error: ZIP error: "), "{stderr}");
 }
 
 #[test]

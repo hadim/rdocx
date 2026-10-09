@@ -498,6 +498,14 @@ impl PyParagraph {
         mathml: Option<&str>,
         display: bool,
     ) -> PyResult<()> {
+        if latex
+            .or(mathml)
+            .is_some_and(|source| source.trim().is_empty())
+        {
+            return Err(PyValueError::new_err(
+                "add_equation needs a non-empty equation, such as r\"\\frac{a}{b}\"",
+            ));
+        }
         let converted = match (latex, mathml) {
             (Some(latex), None) => rdocx::equation_from_latex(latex),
             (None, Some(mathml)) => rdocx::equation_from_mathml(mathml),

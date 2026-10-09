@@ -678,7 +678,7 @@ fn drop_copied_control_identities(control: &mut CT_Sdt) -> Result<()> {
     Ok(())
 }
 
-fn body_marker(content: &BodyContent) -> Result<Option<Control>> {
+fn body_marker(content: &BodyContent) -> Result<Marker> {
     match content {
         BodyContent::Paragraph(paragraph) => {
             marker_from_sources(&placeholder::replaceable_texts(paragraph))
@@ -691,7 +691,7 @@ fn body_marker(content: &BodyContent) -> Result<Option<Control>> {
     }
 }
 
-fn row_marker(row: &CT_Row) -> Result<Option<Control>> {
+fn row_marker(row: &CT_Row) -> Result<Marker> {
     let mut direct_sources = Vec::new();
     collect_row_marker_sources(row, &mut direct_sources);
     if !direct_sources
@@ -706,7 +706,14 @@ fn row_marker(row: &CT_Row) -> Result<Option<Control>> {
     marker_from_sources(&all_sources)
 }
 
-fn marker_from_sources(sources: &[String]) -> Result<Option<Control>> {
+/// A control marker and the line, the paragraph or row text, that holds it.
+type Marker = Option<(Control, String)>;
+
+/// The deepest nesting of `{% for %}` and `{% if %}` blocks a template may
+/// use. Deeper templates are refused rather than recursing without bound.
+const MAX_BLOCK_DEPTH: usize = 64;
+
+fn marker_from_sources(sources: &[String]) -> Result<Marker> {
     let with_controls = sources
         .iter()
         .filter(|source| source.contains("{%") || source.contains("%}"))
@@ -725,7 +732,7 @@ fn marker_from_sources(sources: &[String]) -> Result<Option<Control>> {
         ));
     }
     parse_control(nonempty[0])
-        .map(Some)
+        .map(|control| Some((control, nonempty[0].trim().to_owned())))
         .map_err(|error| located(error, &line_context(nonempty[0])))
 }
 
@@ -792,68 +799,97 @@ fn validate_scope_name(name: &str) -> Result<()> {
 
 fn parse_blocks<T: Clone>(
     items: &[T],
-    marker: impl Fn(&T) -> Result<Option<Control>>,
+    marker: impl Fn(&T) -> Result<Marker>,
 ) -> Result<Vec<Block<T>>> {
-    let (blocks, next) = parse_block_level(items, 0, None, &marker)?;
+    let (blocks, next) = parse_block_level(items, 0, &mut Vec::new(), &marker)?;
     if next != items.len() {
         return Err(template_error("unexpected control marker"));
     }
     Ok(blocks)
 }
 
-/// Parse the blocks up to the end marker of `expected`, the kind of the open
-/// block and its opening marker.
-fn parse_block_level<T: Clone, F: Fn(&T) -> Result<Option<Control>>>(
+/// One open block: the kind of its end marker, its opening marker and the
+/// line that holds it.
+struct OpenBlock {
+    end: EndKind,
+    marker: String,
+    line: String,
+}
+
+/// Parse the blocks up to the end marker of the innermost `open` block, or to
+/// the end of `items` when no block is open.
+fn parse_block_level<T: Clone, F: Fn(&T) -> Result<Marker>>(
     items: &[T],
     mut index: usize,
-    expected: Option<(EndKind, String)>,
+    open: &mut Vec<OpenBlock>,
     marker: &F,
 ) -> Result<(Vec<Block<T>>, usize)> {
     let mut blocks = Vec::new();
     while index < items.len() {
-        let control = marker(&items[index])?;
-        let opener = control.as_ref().map(Control::marker).unwrap_or_default();
-        match control {
-            None => {
-                blocks.push(Block::Item {
-                    source_index: index,
-                    value: items[index].clone(),
-                });
-                index += 1;
-            }
-            Some(Control::For { name, path }) => {
-                let opened = Some((EndKind::For, opener));
-                let (body, next) = parse_block_level(items, index + 1, opened, marker)?;
-                blocks.push(Block::For { name, path, body });
-                index = next;
-            }
-            Some(Control::If { path }) => {
-                let opened = Some((EndKind::If, opener));
-                let (body, next) = parse_block_level(items, index + 1, opened, marker)?;
-                blocks.push(Block::If { path, body });
-                index = next;
-            }
-            Some(Control::End(actual)) => {
-                let Some((expected, opened)) = expected else {
-                    return Err(template_error(&format!(
-                        "unexpected `{opener}` without an opening marker"
-                    )));
+        let Some((control, line)) = marker(&items[index])? else {
+            blocks.push(Block::Item {
+                source_index: index,
+                value: items[index].clone(),
+            });
+            index += 1;
+            continue;
+        };
+        let text = control.marker();
+        let end = match &control {
+            Control::For { .. } => EndKind::For,
+            Control::If { .. } => EndKind::If,
+            Control::End(actual) => {
+                let actual = *actual;
+                let Some(innermost) = open.last() else {
+                    return Err(located(
+                        template_error(&format!("unexpected `{text}` without an opening marker")),
+                        &line_context(&line),
+                    ));
                 };
-                if actual != expected {
-                    return Err(template_error(&format!(
-                        "expected {} before `{opener}` to close `{opened}`",
-                        expected.name()
-                    )));
+                if actual != innermost.end {
+                    return Err(located(
+                        template_error(&format!(
+                            "expected {} before `{text}` to close `{}`",
+                            innermost.end.name(),
+                            innermost.marker
+                        )),
+                        &line_context(&line),
+                    ));
                 }
                 return Ok((blocks, index + 1));
             }
+        };
+        if open.len() == MAX_BLOCK_DEPTH {
+            return Err(located(
+                template_error(&format!(
+                    "`{text}` nests more than {MAX_BLOCK_DEPTH} blocks"
+                )),
+                &line_context(&line),
+            ));
         }
+        open.push(OpenBlock {
+            end,
+            marker: text,
+            line,
+        });
+        let (body, next) = parse_block_level(items, index + 1, open, marker)?;
+        open.pop();
+        blocks.push(match control {
+            Control::For { name, path } => Block::For { name, path, body },
+            Control::If { path } => Block::If { path, body },
+            Control::End(_) => unreachable!("end markers return above"),
+        });
+        index = next;
     }
-    if let Some((expected, opener)) = expected {
-        return Err(template_error(&format!(
-            "missing {} marker to close `{opener}`",
-            expected.name()
-        )));
+    if let Some(innermost) = open.last() {
+        return Err(located(
+            template_error(&format!(
+                "missing {} marker to close `{}`",
+                innermost.end.name(),
+                innermost.marker
+            )),
+            &line_context(&innermost.line),
+        ));
     }
     Ok((blocks, index))
 }

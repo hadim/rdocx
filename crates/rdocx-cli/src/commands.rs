@@ -1992,7 +1992,13 @@ fn validate_dpi(dpi: f64) -> Result<()> {
 /// paragraphs, missing metadata) are reported but do not affect the exit
 /// status.
 pub fn validate(file: &Path) -> Result<bool> {
-    let report = Document::validate_file(file)?;
+    let report = match Document::validate_file(file) {
+        Ok(report) => report,
+        // An unreadable package keeps the package error's own message, such
+        // as `ZIP error: ...`, as before the checks moved to the library.
+        Err(rdocx::Error::Opc(error)) => return Err(error.into()),
+        Err(error) => return Err(error.into()),
+    };
     match print_validation_report(file, &report.errors, &report.warnings) {
         Err(error) if error.kind() != io::ErrorKind::BrokenPipe => Err(error.into()),
         _ => Ok(report.is_valid()),

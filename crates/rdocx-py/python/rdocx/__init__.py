@@ -96,6 +96,11 @@ from ._rdocx import (
     ValidationReport,
 )
 
+# The custom properties behave as a mutable mapping of names to typed values.
+import collections.abc as _abc
+
+_abc.MutableMapping.register(CustomProperties)
+
 __all__ = [
     "AppProperties",
     "Bookmark",

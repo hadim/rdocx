@@ -2222,7 +2222,7 @@ impl PyDocument {
                 type_name(data)
             )));
         }
-        let data = template_value(data, "data")?;
+        let data = template_value(data, "data", &mut Vec::new())?;
         let count = py
             .detach(|| self.inner.render_template(&data))
             .map_err(|error| rdocx_to_pyerr(py, error))?;
@@ -2263,10 +2263,10 @@ impl PyDocument {
         let start = if let Ok(item) = start.cast::<PyStoryItem>() {
             self.native_location(py, &item.borrow())?
         } else {
-            let index = body_index_argument(start, "start must be an int or a StoryItem")?;
-            if index >= self.inner.content_count() {
-                return Err(PyIndexError::new_err("content index out of range"));
-            }
+            let index = start
+                .extract::<isize>()
+                .map_err(|_| PyTypeError::new_err("start must be an int or a StoryItem"))?;
+            let index = crate::normalize_index(index, self.inner.content_count(), "content")?;
             self.body_location(py, index)?
         };
         let end = match end {
@@ -2358,6 +2358,11 @@ impl PyDocument {
                  only rich_text, plain_text, combo_box, dropdown_list and date controls take one",
                 content_control_type_name(control.control_type())
             )));
+        }
+        for control in &matches {
+            control
+                .check_value(value)
+                .map_err(|error| PyValueError::new_err(error.to_string()))?;
         }
         let count = match key {
             "tag" => self.inner.set_content_control_value_by_tag(name, value),
@@ -4276,9 +4281,18 @@ impl PyDocument {
         } else {
             let message = format!("{name} must be an int, a StoryItem or a Story");
             let index = value
-                .extract::<usize>()
+                .extract::<isize>()
                 .map_err(|_| PyTypeError::new_err(message))?;
-            self.body_location(py, index)
+            // A boundary runs from 0 to the item count, and a negative index
+            // counts from the end, so -1 is the boundary before the last item.
+            let count = self.inner.content_count() as isize;
+            let boundary = if index < 0 { count + index } else { index };
+            if !(0..=count).contains(&boundary) {
+                return Err(PyIndexError::new_err(format!(
+                    "{name} index {index} is out of range for {count} body items"
+                )));
+            }
+            self.body_location(py, boundary as usize)
         }
     }
 
@@ -4377,8 +4391,17 @@ fn is_mapping(value: &Bound<'_, PyAny>) -> PyResult<bool> {
     value.is_instance(&mapping)
 }
 
-/// Convert template data to JSON. `path` names the value in error messages.
-fn template_value(value: &Bound<'_, PyAny>, path: &str) -> PyResult<serde_json::Value> {
+/// The deepest nesting of dicts and lists template data may use.
+const MAX_TEMPLATE_DATA_DEPTH: usize = 256;
+
+/// Convert template data to JSON. `path` names the value in error messages,
+/// and `open` holds the containers being converted, to refuse a cycle and
+/// bound the depth.
+fn template_value(
+    value: &Bound<'_, PyAny>,
+    path: &str,
+    open: &mut Vec<usize>,
+) -> PyResult<serde_json::Value> {
     use serde_json::Value;
 
     if value.is_none() {
@@ -4411,27 +4434,24 @@ fn template_value(value: &Bound<'_, PyAny>, path: &str) -> PyResult<serde_json::
     if let Ok(text) = value.cast::<PyString>() {
         return Ok(Value::String(text.to_cow()?.into_owned()));
     }
-    if is_mapping(value)? {
-        let mut object = serde_json::Map::new();
-        for item in value.call_method0("items")?.try_iter()? {
-            let (key, item) = item?.extract::<(Bound<'_, PyAny>, Bound<'_, PyAny>)>()?;
-            let Ok(key) = key.extract::<String>() else {
-                return Err(PyTypeError::new_err(format!(
-                    "template data {path} has a {} key; tag paths need str keys",
-                    type_name(&key)
-                )));
-            };
-            let value = template_value(&item, &format!("{path}[{key:?}]"))?;
-            object.insert(key, value);
+    let container =
+        is_mapping(value)? || value.is_instance_of::<PyList>() || value.is_instance_of::<PyTuple>();
+    if container {
+        let identity = value.as_ptr() as usize;
+        if open.contains(&identity) {
+            return Err(PyValueError::new_err(format!(
+                "template data {path} contains itself; template data must be a tree"
+            )));
         }
-        return Ok(Value::Object(object));
-    }
-    if value.is_instance_of::<PyList>() || value.is_instance_of::<PyTuple>() {
-        let mut array = Vec::new();
-        for (index, item) in value.try_iter()?.enumerate() {
-            array.push(template_value(&item?, &format!("{path}[{index}]"))?);
+        if open.len() == MAX_TEMPLATE_DATA_DEPTH {
+            return Err(PyValueError::new_err(format!(
+                "template data {path} nests deeper than {MAX_TEMPLATE_DATA_DEPTH} dicts and lists"
+            )));
         }
-        return Ok(Value::Array(array));
+        open.push(identity);
+        let converted = template_container(value, path, open);
+        open.pop();
+        return converted;
     }
     let datetime = value.py().import("datetime")?;
     let hint = if value.is_instance(&datetime.getattr("date")?)?
@@ -4445,6 +4465,36 @@ fn template_value(value: &Bound<'_, PyAny>, path: &str) -> PyResult<serde_json::
         "template data {path} is a {}, which a template cannot render; {hint}",
         type_name(value)
     )))
+}
+
+/// Convert one dict or list of template data.
+fn template_container(
+    value: &Bound<'_, PyAny>,
+    path: &str,
+    open: &mut Vec<usize>,
+) -> PyResult<serde_json::Value> {
+    use serde_json::Value;
+
+    if is_mapping(value)? {
+        let mut object = serde_json::Map::new();
+        for item in value.call_method0("items")?.try_iter()? {
+            let (key, item) = item?.extract::<(Bound<'_, PyAny>, Bound<'_, PyAny>)>()?;
+            let Ok(key) = key.extract::<String>() else {
+                return Err(PyTypeError::new_err(format!(
+                    "template data {path} has a {} key; tag paths need str keys",
+                    type_name(&key)
+                )));
+            };
+            let value = template_value(&item, &format!("{path}[{key:?}]"), open)?;
+            object.insert(key, value);
+        }
+        return Ok(Value::Object(object));
+    }
+    let mut array = Vec::new();
+    for (index, item) in value.try_iter()?.enumerate() {
+        array.push(template_value(&item?, &format!("{path}[{index}]"), open)?);
+    }
+    Ok(Value::Array(array))
 }
 
 /// The findings of `Document.validate()` and `rdocx validate`.
@@ -4700,12 +4750,14 @@ impl PyCustomProperties {
         self.names(py).len()
     }
 
-    fn __contains__(&self, py: Python<'_>, name: &str) -> bool {
-        self.document
-            .borrow(py)
-            .inner
-            .custom_property(name)
-            .is_some()
+    fn __contains__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> bool {
+        key.extract::<String>().is_ok_and(|name| {
+            self.document
+                .borrow(py)
+                .inner
+                .custom_property(&name)
+                .is_some()
+        })
     }
 
     fn __iter__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
@@ -4715,25 +4767,45 @@ impl PyCustomProperties {
             .map(Bound::into_any)
     }
 
-    fn __getitem__(&self, py: Python<'_>, name: &str) -> PyResult<Py<PyAny>> {
+    fn __getitem__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+        let missing = || PyKeyError::new_err(key.clone().unbind());
+        let name = key.extract::<String>().map_err(|_| missing())?;
         let document = self.document.borrow(py);
-        let property = document
-            .inner
-            .custom_property(name)
-            .ok_or_else(|| PyKeyError::new_err(name.to_owned()))?;
+        let property = document.inner.custom_property(&name).ok_or_else(missing)?;
         custom_value_to_python(py, &property.value)
     }
 
-    #[pyo3(signature = (name, default = None))]
-    fn get(&self, py: Python<'_>, name: &str, default: Option<Py<PyAny>>) -> PyResult<Py<PyAny>> {
+    #[pyo3(signature = (key, default = None))]
+    fn get(
+        &self,
+        py: Python<'_>,
+        key: &Bound<'_, PyAny>,
+        default: Option<Py<PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
         let document = self.document.borrow(py);
-        match document.inner.custom_property(name) {
+        let property = key
+            .extract::<String>()
+            .ok()
+            .and_then(|name| document.inner.custom_property(&name).cloned());
+        match property {
             Some(property) => custom_value_to_python(py, &property.value),
             None => Ok(default.unwrap_or_else(|| py.None())),
         }
     }
 
-    fn __setitem__(&self, py: Python<'_>, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
+    fn __setitem__(
+        &self,
+        py: Python<'_>,
+        key: &Bound<'_, PyAny>,
+        value: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let name = key.extract::<String>().map_err(|_| {
+            PyTypeError::new_err(format!(
+                "custom property names are str, not {}",
+                type_name(key)
+            ))
+        })?;
+        let name = name.as_str();
         if name.is_empty() {
             return Err(PyValueError::new_err(
                 "a custom property needs a non-empty name",
@@ -4767,17 +4839,30 @@ impl PyCustomProperties {
             .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
-    fn __delitem__(&self, py: Python<'_>, name: &str) -> PyResult<()> {
+    fn __delitem__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<()> {
+        let missing = || PyKeyError::new_err(key.clone().unbind());
+        let name = key.extract::<String>().map_err(|_| missing())?;
         let removed = self
             .document
             .borrow_mut(py)
             .inner
-            .remove_custom_property(name)
+            .remove_custom_property(&name)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         match removed {
             Some(_) => Ok(()),
-            None => Err(PyKeyError::new_err(name.to_owned())),
+            None => Err(missing()),
         }
+    }
+
+    fn values<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let document = self.document.borrow(py);
+        let mut values = Vec::new();
+        for property in document.inner.custom_properties() {
+            if property.name.is_some() {
+                values.push(custom_value_to_python(py, &property.value)?);
+            }
+        }
+        PyList::new(py, values)
     }
 
     fn keys<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {

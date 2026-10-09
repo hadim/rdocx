@@ -4134,18 +4134,37 @@ def test_whole_story_comment_refusals_preserve_bytes_and_revision(kind):
 
 
 def _cli_binary():
+    """The rdocx CLI to compare with: `RDOCX_CLI`, else a debug build of this
+    checkout, else `rdocx` on the PATH. A configured path that does not
+    exist fails the test rather than skipping it."""
     import os
     import pathlib
     import shutil
 
     configured = os.environ.get("RDOCX_CLI")
     if configured:
+        if not pathlib.Path(configured).is_file():
+            pytest.fail(f"RDOCX_CLI={configured} is not a file; build it with cargo build -p rdocx-cli")
         return configured
     root = pathlib.Path(__file__).resolve().parents[3]
     for target in (os.environ.get("CARGO_TARGET_DIR"), root / "target"):
         if target and (pathlib.Path(target) / "debug" / "rdocx").exists():
             return str(pathlib.Path(target) / "debug" / "rdocx")
-    return shutil.which("rdocx")
+    found = shutil.which("rdocx")
+    if found is None:
+        pytest.skip(
+            "no rdocx CLI to compare with: set RDOCX_CLI or run cargo build -p rdocx-cli"
+        )
+    return found
+
+
+def _parity_inputs():
+    """The generated story fixture, then every sample of `samples/` when the
+    samples were generated (`cargo run -p rdocx --example generate_all_samples`)."""
+    import pathlib
+
+    root = pathlib.Path(__file__).resolve().parents[3]
+    return ["stories", *sorted(str(path) for path in (root / "samples").glob("*.docx"))]
 
 
 def _story_document():
@@ -4182,29 +4201,36 @@ def test_text_views_read_every_story_as_the_cli_does():
     )
 
 
-def test_text_views_and_validate_equal_the_cli(tmp_path):
+@pytest.mark.parametrize("source", _parity_inputs())
+def test_text_views_and_validate_equal_the_cli(tmp_path, source):
+    import warnings
+
     import rdocx
 
     cli = _cli_binary()
-    if cli is None:
-        pytest.skip("set RDOCX_CLI to the rdocx CLI to compare with it")
-    path = tmp_path / "stories.docx"
-    _story_document().save(path)
+    if source == "stories":
+        path = tmp_path / "stories.docx"
+        _story_document().save(path)
+    else:
+        path = source
     document = rdocx.Document(path)
 
     def run(*args):
         return subprocess.run([cli, *args], capture_output=True, text=True)
 
-    assert run("text", str(path)).stdout == document.text()
-    for fmt, view in (("md", document.to_markdown()), ("html", document.to_html())):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", rdocx.ConversionWarning)
+        text, markdown, html = document.text(), document.to_markdown(), document.to_html()
+    assert run("text", str(path)).stdout == text
+    for fmt, view in (("md", markdown), ("html", html)):
         out = tmp_path / f"out.{fmt}"
         run("convert", str(path), "--to", fmt, "-o", str(out))
         assert out.read_text() == view
     printed = run("validate", str(path)).stdout
-    report = document.validate()
+    report = rdocx.Document.validate_file(path)
     findings = [line.split(". ", 1)[1] for line in printed.splitlines() if line.startswith("  ")]
     assert findings == [*report.errors, *report.warnings]
-    assert rdocx.Document.validate_file(path) == report
+    assert document.validate() == report
 
 
 def test_unreadable_story_part_warns_and_keeps_the_body():
@@ -4479,3 +4505,134 @@ def test_content_controls_list_and_set_by_tag_or_alias():
     with pytest.raises(ValueError, match="checkbox control, which holds no text value"):
         document.set_content_control_value("x", tag="agree")
     assert document.content_controls[1].text == "X"
+
+
+def test_render_template_refuses_cyclic_and_too_deep_data():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("{{ user.name }}")
+    cyclic = {}
+    cyclic["user"] = cyclic
+    with pytest.raises(ValueError, match=r'data\["user"\] contains itself'):
+        document.render_template(cyclic)
+    deep = {}
+    node = deep
+    for _ in range(20_000):
+        node["next"] = {}
+        node = node["next"]
+    with pytest.raises(ValueError, match="nests deeper than 256"):
+        document.render_template(deep)
+    shared = {"name": "Ada"}
+    assert document.render_template({"user": shared, "other": [shared, shared]}) == 1
+    nested = rdocx.Document()
+    for _ in range(2_000):
+        nested.add_paragraph("{% if shown %}")
+    with pytest.raises(rdocx.RdocxError, match="nests more than 64 blocks"):
+        nested.render_template({"shown": True})
+
+
+def test_negative_indexes_count_from_the_end():
+    import rdocx
+
+    source = rdocx.Document()
+    for text in ("a", "b", "c"):
+        source.add_paragraph(text)
+    destination = rdocx.Document()
+    destination.add_paragraph("first")
+    destination.add_paragraph("last")
+
+    destination.insert_document(source, at=-1)
+    assert [p.text for p in destination.paragraphs] == ["first", "a", "b", "c", "last"]
+    destination.import_fragment(source.copy_fragment(-2, -1), at=0)
+    assert destination.paragraphs[0].text == "b"
+    with pytest.raises(IndexError):
+        destination.insert_document(source, at=-99)
+    with pytest.raises(IndexError):
+        source.copy_fragment(3)
+
+
+def test_custom_properties_are_a_mutable_mapping():
+    import collections.abc
+
+    import rdocx
+
+    properties = rdocx.Document().custom_properties
+    assert isinstance(properties, collections.abc.MutableMapping)
+    properties["A"] = "x"
+    properties["B"] = 2
+    assert properties.values() == ["x", 2]
+    assert 1 not in properties and None not in properties and "A" in properties
+    assert properties.get(1, "default") == "default"
+    with pytest.raises(KeyError):
+        properties[1]
+    with pytest.raises(TypeError, match="names are str"):
+        properties[1] = "x"
+
+
+def test_add_equation_refuses_an_empty_equation():
+    import rdocx
+
+    paragraph = rdocx.Document().add_paragraph("x")
+    for empty in ("", "   "):
+        with pytest.raises(ValueError, match="non-empty equation"):
+            paragraph.add_equation(empty)
+    assert paragraph.equations == ()
+
+
+def test_content_control_values_follow_the_control_type():
+    import rdocx
+
+    def control(tag, properties, text, run_properties=""):
+        return (
+            f'<w:sdt><w:sdtPr><w:tag w:val="{tag}"/>{properties}</w:sdtPr><w:sdtContent>'
+            f"<w:p><w:r>{run_properties}<w:t>{text}</w:t></w:r></w:p></w:sdtContent></w:sdt>"
+        )
+
+    body = "".join(
+        [
+            control(
+                "name",
+                "<w:showingPlcHdr/><w:text/>",
+                "Click here",
+                '<w:rPr><w:rStyle w:val="PlaceholderText"/></w:rPr>',
+            ),
+            control(
+                "colour",
+                '<w:dropDownList><w:listItem w:displayText="Red" w:value="red"/>'
+                '<w:listItem w:displayText="Blue" w:value="blue"/></w:dropDownList>',
+                "Red",
+            ),
+            control(
+                "size",
+                '<w:comboBox><w:listItem w:displayText="Small" w:value="s"/></w:comboBox>',
+                "Small",
+            ),
+            control(
+                "when",
+                '<w:date w:fullDate="2024-01-02T00:00:00Z"><w:dateFormat w:val="M/d/yyyy"/>'
+                '<w:lid w:val="en-US"/></w:date>',
+                "1/2/2024",
+            ),
+        ]
+    ) + "<w:sectPr/>"
+    document = _replace_document_body(rdocx.Document(), body)
+    before = document.to_bytes()
+
+    with pytest.raises(ValueError, match=r'not one of its items \["Red", "Blue"\]'):
+        document.set_content_control_value("Green", tag="colour")
+    with pytest.raises(ValueError, match="not an ISO date"):
+        document.set_content_control_value("next Tuesday", tag="when")
+    assert document.to_bytes() == before
+
+    document.set_content_control_value("Ada", tag="name")
+    document.set_content_control_value("blue", tag="colour")
+    document.set_content_control_value("Huge", tag="size")
+    document.set_content_control_value("2026-03-05", tag="when")
+
+    assert [c.text for c in document.content_controls] == ["Ada", "Blue", "Huge", "3/5/2026"]
+    xml = _document_xml(document).decode()
+    assert "showingPlcHdr" not in xml and "PlaceholderText" not in xml
+    assert '<w:dropDownList w:lastValue="blue">' in xml
+    assert '<w:comboBox w:lastValue="Huge">' in xml
+    assert 'w:fullDate="2026-03-05T00:00:00Z"' in xml

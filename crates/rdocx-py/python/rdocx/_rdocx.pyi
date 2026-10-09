@@ -1,7 +1,12 @@
 import datetime as _datetime
 import os as _os
-from collections.abc import Iterator as _Iterator, Sequence as _Sequence
-from typing import Literal as _Literal, NoReturn as _Never, final as _final, overload as _overload
+from collections.abc import (
+    Iterator as _Iterator,
+    Mapping as _Mapping,
+    MutableMapping as _MutableMapping,
+    Sequence as _Sequence,
+)
+from typing import Any as _Any, Literal as _Literal, NoReturn as _Never, final as _final, overload as _overload
 
 from . import shared as _shared
 from .enum import table as _table
@@ -663,7 +668,7 @@ class Settings:
 
 
 @_final
-class CustomProperties:
+class CustomProperties(_MutableMapping[str, _CustomPropertyValue | bytes | None]):
     """The custom document properties, `docProps/custom.xml`, as a mapping.
 
     Values are typed: `str`, `int` (32 bits), `float`, `bool` and
@@ -674,16 +679,21 @@ class CustomProperties:
 
     def __new__(cls, *, _private: _Never) -> CustomProperties: ...
     def __len__(self) -> int: ...
-    def __contains__(self, key: str, /) -> bool: ...
+    def __contains__(self, key: object, /) -> bool: ...
     def __iter__(self) -> _Iterator[str]: ...
     def __getitem__(self, key: str, /) -> _CustomPropertyValue | bytes | None: ...
-    def __setitem__(self, key: str, value: _CustomPropertyValue, /) -> None: ...
+    def __setitem__(  # type: ignore[override]
+        self, key: str, value: _CustomPropertyValue, /
+    ) -> None: ...
     def __delitem__(self, key: str, /) -> None: ...
-    def get(
-        self, name: str, default: object = None
+    def get(  # type: ignore[override]
+        self, key: object, default: object = None
     ) -> _CustomPropertyValue | bytes | object | None: ...
-    def keys(self) -> list[str]: ...
-    def items(self) -> list[tuple[str, _CustomPropertyValue | bytes | None]]: ...
+    def keys(self) -> list[str]: ...  # type: ignore[override]
+    def values(self) -> list[_CustomPropertyValue | bytes | None]: ...  # type: ignore[override]
+    def items(  # type: ignore[override]
+        self,
+    ) -> list[tuple[str, _CustomPropertyValue | bytes | None]]: ...
 
 
 @_final
@@ -983,13 +993,15 @@ class Document:
     def validate_file(path: _Path) -> ValidationReport:
         """Validate a file exactly as `rdocx validate` does, even a file
         that does not open."""
-    def render_template(self, data: dict[str, object]) -> int:
+    def render_template(self, data: _Mapping[str, _Any]) -> int:
         """Render `{{ path.to.value }}` tags and `{% for item in path %}` /
         `{% if path %}` blocks from `data` and return the number of tags.
 
         A tag may cross run boundaries and keeps the formatting of its first
         run. Values are `str`, `int`, `float`, `bool`, `None` (empty text),
-        `dict` and `list`. A `{% ... %}` marker must be alone in its body
+        `dict` and `list`, rendered as JSON writes them: `True` gives `true`
+        and `2.0` gives `2.0`, so pass a formatted `str` for any other form.
+        Data deeper than 256 levels or containing itself raises `ValueError`. A `{% ... %}` marker must be alone in its body
         paragraph or table row, closed by `{% endfor %}` or `{% endif %}`.
         A missing path or a malformed tag raises `RdocxError` naming the tag
         and its line, and leaves the document unchanged.
@@ -1002,7 +1014,8 @@ class Document:
         conflict: _ConflictPolicy = "reuse_equivalent",
     ) -> None:
         """Insert the body of `other` before body index `at` (the end of the
-        body by default), with its styles, lists, pictures and links.
+        body by default, a negative index counts from the end), with its
+        styles, lists, pictures and links.
 
         `conflict="reuse_equivalent"` reuses a style, list or media part
         identical to one already here and renames the others,
@@ -1016,7 +1029,8 @@ class Document:
         end: int | StoryItem | Story | None = None,
     ) -> DocumentFragment:
         """Copy the story items from `start` up to `end` excluded (the end of
-        the story by default) with their dependencies."""
+        the story by default) with their dependencies. Negative body indexes
+        count from the end."""
     def import_fragment(
         self,
         fragment: DocumentFragment,
