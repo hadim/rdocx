@@ -640,6 +640,7 @@ pub struct PyHyperlink {
     url: Option<String>,
     anchor: Option<String>,
     relationship_id: Option<String>,
+    tooltip: Option<String>,
     /// The position among the native `story_links` of `story`, which
     /// selects one of several identical links, and the story's link layout
     /// when the snapshot was taken. A constructed record has neither.
@@ -656,6 +657,7 @@ impl PartialEq for PyHyperlink {
             && self.url == other.url
             && self.anchor == other.anchor
             && self.relationship_id == other.relationship_id
+            && self.tooltip == other.tooltip
     }
 }
 
@@ -675,7 +677,8 @@ fn story_link_layout<'a>(links: impl IntoIterator<Item = (&'a [usize], &'a str)>
 #[pymethods]
 impl PyHyperlink {
     #[new]
-    #[pyo3(signature = (*, story, index_path, text, url, anchor, relationship_id))]
+    #[pyo3(signature = (*, story, index_path, text, url, anchor, relationship_id, tooltip = None))]
+    #[allow(clippy::too_many_arguments)]
     fn new(
         story: PyRef<'_, PyStory>,
         index_path: Vec<usize>,
@@ -683,6 +686,7 @@ impl PyHyperlink {
         url: Option<String>,
         anchor: Option<String>,
         relationship_id: Option<String>,
+        tooltip: Option<String>,
     ) -> Self {
         Self {
             story: story.clone(),
@@ -691,6 +695,7 @@ impl PyHyperlink {
             url,
             anchor,
             relationship_id,
+            tooltip,
             position: None,
         }
     }
@@ -723,6 +728,11 @@ impl PyHyperlink {
     #[getter]
     fn relationship_id(&self) -> Option<&str> {
         self.relationship_id.as_deref()
+    }
+
+    #[getter]
+    fn tooltip(&self) -> Option<&str> {
+        self.tooltip.as_deref()
     }
 }
 
@@ -3527,6 +3537,7 @@ impl PyDocument {
                     url: link.url,
                     anchor: link.anchor,
                     relationship_id: link.rel_id,
+                    tooltip: link.tooltip,
                     position,
                 }
             })
@@ -3591,6 +3602,12 @@ impl PyDocument {
         text: &str,
         url: &str,
     ) -> PyResult<()> {
+        if url.starts_with('#') {
+            return Err(PyValueError::new_err(
+                "a url starting with '#' names a bookmark, link to it with \
+                 paragraph.add_hyperlink(text, anchor=name)",
+            ));
+        }
         let story = self.native_story(py, &story)?;
         py.detach(|| self.inner.add_hyperlink_to_story(&story, text, url))
             .map_err(|error| rdocx_to_pyerr(py, error))?;

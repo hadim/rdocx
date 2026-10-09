@@ -4236,3 +4236,45 @@ def test_run_pictures_land_in_body_and_cell_runs_and_resize_one_at_a_time():
         document.add_paragraph("later")
         document.set_picture_size(target, 1, 1)
     assert relationship
+
+
+def test_hyperlinks_point_inside_the_document_and_carry_tooltips():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("Methods")
+    document.add_paragraph("Body text")
+    document.paragraphs[1].add_hyperlink(
+        "see Methods", anchor=document.paragraphs[0], tooltip="Jump to Methods"
+    )
+    document.paragraphs[1].add_hyperlink("web", "https://example.test", tooltip="Site")
+    # A url starting with '#' names a bookmark rather than a file.
+    document.paragraphs[1].add_hyperlink("again", "#Heading_Methods")
+    assert [bookmark.name for bookmark in document.bookmarks] == ["Heading_Methods"]
+
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    links = reopened.hyperlinks
+    assert [(link.text, link.url, link.anchor, link.tooltip) for link in links] == [
+        ("see Methods", None, "Heading_Methods", "Jump to Methods"),
+        ("web", "https://example.test", None, "Site"),
+        ("again", None, "Heading_Methods", None),
+    ]
+    rels = zipfile.ZipFile(io.BytesIO(reopened.to_bytes())).read(
+        "word/_rels/document.xml.rels"
+    )
+    assert b"Heading_Methods" not in rels
+    # The heading keeps its single bookmark when linked again.
+    reopened.paragraphs[1].add_hyperlink("third", anchor=reopened.paragraphs[0])
+    assert [bookmark.name for bookmark in reopened.bookmarks] == ["Heading_Methods"]
+
+    with pytest.raises(KeyError, match="add_bookmark"):
+        reopened.paragraphs[1].add_hyperlink("missing", anchor="NoSuchBookmark")
+    with pytest.raises(KeyError):
+        reopened.paragraphs[1].add_hyperlink("missing", "#NoSuchBookmark")
+    with pytest.raises(TypeError, match="not both"):
+        reopened.paragraphs[1].add_hyperlink("x", "https://a.test", anchor="Heading_Methods")
+    with pytest.raises(TypeError, match="needs url"):
+        reopened.paragraphs[1].add_hyperlink("x")
+    body = next(story for story in reopened.stories if story.kind == "body")
+    with pytest.raises(ValueError, match="anchor=name"):
+        reopened.add_hyperlink_to_story(body, "x", "#Heading_Methods")

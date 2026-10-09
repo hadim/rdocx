@@ -393,6 +393,7 @@ class Hyperlink:
         url: str | None,
         anchor: str | None,
         relationship_id: str | None,
+        tooltip: str | None = None,
     ) -> Hyperlink: ...
     @property
     def story(self) -> Story: ...
@@ -406,6 +407,8 @@ class Hyperlink:
     def anchor(self) -> str | None: ...
     @property
     def relationship_id(self) -> str | None: ...
+    @property
+    def tooltip(self) -> str | None: ...
 
 
 @_final
@@ -964,7 +967,17 @@ class Paragraph:
     @alignment.setter
     def alignment(self, value: _text.WD_ALIGN_PARAGRAPH | None) -> None: ...
     def add_run(self, text: str) -> Run: ...
-    def add_hyperlink(self, text: str, url: str) -> Run: ...
+    # url for a web link, anchor for a bookmark name or a body heading
+    # paragraph, which gets a bookmark when it has none. A url starting with
+    # "#" names a bookmark.
+    def add_hyperlink(
+        self,
+        text: str,
+        url: str | None = None,
+        *,
+        anchor: str | Paragraph | None = None,
+        tooltip: str | None = None,
+    ) -> Run: ...
     @property
     def paragraph_format(self) -> ParagraphFormat: ...
     @property

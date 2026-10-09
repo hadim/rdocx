@@ -232,6 +232,10 @@ def exercise_rdocx_types(path: Path) -> None:
         crop=(0.1, 0.0, 0.1, 0.0),
     )
     document.paragraphs[0].add_run("").add_picture(b"png", Inches(1), title="Logo")
+    internal: Run = document.paragraphs[0].add_hyperlink(
+        "see", anchor=document.paragraphs[0], tooltip="Jump"
+    )
+    assert_type(document.hyperlinks[0].tooltip, str | None)
     story_items: tuple[StoryItem, ...] = document.story_items
     inserted_picture: StoryItem = document.add_picture(
         b"png", "image.png", Inches(1), Inches(1), after=story_items[0]
