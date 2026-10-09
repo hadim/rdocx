@@ -72,6 +72,10 @@ with open("review.pdf", "wb") as output:
 - Shape z-order through `slide.shapes.move(from_, to)`.
 - Group members added through `group.shapes`, with the group refit to its
   members as in python-pptx.
+- Autofit that sticks: setting `text_frame.auto_size` stores the shrink
+  PowerPoint would choose or resizes the shape to its text,
+  `text_frame.fit_text()` writes the largest size that fits as in python-pptx,
+  and `prs.refresh_autofit()` refreshes every frame after later edits.
 - Run hyperlinks, read, added, retargeted, and removed as in python-pptx.
 - Shape click actions, a hyperlink or a slide jump, through `shape.click_action`
   as in python-pptx.

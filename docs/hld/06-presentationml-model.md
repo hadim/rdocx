@@ -452,6 +452,9 @@ TextFrame::set_insets(&mut self, left: Option<Emu>, right: Option<Emu>, top: Opt
 TextFrame::set_vertical_anchor(&mut self, anchor: Option<TextAnchor>);
 TextFrame::set_word_wrap(&mut self, wrap: Option<bool>);
 TextFrame::set_autofit_mode(&mut self, mode: Option<AutofitMode>);
+TextFrame::set_normal_autofit(&mut self, font_scale: u32, line_spacing_reduction: u32) -> Result<()>;
+TextFrame::set_font_on_every_run(&mut self, typeface: Option<&str>, size: i32, bold: bool, italic: bool) -> Result<()>;
+TextFrameRef::normal_autofit(&self) -> Option<(u32, u32)>;
 TextParagraphRef::properties(&self) -> Option<&CT_TextParagraphProperties>;
 TextParagraphMut::properties(&self) -> Option<&CT_TextParagraphProperties>;
 ```
@@ -460,7 +463,18 @@ Insets are read and written in left, right, top, bottom order, like
 `TableCellMut::margins`. A universal measure reads as the nearest EMU. An inset
 outside the 32-bit coordinate range is rejected before any inset changes.
 Choosing normal autofit again keeps its stored font scale and line spacing
-reduction. `TextParagraphMut::set_bullet` removes the preserved picture or
+reduction. `set_normal_autofit` stores both in thousandths of a percent and
+omits a full-size scale and a zero reduction, so text that fits keeps a bare
+`a:normAutofit`. `set_font_on_every_run` is the write half of python-pptx's
+`fit_text`: size, bold, italic and an optional Latin typeface on every run,
+line break, field and paragraph end.
+
+With the `render` feature, `Presentation::refresh_autofit`,
+`Presentation::refresh_shape_autofit(slide_index, shape_path)` and
+`Presentation::fit_text(slide_index, shape_path, FitTextOptions)` measure the
+text with deterministic fonts and store the result, as the rendering spec's
+autofit section describes. Each returns `AutofitResult` values naming the
+frame, the stored values and every typeface the measurement replaced. `TextParagraphMut::set_bullet` removes the preserved picture or
 follow-text bullet part that the new value replaces, so the paragraph keeps one
 choice per bullet group.
 

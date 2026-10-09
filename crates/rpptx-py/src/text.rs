@@ -9,6 +9,7 @@ use rpptx::{
     TextFont, TextNoBullet, TextSpacing, TextStrike, TextUnderline,
 };
 
+use crate::layout::PyAutofitResult;
 use crate::normalize_index;
 use crate::presentation::PyPresentation;
 use crate::replacement_count_to_pyerr;
@@ -208,6 +209,37 @@ impl PyTextFrame {
 /// Left, right, top, and bottom text insets, as the facade reports them.
 type Insets = (Option<Emu>, Option<Emu>, Option<Emu>, Option<Emu>);
 
+/// The slide and shape-tree path of a shape's own text frame, `None` for a
+/// table cell, which PowerPoint never autofits.
+fn autofit_shape_path(path: &ContentPath) -> Option<(usize, Vec<usize>)> {
+    let mut slide = None;
+    let mut shapes = Vec::new();
+    for segment in &path.segs {
+        match segment {
+            PathSeg::Slide(index) => slide = Some(*index),
+            PathSeg::Shape(index) => shapes.push(*index),
+            _ => return None,
+        }
+    }
+    Some((slide?, shapes))
+}
+
+impl PyTextFrame {
+    /// Stores this frame's autofit result, `None` for a table cell or a
+    /// frame without normal or shape autofit in effect.
+    fn refresh_shape_autofit(&self, py: Python<'_>) -> PyResult<Option<rpptx::AutofitResult>> {
+        self.validate(py)?;
+        let Some((slide, shapes)) = autofit_shape_path(&self.path) else {
+            return Ok(None);
+        };
+        self.presentation
+            .borrow_mut(py)
+            .inner
+            .refresh_shape_autofit(slide, &shapes)
+            .map_err(|error| rpptx_to_pyerr(py, error))
+    }
+}
+
 #[pymethods]
 impl PyTextFrame {
     #[getter]
@@ -334,7 +366,11 @@ impl PyTextFrame {
                 )),
             })
             .transpose()?;
-        self.update(py, |frame| frame.set_autofit_mode(mode))
+        self.update(py, |frame| frame.set_autofit_mode(mode))?;
+        if matches!(mode, Some(AutofitMode::Normal | AutofitMode::Shape)) {
+            self.refresh_shape_autofit(py)?;
+        }
+        Ok(())
     }
 
     #[getter]
@@ -419,6 +455,76 @@ impl PyTextFrame {
     #[setter]
     fn set_word_wrap(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
         self.update(py, |frame| frame.set_word_wrap(value))
+    }
+
+    /// Stores the values this frame's autofit asks for and returns them.
+    ///
+    /// `TEXT_TO_FIT_SHAPE` gets PowerPoint's `fontScale` and
+    /// `lnSpcReduction`, `SHAPE_TO_FIT_TEXT` a shape height that fits the
+    /// text, keeping the anchored edge. Setting `auto_size` already does
+    /// this, so call it after later text edits. `None` means the frame has
+    /// no such autofit in effect.
+    fn refresh_autofit(&self, py: Python<'_>) -> PyResult<Option<PyAutofitResult>> {
+        if autofit_shape_path(&self.path).is_none() {
+            return Err(PyValueError::new_err(
+                "PowerPoint does not autofit table cell text: set the row height or the font size instead",
+            ));
+        }
+        Ok(self.refresh_shape_autofit(py)?.map(PyAutofitResult::from))
+    }
+
+    /// Writes the largest size up to `max_size` points at which the text
+    /// fits the shape on every run, as python-pptx does.
+    ///
+    /// The frame then has no autofit and wraps words. `font_family` `None`
+    /// keeps each run's typeface. The text is measured with rpptx's
+    /// deterministic fonts, or with `font_file` when given, and the result
+    /// lists any typeface it had to replace. An empty frame is left alone.
+    #[pyo3(signature = (font_family = None, max_size = 18, bold = false, italic = false, font_file = None))]
+    fn fit_text(
+        &self,
+        py: Python<'_>,
+        font_family: Option<&str>,
+        max_size: i64,
+        bold: bool,
+        italic: bool,
+        font_file: Option<std::path::PathBuf>,
+    ) -> PyResult<Option<PyAutofitResult>> {
+        self.validate(py)?;
+        let max_size = u32::try_from(max_size)
+            .ok()
+            .filter(|size| (1..=4_000).contains(size))
+            .ok_or_else(|| {
+                PyValueError::new_err("max_size must be a whole number of points from 1 to 4000")
+            })?;
+        let Some((slide, shapes)) = autofit_shape_path(&self.path) else {
+            return Err(PyValueError::new_err(
+                "fit_text measures a shape's own text frame: set table cell font sizes directly",
+            ));
+        };
+        let font_file = font_file
+            .map(|path| {
+                std::fs::read(&path).map_err(|error| {
+                    PyValueError::new_err(format!(
+                        "cannot read font_file {}: {error}",
+                        path.display()
+                    ))
+                })
+            })
+            .transpose()?;
+        let options = rpptx::FitTextOptions {
+            font_family,
+            max_size,
+            bold,
+            italic,
+            font_file: font_file.as_deref(),
+        };
+        self.presentation
+            .borrow_mut(py)
+            .inner
+            .fit_text(slide, &shapes, options)
+            .map(|result| result.map(PyAutofitResult::from))
+            .map_err(|error| rpptx_to_pyerr(py, error))
     }
 }
 

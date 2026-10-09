@@ -5,7 +5,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList, PyTuple};
 use smallvec::smallvec;
 
-use crate::layout::PyTextFrameLayout;
+use crate::layout::{PyAutofitResult, PyTextFrameLayout};
 use crate::shape::length;
 use crate::slide::{PySlideCollection, PySlideLayoutCollection};
 use crate::{replacement_count_to_pyerr, rpptx_to_pyerr, rpptx_value_to_pyerr};
@@ -253,6 +253,20 @@ impl PyPresentation {
             .detach(|| self.inner.text_layout_deterministic(width_factor))
             .map_err(|error| rpptx_to_pyerr(py, error))?;
         PyTuple::new(py, frames.iter().map(PyTextFrameLayout::from))
+    }
+
+    /// Stores the autofit result of every slide text frame that asks for one.
+    ///
+    /// Normal autofit (`MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE`) gets the
+    /// `fontScale` and `lnSpcReduction` PowerPoint would store, and shape
+    /// autofit (`SHAPE_TO_FIT_TEXT`) the height of its text. Call it after
+    /// filling a template and before saving.
+    fn refresh_autofit<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let results = self
+            .inner
+            .refresh_autofit()
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        PyTuple::new(py, results.into_iter().map(PyAutofitResult::from))
     }
 
     fn to_notes_pdf<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {

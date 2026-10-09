@@ -9808,6 +9808,501 @@ fn text_layout_reports_the_scale_and_fit_each_autofit_mode_draws() {
     );
 }
 
+// Issue #310: autofit that sticks. The expected values were recorded once
+// from PowerPoint for Mac 16 (osascript: edit each frame's last paragraph so
+// PowerPoint refits it, or set "shape to fit text", then save) on decks that
+// python-pptx built with the same frames.
+
+/// A python-pptx text box: 3 inches wide, default insets, wrapping.
+fn autofit_box(
+    id: u32,
+    name: &str,
+    (x, y): (i64, i64),
+    height: i64,
+    autofit: &str,
+    paragraphs: &str,
+) -> String {
+    text_layout_shape(
+        id,
+        name,
+        (x, y, 2_743_200, height),
+        &format!(r#"<a:bodyPr wrap="square">{autofit}</a:bodyPr>"#),
+        paragraphs,
+    )
+}
+
+/// One paragraph per text in `typeface` at `size` points.
+fn autofit_paragraphs(texts: &[String], typeface: &str, size: u32, properties: &str) -> String {
+    texts
+        .iter()
+        .map(|text| {
+            format!(
+                r#"<a:p>{properties}<a:r><a:rPr lang="en-US" sz="{}"><a:latin typeface="{typeface}"/></a:rPr><a:t>{text}</a:t></a:r></a:p>"#,
+                size * 100
+            )
+        })
+        .collect()
+}
+
+fn numbered(prefix: &str, count: usize) -> Vec<String> {
+    (0..count)
+        .map(|index| format!("{prefix} {index}"))
+        .collect()
+}
+
+/// The first `count` words of lorem ipsum, as the probe deck wrote them.
+fn lorem_words(count: usize) -> String {
+    const WORDS: &str = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor \
+        incididunt ut labore et dolore magna aliqua ut enim ad minim veniam quis nostrud \
+        exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat duis aute irure \
+        dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur \
+        excepteur sint occaecat cupidatat non proident sunt in culpa qui officia deserunt \
+        mollit anim id est laborum";
+    let words = WORDS.split_whitespace().collect::<Vec<_>>();
+    (0..count)
+        .map(|index| words[index % words.len()])
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A box `usable` points tall inside its default 3.6 point insets, sized as
+/// python-pptx's `Pt` truncates.
+fn usable_height(usable: f64) -> i64 {
+    ((usable + 7.2) * 12_700.0) as i64
+}
+
+#[test]
+fn refresh_autofit_stores_the_steps_powerpoint_chose() {
+    const ONE_AND_A_HALF: &str = r#"<a:pPr><a:lnSpc><a:spcPct val="150000"/></a:lnSpc></a:pPr>"#;
+    let mut cases: Vec<(String, i64, String, (u32, u32))> = Vec::new();
+    // Arial 18 points, one line per paragraph, in a 1.5 inch box.
+    for (lines, expected) in [
+        (5, (100_000, 10_000)),
+        (6, (92_500, 20_000)),
+        (7, (85_000, 20_000)),
+        (8, (70_000, 20_000)),
+        (9, (62_500, 20_000)),
+        (10, (55_000, 20_000)),
+        (11, (47_500, 20_000)),
+        (12, (40_000, 20_000)),
+        (15, (40_000, 20_000)),
+        (16, (32_500, 20_000)),
+        (17, (32_500, 20_000)),
+        (18, (25_000, 20_000)),
+        (24, (25_000, 20_000)),
+    ] {
+        cases.push((
+            format!("lines {lines}"),
+            1_371_600,
+            autofit_paragraphs(&numbered("Item", lines), "Arial", 18, ""),
+            expected,
+        ));
+    }
+    // Five 18 point lines in boxes one point apart, at each step boundary.
+    for (usable, expected) in [
+        (98.0, (100_000, 10_000)),
+        (97.0, (92_500, 10_000)),
+        (92.0, (92_500, 10_000)),
+        (91.0, (92_500, 20_000)),
+        (82.0, (92_500, 20_000)),
+        (81.0, (85_000, 10_000)),
+        (80.0, (85_000, 20_000)),
+        (72.0, (85_000, 20_000)),
+        (71.0, (77_500, 20_000)),
+        (68.0, (77_500, 20_000)),
+        (67.0, (70_000, 20_000)),
+        (63.0, (70_000, 20_000)),
+        (62.0, (62_500, 20_000)),
+    ] {
+        cases.push((
+            format!("ladder {usable}"),
+            usable_height(usable),
+            autofit_paragraphs(&numbered("Line", 5), "Arial", 18, ""),
+            expected,
+        ));
+    }
+    // 20 points at 62.5 % rounds half up to 13 points.
+    for (usable, expected) in [(50.0, (62_500, 20_000)), (49.0, (55_000, 20_000))] {
+        cases.push((
+            format!("half point {usable}"),
+            usable_height(usable),
+            autofit_paragraphs(&numbered("Line", 4), "Arial", 20, ""),
+            expected,
+        ));
+    }
+    // One wrapping paragraph.
+    for (words, expected) in [
+        (30, (77_500, 20_000)),
+        (60, (55_000, 20_000)),
+        (100, (40_000, 20_000)),
+    ] {
+        cases.push((
+            format!("words {words}"),
+            1_371_600,
+            autofit_paragraphs(&[lorem_words(words)], "Arial", 18, ""),
+            expected,
+        ));
+    }
+    // 150 % line spacing, where the last line fits down to its descent.
+    for (lines, expected) in [
+        (3, (92_500, 20_000)),
+        (5, (55_000, 20_000)),
+        (8, (32_500, 20_000)),
+    ] {
+        cases.push((
+            format!("calibri {lines}"),
+            1_371_600,
+            autofit_paragraphs(&numbered("Point", lines), "Calibri", 24, ONE_AND_A_HALF),
+            expected,
+        ));
+    }
+    for (usable, expected) in [
+        (84.0, (92_500, 10_000)),
+        (78.0, (92_500, 20_000)),
+        (74.0, (85_000, 10_000)),
+        (46.0, (55_000, 20_000)),
+    ] {
+        cases.push((
+            format!("spaced {usable}"),
+            usable_height(usable),
+            autofit_paragraphs(&numbered("Row", 3), "Arial", 18, ONE_AND_A_HALF),
+            expected,
+        ));
+    }
+
+    let shapes = cases
+        .iter()
+        .enumerate()
+        .map(|(index, (name, height, paragraphs, _))| {
+            autofit_box(
+                index as u32 + 2,
+                name,
+                (0, 0),
+                *height,
+                "<a:normAutofit/>",
+                paragraphs,
+            )
+        })
+        .collect::<String>();
+    let mut presentation = text_layout_deck(&shapes, "");
+
+    let results = presentation.refresh_autofit().unwrap();
+
+    assert_eq!(results.len(), cases.len());
+    let slide = presentation.slide(0).unwrap();
+    for ((name, _, _, expected), result) in cases.iter().zip(&results) {
+        assert_eq!(result.name.as_deref(), Some(name.as_str()));
+        assert_eq!(result.autofit, rpptx::AutofitMode::Normal);
+        let stored = slide
+            .shape(result.shape_path[0])
+            .and_then(|shape| shape.text_frame())
+            .and_then(|frame| frame.normal_autofit());
+        assert_eq!(stored, Some(*expected), "{name}");
+        assert_eq!(
+            (
+                (result.font_scale * 100_000.0).round() as u32,
+                (result.line_spacing_reduction * 100_000.0).round() as u32
+            ),
+            *expected,
+            "{name}"
+        );
+        assert_eq!(result.fits, !name.starts_with("lines 24"), "{name}");
+    }
+
+    // The refreshed text draws inside its box, except at PowerPoint's floor.
+    let frames = presentation.text_layout_deterministic(1.0).unwrap();
+    for frame in &frames {
+        let name = frame.name.as_deref().unwrap();
+        assert_eq!(frame.layout.overflow, name == "lines 24", "{name}");
+        if name != "lines 24" {
+            let bottom = frame.layout.usable.y + frame.layout.usable.height;
+            assert!(
+                frame
+                    .layout
+                    .lines
+                    .iter()
+                    .all(|line| line.baseline <= bottom),
+                "{name}"
+            );
+        }
+    }
+    let saved = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&saved).unwrap();
+    assert!(
+        reopened
+            .text_layout_deterministic(1.0)
+            .unwrap()
+            .iter()
+            .all(|frame| frame.layout.overflow == (frame.name.as_deref() == Some("lines 24")))
+    );
+    assert!(reopened.to_pdf_deterministic().is_ok());
+}
+
+#[test]
+fn refresh_autofit_sizes_shape_autofit_frames_as_powerpoint_does() {
+    let arial = |lines: usize, size: u32, properties: &str| {
+        autofit_paragraphs(&numbered("Row", lines), "Arial", size, properties)
+    };
+    let anchored = |anchor: &str, (x, y): (i64, i64), lines: usize| {
+        (
+            x,
+            y,
+            1_371_600,
+            format!(r#"<a:bodyPr wrap="square" anchor="{anchor}"><a:spAutoFit/></a:bodyPr>"#),
+            arial(lines, 18, ""),
+        )
+    };
+    let plain = |height: i64, paragraphs: String| {
+        (
+            0,
+            0,
+            height,
+            r#"<a:bodyPr wrap="square"><a:spAutoFit/></a:bodyPr>"#.to_owned(),
+            paragraphs,
+        )
+    };
+    // (shape, expected offset y, expected height) from PowerPoint.
+    let cases = [
+        (anchored("t", (182_880, 1_097_280), 2), 1_097_280, 646_331),
+        (
+            anchored("ctr", (6_217_920, 1_097_280), 2),
+            1_459_914,
+            646_331,
+        ),
+        (
+            anchored("ctr", (9_235_439, 1_097_280), 9),
+            490_419,
+            2_585_323,
+        ),
+        (anchored("b", (182_880, 3_291_840), 2), 4_017_109, 646_331),
+        (
+            anchored("b", (3_200_400, 3_291_840), 9),
+            2_078_117,
+            2_585_323,
+        ),
+        (plain(914_400, arial(1, 10, "")), 0, 246_221),
+        (plain(914_400, arial(5, 18, "")), 0, 1_477_328),
+        (plain(914_400, arial(5, 32, "")), 0, 2_554_545),
+        (
+            plain(
+                914_400,
+                autofit_paragraphs(&numbered("Row", 2), "Calibri", 18, ""),
+            ),
+            0,
+            646_331,
+        ),
+        (
+            plain(
+                1_270_000,
+                arial(
+                    3,
+                    18,
+                    r#"<a:pPr><a:spcAft><a:spcPts val="1200"/></a:spcAft></a:pPr>"#,
+                ),
+            ),
+            0,
+            1_231_106,
+        ),
+    ];
+    let shapes = cases
+        .iter()
+        .enumerate()
+        .map(|(index, ((x, y, height, body, paragraphs), _, _))| {
+            text_layout_shape(
+                index as u32 + 2,
+                &format!("grow {index}"),
+                (*x, *y, 2_743_200, *height),
+                body,
+                paragraphs,
+            )
+        })
+        .collect::<String>();
+    let mut presentation = text_layout_deck(&shapes, "");
+
+    let results = presentation.refresh_autofit().unwrap();
+
+    let slide = presentation.slide(0).unwrap();
+    for (index, (((x, _, _, _, _), top, height), result)) in cases.iter().zip(&results).enumerate()
+    {
+        assert_eq!(result.autofit, rpptx::AutofitMode::Shape);
+        assert_eq!(result.height, Some(Emu(*height)), "case {index}");
+        let shape = slide.shape(index).unwrap();
+        assert_eq!(shape.position(), Some((Emu(*x), Emu(*top))), "case {index}");
+        assert_eq!(
+            shape.size(),
+            Some((Emu(2_743_200), Emu(*height))),
+            "case {index}"
+        );
+    }
+
+    // A second refresh finds every shape already fitted.
+    let before = presentation.to_bytes().unwrap();
+    presentation.refresh_autofit().unwrap();
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn shape_autofit_keeps_the_anchored_edge_of_a_rotated_shape() {
+    let shape = text_layout_shape(
+        2,
+        "Turned",
+        (1_000_000, 1_000_000, 2_743_200, 1_371_600),
+        r#"<a:bodyPr wrap="square"><a:spAutoFit/></a:bodyPr>"#,
+        &autofit_paragraphs(&numbered("Row", 2), "Arial", 18, ""),
+    )
+    .replace("<a:xfrm>", r#"<a:xfrm rot="5400000">"#);
+    let mut presentation = text_layout_deck(&shape, "");
+
+    presentation.refresh_shape_autofit(0, &[0]).unwrap();
+
+    // Turned a quarter clockwise, the shape's top edge faces right, so it
+    // shrinks toward that edge: the centre moves right by half the change.
+    let shrink = 1_371_600 - 646_331;
+    let shape = presentation.slide(0).unwrap().shape(0).unwrap();
+    assert_eq!(
+        shape.position(),
+        Some((Emu(1_000_000 + shrink / 2), Emu(1_000_000 + shrink / 2)))
+    );
+    assert_eq!(shape.size(), Some((Emu(2_743_200), Emu(646_331))));
+}
+
+#[test]
+fn refresh_autofit_reports_fallback_fonts_and_leaves_fitting_inherited_frames_alone() {
+    let shapes = [
+        autofit_box(
+            2,
+            "Unknown font",
+            (0, 0),
+            1_371_600,
+            "<a:normAutofit/>",
+            &autofit_paragraphs(&numbered("Item", 2), "Rdocx Missing Sans", 18, ""),
+        ),
+        autofit_box(
+            3,
+            "No autofit",
+            (0, 0),
+            1_371_600,
+            "<a:noAutofit/>",
+            &autofit_paragraphs(&numbered("Item", 12), "Arial", 18, ""),
+        ),
+        autofit_box(
+            4,
+            "Stale",
+            (0, 0),
+            1_371_600,
+            r#"<a:normAutofit fontScale="25000" lnSpcReduction="20000"/>"#,
+            &autofit_paragraphs(&numbered("Item", 2), "Arial", 18, ""),
+        ),
+    ]
+    .concat();
+    let mut presentation = text_layout_deck(&shapes, "");
+
+    let results = presentation.refresh_autofit().unwrap();
+
+    assert_eq!(
+        results
+            .iter()
+            .map(|result| result.name.as_deref().unwrap())
+            .collect::<Vec<_>>(),
+        ["Unknown font", "Stale"]
+    );
+    assert_eq!(results[0].font_substitutions.len(), 1);
+    assert_eq!(results[0].font_substitutions[0].0, "Rdocx Missing Sans");
+    assert_ne!(results[0].font_substitutions[0].1, "Rdocx Missing Sans");
+    assert_eq!(
+        results[1].font_substitutions,
+        [("Arial".to_owned(), "Liberation Sans".to_owned())]
+    );
+    let slide = presentation.slide(0).unwrap();
+    let stored = |index: usize| {
+        slide
+            .shape(index)
+            .and_then(|shape| shape.text_frame())
+            .and_then(|frame| frame.normal_autofit())
+    };
+    // A stale shrink goes back to a bare normAutofit once the text fits.
+    assert_eq!(stored(2), Some((100_000, 0)));
+
+    // A single frame refreshes on its own, and a missing one is an error.
+    assert_eq!(presentation.refresh_shape_autofit(0, &[1]).unwrap(), None);
+    assert!(presentation.refresh_shape_autofit(0, &[9]).is_err());
+    assert!(presentation.refresh_shape_autofit(4, &[0]).is_err());
+}
+
+#[test]
+fn fit_text_writes_the_largest_whole_size_that_fits_on_every_run() {
+    let shapes = [
+        autofit_box(
+            2,
+            "Fit",
+            (0, 0),
+            1_371_600,
+            "<a:normAutofit/>",
+            &autofit_paragraphs(&numbered("Item", 6), "Arial", 18, ""),
+        ),
+        autofit_box(3, "Empty", (0, 0), 1_371_600, "", "<a:p/>"),
+        autofit_box(
+            4,
+            "Tiny",
+            (0, 0),
+            12_700,
+            "",
+            &autofit_paragraphs(&[lorem_words(40)], "Arial", 18, ""),
+        ),
+    ]
+    .concat();
+    let mut presentation = text_layout_deck(&shapes, "");
+    let options = rpptx::FitTextOptions {
+        font_family: Some("Calibri"),
+        max_size: 40,
+        bold: true,
+        ..rpptx::FitTextOptions::default()
+    };
+
+    let result = presentation.fit_text(0, &[0], options).unwrap().unwrap();
+
+    // Six Calibri lines fit 100.8 points at 14 points (6 x 16.8 = 100.8).
+    assert_eq!(result.font_size, Some(14.0));
+    assert_eq!(result.autofit, rpptx::AutofitMode::None);
+    assert_eq!(
+        result.font_substitutions,
+        [("Calibri".to_owned(), "Carlito".to_owned())]
+    );
+    let frame = presentation
+        .slide(0)
+        .unwrap()
+        .shape(0)
+        .unwrap()
+        .text_frame()
+        .unwrap();
+    assert_eq!(frame.autofit_mode(), Some(rpptx::AutofitMode::None));
+    assert_eq!(frame.word_wrap(), Some(true));
+    for index in 0..frame.paragraph_count() {
+        let run = frame.paragraph(index).unwrap().run(0).unwrap();
+        let properties = run.properties().unwrap();
+        assert_eq!(properties.font_size, Some(1_400));
+        assert_eq!(
+            (properties.bold, properties.italic),
+            (Some(true), Some(false))
+        );
+        assert_eq!(properties.latin.as_ref().unwrap().typeface, "Calibri");
+    }
+    assert!(
+        !presentation.text_layout_deterministic(1.0).unwrap()[0]
+            .layout
+            .overflow
+    );
+
+    assert_eq!(presentation.fit_text(0, &[1], options).unwrap(), None);
+    let error = presentation.fit_text(0, &[2], options).unwrap_err();
+    assert!(error.to_string().contains("even at 1 point"), "{error}");
+    let zero = rpptx::FitTextOptions {
+        max_size: 0,
+        ..options
+    };
+    assert!(presentation.fit_text(0, &[0], zero).is_err());
+}
+
 #[test]
 fn text_layout_lines_match_the_glyph_runs_the_renderer_draws() {
     let wrapped = "Every line the checker reports must be one the renderer draws, \
