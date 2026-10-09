@@ -635,3 +635,33 @@ until that input has authentic successful qualification. No further font copy,
 media distribution or production fixture file is authorized by this record.
 Final body freeze/admission and unchanged-hash Base/final execution remain
 required in existing integration entrypoints, once over the integrated result.
+
+## Premeasurement coverage revision required
+
+Independent root body review found no explicit fit_text/refresh_autofit or
+Georgia/Segoe UI/Aptos/Symbol/Wingdings operations in the first frozen100
+statements. Its static100/100 result is not complete303..313 coverage.
+Before any Base execution, amend only W-AREA-19, P-AREA-02, P-AREA-03 and
+P-AREA-11 within their existing identities. Add explicit X207 fit/refresh,
+X210 actual selected-face and same-pass diagnostic assertions, source-
+preserving qualified SymbolF0B7/U2022 and WingdingsF0A7/U25AA controls.
+Keep original24 example bodies, all100 IDs and the exact allocation digest.
+Freeze a separately identified revision with old/new body/support hashes.
+Never edit specimens after observing a production execution to raise the rate.
+
+Use X207's concrete owned result schema above and X210's approved additive
+render diagnostics. The bounded H457 explicit Arial28 seven-line150-percent
+control expects92500/0 from actual shared Q/S measurement. Its exact
+geometry/font/style operands must match the retained native input. General
+solver parity remains a native provider gate. Meaningful positive XML edits
+and preserved unrelated opaque/source siblings replace alias-only success
+through the existing14 XML identities. Native relationship/identity/lifetime/
+late-failure riders remain required, not implied by a scalar edit.
+
+PDF inspection can use the already installed pinned Poppler text/font output
+as local test evidence without adding a production dependency. Actual font
+selection must bind font data or emitted embedded faces, not merely search
+PDF bytes for a family string or count nonblank pixels. Missing selected-face
+inspection is a recorded acceptance gap. Movie frame qualification remains
+unresolved. Root reviews the revised exact manifest before unchanged-hash
+Base/final source-built execution and scoring.

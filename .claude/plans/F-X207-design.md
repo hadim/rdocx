@@ -618,3 +618,24 @@ edge-spacing tests, Q-only falsely fitting round-down rejection, actual PDF
 containment, every-frame inventory, checked affine sizing and transactional
 late-failure controls remain mandatory implementation/completion gates.
 Design is approved without claiming those future tests already passed.
+
+## Concrete owned Python result schema
+
+Presentation.refresh_autofit returns one immutable AutofitRefreshResult:
+updates is tuple[AutofitUpdate,...], diagnostics is tuple[str,...] of exact
+same-pass owned messages, and changed is bool. Each immutable update exposes
+owner_part:str, owner_kind:str, slide_index:int|None, shape_id:int|None,
+cell:tuple[int,int]|None, mode:str, status:str, font_scale:int|None,
+line_spacing_reduction:int|None, point_size:int|None, old_bounds/new_bounds
+as four-integer EMU tuples (left,top,width,height), and changed:bool.
+Mode is normal, shape or none. Status is updated, unchanged or empty.
+Normal nonempty updates expose the exact saved integer pair. Uniform fit
+exposes the chosen integer point_size and mode none. Empty updates leave
+fitting values absent. No floats masquerade as serialized integer values.
+TextFrame.fit_text returns its one AutofitUpdate with owned diagnostics
+attached as diagnostics:tuple[str,...]. Native structures retain the same
+facts plus concrete typed location, mode and owned Diagnostic vectors.
+FitReport separates native-informed Q facts from actual persisted S facts.
+The Python result projection and F-X204 CLI use these actual recorded facts,
+not a second measurement or global last-render registry. Existing-file
+classes/structures are justified by these two current named consumers.
