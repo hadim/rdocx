@@ -1,6 +1,6 @@
 # F-X196, Validate visible paragraph content without false empty warnings
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: S
 **Depends on**: none
@@ -100,11 +100,11 @@ Expected unchanged. Validation reads documents without rendering or mutation.
 
 ## Implementation checklist
 
-- [ ] Prove the three-picture warning failure at exact Base.
-- [ ] Add private content-aware predicate and qualified XML scan.
-- [ ] Cover every visible kind and empty/metadata controls.
-- [ ] Verify source preservation, scoped gate and clean microscope.
-- [ ] Prepare validated handoff.
+- [x] Prove the three-picture warning failure at exact Base.
+- [x] Add private content-aware predicate and qualified XML scan.
+- [x] Cover every visible kind and empty/metadata controls.
+- [x] Verify source preservation, scoped gate and clean microscope.
+- [x] Prepare validated handoff.
 
 ## Open questions
 

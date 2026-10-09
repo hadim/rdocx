@@ -6778,8 +6778,12 @@ Resolve `hadim`'s
 not classify a paragraph as empty merely because its text projection trims
 to an empty string. Paragraphs containing a drawing, picture, object, chart,
 equation, field, symbol, tab, break, footnote/endnote reference or a content
-control containing visible content are nonempty. Inspect modeled content
-without mutating the document or discarding opaque source XML. Truly empty
+control containing visible content are nonempty. Align a qualified read-only
+main-part content scan with the recursive body paragraph inventory. Exclude
+direct body and direct nested cell tables and unsupported wrappers, and enter
+control-owned tables. Properties, range markers, deleted content
+and producer page-break hints remain empty. Do not mutate the document or
+discard opaque source XML. Truly empty
 paragraphs retain the existing warning and metadata checks remain intact.
 
 **Test gate**: regression. The reported three-picture document has no empty

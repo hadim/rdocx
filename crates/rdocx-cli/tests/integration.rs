@@ -1849,6 +1849,313 @@ fn text_and_replace_read_simple_fields_smart_tags_and_custom_xml() {
 }
 
 #[test]
+fn picture_paragraphs_do_not_trigger_empty_paragraph_warnings() {
+    let temp = TempWorkspace::new("validate-picture-content");
+    let input = temp.path.join("three-pictures.docx");
+    let mut document = Document::new();
+    let png = [
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8,
+        0xcf, 0xc0, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xe2, 0x21, 0xbc, 0x33, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+    for index in 0..3 {
+        document.add_picture(
+            &png,
+            &format!("picture{index}.png"),
+            rdocx::Length::inches(1.0),
+            rdocx::Length::inches(1.0),
+        );
+    }
+    document.save(&input).unwrap();
+    let before = fs::read(&input).unwrap();
+    let output = cli(&["validate", path_text(&input)]);
+    assert_success(&output, "validate picture paragraphs");
+    let report = String::from_utf8(output.stdout).unwrap();
+    assert!(!report.contains("empty paragraph"), "{report}");
+    assert!(report.contains("Missing document title"), "{report}");
+    assert!(report.contains("Missing document author"), "{report}");
+    assert_eq!(fs::read(&input).unwrap(), before);
+
+    // A separate structural error must not reintroduce the picture advisory.
+    document
+        .paragraph_mut(0)
+        .unwrap()
+        .set_style("MissingPictureStyle");
+    document.save(&input).unwrap();
+    let before = fs::read(&input).unwrap();
+    let output = cli(&["validate", path_text(&input)]);
+    assert!(!output.status.success());
+    let report = String::from_utf8(output.stdout).unwrap();
+    assert!(report.contains("MissingPictureStyle"), "{report}");
+    assert!(report.contains("is not defined"), "{report}");
+    assert!(!report.contains("empty paragraph"), "{report}");
+    assert_eq!(fs::read(&input).unwrap(), before);
+}
+
+#[test]
+fn visible_nontext_content_and_empty_controls_keep_distinct_validation_warnings() {
+    let temp = TempWorkspace::new("validate-visible-content");
+    let cases = [
+        ("drawing", "<w:r><w:drawing/></w:r>", false),
+        ("pict", "<w:r><w:pict/></w:r>", false),
+        ("object", "<w:r><w:object/></w:r>", false),
+        (
+            "symbol",
+            r#"<w:r><w:sym w:font="Symbol" w:char="F041"/></w:r>"#,
+            false,
+        ),
+        ("tab", "<w:r><w:tab/></w:r>", false),
+        ("break", "<w:r><w:br/></w:r>", false),
+        ("return", "<w:r><w:cr/></w:r>", false),
+        (
+            "footnote",
+            r#"<w:r><w:footnoteReference w:id="1"/></w:r>"#,
+            false,
+        ),
+        (
+            "endnote",
+            r#"<w:r><w:endnoteReference w:id="1"/></w:r>"#,
+            false,
+        ),
+        ("field", r#"<w:fldSimple w:instr="DATE"/>"#, false),
+        (
+            "complex-field",
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            false,
+        ),
+        (
+            "math",
+            r#"<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:r><m:t>x</m:t></m:r></m:oMath>"#,
+            false,
+        ),
+        (
+            "control-drawing",
+            "<w:sdt><w:sdtPr/><w:sdtContent><w:r><w:drawing/></w:r></w:sdtContent></w:sdt>",
+            false,
+        ),
+        (
+            "alias",
+            r#"<q:r xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:drawing/></q:r>"#,
+            false,
+        ),
+        (
+            "compatibility",
+            r#"<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="w"><w:r><w:drawing/></w:r></mc:Choice><mc:Fallback><w:r><w:pict/></w:r></mc:Fallback></mc:AlternateContent>"#,
+            false,
+        ),
+        (
+            "compatibility-empty",
+            r#"<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="w"/><mc:Fallback/></mc:AlternateContent>"#,
+            true,
+        ),
+        (
+            "inserted-drawing",
+            "<w:ins><w:r><w:drawing/></w:r></w:ins>",
+            false,
+        ),
+        (
+            "moved-away-drawing",
+            "<w:moveFrom><w:r><w:drawing/></w:r></w:moveFrom>",
+            true,
+        ),
+        (
+            "run-property",
+            "<w:r><w:rPr><w:drawing/></w:rPr></w:r>",
+            true,
+        ),
+        ("empty", "", true),
+        ("whitespace", "<w:r><w:t>  </w:t></w:r>", true),
+        (
+            "bookmark",
+            r#"<w:bookmarkStart w:id="1" w:name="here"/><w:bookmarkEnd w:id="1"/>"#,
+            true,
+        ),
+        ("property", "<w:pPr><w:tabs><w:tab/></w:tabs></w:pPr>", true),
+        (
+            "rendered-hint",
+            "<w:r><w:lastRenderedPageBreak/></w:r>",
+            true,
+        ),
+        (
+            "deleted",
+            "<w:del><w:r><w:delText>deleted</w:delText><w:drawing/></w:r></w:del>",
+            true,
+        ),
+        (
+            "empty-control",
+            "<w:sdt><w:sdtPr/><w:sdtContent/></w:sdt>",
+            true,
+        ),
+        (
+            "control-property",
+            "<w:sdt><w:sdtPr><w:drawing/></w:sdtPr><w:sdtContent/></w:sdt>",
+            true,
+        ),
+        ("foreign", r#"<x:drawing xmlns:x="urn:producer"/>"#, true),
+        (
+            "foreign-wrapper",
+            r#"<x:wrapper xmlns:x="urn:producer"><w:drawing/></x:wrapper>"#,
+            true,
+        ),
+    ];
+    for (label, fragment, empty) in cases {
+        let input = temp.path.join(format!("{label}.docx"));
+        write_document(&input, &["CONTENT"]);
+        rewrite_run(&input, "CONTENT", |_| fragment.to_owned());
+        let before = fs::read(&input).unwrap();
+        let output = cli(&["validate", path_text(&input)]);
+        assert_success(&output, label);
+        let report = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(
+            report.contains("1 empty paragraph(s) found"),
+            empty,
+            "{label}: {report}"
+        );
+        assert_eq!(fs::read(&input).unwrap(), before, "{label}");
+    }
+}
+
+#[test]
+fn validation_preserves_recursive_block_control_and_table_paragraph_scope() {
+    let temp = TempWorkspace::new("validate-control-scope");
+    let input = temp.path.join("controls.docx");
+    write_document(&input, &["Body text"]);
+    let mut package = OpcPackage::open(&input).unwrap();
+    let part = package.main_document_part().unwrap();
+    let xml = String::from_utf8(package.get_part(&part).unwrap().to_vec()).unwrap();
+    let controls = concat!(
+        "<w:sdt><w:sdtPr/><w:sdtContent>",
+        "<w:p><w:r><w:drawing/></w:r></w:p>",
+        "<w:sdt><w:sdtPr/><w:sdtContent><w:p/></w:sdtContent></w:sdt>",
+        "<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:tcPr/><w:p/>",
+        "<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:tcPr/><w:p/></w:tc></w:tr></w:tbl>",
+        "<w:sdt><w:sdtContent><w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:tcPr/><w:p><w:r><w:drawing/></w:r></w:p></w:tc></w:tr></w:tbl></w:sdtContent></w:sdt>",
+        "</w:tc><w:sdt><w:sdtContent><w:tc><w:tcPr/><w:p/></w:tc></w:sdtContent></w:sdt></w:tr>",
+        "<w:sdt><w:sdtContent><w:tr><w:tc><w:tcPr/><w:p><w:r><w:drawing/></w:r></w:p></w:tc></w:tr></w:sdtContent></w:sdt></w:tbl>",
+        "</w:sdtContent></w:sdt>",
+        "<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:tcPr/><w:p/></w:tc></w:tr></w:tbl>",
+    );
+    package.set_part(
+        &part,
+        xml.replace("</w:body>", &format!("{controls}</w:body>"))
+            .into_bytes(),
+    );
+    package.save(&input).unwrap();
+    assert_eq!(Document::open(&input).unwrap().paragraph_count(), 7);
+    let before = fs::read(&input).unwrap();
+    let output = cli(&["validate", path_text(&input)]);
+    assert_success(&output, "validate nested block controls");
+    let report = String::from_utf8(output.stdout).unwrap();
+    assert!(report.contains("3 empty paragraph(s) found"), "{report}");
+    assert!(!report.contains("4 empty paragraph"), "{report}");
+    assert_eq!(fs::read(&input).unwrap(), before);
+}
+
+#[test]
+fn validation_ignores_opaque_content_control_slots() {
+    let temp = TempWorkspace::new("validate-opaque-control-slots");
+    let cases = [
+        (
+            "duplicate-block",
+            "<w:sdt><w:sdtContent><w:p/></w:sdtContent><w:sdtContent><w:p/></w:sdtContent></w:sdt>",
+            1,
+            1,
+        ),
+        (
+            "expanded-empty-first",
+            "<w:sdt><w:sdtContent></w:sdtContent><w:sdtContent><w:p/></w:sdtContent></w:sdt>",
+            0,
+            0,
+        ),
+        (
+            "self-closing-first",
+            "<w:sdt><w:sdtContent/><w:sdtContent><w:p><w:r><w:drawing/></w:r></w:p></w:sdtContent></w:sdt>",
+            1,
+            0,
+        ),
+        (
+            "opaque-block",
+            "<w:sdt><w:sdtPr><w:id w:val=\"invalid\"/></w:sdtPr><w:sdtContent><w:p><w:r><w:drawing/></w:r></w:p></w:sdtContent></w:sdt>",
+            0,
+            0,
+        ),
+        (
+            "duplicate-inline",
+            "<w:p><w:sdt><w:sdtContent><w:r/></w:sdtContent><w:sdtContent><w:r><w:drawing/></w:r></w:sdtContent></w:sdt></w:p>",
+            1,
+            1,
+        ),
+        (
+            "opaque-inline",
+            "<w:p><w:sdt><w:sdtPr><w:id w:val=\"invalid\"/></w:sdtPr><w:sdtContent><w:r><w:drawing/></w:r></w:sdtContent></w:sdt></w:p>",
+            1,
+            1,
+        ),
+        (
+            "inline-self-closing-first",
+            "<w:p><w:sdt><w:sdtContent/><w:sdtContent><w:r><w:drawing/></w:r></w:sdtContent></w:sdt></w:p>",
+            1,
+            0,
+        ),
+        (
+            "alias-duplicate",
+            "<q:sdt xmlns:q=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><q:sdtContent><q:p/></q:sdtContent><q:sdtContent><q:p/></q:sdtContent></q:sdt>",
+            1,
+            1,
+        ),
+        (
+            "nested-opaque",
+            "<w:sdt><w:sdtContent><w:sdt><w:sdtPr><w:id w:val=\"invalid\"/></w:sdtPr><w:sdtContent><w:p/></w:sdtContent></w:sdt></w:sdtContent></w:sdt>",
+            0,
+            0,
+        ),
+    ];
+    for (name, control, paragraphs, empty) in cases {
+        let input = temp.path.join(format!("{name}.docx"));
+        let mut document = Document::new();
+        document.add_paragraph("Body text");
+        document.save(&input).unwrap();
+        let mut package = OpcPackage::open(&input).unwrap();
+        let part = package.main_document_part().unwrap();
+        let xml = String::from_utf8(package.get_part(&part).unwrap().to_vec()).unwrap();
+        package.set_part(
+            &part,
+            xml.replace("</w:body>", &format!("{control}</w:body>"))
+                .into_bytes(),
+        );
+        package.save(&input).unwrap();
+        assert_eq!(
+            Document::open(&input).unwrap().paragraph_count(),
+            1 + paragraphs,
+            "{name}"
+        );
+        let before = fs::read(&input).unwrap();
+        let output = cli(&["validate", path_text(&input)]);
+        assert_success(&output, name);
+        let report = String::from_utf8(output.stdout).unwrap();
+        if empty == 0 {
+            assert!(!report.contains("empty paragraph"), "{name}: {report}");
+        } else {
+            assert!(
+                report.contains(&format!("{empty} empty paragraph(s) found")),
+                "{name}: {report}"
+            );
+        }
+        assert!(
+            report.contains("Missing document title"),
+            "{name}: {report}"
+        );
+        assert!(
+            report.contains("Missing document author"),
+            "{name}: {report}"
+        );
+        assert_eq!(fs::read(&input).unwrap(), before, "{name}");
+    }
+}
+
+#[test]
 fn validate_exit_status_is_a_verdict() {
     let temp = TempWorkspace::new("validate");
     let valid = temp.path.join("valid.docx");

@@ -3023,7 +3023,18 @@ footers, notes, and comments are defined. Both are errors. A style id inside a
 tracked property change or inside `mc:Fallback`, and an empty id, are not
 checked. Parts are scanned before the document
 opens, so a malformed styles, numbering, or settings part is named in the
-report beside the open failure it causes. `layout --json` uses
+report beside the open failure it causes. Empty-paragraph advisories count
+body paragraphs and paragraphs nested in block content controls, including
+control-owned tables. Direct body tables and direct nested cell tables remain
+excluded, while tables wrapped by a cell control remain included. A qualified drawing, picture, object, symbol, tab, break, note reference,
+field or equation makes a paragraph nonempty, including visible content inside
+supported inline wrappers. Properties, bookmarks, range markers, deleted
+content and producer page-break hints do not. A read-only qualified main-part
+scan aligns with that paragraph inventory and leaves the input bytes intact.
+It follows native typed content-control admission and only the first expanded
+content slot. Duplicate slots, invalid opaque controls and self-closing raw
+slots do not add visible content or paragraphs.
+Title and author advisories retain their existing behavior. `layout --json` uses
 bundled deterministic fonts and reports every direct body item. Its point-space
 fragments carry one-based physical and displayed page numbers, and preserved
 unlaid items retain an empty fragment list. `diff` compares accepted-view
