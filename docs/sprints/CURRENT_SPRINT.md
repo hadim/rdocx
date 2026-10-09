@@ -298,3 +298,14 @@ only workflow classification, preserving all26 cumulative feature paths.
 Fresh comments/reviews/inline reviews for325 and326 contain no entries.
 Previously captured heads and closed completed deliveries keep their existing
 owners. Contributor test claims are not local completion or closure evidence.
+
+## One causal provider and acyclic consumer ordering
+
+F-X194 retains initial numeric cell-text generation support. Completed
+F-X194/F-X197 release F-X206, which implements the bounded causal foundation
+and existing Word/PPT consumer migration once. F-X201/F-X202/F-X205/F-X208
+consume completed F-X206, and F-X209 already requires it. No F-X194-to-F-X206
+reverse edge or provider-to-F-X211 edge is introduced. F-X211 audits residuals
+and the final corpus after providers, with exactly100 allocated script IDs.
+Its allocation digest is not a full statement-body freeze or executed rate.
+Formal completion and exclusive file claims remain required before source work.

@@ -6897,7 +6897,7 @@ Resolve [Issue304](https://github.com/tensorbee/rdocx/issues/304) in S91,
 part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
 coverage checklist. Repair inherited section geometry, orientation dimension swaps and incomplete pgSz validation. Enable even-page stories coherently. Add live header/footer paragraphs, tables, pictures and fields, first-page/link controls, footnote/endnote creation, deletion and numbering, run page/column breaks, page colour, watermarks and borders. Accept documented Length values without silent unit confusion.
 
-**Depends on**: none.
+**Depends on**: F-X206.
 **Test gate**: regression. Reproduce each missing operation or reported defect
 through the installed public API on the claimed Base before implementation.
 Exercise all Issue304 acceptance criteria through save/reopen, native
@@ -6915,7 +6915,7 @@ Resolve [Issue305](https://github.com/tensorbee/rdocx/issues/305) in S91,
 part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
 coverage checklist. Reuse signed removable table indentation from F-X194. Add empty rows, nested tables, table look/style/layout, merge-aware column insertion/deletion and cell splitting. Expose picture options, run/cell pictures, identity-specific resize and picture inventory. Add bookmark/heading hyperlinks and tooltips. Complete synchronized scoped alternate text-box edits beyond F-X198's safe refusal, preserving physical owner identity and atomicity.
 
-**Depends on**: F-X194, F-X198.
+**Depends on**: F-X194, F-X198, F-X206.
 **Test gate**: regression. Reproduce each missing operation or reported defect
 through the installed public API on the claimed Base before implementation.
 Exercise all Issue305 acceptance criteria through save/reopen, native
@@ -6969,7 +6969,7 @@ Resolve [Issue308](https://github.com/tensorbee/rdocx/issues/308) in S91,
 part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
 coverage checklist. Reuse cell text frames and colour formats. Add run baseline/spacing/language/script fonts, numbered bullets and bullet attributes, gradient/pattern/picture/transparency fills, background fills, table style/banding, core/app/custom properties, sections, media lifecycle, JPEG/TIFF, notes/handout PDF, PDF/A and ODP. Repair inherited template metadata and 16:9 placeholder geometry with reviewed deterministic behavior deltas.
 
-**Depends on**: F-X194, F-X195, F-X197.
+**Depends on**: F-X194, F-X195, F-X197, F-X206.
 **Test gate**: regression. Reproduce each missing operation or reported defect
 through the installed public API on the claimed Base before implementation.
 Exercise all Issue308 acceptance criteria through save/reopen, native
@@ -7032,7 +7032,7 @@ Resolve [Issue311](https://github.com/tensorbee/rdocx/issues/311) in S91,
 part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
 coverage checklist. Implement layout/master hf-aware slide-owned footer/date/number placeholder creation, deck/per-slide controls, skip-title and add_field. Expose placeholder format and theme colours/fonts. Render uncached slidenum and firstSlideNum correctly. Confirm actual PowerPoint hf-only behavior before changing the renderer. Author the requested common transitions with direction, duration and advance controls, lifting the specific existing non-goal. Add footer CLI and inspection using Python-visible operations.
 
-**Depends on**: F-X197.
+**Depends on**: F-X197, F-X206.
 **Test gate**: regression. Reproduce each missing operation or reported defect
 through the installed public API on the claimed Base before implementation.
 Exercise all Issue311 acceptance criteria through save/reopen, native

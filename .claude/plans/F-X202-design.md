@@ -3,7 +3,7 @@
 **Status**: draft
 **Sprint**: S91
 **Size**: L
-**Depends on**: F-X194, F-X198
+**Depends on**: F-X194, F-X198, F-X206
 
 This canonical draft is not approved for implementation.
 Both prerequisites remain unfinished. Do not claim or start this story until

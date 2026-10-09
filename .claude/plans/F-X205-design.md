@@ -3,7 +3,7 @@
 **Status**: approved
 **Sprint**: S91
 **Size**: L
-**Depends on**: F-X194, F-X195, F-X197
+**Depends on**: F-X194, F-X195, F-X197, F-X206
 **Issue**: 308, captured in S91-intake-issues.json on 2026-10-09
 **Prerequisites**: F-X194 and F-X197
 **Implementation**: not claimed, no source changes or new gate evidence
@@ -460,7 +460,7 @@ with the shared X195 caller-font provider.
 The current render_handout_pages requires a related handoutMaster at
 crates/rpptx/src/lib.rs:10241. Native successful default-handout printing
 without that part establishes a distinct default-surface compatibility case,
-not a passing local result. Resolve that explicit contract before approval,
+not a passing local result. The approved final technical contract below resolves this absent-owner case,
 while preserving malformed existing-owner refusal and imported master
 geometry. The study performs no renderer comparison and covers only this
 two-slide deck. The original exact-line-spacing overflow remains visible

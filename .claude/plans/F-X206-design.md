@@ -1,6 +1,6 @@
 # F-X206, Complete PowerPoint shape authoring and live handles
 
-**Status**: draft
+**Status**: approved
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X194, F-X197
@@ -308,7 +308,7 @@ be waived as a harmless binding change.
 Wrapper exposure should preserve existing defaults. Actual native semantic
 changes require measured declared deltas and separate labelled commits before
 any exclusive baseline update. The risk discussion above identifies those
-possible changes. No baseline movement or implementation is approved by this draft.
+possible changes. No baseline movement is preapproved. Implementation requires completed dependencies and exclusive source claims.
 
 ## Implementation checklist
 
@@ -322,23 +322,13 @@ possible changes. No baseline movement or implementation is approved by this dra
 
 ## Open questions
 
-1. Reconcile the one shared text generation and layout generation with X194's
-   approved cell-only design. Audit every mutation and descendant constructor.
-2. Confirm native layout inventory mutation paths and whether concrete
-   generations suffice without stable-owner lookup. No removal of checks.
-3. Establish PowerPoint's combined rotated/flipped group result, then choose
-   correct affine implementation or explicit unsupported atomic boundaries.
-4. Define connection-site routing/lifecycle after move, regroup and removal,
-   including preset guides and unsupported custom geometries.
-5. Set exact native align/distribute selection/reference signatures and the
-   visual-bound versus geometry-bound contract.
-6. Choose typed caps/highlight ownership while retaining all_caps compatibility
-   and exact imported small-cap/raw metadata.
-7. Reconcile placeholder naming and fill identity with X205's fresh template
-   geometry update and native PowerPoint provenance.
-
-These require reviewed technical decisions, not invented user approval gates.
-This draft does not authorize implementation or baseline changes.
+Resolved by the bounded causal provider, geometry, connector and rendering
+contracts below. F-X194 remains initial numeric cell-generation owner, and
+F-X206 extends it once after completed F-X194/F-X197. Word/PPT captured-token
+migration belongs here, while F-X211 audits residuals and the final corpus.
+Existing-file ownership and dependency completion gate the actual claim.
+Issue323's native/render control, source-built failures, no-op/late-refusal
+atomicity and labelled output deltas remain completion tests.
 
 ## PR317 cell anchor reuse
 
@@ -473,3 +463,48 @@ The contributor explicitly leaves Issue323 unresolved. Retain resolvable
 siblings and owner-specific diagnostics for unresolved grouped connector
 members. Its global kind-counter history is not the selected X211 causal
 owner contract. New and later PRs remain under this owner, without a new F-ID.
+
+## Approved shared causal scope and operations
+
+## Single implementation ownership, without dependency cycle
+
+F-X194 owns initial cell resolver/text generation. F-X206 owns extending that same generation to shape text and notes, distinct layout/master inventory scopes, PPT ancestor survival, native affine/connector/arrange/caps/highlight and cell-anchor work. Assign the shared bounded causal-state foundation and minimal existing Word/PPT consumer migration to F-X206 once in oxml-py-support and existing binding files under explicit root leases. Preserve public numeric constructor behavior from the final causal memo. X202 owns Word hyperlink physical identity and related picture/table operations. X201 owns sections. X209 owns master/layout/theme part identities. F-X201/F-X202/F-X205/F-X208 formally depend on completed F-X206. F-X209 already depends on it. F-X194 does not depend on F-X206 and retains its initial numeric text-revision extension. None depends on211.
+
+X211 follows integrated providers. It audits/refines residual Word table/grid ancestors, Word hyperlinks and other uncovered consumers without reimplementing provider lifetimes, adds checked fourteen-owner XML operations, actionable errors and the final corpus. If root assigns a residual fix to a provider,211 retains only its cross-story acceptance. Formal211 depends on200..210 for final corpus. Do not make194/206/202/209 wait for211 approval or completion. Design approval is conditional on fixed contracts, claims wait for actual dependencies and file leases. Shared consumer migration is a declared scope amendment, not silently expanded206 source ownership.
+
+Use actual current model owner inventory, not a generic stable-handle registry. Shape/Slide/Table/TextFrame ancestor identity survives descendant text edits. Layout/master proxies are keyed by checked originating part ownership and separate inventory tokens, not global shape revision. Existing shapes can survive unrelated insert/remove only when provider proves their original owner token, ID uniqueness and non-rebinding. Indexed Row/Column/Cell and paragraph/run/font descendants still retire for affected grid/text topology. Removed/recreated native IDs never resurrect tokens. Layout import/reorder/removal retires only affected inventories. Notes ancestor behavior uses the same text-body partition, not an independent counter. Do not promise live cell descendants across grid edits.
+
+Common top-level revision remains committed invalidating-transaction serial, distinct from local generations. One relevant successful commit advances it once, preflight overflow/all successor allocation before publication, no fallible state changes afterward. A handle holds originating document/owner and relevant Arc states. Validate foreign identity before lookup, then retired states, choosing minimum common committed retirement serial across relevant scopes. Same-transaction ties use one real public label and fixed scope order. OnceLock records first cause once, no next links/history/last-operation substitution. Manual revision-u64 selectors remain unbound/unknown cause, preserving visible equality and legacy missing-owner ordering. Manual Item with bound Story inherits only its Story owner constraint. Errors/no-ops retain bytes, all state identities and serials. Existing setters are not reclassified as no-op merely because displayed text matches.
+
+## Geometry and operations
+
+Adopt flip then rotate about frame center, composed with actual group child-coordinate offset/scale and all ancestor transforms. Unit-scale native controls are exact evidence for that order, not nonuniform decomposition proof. Preserve IDs/relationships and relative z-order during group/ungroup. Noncontiguous grouping cannot preserve interleaving against unselected siblings, so refuse it atomically, rather than claim total z-order preservation. Exact affine child conversion is supported only when representable by DrawingML rotation/flip/scale without skew. Nonuniform rotated-child skew or opaque decomposition refuses before candidate publication. no heuristic axes/position approximation. Bounds and checked integer publication use one documented rounding rule local to geometry, leaving existing unit-constructor truncation unchanged.
+
+Keep contributed enum/signature vocabulary in existing native lib.rs, no arrange.rs module: ShapesMut::align(indices:&[usize],alignment:ShapeAlignment,reference:ArrangeReference)->Result<()>. distribute(indices:&[usize],direction:DistributeDirection,reference:ArrangeReference)->Result<()>. ShapeAlignment is Left/Center/Right/Top/Middle/Bottom, reference Selection/Slide, direction Horizontal/Vertical. Public Python takes actual same-owner Shape handles, validates bound origin and converts current owner paths only after checks. No duplicate selections or ancestor/descendant mixture. Alignment requires>=1 slide-relative and>=2 selection-relative. Distribution requires>=1 slide-relative,>=3 selection-relative. All validation and geometry materialization occurs in a candidate, never the live tree.
+
+Use axis-aligned bounds of transformed frame corners in slide coordinates, excluding shadows, stroke/painted ink and cropped picture contents. Native Left/Top controls establish this choice for rotated rectangles. Selection reference is union of those bounds, slide reference is full slide rectangle. Map slide-space translations through inverse parent affine for nested same-parent children. Refuse singular or unrepresentable transform, not all nested slide-relative operations indiscriminately. Align selected visual edges/centers. Distribute equal signed edge-to-edge gaps, preserving selection extrema. negative gaps are permitted and explicit, not clamped. Slide-relative uses both slide edges, one member is centered. Sort by leading bound then existing owner z-order for ties. preserve z-order, sizes, rotation and IDs. Precompute all translations/check overflow before any mutation. Distribution is a selected deterministic product contract, not a falsely claimed native measurement.
+
+Connectors: adopt owner-aware Presentation::connect_connector(slide_index,connector_path:&[usize],end:ConnectorEnd,target_shape_id:u32,site:u32)->Result<()> and set_connector_endpoint with the contributor's existing enum vocabulary, but bind checked physical owner paths. Site indices are zero-based actual preset geometry connection-site inventory after guide evaluation, not guessed rectangle cardinal sites for unsupported shapes. Support same-slide nested targets and inverse-transform endpoint into connector's owner coordinates. Reject self, foreign/detached/duplicate target, invalid site, custom geometry lacking modeled sites, singular transform or read-only AlternateContent before allocation/publication. Unsupported native sites refuse authoring rather than silently substitute four sites.
+
+Glue remains live: target position/size/flip/rotation/preset edits and exact regroup/ungroup recompute attached endpoint coordinates in the same checked candidate. Native render assembly resolves retained imported attachment IDs against current actual owner/site geometry and emits owner-specific diagnostics for unsupported attachments. Deleting a glued target detaches the relevant stCxn/endCxn while preserving the last resolved endpoint, other end and connector. do not leave a dangling target or delete the connector. Unsupported late reroute causes whole authored operation refusal. No auto-routing promise for elbow bends beyond supported connector geometry. Save/reopen preserves attachment semantics. Member-level renderer failures must not suppress valid siblings.
+
+Issue323 remains required: fresh installed Base repro adding a connector to rotated30-degree/flipH/2x unequal chExt/ext group, plus nonuniform partner. Compare actual rectangle/connector positions with pinned native and LibreOffice, verify member IDs/z-order/opaque bytes and save/reopen. Current unit-scale markers and contributor326 do not satisfy this case. One shared transform/connector fix handles it, no second F-ID.
+
+
+## Caps, highlight and XML decisions
+
+Keep existing all_caps:Option<bool>, add minimal typed small_caps:Option<bool> and highlight:Option<ColorChoice> within current model file. They own exactly one qualified cap attribute and one DrawingML highlight child. Parse all/none/small distinctly. unsupported/foreign cap metadata remains raw. Checked setters select one cap state, clear conflicting true state, and never emit duplicate cap. Simultaneous true values in supplied native property values refuse before publication, not arbitrary precedence. None clears the requested owned flag without destroying another explicit mode, false explicitly selects cap=none. Preserve legacy all_caps getter semantics for imported small. Namespace URI qualification is mandatory, including raw-child replacement. foreign highlight remains opaque. X197 owns RGB/theme extraction. Getters do not promote defaults or mutate source.
+
+Render actual all-caps and small-caps with original text/cluster identity preserved. Prefer OpenType smcp when available. Select a deterministic synthesized fallback when the font lacks smcp: lowercase cased clusters display their Unicode uppercase mapping at80% of the original run size, while original uppercase and uncased clusters keep full size. Preserve original logical text, cluster source mapping and font face, including multi-codepoint uppercase expansions. This80% ratio is an explicit product policy, not measured PowerPoint equivalence. Declare its expected pixel/width delta and test font-feature and fallback controls before the behavior commit. Root may adopt this precise choice now rather than leave an unbounded render-policy question. Highlight paints its resolved colour behind the actual run glyph area with alpha, preserving other effects. A typed save/reopen alone is not rendering acceptance.
+
+
+The neutral-state scope amendment owns ContentPath/RevisionCounter in existing
+oxml-py-support/lib.rs and actual current Word/PPT capture, validation and
+publication consumers in their existing binding files. Initial Word migration
+preserves current conservative global invalidation and manual numeric selector
+semantics. It does not preimplement X201 section authoring or X202 physical
+hyperlinks. New consumer handles use this completed provider. Removing Copy,
+hidden owner tokens and common serial changes require both affected native
+families, installed runtime/typing/stubtest, WASM, packaging, Base failure,
+no-op/overflow/first-cause and bounded state-lifetime checks. Every invoked
+public mutation label must be accurate. No new file/module/trait/generic.

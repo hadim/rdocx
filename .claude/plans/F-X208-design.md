@@ -3,9 +3,9 @@
 **Status**: approved
 **Sprint**: S91
 **Size**: L
-**Depends on**: F-X197
+**Depends on**: F-X197, F-X206
 
-Technical design is not approved for implementation. Issue311 is
+The design is approved. Implementation waits for completed dependencies and exclusive source claims. Issue311 is
 owned here. Issue312 theme editing remains F-X209 and shared one-shot CLI
 commands remain F-X204. F-X197 is the approved colour-format prerequisite.
 Do not reinterpret PR315 caller-font metadata, font ownership or rendering
@@ -209,7 +209,7 @@ capture receipts. No new crate, module, source file or speculative abstraction.
 Existing static transition output should remain unchanged. Footer occupancy
 and displayed-number fixes can change deterministic output only after native
 proof and explicit reviewed delta declaration. No baseline move is approved
-by this draft.
+by this design.
 
 ## Implementation checklist
 

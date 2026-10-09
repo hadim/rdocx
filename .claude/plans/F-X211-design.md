@@ -1,6 +1,6 @@
 # F-X211, Python script compatibility and safe XML access
 
-**Status**: draft
+**Status**: approved
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X200 through F-X210 for final corpus acceptance, refined source barriers below
@@ -307,7 +307,7 @@ silent failure has a failing-before/fixed-after public control.
 
 | Category | Test | Asserts |
 |---|---|---|
-| regression | first_draft_corpus_runs_unmodified_and_reports_per_area_rates | Stable about100-script denominator, saved-file facts and honest divergence counts |
+| regression | first_draft_corpus_runs_unmodified_and_reports_per_area_rates | Stable exactly100-script denominator, saved-file facts and honest divergence counts |
 | regression | existing_documentation_examples_remain_identified_subset | All17/7 IDs and declared old adaptations retained |
 | regression | actionable_divergences_name_the_supported_call | Known attribute/type names, correct forms and no hidden mutation |
 | regression | element_xml_covers_all_requested_family_owners | Fourteen concrete cases plus declared shape-kind variants and namespace closure |
@@ -329,7 +329,7 @@ entrypoints. Stubs describe element views and ownership. Extend existing
 is required by this proposal. Run strict mypy/stubtest against installed
 bindings and meaningful deterministic render/native comparisons.
 
-No regression was executed by this draft. Preserve Base failure, provider
+No regression was executed by this design. Preserve Base failure, provider
 evidence and final integrated corpus result as separate records. Root records
 rates in the eventual PR, after genuine measured completion.
 
@@ -388,26 +388,15 @@ change baselines or corpus denominators to manufacture a passing rate.
 
 ## Open questions
 
-1. Approve the exact family-owner matrix. The issue lists ten generic names
-   and14 concrete family cases, not an unexplained11-owner denominator.
-2. Set final native target signatures against actual ContentLocation/
-   StoryRunPosition and X209 part-owner semantics, including accepted nested
-   runs and table cell body ownership. Do not use an unsafe generic mutator.
-3. Decide namespace-complete XML limits and qualified type/schema validation
-   boundaries without implying a complete XSD validator or arbitrary part edit.
-4. Assign residual table/hyperlink/notes survival once and prove stable identity
-   under deletion, duplicates and ID reuse. Preserve unsafe descendant checks.
-5. Choose bounded causal invalidation provenance with accurate repeated-edit
-   wording. Last unrelated mutation cannot masquerade as first invalidator.
-6. Freeze corpus allocation and deliberate divergence policy before Base
-   measurement. Decide final CI failure criteria without weakening existing gates.
-7. Define wrong-unit and accepted-option audit coverage from actual public
-   inventory, with provider fixes and no invented coercion policy.
-
-Resolve material decisions before approving this draft. The authorized316
-scope does not imply arbitrary new files or a full lxml compatibility promise.
-This canonical draft does not authorize implementation. No source, gate
-timeout or Cargo changes accompany it.
+Resolved by the exact fourteen-family XML matrix, bounded causal compatibility
+contract, provider ownership and100-script allocation below. F-X206 owns
+shared state and existing consumer migration after F-X194/F-X197. Providers
+create their new handles on that one foundation, with no provider dependency
+on F-X211. This story owns residual audits/XML and the final integrated corpus.
+Allocation is frozen now. Actual original statement/assertion bodies and their
+separate full corpus digest must be frozen in existing entrypoints before
+Base measurement or production changes. Allocation digest is not a body
+freeze, executed rate or successful-file evidence.
 
 ## Bounded causal-token refinement
 
@@ -497,3 +486,118 @@ clone/removal/reuse, reversed multi-scope validator order, overflow-before-edit,
 late failure and weak-state reclamation after thousands of uncaptured edits.
 These settle the design's causal question, with provider implementation and
 actual frozen-corpus acceptance still required once, not already passed.
+
+## Approved XML scope and exact corpus allocation
+
+X211 element matrix is exactly the plan's ten generic names/fourteen family cases. Keep paragraph.element.xml:str and element.replace_xml(xml:str)->None, namespace-complete serialization, concrete checked native ContentLocation/StoryRunPosition or true part-owner routes, no unsafe generic package write or lxml promise. Exactly one matching qualified root, modeled invariant/schema order and owned relationship validation, inherited namespace closure, staged serialize/reopen and same-token atomicity. Raw writes retain X198/X202 paired-owner barriers. Regular Run refuses fld/br roots. Declared limits reuse current package/text parsing caps, reject DTD/entity/network resolution and malformed root/trailing content before mutable access. Not a complete XSD validator. Identical fully equivalent owner replacement is no-op. replacing owner topology retires precisely its unsafe descendants. Existing manual snapshots remain compatible.
+
+## Fixed allocation and evidence boundaries
+
+Selected exact100-script allocation: Word49 and PowerPoint51. Existing examples24 (Word17/PPT7), XML14 (Word5/PPT9), lifetime16 (Word7/PPT9), provider acceptance46 (Word20/PPT26). Shape XML case includes sp/pic/grpSp/cxnSp/graphicFrame variants within one script, not extra denominator identities. Each XML script bundles positive qualified/default/alias closure and save/reopen with wrong-root/foreign/late-failure atomic checks. Lifetime scripts include wrong-owner and retired-handle actionable failures alongside required survival. These nested controls do not increase script count.
+
+Canonical allocation JSON is UTF-8 compact json.dumps(records,sort_keys=True,separators=(",",":")), each record has id/area/case, with area equal to the uppercase second component of id (BASE/XML/LIFE/AREA). Independently derived SHA256 f6adc336ed82bcfa2a3c034e91513ef58543fb322e4de259c1a6d6d2010ebcbf. This digest freezes only allocation identities below. No full statements/assertion-body corpus digest or Base/final rate currently exists. Freeze actual original bodies, setup and saved-file assertions in existing test entrypoints before Base measurement. Retain original17/7 bodies and named adaptations. No injected re-fetches/coercions. Successful adapted gate remains separate from unmodified correct-file metric. Every attempt stays denominator, deliberate divergence counts as non-success, unexpected failure/missing identity/assertion/unreviewed divergence fails CI. Finite deliberate refusal cases have independent actionable-error tests, not fake successful-file credit.
+
+Saved-file assertions must reopen through both binding/native relevant paths and verify semantic contents plus qualified owner/relationship/grid identities. visible contracts add deterministic rendering. XML cases verify exact unrelated opaque bytes and qualified schema facts, exports verify format/page/selection/diagnostic counts, lifetimes verify both bytes and generations. Source/build/interpreter/oracle versions and final body digest accompany Base/final rates. Final corpus runs once on integrated200..210, not provider worker copies. These unrun gates do not block design approval.
+
+### Exact allocation IDs
+
+- W-BASE-01: documents.opening-a-document
+- W-BASE-02: documents.really-opening-a-document
+- W-BASE-03: quickstart.opening-a-document
+- W-BASE-04: quickstart.adding-a-paragraph
+- W-BASE-05: quickstart.adding-a-table
+- W-BASE-06: quickstart.table-cell-text
+- W-BASE-07: quickstart.held-row-two-cell-assignment
+- W-BASE-08: quickstart.table-iteration
+- W-BASE-09: quickstart.table-style
+- W-BASE-10: quickstart.adding-runs
+- W-BASE-11: text.horizontal-alignment
+- W-BASE-12: text.indentation
+- W-BASE-13: text.line-spacing
+- W-BASE-14: text.paragraph-spacing
+- W-BASE-15: text.pagination-properties
+- W-BASE-16: text.font-name-and-size
+- W-BASE-17: text.font-tristate-and-underline
+- P-BASE-01: hello
+- P-BASE-02: bullet
+- P-BASE-03: textbox
+- P-BASE-04: picture
+- P-BASE-05: shapes
+- P-BASE-06: table
+- P-BASE-07: text-extraction
+- W-XML-01: paragraph
+- W-XML-02: run
+- W-XML-03: table
+- W-XML-04: cell
+- W-XML-05: section-properties
+- P-XML-01: paragraph
+- P-XML-02: run
+- P-XML-03: table
+- P-XML-04: cell
+- P-XML-05: shape-kinds
+- P-XML-06: text-body
+- P-XML-07: slide
+- P-XML-08: layout
+- P-XML-09: master
+- W-LIFE-01: table-held-row-after-cell-text
+- W-LIFE-02: table-ancestor-after-grid-edit
+- W-LIFE-03: hyperlink-after-unrelated-link-edit
+- W-LIFE-04: removed-duplicate-link-no-rebind
+- W-LIFE-05: manual-vs-captured-story-item
+- W-LIFE-06: first-cause-multiple-edits
+- W-LIFE-07: noop-failure-overflow-and-weak-retirement
+- P-LIFE-01: title-subtitle-ancestor-survival
+- P-LIFE-02: notes-ancestor-survival
+- P-LIFE-03: layout-after-add-slide
+- P-LIFE-04: master-theme-proxy-survival
+- P-LIFE-05: table-after-row-column-edit
+- P-LIFE-06: removed-shape-no-id-rebind
+- P-LIFE-07: gradient-stop-duplicate-insert-delete
+- P-LIFE-08: cross-scope-first-cause-and-foreign-owner
+- P-LIFE-09: noop-failure-overflow-and-weak-retirement
+- W-AREA-01: style-create-delete-kind
+- W-AREA-02: style-cascade-and-language
+- W-AREA-03: lists-numbering-restart
+- W-AREA-04: paragraph-keep-and-tabs
+- W-AREA-05: sections-orientation-margins
+- W-AREA-06: header-footer-distinct-stories
+- W-AREA-07: footnote-endnote-scope
+- W-AREA-08: table-indent-look-style
+- W-AREA-09: table-grid-merge-split
+- W-AREA-10: picture-add-resize-inventory
+- W-AREA-11: bookmark-heading-fragment-link
+- W-AREA-12: external-link-retained-format
+- W-AREA-13: content-control-edit
+- W-AREA-14: math-expression-loss-report
+- W-AREA-15: template-nested-conditions
+- W-AREA-16: checked-validation-diagnostics
+- W-AREA-17: core-app-custom-properties
+- W-AREA-18: scope-text-and-format-export
+- W-AREA-19: caller-font-fit-pdf-render
+- W-AREA-20: paired-textbox-physical-replacement
+- P-AREA-01: fresh-metadata-all-layout-geometry
+- P-AREA-02: font-baseline-spacing-scripts
+- P-AREA-03: numbered-bullet-details
+- P-AREA-04: gradient-live-stops
+- P-AREA-05: pattern-and-path-fill-pixels
+- P-AREA-06: picture-fill-owner-pruning
+- P-AREA-07: solid-theme-alpha-brightness
+- P-AREA-08: cell-text-anchor-banding-style
+- P-AREA-09: core-app-custom-sections
+- P-AREA-10: movie-poster-lifecycle
+- P-AREA-11: jpeg-tiff-multipage-selection
+- P-AREA-12: notes-blank-default-handout
+- P-AREA-13: pdfa-and-odp-loss-reports
+- P-AREA-14: alt-title-decorative-qualification
+- P-AREA-15: flip-rotate-native-order
+- P-AREA-16: group-ungroup-id-zorder
+- P-AREA-17: nested-nonuniform-affine-refusal
+- P-AREA-18: glue-move-delete-regroup
+- P-AREA-19: issue323-connector-scaled-group
+- P-AREA-20: picture-placeholder-identity-crop
+- P-AREA-21: run-internal-link-highlight-smallcaps
+- P-AREA-22: align-visual-selection-slide
+- P-AREA-23: distribute-gap-ties-cardinality
+- P-AREA-24: footer-title-date-first-zero
+- P-AREA-25: master-layout-theme-apply
+- P-AREA-26: all-transitions-retained-sound
