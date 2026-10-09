@@ -287,3 +287,55 @@ The read-only assessment predates the separate user approval of the exact
 3916-byte subset. That approval is recorded above and does not expand to the
 extra static faces, altered notices or a changed subset. No asset is copied,
 font installed, source changed or baseline adopted by this refresh.
+
+## Resolved bounded metrics and same-pass diagnostics contract
+
+The authenticated final decision memo is
+/private/tmp/S91-F-X210-final-contract/decisions.md. Its20 referenced source
+and evidence hashes match. Valid in-memory WOFF reconstruction authenticated
+all15 table checksums and whole SFNT checksum before actual HarfBuzz14.4
+shaping, superseding only the earlier failed direct-WOFF measurement route.
+No Microsoft font bytes or reconstructed SFNT were redistributed or saved.
+
+For pinned Selawik Regular1.01 versus Segoe UI Regular5.31, isolated95 ASCII
+advances and all20 measured kern-disabled string advances match exactly.
+With kerning enabled18/20 strings differ: AVATAR differs0.26123046875em,
+To0.10302734375em and the largest measured mixed-pair control0.39111328125em.
+These are per-control observations, never a universal tolerance or identical
+wrapping guarantee. Publish those differences and the absent Selawik kerning.
+Selected Word Windows/typo metrics agree, while generic hhea metrics differ.
+No genuine Segoe UI Bold700 reference was found, so Bold provenance and
+style coverage do not become a measured Bold parity claim. Keep original
+approved faces as approximate substitutes with these explicit guarantees.
+
+Resolve section-square as WingdingsA7/F0A7 mapped semantically to U25AA,
+based on the authenticated eight native symbol controls. It is distinct from
+unchecked-checkboxU2610. Genuine supplied symbol coverage has precedence,
+ordinary Wingdings text and unrelated PUA are not globally rewritten, and
+unknown codes remain source-preserved with honest missing-glyph diagnostics.
+Monochrome semantic fallback is not original-font outline or advance parity.
+
+Select additive native/Python diagnostic companions in existing facade files:
+one successful layout/encode returns the existing payload paired with owned
+diagnostics. PDF returns native Result<(Vec<u8>,Vec<Diagnostic>)> and Python
+(bytes,tuple[str,...]). Analogous PNG/raster companions retain old payloads.
+Existing byte APIs keep their current return types. Reuse SVG's existing
+diagnostic result, expose PPT TextFrameLayout's same-pass diagnostic vector
+through its existing Python record, and feed X207 fit reports from those facts.
+CLI emits the exact successful render's ordered facts to stderr once.
+Do not rerender to infer diagnostics for earlier bytes or expose a last-render
+mutable registry. No forwarding-only generic wrapper or new source file.
+
+X195 owns bounded actual requested/selected contributing events and cache
+replay. The FontId-global Aptos attribution bug exists in PR319, not current
+canonical code. Preserve trace bounds and carrier budget accounting, retain
+Aptos versus Aptos Display identity, and suppress fallback claims for genuine
+actual caller coverage. Test cold/warm non-Aptos reuse, missing glyph fallback,
+empty probes and exact same-provider output across measurement/export paths.
+These are selected future gates, not already implemented consumers.
+
+The exact revised3968-byte same-path subset adds onlyU2610, SHA
+a95e7d7421e30e8ad304a0eb48aa18aefabcfec568a0f652c1039d72da999373.
+Its actual approval answer remains pending. Original3916-byte approval and
+all eight core approvals remain valid for their exact bytes. Neither research
+nor elapsed time authorizes copying revised bytes.

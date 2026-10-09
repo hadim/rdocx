@@ -457,3 +457,42 @@ installed Arial bytes read in place. Retain current renderer overflow and
 last-baseline-plus-font-descent as separate outputs. Glyph ink is unmeasured
 where the public API does not expose it. No general candidate order or
 production change is approved by these finite boundary observations.
+
+## Actual source measurement and bounded solver hypothesis
+
+Successful standalone diagnostic session53221 and compiled-binary complete
+grid session77863 both have actual exit0. Source, inputs, output and corrected
+canonical-pinned lock hashes are retained under
+/private/tmp/S91-F-X207-source-measurement. The original interrupted fresh-lock
+resolution and temporary hash-formatter failure remain explicit failed runs.
+No repository source, dependency or baseline changed. Original Arial bytes
+are read in place, SHA15663c7e8495594c6136eb51b11983eb8f5bbcdd07bb2c327e0d1e83415b0f06.
+
+Across18 authenticated frames, a vertical-only last-baseline plus actual
+selected-font descent criterion matches17 native selected pairs under the
+bounded sparse-order hypothesis. Existing full-advance fitting matches14.
+H465/H457/H461 distinguish terminal metric from full line advance. Metric
+end is not glyph ink, and vertical-only success does not prove width fitting.
+BExact28 remains genuinely unfit at native floor25000/20000:190.483398pt
+metric end versus154.8pt usable height. Preserve unchanged atomic refusal
+for that control and explicitly document the native-floor-writing divergence.
+Never count it as an eighteenth successful fit.
+
+The sparse sequence100000/0,100000/10000,92500/0,92500/10000,92500/20000,
+then7500 scale decrements with20000 reduction down to25000 is a measured
+hypothesis, not a proved general native search. It conflicts with the earlier
+2.5-percent draft ladder and must be selected only with explicit policy and
+reviewed meaningful discriminators before production implementation.
+Next focused tests distinguish terminal descenders and last paragraph-after
+space, omitted100000/20000 and85000/10000 competitors, a real width/wrap
+threshold, mixed/default run styles, late transactional failure, shared owner
+contexts and resize anchors. Do not repeat a broad height sweep or redefine
+exact28-point spacing to force this control to fit. One evaluator and actual
+provider must serve refresh, reporting and render diagnostics.
+
+Detailed read-only decision memo is
+/private/tmp/S91-F-X207-decision/design-resolution.md, with authenticated
+18-case measured-summary.json and source/input/output read receipt. Existing
+explicit refresh, None-family preservation, physical inventory and conservative
+shared-context policies remain selected contracts. General terminal extent
+and candidate admission still need this bounded final technical resolution.

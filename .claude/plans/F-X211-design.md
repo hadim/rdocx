@@ -454,3 +454,46 @@ approval barriers. Add existing-entrypoint tests for repeated edits, cloned
 handles, Arc weak lifetime reclamation, owner survival, failure/no-op stability,
 actual alias labels and cross-document/constructed snapshots. This refinement
 settles the bounded mechanism candidate, not full F-X211 design approval.
+
+## Final causal compatibility and common serial contract
+
+The authenticated resolution memo is
+/private/tmp/S91-F-X211-causal-finalization/resolution-memo.md. Its15 source
+references match current canonical bytes. Preserve visible Story/StoryItem
+constructors and field-based equality. Manual numeric construction remains
+an explicit unbound current-target selector, never a captured owner token.
+An unmatched numeric guard reports unavailable causal provenance, not an
+invented first invalidating operation. Preserve existing missing-manual-story
+error ordering. A manually constructed Item using a bound Story retains that
+Story's originating-owner constraint without fabricating item generation.
+
+Native captures and their clones carry hidden document/owner state tokens.
+Reject foreign document identity before lookup or revision comparison. Validate
+retired relevant tokens before resolving their current native location.
+Visible equality excludes identity, token pointers and mutable cause state.
+Removed/recreated physical owners cannot resurrect captured handles.
+ContentPath::new stays const/unbound with no allocation. Genuine captures
+use token-aware validation. Removing RevisionCounter Copy and adding hidden
+Rust fields is an intentional pre-1.0 source change, not claimed compatibility.
+
+Keep the current top-level revision as one monotonic invalidating-transaction
+serial alongside partitioned scope generations. Capture's visible serial
+is distinct from the local generation token. An unrelated owner's commit
+must not make a still-live scope stale by comparing these different numbers.
+The earliest relevant retired token is selected by minimum common committed
+serial, never unrelated local generations or validator traversal order.
+Same-transaction ties have one public label/serial and fixed scope ordering.
+
+Each owner retains only its current Arc<RevisionState>. Live handles may
+retain old states with one OnceLock first cause. No event history, next-state
+pointer, revision lookup map or document ownership cycle. Preflight scalar
+and local checked_add plus successor allocation before native publication.
+Publish success and retire/swap exactly once without a fallible step afterward.
+No-op/refusal retains bytes, all state identities, causes and serial values.
+
+Existing-entrypoint tests cover bound/manual equality, foreign equal-valued
+capture refusal, manual selectors, bound Story propagation, alias labels,
+clone/removal/reuse, reversed multi-scope validator order, overflow-before-edit,
+late failure and weak-state reclamation after thousands of uncaptured edits.
+These settle the design's causal question, with provider implementation and
+actual frozen-corpus acceptance still required once, not already passed.
