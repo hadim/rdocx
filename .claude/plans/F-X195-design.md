@@ -275,3 +275,37 @@ caller-font handout/PDF-A paths. Its fallback on subset failure, directory
 precedence and synthesis geometry must be reconciled against the approved
 plan. Contributor gate claims are not local evidence. Archive measurements
 will be generated from actual integrated source.
+
+## PR315 assessment against the approved contract
+
+The immutable head has38 changed files. Required patch and full metadata,
+comments and reviews are retained in ignored canonical scratch. No contributor
+gate is treated as locally passed. Reuse lexical directory loading, facade
+font threading, batched page layout, one presentation font manager, explicit
+variation metadata, HarfRust instances and static subsetting scaffolding.
+
+Reconcile these differences before implementation starts:
+
+- font.rs:585 forces regular wght400 instead of retaining default coordinates,
+  and :1404 exempts every bundled face from requested bold instancing.
+- font.rs:592 uses slnt -14, and output.rs:499 uses a1/30em stroke, instead of
+  approved geometry. Genuine/synthetic italic and ink-bound expansion are
+  absent. Preserve static style preference and verify clamped axes truthfully.
+- oxml-pdf/font.rs:423 substitutes default glyphs after instance subset failure
+  while writing instanced widths. Refuse or use verified matching geometry.
+- PDF names and SVG CSS must reflect actual instances and synthesis. Prevent
+  browser double synthesis and retain approved round caps/joins and shear.
+- rdocx-py/document.rs:4006 and rpptx-py/presentation.rs:468 put directory
+  inputs after explicit pairs. Approved explicit-last selection still needs
+  an actual equal-family/style selected-byte assertion, not a vector claim.
+- rpptx/lib.rs:1174 and :10299 pass empty fonts on timeline and handout paths.
+  Complete all requested entrypoints including PDF-A and detached file reads.
+
+Contributor default-coordinate and bundled-exemption assertions encode the
+incomplete behavior and must not become acceptance. Use the retained licensed
+HarfBuzz14.4.0 regular/bold controls with their measured numerical limits, plus
+real italic/slant, subset-failure, TTC, collision/cache, PDF/raster/SVG and
+notes/handout/timeline checks. Rederive actual local archive measurements.
+The minimum subsetter0.2.6 requirement needs explicit manifest review, with
+no new dependency or lock delta inferred. Source ownership stays exclusive
+after the first wave and table work, with X207 and X210 following this story.
