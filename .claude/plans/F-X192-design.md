@@ -49,7 +49,8 @@ formatted contributor representation and source-kind-specific title keys.
 IEEE uses numeric RefOrder. Existing tuple Last/Title probes do not establish
 those string keys. Retained ICU probes tested partial operands and tuples,
 not complete Harvard or APA SortingString values. Their failure does not prove
-complete-key ICU failure. No complete-key comparator receipt is authenticated.
+complete-key ICU failure. The separately authenticated complete-key ICU
+counterexample and same-key native controls below establish bounded results.
 Default ICU, Core Foundation and ASCII fallback remain prohibited.
 The approved implementation route is source-kind-specific native sort-key
 assembly plus an independently demonstrated portable comparator and stable
@@ -295,3 +296,41 @@ sixteen localized non-Case operands per own control remain explicitly
 unproved. Corporate and Case assembly is genuine, not a guessed author key.
 No dependency, production comparator, baseline or native recapture follows.
 A demonstrated complete formatter/comparator route remains required.
+
+## Exact locale input and same-key author controls
+
+The authenticated installed resource search found no standalone APA locale
+packet for1033,1054 or1105. The eight-artifact metadata manifest under
+/private/tmp/S91-F-X192-author0-provenance has SHA
+ab535351e2591426cf58c38097d7626131d0495fcd83e6e5b2b8a3c4f9444d65.
+The exact person-formatting dependency is twelve runtime properties and
+DefaultLCID, not only four name-order formats. Installed literal proximity
+does not establish their binding. Do not adopt guessed English defaults.
+The prepared independent diagnostic style is inert. Installation into the
+signed Word application bundle is rejected. No supported current Mac user
+discovery route or equivalent diagnostic/native APA packet is established.
+
+Two additional native Harvard controls use Corporate operands that assemble
+exactly the earlier person keys, Unicode strings ИвановA2020Same title and
+王A2020Same title. Native F9/save places the Cyrillic source first for both
+forward and reversed source collections, agreeing with the authentic
+21-source person vector. Each complete package is byte identical after
+ordinary no-F9 reopening. Raw operands and installed assembly establish key
+bytes, not direct observation of a transient SortingString. There is no
+author-kind inversion in these exact controls. Earlier whitespace corporate
+keys are different complete strings and cannot establish such an inversion.
+
+Root authenticated all47 artifacts under
+/private/tmp/S91-F-X192-byte-identical-author-kind. Its final manifest SHA is
+35219161dd1c712e2fc14748a5e6bf5ee6a6e39b3065f90524b23add84b33ec8.
+The installed Word pin remains16.113.2 build16.113.26092012. No production
+comparator, dependency or script ordering follows from these observations.
+
+Root also tested the installed public Core Foundation comparison API against
+the twelve retained complete-key vectors. Plain, localized, case-insensitive
+localized and nonliteral case-insensitive localized comparisons under en_US,
+en_GB and the actual en_GB host locale each match only three tie vectors out
+of twelve. The144 measurements retain36 matches and108 differences under
+/private/tmp/S91-F-X192-corefoundation-probe. This is a read-only candidate
+rejection, not a portable backend or a production dependency. APA person
+keys remain outside the complete-key comparator measurements.
