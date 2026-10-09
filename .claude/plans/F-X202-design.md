@@ -1,11 +1,11 @@
 # F-X202, Complete Word tables pictures and internal links
 
-**Status**: draft
+**Status**: approved
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X194, F-X198, F-X206
 
-This canonical draft is not approved for implementation.
+The design is approved. Implementation waits for completed dependencies and exclusive source claims.
 Both prerequisites remain unfinished. Do not claim or start this story until
 their reviewed integration and the decisions below are complete. Sources and
 citations were checked against canonical head
@@ -315,12 +315,14 @@ dependency prefix, and update this draft's citations at the actual claim Base.
 
 ## Open questions
 
-The explicit Picture target transition, named relationship-wide compatibility
-operation, logical-grid rules, split/no-op results, bookmark placement and
-paired-owner admission are resolved below. Final approval still requires the
-mandatory native table and genuine paired-text-box controls, exact provider
-source ownership and a bounded complete implementation wave. No Issue301
-closure follows from the F-X198 safety prefix alone.
+Resolved by the explicit occurrence-local Picture transition, logical-grid,
+link and qualified paired-owner contracts below, with genuine native positive
+pairing and empty-row/vMerge evidence now captured and authenticated.
+F-X198's completed safety prefix supplies no-op/count/refusal order, and
+F-X206 supplies bound origin/causal tokens once. Shared source/test files
+are serialized against those providers. Installed positive synchronization,
+source-built ambiguity and all namespace/late-failure controls remain required
+before completion. This control does not imply arbitrary producer pairing.
 
 ## PR317 synchronization reuse assessment
 
@@ -347,7 +349,7 @@ by this static source assessment. Do not claim local success from them.
 
 Freeze the existing clone operation as content cloning. Native document.rs:19793 copies properties, nested content, relationships and producer XML, freshens identities and omits comment anchors. Python clone_row currently bumps structural revision and returns a newly captured Row at rdocx-py/table.rs:597. It remains available with that contract.
 
-Choose `Table.add_row() -> Row` as empty append, backed by checked native add_empty_table_row(table_index)->Result<usize>. Copy last direct row's row/cell formatting and horizontal logical occupancy, then replace each cell content with its required empty paragraph. Do not copy nested content, bookmarks/comments, bindings, drawing relationships or paragraph identities. Clear vMerge on all new cells so append does not extend an existing vertical merge or start a fresh multirow region inadvertently. This is the proposed rule, not an observed Word/python-docx result. A last row with gridBefore/gridAfter keeps those omissions and gridSpan occupancy. A table without a last direct row refuses until a separate initial-row contract exists. Wrapped row/cell control topology cannot be cloned as formatting: refuse before publication if it cannot be projected without copying control ownership. Do not turn add_row into clone_row plus ad hoc text clearing.
+Choose `Table.add_row() -> Row` as empty append, backed by checked native add_empty_table_row(table_index)->Result<usize>. Copy last direct row's row/cell formatting and horizontal logical occupancy, then replace each cell content with its required empty paragraph. Do not copy nested content, bookmarks/comments, bindings, drawing relationships or paragraph identities. Clear vMerge on all new cells so append does not extend an existing vertical merge or start a fresh multirow region inadvertently. The native bounded Insert Below control below establishes the ordinary vertical-merge reset rule. Omitted/wrapped row cases retain their separate tests. A last row with gridBefore/gridAfter keeps those omissions and gridSpan occupancy. A table without a last direct row refuses until a separate initial-row contract exists. Wrapped row/cell control topology cannot be cloned as formatting: refuse before publication if it cannot be projected without copying control ownership. Do not turn add_row into clone_row plus ad hoc text clearing.
 
 Keep proposed Python insert_column(index:int,*,before:bool=True)->None and delete_column(index:int)->None. Index identifies an existing logical tblGrid column, in0..column_count. Insertion boundary is index or index+1. No negative indexing for mutation, no guessed clamping, and invalid inputs fail before native mutable access. Native document methods use document-wide recursive table ordinal, as documented for clone_table_row at document.rs:19788 and implemented by table/table_mut at19769/19778. The current Python ContentPath top segment is not sufficient for arbitrary nested table translation: table.rs:23 finds the first Body segment. Resolve the full existing ContentPath to the checked native physical table before choosing its recursive ordinal. Do not claim nested parity by feeding a body index to a tables-only ordinal.
 
@@ -456,3 +458,30 @@ warning. Complete controls/receipt are at
 /private/tmp/S91-F-X202-style-policy-control. Incremental contribution receipt
 SHA0350451b0e26b764d0adb4a6ec756478881bf62ed22e436023378dceced27b40.
 No source, baseline, completed acceptance or new F-ID follows from intake.
+
+## Authenticated native positive pairing and empty-row control
+
+Actual Word16.113.2 build16.113.26092012 authored the uniqueX202_NATIVE_PAIR
+textbox through native Draw Text Box, producing one qualified Choice/WPS
+and one Fallback/VML owner with matching paragraph text. No synthetic
+alternate was inserted. A native2x2 table with first-column vMerge then
+Insert Below fromB2 retains A1/A2 and B1/B2, grid4428/4428, and creates
+a third row of independent empty cells without vMerge.
+
+Normal reopen/save preserves document XML and all relationships exactly.
+One-page native Letter PDF text-bearing streams, extracted text and90dpi
+pixels agree across reopen. Root verified23 immutable study artifacts plus
+the unchanged original/template copy, independently parsed qualified native
+branches/new-row facts and visually inspected the native page. Complete
+study receiptSHA4b24d87e89936f97a5d9fb5ed06c17326479b6d566f75bb2ccca1592c1af73ef
+resides in /private/tmp/S91-F-X202-native-pair-table.
+
+The failed UI font selection is explicitly qualified in
+font-input-qualification.md: saved table has no authenticated Arial12 run
+properties, so no font-parity claim is made. Actual Poppler26.09.0 was used
+for this study, not the older pinned26.01 corpus oracle. The textbox carrier
+extends beyond the page edge. This provides genuine topology and native-row
+evidence, not geometry fidelity or passing repository replacement/rendering.
+Ordinary pairing success, both edited copies, logical count1, actual native
+reopen and complete no-op/refusal/source-preservation gates still must pass
+on the implementation. No tracked binary fixture or new source file is added.
