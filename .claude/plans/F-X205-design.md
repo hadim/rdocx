@@ -1,9 +1,9 @@
 # F-X205, Complete Python PowerPoint text fill and export parity
 
-**Status**: draft
+**Status**: approved
 **Sprint**: S91
 **Size**: L
-**Depends on**: F-X194, F-X197
+**Depends on**: F-X194, F-X195, F-X197
 **Issue**: 308, captured in S91-intake-issues.json on 2026-10-09
 **Prerequisites**: F-X194 and F-X197
 **Implementation**: not claimed, no source changes or new gate evidence
@@ -249,7 +249,7 @@ copied from another worker.
 Wrapper exposure should preserve existing defaults. Actual native semantic
 changes require measured declared deltas and separate labelled commits before
 any exclusive baseline update. The risk discussion above identifies those
-possible changes. No baseline movement or implementation is approved by this draft.
+possible changes. No baseline movement is approved by this design. Implementation waits for completed dependencies and exclusive source claims.
 
 ## Implementation checklist
 
@@ -263,20 +263,13 @@ possible changes. No baseline movement or implementation is approved by this dra
 
 ## Open questions
 
-1. Choose exact Python bullet/fill/property/media/export signatures and enum
-   values, using python-pptx names where present and concrete current types.
-2. Select deterministic fresh metadata values without changing imported or
-   user-written fields, and obtain authenticated Office geometry provenance.
-3. Confirm missing native application/custom properties and JPEG/TIFF API
-   inventory, then define the smallest checked facade operations.
-4. Define ODP read/write return types that retain diagnostics and loss facts.
-5. Clarify solid transparency ownership versus shared colour alpha transforms
-   with X197, including theme brightness editing and preserved metadata.
-6. Determine which new native render semantics, rather than mere exposure,
-   are required after source-built regressions for language and gradients.
-
-Resolve these through design and source evidence. Do not silently reduce the
-issue acceptance or request approval for already authorized nested colours.
+Resolved by the concrete formatting/fill/property/export contract below,
+fixed fresh metadata and authenticated native geometry. Notes/handout absence
+is a read-only synthetic-surface case, not malformed-owner fallback. Exact
+common JPEG/TIFF/ODP result signatures and same-provider font inputs are
+selected. Language/gradient Base failures, output comparison and package/hash
+review remain required implementation tests, not claims of completed parity.
+No outstanding user product choice or speculative new source module remains.
 
 ## PR318 contribution intake
 
@@ -472,3 +465,23 @@ while preserving malformed existing-owner refusal and imported master
 geometry. The study performs no renderer comparison and covers only this
 two-slide deck. The original exact-line-spacing overflow remains visible
 inside its slide image. Other export and rendering gates remain due.
+
+## Approved F-X205 final technical contract
+
+Close questions2,3 and5 from the already resolved appendices. Fresh native/Python presentations use created=modified="2000-01-01T00:00:00Z", with creator/author, lastModifiedBy and description absent. Save never injects an ambient clock or replaces imported/user fields. The additive checked set/remove property facade at plan:310-318, retained-core XML patch at329 and live property owners at333 are the chosen policy. Custom property value, PID/fmtid/order and FileTime semantics reuse X203. Solid-fill transparency belongs to its alpha transform, not a new RGB conversion. X197 owns colours and brightness, X195 owns all caller-font entrypoints, X194 owns cell text, and X211 owns stable gradient-stop identity. F-X195 is a formal font-provider dependency. X205 owns its stable gradient-stop identity once, with the shared X211 contract defining later corpus validation rather than creating a dependency cycle. Do not create a new colour parser or lifetime implementation.
+
+Close question1 with the contributor's concrete established spellings, adapted to checked operations and existing enum files:
+
+- Font.baseline: float|None, finite fraction[-1,1], truncation to DrawingML100000 units. Font.spacing: Length|None getter, int|None setter in existing EMU convention, checked conversion to text hundredths of a point. Font.language: str|None, Font.east_asian_name and complex_script_name: str|None. Clear only the selected field. Validate XML text and preserve opaque attributes. Do not adopt the new language enum module. Latin uses existing Font.name.
+- Paragraph.auto_number: the complete existing DrawingML TextAutoNumber scheme strings, exposed as a Literal in the existing stub, not a new enum module. auto_number_start: int|None with schema range1..32767. bullet_color uses X197's RGBColor/hex extractor, bullet_font str|None, bullet_size finite fraction0.25..4.0|None. Clear removes only that owned property. Choice edits preserve colour/font/size. Imported point-size bullets remain intact on read and unrelated edits, with no claim that None proves follow-text when the raw kind is points.
+- FillFormat retains solid/background/gradient/patterned/picture(image_file), pattern enum in the existing enum file, gradient_angle finite degrees, gradient_path Literal[circle,rect,shape]|None, gradient_stops with append/get/delete, and stop.position finite[0,1]. None path means linear. Existing stop identities and whole-fill replacement follow the plan:355 contract. Add FillFormat.transparency: float|None, finite[0,1], defined as1-opacity for a solid fill. Setter requires existing solid fill and replaces only its alpha transform. Getter never creates a fill. Preserve line/shadow semantics.
+- Core/app/custom proxies retain the plan:333 names and actual native optional types. created/modified use native lexical String values, not an implicit datetime/timezone conversion. Core author maps creator and comments maps description. Custom get returns immutable typed property|None, set/delete are checked, iteration immutable and ordered. Section getter tuple[Section,...], set_sections(list[tuple[str,list[int]]]) reuses current native validation and stable slide-ID conversion.
+- ShapeCollection.add_movie(movie_file,left,top,width,height,poster_frame_image=None,mime_type=None)->Shape uses existing native add_media settings and defaults. Slide.media->tuple[MediaInfo,...], extract_media(shape_id)->bytes|None, replace_media(shape_id,media_file,mime_type=None)->None and remove_media(shape_id)->None remain owner-aware. All input validation, fill allocation and reference pruning precede one native publication.
+
+Close questions3/4 export signatures using the captured PR318 stub: render_slides(*,dpi=150.0,format="png",quality=None,transparent=False,slides=None), PNG/JPEG returns list[bytes] with one image per selected slide, TIFF returns one multipage bytes value in selected order. This format-dependent return is explicit in overloads, not hidden. Existing single-slide PNG remains compatible. Add minimal checked JPEG/TIFF encoding in current native lib.rs using existing image support and shared layout/font pipeline. JPEG quality applies only to JPEG, transparency refuses for JPEG, invalid format/DPI/quality/selection fails before rendering. to_pdfa(profile="pdfa-2b")->bytes supports exactly pdfa-2b/pdfa-3b. to_handout_pdf(slides_per_page=6)->bytes and render_all_handouts(slides_per_page=6,dpi=150.0)->list[bytes] support exactly1,2,3,4,6,9. Existing to_notes_pdf/render_all_notes remain. Add the integrated X195 keyword font controls to every rendering route. Preserve report-bearing native OdpReadResult/OdpWriteResult: from_odp(path|bytes)->tuple[Presentation,list[tuple[path,message]]], to_odp()->tuple[bytes,list[tuple[path,message]]], save_odp(path)->list[tuple[path,message]], retaining ordered diagnostics exactly, not bytes-only convenience that discards loss.
+
+Close the real default-surface edge: notes/handout export is read-only and succeeds when a legal owner is absent. Existing valid owner geometry/theme is authoritative. An absent handoutMaster creates an in-memory neutral handout surface using existing HandoutLayout and export_page_size/handout_targets, not a saved package part. An absent notesSlide yields a blank note body for that slide, as already supported. If the whole notesMaster is absent, use an in-memory fresh notes surface from the approved native-authenticated notes geometry. Do not mask a present malformed, duplicate, dangling, wrong-content-type or external owner as absence. Preserve refusal for those cases. Use presentation notesSz for logical page dimensions, rather than importing the macOS A4 paper setting. No ambient print date is injected. Synthetic defaults must not mutate to_bytes, metadata or owner generations.
+
+Geometry is resolved from the authenticated template comparison and notes comparison, not page containment guesses. Fresh master/all11-layout rectangles use the authenticated Office16:9 projection. Notes slide-image/body exact rectangles are recorded at plan:389-394. For differing header/date/footer/number heights, choose the recorded actual native values rather than claim PR318 byte equivalence. Imported geometry is unchanged. Native Print Notes/Hand-outs now supplies positive visible evidence: two notes pages including one blank-body page and one two-frame handout, even with no notesSlide2 or handoutMaster. This closes the provenance question. It does not prove local rendering.
+
+Question6 is an implementation acceptance decision: implement actual requested supported linear/path gradient and pattern rendering plus baseline/spacing/script-font/language propagation where current output demonstrably lacks it. Structure-only round trips and Google Slides advisory degradation do not satisfy native visible acceptance. Keep explicit diagnostics for imported unsupported cases without silently reducing Issue308 requested authoring support. Base repro, pixels, fonts, export signatures, typing, native reopen, package/hash deltas and gates remain implementation obligations.

@@ -1,6 +1,6 @@
 # F-X208, Author PowerPoint footer fields themes and transitions
 
-**Status**: draft
+**Status**: approved
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X197
@@ -223,12 +223,14 @@ by this draft.
 
 ## Open questions
 
-Native hf-only/new-slide and dialog persistence rules are genuine remaining
-evidence gaps, not user preference questions. Resolve with captures first.
-Then specify title suppression and missing-placeholder synthesis, legal flag
-owner updates, displayed-number plumbing and supported automatic date cache
-context. Synchronize X209 theme-owner/proxy design before source claims and
-X204 CLI command ownership before shared main.rs/commands.rs writes.
+Resolved by the native Apply/ApplyAll controls and ten-case legal-owner matrix,
+plus the exact live footer/title/date/cache/transition contract below. Author
+slide-owned placeholders using qualified supported template geometry, preserve
+legal owner metadata and refuse ambiguity atomically. Same-pass displayed
+numbers and deterministic field identities use the existing providers.
+Branded/multi-master/new-slide native and local output comparisons remain
+implementation gates. No ambient date clock, guessed geometry or new module
+is authorized.
 
 ## Actual native design evidence
 
@@ -324,3 +326,19 @@ candidate, generate unique field IDs and resolve current owner/theme state.
 Preserve placeholder identity, transformed geometry and qualified relationships.
 The copied new files, libc dependency and public result field are not implicitly
 authorized. Contributor hashes remain inputs to inspect, not local gate evidence.
+
+## Approved F-X208 final technical contract
+
+Replace the stale Open questions at plan:224 with the resolved native owner contract. Ten accepted graph-preserving controls show occupied master/layout dt/ftr/sldNum placeholders are invisible without slide-owned placeholders under absent/empty/on/off/conflicting hf, equal/distinct idx and title settings. Ordinary master text remains visible. The Apply/ApplyAll captures prove actual slide-owned fields, legal master/layout hf, firstSlideNum0 and title suppression. No slide-root p:hf is legal. These bounded native facts close the design question, while full branded/multi-master/cached-field implementation controls remain required.
+
+Select native HeaderFooter/HeaderFooterDate and existing-file operations as contribution ingredients, not new header_footer.rs/transition.rs modules or libc. Presentation.set_header_footer(slide_number=True,footer=None,date=None,hide_on_title=True,date_format="datetime1",*,date_cache=None)->None is the exact complete-replacement Python operation. date None disables, date="auto" creates an automatic field, every other string is fixed text. date_cache: str|None explicitly supplies automatic cached text. No ambient clock or silent US locale calculation. Automatic field type supports datetime1..datetime13 and retained imported aliases without claiming universal locale rendering. Empty supplied cache is distinct from absent. Without cache preserve a compatible existing automatic cache, otherwise author an uncached field and report that static rendering has no computed date. Fixed date/footer text validate XML before access. A separate field helper can format explicitly supplied Gregorian year/month/day for datetime1..7 with documented en-US output, refusing time-only formats unless an explicit time context exists. Native PowerPoint may refresh automatic fields on open. Do not use its captured current date as a deterministic expected value.
+
+Slide.header_footer is a live owner proxy with the contributor spellings slide_number/footer/date/date_format, adding read-only presence/mode/source metadata so absence is not flattened to false. Setters patch only that field on the latest state. Local operations change only that slide's owned placeholders. Deck operation stages every slide plus legal owner flags once. Patch existing master/layout known flags while retaining hdr and opaque fields, unless a separately explicit header operation requests them. Repeated identical assignment is a source-proven no-op. Missing/duplicate or ambiguous template geometry refuses atomically rather than guessed synthesis. Resolve supported layout placeholder first, then qualified corresponding master placeholder by type/idx. retain grouped geometry and remap owner relationships or refuse unsupported carriers. Default and branded acceptance fixtures must supply supported footer geometry. Ordinary matching-text shapes never qualify.
+
+Title means the linked layout's qualified type="title", not position zero or localized name. hide_on_title removes only owned latent placeholders on those slides and updates legal layout/master title flags consistently. A missing/unknown layout type is not guessed to be title. New-slide authoring uses the selected layout/master effective legal enabled state and qualified template placeholders. an absent hf alone does not invent enabled authored fields. This is an explicit authoring policy, not a claim that all native templates materialize identically. Native new-slide variants remain operation tests, not a design-approval wait.
+
+firstSlideNum is optional typed root state, absent defaults1 and explicit0 is valid. Python slide_number_start:int|None getter/setter retains presence. Use checked schema range and overflow, displayed=first+physical_index. Carry displayed numbers to static/timeline slide field evaluation, without changing physical page IDs, output selection/names or notes/handout page numbering. GUIDs are deterministic, unique within the complete presentation field identity inventory, not fixed constants reused per field kind. Preserve retained IDs and allocate new ones through the existing accepted allocator. Qualified a:fld and schema child order are shared authoring primitives.
+
+Transitions keep contributor live Slide.transition spellings type/direction/duration/advance_on_click/advance_after and apply_to_all. Preserve explicit optional presence in native/read metadata. Durations finite nonnegative seconds convert by checked truncation to milliseconds. Only the selected qualified property is patched, retaining sound, extensions, unrelated transition attributes and timing. None removes transition only. Implement typed/timeline none/fade/push/wipe/split/cover/uncover/cut/zoom with effect-specific directions and atomic all-slide rollback. Unknown retained effects remain readable with unsupported metadata. PR324 Other effects and whole-subtree replacement are implementation gaps, not an approved shortcut.
+
+Theme reads use the already approved X209 master-part live owner contract and X197 colours, not detached snapshots. X208 can implement its read extraction once and consume X209's resolved lifecycle without waiting for provider completion to approve design. Formal source claim depends on actual providers, shared file leases and global draft barrier. CLI footer/inspect remains X208's declared surface, coordinated with X204 serialization, output refusal and reference tests. No new F-ID, module/dependency, baseline movement or unpublished contributor test claim is authorized by this memo.

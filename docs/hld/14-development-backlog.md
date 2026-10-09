@@ -6969,7 +6969,7 @@ Resolve [Issue308](https://github.com/tensorbee/rdocx/issues/308) in S91,
 part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
 coverage checklist. Reuse cell text frames and colour formats. Add run baseline/spacing/language/script fonts, numbered bullets and bullet attributes, gradient/pattern/picture/transparency fills, background fills, table style/banding, core/app/custom properties, sections, media lifecycle, JPEG/TIFF, notes/handout PDF, PDF/A and ODP. Repair inherited template metadata and 16:9 placeholder geometry with reviewed deterministic behavior deltas.
 
-**Depends on**: F-X194, F-X197.
+**Depends on**: F-X194, F-X195, F-X197.
 **Test gate**: regression. Reproduce each missing operation or reported defect
 through the installed public API on the claimed Base before implementation.
 Exercise all Issue308 acceptance criteria through save/reopen, native
