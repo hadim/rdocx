@@ -4875,5 +4875,59 @@ def test_masters_layouts_and_themes_from_python(tmp_path):
     assert deck.slides[0].shapes.title.text_frame.text == "Kept"
     assert not deck.slide_layouts[0].show_master_shapes
     deck.apply_theme(reopened)
+    with open(path, "rb") as brand:
+        deck.apply_theme(brand)
     with pytest.raises(TypeError, match="source must be a path"):
         deck.apply_theme(42)
+
+
+def test_master_layout_collections_hyperlinks_and_colours_from_python(tmp_path):
+    from rpptx import Inches, Presentation
+
+    _write_tiny_png(tmp_path / "logo.png")
+    prs = Presentation()
+    prs.slides.add_slide(prs.slide_layouts[1])
+    layouts = prs.slide_master.slide_layouts
+    assert len(layouts) == len(prs.slide_layouts) and layouts.index(prs.slide_layouts[2]) == 2
+    assert layouts.get_by_name("Title Only") == prs.slide_layouts.get_by_name("Title Only")
+    assert layouts.get_by_name("Nope") is None and prs.slide_layouts.get_by_name("Nope", 7) == 7
+    copy = prs.slide_master.slide_layouts.duplicate(prs.slide_layouts[1])
+    prs.slide_master.slide_layouts.remove(copy)
+    with pytest.raises(ValueError, match="in use"):
+        prs.slide_master.slide_layouts.remove(prs.slide_layouts[1])
+
+    # A master with one layout keeps it.
+    single = Presentation()
+    while len(single.slide_layouts) > 1:
+        single.slide_layouts.remove(single.slide_layouts[1])
+    assert len(single.slide_layouts) == 1
+    with pytest.raises(ValueError, match="only slide-layout of its slide master"):
+        single.slide_layouts.remove(single.slide_layouts[0])
+
+    # A clickable logo on the master.
+    logo = prs.slide_master.shapes.add_picture(tmp_path / "logo.png", Inches(8.5), Inches(0.1))
+    logo.click_action.hyperlink.address = "https://example.com"
+    logo = prs.slide_master.shapes[len(prs.slide_master.shapes) - 1]
+    assert logo.click_action.hyperlink.address == "https://example.com"
+    with pytest.raises(ValueError, match="slide shapes only"):
+        logo.click_action.target_slide
+    path = tmp_path / "linked.pptx"
+    prs.save(path)
+    reopened = Presentation(path)
+    assert not reopened.validate()
+    master_logo = reopened.slide_master.shapes[len(reopened.slide_master.shapes) - 1]
+    assert master_logo.click_action.hyperlink.address == "https://example.com"
+    master_logo.click_action.hyperlink.address = None
+    assert master_logo.click_action.hyperlink.address is None
+
+    # One colour parser for every colour setter.
+    font = prs.slide_master.text_styles.title[0].font
+    font.color = "#1A237E"
+    assert font.color == "1A237E"
+    run = prs.slides[0].shapes.title.text_frame
+    run.text = "Colour"
+    paragraph_font = prs.slides[0].shapes.title.text_frame.paragraphs[0].runs[0].font
+    paragraph_font.color = (1, 2, 3)
+    assert paragraph_font.color == "010203"
+    with pytest.raises(TypeError, match="font color must be an RGBColor"):
+        paragraph_font.color = 3.5

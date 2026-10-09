@@ -248,25 +248,60 @@ impl PySlideLayout {
 pub struct PySlideLayoutCollection {
     presentation: Py<PyPresentation>,
     path: ContentPath,
+    /// The master whose layouts this collection holds, or every master's
+    /// layouts in order for `prs.slide_layouts`.
+    master: Option<usize>,
 }
 
 impl PySlideLayoutCollection {
     pub(crate) fn new(presentation: Py<PyPresentation>, path: ContentPath) -> Self {
-        Self { presentation, path }
+        Self {
+            presentation,
+            path,
+            master: None,
+        }
+    }
+
+    /// The presentation-wide indices of this collection's layouts, in order.
+    fn layouts(&self, py: Python<'_>) -> PyResult<Vec<usize>> {
+        let presentation = self.presentation.borrow(py);
+        validate_path(
+            py,
+            &presentation,
+            &self.path,
+            "slide layout collection",
+            &match self.master {
+                Some(master) => format!(".slide_masters[{master}].slide_layouts"),
+                None => ".slide_layouts".to_owned(),
+            },
+        )?;
+        match self.master {
+            None => Ok((0..presentation.inner.layout_count()).collect()),
+            Some(master) => presentation
+                .inner
+                .master_layouts(master)
+                .ok_or_else(|| PyIndexError::new_err("slide master index out of range")),
+        }
     }
 
     fn len(&self, py: Python<'_>) -> PyResult<usize> {
-        validate_path(
-            py,
-            &self.presentation.borrow(py),
-            &self.path,
-            "slide layout collection",
-            ".slide_layouts",
-        )?;
-        Ok(self.presentation.borrow(py).inner.layout_count())
+        Ok(self.layouts(py)?.len())
     }
 
-    fn item(&self, py: Python<'_>, index: usize) -> PyResult<Py<PySlideLayout>> {
+    /// The layout at a position of this collection.
+    fn item(&self, py: Python<'_>, position: usize) -> PyResult<Py<PySlideLayout>> {
+        let index = match self.master {
+            None => position,
+            Some(_) => *self
+                .layouts(py)?
+                .get(position)
+                .ok_or_else(|| PyIndexError::new_err("slide layout index out of range"))?,
+        };
+        self.layout(py, index)
+    }
+
+    /// A handle on one layout by its presentation-wide index.
+    fn layout(&self, py: Python<'_>, index: usize) -> PyResult<Py<PySlideLayout>> {
         Py::new(
             py,
             PySlideLayout {
@@ -275,6 +310,23 @@ impl PySlideLayoutCollection {
                 path: self.path.clone(),
             },
         )
+    }
+
+    /// The position of a layout in this collection and its presentation-wide index.
+    fn find(&self, py: Python<'_>, slide_layout: &Bound<'_, PyAny>) -> PyResult<(usize, usize)> {
+        let layouts = self.layouts(py)?;
+        let layout = slide_layout.extract::<PyRef<'_, PySlideLayout>>()?;
+        if !layout.presentation.is(&self.presentation) {
+            return Err(PyValueError::new_err(
+                "layout not in this SlideLayouts collection",
+            ));
+        }
+        layout.validate(py)?;
+        let position = layouts
+            .iter()
+            .position(|index| *index == layout.index)
+            .ok_or_else(|| PyValueError::new_err("layout not in this SlideLayouts collection"))?;
+        Ok((position, layout.index))
     }
 }
 
@@ -290,29 +342,54 @@ impl PySlideLayoutCollection {
         })
     }
 
-    /// Returns the zero-based index of a layout of this presentation.
+    /// Returns the zero-based position of a layout in this collection.
     fn index(&self, py: Python<'_>, slide_layout: &Bound<'_, PyAny>) -> PyResult<usize> {
-        self.len(py)?;
-        let layout = slide_layout.extract::<PyRef<'_, PySlideLayout>>()?;
-        if !layout.presentation.is(&self.presentation) {
-            return Err(PyValueError::new_err(
-                "layout not in this SlideLayouts collection",
-            ));
+        Ok(self.find(py, slide_layout)?.0)
+    }
+
+    /// Returns the first layout named `name`, or `default`, like
+    /// python-pptx `SlideLayouts.get_by_name`.
+    #[pyo3(signature = (name, default = None))]
+    fn get_by_name(
+        &self,
+        py: Python<'_>,
+        name: &str,
+        default: Option<Py<PyAny>>,
+    ) -> PyResult<Option<Py<PyAny>>> {
+        let found = {
+            let layouts = self.layouts(py)?;
+            let presentation = self.presentation.borrow(py);
+            layouts
+                .into_iter()
+                .find(|index| presentation.inner.layout_name(*index) == Some(name))
+        };
+        match found {
+            Some(index) => Ok(Some(self.layout(py, index)?.into_any())),
+            None => Ok(default),
         }
-        layout.validate(py)?;
-        Ok(layout.index)
     }
 
     /// Removes a layout no slide uses, like python-pptx
-    /// `SlideLayouts.remove`. Layout handles are invalidated.
+    /// `SlideLayouts.remove`. The last layout of a master stays. Layout
+    /// handles are invalidated.
     fn remove(&self, py: Python<'_>, slide_layout: &Bound<'_, PyAny>) -> PyResult<()> {
-        let index = self.index(py, slide_layout)?;
+        let (_, index) = self.find(py, slide_layout)?;
         let mut presentation = self.presentation.borrow_mut(py);
         let used = presentation.inner.layout_slides(index);
         if !used.is_empty() {
             return Err(PyValueError::new_err(format!(
                 "cannot remove slide-layout in use by one or more slides (slides {used:?}), set their slide_layout to another layout first"
             )));
+        }
+        let siblings = presentation
+            .inner
+            .layout_master(index)
+            .and_then(|master| presentation.inner.master_layouts(master))
+            .map_or(0, |layouts| layouts.len());
+        if siblings <= 1 {
+            return Err(PyValueError::new_err(
+                "cannot remove the only slide-layout of its slide master",
+            ));
         }
         presentation
             .inner
@@ -330,7 +407,7 @@ impl PySlideLayoutCollection {
         py: Python<'_>,
         slide_layout: &Bound<'_, PyAny>,
     ) -> PyResult<Py<PySlideLayout>> {
-        let index = self.index(py, slide_layout)?;
+        let (_, index) = self.find(py, slide_layout)?;
         let mut presentation = self.presentation.borrow_mut(py);
         let copy = presentation
             .inner
@@ -349,41 +426,16 @@ impl PySlideLayoutCollection {
         )
     }
 
-    fn __iter__(&self, py: Python<'_>) -> PyResult<Py<PySlideLayoutIterator>> {
-        self.len(py)?;
-        Py::new(
-            py,
-            PySlideLayoutIterator {
-                presentation: self.presentation.clone_ref(py),
-                path: self.path.clone(),
-                index: 0,
-            },
-        )
-    }
-}
-
-#[pyclass]
-struct PySlideLayoutIterator {
-    presentation: Py<PyPresentation>,
-    path: ContentPath,
-    index: usize,
-}
-
-#[pymethods]
-impl PySlideLayoutIterator {
-    fn __iter__(slf: Py<Self>) -> Py<Self> {
-        slf
-    }
-
-    fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<Py<PySlideLayout>>> {
-        let collection =
-            PySlideLayoutCollection::new(self.presentation.clone_ref(py), self.path.clone());
-        if self.index >= collection.len(py)? {
-            return Ok(None);
-        }
-        let index = self.index;
-        self.index += 1;
-        collection.item(py, index).map(Some)
+    fn __iter__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let items = self
+            .layouts(py)?
+            .into_iter()
+            .map(|index| self.layout(py, index))
+            .collect::<PyResult<Vec<_>>>()?;
+        PyTuple::new(py, items)?
+            .into_any()
+            .try_iter()
+            .map(Bound::into_any)
     }
 }
 
@@ -1570,23 +1622,17 @@ impl PySlideMaster {
         )
     }
 
-    /// The layouts this master owns, as `prs.slide_layouts` members.
+    /// The layouts this master owns, like python-pptx
+    /// `slide_master.slide_layouts`, with `remove`, `duplicate`,
+    /// `get_by_name` and `index` scoped to this master.
     #[getter]
-    fn slide_layouts<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+    fn slide_layouts(&self, py: Python<'_>) -> PyResult<Py<PySlideLayoutCollection>> {
         self.validate(py)?;
-        let layouts = self
-            .presentation
-            .borrow(py)
-            .inner
-            .master_layouts(self.index)
-            .ok_or_else(|| PyIndexError::new_err("slide master index out of range"))?;
-        let collection =
+        let mut collection =
             PySlideLayoutCollection::new(self.presentation.clone_ref(py), self.path.clone());
-        let items = layouts
-            .into_iter()
-            .map(|index| collection.item(py, index))
-            .collect::<PyResult<Vec<_>>>()?;
-        PyTuple::new(py, items)
+        collection.master = Some(self.index);
+        collection.layouts(py)?;
+        Py::new(py, collection)
     }
 
     /// Two handles are equal when they name the same master of one presentation.

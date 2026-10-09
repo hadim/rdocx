@@ -535,7 +535,7 @@ def exercise_rpptx_header_footer_theme_transition_types(presentation: Presentati
     heading: str = theme.fonts.major.latin
     body: str = theme.fonts.minor.east_asian
     masters: int = len(presentation.slide_masters)
-    layouts: tuple[SlideLayout, ...] = master.slide_layouts
+    layouts: SlideLayoutCollection = master.slide_layouts
     slide.shapes[0].text_frame.paragraphs[0].add_field("slidenum")
     (numbered, footer, date, date_format, kind_name, accent, heading, body, masters, layouts)
 
@@ -565,6 +565,7 @@ def exercise_rpptx_master_layout_theme_types(presentation: Presentation, logo: P
     level: TextStyleLevel = styles.body[0]
     level.bullet = "\u2022"
     level.bullet_color = "FF6600"
+    level.font.color = "#1A237E"
     level.font.size = 20 * 12700
     level.left_indent = 342900
     layout = presentation.slide_layouts[0]
@@ -574,11 +575,16 @@ def exercise_rpptx_master_layout_theme_types(presentation: Presentation, logo: P
     layout.background.fill.picture(logo)
     used: tuple[Slide, ...] = layout.used_by_slides
     copy: SlideLayout = presentation.slide_layouts.duplicate(layout)
-    presentation.slide_layouts.remove(copy)
+    presentation.slide_master.slide_layouts.remove(copy)
+    named: SlideLayout | None = presentation.slide_master.slide_layouts.get_by_name("Title Slide")
+    found: SlideLayout | None = presentation.slide_layouts.get_by_name("Nope", None)
+    (named, found)
     presentation.slides[0].show_master_shapes = False
     hidden: bool = presentation.slides[0].show_master_shapes
     placeholders: list[Shape] = list(master.placeholders)
     presentation.apply_theme("brand.potx", import_master=True)
+    with open("brand.potx", "rb") as brand:
+        presentation.apply_theme(brand)
     (used, hidden, placeholders)
 
 

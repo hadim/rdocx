@@ -5,8 +5,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBool, PyFloat, PyList, PySlice, PyString};
 use rpptx::{
     AutofitMode, CT_TextCharacterProperties, CT_TextParagraphProperties, ColorChoice, Emu, Fill,
-    RgbColor, SolidFill, TextAlignment, TextAnchor, TextBulletCharacter, TextBulletChoice,
-    TextBulletColor, TextFont, TextNoBullet, TextSpacing, TextStrike, TextUnderline,
+    SolidFill, TextAlignment, TextAnchor, TextBulletCharacter, TextBulletChoice, TextBulletColor,
+    TextFont, TextNoBullet, TextSpacing, TextStrike, TextUnderline,
 };
 
 use crate::normalize_index;
@@ -1289,28 +1289,6 @@ fn underline_value(underline: TextUnderline) -> i32 {
     }
 }
 
-/// Reads a font colour: an `RGBColor` or any triple of 0 to 255 integers,
-/// or a six-digit hexadecimal string such as `3C2F80`.
-fn font_color(value: &Bound<'_, PyAny>) -> PyResult<RgbColor> {
-    if value.is_instance_of::<PyString>() {
-        return RgbColor::parse(&value.extract::<String>()?).map_err(|_| {
-            PyValueError::new_err("font color strings must contain six hexadecimal digits")
-        });
-    }
-    let (red, green, blue) = value.extract::<(i64, i64, i64)>().map_err(|_| {
-        PyTypeError::new_err("font color must be an RGBColor, a six-digit hex string, or None")
-    })?;
-    let channel = |value: i64| {
-        u8::try_from(value)
-            .map_err(|_| PyValueError::new_err("font color channels must be from 0 to 255"))
-    };
-    Ok(RgbColor::new(
-        channel(red)?,
-        channel(green)?,
-        channel(blue)?,
-    ))
-}
-
 #[pymethods]
 impl PyFont {
     #[getter]
@@ -1443,7 +1421,7 @@ impl PyFont {
         let color = match value {
             None => None,
             Some(value) if value.is_none() => None,
-            Some(value) => Some(font_color(value)?),
+            Some(value) => Some(crate::dml::color_argument(value, "font color")?),
         };
         self.update(py, |properties| {
             let Some(color) = color else {
@@ -1725,8 +1703,9 @@ impl PyTextStyleLevel {
 
     /// The bullet character, `False` for no bullet, or `None` to inherit,
     /// as `paragraph.bullet` reads it. PowerPoint draws the character in the
-    /// level's bullet font, Arial in the default template, and may show nothing
-    /// for a character that font lacks, so prefer one such as `•` or `–`.
+    /// level's bullet font, Arial in the default template, and drops some
+    /// characters rpptx still draws, such as `▪` on a Mac, so prefer `•` or
+    /// `–`, which both draw alike.
     #[getter]
     fn bullet(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         let bullet = self.read(py, |properties| properties.and_then(read_bullet))?;

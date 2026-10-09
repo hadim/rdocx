@@ -120,7 +120,9 @@ pub(crate) fn part_of(path: &ContentPath) -> PyResult<rpptx::PartRef> {
 }
 
 /// The slide a content path starts in. Operations that only slides
-/// support, such as hyperlinks to slides, refuse layout and master shapes.
+/// support, such as `click_action.target_slide`, replacing or cropping a
+/// picture's image, effective geometry and media, raise `ValueError` on
+/// layout and master shapes. `click_action.hyperlink` works on all three.
 pub(crate) fn slide_index(path: &ContentPath) -> PyResult<usize> {
     match part_of(path)? {
         rpptx::PartRef::Slide(index) => Ok(index),
@@ -900,7 +902,7 @@ impl PyShapeHyperlink {
             .ok_or_else(|| PyValueError::new_err("shape has no id"))?;
         presentation
             .inner
-            .shape_hyperlink_address(slide_index(&self.path)?, shape_id)
+            .part_shape_hyperlink_address(part_of(&self.path)?, shape_id)
             .map(|address| address.map(str::to_owned))
             .map_err(|error| rpptx_to_pyerr(py, error))
     }
@@ -920,8 +922,8 @@ impl PyShapeHyperlink {
             .ok_or_else(|| PyValueError::new_err("shape has no id"))?;
         presentation
             .inner
-            .set_shape_hyperlink(
-                slide_index(&self.path)?,
+            .set_part_shape_hyperlink(
+                part_of(&self.path)?,
                 shape_id,
                 value.filter(|value| !value.is_empty()),
             )

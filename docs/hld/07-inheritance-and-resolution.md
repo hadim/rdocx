@@ -393,6 +393,15 @@ not inherit opaque XML or hyperlink actions. `cap="all"` and `cap="none"`
 overlay as character properties through the same chain. Other capitalization
 values remain unmodelled and preserved.
 
+Bullet characters are a known divergence, measured against a PowerPoint for
+Mac PDF export for issue 312. PowerPoint drew no `▪` (U+25AA) bullet with
+`a:buFont` Arial, Calibri or Segoe UI Symbol, nor without `a:buFont`, while
+rpptx draws it through font fallback. It drew Wingdings `§` as a square, which
+rpptx draws as a literal `§` because symbol-font remapping is not modelled.
+`•` and `–` in Arial draw alike in both. Which characters PowerPoint drops
+depends on the fonts installed, so rpptx does not imitate the drop, and the
+API documentation steers callers to `•` and `–`.
+
 Each paragraph also resolves `a:endParaRPr` as a final character-property
 overlay on the same inherited paragraph style. This terminal style supplies
 the font, size, and metrics for an empty paragraph. It does not replace the

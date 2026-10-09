@@ -434,7 +434,8 @@ impl PyPresentation {
     // Masters, layouts and themes (#312).
 
     /// Applies the theme of a `.pptx`, `.potx` or `.thmx` file, of its
-    /// bytes, or of another `Presentation` to every slide master: colours,
+    /// bytes or a binary file object, or of another `Presentation` to every
+    /// slide master: colours,
     /// fonts and effects (rpptx extension).
     ///
     /// With `import_master`, the source's first master design comes too:
@@ -456,12 +457,18 @@ impl PyPresentation {
             && !source.is_instance_of::<pyo3::types::PyString>()
         {
             self.inner.apply_theme_bytes(&bytes, import_master)
+        } else if source.hasattr("read")? {
+            if source.hasattr("seek")? {
+                source.call_method1("seek", (0,))?;
+            }
+            let bytes = source.call_method0("read")?.extract::<Vec<u8>>()?;
+            self.inner.apply_theme_bytes(&bytes, import_master)
         } else if let Ok(path) = source.extract::<PathBuf>() {
             let bytes = std::fs::read(&path)?;
             self.inner.apply_theme_bytes(&bytes, import_master)
         } else {
             return Err(pyo3::exceptions::PyTypeError::new_err(
-                "source must be a path to a .pptx, .potx or .thmx file, its bytes, or a Presentation",
+                "source must be a path to a .pptx, .potx or .thmx file, its bytes, a binary file object, or a Presentation",
             ));
         };
         result.map_err(|error| rpptx_to_pyerr(py, error))?;
