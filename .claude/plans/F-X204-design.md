@@ -412,29 +412,87 @@ unexplained hash delta to CLI work or move the exclusive baseline.
 
 ## Open questions
 
-1. Resolved dependency inventory: X202 images, X203 text/counts/custom
-   properties/tagged controls, X205 core metadata and X207 fit/report are
-   the actual capability barriers. Other overlapping stories remain source
-   resources, not automatic formal prerequisites.
-2. Choose exact map keys and Python counted regex signature. The proposed
-   keys mirror existing CLI placeholder/value names and preserve current
-   Python total-count compatibility.
-3. Confirm Word regex physical AlternateContent, tracked deletion, note
-   separator and field-result boundaries from source-built controls. Document
-   actual scope rather than expanding it accidentally.
-4. Choose common combined field-update return shape and explicit time policy,
-   preserving existing saved-cache semantics and atomicity.
-5. Set typed custom-property input syntax and clear semantics consistently
-   with X203, including ambiguous numeric/string values and duplicate keys.
-6. Choose image occurrence versus unique-part extraction filenames/reports,
-   linked-image diagnostics and full publication rollback semantics.
-7. Finalize one-based --at and move semantics and whether numeric layout
-   indexes are likewise one-based in CLI. They must be explicit in help.
-8. Confirm X207's every-frame inventory, meaningful needed-scale contract and
-   unsupported-frame reporting before declaring fit complete.
-9. Clarify whether --json refusals need structured stderr diagnostics in
-   addition to existing nonzero exit, without corrupting success stdout.
+Ordered cascading maps, family-specific empty matching, checked counted regex,
+field time, extraction identity/rollback, typed metadata, slide positions and
+fit-report projection are resolved below. Final approval requires provider
+completion and exact fit inventory ownership. Map object duplicate keys use
+the existing JSON parser's last occurrence wins behavior, explicitly stated
+in help and tested. Repeated array entries remain separate ordered operations.
+No new parser dependency or duplicate-detection claim is implied.
 
-All unresolved questions remain in draft. No approval, source, baseline or
-Cargo action is implied by this canonical draft. F-X193's scoped gate
-remains incomplete and its reviewed source is untouched.
+## Resolved one-shot operation contracts
+
+
+Freeze --map as a UTF-8 JSON array of objects with placeholder:string, value:string and optional expect:nonnegative integer|null. Array order and repeated placeholders are meaningful. Unknown keys, nonobjects, missing strings, booleans as counts, fractional/negative/overflow counts, invalid XML replacement text and command-line --expect combined with --map refuse before candidate publication. Preserve normal serde_json string decoding, never stringify arbitrary JSON values. Duplicate object keys follow existing serde_json::Value last occurrence wins behavior. State this exact rule in help and test it. Repeated array entries remain separate operations. No duplicate-key rejection is claimed.
+
+An omitted/null expect imposes no count requirement. Every pair searches the staged result of previous pairs. A-to-B then B-to-C cascades, and duplicate placeholders are applied twice. An unrestricted zero count succeeds in map mode, including PowerPoint. Existing single-pair behavior stays family-specific: Word permits unmatched0, commands.rs:1948, while PowerPoint refuses zero unless expect0, rpptx-cli/commands.rs:543. Do not apply the single PowerPoint no-match refusal to every map entry.
+
+Empty map returns an empty successful report with total0 and leaves native state and Python revision unchanged. A mutating CLI invocation still publishes the unchanged source through the required output path and reports it only after publication. It must not create an output before map parse/output preflight succeeds. Native Word try_replace_all_expected at document.rs:27163 currently commits its clone even for an empty input, so native publication no-op needs an explicit early return if required. Existing Python expected_replacements already leaves its revision unchanged when no count is positive, rdocx-py/document.rs:1867. Do not manufacture a Python empty-map revision defect.
+
+Use existing Word counted signature. Add family-local PowerPoint `try_replace_all_expected(&mut self,pairs:&[(&str,&str,Option<usize>)])->Result<Result<Vec<usize>,ReplacementCountMismatch>>`, with mismatch fields index/placeholder/expected/found. Do not import rdocx mismatch types into rpptx. Validate all input placeholders before staging. PowerPoint retains its actual native invalid-character escape policy from lib.rs:1838 unless separately approved to change it, while Word rejects invalid XML replacements. A map should not secretly unify those existing family rules.
+
+One candidate is prepared, pairs run in input order, and only the first mismatch or hard failure is returned. Expected mismatch reports that pair's zero-based index, search string, expected and found counts. It returns no successful prefix report and publishes nothing. Hard parse/ownership/serialization/reopen failure is RdocxError/RpptxError in the public binding and nonzero CLI refusal. Late failure preserves complete original native bytes, revision and handles. Counts are logical family counts, not serialized physical branch count. After all counts agree, validate the complete staged package and publish once. Python Word keeps replace_all's tuple-count result. PowerPoint adds the equivalent tuple-count method. No CLI-only batch loop.
+
+Success schema1 payload: operation='replace', mode='literal'|'regex', pairs=[{index,placeholder,value,count,expected}], total_count, output. Expected remains null when unrestricted. In regex mode placeholder is the pattern and is labelled pattern in human output. Total uses checked arithmetic. Stdout contains exactly one JSON object when --json, with no progress prose. Refusal uses existing stderr human diagnostics and nonzero exit, no success-shaped partial JSON. A new structured error envelope is outside this change unless explicitly reconciled across both CLIs.
+
+## Word regex ownership and error route
+
+Add shared native try_replace_all_regex_expected with the same ordered mismatch contract, and additive Python replace_all_regex_expected(pairs)->tuple[int,...]. Preserve Python replace_all_regex's existing total-int return. Compile every regex and validate every replacement before editing any candidate. Syntax is the native Rust regex dialect and captures.expand semantics, not Python re, shell interpolation or PCRE. A valid empty/zero-width pattern is accepted but zero-width matches are skipped and not counted, exactly placeholder.rs:113. Empty literal semantics must also remain family-specific: native Word replace_in_paragraph returns0 for empty placeholder, placeholder.rs:40, while native PowerPoint require_replacement_placeholder rejects it, lib.rs:9783. Do not claim both native families already refuse an empty literal. CLI map parsing may follow those actual family contracts, with expect governing the Word zero result, rather than changing existing single-pair behavior.
+
+Regex matches within native replaceable run stretches: ordinary adjacent text runs may match across runs, but controls, revisions and supported wrappers split stretches. Native placeholder.rs:49 documents those boundaries, and1736 uses captures_at on paragraph text. No matching across paragraphs/cells/stories, field instructions, deleted revisions or wrapper boundary edges. Preserve first matched run formatting and unrelated runs/opaque XML. Native notes rewriting excludes separator/continuation separator/notice and untyped id<=0 entries, placeholder.rs:1419. Charts and comments are not implicitly added: document.rs:27475 lists main/header/footer text-bearing parts, and note rewriting handles footnotes/endnotes. Typed simple-field displayed text is reachable through its supported wrapper, not arbitrary field code.
+
+Physical alternate textbox copies use the existing document-wide raw replacement policy: edit the copies independently, count only the selected logical representation, and do not use the X202 scoped correspondence algorithm as an unrestricted regex rewrite. Existing placeholder.rs:1243 routes regex through rewrite_text_boxes, while native document.rs:27441 can change a part with count0 when only an uncounted copy matches. This differs deliberately from scoped selected-owner synchronization.
+
+Material error gap: legacy replace_regex_in_xml_parts returns usize and uses if-let Ok for raw rewriting at document.rs:27443, with reparse failure ignored at27453. Legacy header loading can likewise skip a failed load at27421. The new counted checked route must return and propagate Result for every touched required owner and staged reopen. Reuse the existing actual traversal/matcher, but do not equate that swallowing helper with an all-or-nothing checked operation. Keep the legacy method's behavior unchanged unless a separate labelled behavior correction is approved. Malformed raw owner tests must prove the new route's original-byte rollback. A checked preflight may reject malformed supported parts before invoking shared edits, but cannot count them as empty matches or silently bypass a changed uncounted copy.
+
+## Image extraction names, bytes and filesystem publication
+
+X202 owns native/Python occurrence inventory. Existing Document.images at document.rs:28939 is body-only, and ImageInfo at30663 lacks physical owner/bytes, so neither is a complete provider. X204 consumes a reviewed owner-aware checkpoint that distinguishes picture occurrence from media part. It must not duplicate scanner identity or silently call unsupported group/VML inventory complete.
+
+Extract each unique internal owning media part once, in the order first encountered in the provider's deterministic occurrence inventory. Occurrence JSON records keep story kind/part/owner, selected physical occurrence, EMU size, description/title/decorative, relationship and media-part/content-type plus its shared extracted file. Distinct source parts remain distinct files even if bytes match. Do not deduplicate by relationship string across owner parts or by byte hash.
+
+Use generated flat names image-000001.<ext>, padded at least6 digits and expanding when needed. Extension comes from a bounded content-type mapping, never unsanitized package path or alternate title. Unknown content type uses bin and remains recorded in JSON. Never join target names containing separators, '..', drive paths or producer-controlled names. Write exact embedded bytes without rasterization/reencoding. External linked image occurrences are retained with status='external', file=null and URL as metadata, without network fetch. Unsupported occurrence ownership gets a named diagnostic or checked refusal from the provider, never a guessed empty entry. Missing internal media/relationship is a hard prepublication error.
+
+Preload all required bytes and precompute every destination and JSON listing before creating/publishing files. Directory must be an existing real directory or a new directory created only after full source validation. Reject a symlink directory target. Use shared ensure_output_paths_allowed at oxml-cli-support/lib.rs:143 to protect input identity, aliases, hard links and collisions. No --force for extraction: StagedOutputSet::with_replace_existing documents that previously replaced outputs remain on late failure, lib.rs:212, while nonreplacing publish removes this invocation's earlier files on failure at257. Therefore the current forced mode cannot satisfy the chosen extraction rollback contract.
+
+Stage all new files with nonreplacing StagedOutputSet and publish as a set. On failure clean this invocation's temporary/new files and remove a newly created directory only if empty, preserving preexisting unrelated files. Existing support rollback is best-effort filesystem cleanup, not a claim of crash-atomic multi-file rename. Tests inject late publication failure and verify no partial set remains under normal recoverable errors. Print JSON listing only after successful file publication. An empty extraction produces an empty listing and no unnecessary new directory. Read-only inventory never saves the document.
+
+## Metadata, fill and count projections
+
+Word meta get returns core title/author/subject/keywords plus immutable typed custom property snapshots from X203, preserving native PID/fmtid/type/order. PowerPoint meta get uses X205's common metadata surface. Meta set parses all assignments before staging, rejects repeated core/custom names and a set/remove collision, clones the latest native properties, changes only supplied fields and retains opaque metadata and absent fields. No fresh-template normalization for imported files. Empty textual core assignment follows the common provider's explicit removal policy, not a guessed count or author default.
+
+Choose repeatable `--custom NAME=TYPE:VALUE` syntax split at the first '=' and then the first ':'. Types are str, int, float, bool, filetime and empty. Str preserves everything after its type colon verbatim. Int is signed32-bit, float finite64-bit, bool accepts true/false only, empty requires no payload. Filetime uses exactly X203's approved checked lexical CustomFileTime authoring policy, without CLI-only timezone normalization. `--remove-custom NAME` is explicit deletion, missing removal is a no-op. Existing Lpstr/Lpwstr updates preserve their native type/identity unless the explicit type requests a change. Raw custom values are read-only reported data, not authored arbitrary XML. This is input syntax over shared typed APIs, not a new property model in commands.rs.
+
+Repeated `fill --tag NAME=VALUE` splits on first '=', preserves remaining text and rejects duplicate tag names. It means tag only, never native bind_content_controls alias fallback, content_control.rs:113. Proposed shared `fill_content_control_tags(&mut self,pairs:&[(&str,&str)])->Result<Vec<usize>>` stages all selectors once and has Python counterpart. Every matching typed main-body control for a tag is updated using existing native checked binding. A requested tag with no match refuses the whole command. Unsupported bound owner fails atomically. Parse/validate all values before candidate editing. Count controls logically, preserve custom XML/display consistency, publish once and report per-tag counts.
+
+Inspect word/character/page counts consumes X203's exact body token/Unicode scalar and deterministic layout provider. Report count_scope='accepted-main-body' plus character_include_spaces=true, page_count_source='deterministic-layout', and provider diagnostics. Do not count all-story display labels or substitute cached app metadata. Pictures are additive inspect keys using X202 identities. Existing schema1 keys and meaning remain unchanged. A unavailable mandatory provider result is an explicit checked error, not invented0.
+
+## Slide, notes and fit conventions
+
+All user-facing slide and numeric layout positions are one-based. --layout accepts either a decimal positive index in1..layout_count or exact unique name. Entirely numeric input is an index, not a layout name. Reject0, overflow, unknown and ambiguous names before mutation. Native layout_name/layout_count exist at rpptx/lib.rs:1939/1944. --at N is the final insertion position in1..old_slide_count+1, default append. Add then placement must be a common staged operation, proposed Presentation::add_slide_at(layout_index,position)->Result<usize>, exposed in Python too. It composes existing add_slide3253/move_slide2585 on one clone and publishes once, not two separately committed CLI operations.
+
+Duplicate N uses native duplicate_slide2791 and inserts directly after source. Remove N, hide/show N use existing checked operations and preserve relationships/notes lifecycle. Move N --to M uses final position in1..slide_count after removal/reinsertion, not a pre-removal gap position. Native move_slide at2585 already defines final zero-based index. N==M is a no-op. Convert each index once, at parsing-to-provider boundary. Mutation commands require a separate output and preserve original input under every refusal.
+
+Notes set N requires exactly one of --text or --from-file. Read complete UTF-8 file before native mutation, retain LF/CRLF and all leading/trailing characters, and do not add a newline. Invalid UTF-8/missing source file/conflicting options refuse before creating a notes part. Existing Presentation::set_notes_text at2616 supplies common lifecycle and Python already exposes notes text. Report selected one-based slide, output and actual text scalar count, not byte count disguised as characters.
+
+Fit is read-only and consumes a common X207 provider, proposed Presentation::fit_report(font_files)->Result<FitReport> with the same Python exposure. No CLI search loop or calls to mutating fit_text/refresh_autofit. Report every admitted frame with stable slide/owner path/shape id/name, table-cell path when applicable, usable bounds, measured overflow/current stored renderer scale, needed_scale and diagnostics. Needed scale is explicitly the hypothetical total font scale from the common shared measurement trials, not a reused current font_scale or an unnamed additional multiplier. If no permitted scale fits, needed_scale=null with reason='unfit-at-floor'. Do not report25 percent as success when it still overflows.
+
+Fit stdout JSON uses schema1, frames and diagnostics, no output file. Exit0 only when all relevant frames were assessed and none overflow. Exit1 when any assessed frame overflows. A mandatory frame that the provider cannot assess yields an explicit unsupported-owner diagnostic and a refusal exit distinct from a successful fit, using the existing CLI generic-error nonzero path. Empty/no-text frames remain accounted for by owner identity or documented empty status, not silently used to reduce an every-frame promise. X207 must settle full owner admission and shared inherited-owner contexts before fit is complete. Existing text_layout_deterministic at1199 excludes cells/master/SmartArt and reports current scale, so it cannot satisfy this provider merely by renaming fields. Fonts use the shared deterministic/caller-font preparation and requested-versus-used diagnostics from X195/X210.
+
+## Fields combined operation
+
+Choose shared proposed `Document::update_all_fields(&mut self,context:&FieldEvaluationContext)->Result<FieldsUpdateReport>` and matching Python method. Report ordinary_updated:usize, layout:LayoutBackedFieldUpdateReport, ordered retained FieldEvaluation/diagnostic facts, total_updated and saved_cache_scope. One outer candidate evaluates/updates ordinary fields first and layout-backed caches second, then prepares/reopens and publishes once. Reuse update_fields1809 and update_layout_backed_fields1840 with their exact supported stored-cache behavior. PAGE/NUMPAGES in headers/footers intentionally retain caches as documented field.rs:1819. No unconditional cache rewrite promise.
+
+`fields update --now YYYY-MM-DDTHH:MM:SS` supplies explicit civil FieldDateTime context. Native FieldDateTime at field.rs:1344 has only year/month/day/hour/minute/second, no timezone or fractional seconds. Accept exactly that civil grammar with Gregorian calendar and time bounds, rejecting timezone suffixes, fractions and leap seconds instead of pretending the native value has an offset policy. Omission means context.now=None, preserving unresolved date caches/diagnostics instead of reading ambient current time. Invalid input refuses before mutation. Derive FILE/FILENAME context from an explicit documented input path policy, not nondeterministic temporary staging names. Layout diagnostics are report data. A hard failure in either phase discards both phases. X204 owns this narrow common orchestration only after explicit shared-file claim, not an unreviewed CLI loop over live operations.
+
+## Completion and evidence boundaries
+
+Each command needs one existing-entrypoint integration test plus its full option/error/output matrix, installed Python/native parity, exact opaque/source retention and every required provider checkpoint. Plans do not prove APIs are present. New native batch/regex/tag-fill/field/add-at orchestration and their Python binding belong to explicit X204 narrow shared-source claims, serialized with202/203/205/207. No new source file/module/dependency or general replacement abstraction is proposed. Expected hash remains unchanged for additive valid-input behavior, but any deliberate correction of legacy swallowed error behavior requires a separately labelled reviewed contract.
+
+Canonical read HEAD: `decfe4b5356da90c22cef6d85b6553905d1de373`. Source SHA receipts:
+
+- `crates/rdocx/src/document.rs`: `3b8eec9fc3980a9dc743be2faef39d1126c819be102a61b58a4f6ae798a59620`.
+- `crates/rdocx/src/field.rs`: `63db78f9e205c56f2982c46a5999092c0041e00204256455669d7b6da07001d7`.
+- `crates/rdocx-oxml/src/placeholder.rs`: `26ddc9f8912473176bc7f3a0bab2ed4bbe775c555a395524953d913156c25fef`.
+- `crates/rpptx/src/lib.rs`: `9e203e0e9e3fe71c8b0c9d070a1a0cffa6f757fbd849c88c46702ed910996b6b`.
+- `crates/oxml-cli-support/src/lib.rs`: `24b4104b26df27e800d049378ad31700aa04f99dbd9d840c3ee8d8d31b3b5cc7`.
