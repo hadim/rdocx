@@ -66,8 +66,9 @@ ExportResult owns bytes and immutable typed diagnostic records. Reuse native
 to_html/to_markdown at document.rs:28085/28097 and existing ODT/RTF/EPUB write
 results at odt.rs:137, rtf.rs:85 and epub.rs:64. Do not discard the existing
 path/message diagnostics from lossy converters. The approved installed names are to_odt, to_rtf and to_epub.
-Bare HTML/Markdown preserve existing native limitations and CommonMark subset,
-not a new independent Python formatter.
+Bare HTML/Markdown retain the existing native subset and one provider. The
+explicit Issue332 emitter corrections below amend the previous Markdown
+behavior, without an independent Python formatter.
 
 Extract shared accepted-view text presentation from existing CLI into native
 existing document.rs/lib.rs, with one owned TextReport containing rendered
@@ -300,8 +301,10 @@ and actual delivered story scope. No fictional Word HLD07 document exists.
 ## Hash harness
 
 Expected49 existing deterministic outputs unchanged for binding exposure and
-shared validation/text refactoring. Keep existing native template/export/import
-semantics. If a discovered native defect requires behavior changes, record its
+shared validation/text refactoring. Keep native template/import semantics.
+Issues332/334 below explicitly amend Markdown and fresh compatible creation
+semantics, with separate measured reviewed behavior deltas. If another native
+defect requires behavior changes, record its
 separate approved expected delta and exact affected entries before proceeding.
 Neither parity wrappers nor diagnostic projection justify an unexplained hash
 delta or a second baseline writer.
@@ -325,6 +328,8 @@ write sprint totals. Fresh dependency-prefix source is the test Base.
 - [ ] Prove each missing installed Base operation and corpus parity failure.
 - [ ] Share native CLI validation/text without changing its report semantics.
 - [ ] Bind exports/templates/checked assembly/properties/equations/controls/settings.
+- [ ] Fix Issue332 in the shared native Markdown emitter with preservation controls.
+- [ ] Set Issue334 fresh WordCompatible mode15 without normalizing imported documents.
 - [ ] Prove source preservation, revision and malformed atomic controls.
 - [ ] Run complete sample-corpus parity and declared runtime/typing/oracle gates.
 - [ ] Run scoped hash, package, repository-policy, WASM and risk riders.
@@ -520,7 +525,67 @@ attributes and opaque order verbatim. Bind checkedState/uncheckedState font
 and scalar together instead of dropping the state font at native
 content_control.rs:193/:199. Preserve actual supplied-face precedence and
 source XML, using X195/X210's shared qualified font semantics. Default
-U2612 is in the approved3916-byte subset. U2610 requires the separately
-pending3968-byte asset revision, which this PR cannot approve. Tests must
+U2612 and U2610 are in F-X210's selected3968-byte subset, explicitly
+approved by the user on2026-10-10. This PR does not supply separate approval.
+Tests must
 cover foreign namespaces, distinct state fonts, explicit custom state glyphs,
 unsupported control kinds, live owner identity and late atomic refusal.
+
+## Issues332 and334 native provider amendments
+
+[Issue332](https://github.com/tensorbee/rdocx/issues/332) and
+[Issue334](https://github.com/tensorbee/rdocx/issues/334) are assigned once
+to F-X203. Their read-only source assessment is retained in
+/private/tmp/S91-Issues332-334-assessment/assessment.md. They are explicit
+native behavior changes, not parity-only wrappers or a repeat of completed
+F-X193 inbound HTML mark inheritance. No material question remains.
+
+Issue332 fixes the existing rdocx-html/src/markdown.rs emitter. Move leading
+and trailing text whitespace outside owned emphasis markers, preserving
+original text. Whitespace-only segments stay undecorated. Coalesce adjacent
+segments with equal emitted emphasis within the same link/context, without
+merging changed targets, field-format boundaries, hard/page/column breaks
+or accepted-view structural boundaries. Preserve hyperlink sanitation,
+accepted-view control/deletion rules, tabs and two-space hard-break syntax.
+Insert a block separator before a nonempty emitted table following a list,
+including accepted content-control tables. Consecutive list items stay one
+list and omitted empty tables do not manufacture a block boundary.
+
+Existing test carriers must cover the three original from_html examples and
+independently authored run splits. Require intended emphasis, unchanged
+logical text/spacing, equal/mixed emphasis, link boundaries, cached fields,
+hard breaks and control/list/table transitions. Correct the existing
+whitespace-inside-italic field expectation intentionally, retaining its
+logical-text and break controls. Bare HTML and source/package snapshots
+remain unchanged. Native, Python and CLI exports use the same emitter.
+This does not add a full CommonMark implementation or a parser dependency.
+
+Issue334 initializes exactly one qualified compatibilityMode with office
+URI and value15 in every freshly authored WordCompatible profile, across
+its supported document/template/macro package classes. Use existing typed
+settings and set_compatibility_setting before initial serialization in
+Document::new_with_profile. Document::new and from_html inherit that policy.
+Do not change CT_Settings::new globally or alter Minimal creation. Imported
+absent/14/15/16 modes and opaque compatibility facts retain their source
+semantics. Explicit caller removal or override remains honored on save.
+The existing modern-versus-legacy layout branch remains the single policy.
+
+Test fresh profiles and HTML creation through save/reopen, exactly one
+mode15 setting, settings schema order and unchanged package ownership.
+Test Minimal, imported absent/legacy/future modes and explicit removal/
+overrides separately. Prove modern layout selection for the fresh profile
+and retained legacy selection for imported absent/14 modes. Use existing
+deterministic table/margin/tab/footnote controls and bounded pinned native
+Word opening evidence. Contributor title-bar observations are not a local
+Word acceptance result. No automatic promotion of imported fixtures.
+
+Reserve existing rdocx-html/src/markdown.rs and lib.rs in addition to the
+existing document/settings and test carriers. HLD03/08/10/12/14 updates
+cover this provider ownership, fresh-profile selection and acceptance.
+Each issue lands as its own labelled native behavior commit, separately
+from binding exposure and each other. Measure exact affected hash entries
+and review Markdown/XML/layout/PDF/PNG deltas with deterministic fonts.
+Issue334 may change multiple freshly authored samples. No blanket49-entry
+unchanged claim applies to these fixes. Preserve all unrelated outputs,
+derive actual package inventories/archive rows and retain root's exclusive
+baseline lease. No new file, module, dependency or test binary is required.

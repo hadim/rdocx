@@ -508,3 +508,53 @@ hidden owner tokens and common serial changes require both affected native
 families, installed runtime/typing/stubtest, WASM, packaging, Base failure,
 no-op/overflow/first-cause and bounded state-lifetime checks. Every invoked
 public mutation label must be accurate. No new file/module/trait/generic.
+
+## PR335 reconciliation and member resolution policy
+
+[PR335](https://github.com/tensorbee/rdocx/pull/335), immutable head
+e2875c7ece140439286c6e6948a378ac2a343250, closes the already assigned
+Issue323. Its complete source assessment is retained under
+/private/tmp/S91-PR335-e2875c7-intake. Both group transform function bodies
+are byte-identical to the assessed PR326 versions. Adopt that correction
+once. Reuse its equal-axis2x connector fixture without claiming unexecuted
+LibreOffice/native evidence or satisfying the required nonuniform partner.
+Installed Base, actual native positions, member IDs/z-order/opaque bytes and
+save/reopen remain separate required gates.
+
+Select member-local resolution recovery for the existing semantic
+ResolveError variants: StyleIndexOutOfRange, UnresolvedPlaceholderColor
+and ConcreteValue returned while resolving one member. Retain valid
+siblings in authored draw order. A failed member with trustworthy finite
+bounds uses the existing unresolved-shape bounds-outline fallback under
+its actual ancestor transform. Without trustworthy bounds it is omitted
+from drawing with a named omission diagnostic. Increment unresolved count
+before deciding whether bounds permit drawing, never afterward.
+
+Use one owned unresolved_member_count in the existing ResolvedSlide,
+initialized to0 and incremented once per failed member. The strict corpus
+gate consumes that count independently of drawable fallback shapes. Native
+render reporting also consumes it to identify incomplete slide output,
+alongside ordered owner-specific diagnostic messages. This additional
+field is a pre-1.0 Rust source change for struct literals. Update all actual
+existing literal/renderer consumers and archive/API evidence. No new
+public type, module, dependency or generic recovery framework is proposed.
+
+The recoverable render/convert may return successful bytes with these
+explicit diagnostics. Existing byte return types remain unchanged, while
+the approved same-pass companions and CLI stderr expose the actual facts.
+Identify failed owner/ID/name and reason once. Do not represent partial
+failed-member font/paint facts as successfully drawn output. Other valid
+sibling diagnostics remain ordered and intact. Fatal package/XML admission,
+slide background/context setup, backend encoding or I/O failures still
+return errors. Recovery does not turn a refused authored connector/group
+operation into success or weaken its atomicity and source preservation.
+
+Add malformed-style member and boundsless-member controls with valid
+siblings, asserting actual pixels/order, owner diagnostics, unresolved
+count and a failing strict corpus gate for both kinds of recovery. Include
+fatal background/encoding controls and count0/unchanged output for valid
+slides. The contributor gate scans emitted shapes and misses boundsless
+omissions, so it cannot be adopted as proof that fallback hides no failure.
+These rendering semantics require their own labelled behavior commit and
+measured reviewed deltas, separately from the duplicated group correction,
+handle migration and authoring wrappers. Root holds the baseline lease.

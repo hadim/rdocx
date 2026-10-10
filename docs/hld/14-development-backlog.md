@@ -6936,6 +6936,14 @@ Resolve [Issue306](https://github.com/tensorbee/rdocx/issues/306) in S91,
 part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
 coverage checklist. Expose HTML, Markdown, all-story text, ODT/RTF/EPUB export and word/character/page counts. Add existing template rendering, document/fragment import with style policy, typed custom/app properties, validation parity, LaTeX/MathML equations, content-control list/value updates and track-revisions settings. Reuse visible paragraph validation from F-X196 and section validation from F-X201. Content-control creation and tracked-edit authoring retain their later roadmap contracts.
 
+Also resolve [Issue332](https://github.com/tensorbee/rdocx/issues/332) in the
+shared native Markdown emitter, with whitespace outside emphasis, adjacent
+equivalent spans coalesced and a separator between lists and tables. Resolve
+[Issue334](https://github.com/tensorbee/rdocx/issues/334) by giving newly
+authored WordCompatible profiles exactly one compatibilityMode15 setting,
+while preserving Minimal and imported settings. Separate reviewed behavior
+commits and measured output deltas cover both native provider corrections.
+
 **Depends on**: F-X196, F-X201, F-X212.
 **Test gate**: regression. Reproduce each missing operation or reported defect
 through the installed public API on the claimed Base before implementation.

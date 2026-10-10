@@ -841,3 +841,32 @@ unchanged. Land the intentional over-limit parser refusal in a separate
 labelled commit. Ordinary valid deterministic outputs are expected unchanged
 and still require the hash harness. No source implementation or passing
 Issue331 regression is claimed by this amendment.
+
+## PR333 immutable contribution reconciliation
+
+[PR333](https://github.com/tensorbee/rdocx/pull/333), immutable head
+8636af0949b192665490659041b7541ae5ef4090, maps once to Issue316/F-X211.
+All163 complete changed-source blobs and patch paths are authenticated
+in /private/tmp/S91-PR333-intake. Static assessment is retained there.
+No contributed gate or source is integrated by intake.
+
+Keep the existing frozen100 bodies, digest and observed17/100 Base result.
+The contribution's120 records and mutable needs labels are supplemental
+examples, not replacement acceptance or a projected success rate. Implement
+the approved element.xml string view and complete fourteen-owner matrix,
+preserving existing byte snapshots. Qualified URI/sequence/opaque bytes,
+physical owner/relationship closure and staged package reopen are required.
+Local-name roots or element counts do not replace those invariants.
+
+Reuse useful one-root/DTD/CDATA/vocabulary/actual-part relationship checks
+selectively in existing approved files. The125 contributed new files and
+two raw_xml modules are not automatically authorized or needed. Consume
+Issue331's common native bound and the actual X194/X202/X206/X209 owner
+providers. Do not add the contributor's unbounded per-edit BTreeMap replay
+next to the bounded causal foundation. Same-value replacement/no-op keeps
+bytes and tokens, and real topology changes retire only unsafe descendants.
+Known formatting, sections, notes and scalar-validation changes retain
+their provider owners. Reconcile legitimate subquantum Length values and
+minimum signed bounds rather than copying i64::abs or blanket rejection.
+No duplicate implementation, corpus mutation or new material question is
+introduced by this source assessment.
