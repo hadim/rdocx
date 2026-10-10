@@ -2,7 +2,7 @@ use oxml_py_support::{ContentPath, PathSeg};
 use pyo3::PyClass;
 use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyBytes, PyDict, PyList, PySlice, PyTuple};
+use pyo3::types::{PyAny, PyBytes, PyList, PySlice, PyTuple};
 use smallvec::smallvec;
 
 use crate::Scope;
@@ -361,12 +361,17 @@ impl PySlideLayoutCollection {
 
     /// A handle on one layout by its presentation-wide index.
     fn layout(&self, py: Python<'_>, index: usize) -> PyResult<Py<PySlideLayout>> {
+        let path = self
+            .presentation
+            .borrow(py)
+            .revisions
+            .capture(smallvec![PathSeg::Layout(index)]);
         Py::new(
             py,
             PySlideLayout {
                 presentation: self.presentation.clone_ref(py),
                 index,
-                path: self.path.clone(),
+                path,
             },
         )
     }
@@ -454,7 +459,9 @@ impl PySlideLayoutCollection {
             .inner
             .remove_layout(index)
             .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
-        presentation.revisions.bump();
+        presentation
+            .revisions
+            .invalidate(Scope::Slides, "SlideLayoutCollection.remove()");
         Ok(())
     }
 
@@ -472,8 +479,12 @@ impl PySlideLayoutCollection {
             .inner
             .duplicate_layout(index)
             .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
-        presentation.revisions.bump();
-        let path = presentation.revisions.capture(smallvec![]);
+        presentation
+            .revisions
+            .invalidate(Scope::Slides, "SlideLayoutCollection.duplicate()");
+        let path = presentation
+            .revisions
+            .capture(smallvec![PathSeg::Layout(copy)]);
         drop(presentation);
         Py::new(
             py,
@@ -621,7 +632,9 @@ impl PySlide {
                     format!("slide {index} has no layout reachable through the slide masters"),
                 )
             })?;
-        let path = presentation.revisions.capture(smallvec![]);
+        let path = presentation
+            .revisions
+            .capture(smallvec![PathSeg::Layout(layout)]);
         drop(presentation);
         Py::new(
             py,
@@ -1813,12 +1826,17 @@ impl PySlideMasterCollection {
     }
 
     pub(crate) fn item(&self, py: Python<'_>, index: usize) -> PyResult<Py<PySlideMaster>> {
+        let path = self
+            .presentation
+            .borrow(py)
+            .revisions
+            .capture(smallvec![PathSeg::Master(index)]);
         Py::new(
             py,
             PySlideMaster {
                 presentation: self.presentation.clone_ref(py),
                 index,
-                path: self.path.clone(),
+                path,
             },
         )
     }
@@ -1976,7 +1994,7 @@ impl PyThemeColors {
     /// without `#`, or an `(r, g, b)` triple.
     fn __setitem__(&self, py: Python<'_>, key: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
         self.theme(py).read(py)?;
-        let color = crate::dml::color_argument(value, "theme colour")?;
+        let color = crate::dml::rgb_color(value, "theme colour")?;
         self.presentation
             .borrow_mut(py)
             .inner

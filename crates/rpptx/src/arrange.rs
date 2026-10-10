@@ -13,9 +13,9 @@ use rpptx_oxml::connector::{CT_Connection, CT_ConnectionShape};
 use rpptx_oxml::shape_tree::{CT_GroupShape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild};
 
 use crate::{
-    Angle, Emu, Error, Presentation, Result, ShapeKind, ShapeMut, ShapesMut, detach_connectors,
-    fit_group_to_members, group_at_mut, invalid_shape_mutation, member_box, shape_kind, shape_mut,
-    shape_placeholder, shape_properties, shape_transform,
+    Angle, Emu, Error, PartRef, Presentation, Result, ShapeKind, ShapeMut, ShapesMut,
+    detach_connectors, fit_group_to_members, group_at_mut, invalid_shape_mutation, member_box,
+    shape_kind, shape_mut, shape_placeholder, shape_properties, shape_transform,
 };
 
 /// The edge or centre line [`ShapesMut::align`] lines shapes up on.
@@ -303,9 +303,10 @@ fn sorted_indices(operation: &'static str, indices: &[usize], count: usize) -> R
 
 impl ShapesMut<'_> {
     fn tree(&mut self) -> &mut CT_ShapeTree {
-        &mut self.presentation.slides[self.slide_index]
-            .slide
-            .common_slide_data
+        &mut self
+            .presentation
+            .common_data_mut(self.part)
+            .expect("a shape collection names an existing part")
             .shape_tree
     }
 
@@ -372,8 +373,15 @@ impl ShapesMut<'_> {
     pub fn ungroup(&mut self, index: usize) -> Result<Range<usize>> {
         const OPERATION: &str = "ungroup shapes";
         let group_path = self.group.clone();
-        let slide = &mut self.presentation.slides[self.slide_index].slide;
-        let members = Members::at(&mut slide.common_slide_data.shape_tree, &group_path)
+        // Only a slide carries the animations that may target the group.
+        let timing = match self.part {
+            PartRef::Slide(slide_index) => {
+                self.presentation.slides[slide_index].slide.timing.clone()
+            }
+            PartRef::Layout(_) | PartRef::Master(_) => None,
+        };
+        let tree = self.tree();
+        let members = Members::at(tree, &group_path)
             .ok_or_else(|| invalid_shape_mutation(OPERATION, "the collection is not a group"))?;
         let count = members.children().len();
         let child = members.children().get(index).ok_or_else(|| {
@@ -389,7 +397,7 @@ impl ShapesMut<'_> {
             });
         };
         let group_id = child.non_visual_id();
-        if let (Some(timing), Some(id)) = (&slide.timing, group_id)
+        if let (Some(timing), Some(id)) = (&timing, group_id)
             && timing.references_shape(id)
         {
             return Err(invalid_shape_mutation(
@@ -405,15 +413,12 @@ impl ShapesMut<'_> {
             })?;
         }
         let range = index..index + placed.len();
-        let mut members = Members::at(&mut slide.common_slide_data.shape_tree, &group_path)
-            .expect("the group path was checked");
+        let tree = self.tree();
+        let mut members = Members::at(tree, &group_path).expect("the group path was checked");
         members.take(&[index]);
         members.insert(index, placed);
         if let Some(id) = group_id {
-            detach_connectors(
-                &mut slide.common_slide_data.shape_tree.children,
-                &HashSet::from([id]),
-            );
+            detach_connectors(&mut self.tree().children, &HashSet::from([id]));
         }
         Ok(range)
     }
@@ -515,12 +520,15 @@ impl ShapesMut<'_> {
         let count =
             Members::at(self.tree(), &group_path).map_or(0, |members| members.children().len());
         let sorted = sorted_indices(operation, indices, count)?;
+        // A slide placeholder that inherits its frame gets it written first.
+        // Layout and master shapes have no slide-level inheritance to apply.
         #[cfg(feature = "render")]
-        for index in &sorted {
-            let mut path = self.group.clone();
-            path.push(*index);
-            self.presentation
-                .materialize_geometry(self.slide_index, &path)?;
+        if let PartRef::Slide(slide_index) = self.part {
+            for index in &sorted {
+                let mut path = self.group.clone();
+                path.push(*index);
+                self.presentation.materialize_geometry(slide_index, &path)?;
+            }
         }
         let members = Members::at(self.tree(), &group_path).expect("the group path was checked");
         let bounds = sorted

@@ -121,7 +121,9 @@ impl Scope {
 
     fn of(path: &ContentPath) -> Option<Self> {
         Some(match path.segs.last()? {
-            PathSeg::Slide(_) => Self::Slides,
+            // Layout and master handles share the widest scope: removing,
+            // duplicating, or importing layouts renumbers them.
+            PathSeg::Slide(_) | PathSeg::Layout(_) | PathSeg::Master(_) => Self::Slides,
             PathSeg::Shape(_) => Self::Shapes,
             PathSeg::Row(_) | PathSeg::Cell(_) => Self::Tables,
             PathSeg::Body(_) | PathSeg::Para(_) => Self::Paragraphs,

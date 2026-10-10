@@ -20,7 +20,7 @@ use crate::shape::{
     shape_mut_at, shape_ref_at, slide_index,
 };
 use crate::table::{cell_mut_at, cell_ref_at};
-use crate::text::{PyFont, font_properties};
+use crate::text::PyFont;
 use crate::{Scope, normalize_index, rpptx_to_pyerr, validate_path};
 
 const MAX_LINE_WIDTH_EMU: i64 = 20_116_800;
@@ -1021,8 +1021,11 @@ pub(crate) enum ColorSource {
     GradientStop { target: FillTarget, index: usize },
     /// The colour of the outer shadow.
     Shadow,
-    /// The solid fill of a run or paragraph font.
-    Font,
+    /// The solid fill of a run or paragraph font, or of a master text style
+    /// level's default run properties when `style` names one.
+    Font {
+        style: Option<(rpptx::MasterTextStyle, usize)>,
+    },
 }
 
 impl ColorSource {
@@ -1032,7 +1035,7 @@ impl ColorSource {
             Self::PatternBackground { .. } => ".fill.back_color",
             Self::GradientStop { .. } => ".fill.gradient_stops",
             Self::Shadow => ".shadow.color",
-            Self::Font => ".font.color",
+            Self::Font { .. } => ".font.color",
         }
     }
 }
@@ -1067,10 +1070,7 @@ fn read_color(
             }
         }
         ColorSource::Shadow => current_shadow(presentation, path)?.and_then(|shadow| shadow.color),
-        ColorSource::Font => match font_properties(presentation, path).and_then(|font| font.fill) {
-            Some(rpptx::Fill::Solid(fill)) => fill.color,
-            _ => None,
-        },
+        ColorSource::Font { .. } => unreachable!("a font colour is read through its Font"),
     })
 }
 
@@ -1091,7 +1091,7 @@ fn write_color(
                 shadow.replace_color(color);
             });
         }
-        ColorSource::Font => unreachable!("a font colour is written through its Font"),
+        ColorSource::Font { .. } => unreachable!("a font colour is written through its Font"),
         ColorSource::Fill { target, solidify } => {
             let fill = match current_fill(presentation, path, target)? {
                 Some(rpptx::Fill::Solid(mut fill)) => {
@@ -1162,6 +1162,15 @@ impl PyColorFormat {
     }
 
     fn color(&self, py: Python<'_>) -> PyResult<Option<rpptx::ColorChoice>> {
+        if let ColorSource::Font { style } = self.source {
+            return PyFont::styled(self.presentation.clone_ref(py), self.path.clone(), style).read(
+                py,
+                |properties| match properties.and_then(|properties| properties.fill.as_ref()) {
+                    Some(rpptx::Fill::Solid(fill)) => fill.color.clone(),
+                    _ => None,
+                },
+            );
+        }
         let presentation = self.presentation.borrow(py);
         validate_path(py, &presentation, &self.path, "color", self.source.suffix())?;
         read_color(&presentation.inner, &self.path, self.source)
@@ -1173,10 +1182,9 @@ impl PyColorFormat {
         py: Python<'_>,
         change: impl FnOnce(Option<rpptx::ColorChoice>) -> rpptx::ColorChoice,
     ) -> PyResult<()> {
-        if let ColorSource::Font = self.source {
-            return PyFont::new(self.presentation.clone_ref(py), self.path.clone()).update(
-                py,
-                |properties| match properties.fill.as_mut() {
+        if let ColorSource::Font { style } = self.source {
+            return PyFont::styled(self.presentation.clone_ref(py), self.path.clone(), style)
+                .update(py, |properties| match properties.fill.as_mut() {
                     Some(rpptx::Fill::Solid(fill)) => {
                         fill.color = Some(change(fill.color.take()));
                     }
@@ -1185,8 +1193,7 @@ impl PyColorFormat {
                         fill.color = Some(change(None));
                         properties.fill = Some(rpptx::Fill::Solid(fill));
                     }
-                },
-            );
+                });
         }
         let mut presentation = self.presentation.borrow_mut(py);
         validate_path(py, &presentation, &self.path, "color", self.source.suffix())?;

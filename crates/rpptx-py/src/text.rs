@@ -9,8 +9,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBool, PyFloat, PyList, PySlice, PyString};
 use rpptx::{
     AutofitMode, CT_TextCharacterProperties, CT_TextParagraphProperties, ColorChoice, Emu, Fill,
-    SolidFill, TextAlignment, TextAnchor, TextBulletCharacter, TextBulletChoice, TextBulletColor,
-    TextFont, TextNoBullet, TextSpacing, TextStrike, TextUnderline,
+    SolidFill, TextAlignment, TextAnchor, TextBulletCharacter, TextBulletChoice, TextFont,
+    TextNoBullet, TextSpacing, TextStrike, TextUnderline,
 };
 
 use crate::Scope;
@@ -1416,8 +1416,18 @@ pub struct PyFont {
 }
 
 impl PyFont {
-    pub(crate) fn new(presentation: Py<PyPresentation>, path: ContentPath) -> Self {
-        Self { presentation, path }
+    /// A font that reads and writes a master text style level when `style`
+    /// names one, and the run or paragraph `path` names otherwise.
+    pub(crate) fn styled(
+        presentation: Py<PyPresentation>,
+        path: ContentPath,
+        style: Option<(rpptx::MasterTextStyle, usize)>,
+    ) -> Self {
+        Self {
+            presentation,
+            path,
+            style,
+        }
     }
 
     fn validate(&self, py: Python<'_>) -> PyResult<()> {
@@ -1430,7 +1440,7 @@ impl PyFont {
         )
     }
 
-    fn read<T>(
+    pub(crate) fn read<T>(
         &self,
         py: Python<'_>,
         read: impl FnOnce(Option<&CT_TextCharacterProperties>) -> T,
@@ -1683,7 +1693,7 @@ impl PyFont {
             PyColorFormat::new(
                 self.presentation.clone_ref(py),
                 self.path.clone(),
-                ColorSource::Font,
+                ColorSource::Font { style: self.style },
             ),
         )
     }
@@ -2254,9 +2264,7 @@ impl PyTextStyleLevel {
     #[setter]
     fn set_bullet_color(&self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
         let color = match value {
-            Some(value) if !value.is_none() => {
-                Some(crate::dml::color_argument(value, "bullet_color")?)
-            }
+            Some(value) if !value.is_none() => Some(rgb_color(value, "bullet_color")?),
             _ => None,
         };
         self.update(py, |properties| {

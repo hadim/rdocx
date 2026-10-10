@@ -5703,7 +5703,7 @@ def test_masters_layouts_and_themes_from_python(tmp_path):
     body = prs.slide_master.text_styles.body[0]
     body.bullet = "\u2013"
     body.bullet_color = RGBColor(0xFF, 0x66, 0x00)
-    assert (title.font.size, title.font.color, body.bullet, str(body.bullet_color)) == (Pt(40), "1A237E", "\u2013", "FF6600")
+    assert (title.font.size, str(title.font.color.rgb), body.bullet, str(body.bullet_color)) == (Pt(40), "1A237E", "\u2013", "FF6600")
 
     # Layout lifecycle and the slide-level hide.
     count = len(prs.slide_layouts)
@@ -5784,11 +5784,11 @@ def test_master_layout_collections_hyperlinks_and_colours_from_python(tmp_path):
     # One colour parser for every colour setter.
     font = prs.slide_master.text_styles.title[0].font
     font.color = "#1A237E"
-    assert font.color == "1A237E"
+    assert str(font.color.rgb) == "1A237E"
     run = prs.slides[0].shapes.title.text_frame
     run.text = "Colour"
     paragraph_font = prs.slides[0].shapes.title.text_frame.paragraphs[0].runs[0].font
     paragraph_font.color = (1, 2, 3)
-    assert paragraph_font.color == "010203"
-    with pytest.raises(TypeError, match="font color must be an RGBColor"):
+    assert str(paragraph_font.color.rgb) == "010203"
+    with pytest.raises(TypeError, match="color must be an RGBColor"):
         paragraph_font.color = 3.5

@@ -1542,12 +1542,12 @@ impl PyShapeCollection {
     /// the returned group's `shapes`.
     fn group(&mut self, py: Python<'_>, shapes: &Bound<'_, PyAny>) -> PyResult<Py<PyShape>> {
         let indices = self.member_indices(py, shapes)?;
-        let (slide_index, group) = self.target(py)?;
+        let (part, group) = self.target(py)?;
         let index = {
             let mut presentation = self.presentation.borrow_mut(py);
             presentation
                 .inner
-                .shapes_mut(slide_index, &group)
+                .part_shapes_mut(part, &group)
                 .expect("the target is a slide or a group")
                 .group(&indices)
                 .map_err(|error| rpptx_to_pyerr(py, error))?;
@@ -1661,7 +1661,12 @@ impl PyShapeCollection {
         poster_frame_image: Option<&Bound<'_, PyAny>>,
         mime_type: Option<&str>,
     ) -> PyResult<Py<PyShape>> {
-        let (slide_index, group) = self.target(py)?;
+        let (part, group) = self.target(py)?;
+        let rpptx::PartRef::Slide(slide_index) = part else {
+            return Err(PyValueError::new_err(
+                "a movie goes on a slide, not on a slide layout or slide master",
+            ));
+        };
         if !group.is_empty() {
             return Err(PyValueError::new_err(
                 "a movie goes on the slide's own shapes, not in a group",
@@ -1825,11 +1830,11 @@ impl PyShapeCollection {
         arrange: impl FnOnce(&mut rpptx::ShapesMut<'_>, &[usize]) -> rpptx::Result<()>,
     ) -> PyResult<()> {
         let indices = self.member_indices(py, shapes)?;
-        let (slide_index, group) = self.target(py)?;
+        let (part, group) = self.target(py)?;
         let mut presentation = self.presentation.borrow_mut(py);
         let mut collection = presentation
             .inner
-            .shapes_mut(slide_index, &group)
+            .part_shapes_mut(part, &group)
             .expect("the target is a slide or a group");
         arrange(&mut collection, &indices).map_err(|error| rpptx_to_pyerr(py, error))
     }
