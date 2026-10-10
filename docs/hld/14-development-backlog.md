@@ -7419,25 +7419,36 @@ all archive/baseline evidence from actual accepted source.
 
 ### F-X212, Align native accessibility with visible paragraph content (M)
 
-PR317 adds a native accessibility fix beyond F-X196 read-only CLI validation.
-Adopt the accepted visible-content behavior once, preserving the completed
-CLI scan and extending its contract only where independently justified.
-Reuse the contributor native predicate and audit regression after qualifying
-raw names and typed admission. Pictures, drawings, objects, symbols, breaks,
-note references and equations interrupt an empty-paragraph run. Opaque
-producer XML, foreign lookalikes, properties, deleted text, loose field
-instructions/markers and soft hyphens do not prove visible content.
-Preserve every unmodelled byte, schema order and audit source inventory.
+Native `Document::paragraph_visibility` returns final displayed-content flags
+in recursive facade paragraph order from one unpublished current-source
+candidate. The shared qualified scanner validates physical owners and admitted
+typed slots, including the first expanded content-control slot. Native audit
+uses direct body paragraphs only, resets the streak for every other body item,
+and preserves metadata, image-alt and heading findings. Source construction
+or classification failure adds one indeterminate Warning and skips empty
+streak findings instead of fabricating flags.
+
+Accepted pictures, drawings, objects, symbols, tabs, breaks, note references,
+equations and complete displayed field results interrupt empty streaks.
+Parser-owned simple and complex results preserve accepted nontext, nested
+owner identity, namespace provenance and current-cache consistency. Deleted
+results, opaque producer hints, foreign lookalikes, properties, loose field
+markers or instructions and soft hyphens alone do not prove visibility.
+CLI validation shares the classifier and recursive inventory, with explicit
+complete-field display and indeterminate-error handling. All operations
+preserve live source, package bytes and unmodelled XML.
 
 **Depends on**: F-X196.
-**Test gate**: regression. Real picture-only paragraphs reproduce the current
-consecutive-empty audit error. Namespace/opaque/deleted/duplicate control
-cases preserve source. Native and CLI shared discriminators state any
-intentional semantic refinement explicitly. Expected feature_showcase deltas
-are limited to word/document.xml and PDF bytes/pages due to one fewer
-accessibility finding. Derive the actual49-key result, prove reverting the
-audit correction restores the old result, review the delta independently
-and make its own labelled commit. No contributor baseline is copied.
+**Test gate**: regression. Public picture, namespace, field/cache, deleted,
+opaque, duplicate-slot, current-edit and failure controls distinguish genuine
+empty paragraphs across native and CLI consumers. Nested child mutation,
+refresh and save/reopen retain owner identity and bounded graph work.
+Deterministic attribution permits only the three feature_showcase XML and PDF
+bytes/pages keys, with 46 unchanged entries. Audit-only reversal must recover
+all original 49 entries, prove exactly the issue-count and removed-finding
+XML effects, and restore accepted source. Expected deltas require independent
+review and a separate labelled behavior commit. Contributor baselines are not
+accepted evidence.
 
 ## Rolling contribution reconciliation, 2026-10-09
 

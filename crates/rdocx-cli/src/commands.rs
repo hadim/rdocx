@@ -13,16 +13,16 @@ use oxml_opc::relationship::rel_types;
 use quick_xml::XmlVersion;
 use quick_xml::escape::escape;
 use quick_xml::events::{BytesStart, Event};
-use quick_xml::name::{Namespace, PrefixDeclaration, ResolveResult};
+use quick_xml::name::{Namespace, ResolveResult};
 use quick_xml::reader::NsReader;
 use rdocx::{
     BodyItemRef, ComparisonGranularity, ComparisonOptions, ComparisonStoryKind, Document,
     HdrFtrType, HeaderFooterKind, RasterFormat, RasterOptions, RasterOutput, RevisionKind,
     RevisionView, RunRange, StoryId, StoryItemKind, StoryKind,
 };
-use rdocx_oxml::content_control::{CT_Sdt, SdtContent, StorySdtOwner};
+use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Document};
-use rdocx_oxml::namespace::{M_NS, MC_NS, W_NS};
+use rdocx_oxml::namespace::{MC_NS, W_NS};
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent};
 use rdocx_oxml::text::{CT_P, CT_R};
 use serde_json::{Value, json};
@@ -2315,27 +2315,17 @@ pub fn validate(file: &Path) -> Result<bool> {
         warnings.push("Document has no content (no paragraphs or tables)".to_string());
     }
 
-    let paragraphs = doc.paragraphs();
-    let main_part = package
-        .main_document_part()
-        .and_then(|name| package.get_part(&name))
-        .ok_or("main document part is missing")?;
-    let nontext_content = match paragraph_nontext_content(main_part) {
-        Ok(flags) => flags,
-        // Preserve existing structural diagnostics when malformed XML cannot be scanned.
-        Err(_) if !errors.is_empty() => vec![false; paragraphs.len()],
-        Err(error) => return Err(error),
-    };
-    if nontext_content.len() != paragraphs.len() {
-        return Err("main document paragraph inventory does not match validation scope".into());
-    }
-    let empty_count = paragraphs
-        .iter()
-        .zip(nontext_content)
-        .filter(|(paragraph, visible)| paragraph.text().trim().is_empty() && !visible)
-        .count();
-    if empty_count > 0 {
-        warnings.push(format!("{empty_count} empty paragraph(s) found"));
+    match doc.paragraph_visibility() {
+        Ok(visibility) => {
+            let empty_count = visibility.iter().filter(|visible| !**visible).count();
+            if empty_count > 0 {
+                warnings.push(format!("{empty_count} empty paragraph(s) found"));
+            }
+        }
+        Err(error) if !errors.is_empty() => warnings.push(format!(
+            "Paragraph visibility could not be determined: {error}"
+        )),
+        Err(error) => return Err(error.into()),
     }
 
     let mut prev_level: Option<u32> = None;
@@ -2358,183 +2348,6 @@ pub fn validate(file: &Path) -> Result<bool> {
     }
 
     report_validation(file, &errors, &warnings)
-}
-
-/// Match the facade's body paragraph inventory, including nested block controls,
-/// and mark visible nontext children without entering direct body tables or opaque wrappers.
-fn paragraph_nontext_content(xml: &[u8]) -> Result<Vec<bool>> {
-    let mut reader = NsReader::from_reader(xml);
-    // Qualified Word name, admitted path, paragraph boundary, typed content slot.
-    let mut open: Vec<(Vec<u8>, bool, bool, bool)> = Vec::new();
-    let mut in_paragraph = false;
-    let mut visible = Vec::new();
-    let mut buffer = Vec::new();
-    loop {
-        let event_start = usize::try_from(reader.buffer_position())?;
-        let (namespace, event) = reader.read_resolved_event_into(&mut buffer)?;
-        match event {
-            Event::Start(ref element) | Event::Empty(ref element) => {
-                let local = element.local_name();
-                let word = matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == W_NS.as_bytes());
-                let math = matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == M_NS.as_bytes());
-                let compatibility = matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == MC_NS.as_bytes());
-                let parent = open.last().map(|(name, _, _, _)| name.as_slice());
-                let admitted_parent = open.last().is_some_and(|(_, admitted, _, _)| *admitted);
-                // A control inherits its physical container's admitted child kinds.
-                let container = if parent == Some(b"sdtContent") {
-                    open.iter().rev().find_map(|(name, admitted, _, _)| {
-                        (*admitted && matches!(name.as_slice(), b"body" | b"tbl" | b"tr" | b"tc"))
-                            .then_some(name.as_slice())
-                    })
-                } else {
-                    parent
-                };
-                let typed_control = if word
-                    && local.as_ref() == b"sdt"
-                    && admitted_parent
-                    && matches!(event, Event::Start(_))
-                {
-                    let prefixes = reader
-                        .resolver()
-                        .bindings()
-                        .filter(|(_, namespace)| namespace.as_ref() == W_NS.as_bytes())
-                        .map(|(prefix, _)| match prefix {
-                            PrefixDeclaration::Default => Ok(String::new()),
-                            PrefixDeclaration::Named(prefix) => {
-                                std::str::from_utf8(prefix).map(str::to_owned)
-                            }
-                        })
-                        .collect::<std::result::Result<Vec<_>, _>>()?;
-                    let owner = if in_paragraph {
-                        StorySdtOwner::Inline
-                    } else {
-                        match container {
-                            Some(b"tbl") => StorySdtOwner::Table,
-                            Some(b"tr") => StorySdtOwner::Row,
-                            _ => StorySdtOwner::Block,
-                        }
-                    };
-                    let mut probe = reader.clone();
-                    probe.read_to_end(element.name())?;
-                    let end = usize::try_from(probe.buffer_position())?;
-                    let source = xml
-                        .get(event_start..end)
-                        .ok_or("content-control source span is invalid")?;
-                    CT_Sdt::story_raw_is_typed(source, &prefixes, owner)
-                } else {
-                    false
-                };
-                let first_content = word
-                    && local.as_ref() == b"sdtContent"
-                    && admitted_parent
-                    && parent == Some(b"sdt")
-                    && matches!(event, Event::Start(_))
-                    && open.last().is_some_and(|(_, _, _, seen)| !seen);
-                let mut paragraph = false;
-                let admitted = if in_paragraph {
-                    if admitted_parent
-                        && ((word
-                            && matches!(
-                                local.as_ref(),
-                                b"drawing"
-                                    | b"pict"
-                                    | b"object"
-                                    | b"sym"
-                                    | b"tab"
-                                    | b"br"
-                                    | b"cr"
-                                    | b"footnoteReference"
-                                    | b"endnoteReference"
-                                    | b"fldChar"
-                                    | b"fldSimple"
-                            ))
-                            || (math && matches!(local.as_ref(), b"oMath" | b"oMathPara")))
-                        && let Some(flag) = visible.last_mut()
-                    {
-                        *flag = true;
-                    }
-                    admitted_parent
-                        && ((word
-                            && matches!(
-                                local.as_ref(),
-                                b"r" | b"hyperlink"
-                                    | b"ins"
-                                    | b"moveTo"
-                                    | b"smartTag"
-                                    | b"customXml"
-                                    | b"sdt"
-                                    | b"sdtContent"
-                                    | b"dir"
-                                    | b"bdo"
-                            )
-                            && match local.as_ref() {
-                                b"sdt" => typed_control,
-                                b"sdtContent" => first_content,
-                                _ => true,
-                            })
-                            || (compatibility
-                                && matches!(
-                                    local.as_ref(),
-                                    b"AlternateContent" | b"Choice" | b"Fallback"
-                                )))
-                } else if word {
-                    match local.as_ref() {
-                        b"document" => open.is_empty(),
-                        b"body" => admitted_parent && parent == Some(b"document"),
-                        b"sdt" => {
-                            typed_control
-                                && matches!(container, Some(b"body" | b"tbl" | b"tr" | b"tc"))
-                        }
-                        b"sdtContent" => first_content,
-                        b"tbl" => {
-                            admitted_parent
-                                && parent == Some(b"sdtContent")
-                                && matches!(container, Some(b"body" | b"tc"))
-                        }
-                        b"tr" => admitted_parent && container == Some(b"tbl"),
-                        b"tc" => admitted_parent && container == Some(b"tr"),
-                        b"p" if admitted_parent && matches!(container, Some(b"body" | b"tc")) => {
-                            visible.push(false);
-                            paragraph = true;
-                            if matches!(event, Event::Start(_)) {
-                                in_paragraph = true;
-                            }
-                            true
-                        }
-                        _ => false,
-                    }
-                } else {
-                    false
-                };
-                if first_content && let Some((_, _, _, seen)) = open.last_mut() {
-                    *seen = true;
-                }
-                if matches!(event, Event::Start(_)) {
-                    open.push((
-                        if word {
-                            local.as_ref().to_vec()
-                        } else {
-                            Vec::new()
-                        },
-                        admitted,
-                        paragraph,
-                        false,
-                    ));
-                }
-            }
-            Event::End(_) => {
-                if open.pop().is_some_and(|(_, _, paragraph, _)| paragraph) {
-                    in_paragraph = false;
-                }
-            }
-            Event::Eof if !open.is_empty() => {
-                return Err("main document ends inside an element".into());
-            }
-            Event::Eof => return Ok(visible),
-            _ => {}
-        }
-        buffer.clear();
-    }
 }
 
 fn report_validation(file: &Path, errors: &[String], warnings: &[String]) -> Result<bool> {
@@ -2665,16 +2478,6 @@ fn word_value(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn visible_content_does_not_hide_malformed_remaining_xml() {
-        for ending in ["", "</w:r></w:body></w:document>"] {
-            let xml = format!(
-                r#"<w:document xmlns:w="{W_NS}"><w:body><w:p><w:r><w:drawing/></w:r></w:p>{ending}"#
-            );
-            assert!(paragraph_nontext_content(xml.as_bytes()).is_err(), "{xml}");
-        }
-    }
 
     /// The Myers matches of `diff` are a longest common subsequence: equal,
     /// strictly increasing pairs as many as the quadratic table finds.

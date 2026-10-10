@@ -26,6 +26,32 @@ XML and coordinates, stable read revisions and held handle validity. Strict
 typing and stub agreement remain separate checks. No field evaluation or native
 Word session is needed to expose an already stored cache.
 
+Paragraph-visibility regressions share native audit and CLI source-built
+controls. Real picture-only paragraphs interrupt direct-body empty streaks,
+while later true empty paragraphs retain their findings. The public native
+query matches its recursive facade inventory, including admitted block-control
+and control-owned table slots. Alias, default, rebound and foreign namespaces,
+accepted/deleted wrappers, opaque owners, duplicate slots and malformed source
+are distinct controls. Queries and validation leave live model, package and
+input bytes unchanged, including after unsaved edits or source refusal.
+
+Parser controls cover complete simple, nested and spanning complex fields,
+accepted nontext and special-character results, deleted-only results,
+ordinary text-only projection and soft-hyphen exclusion. Direct public cache
+mutation must filter stale typed display without changing source ownership.
+A stale parent cache must still permit supported child mutation, refresh and
+save/reopen through its single authoritative graph. Original owner identity
+and source spans survive, new child replacement refuses, and mixed annotation
+and growing-nest controls bound retained graph and clone work. Empty
+PAGE/NUMPAGES placeholder positives remain separate from non-placeholder
+empty-cache negatives.
+
+Source failure controls require one native indeterminate Warning and no
+consecutive-empty finding, retaining other audit findings. CLI controls
+separate a Result error from a structural-error report with an indeterminate
+Warning. Neither path substitutes all-empty flags. Shared matrices and exact
+legacy controls prove the explicit complete-field display refinement.
+
 The comment ownership regression uses source-built packages and a compiled
 exact-Base failure for whole-thread removal and partial-cut refusal. Existing
 integration gates separately prove row removal, fragment pop and cell text
@@ -1467,16 +1493,23 @@ Check mode reads the manifest without modifying it and reports added, removed,
 and changed entries. Baseline writes require `--update --reason <text>`, and an
 empty reason is rejected. Generated PNGs remain ignored under `samples/`.
 
-The current reviewed Word-validity delta changes exactly
+Accessibility report generation writes both an issue count and one numbered
+paragraph per finding. Its visibility correction affects exactly
 `feature_showcase:word/document.xml`, `feature_showcase:pdf/pages`, and
-`feature_showcase:pdf/bytes`. `Cell::add_table` now leaves the trailing empty
-cell paragraph Word requires. That new paragraph changes the nested table's
-Word XML and a later PDF page. Its PDF resources, page-one PNG, every other
-sample entry, and the manifest cardinality remain unchanged.
+`feature_showcase:pdf/bytes`. The issue count is three, and the false
+four-consecutive-empty-paragraph Info item is absent. Those are the only two
+XML effects. PDF resources, page-one PNG, all other 46 entries and the
+49-entry manifest cardinality remain unchanged.
 
-The harness remains necessary because an output change can pass structural
-round-trip tests. The three-entry F-X159 delta was reviewed against the
-source-built package and deterministic render.
+Attribution requires a deterministic accepted-source measurement and a bounded
+reversal of only the audit method that recovers the exact original 49 entries.
+The proof compares the whole generated XML and every other package member,
+checks both the count and complete finding paragraph, then restores the full
+accepted source guards. A successful hash child does not establish that its
+outer diagnostic helper succeeded. Helper assertions and restoration are
+reported separately, and any failed assertion needs authenticated retained
+artifacts rather than a renamed pass. The harness remains necessary even
+when structural round-trip tests pass.
 
 Rules:
 

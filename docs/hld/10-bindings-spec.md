@@ -836,6 +836,41 @@ native validation failure publishes no candidate and leaves existing handles
 valid.
 
 ## Native Word facade stability
+
+Native Rust exposes `Document::paragraph_visibility(&self) -> Result<Vec<bool>>`.
+Each flag matches one `Document::paragraphs()` item in encounter order. The
+inventory includes direct body paragraphs and admitted block-control
+paragraphs, entering control-owned tables. Direct body tables and direct
+nested cell tables remain excluded. Qualified physical owner paths and typed
+content slots must match before any flags are returned.
+
+The query clones one unpublished candidate, flushes its current model to the
+resolved main part once, and classifies that source without changing the live
+document or package. It uses retained namespace bindings, including aliases,
+defaults and shadows. Unsupported or ambiguous source construction, malformed
+XML and owner mismatches return Error. It does not save, reopen or serialize
+each paragraph separately.
+
+Accepted non-whitespace text, drawings, pictures, objects, equations, symbols,
+tabs, breaks, note references and supported special characters are visible.
+A soft hyphen alone, deleted text, comment references, properties, range
+markers and producer hints are not. Complete simple and complex fields use
+consistent accepted typed results, including nested nontext caches, before
+their current effective text cache. Loose markers and instructions alone do
+not count. Current empty PAGE/NUMPAGES serialization supplies its existing
+visible placeholder. Parser-owned results retain qualified source identity
+and one authoritative nested child graph. Public cache reads retain their
+consistency filter, while child edits and refresh use that graph even when a
+parent's effective cache is temporarily stale. Unsupported replacement of a
+retained child owner is refused.
+
+`Document::audit_accessibility` uses the same classifier with only direct
+body paragraphs. Every nonparagraph body item resets its empty streak.
+Pictures and other displayed content interrupt the streak. If visibility
+cannot be determined, the infallible audit retains metadata, image-alt and
+heading findings, adds one Warning with the actual error detail, and omits
+consecutive-empty findings. It does not invent empty flags on failure.
+
 Native Rust exposes `BibliographySourceKind`, `BibliographyContributorRole`,
 `BibliographySourceField`, `BibliographyStyle`, source/person/contributor/property
 records, source/style inspection records, `CitationOptions`,
@@ -3083,15 +3118,21 @@ opens, so a malformed styles, numbering, or settings part is named in the
 report beside the open failure it causes. Empty-paragraph advisories count
 body paragraphs and paragraphs nested in block content controls, including
 control-owned tables. Direct body tables and direct nested cell tables remain
-excluded, while tables wrapped by a cell control remain included. A qualified drawing, picture, object, symbol, tab, break, note reference,
-field or equation makes a paragraph nonempty, including visible content inside
-supported inline wrappers. Properties, bookmarks, range markers, deleted
-content and producer page-break hints do not. A read-only qualified main-part
-scan aligns with that paragraph inventory and leaves the input bytes intact.
-It follows native typed content-control admission and only the first expanded
-content slot. Duplicate slots, invalid opaque controls and self-closing raw
-slots do not add visible content or paragraphs.
-Title and author advisories retain their existing behavior. `layout --json` uses
+excluded, while tables wrapped by a cell control remain included. `Document::paragraph_visibility` supplies the final accepted text and
+nontext classification, including visible content inside supported inline
+wrappers. Complete fields require accepted displayed results, not loose field
+markers or instructions. A consistent typed deleted-only result remains empty
+even when its public text-extraction cache is nonempty. Properties, bookmarks,
+range markers, deleted content, producer hints and soft hyphens alone do not
+count. The read-only current-source scan follows native typed content-control
+admission and only the first expanded content slot. Duplicate slots, invalid
+opaque controls and self-closing raw slots add neither visibility nor owners.
+
+A visibility failure returns Error when no structural error has already been
+collected. Otherwise validation retains those errors, adds one indeterminate
+paragraph-visibility Warning with the actual detail, and omits the empty-count
+advisory. It does not substitute plain text or all-false flags. Title, author
+and heading advisories retain their existing behavior. `layout --json` uses
 bundled deterministic fonts and reports every direct body item. Its point-space
 fragments carry one-based physical and displayed page numbers, and preserved
 unlaid items retain an empty fragment list. `diff` compares accepted-view

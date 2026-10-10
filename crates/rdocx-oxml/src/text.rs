@@ -791,10 +791,24 @@ impl Field {
         self.nested_fields_from_instruction(&self.instruction, structured_unchanged)
     }
 
+    fn parsed_cached_child_runs(&self) -> Option<&[CT_R]> {
+        self.parsed_cached_runs.as_deref().filter(|runs| {
+            self.cached_fields.is_empty()
+                && runs
+                    .iter()
+                    .flat_map(|run| &run.content)
+                    .any(|content| matches!(content, RunContent::Field(_)))
+        })
+    }
+
     /// Direct nested fields in the ordered cached result, without flattening it.
     #[doc(hidden)]
     pub fn cached_fields_in_source_order(&self) -> Vec<&Field> {
-        if let Some(runs) = self.typed_cache().or(self.simple_cached_runs.as_deref()) {
+        if let Some(runs) = self
+            .typed_cache()
+            .or(self.simple_cached_runs.as_deref())
+            .or(self.parsed_cached_child_runs())
+        {
             return runs
                 .iter()
                 .flat_map(|run| &run.content)
@@ -833,34 +847,34 @@ impl Field {
     /// replacement without the original simple-cache source span.
     #[doc(hidden)]
     pub fn cached_field_mut(&mut self, index: usize) -> Option<&mut Field> {
-        if let Some(runs) = self
+        let parsed_children = self.parsed_cached_child_runs().is_some();
+        let runs = self
             .typed_cached_runs
             .as_mut()
             .or(self.simple_cached_runs.as_mut())
-        {
+            .or(if parsed_children {
+                self.parsed_cached_runs.as_mut()
+            } else {
+                None
+            })
+            .or(match &mut self.source {
+                FieldSource::New { cached_runs, .. } => cached_runs.as_mut(),
+                _ => None,
+            });
+        if let Some(runs) = runs {
             return runs
                 .iter_mut()
                 .flat_map(|run| &mut run.content)
-                .filter_map(|content| match content {
-                    RunContent::Field(field) => Some(field),
-                    _ => None,
+                .filter_map(|content| {
+                    if let RunContent::Field(field) = content {
+                        Some(field)
+                    } else {
+                        None
+                    }
                 })
                 .nth(index);
         }
-        match &mut self.source {
-            FieldSource::New {
-                cached_runs: Some(runs),
-                ..
-            } => runs
-                .iter_mut()
-                .flat_map(|run| &mut run.content)
-                .filter_map(|content| match content {
-                    RunContent::Field(field) => Some(field),
-                    _ => None,
-                })
-                .nth(index),
-            _ => self.cached_fields.get_mut(index).map(|(_, field)| field),
-        }
+        self.cached_fields.get_mut(index).map(|(_, field)| field)
     }
 
     /// Refresh the display projection after nested cached fields were edited.
@@ -872,7 +886,11 @@ impl Field {
     }
 
     fn nested_cached_projection(&self) -> Option<String> {
-        if let Some(runs) = self.typed_cache().or(self.simple_cached_runs.as_deref()) {
+        if let Some(runs) = self
+            .typed_cache()
+            .or(self.simple_cached_runs.as_deref())
+            .or(self.parsed_cached_child_runs())
+        {
             return Some(runs.iter().map(cached_run_display).collect());
         }
         match &self.source {
@@ -1162,6 +1180,7 @@ impl Field {
             let runs = self
                 .typed_cache()
                 .or(self.simple_cached_runs.as_deref())
+                .or(self.parsed_cached_child_runs())
                 .or(match &self.source {
                     FieldSource::New {
                         cached_runs: Some(runs),
@@ -3175,6 +3194,7 @@ fn parse_simple_field(raw: &[u8], word_prefixes: &[String]) -> Result<Option<Fie
     let mut cached_result = String::new();
     let mut cached_segments = Vec::new();
     let mut result_run_index = 0usize;
+    let mut result_runs = Vec::new();
     loop {
         buffer.clear();
         let before = reader.buffer_position() as usize;
@@ -3189,9 +3209,10 @@ fn parse_simple_field(raw: &[u8], word_prefixes: &[String]) -> Result<Option<Fie
                         cached_segments.push(CachedDisplaySegment {
                             run_index: result_run_index,
                             text,
-                            properties: run.properties,
+                            properties: run.properties.clone(),
                         });
                     }
+                    result_runs.push(run);
                     result_run_index += 1;
                 } else {
                     reader.read_to_end_into(start.name(), &mut Vec::new())?;
@@ -3219,6 +3240,15 @@ fn parse_simple_field(raw: &[u8], word_prefixes: &[String]) -> Result<Option<Fie
         raw.to_vec(),
         prefixes.clone(),
     );
+    if cached_runs_need_typed_projection(&result_runs)
+        && result_runs
+            .iter()
+            .map(cached_run_display)
+            .collect::<String>()
+            == field.cached_result
+    {
+        field.simple_cached_runs = Some(result_runs);
+    }
     let result_xml = &raw[result_start..result_end];
     // The typed pass still decides namespace and structure. This cheap absence
     // test avoids reparsing ordinary text-only caches.
@@ -3252,15 +3282,17 @@ fn parse_simple_field(raw: &[u8], word_prefixes: &[String]) -> Result<Option<Fie
             Some(&cache_root),
         )?;
         let runs = paragraph.runs().into_iter().cloned().collect::<Vec<_>>();
-        if runs.iter().flat_map(|run| &run.content).any(|content| {
-            matches!(
-                content,
-                RunContent::Field(_)
-                    | RunContent::FootnoteRef { .. }
-                    | RunContent::EndnoteRef { .. }
-                    | RunContent::CommentReference { .. }
-            )
-        }) {
+        if cached_runs_need_typed_projection(&runs)
+            || runs.iter().flat_map(|run| &run.content).any(|content| {
+                matches!(
+                    content,
+                    RunContent::Field(_)
+                        | RunContent::FootnoteRef { .. }
+                        | RunContent::EndnoteRef { .. }
+                        | RunContent::CommentReference { .. }
+                )
+            })
+        {
             field.cached_result = runs.iter().map(cached_run_display).collect();
             if let FieldSource::Parsed {
                 original_cached_result,
@@ -3343,6 +3375,13 @@ fn simple_result_run_display(raw: &[u8], word_prefixes: &[String]) -> Result<Opt
                         BreakType::Column => '\u{000b}',
                     };
                     display.get_or_insert_default().push(marker);
+                } else if matches!(
+                    parse_typed_special_run_child(&element, &prefixes)?,
+                    Some(RunContent::SpecialCharacter(
+                        SpecialCharacter::CarriageReturn
+                    ))
+                ) {
+                    display.get_or_insert_default().push('\n');
                 }
             }
             Event::End(end) if matches_local_name(end.name().as_ref(), b"r") => {
@@ -4156,9 +4195,7 @@ enum ComplexFieldEvent {
     Separate(Option<bool>),
     End(Option<bool>),
     Instruction(String),
-    Result(String),
-    Tab,
-    Break(BreakType),
+    Result(RunContent),
 }
 
 fn complex_field_events(raw: &[u8], word_prefixes: &[String]) -> Result<Vec<ComplexFieldEvent>> {
@@ -4189,17 +4226,27 @@ fn complex_field_events(raw: &[u8], word_prefixes: &[String]) -> Result<Vec<Comp
                         crate::xml_text::read_element_text(&mut reader, start.name()),
                     ));
                 } else if is_word_element(start.name().as_ref(), b"t", &prefixes) {
-                    events.push(ComplexFieldEvent::Result(
-                        crate::xml_text::read_element_text(&mut reader, start.name()),
-                    ));
+                    events.push(ComplexFieldEvent::Result(RunContent::Text(CT_Text {
+                        preserve_space: start.attributes().any(|attribute| {
+                            attribute.ok().is_some_and(|attribute| {
+                                attribute.key.as_ref() == b"xml:space"
+                                    && attribute.value.as_ref() == b"preserve"
+                            })
+                        }),
+                        text: crate::xml_text::read_element_text(&mut reader, start.name()),
+                    })));
                 } else if is_word_element(start.name().as_ref(), b"tab", &prefixes) {
-                    events.push(ComplexFieldEvent::Tab);
+                    events.push(ComplexFieldEvent::Result(RunContent::Tab));
                     reader.read_to_end_into(start.name(), &mut Vec::new())?;
                 } else if is_word_element(start.name().as_ref(), b"br", &prefixes) {
-                    events.push(ComplexFieldEvent::Break(field_break_type(
-                        &start, &prefixes,
+                    events.push(ComplexFieldEvent::Result(RunContent::Break(
+                        field_break_type(&start, &prefixes),
                     )));
                     reader.read_to_end_into(start.name(), &mut Vec::new())?;
+                } else if is_word_element(start.name().as_ref(), b"drawing", &prefixes) {
+                    events.push(ComplexFieldEvent::Result(RunContent::Drawing(
+                        CT_Drawing::from_xml_with_prefixes(&mut reader, &prefixes)?,
+                    )));
                 } else {
                     reader.read_to_end_into(start.name(), &mut Vec::new())?;
                 }
@@ -4209,11 +4256,13 @@ fn complex_field_events(raw: &[u8], word_prefixes: &[String]) -> Result<Vec<Comp
                 if is_word_element(start.name().as_ref(), b"fldChar", &prefixes) {
                     push_field_char_event(&mut events, &start, &prefixes);
                 } else if is_word_element(start.name().as_ref(), b"tab", &prefixes) {
-                    events.push(ComplexFieldEvent::Tab);
+                    events.push(ComplexFieldEvent::Result(RunContent::Tab));
                 } else if is_word_element(start.name().as_ref(), b"br", &prefixes) {
-                    events.push(ComplexFieldEvent::Break(field_break_type(
-                        &start, &prefixes,
+                    events.push(ComplexFieldEvent::Result(RunContent::Break(
+                        field_break_type(&start, &prefixes),
                     )));
+                } else if let Some(content) = parse_typed_special_run_child(&start, &prefixes)? {
+                    events.push(ComplexFieldEvent::Result(content));
                 }
             }
             Event::End(end) if matches_local_name(end.name().as_ref(), b"r") => break,
@@ -4263,7 +4312,8 @@ struct ComplexFieldBuilder {
     instruction: Vec<InstructionPart>,
     cached_result: String,
     cached_segments: Vec<CachedDisplaySegment>,
-    cached_fields: Vec<(std::ops::Range<usize>, Field)>,
+    cached_child_ranges: Vec<std::ops::Range<usize>>,
+    cached_runs: Vec<CT_R>,
     valid: bool,
 }
 
@@ -4330,8 +4380,11 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
             {
                 let end = parent.cached_result.len();
                 parent
-                    .cached_fields
-                    .push((end - child.cached_result.len()..end, child.clone()));
+                    .cached_child_ranges
+                    .push(end - child.cached_result.len()..end);
+                parent
+                    .cached_runs
+                    .push(field_run(child.clone(), runs[run_index].properties.clone()));
             }
             continue;
         }
@@ -4345,7 +4398,8 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
                     instruction: Vec::new(),
                     cached_result: String::new(),
                     cached_segments: Vec::new(),
-                    cached_fields: Vec::new(),
+                    cached_child_ranges: Vec::new(),
+                    cached_runs: Vec::new(),
                     valid: true,
                 }),
                 ComplexFieldEvent::Instruction(text) => {
@@ -4355,50 +4409,33 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
                         field.instruction.push(InstructionPart::Text(text));
                     }
                 }
-                ComplexFieldEvent::Result(text) => {
-                    for field in &mut stack {
-                        if field.separate_run.is_some() {
-                            field.cached_result.push_str(&text);
-                            push_cached_display_segment(
-                                &mut field.cached_segments,
-                                run_index,
-                                &text,
-                                runs[run_index].properties.as_ref(),
-                            );
-                        }
-                    }
-                }
-                ComplexFieldEvent::Tab => {
-                    for field in &mut stack {
-                        if field.separate_run.is_some() {
-                            field.cached_result.push('\t');
-                            push_cached_display_segment(
-                                &mut field.cached_segments,
-                                run_index,
-                                "\t",
-                                runs[run_index].properties.as_ref(),
-                            );
-                        }
-                    }
-                }
-                ComplexFieldEvent::Break(break_type) => {
-                    let marker = match break_type {
-                        BreakType::Line => '\n',
-                        BreakType::Page => '\u{000c}',
-                        BreakType::Column => '\u{000b}',
+                ComplexFieldEvent::Result(content) => {
+                    let display = match &content {
+                        RunContent::Break(BreakType::Page) => "\u{000c}",
+                        RunContent::Break(BreakType::Column) => "\u{000b}",
+                        _ => CT_R::content_text(&content),
                     };
                     for field in &mut stack {
                         if field.separate_run.is_some() {
-                            field.cached_result.push(marker);
-                            let mut text = String::new();
-                            text.push(marker);
+                            field.cached_result.push_str(display);
                             push_cached_display_segment(
                                 &mut field.cached_segments,
                                 run_index,
-                                &text,
+                                display,
                                 runs[run_index].properties.as_ref(),
                             );
                         }
+                    }
+                    if let Some(field) = stack.last_mut()
+                        && field.separate_run.is_some()
+                    {
+                        field.cached_runs.push(CT_R {
+                            properties: runs[run_index].properties.clone(),
+                            content: vec![content],
+                            extra_xml: Vec::new(),
+                            extra_xml_positions: Vec::new(),
+                            alt_drawings: Vec::new(),
+                        });
                     }
                 }
                 ComplexFieldEvent::Separate(dirty) => {
@@ -4434,7 +4471,6 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
                         word_prefixes.to_vec(),
                     );
                     parsed.nested_order = nested_order;
-                    parsed.cached_fields = field.cached_fields;
                     if field.separate_run.is_some()
                         && let FieldSource::Parsed { raw_xml, .. } = &parsed.source
                         && source_has_note_reference_name(raw_xml)
@@ -4455,6 +4491,35 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
                         parsed.parsed_cached_runs = Some(cache_runs);
                         parsed.parsed_cached_comment_ranges = cache_ranges;
                     }
+                    if parsed.parsed_cached_runs.is_none()
+                        && cached_runs_need_typed_projection(&field.cached_runs)
+                        && field
+                            .cached_runs
+                            .iter()
+                            .map(cached_run_display)
+                            .collect::<String>()
+                            == parsed.cached_result
+                    {
+                        parsed.parsed_cached_runs = Some(field.cached_runs);
+                    } else {
+                        parsed.cached_fields = field
+                            .cached_child_ranges
+                            .into_iter()
+                            .zip(
+                                field
+                                    .cached_runs
+                                    .into_iter()
+                                    .flat_map(|run| run.content)
+                                    .filter_map(|content| {
+                                        if let RunContent::Field(child) = content {
+                                            Some(child)
+                                        } else {
+                                            None
+                                        }
+                                    }),
+                            )
+                            .collect();
+                    }
                     let valid = field.valid
                         && !parsed.instruction.name.is_empty()
                         && run_sources[field.start_run..=run_index]
@@ -4468,7 +4533,8 @@ fn project_complex_fields(projection: ComplexFieldProjection<'_>) -> Result<()> 
                         } else {
                             let end = parent.cached_result.len();
                             let start = end.saturating_sub(parsed.cached_result.len());
-                            parent.cached_fields.push((start..end, parsed));
+                            parent.cached_child_ranges.push(start..end);
+                            parent.cached_runs.push(field_run(parsed, None));
                         }
                     } else if valid {
                         completed.push((field.start_run, run_index, parsed, None));
@@ -9546,15 +9612,16 @@ fn update_nested_field_sources(
         edits.push((span.start, span.end, replacement));
     }
 
-    let complex_children = field
-        .cached_fields
+    let children = field.cached_fields_in_source_order();
+    let complex_children = children
         .iter()
-        .filter(|(_, child)| child.form() == FieldForm::Complex)
+        .copied()
+        .filter(|child| child.form() == FieldForm::Complex)
         .collect::<Vec<_>>();
-    let simple_children = field
-        .cached_fields
+    let simple_children = children
         .iter()
-        .filter(|(_, child)| child.form() == FieldForm::Simple)
+        .copied()
+        .filter(|child| child.form() == FieldForm::Simple)
         .collect::<Vec<_>>();
     if field.typed_cache().is_none()
         && (scan.result_nested.len() != complex_children.len()
@@ -9564,7 +9631,17 @@ fn update_nested_field_sources(
             "nested cached field spans in owning complex field".to_owned(),
         ));
     }
-    for ((_, nested), span) in complex_children.into_iter().zip(scan.result_nested) {
+    for (nested, span) in complex_children.into_iter().zip(scan.result_nested) {
+        if field.parsed_cached_child_runs().is_some() {
+            let expected = &raw[scan.runs[span.start_run].start..scan.runs[span.end_run].end];
+            if !matches!(&nested.source, FieldSource::Parsed { raw_xml, .. } if raw_xml.as_slice() == expected)
+            {
+                return Err(OxmlError::InvalidValue(
+                    "replacement cached field has no original complex-cache source identity"
+                        .to_owned(),
+                ));
+            }
+        }
         if nested.is_unchanged() {
             continue;
         }
@@ -9572,7 +9649,14 @@ fn update_nested_field_sources(
             rewrite_isolated_nested_field(nested, raw, &span, &scan.runs, word_prefixes)?;
         edits.push((span.start, span.end, replacement));
     }
-    for ((_, child), (start, end)) in simple_children.into_iter().zip(scan.result_simple) {
+    for (child, (start, end)) in simple_children.into_iter().zip(scan.result_simple) {
+        if field.parsed_cached_child_runs().is_some()
+            && !matches!(&child.source, FieldSource::Parsed { raw_xml, .. } if raw_xml.as_slice() == &raw[start..end])
+        {
+            return Err(OxmlError::InvalidValue(
+                "replacement cached field has no original simple-cache source identity".to_owned(),
+            ));
+        }
         if child.is_unchanged() {
             continue;
         }
@@ -10681,6 +10765,33 @@ fn replace_typed_field_cache(
     Ok(output)
 }
 
+fn cached_runs_need_typed_projection(runs: &[CT_R]) -> bool {
+    let mut pending = vec![runs];
+    while let Some(runs) = pending.pop() {
+        for content in runs.iter().flat_map(|run| &run.content) {
+            match content {
+                RunContent::Tab
+                | RunContent::Break(_)
+                | RunContent::Symbol { .. }
+                | RunContent::Drawing(_)
+                | RunContent::DeletedText(_) => return true,
+                RunContent::SpecialCharacter(character)
+                    if !matches!(character, SpecialCharacter::SoftHyphen) =>
+                {
+                    return true;
+                }
+                RunContent::Field(child) => {
+                    if let Some(runs) = child.cached_result_runs() {
+                        pending.push(runs);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    false
+}
+
 fn source_has_note_reference_name(raw: &[u8]) -> bool {
     [
         b"footnoteReference".as_slice(),
@@ -10704,20 +10815,26 @@ fn parsed_complex_cache_runs(
     else {
         unreachable!("complex field cache");
     };
-    let mut cache = b"<w:p>".to_vec();
+    let prefix = word_prefixes
+        .iter()
+        .find(|prefix| !prefix.starts_with('\0'))
+        .ok_or_else(|| OxmlError::InvalidValue("complex field has no Word prefix".to_owned()))?;
+    let name = if prefix.is_empty() {
+        "p".to_owned()
+    } else {
+        format!("{prefix}:p")
+    };
+    let mut cache = format!("<{name}>").into_bytes();
     cache.extend_from_slice(&raw[first_open]);
     cache.extend_from_slice(&raw[result]);
     cache.extend_from_slice(&raw[last_close]);
-    cache.extend_from_slice(b"</w:p>");
+    cache.extend_from_slice(format!("</{name}>").as_bytes());
     let mut reader = Reader::from_reader(cache.as_slice());
     let mut buffer = Vec::new();
     let Event::Start(root) = reader.read_event_into(&mut buffer)? else {
         unreachable!("cache root");
     };
-    let mut prefixes = word_prefixes.to_vec();
-    if !prefixes.iter().any(|prefix| prefix == "w") {
-        prefixes.push("w".into());
-    }
+    let prefixes = word_prefixes_at(&root, word_prefixes)?;
     let paragraph = CT_P::from_xml_with_prefixes_and_root(&mut reader, &prefixes, Some(&root))?;
     Ok((
         paragraph.runs().into_iter().cloned().collect(),
@@ -17555,6 +17672,583 @@ mod tests {
                 Field::from_raw(raw, FieldForm::Simple, vec![]).is_err(),
                 "{raw:?}"
             );
+        }
+    }
+
+    #[test]
+    fn visibility_parsed_nontext_field_results_keep_owned_order_and_current_cache() {
+        let mut failures = Vec::new();
+        for (name, result, expected_cache) in [
+            ("tab", "<w:tab/>", "\t"),
+            ("break", "<w:br/>", "\n"),
+            ("symbol", r#"<w:sym w:font="Wingdings" w:char="F0FC"/>"#, ""),
+            ("cr", "<w:cr/>", "\n"),
+            ("no-break-hyphen", "<w:noBreakHyphen/>", ""),
+            (
+                "positional-tab",
+                r#"<w:ptab w:alignment="left" w:relativeTo="margin" w:leader="none"/>"#,
+                "",
+            ),
+        ] {
+            for form in [FieldForm::Simple, FieldForm::Complex] {
+                let source = match form {
+                    FieldForm::Simple => format!(
+                        r#"<w:fldSimple w:instr=" PAGE "><w:r>{result}</w:r></w:fldSimple>"#
+                    ),
+                    FieldForm::Complex => format!(
+                        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r>{result}</w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#
+                    ),
+                };
+                let paragraph = parse_paragraph(&source);
+                let field = parsed_field(&paragraph, 0);
+                assert_eq!(field.cached_result, expected_cache, "{name} {form:?}");
+                let output = serialized_paragraph(&paragraph);
+                assert_eq!(output, format!("<w:p>{source}</w:p>"));
+                let reopened = parse_paragraph(&source);
+                assert_eq!(paragraph, reopened);
+                let Some(runs) = field.cached_result_runs() else {
+                    failures.push(format!("{name} {form:?}: typed result absent"));
+                    continue;
+                };
+                let content = runs.iter().flat_map(|run| &run.content).collect::<Vec<_>>();
+                assert_eq!(content.len(), 1, "{name} {form:?}: {content:?}");
+                assert!(match name {
+                    "tab" => matches!(content[0], RunContent::Tab),
+                    "break" => matches!(content[0], RunContent::Break(BreakType::Line)),
+                    "symbol" => matches!(content[0], RunContent::Symbol { .. }),
+                    "cr" => matches!(
+                        content[0],
+                        RunContent::SpecialCharacter(SpecialCharacter::CarriageReturn)
+                    ),
+                    "no-break-hyphen" => matches!(
+                        content[0],
+                        RunContent::SpecialCharacter(SpecialCharacter::NoBreakHyphen)
+                    ),
+                    "positional-tab" => matches!(
+                        content[0],
+                        RunContent::SpecialCharacter(SpecialCharacter::PositionalTab { .. })
+                    ),
+                    _ => unreachable!(),
+                });
+                let mut changed = field.clone();
+                changed.cached_result = "changed".into();
+                assert!(changed.cached_result_runs().is_none());
+                changed.cached_result = " ".into();
+                assert!(changed.cached_result_runs().is_none());
+                assert_eq!(field.cached_result, expected_cache);
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn visibility_deleted_simple_and_nested_results_keep_public_cache_and_owned_graph() {
+        for sibling in ["", "<w:r><w:t>accepted</w:t></w:r>"] {
+            let child = format!(
+                r#"<w:fldSimple w:instr=" PAGE "><w:r><w:delText>gone</w:delText></w:r>{sibling}</w:fldSimple>"#
+            );
+            for form in [None, Some(FieldForm::Simple), Some(FieldForm::Complex)] {
+                let source = match form {
+                    None => child.clone(),
+                    Some(FieldForm::Simple) => {
+                        format!(r#"<w:fldSimple w:instr=" UNKNOWN ">{child}</w:fldSimple>"#)
+                    }
+                    Some(FieldForm::Complex) => format!(
+                        r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> UNKNOWN </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>{child}<w:r><w:fldChar w:fldCharType="end"/></w:r>"#
+                    ),
+                };
+                let paragraph = parse_paragraph(&source);
+                let field = parsed_field(&paragraph, 0);
+                assert_eq!(
+                    field.cached_result,
+                    if sibling.is_empty() {
+                        "gone"
+                    } else {
+                        "goneaccepted"
+                    }
+                );
+                let mut pending = vec![field];
+                let mut deleted = 0;
+                let mut accepted = 0;
+                while let Some(field) = pending.pop() {
+                    assert!(
+                        field.cached_fields.is_empty(),
+                        "retained accepted graph owns each child once"
+                    );
+                    for content in field
+                        .cached_result_runs()
+                        .expect("consistent accepted result graph")
+                        .iter()
+                        .flat_map(|run| &run.content)
+                    {
+                        match content {
+                            RunContent::DeletedText(text) => {
+                                assert_eq!(text.text, "gone");
+                                deleted += 1;
+                            }
+                            RunContent::Text(text) => {
+                                assert_eq!(text.text, "accepted");
+                                accepted += 1;
+                            }
+                            RunContent::Field(child) => pending.push(child),
+                            _ => panic!("unexpected result content"),
+                        }
+                    }
+                }
+                assert_eq!(deleted, 1);
+                assert_eq!(accepted, usize::from(!sibling.is_empty()));
+                assert_eq!(
+                    serialized_paragraph(&paragraph),
+                    format!("<w:p>{source}</w:p>")
+                );
+                assert_eq!(paragraph, parse_paragraph(&source));
+                let mut changed = field.clone();
+                changed.cached_result = "current".into();
+                assert!(changed.cached_result_runs().is_none());
+                changed.cached_result = field.cached_result.clone();
+                assert!(changed.cached_result_runs().is_some());
+            }
+        }
+        for source in [
+            r#"<w:fldSimple w:instr=" PAGE "><w:r><w:softHyphen/></w:r></w:fldSimple>"#,
+            r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText> PAGE </w:instrText><w:fldChar w:fldCharType="separate"/><w:softHyphen/><w:fldChar w:fldCharType="end"/></w:r>"#,
+        ] {
+            let paragraph = parse_paragraph(source);
+            let field = parsed_field(&paragraph, 0);
+            assert_eq!(field.cached_result, "");
+            assert!(field.cached_result_runs().is_none());
+            assert_eq!(
+                serialized_paragraph(&paragraph),
+                format!("<w:p>{source}</w:p>")
+            );
+        }
+    }
+
+    #[test]
+    fn visibility_parsed_nontext_field_drawing_results_have_actual_typed_payload() {
+        let drawing = CT_Drawing::inline(crate::drawing::CT_Inline::new("rId1", 914_400, 914_400));
+        let mut writer = Writer::new(Vec::new());
+        drawing.to_xml(&mut writer).unwrap();
+        // The writer uses the main document's inherited DrawingML declarations.
+        // Close that actual producer scope for this standalone paragraph fixture.
+        let result = String::from_utf8(writer.into_inner()).unwrap().replacen(
+            "<w:drawing>",
+            &format!(
+                r#"<w:drawing xmlns:wp="{}" xmlns:a="{}" xmlns:pic="{}" xmlns:r="{}">"#,
+                crate::drawing::drawing_ns::WP,
+                crate::drawing::drawing_ns::A,
+                crate::drawing::drawing_ns::PIC,
+                crate::drawing::drawing_ns::R,
+            ),
+            1,
+        );
+        let positive = parse_paragraph(&format!("<w:r>{result}</w:r>"));
+        assert!(
+            matches!(positive.runs[0].content[0], RunContent::Drawing(ref value) if value.inline.as_ref().is_some_and(|inline| inline.embed_id == "rId1"))
+        );
+        let mut failures = Vec::new();
+        for form in [FieldForm::Simple, FieldForm::Complex] {
+            let source = match form {
+                FieldForm::Simple => {
+                    format!(r#"<w:fldSimple w:instr=" PAGE "><w:r>{result}</w:r></w:fldSimple>"#)
+                }
+                FieldForm::Complex => format!(
+                    r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r>{result}</w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#
+                ),
+            };
+            let paragraph = parse_paragraph(&source);
+            let field = parsed_field(&paragraph, 0);
+            assert_eq!(field.cached_result, "");
+            assert_eq!(
+                serialized_paragraph(&paragraph),
+                format!("<w:p>{source}</w:p>")
+            );
+            let Some(runs) = field.cached_result_runs() else {
+                failures.push(format!("{form:?}: actual drawing result absent"));
+                continue;
+            };
+            assert!(runs.iter().flat_map(|run| &run.content).any(|item| matches!(item, RunContent::Drawing(value) if value.inline.as_ref().is_some_and(|inline| inline.embed_id == "rId1"))));
+            let mut changed = field.clone();
+            changed.cached_result = " ".into();
+            assert!(changed.cached_result_runs().is_none());
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn visibility_parsed_nontext_field_results_respect_producer_namespaces() {
+        let mut failures = Vec::new();
+        for prefix in ["q:", ""] {
+            for simple in [true, false] {
+                let result = format!("<{prefix}r><w:tab/><{prefix}tab/></{prefix}r>");
+                let source = if simple {
+                    format!(r#"<{prefix}fldSimple a:instr=" PAGE ">{result}</{prefix}fldSimple>"#)
+                } else {
+                    format!(
+                        r#"<{prefix}r><{prefix}fldChar a:fldCharType="begin"/></{prefix}r><{prefix}r><{prefix}instrText> PAGE </{prefix}instrText></{prefix}r><{prefix}r><{prefix}fldChar a:fldCharType="separate"/></{prefix}r>{result}<{prefix}r><{prefix}fldChar a:fldCharType="end"/></{prefix}r>"#
+                    )
+                };
+                let binding = if prefix.is_empty() {
+                    "xmlns"
+                } else {
+                    "xmlns:q"
+                };
+                let xml = format!(
+                    r#"<{prefix}p {binding}="{}" xmlns:w="urn:foreign" xmlns:a="{}">{source}</{prefix}p>"#,
+                    crate::namespace::W_NS,
+                    crate::namespace::W_NS
+                );
+                let paragraph = CT_P::from_xml_fragment(xml.as_bytes()).unwrap();
+                let field = parsed_field(&paragraph, 0);
+                assert_eq!(field.cached_result, "\t", "{prefix:?} simple={simple}");
+                let before = serialized_paragraph(&paragraph);
+                let FieldSource::Parsed {
+                    raw_xml,
+                    word_prefixes,
+                    ..
+                } = &field.source
+                else {
+                    panic!("parsed field owner");
+                };
+                assert!(
+                    word_prefixes
+                        .iter()
+                        .any(|value| value == prefix.trim_end_matches(':'))
+                );
+                assert!(!word_prefixes.iter().any(|value| value == "w"));
+                assert!(String::from_utf8_lossy(raw_xml).contains("<w:tab/>"));
+                let (original, replacement) = field.source_replacement().unwrap().unwrap();
+                assert_eq!(original, replacement);
+                if !simple {
+                    let (projected, _) = parsed_complex_cache_runs(raw_xml, word_prefixes).unwrap();
+                    let tabs = projected
+                        .iter()
+                        .flat_map(|run| &run.content)
+                        .filter(|item| matches!(item, RunContent::Tab))
+                        .count();
+                    if tabs != 1 {
+                        failures.push(format!("{prefix:?} complex helper admitted {tabs} tabs"));
+                    }
+                }
+                let Some(runs) = field.cached_result_runs() else {
+                    failures.push(format!("{prefix:?} simple={simple}: typed result absent"));
+                    continue;
+                };
+                assert_eq!(
+                    runs.iter()
+                        .flat_map(|run| &run.content)
+                        .filter(|item| matches!(item, RunContent::Tab))
+                        .count(),
+                    1
+                );
+                assert_eq!(serialized_paragraph(&paragraph), before);
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn visibility_parsed_nontext_field_results_keep_nested_and_shared_owners() {
+        let mut failures = Vec::new();
+        for (name, source, expected_cache) in [
+            (
+                "nested simple",
+                r#"<w:fldSimple w:instr=" REF Outer "><w:fldSimple w:instr=" PAGE "><w:r><w:tab/></w:r></w:fldSimple></w:fldSimple>"#,
+                "\t",
+            ),
+            (
+                "nested complex",
+                r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> REF Outer </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:tab/></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+                "\t",
+            ),
+            (
+                "shared physical run",
+                r#"<w:r><w:t>PRE</w:t><w:fldChar w:fldCharType="begin"/><w:instrText> PAGE </w:instrText><w:fldChar w:fldCharType="separate"/><w:tab/><w:fldChar w:fldCharType="end"/><w:t>POST</w:t></w:r>"#,
+                "\t",
+            ),
+            (
+                "spanning result runs",
+                r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:tab/></w:r><w:r><w:br/></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+                "\t\n",
+            ),
+        ] {
+            let paragraph = parse_paragraph(source);
+            let field = paragraph
+                .runs()
+                .into_iter()
+                .flat_map(|run| &run.content)
+                .find_map(|item| match item {
+                    RunContent::Field(field) => Some(field),
+                    _ => None,
+                })
+                .expect("complete parsed owner");
+            assert_eq!(field.cached_result, expected_cache, "{name}");
+            assert_eq!(
+                serialized_paragraph(&paragraph),
+                format!("<w:p>{source}</w:p>")
+            );
+            let mut work = vec![field];
+            let mut controls = Vec::new();
+            while let Some(current) = work.pop() {
+                if let Some(runs) = current.cached_result_runs() {
+                    for item in runs.iter().flat_map(|run| &run.content) {
+                        match item {
+                            RunContent::Field(child) => work.push(child),
+                            RunContent::Tab => controls.push("tab"),
+                            RunContent::Break(BreakType::Line) => controls.push("break"),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            let expected = if name == "spanning result runs" {
+                vec!["tab", "break"]
+            } else {
+                vec!["tab"]
+            };
+            if controls != expected {
+                failures.push(format!("{name}: {controls:?}"));
+            }
+        }
+        let incomplete = parse_paragraph(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText> PAGE </w:instrText><w:fldChar w:fldCharType="separate"/><w:tab/></w:r>"#,
+        );
+        assert!(
+            !incomplete
+                .runs()
+                .into_iter()
+                .flat_map(|run| &run.content)
+                .any(|item| matches!(item, RunContent::Field(_)))
+        );
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn visibility_nontext_nested_cache_mutation_keeps_graph_and_source_identity() {
+        for child_form in [FieldForm::Simple, FieldForm::Complex] {
+            let child = match child_form {
+                FieldForm::Simple => {
+                    r#"<w:fldSimple w:instr=" PAGE "><w:r><w:tab/></w:r></w:fldSimple>"#
+                }
+                FieldForm::Complex => {
+                    r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:tab/></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#
+                }
+            };
+            let source = format!(
+                r#"<w:r producer="keep"><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> UNKNOWN </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>PRE</w:t></w:r>{child}<w:r><w:t>POST</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#
+            );
+            let mut paragraph = parse_paragraph(&source);
+            assert_eq!(
+                serialized_paragraph(&paragraph),
+                format!("<w:p>{source}</w:p>")
+            );
+            let original = paragraph.clone();
+            let RunContent::Field(outer) = &mut paragraph.runs[0].content[0] else {
+                panic!("outer")
+            };
+            assert!(outer.cached_fields.is_empty());
+            assert!(outer.parsed_cached_child_runs().is_some());
+            let child_owner = outer.cached_fields_in_source_order()[0]
+                .source_owner_id()
+                .unwrap();
+            outer.cached_field_mut(0).unwrap().cached_result = "changed".into();
+            assert_eq!(outer.cached_result, "PRE\tPOST");
+            assert!(
+                outer.cached_result_runs().is_none(),
+                "stale display must not expose stored graph"
+            );
+            assert_eq!(
+                outer.cached_fields_in_source_order()[0].cached_result,
+                "changed"
+            );
+            assert_eq!(
+                outer.cached_field_mut(0).unwrap().source_owner_id(),
+                Some(child_owner)
+            );
+            outer.refresh_cached_field_projection();
+            assert_eq!(outer.cached_result, "PREchangedPOST");
+            assert!(outer.cached_result_runs().is_some());
+            let (_, replacement) = outer.source_replacement().unwrap().unwrap();
+            assert!(
+                std::str::from_utf8(&replacement)
+                    .unwrap()
+                    .contains(r#"producer="keep""#)
+            );
+            assert_ne!(paragraph, original);
+            let edited = serialized_paragraph(&paragraph);
+            let reopened = parse_paragraph(&edited.replace("<w:p>", "").replace("</w:p>", ""));
+            let outer = parsed_field(&reopened, 0);
+            assert_eq!(outer.cached_result, "PREchangedPOST");
+            assert_eq!(
+                outer.cached_fields_in_source_order()[0].cached_result,
+                "changed"
+            );
+            assert_eq!(outer.cached_fields_in_source_order()[0].form(), child_form);
+            assert_eq!(serialized_paragraph(&reopened), edited);
+
+            let mut rejected = parse_paragraph(&source);
+            let RunContent::Field(outer) = &mut rejected.runs[0].content[0] else {
+                panic!("outer")
+            };
+            *outer.cached_field_mut(0).unwrap() =
+                Field::from_raw("PAGE", child_form, vec![CT_R::new("replacement")]).unwrap();
+            outer.refresh_cached_field_projection();
+            assert!(
+                outer
+                    .source_replacement()
+                    .unwrap_err()
+                    .to_string()
+                    .contains("source identity")
+            );
+        }
+    }
+
+    #[test]
+    fn visibility_nontext_nested_graph_growth_and_clone_have_one_owned_child_axis() {
+        fn owned_shape(field: &Field) -> (usize, usize, usize) {
+            let mut pending = vec![field];
+            let mut fields = 0;
+            let mut source_bytes = 0;
+            let mut clone_payload_bytes = 0;
+            while let Some(field) = pending.pop() {
+                fields += 1;
+                clone_payload_bytes += std::mem::size_of::<Field>()
+                    + field.cached_result.len()
+                    + field.instruction.raw.len();
+                if let FieldSource::Parsed {
+                    raw_xml,
+                    original_cached_result,
+                    original_instruction,
+                    cached_segments,
+                    word_prefixes,
+                    ..
+                } = &field.source
+                {
+                    source_bytes += raw_xml.len();
+                    clone_payload_bytes += raw_xml.len()
+                        + original_cached_result.len()
+                        + original_instruction.raw.len()
+                        + cached_segments.len() * std::mem::size_of::<CachedDisplaySegment>()
+                        + cached_segments
+                            .iter()
+                            .map(|segment| segment.text.len())
+                            .sum::<usize>()
+                        + word_prefixes
+                            .iter()
+                            .map(|prefix| std::mem::size_of::<String>() + prefix.len())
+                            .sum::<usize>();
+                }
+                pending.extend(field.cached_fields.iter().map(|(_, child)| child));
+                for runs in [
+                    &field.parsed_cached_runs,
+                    &field.simple_cached_runs,
+                    &field.typed_cached_runs,
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    clone_payload_bytes += runs.len() * std::mem::size_of::<CT_R>();
+                    for run in runs {
+                        assert!(
+                            run.properties.is_none(),
+                            "growth control isolates cache ownership"
+                        );
+                        clone_payload_bytes +=
+                            run.content.len() * std::mem::size_of::<RunContent>();
+                        clone_payload_bytes += run
+                            .content
+                            .iter()
+                            .map(|content| match content {
+                                RunContent::Text(text) | RunContent::DeletedText(text) => {
+                                    text.text.len()
+                                }
+                                _ => 0,
+                            })
+                            .sum::<usize>();
+                    }
+                    pending.extend(runs.iter().flat_map(|run| &run.content).filter_map(
+                        |content| {
+                            if let RunContent::Field(child) = content {
+                                Some(child)
+                            } else {
+                                None
+                            }
+                        },
+                    ));
+                }
+            }
+            (fields, source_bytes, clone_payload_bytes)
+        }
+        for depth in [1, 2, 4, 8, 16, 32] {
+            let begin = r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText> UNKNOWN </w:instrText><w:fldChar w:fldCharType="separate"/></w:r>"#;
+            let end = r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#;
+            let source = format!(
+                "{}<w:r><w:tab/></w:r>{}",
+                begin.repeat(depth),
+                end.repeat(depth)
+            );
+            let paragraph = parse_paragraph(&source);
+            let field = parsed_field(&paragraph, 0);
+            let shape = owned_shape(field);
+            assert_eq!(shape.0, depth, "each cached owner retained exactly once");
+            // Existing source fragments include every descendant's XML. The
+            // retained graph adds one child axis, never an exponential clone.
+            assert!(shape.1 <= depth * source.len());
+            assert!(shape.2 <= depth * (source.len() + 4_096));
+            let cloned = field.clone();
+            assert_eq!(owned_shape(&cloned), shape);
+            assert_eq!(&cloned, field);
+            assert_eq!(
+                serialized_paragraph(&paragraph),
+                format!("<w:p>{source}</w:p>")
+            );
+            println!(
+                "depth={depth} owned_fields={} retained_source_bytes={} clone_payload_bytes={} cloned_fields={}",
+                shape.0,
+                shape.1,
+                shape.2,
+                owned_shape(&cloned).0
+            );
+        }
+        let ordinary = parse_paragraph(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText> PAGE </w:instrText><w:fldChar w:fldCharType="separate"/><w:t>ordinary</w:t><w:fldChar w:fldCharType="end"/></w:r>"#,
+        );
+        assert!(parsed_field(&ordinary, 0).cached_result_runs().is_none());
+        assert_eq!(ordinary, ordinary.clone());
+    }
+
+    #[test]
+    fn visibility_nontext_graph_preserves_mixed_annotation_owner_boundaries() {
+        for marker in ["footnoteReference", "endnoteReference", "commentReference"] {
+            let source = format!(
+                r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> UNKNOWN </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:{marker} w:id="7"/></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> PAGE </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:tab/></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#
+            );
+            let paragraph = parse_paragraph(&source);
+            let field = parsed_field(&paragraph, 0);
+            assert_eq!(field.cached_fields_in_source_order().len(), 1);
+            assert!(
+                !field.cached_fields.is_empty(),
+                "legacy annotation range axis stays authoritative"
+            );
+            assert!(field.parsed_cached_child_runs().is_none());
+            let runs = field.cached_result_runs().unwrap();
+            assert!(runs.iter().flat_map(|run| &run.content).any(|content| {
+                matches!(
+                    (marker, content),
+                    ("footnoteReference", RunContent::FootnoteRef { id: 7, .. })
+                        | ("endnoteReference", RunContent::EndnoteRef { id: 7, .. })
+                        | (
+                            "commentReference",
+                            RunContent::CommentReference { id: 7, .. }
+                        )
+                )
+            }));
+            assert_eq!(
+                serialized_paragraph(&paragraph),
+                format!("<w:p>{source}</w:p>")
+            );
+            let reopened = parse_paragraph(&source);
+            assert_eq!(paragraph, reopened);
         }
     }
 

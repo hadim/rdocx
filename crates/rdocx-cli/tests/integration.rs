@@ -1919,11 +1919,15 @@ fn visible_nontext_content_and_empty_controls_keep_distinct_validation_warnings(
             r#"<w:r><w:endnoteReference w:id="1"/></w:r>"#,
             false,
         ),
-        ("field", r#"<w:fldSimple w:instr="DATE"/>"#, false),
         (
-            "complex-field",
+            "empty-simple-field",
+            r#"<w:fldSimple w:instr="DATE"/>"#,
+            true,
+        ),
+        (
+            "loose-complex-begin",
             r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
-            false,
+            true,
         ),
         (
             "math",
@@ -2015,6 +2019,295 @@ fn visible_nontext_content_and_empty_controls_keep_distinct_validation_warnings(
         );
         assert_eq!(fs::read(&input).unwrap(), before, "{label}");
     }
+}
+
+#[test]
+fn validation_qualified_display_content_and_field_controls_preserve_source() {
+    let temp = TempWorkspace::new("validate-field-display");
+    let cases = [
+        (
+            "simple-cr",
+            r#"<w:fldSimple w:instr="PAGE"><w:r><w:cr/></w:r></w:fldSimple>"#,
+            true,
+        ),
+        (
+            "complex-cr",
+            r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:cr/><w:fldChar w:fldCharType="end"/></w:r>"#,
+            true,
+        ),
+        (
+            "simple-no-break-hyphen",
+            r#"<w:fldSimple w:instr="PAGE"><w:r><w:noBreakHyphen/></w:r></w:fldSimple>"#,
+            true,
+        ),
+        (
+            "complex-no-break-hyphen",
+            r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:noBreakHyphen/><w:fldChar w:fldCharType="end"/></w:r>"#,
+            true,
+        ),
+        (
+            "simple-positional-tab",
+            r#"<w:fldSimple w:instr="PAGE"><w:r><w:ptab w:alignment="left" w:relativeTo="margin" w:leader="none"/></w:r></w:fldSimple>"#,
+            true,
+        ),
+        (
+            "complex-positional-tab",
+            r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:ptab w:alignment="left" w:relativeTo="margin" w:leader="none"/><w:fldChar w:fldCharType="end"/></w:r>"#,
+            true,
+        ),
+        (
+            "simple-soft-hyphen",
+            r#"<w:fldSimple w:instr="PAGE"><w:r><w:softHyphen/></w:r></w:fldSimple>"#,
+            false,
+        ),
+        (
+            "complex-soft-hyphen",
+            r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:softHyphen/><w:fldChar w:fldCharType="end"/></w:r>"#,
+            false,
+        ),
+        (
+            "simple-leaf-deleted-only",
+            r#"<w:fldSimple w:instr="PAGE"><w:r><w:delText>gone</w:delText></w:r></w:fldSimple>"#,
+            false,
+        ),
+        (
+            "simple-outer-deleted-only",
+            r#"<w:fldSimple w:instr="UNKNOWN"><w:fldSimple w:instr="PAGE"><w:r><w:delText>gone</w:delText></w:r></w:fldSimple></w:fldSimple>"#,
+            false,
+        ),
+        (
+            "complex-outer-deleted-only",
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>UNKNOWN</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:fldSimple w:instr="PAGE"><w:r><w:delText>gone</w:delText></w:r></w:fldSimple><w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+            false,
+        ),
+        (
+            "simple-leaf-deleted-accepted",
+            r#"<w:fldSimple w:instr="PAGE"><w:r><w:delText>gone</w:delText></w:r><w:r><w:t>accepted</w:t></w:r></w:fldSimple>"#,
+            true,
+        ),
+        (
+            "simple-outer-deleted-accepted",
+            r#"<w:fldSimple w:instr="UNKNOWN"><w:fldSimple w:instr="PAGE"><w:r><w:delText>gone</w:delText></w:r><w:r><w:t>accepted</w:t></w:r></w:fldSimple></w:fldSimple>"#,
+            true,
+        ),
+        (
+            "complex-outer-deleted-accepted",
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>UNKNOWN</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:fldSimple w:instr="PAGE"><w:r><w:delText>gone</w:delText></w:r><w:r><w:t>accepted</w:t></w:r></w:fldSimple><w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+            true,
+        ),
+        (
+            "alias-pict",
+            r#"<q:r xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:pict/></q:r>"#,
+            true,
+        ),
+        (
+            "default-object",
+            r#"<r xmlns="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><object/></r>"#,
+            true,
+        ),
+        (
+            "foreign-pict",
+            r#"<w:r><x:pict xmlns:x="urn:producer"/></w:r>"#,
+            false,
+        ),
+        (
+            "rebound-object",
+            r#"<w:r><w:object xmlns:w="urn:producer"/></w:r>"#,
+            false,
+        ),
+        ("soft-hyphen", "<w:r><w:softHyphen/></w:r>", false),
+        (
+            "producer-hint",
+            "<w:r><w:lastRenderedPageBreak/></w:r>",
+            false,
+        ),
+        (
+            "deleted-text",
+            "<w:r><w:delText>deleted</w:delText></w:r>",
+            false,
+        ),
+        (
+            "deleted-drawing",
+            "<w:del><w:r><w:drawing/></w:r></w:del>",
+            false,
+        ),
+        (
+            "moved-away",
+            "<w:moveFrom><w:r><w:drawing/></w:r></w:moveFrom>",
+            false,
+        ),
+        (
+            "inserted-drawing",
+            "<w:ins><w:r><w:drawing/></w:r></w:ins>",
+            true,
+        ),
+        (
+            "equation",
+            r#"<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:r><m:t>x</m:t></m:r></m:oMath>"#,
+            true,
+        ),
+        (
+            "loose-begin",
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            false,
+        ),
+        (
+            "loose-separate",
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+            false,
+        ),
+        (
+            "loose-end",
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+            false,
+        ),
+        (
+            "instruction",
+            "<w:r><w:instrText>PAGE</w:instrText></w:r>",
+            false,
+        ),
+        (
+            "deleted-instruction",
+            "<w:r><w:delInstrText>PAGE</w:delInstrText></w:r>",
+            false,
+        ),
+        ("simple-empty", r#"<w:fldSimple w:instr="PAGE"/>"#, false),
+        (
+            "simple-text",
+            r#"<w:fldSimple w:instr="PAGE"><w:r><w:t>4</w:t></w:r></w:fldSimple>"#,
+            true,
+        ),
+        (
+            "simple-whitespace",
+            r#"<w:fldSimple w:instr="PAGE"><w:r><w:t xml:space="preserve"> </w:t></w:r></w:fldSimple>"#,
+            false,
+        ),
+        (
+            "simple-tab",
+            r#"<w:fldSimple w:instr="PAGE"><w:r><w:tab/></w:r></w:fldSimple>"#,
+            true,
+        ),
+        (
+            "complex-text",
+            r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>4</w:t><w:fldChar w:fldCharType="end"/></w:r>"#,
+            true,
+        ),
+        (
+            "complex-break",
+            r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:br/><w:fldChar w:fldCharType="end"/></w:r>"#,
+            true,
+        ),
+        (
+            "complex-whitespace",
+            r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:t xml:space="preserve"> </w:t><w:fldChar w:fldCharType="end"/></w:r>"#,
+            false,
+        ),
+        (
+            "incomplete-complex",
+            r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText></w:r>"#,
+            false,
+        ),
+        (
+            "simple-symbol",
+            r#"<w:fldSimple w:instr="PAGE"><w:r><w:sym w:font="Symbol" w:char="F041"/></w:r></w:fldSimple>"#,
+            true,
+        ),
+        (
+            "simple-drawing",
+            r#"<w:fldSimple w:instr="PAGE"><w:r><w:drawing xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><wp:inline><wp:extent cx="914400" cy="914400"/><wp:docPr id="1" name="Actual"/><a:graphic><a:graphicData uri="urn:producer"/></a:graphic></wp:inline></w:drawing></w:r></w:fldSimple>"#,
+            true,
+        ),
+        (
+            "complex-symbol",
+            r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:sym w:font="Symbol" w:char="F041"/><w:fldChar w:fldCharType="end"/></w:r>"#,
+            true,
+        ),
+        (
+            "complex-drawing",
+            r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:drawing xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><wp:inline><wp:extent cx="914400" cy="914400"/><wp:docPr id="1" name="Actual"/><a:graphic><a:graphicData uri="urn:producer"/></a:graphic></wp:inline></w:drawing><w:fldChar w:fldCharType="end"/></w:r>"#,
+            true,
+        ),
+        (
+            "spanning-complex",
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>NUMPAGES</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>4</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+            true,
+        ),
+        (
+            "nested-complex",
+            r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText>IF</w:instrText><w:fldChar w:fldCharType="separate"/><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>4</w:t><w:fldChar w:fldCharType="end"/><w:fldChar w:fldCharType="end"/></w:r>"#,
+            true,
+        ),
+        (
+            "unmatched-delimiters",
+            r#"<w:r><w:fldChar w:fldCharType="separate"/><w:fldChar w:fldCharType="end"/></w:r>"#,
+            false,
+        ),
+        (
+            "default-loose-marker",
+            r#"<r xmlns="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><fldChar fldCharType="begin"/></r>"#,
+            false,
+        ),
+        (
+            "alias-loose-marker",
+            r#"<q:r xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:fldChar q:fldCharType="begin"/></q:r>"#,
+            false,
+        ),
+        (
+            "foreign-marker",
+            r#"<w:r><x:fldChar xmlns:x="urn:producer" x:fldCharType="begin"/></w:r>"#,
+            false,
+        ),
+        (
+            "inserted-loose-marker",
+            r#"<w:ins><w:r><w:fldChar w:fldCharType="begin"/></w:r></w:ins>"#,
+            false,
+        ),
+        (
+            "deleted-loose-marker",
+            r#"<w:del><w:r><w:fldChar w:fldCharType="begin"/></w:r></w:del>"#,
+            false,
+        ),
+        (
+            "duplicate-inline-slot",
+            "<w:sdt><w:sdtContent><w:r/></w:sdtContent><w:sdtContent><w:r><w:drawing/></w:r></w:sdtContent></w:sdt>",
+            false,
+        ),
+        (
+            "invalid-opaque-control",
+            r#"<w:sdt><w:sdtPr><w:id w:val="invalid"/></w:sdtPr><w:sdtContent><w:r><w:drawing/></w:r></w:sdtContent></w:sdt>"#,
+            false,
+        ),
+        (
+            "admitted-inline-control",
+            "<w:sdt><w:sdtPr/><w:sdtContent><w:r><w:drawing/></w:r></w:sdtContent></w:sdt>",
+            true,
+        ),
+    ];
+    let mut failures = Vec::new();
+    for (label, fragment, visible) in cases {
+        let input = temp.path.join(format!("{label}.docx"));
+        let mut document = Document::new();
+        document.add_paragraph("CONTENT");
+        document.save(&input).unwrap();
+        rewrite_run(&input, "CONTENT", |_| fragment.to_owned());
+        let before = fs::read(&input).unwrap();
+        let output = cli(&["validate", path_text(&input)]);
+        assert_success(&output, label);
+        let report = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(fs::read(&input).unwrap(), before, "{label}");
+        assert!(
+            report.contains("Missing document title"),
+            "{label}: {report}"
+        );
+        assert!(
+            report.contains("Missing document author"),
+            "{label}: {report}"
+        );
+        if report.contains("1 empty paragraph(s) found") == visible {
+            failures.push(format!("{label}: visible={visible}, report={report}"));
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 #[test]

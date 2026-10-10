@@ -20,7 +20,7 @@ use quick_xml::Writer;
 use quick_xml::XmlVersion;
 use quick_xml::escape::resolve_xml_entity;
 use quick_xml::events::{BytesStart, Event};
-use quick_xml::name::{Namespace, ResolveResult};
+use quick_xml::name::{Namespace, PrefixDeclaration, ResolveResult};
 use quick_xml::reader::NsReader;
 use rdocx_oxml::MathProperties;
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent, StorySdtOwner};
@@ -36,7 +36,7 @@ use rdocx_oxml::font_table::{EmbeddedFontReference, FontFaceKind, FontTable};
 use rdocx_oxml::header_footer::{
     CT_HdrFtr, HdrFtrRef, HdrFtrType, VmlWatermark, replace_authored_watermark,
 };
-use rdocx_oxml::namespace::matches_local_name;
+use rdocx_oxml::namespace::{M_NS, MC_NS, W_NS, matches_local_name};
 use rdocx_oxml::numbering::{
     CT_AbstractNum, CT_Lvl, CT_Num, CT_NumLvl, CT_Numbering, ST_LvlSuffix, ST_NumberFormat,
 };
@@ -51,7 +51,7 @@ use rdocx_oxml::shared::{ST_Jc, ST_PageOrientation, ST_SectionType};
 use rdocx_oxml::styles::{CT_Styles, StyleType};
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc, CellContent, ST_VerticalJc, VMerge};
 use rdocx_oxml::text::{
-    CT_P, CT_R, RangeAnchor, RunContent, story_field_instruction_has_name,
+    CT_P, CT_R, RangeAnchor, RunContent, SpecialCharacter, story_field_instruction_has_name,
     story_simple_field_is_typed,
 };
 use rdocx_oxml::units::Twips;
@@ -1761,6 +1761,473 @@ fn typed_numbering_leaf_has_unmodeled(raw: &[u8], word_prefixes: &[String]) -> b
             Ok(Event::Eof) | Err(_) => return true,
             _ => buffer.clear(),
         }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ParagraphVisibilityScope {
+    FacadeRecursive,
+    DirectBody,
+}
+
+type ParagraphVisibilityPath = Vec<(&'static [u8], usize)>;
+type ParagraphVisibilityOwners<'a> = Vec<(ParagraphVisibilityPath, &'a CT_P)>;
+
+// Pair typed owners with their structural encounter slots. Raw children and
+// formatting are not owner slots. Tables directly in body or cells stay opaque.
+fn paragraph_visibility_owners(
+    document: &Document,
+    scope: ParagraphVisibilityScope,
+) -> ParagraphVisibilityOwners<'_> {
+    fn control<'a>(
+        sdt: &'a CT_Sdt,
+        owner: &'static [u8],
+        path: &[(&'static [u8], usize)],
+        out: &mut ParagraphVisibilityOwners<'a>,
+    ) {
+        let mut slot = 0;
+        for child in &sdt.content {
+            let name: &'static [u8] = match child {
+                SdtContent::Paragraph(_) if matches!(owner, b"body" | b"tc") => b"p",
+                SdtContent::Table(_) if matches!(owner, b"body" | b"tc") => b"tbl",
+                SdtContent::Row(_) if owner == b"tbl" => b"tr",
+                SdtContent::Cell(_) if owner == b"tr" => b"tc",
+                SdtContent::ContentControl(_) => b"sdt",
+                _ => continue,
+            };
+            let mut next = path.to_vec();
+            next.push((name, slot));
+            slot += 1;
+            match child {
+                SdtContent::Paragraph(p) => out.push((next, p)),
+                SdtContent::Table(t) => table(t, &next, out),
+                SdtContent::Row(r) => row(r, &next, out),
+                SdtContent::Cell(c) => cell(c, &next, out),
+                SdtContent::ContentControl(c) => control(c, owner, &next, out),
+                _ => {}
+            }
+        }
+    }
+    fn table<'a>(
+        t: &'a CT_Tbl,
+        path: &[(&'static [u8], usize)],
+        out: &mut ParagraphVisibilityOwners<'a>,
+    ) {
+        let mut slot = 0;
+        for index in 0..=t.rows.len() {
+            for (_, _, c) in t.content_controls.iter().filter(|(at, _, _)| *at == index) {
+                let mut next = path.to_vec();
+                next.push((b"sdt", slot));
+                slot += 1;
+                control(c, b"tbl", &next, out);
+            }
+            if let Some(r) = t.rows.get(index) {
+                let mut next = path.to_vec();
+                next.push((b"tr", slot));
+                slot += 1;
+                row(r, &next, out);
+            }
+        }
+    }
+    fn row<'a>(
+        r: &'a CT_Row,
+        path: &[(&'static [u8], usize)],
+        out: &mut ParagraphVisibilityOwners<'a>,
+    ) {
+        let mut slot = 0;
+        for index in 0..=r.cells.len() {
+            for (_, _, c) in r.content_controls.iter().filter(|(at, _, _)| *at == index) {
+                let mut next = path.to_vec();
+                next.push((b"sdt", slot));
+                slot += 1;
+                control(c, b"tr", &next, out);
+            }
+            if let Some(c) = r.cells.get(index) {
+                let mut next = path.to_vec();
+                next.push((b"tc", slot));
+                slot += 1;
+                cell(c, &next, out);
+            }
+        }
+    }
+    fn cell<'a>(
+        c: &'a CT_Tc,
+        path: &[(&'static [u8], usize)],
+        out: &mut ParagraphVisibilityOwners<'a>,
+    ) {
+        for (slot, child) in c.content.iter().enumerate() {
+            let name: &'static [u8] = match child {
+                CellContent::Paragraph(_) => b"p",
+                CellContent::Table(_) => b"tbl",
+                CellContent::ContentControl(_) => b"sdt",
+            };
+            let mut next = path.to_vec();
+            next.push((name, slot));
+            match child {
+                CellContent::Paragraph(p) => out.push((next, p)),
+                CellContent::ContentControl(c) => control(c, b"tc", &next, out),
+                CellContent::Table(_) => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    let mut slot = 0;
+    for child in &document.document.body.content {
+        let name: &'static [u8] = match child {
+            BodyContent::Paragraph(_) => b"p",
+            BodyContent::Table(_) => b"tbl",
+            BodyContent::ContentControl(_) => b"sdt",
+            BodyContent::RawXml(_) => continue,
+        };
+        let path = vec![(name, slot)];
+        slot += 1;
+        match child {
+            BodyContent::Paragraph(p) => out.push((path, p)),
+            BodyContent::ContentControl(c)
+                if scope == ParagraphVisibilityScope::FacadeRecursive =>
+            {
+                control(c, b"body", &path, &mut out)
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+fn paragraph_has_typed_visible_content(paragraph: &CT_P) -> bool {
+    let mut pending = paragraph.accepted_bookmark_runs();
+    while let Some(run) = pending.pop() {
+        if !run.alt_drawings.is_empty() {
+            return true;
+        }
+        for content in &run.content {
+            match content {
+                RunContent::Text(text) if !text.text.trim().is_empty() => return true,
+                RunContent::Tab
+                | RunContent::Break(_)
+                | RunContent::Symbol { .. }
+                | RunContent::Drawing(_)
+                | RunContent::FootnoteRef { .. }
+                | RunContent::EndnoteRef { .. } => return true,
+                RunContent::SpecialCharacter(character)
+                    if !matches!(character, SpecialCharacter::SoftHyphen) =>
+                {
+                    return true;
+                }
+                RunContent::Field(field) => {
+                    if let Some(runs) = field.cached_result_runs() {
+                        // A consistent owned result may contain only deleted text.
+                        // Its public string cache remains a text extraction projection.
+                        pending.extend(runs);
+                    } else if !field.cached_result.trim().is_empty() {
+                        return true;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    false
+}
+
+/// Match the facade's body paragraph inventory, including nested block controls,
+/// and mark visible nontext children without entering direct body tables or opaque wrappers.
+fn paragraph_visibility_from_main_source(
+    document: &Document,
+    xml: &[u8],
+    scope: ParagraphVisibilityScope,
+) -> Result<Vec<bool>> {
+    let owners = paragraph_visibility_owners(document, scope);
+    let mut owner_paths = Vec::new();
+    let mut slot_stack: Vec<(ParagraphVisibilityPath, usize)> = Vec::new();
+    let mut reader = NsReader::from_reader(xml);
+    // Qualified Word name, admitted path, paragraph boundary, typed content slot.
+    let mut open: Vec<(Vec<u8>, bool, bool, bool)> = Vec::new();
+    let mut in_paragraph = false;
+    let mut visible = Vec::new();
+    let mut buffer = Vec::new();
+    loop {
+        let event_start = usize::try_from(reader.buffer_position())
+            .map_err(|error| Error::Other(error.to_string()))?;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(rdocx_oxml::OxmlError::from)?;
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                let local = element.local_name();
+                let word = matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == W_NS.as_bytes());
+                let math = matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == M_NS.as_bytes());
+                let compatibility = matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == MC_NS.as_bytes());
+                let parent = open.last().map(|(name, _, _, _)| name.as_slice());
+                let admitted_parent = open.last().is_some_and(|(_, admitted, _, _)| *admitted);
+                // A control inherits its physical container's admitted child kinds.
+                let container = if parent == Some(b"sdtContent") {
+                    open.iter().rev().find_map(|(name, admitted, _, _)| {
+                        (*admitted && matches!(name.as_slice(), b"body" | b"tbl" | b"tr" | b"tc"))
+                            .then_some(name.as_slice())
+                    })
+                } else {
+                    parent
+                };
+                let typed_control = if word
+                    && local.as_ref() == b"sdt"
+                    && admitted_parent
+                    && matches!(event, Event::Start(_))
+                {
+                    let prefixes = reader
+                        .resolver()
+                        .bindings()
+                        .filter(|(_, namespace)| namespace.as_ref() == W_NS.as_bytes())
+                        .map(|(prefix, _)| match prefix {
+                            PrefixDeclaration::Default => Ok(String::new()),
+                            PrefixDeclaration::Named(prefix) => {
+                                std::str::from_utf8(prefix).map(str::to_owned)
+                            }
+                        })
+                        .collect::<std::result::Result<Vec<_>, _>>()
+                        .map_err(|error| Error::Other(error.to_string()))?;
+                    let owner = if in_paragraph {
+                        StorySdtOwner::Inline
+                    } else {
+                        match container {
+                            Some(b"tbl") => StorySdtOwner::Table,
+                            Some(b"tr") => StorySdtOwner::Row,
+                            _ => StorySdtOwner::Block,
+                        }
+                    };
+                    let mut probe = reader.clone();
+                    probe
+                        .read_to_end(element.name())
+                        .map_err(rdocx_oxml::OxmlError::from)?;
+                    let end = usize::try_from(probe.buffer_position())
+                        .map_err(|error| Error::Other(error.to_string()))?;
+                    let source = xml.get(event_start..end).ok_or_else(|| {
+                        Error::Other("content-control source span is invalid".to_owned())
+                    })?;
+                    CT_Sdt::story_raw_is_typed(source, &prefixes, owner)
+                } else {
+                    false
+                };
+                let first_content = word
+                    && local.as_ref() == b"sdtContent"
+                    && admitted_parent
+                    && parent == Some(b"sdt")
+                    && matches!(event, Event::Start(_))
+                    && open.last().is_some_and(|(_, _, _, seen)| !seen);
+                let mut paragraph = false;
+                let admitted = if in_paragraph {
+                    if admitted_parent
+                        && ((word
+                            && parent == Some(b"r")
+                            && matches!(
+                                local.as_ref(),
+                                b"drawing"
+                                    | b"pict"
+                                    | b"object"
+                                    | b"sym"
+                                    | b"tab"
+                                    | b"br"
+                                    | b"cr"
+                                    | b"footnoteReference"
+                                    | b"endnoteReference"
+                            ))
+                            || (math && matches!(local.as_ref(), b"oMath" | b"oMathPara")))
+                        && let Some(flag) = visible.last_mut()
+                    {
+                        *flag = true;
+                    }
+                    admitted_parent
+                        && ((word
+                            && matches!(
+                                local.as_ref(),
+                                b"t" | b"r"
+                                    | b"hyperlink"
+                                    | b"ins"
+                                    | b"moveTo"
+                                    | b"smartTag"
+                                    | b"customXml"
+                                    | b"sdt"
+                                    | b"sdtContent"
+                                    | b"dir"
+                                    | b"bdo"
+                            )
+                            && match local.as_ref() {
+                                b"sdt" => typed_control,
+                                b"sdtContent" => first_content,
+                                _ => true,
+                            })
+                            || (compatibility
+                                && matches!(
+                                    local.as_ref(),
+                                    b"AlternateContent" | b"Choice" | b"Fallback"
+                                )))
+                } else if word {
+                    match local.as_ref() {
+                        b"document" => open.is_empty(),
+                        b"body" => admitted_parent && parent == Some(b"document"),
+                        b"sdt" => {
+                            scope == ParagraphVisibilityScope::FacadeRecursive
+                                && typed_control
+                                && matches!(container, Some(b"body" | b"tbl" | b"tr" | b"tc"))
+                        }
+                        b"sdtContent" => first_content,
+                        b"tbl" => {
+                            admitted_parent
+                                && parent == Some(b"sdtContent")
+                                && matches!(container, Some(b"body" | b"tc"))
+                        }
+                        b"tr" => admitted_parent && container == Some(b"tbl"),
+                        b"tc" => admitted_parent && container == Some(b"tr"),
+                        b"p" if admitted_parent && matches!(container, Some(b"body" | b"tc")) => {
+                            visible.push(false);
+                            paragraph = true;
+                            if matches!(event, Event::Start(_)) {
+                                in_paragraph = true;
+                            }
+                            true
+                        }
+                        _ => false,
+                    }
+                } else {
+                    false
+                };
+                let structural: Option<&'static [u8]> = if !in_paragraph || paragraph {
+                    match local.as_ref() {
+                        b"p" if paragraph => Some(b"p"),
+                        b"sdt" if word && typed_control && admitted_parent => Some(b"sdt"),
+                        b"tbl"
+                            if word
+                                && admitted_parent
+                                && matches!(container, Some(b"body" | b"tc")) =>
+                        {
+                            Some(b"tbl")
+                        }
+                        b"tr" if word && admitted_parent && container == Some(b"tbl") => {
+                            Some(b"tr")
+                        }
+                        b"tc" if word && admitted_parent && container == Some(b"tr") => Some(b"tc"),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                let mut path = slot_stack
+                    .last()
+                    .map(|(path, _)| path.clone())
+                    .unwrap_or_default();
+                if let Some(name) = structural {
+                    if let Some((_, slot)) = slot_stack.last_mut() {
+                        path.push((name, *slot));
+                        *slot += 1;
+                    }
+                    if paragraph {
+                        owner_paths.push(path.clone());
+                    }
+                }
+                if matches!(event, Event::Start(_)) {
+                    // sdtContent shares its control's child scope. Other structural
+                    // containers own a fresh set of direct structural slots.
+                    let slot = if first_content {
+                        slot_stack.last().map_or(0, |(_, slot)| *slot)
+                    } else {
+                        0
+                    };
+                    slot_stack.push((path, slot));
+                }
+                if first_content && let Some((_, _, _, seen)) = open.last_mut() {
+                    *seen = true;
+                }
+                if matches!(event, Event::Start(_)) {
+                    open.push((
+                        if word {
+                            local.as_ref().to_vec()
+                        } else {
+                            Vec::new()
+                        },
+                        admitted,
+                        paragraph,
+                        false,
+                    ));
+                }
+            }
+            Event::End(_) => {
+                slot_stack.pop();
+                if open.pop().is_some_and(|(_, _, paragraph, _)| paragraph) {
+                    in_paragraph = false;
+                }
+            }
+            Event::Text(text)
+                if open
+                    .last()
+                    .is_some_and(|(name, admitted, _, _)| *admitted && name == b"t") =>
+            {
+                let text = text
+                    .decode()
+                    .map_err(|error| Error::Other(error.to_string()))?;
+                let text = quick_xml::escape::unescape(&text)
+                    .map_err(|error| Error::Other(error.to_string()))?;
+                if !text.trim().is_empty()
+                    && let Some(flag) = visible.last_mut()
+                {
+                    *flag = true;
+                }
+            }
+            Event::CData(text)
+                if open
+                    .last()
+                    .is_some_and(|(name, admitted, _, _)| *admitted && name == b"t") =>
+            {
+                let text = text
+                    .decode()
+                    .map_err(|error| Error::Other(error.to_string()))?;
+                if !text.trim().is_empty()
+                    && let Some(flag) = visible.last_mut()
+                {
+                    *flag = true;
+                }
+            }
+            Event::GeneralRef(reference)
+                if open
+                    .last()
+                    .is_some_and(|(name, admitted, _, _)| *admitted && name == b"t") =>
+            {
+                let name = reference
+                    .decode()
+                    .map_err(|error| Error::Other(error.to_string()))?;
+                let encoded = format!("&{name};");
+                let text = quick_xml::escape::unescape(&encoded)
+                    .map_err(|error| Error::Other(error.to_string()))?;
+                if !text.trim().is_empty()
+                    && let Some(flag) = visible.last_mut()
+                {
+                    *flag = true;
+                }
+            }
+            Event::Eof if !open.is_empty() => {
+                return Err(Error::Other(
+                    "main document ends inside an element".to_owned(),
+                ));
+            }
+            Event::Eof => {
+                if owner_paths.len() != owners.len()
+                    || owner_paths
+                        .iter()
+                        .zip(&owners)
+                        .any(|(source, (model, _))| source != model)
+                {
+                    return Err(Error::Other(
+                        "main document paragraph owners do not match validation scope".to_owned(),
+                    ));
+                }
+                return Ok(owners
+                    .iter()
+                    .zip(visible)
+                    .map(|((_, p), nontext)| paragraph_has_typed_visible_content(p) || nontext)
+                    .collect());
+            }
+            _ => {}
+        }
+        buffer.clear();
     }
 }
 
@@ -18750,6 +19217,23 @@ impl Document {
             .any(|properties| !properties.extra_xml.is_empty() || properties.change.is_some())
     }
 
+    /// Return whether each facade paragraph contains displayed content.
+    ///
+    /// Uses an unpublished source snapshot and preserves the live document.
+    pub fn paragraph_visibility(&self) -> Result<Vec<bool>> {
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_document_to_package()?;
+        let source = candidate
+            .package
+            .get_part(&candidate.doc_part_name)
+            .ok_or(Error::NoDocumentPart)?;
+        paragraph_visibility_from_main_source(
+            &candidate,
+            source,
+            ParagraphVisibilityScope::FacadeRecursive,
+        )
+    }
+
     /// Get immutable references to all paragraphs.
     pub fn paragraphs(&self) -> Vec<ParagraphRef<'_>> {
         self.document
@@ -29185,26 +29669,44 @@ impl Document {
             prev_level = Some(*level);
         }
 
-        // Check: excessive empty paragraphs
-        let mut consecutive_empty = 0u32;
-        for content in &self.document.body.content {
-            if let BodyContent::Paragraph(p) = content {
-                if p.text().trim().is_empty() {
-                    consecutive_empty += 1;
-                    if consecutive_empty >= 3 {
-                        issues.push(AccessibilityIssue {
-                            severity: IssueSeverity::Info,
-                            message: format!(
-                                "{consecutive_empty} consecutive empty paragraphs (consider using spacing instead)"
-                            ),
-                        });
+        // Check direct body streaks only. An uncertain source omits this whole check.
+        let visibility = (|| {
+            let mut candidate = self.clone_for_staging();
+            candidate.flush_document_to_package()?;
+            let source = candidate
+                .package
+                .get_part(&candidate.doc_part_name)
+                .ok_or(Error::NoDocumentPart)?;
+            paragraph_visibility_from_main_source(
+                &candidate,
+                source,
+                ParagraphVisibilityScope::DirectBody,
+            )
+        })();
+        match visibility {
+            Ok(visibility) => {
+                let mut flags = visibility.into_iter();
+                let mut consecutive_empty = 0u32;
+                for content in &self.document.body.content {
+                    if let BodyContent::Paragraph(_) = content {
+                        if flags.next() == Some(false) {
+                            consecutive_empty += 1;
+                            if consecutive_empty >= 3 {
+                                issues.push(AccessibilityIssue { severity: IssueSeverity::Info,
+                                    message: format!("{consecutive_empty} consecutive empty paragraphs (consider using spacing instead)") });
+                            }
+                        } else {
+                            consecutive_empty = 0;
+                        }
+                    } else {
+                        consecutive_empty = 0;
                     }
-                } else {
-                    consecutive_empty = 0;
                 }
-            } else {
-                consecutive_empty = 0;
             }
+            Err(error) => issues.push(AccessibilityIssue {
+                severity: IssueSeverity::Warning,
+                message: format!("Paragraph visibility could not be determined: {error}"),
+            }),
         }
 
         issues
@@ -38353,6 +38855,633 @@ mod tests {
         // New document has no title or author
         assert!(issues.iter().any(|i| i.message.contains("no title")));
         assert!(issues.iter().any(|i| i.message.contains("no author")));
+    }
+
+    #[test]
+    fn visible_content_does_not_hide_malformed_remaining_xml() {
+        for ending in ["", "</w:r></w:body></w:document>"] {
+            let xml = format!(
+                r#"<w:document xmlns:w="{W_NS}"><w:body><w:p><w:r><w:drawing/></w:r></w:p>{ending}"#
+            );
+            assert!(
+                paragraph_visibility_from_main_source(
+                    &Document::new(),
+                    xml.as_bytes(),
+                    ParagraphVisibilityScope::FacadeRecursive
+                )
+                .is_err(),
+                "{xml}"
+            );
+        }
+    }
+
+    #[test]
+    fn paragraph_visibility_uses_current_picture_source_without_mutating_live_document() {
+        let mut document = Document::new();
+        document.add_paragraph("before");
+        document.add_picture(
+            super::watermark_tests::PNG,
+            "visible.png",
+            Length::inches(1.0),
+            Length::inches(1.0),
+        );
+        document.add_paragraph("");
+        let before_model = document.document.to_xml().unwrap();
+        let before_parts = document.package.parts.clone();
+        assert_eq!(
+            document.paragraph_visibility().unwrap(),
+            vec![true, true, false]
+        );
+        assert_eq!(
+            document.paragraph_visibility().unwrap(),
+            vec![true, true, false]
+        );
+        assert_eq!(document.document.to_xml().unwrap(), before_model);
+        assert_eq!(document.package.parts, before_parts);
+        document.paragraph_mut(2).unwrap().add_run("unsaved");
+        let edited_model = document.document.to_xml().unwrap();
+        let edited_parts = document.package.parts.clone();
+        assert_eq!(
+            document.paragraph_visibility().unwrap(),
+            vec![true, true, true]
+        );
+        assert_eq!(document.document.to_xml().unwrap(), edited_model);
+        assert_eq!(document.package.parts, edited_parts);
+    }
+
+    #[test]
+    fn paragraph_visibility_checks_owner_slots_and_audit_direct_body_scope() {
+        let body = concat!(
+            "<w:p/><w:p/>",
+            "<w:sdt><w:sdtPr/><w:sdtContent><w:p><w:r><w:t>controlled</w:t></w:r></w:p><w:sdt><w:sdtPr/><w:sdtContent><w:p/></w:sdtContent></w:sdt></w:sdtContent></w:sdt>",
+            "<w:tbl><w:tblPr/><w:tblGrid/><w:tr><w:tc><w:tcPr/><w:p><w:r><w:t>excluded</w:t></w:r></w:p></w:tc></w:tr></w:tbl>",
+            "<w:p/><w:p/><w:p/>",
+        );
+        let xml = format!(r#"<w:document xmlns:w="{W_NS}"><w:body>{body}</w:body></w:document>"#);
+        let mut document = Document::new();
+        document.document = rdocx_oxml::document::CT_Document::from_xml(xml.as_bytes()).unwrap();
+        assert_eq!(document.paragraphs().len(), 7);
+        assert_eq!(
+            paragraph_visibility_from_main_source(
+                &document,
+                xml.as_bytes(),
+                ParagraphVisibilityScope::FacadeRecursive
+            )
+            .unwrap(),
+            vec![false, false, true, false, false, false, false]
+        );
+        assert_eq!(
+            paragraph_visibility_from_main_source(
+                &document,
+                xml.as_bytes(),
+                ParagraphVisibilityScope::DirectBody
+            )
+            .unwrap(),
+            vec![false; 5]
+        );
+        let direct = "<w:p><w:r><w:t>controlled</w:t></w:r></w:p><w:p/>";
+        let shifted = xml.replace("<w:sdt><w:sdtPr/><w:sdtContent><w:p><w:r><w:t>controlled</w:t></w:r></w:p><w:sdt><w:sdtPr/><w:sdtContent><w:p/></w:sdtContent></w:sdt></w:sdtContent></w:sdt>", direct);
+        // Equal paragraph count cannot substitute for the original owners.
+        assert_eq!(
+            rdocx_oxml::document::CT_Document::from_xml(shifted.as_bytes())
+                .unwrap()
+                .body
+                .paragraphs()
+                .count(),
+            document.paragraphs().len()
+        );
+        assert!(
+            paragraph_visibility_from_main_source(
+                &document,
+                shifted.as_bytes(),
+                ParagraphVisibilityScope::FacadeRecursive
+            )
+            .is_err()
+        );
+        let issues = document.audit_accessibility();
+        assert_eq!(
+            issues
+                .iter()
+                .filter(|issue| issue.message.contains("consecutive empty paragraphs"))
+                .map(|issue| issue.message.as_str())
+                .collect::<Vec<_>>(),
+            vec!["3 consecutive empty paragraphs (consider using spacing instead)"]
+        );
+        assert!(!issues.iter().any(|issue| {
+            issue
+                .message
+                .starts_with("Paragraph visibility could not be determined:")
+        }));
+    }
+
+    #[test]
+    fn audit_picture_paragraphs_do_not_count_as_consecutive_empty_paragraphs() {
+        let mut document = Document::new();
+        for index in 0..3 {
+            document.add_picture(
+                super::watermark_tests::PNG,
+                &format!("picture{index}.png"),
+                Length::inches(1.0),
+                Length::inches(1.0),
+            );
+        }
+        let before_model = document.document.to_xml().unwrap();
+        let before_parts = document.package.parts.clone();
+        let issues = document.audit_accessibility();
+        assert_eq!(document.document.to_xml().unwrap(), before_model);
+        assert_eq!(document.package.parts, before_parts);
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.message.contains("no title"))
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.message.contains("no author"))
+        );
+        assert_eq!(
+            issues
+                .iter()
+                .filter(|issue| issue.message.contains("has no alt text"))
+                .count(),
+            3,
+        );
+        assert!(
+            !issues
+                .iter()
+                .any(|issue| issue.message.contains("consecutive empty paragraphs")),
+            "{issues:?}",
+        );
+
+        for _ in 0..4 {
+            document.add_paragraph("");
+        }
+        let before_model = document.document.to_xml().unwrap();
+        let before_parts = document.package.parts.clone();
+        let issues = document.audit_accessibility();
+        assert_eq!(document.document.to_xml().unwrap(), before_model);
+        assert_eq!(document.package.parts, before_parts);
+        let empty: Vec<_> = issues
+            .iter()
+            .filter(|issue| issue.message.contains("consecutive empty paragraphs"))
+            .map(|issue| issue.message.as_str())
+            .collect();
+        assert_eq!(
+            empty,
+            vec![
+                "3 consecutive empty paragraphs (consider using spacing instead)",
+                "4 consecutive empty paragraphs (consider using spacing instead)",
+            ]
+        );
+    }
+
+    #[test]
+    fn audit_qualified_display_content_and_field_controls_preserve_source() {
+        let cases = [
+            (
+                "simple-cr",
+                r#"<w:fldSimple w:instr="PAGE"><w:r><w:cr/></w:r></w:fldSimple>"#,
+                true,
+            ),
+            (
+                "complex-cr",
+                r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:cr/><w:fldChar w:fldCharType="end"/></w:r>"#,
+                true,
+            ),
+            (
+                "simple-no-break-hyphen",
+                r#"<w:fldSimple w:instr="PAGE"><w:r><w:noBreakHyphen/></w:r></w:fldSimple>"#,
+                true,
+            ),
+            (
+                "complex-no-break-hyphen",
+                r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:noBreakHyphen/><w:fldChar w:fldCharType="end"/></w:r>"#,
+                true,
+            ),
+            (
+                "simple-positional-tab",
+                r#"<w:fldSimple w:instr="PAGE"><w:r><w:ptab w:alignment="left" w:relativeTo="margin" w:leader="none"/></w:r></w:fldSimple>"#,
+                true,
+            ),
+            (
+                "complex-positional-tab",
+                r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:ptab w:alignment="left" w:relativeTo="margin" w:leader="none"/><w:fldChar w:fldCharType="end"/></w:r>"#,
+                true,
+            ),
+            (
+                "simple-soft-hyphen",
+                r#"<w:fldSimple w:instr="PAGE"><w:r><w:softHyphen/></w:r></w:fldSimple>"#,
+                false,
+            ),
+            (
+                "complex-soft-hyphen",
+                r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:softHyphen/><w:fldChar w:fldCharType="end"/></w:r>"#,
+                false,
+            ),
+            (
+                "simple-leaf-deleted-only",
+                r#"<w:fldSimple w:instr="PAGE"><w:r><w:delText>gone</w:delText></w:r></w:fldSimple>"#,
+                false,
+            ),
+            (
+                "simple-outer-deleted-only",
+                r#"<w:fldSimple w:instr="UNKNOWN"><w:fldSimple w:instr="PAGE"><w:r><w:delText>gone</w:delText></w:r></w:fldSimple></w:fldSimple>"#,
+                false,
+            ),
+            (
+                "complex-outer-deleted-only",
+                r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>UNKNOWN</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:fldSimple w:instr="PAGE"><w:r><w:delText>gone</w:delText></w:r></w:fldSimple><w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+                false,
+            ),
+            (
+                "simple-leaf-deleted-accepted",
+                r#"<w:fldSimple w:instr="PAGE"><w:r><w:delText>gone</w:delText></w:r><w:r><w:t>accepted</w:t></w:r></w:fldSimple>"#,
+                true,
+            ),
+            (
+                "simple-outer-deleted-accepted",
+                r#"<w:fldSimple w:instr="UNKNOWN"><w:fldSimple w:instr="PAGE"><w:r><w:delText>gone</w:delText></w:r><w:r><w:t>accepted</w:t></w:r></w:fldSimple></w:fldSimple>"#,
+                true,
+            ),
+            (
+                "complex-outer-deleted-accepted",
+                r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>UNKNOWN</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:fldSimple w:instr="PAGE"><w:r><w:delText>gone</w:delText></w:r><w:r><w:t>accepted</w:t></w:r></w:fldSimple><w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+                true,
+            ),
+            (
+                "alias-pict",
+                r#"<q:r xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:pict/></q:r>"#,
+                true,
+            ),
+            (
+                "default-object",
+                r#"<r xmlns="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><object/></r>"#,
+                true,
+            ),
+            (
+                "foreign-pict",
+                r#"<w:r><x:pict xmlns:x="urn:producer"/></w:r>"#,
+                false,
+            ),
+            (
+                "rebound-object",
+                r#"<w:r><w:object xmlns:w="urn:producer"/></w:r>"#,
+                false,
+            ),
+            ("soft-hyphen", "<w:r><w:softHyphen/></w:r>", false),
+            (
+                "producer-hint",
+                "<w:r><w:lastRenderedPageBreak/></w:r>",
+                false,
+            ),
+            (
+                "deleted-text",
+                "<w:r><w:delText>deleted</w:delText></w:r>",
+                false,
+            ),
+            (
+                "deleted-drawing",
+                "<w:del><w:r><w:drawing/></w:r></w:del>",
+                false,
+            ),
+            (
+                "moved-away",
+                "<w:moveFrom><w:r><w:drawing/></w:r></w:moveFrom>",
+                false,
+            ),
+            (
+                "inserted-drawing",
+                "<w:ins><w:r><w:drawing/></w:r></w:ins>",
+                true,
+            ),
+            (
+                "equation",
+                r#"<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:r><m:t>x</m:t></m:r></m:oMath>"#,
+                true,
+            ),
+            (
+                "loose-begin",
+                r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+                false,
+            ),
+            (
+                "loose-separate",
+                r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r>"#,
+                false,
+            ),
+            (
+                "loose-end",
+                r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+                false,
+            ),
+            (
+                "instruction",
+                "<w:r><w:instrText>PAGE</w:instrText></w:r>",
+                false,
+            ),
+            (
+                "deleted-instruction",
+                "<w:r><w:delInstrText>PAGE</w:delInstrText></w:r>",
+                false,
+            ),
+            ("simple-empty", r#"<w:fldSimple w:instr="PAGE"/>"#, false),
+            (
+                "simple-text",
+                r#"<w:fldSimple w:instr="PAGE"><w:r><w:t>4</w:t></w:r></w:fldSimple>"#,
+                true,
+            ),
+            (
+                "simple-whitespace",
+                r#"<w:fldSimple w:instr="PAGE"><w:r><w:t xml:space="preserve"> </w:t></w:r></w:fldSimple>"#,
+                false,
+            ),
+            (
+                "simple-tab",
+                r#"<w:fldSimple w:instr="PAGE"><w:r><w:tab/></w:r></w:fldSimple>"#,
+                true,
+            ),
+            (
+                "complex-text",
+                r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>4</w:t><w:fldChar w:fldCharType="end"/></w:r>"#,
+                true,
+            ),
+            (
+                "complex-break",
+                r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:br/><w:fldChar w:fldCharType="end"/></w:r>"#,
+                true,
+            ),
+            (
+                "complex-whitespace",
+                r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:t xml:space="preserve"> </w:t><w:fldChar w:fldCharType="end"/></w:r>"#,
+                false,
+            ),
+            (
+                "incomplete-complex",
+                r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText></w:r>"#,
+                false,
+            ),
+            (
+                "simple-symbol",
+                r#"<w:fldSimple w:instr="PAGE"><w:r><w:sym w:font="Symbol" w:char="F041"/></w:r></w:fldSimple>"#,
+                true,
+            ),
+            (
+                "simple-drawing",
+                r#"<w:fldSimple w:instr="PAGE"><w:r><w:drawing xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><wp:inline><wp:extent cx="914400" cy="914400"/><wp:docPr id="1" name="Actual"/><a:graphic><a:graphicData uri="urn:producer"/></a:graphic></wp:inline></w:drawing></w:r></w:fldSimple>"#,
+                true,
+            ),
+            (
+                "complex-symbol",
+                r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:sym w:font="Symbol" w:char="F041"/><w:fldChar w:fldCharType="end"/></w:r>"#,
+                true,
+            ),
+            (
+                "complex-drawing",
+                r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:drawing xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><wp:inline><wp:extent cx="914400" cy="914400"/><wp:docPr id="1" name="Actual"/><a:graphic><a:graphicData uri="urn:producer"/></a:graphic></wp:inline></w:drawing><w:fldChar w:fldCharType="end"/></w:r>"#,
+                true,
+            ),
+            (
+                "spanning-complex",
+                r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>NUMPAGES</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>4</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+                true,
+            ),
+            (
+                "nested-complex",
+                r#"<w:r><w:fldChar w:fldCharType="begin"/><w:instrText>IF</w:instrText><w:fldChar w:fldCharType="separate"/><w:fldChar w:fldCharType="begin"/><w:instrText>PAGE</w:instrText><w:fldChar w:fldCharType="separate"/><w:t>4</w:t><w:fldChar w:fldCharType="end"/><w:fldChar w:fldCharType="end"/></w:r>"#,
+                true,
+            ),
+            (
+                "unmatched-delimiters",
+                r#"<w:r><w:fldChar w:fldCharType="separate"/><w:fldChar w:fldCharType="end"/></w:r>"#,
+                false,
+            ),
+            (
+                "default-loose-marker",
+                r#"<r xmlns="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><fldChar fldCharType="begin"/></r>"#,
+                false,
+            ),
+            (
+                "alias-loose-marker",
+                r#"<q:r xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:fldChar q:fldCharType="begin"/></q:r>"#,
+                false,
+            ),
+            (
+                "foreign-marker",
+                r#"<w:r><x:fldChar xmlns:x="urn:producer" x:fldCharType="begin"/></w:r>"#,
+                false,
+            ),
+            (
+                "inserted-loose-marker",
+                r#"<w:ins><w:r><w:fldChar w:fldCharType="begin"/></w:r></w:ins>"#,
+                false,
+            ),
+            (
+                "deleted-loose-marker",
+                r#"<w:del><w:r><w:fldChar w:fldCharType="begin"/></w:r></w:del>"#,
+                false,
+            ),
+            (
+                "duplicate-inline-slot",
+                "<w:sdt><w:sdtContent><w:r/></w:sdtContent><w:sdtContent><w:r><w:drawing/></w:r></w:sdtContent></w:sdt>",
+                false,
+            ),
+            (
+                "invalid-opaque-control",
+                r#"<w:sdt><w:sdtPr><w:id w:val="invalid"/></w:sdtPr><w:sdtContent><w:r><w:drawing/></w:r></w:sdtContent></w:sdt>"#,
+                false,
+            ),
+            (
+                "admitted-inline-control",
+                "<w:sdt><w:sdtPr/><w:sdtContent><w:r><w:drawing/></w:r></w:sdtContent></w:sdt>",
+                true,
+            ),
+        ];
+        let mut failures = Vec::new();
+        for (label, fragment, visible) in cases {
+            let mut seed = Document::new();
+            seed.add_paragraph("CONTENT");
+            let mut package =
+                OpcPackage::from_reader(Cursor::new(seed.to_bytes().unwrap())).unwrap();
+            let part = package.main_document_part().unwrap();
+            let xml = String::from_utf8(package.get_part(&part).unwrap().to_vec()).unwrap();
+            let start = xml.find("<w:p>").unwrap();
+            let end = start + xml[start..].find("</w:p>").unwrap() + "</w:p>".len();
+            let mut xml = xml;
+            xml.replace_range(start..end, &format!("<w:p>{fragment}</w:p>").repeat(3));
+            package.set_part(&part, xml.into_bytes());
+            let mut bytes = Cursor::new(Vec::new());
+            package.write_to(&mut bytes).unwrap();
+            let document = Document::from_bytes(bytes.get_ref()).unwrap();
+            assert_eq!(document.paragraph_count(), 3, "{label}");
+            let before_model = document.document.to_xml().unwrap();
+            let before_parts = document.package.parts.clone();
+            match document.paragraph_visibility() {
+                Ok(flags) if flags == vec![visible; 3] => {}
+                actual => failures.push(format!(
+                    "{label}: native visibility={actual:?}, expected={visible}"
+                )),
+            }
+            let issues = document.audit_accessibility();
+            assert_eq!(document.document.to_xml().unwrap(), before_model, "{label}");
+            assert_eq!(document.package.parts, before_parts, "{label}");
+            assert!(
+                issues
+                    .iter()
+                    .any(|issue| issue.message.contains("no title")),
+                "{label}"
+            );
+            assert!(
+                issues
+                    .iter()
+                    .any(|issue| issue.message.contains("no author")),
+                "{label}"
+            );
+            let empty_count = issues
+                .iter()
+                .filter(|issue| issue.message.contains("consecutive empty paragraphs"))
+                .count();
+            if empty_count != usize::from(!visible) {
+                failures.push(format!("{label}: visible={visible}, issues={issues:?}"));
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn audit_current_field_cache_rejects_stale_nontext_results_without_mutation() {
+        // A non-placeholder instruction distinguishes stale cache emptiness.
+        // Empty PAGE/NUMPAGES caches deliberately serialize their visible "1".
+        let mut failures = Vec::new();
+        for instruction in ["DOCPROPERTY Title", "PAGE", "NUMPAGES"] {
+            let mut result = CT_R::new("");
+            result.content.push(RunContent::Tab);
+            let field = Field::from_raw(
+                instruction,
+                rdocx_oxml::text::FieldForm::Complex,
+                vec![result],
+            )
+            .unwrap();
+            assert_eq!(field.cached_result, "\t");
+            assert!(field.cached_result_runs().is_some());
+            let mut paragraph = CT_P::new();
+            let mut run = CT_R::new("");
+            run.content = vec![RunContent::Field(field)];
+            paragraph.runs.push(run);
+            for (cache, cached_visible) in
+                [("\t", true), ("changed", true), ("", false), (" ", false)]
+            {
+                let placeholder = cache.is_empty() && instruction != "DOCPROPERTY Title";
+                let visible = cached_visible || placeholder;
+                let mut document = Document::new();
+                for _ in 0..3 {
+                    let mut paragraph = paragraph.clone();
+                    let mut fields = 0;
+                    for run in &mut paragraph.runs {
+                        for item in &mut run.content {
+                            if let RunContent::Field(field) = item {
+                                fields += 1;
+                                assert!(field.cached_result_runs().is_some());
+                                field.cached_result = cache.to_owned();
+                                assert_eq!(field.cached_result_runs().is_some(), cache == "\t");
+                            }
+                        }
+                    }
+                    assert_eq!(fields, 1, "actual accepted complex-field projection");
+                    document
+                        .document
+                        .body
+                        .content
+                        .push(BodyContent::Paragraph(paragraph));
+                }
+                let before_model = document.document.to_xml().unwrap();
+                let serialized = String::from_utf8(before_model.clone()).unwrap();
+                let before_parts = document.package.parts.clone();
+                assert_eq!(
+                    serialized.matches("<w:tab").count(),
+                    if cache == "\t" { 3 } else { 0 },
+                    "{instruction}: stale typed result must not survive serialization"
+                );
+                assert_eq!(
+                    serialized.matches(">1</w:t>").count(),
+                    if placeholder { 3 } else { 0 },
+                    "{instruction}: actual empty-cache placeholder precondition"
+                );
+                assert_eq!(
+                    document.paragraph_visibility().unwrap(),
+                    vec![visible; 3],
+                    "{instruction}: cache={cache:?}"
+                );
+                let issues = document.audit_accessibility();
+                assert_eq!(document.document.to_xml().unwrap(), before_model);
+                assert_eq!(document.package.parts, before_parts);
+                let empty = issues
+                    .iter()
+                    .any(|issue| issue.message.contains("consecutive empty paragraphs"));
+                if empty == visible {
+                    failures.push(format!(
+                        "{instruction}: cache={cache:?}, visible={visible}: {issues:?}"
+                    ));
+                }
+            }
+        }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn audit_indeterminate_current_source_retains_other_findings_and_omits_empty_streaks() {
+        let mut seed = Document::new();
+        let mut package = OpcPackage::from_reader(Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        let part = package.main_document_part().unwrap();
+        let xml = concat!(
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns="urn:producer">"#,
+            "<w:body><w:p/><w:p/><w:p/><producer/></w:body></w:document>",
+        );
+        package.set_part(&part, xml.as_bytes().to_vec());
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+        // A genuine unsaved edit forces current-source construction to refuse
+        // the producer's ambiguous default namespace, rather than reuse source.
+        document.add_paragraph("");
+        let before_model = document.document.to_xml().unwrap();
+        let before_parts = document.package.parts.clone();
+        let mut candidate = document.clone_for_staging();
+        let error = candidate
+            .flush_document_to_package()
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("shadowed `default` namespace"), "{error}");
+        let issues = document.audit_accessibility();
+        assert_eq!(document.document.to_xml().unwrap(), before_model);
+        assert_eq!(document.package.parts, before_parts);
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.message.contains("no title"))
+        );
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.message.contains("no author"))
+        );
+        let indeterminate: Vec<_> = issues
+            .iter()
+            .filter(|issue| {
+                issue
+                    .message
+                    .starts_with("Paragraph visibility could not be determined:")
+            })
+            .collect();
+        assert_eq!(indeterminate.len(), 1, "{issues:?}");
+        assert_eq!(indeterminate[0].severity, IssueSeverity::Warning);
+        assert!(indeterminate[0].message.contains(&error));
+        assert!(
+            !issues
+                .iter()
+                .any(|issue| issue.message.contains("consecutive empty paragraphs")),
+            "{issues:?}"
+        );
     }
 
     #[test]

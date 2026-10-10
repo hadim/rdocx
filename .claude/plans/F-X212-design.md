@@ -1,6 +1,6 @@
 # F-X212, Align native accessibility with visible paragraph content
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: M
 **Depends on**: F-X196
@@ -153,14 +153,14 @@ Review the generated finding count and reverse-control proof independently.
 ## Implementation checklist
 
 - [x] Complete F-X196 and approve the qualified native predicate design.
-- [ ] Claim this story and observe real failing public audit regression.
-- [ ] Reuse/adapt native predicate and audit wiring in existing files.
-- [ ] Prove raw/typed admission and unchanged source controls.
-- [ ] Review any explicit CLI semantic refinement before implementation.
-- [ ] Derive and independently review exact three-key audit delta.
-- [ ] Commit intentional behavior separately with reviewed expected delta.
-- [ ] Run scoped/risk gates and clean independent microscope.
-- [ ] Update listed HLD sections and validated worker handoff.
+- [x] Claim this story and observe real failing public audit regression.
+- [x] Reuse/adapt native predicate and audit wiring in existing files.
+- [x] Prove raw/typed admission and unchanged source controls.
+- [x] Review any explicit CLI semantic refinement before implementation.
+- [x] Derive and independently review exact three-key audit delta.
+- [x] Commit intentional behavior separately with reviewed expected delta.
+- [x] Run scoped/risk gates and clean independent microscope.
+- [x] Update listed HLD sections and validated worker handoff.
 
 ## Open questions
 
@@ -293,3 +293,27 @@ explicitly. This adds the OXML changed-crate/parser and publication gates.
 Land only in the labelled intentional behavior stage after unchanged scanner
 extraction, preserving the exact forty-nine-key attribution contract. Any
 additional output delta stops for diagnosis and reviewed evidence.
+
+## Scoped workflow policy prerequisite
+
+The scoped workflow-policy gate uses the coordinator's existing roadmap
+validator for both declared table forms, including S91's delivery-status
+column. Mirror canonical7a7851e3's bounded existing-function repair in
+scripts/test_sprint_workflow.py. Preserve unique placement, title, size,
+backlog and dependency assertions. This is a coordinator prerequisite for
+the gate, not additional paragraph-visibility behavior. Its script and this
+plan are absent from all22 authenticated publish archives, so retained
+package verification is unchanged. The ignored worker target path points to
+the existing shared Cargo target, with no second build directory.
+
+## Scoped completion evidence
+
+The labelled scanner extraction is ea803be1. Final scoped native, OXML and
+CLI tests and lint pass through the retained exact retries. The deterministic
+harness matches all49 updated entries, with only the three declared showcase
+keys changed and46 unchanged. Independent source, hash, HLD, carrier and
+policy-prerequisite reviews are clean. Verified22 packaging has original
+Cargo0 and corrected capture0, with the failed capture wrapper retained.
+The final policy command ran141 tests successfully with two existing
+publication-dependent skips, followed by diff0. No sprint-wide or integrated
+result is claimed by this worker completion.
