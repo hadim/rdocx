@@ -1388,6 +1388,28 @@ fn set_nth_inline_legacy_form(
 /// of wasm32 and the 2 MB default of spawned Rust threads.
 const MAX_CONTENT_CONTROL_NESTING: usize = 64;
 
+/// Reject a story part whose content controls nest deeper than
+/// [`MAX_CONTENT_CONTROL_NESTING`] anywhere, without recursing.
+///
+/// The typed parser checks each control it reads, but a control inside
+/// content kept as raw XML, such as a text box, alternate content or a
+/// block-level custom XML element, is only walked later, by recursive
+/// passes such as revision acceptance. Checking the whole part at open keeps
+/// those passes within the same bound.
+#[doc(hidden)]
+pub fn validate_story_part_nesting(xml: &[u8]) -> Result<()> {
+    if nesting_exceeds(xml, &[b"sdt"], MAX_CONTENT_CONTROL_NESTING) {
+        return Err(content_control_nesting_error());
+    }
+    Ok(())
+}
+
+fn content_control_nesting_error() -> OxmlError {
+    OxmlError::InvalidValue(format!(
+        "content control nesting exceeds {MAX_CONTENT_CONTROL_NESTING} levels"
+    ))
+}
+
 /// Reject XML whose content controls nest deeper than
 /// [`MAX_CONTENT_CONTROL_NESTING`], without recursing.
 ///
@@ -1395,11 +1417,7 @@ const MAX_CONTENT_CONTROL_NESTING: usize = 64;
 /// control, so without this check alternating controls and tables would nest
 /// tables past the table limit.
 fn validate_content_control_nesting(xml: &[u8]) -> Result<()> {
-    if nesting_exceeds(xml, &[b"sdt"], MAX_CONTENT_CONTROL_NESTING) {
-        return Err(OxmlError::InvalidValue(format!(
-            "content control nesting exceeds {MAX_CONTENT_CONTROL_NESTING} levels"
-        )));
-    }
+    validate_story_part_nesting(xml)?;
     if nesting_exceeds(xml, &[b"tbl"], MAX_RECOGNIZED_TABLE_NESTING) {
         return Err(OxmlError::InvalidValue(
             "recognized model nesting exceeds table limit".to_owned(),
