@@ -30,7 +30,7 @@ and complete the frozen contribution scope.
 | F-X194 | Complete Python table text and indentation APIs | M | done | - |
 | F-X195 | Honor caller fonts and variable styles across render paths | L | in-progress | codex |
 | F-X196 | Validate visible paragraph content without false empty warnings | S | done | - |
-| F-X197 | Unify Python colour inputs and font colour formats | L | in-progress | codex |
+| F-X197 | Unify Python colour inputs and font colour formats | L | done | - |
 | F-X198 | Preserve alternate text-box copies during scoped replacement | M | done | - |
 | F-X199 | Model namespace-qualified empty table cell margins | S | done | - |
 | F-X200 | Complete Python Word formatting and list parity | L | pending | - |
@@ -496,7 +496,7 @@ F-X211 plan. Intake grants no contributor gate credit or arbitrary new nesting
 policy. The approved256 control policy and complete textbox resource,
 namespace, discovery and public compatibility acceptance remain mandatory.
 
-## S91 intake and verification checkpoint, 2026-10-10 12:40UTC
+## Historical S91 intake and verification checkpoint, 2026-10-10 12:40UTC
 
 The12:40:16UTC GitHub refresh found no additional or changed records. The
 subsequent all-state PR lookup still identifies PR338 as the newest PR.
@@ -545,4 +545,14 @@ independently reviewed corrections. The corrected PowerPoint test has passed
 independent review. All five PowerPoint controls and all nine deterministic
 font controls pass.
 Consumer wiring and the remaining feature gates are outstanding.
-Six stories remain completed, three in progress and thirteen approved.
+Seven stories are completed and integrated, F-X192 and F-X195 remain in
+progress and thirteen stories have approved designs awaiting implementation.
+F-X197 completes its reviewed shared colour contract with scoped652 and
+strict typing/stubs, explicit retained R14 Word354 and fresh R15 PowerPoint583,
+native/WASM gates, verified22 packages and policy141 with2 expected
+publication-dependent skips. Worker49 match its retained worker baseline.
+The integrated prefix passed all seven commands with ROOT-authenticated
+logs and source guards, including canonical F-X212 baseline49 confirmation.
+All49 canonical accepted entries match. Final integrated sprint verification,
+sprint review and close remain due. Scope remains frozen at22 stories,
+19 PRs and26 included issues, with264/281 excluded.

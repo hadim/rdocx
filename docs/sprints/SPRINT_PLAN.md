@@ -2163,15 +2163,15 @@ CLI validation reports before the template and form programme resumes.
 | F-X211 | Complete Python script compatibility and safe XML access | L |
 | F-X212 | Align native accessibility with visible paragraph content | M |
 
-**Current delivery checkpoint, 2026-10-10**: six of twenty-two active stories
-are completed and integrated, F-X193, F-X194, F-X196, F-X198, F-X199 and F-X212.
-F-X192, F-X195 and F-X197 are in progress. Thirteen stories have
-approved designs and await implementation.
+**Current delivery checkpoint, 2026-10-10**: seven of twenty-two active stories
+are completed and integrated, F-X193, F-X194, F-X196, F-X197, F-X198, F-X199
+and F-X212. F-X192 and F-X195 are in progress. Thirteen stories have approved
+designs and await implementation.
 F-X192 needs the remaining catalogue runtime acceptance and native Word
 controls. F-X195 needs its remaining runtime gates and provider wiring.
-F-X197 has passed the full Python suites, native checks, unchanged rendering
-hashes and verified packaging. Repository-policy corrections and final
-review remain before its completion.
+F-X197 completes the scoped dependency prefix with reviewed live colours,
+installed Python coverage, native checks, unchanged rendering hashes,
+verified packaging and policy acceptance.
 No design question remains outstanding. Final integrated verification,
 sprint review and verified sprint close remain outstanding.
 

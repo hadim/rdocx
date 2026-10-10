@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 222 | 202 | 3 | 13 |
-| **Total** | **547** | **476** | **3** | **64** |
+| X, Cross-cutting | 222 | 203 | 2 | 13 |
+| **Total** | **547** | **477** | **2** | **64** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -755,7 +755,7 @@ HLD14 contract before adopting contributor changes.
 | F-X194 | Complete Python table text and indentation APIs | S91 | M | done |
 | F-X195 | Honor caller fonts and variable styles across render paths | S91 | L | in-progress |
 | F-X196 | Validate visible paragraph content without false empty warnings | S91 | S | done |
-| F-X197 | Unify Python colour inputs and font colour formats | S91 | L | in-progress |
+| F-X197 | Unify Python colour inputs and font colour formats | S91 | L | done |
 | F-X198 | Preserve alternate text-box copies during scoped replacement | S91 | M | done |
 | F-X199 | Model namespace-qualified empty table cell margins | S91 | S | done |
 | F-X200 | Complete Python Word formatting and list parity | S91 | L | pending |
