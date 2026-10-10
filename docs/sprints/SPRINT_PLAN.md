@@ -2183,7 +2183,7 @@ A later PR attaches to its existing issue owner. Assessment is not completion.
 | No linked issue | [294](https://github.com/tensorbee/rdocx/pull/294) | F-X193 | Semantic HTML highlights, completed. |
 | [295](https://github.com/tensorbee/rdocx/issues/295), [300](https://github.com/tensorbee/rdocx/issues/300) | [317](https://github.com/tensorbee/rdocx/pull/317) | F-X194 | Cell text frames and signed removable table indentation, completed with scoped acceptance. |
 | [296](https://github.com/tensorbee/rdocx/issues/296), [297](https://github.com/tensorbee/rdocx/issues/297) | [315](https://github.com/tensorbee/rdocx/pull/315) | F-X195 | Caller fonts and variable styles across layout and output. |
-| [298](https://github.com/tensorbee/rdocx/issues/298) | [317](https://github.com/tensorbee/rdocx/pull/317) | F-X196, F-X212 | CLI validation complete. Native accessibility remains F-X212. |
+| [298](https://github.com/tensorbee/rdocx/issues/298) | [317](https://github.com/tensorbee/rdocx/pull/317) | F-X196, F-X212 | CLI validation and native accessibility complete with scoped acceptance. |
 | [299](https://github.com/tensorbee/rdocx/issues/299) | [317](https://github.com/tensorbee/rdocx/pull/317) | F-X197 | Shared Python colour inputs and font colour formats. |
 | [301](https://github.com/tensorbee/rdocx/issues/301) | [317](https://github.com/tensorbee/rdocx/pull/317) | F-X198, F-X202 | Atomic refusal complete. Synchronized alternate-copy editing remains. |
 | No linked issue | [302](https://github.com/tensorbee/rdocx/pull/302) | F-X199 | Qualified empty cell margins, completed. |
@@ -2392,6 +2392,16 @@ Retain the integrated tests and locally verified archive measurements, with
 no reopened story or duplicate work. S91 remains six completed, three in
 progress and thirteen approved. Final integrated verification and review
 remain pending.
+
+The 2026-10-10 14:32 UTC refresh found no new or changed open records.
+PR338 remains assigned to F-X211 for Issue337, with stacked PR336 changes
+assigned once across F-X211 and F-X200. The latest F-X197 installed scoped
+run passed all155 Word cases, strict typing and recursive stub checks.
+PowerPoint passed437 cases and failed60 cell-colour cases. Remediation is
+in progress. This failed scope does not complete F-X197 or its dependent
+stories. F-X195 native tests are prepared and reviewed, with execution and
+Python consumer wiring still required. Full bibliography acceptance remains
+F-X192. Sprint closure remains pending.
 
 #### Sprint S92, Templates, controls, and forms
 
