@@ -353,6 +353,12 @@ needed by X210 diagnostics. Extend actual contributing measurement/shaping
 events with exact requested family, selected face/instance and selected actual
 family, retaining current FontId validation. Replay those bounded events
 inside the same layout lifecycle, not a historical FontId-to-request map.
+Preserve the existing public `finish_paragraph_font_trace` result of
+`Option<Vec<FontId>>` and `replay_layout_font_trace(&[FontId])` signatures.
+Actual Word and PowerPoint cache carriers consume the concrete request-aware
+finish/replay operations from the same bounded trace. The legacy projection
+retains its selected-ID semantics, so same-face request inequality is tested
+through the request-aware carrier, not the legacy ID projection.
 Update actual cache carrier footprint/budget accounting when owned strings
 are added. Preserve bounds and overflow bypass. No global diagnostic registry,
 new source module or duplicated resolver. X210 owns substitution rules and
