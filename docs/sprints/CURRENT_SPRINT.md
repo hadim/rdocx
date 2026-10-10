@@ -492,3 +492,21 @@ F-X211/Issue316. Complete immutable source and discussion assessment is
 underway. Intake grants no contributor gate credit or arbitrary new nesting
 policy. The approved256 control policy and complete textbox resource,
 namespace, discovery and public compatibility acceptance remain mandatory.
+
+## S91 intake and verification checkpoint, 2026-10-10 09:51UTC
+
+The latest read-only GitHub refresh found no additional or changed records.
+All19 PRs and26 included issues remain mapped above, with Issues264 and281
+excluded. PR338 and PR333 source assessment is complete and retained in
+F-X211's existing plan. Assessment does not close their acceptance gates.
+
+F-X194 native, installed Python, typing, WASM and unchanged49-entry hash gates
+have passed. Verified22 package dry-runs and final workflow policy checks are
+running. F-X195 has observed genuine Word request-trace and PowerPoint warm
+trace failures. Two separately reviewed test compile repairs preserve the
+original failure evidence and geometry controls. Remaining core tests and
+provider implementation are pending. F-X212 semantic source has a clean
+independent review and awaits scoped runtime and attributed hash checks.
+Four stories are completed and integrated, three are in progress and fifteen
+remain approved. Final integrated verification, sprint review and close
+preflight remain outstanding. The sprint is not ready for close.
