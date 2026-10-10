@@ -266,9 +266,11 @@ control. The two failed raw-tab cache fixture preconditions are not credited
 as semantic regression evidence and do not relax cached_result_runs filtering.
 
 Reserve existing `crates/rdocx-oxml/src/text.rs` for the smallest necessary
-parser-owned nontext result exposure. Reuse existing parsed_complex_cache_runs
+parser-owned nontext result exposure. Reuse existing parser-owned result spans/child-field projection
 and existing parsed/simple cached-run fields at admitted complete owner
-boundaries. Preserve ordinary text-only projection and avoid unnecessary
+boundaries. Private transient builder storage may retain accepted result runs
+once without adding public model fields. Use parsed_complex_cache_runs only
+where measured nested-cost and ownership controls prove the bounded path. Preserve ordinary text-only projection and avoid unnecessary
 reparsing. Candidate raw hints may trigger qualified typed parsing, but never
 prove visible content by local names. Retain effective-cache consistency
 filtering, current public cache mutation semantics, accepted result order
