@@ -130,6 +130,8 @@ impl Scope {
             PathSeg::Row(_) | PathSeg::Cell(_) => Self::Tables,
             PathSeg::Body(_) | PathSeg::Para(_) => Self::Paragraphs,
             PathSeg::Run(_) => Self::Runs,
+            // A Word header or footer story never appears in a deck path.
+            PathSeg::Story(_) => return None,
         })
     }
 }

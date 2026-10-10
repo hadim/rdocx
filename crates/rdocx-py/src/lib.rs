@@ -27,9 +27,7 @@ use document::{
 use formatting::{PyColorFormat, PyFont, PyParagraphFormat, PyTabStop, PyTabStops};
 use paragraph::{PyParagraph, PyParagraphCollection};
 use run::{PyRun, PyRunCollection};
-use story::{
-    PyHeaderFooter, PyHeaderFooterCell, PyHeaderFooterRow, PyHeaderFooterTable, PySettings,
-};
+use story::{PyHeaderFooter, PyHeaderFooterCell, PyHeaderFooterRow, PyHeaderFooterTable};
 use table::{
     PyCell, PyCellCollection, PyCellParagraphCollection, PyColumn, PyRow, PyRowCollection, PyTable,
     PyTableCollection,

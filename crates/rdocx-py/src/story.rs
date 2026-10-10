@@ -992,38 +992,6 @@ impl PyHeaderFooterCell {
     }
 }
 
-/// Document settings, python-docx's `Settings`.
-#[pyclass(name = "Settings", frozen)]
-pub struct PySettings {
-    document: Py<PyDocument>,
-}
-
-impl PySettings {
-    pub(crate) fn new(document: Py<PyDocument>) -> Self {
-        Self { document }
-    }
-}
-
-#[pymethods]
-impl PySettings {
-    /// Whether even pages show the even-page headers and footers, Word's
-    /// `w:evenAndOddHeaders`. Writing into an even-page header or footer
-    /// turns it on.
-    #[getter]
-    fn odd_and_even_pages_header_footer(&self, py: Python<'_>) -> bool {
-        self.document.borrow(py).inner.even_and_odd_headers()
-    }
-
-    #[setter]
-    fn set_odd_and_even_pages_header_footer(&self, py: Python<'_>, value: bool) -> PyResult<()> {
-        self.document
-            .borrow_mut(py)
-            .inner
-            .set_even_and_odd_headers(value)
-            .map_err(|error| rdocx_to_pyerr(py, error))
-    }
-}
-
 /// The run break a python-docx `WD_BREAK` value names.
 pub(crate) fn break_kind(value: i32) -> PyResult<rdocx::run::BreakKind> {
     use rdocx::run::BreakKind;

@@ -15,7 +15,7 @@ use rdocx_oxml::{ST_PageOrientation, ST_SectionType};
 use crate::paragraph::{
     ParagraphLocation, PyParagraph, PyParagraphCollection, defined_style, style_id_of_type,
 };
-use crate::story::{PyHeaderFooter, PySettings, SectionLayout, StorySlot};
+use crate::story::{PyHeaderFooter, SectionLayout, StorySlot};
 use crate::table::{PyTable, PyTableCollection};
 use crate::{color_hex, rdocx_to_pyerr};
 
@@ -3259,6 +3259,7 @@ impl PyDocument {
         Py::new(py, PyAppProperties { document: slf })
     }
 
+    /// The document settings, python-docx's `document.settings`.
     #[getter]
     fn settings(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<PySettings>> {
         Py::new(py, PySettings { document: slf })
@@ -5474,13 +5475,7 @@ impl PyDocument {
         Ok(())
     }
 
-    // ---- Settings, notes and page decoration ----
-
-    /// The document settings, python-docx's `document.settings`.
-    #[getter]
-    fn settings(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<PySettings>> {
-        Py::new(py, PySettings::new(slf))
-    }
+    // ---- Notes and page decoration ----
 
     /// Add a footnote whose reference ends a body paragraph, given as the
     /// paragraph or its last run, and return the note ID.
@@ -6152,6 +6147,23 @@ impl PySettings {
             .borrow_mut(py)
             .inner
             .set_track_revisions(value)
+            .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    /// Whether even pages show the even-page headers and footers, Word's
+    /// `w:evenAndOddHeaders`. Writing into an even-page header or footer
+    /// turns it on.
+    #[getter]
+    fn odd_and_even_pages_header_footer(&self, py: Python<'_>) -> bool {
+        self.document.borrow(py).inner.even_and_odd_headers()
+    }
+
+    #[setter]
+    fn set_odd_and_even_pages_header_footer(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        self.document
+            .borrow_mut(py)
+            .inner
+            .set_even_and_odd_headers(value)
             .map_err(|error| rdocx_to_pyerr(py, error))
     }
 }

@@ -619,15 +619,6 @@ class HeaderFooterCell:
 
 
 @_final
-class Settings:
-    def __new__(cls, *, _private: _Never) -> Settings: ...
-    @property
-    def odd_and_even_pages_header_footer(self) -> bool: ...
-    @odd_and_even_pages_header_footer.setter
-    def odd_and_even_pages_header_footer(self, value: bool) -> None: ...
-
-
-@_final
 class Style:
     def __new__(
         cls,
@@ -839,6 +830,10 @@ class Settings:
         """
     @track_revisions.setter
     def track_revisions(self, value: bool) -> None: ...
+    @property
+    def odd_and_even_pages_header_footer(self) -> bool: ...
+    @odd_and_even_pages_header_footer.setter
+    def odd_and_even_pages_header_footer(self, value: bool) -> None: ...
 
 
 @_final
@@ -1463,8 +1458,6 @@ class Document:
     ) -> None: ...
     def clone_content(self, source: Paragraph | Table, destination: int) -> None: ...
     def move_content(self, source: Paragraph | Table, destination: int) -> None: ...
-    @property
-    def settings(self) -> Settings: ...
     def add_footnote(self, target: Paragraph | Run, text: str) -> int:
         """Add a footnote whose reference ends a body paragraph and return its ID.
 

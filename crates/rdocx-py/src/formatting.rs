@@ -1031,10 +1031,8 @@ pub(crate) fn edit_paragraph<T>(
             Ok(edit(&mut paragraph))
         }
         ParagraphLocation::Story { slot, at } => {
-            crate::story::edit_paragraph(py, &mut document, slot, at, |paragraph| {
-                update.apply(paragraph)
-            })?
-            .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
+            crate::story::edit_paragraph(py, &mut document, slot, at, edit)?
+                .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))
         }
     }
 }

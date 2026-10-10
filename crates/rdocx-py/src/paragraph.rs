@@ -717,6 +717,12 @@ impl PyParagraph {
                     .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
                     .add_equation(equation)
             }
+            ParagraphLocation::Story { slot, at } => {
+                crate::story::edit_paragraph(py, &mut document, slot, at, |paragraph| {
+                    paragraph.add_equation(equation)
+                })?
+                .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
+            }
         };
         // The equation follows every run, so no run or paragraph handle moves.
         result.map_err(|error| crate::rdocx_to_pyerr(py, error))
@@ -754,6 +760,11 @@ impl PyParagraph {
                 cell.paragraph(paragraph)
                     .map(|paragraph| records(&mut paragraph.equations()))
             }),
+            ParagraphLocation::Story { slot, at } => {
+                crate::story::read_paragraph(py, &document, slot, at, |paragraph| {
+                    records(&mut paragraph.equations())
+                })?
+            }
         }
         .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
         PyTuple::new(py, equations)

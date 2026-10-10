@@ -193,7 +193,16 @@ impl PyRun {
         position: Option<(Bound<'py, PyAny>, Bound<'py, PyAny>)>,
         relative_to: Option<(String, String)>,
     ) -> PyResult<Py<crate::document::PyPicture>> {
-        self.validate(py)?;
+        let (location, _) = self.validate(py)?;
+        // The image relationship would land on the document part, which a
+        // header or footer part cannot reach, so Word would report a broken
+        // picture. Refuse until the binding embeds into the story's part.
+        if matches!(location, ParagraphLocation::Story { .. }) {
+            return Err(pyo3::exceptions::PyNotImplementedError::new_err(
+                "Run.add_picture works in body and table-cell runs, not yet in a header or footer \
+                 run; a header or footer picture is not available from Python yet",
+            ));
+        }
         let (data, filename) = crate::document::picture_source(image, filename)?;
         let options = crate::document::PictureArguments {
             width,
