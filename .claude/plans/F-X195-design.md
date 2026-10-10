@@ -163,6 +163,32 @@ or tracked binary fixture. Existing `harfrust` 0.12, `ttf-parser` 0.25 and
 `subsetter` 0.2.6 provide the required APIs. The latter already enables
 `variable-fonts` by default. Neither WASM wrapper gains a host-directory API.
 
+### Checked PDF preparation
+
+Normal Word and PowerPoint Result-returning output paths use an additive
+`oxml_pdf::render_to_pdf_checked` operation. In existing PDF font.rs, prepare
+every contributing font once into the concrete prepared-font map, returning
+the existing MissingEmbeddedFont error for a missing or failed selected
+instance. The checked public operation performs that preparation before the
+existing writer allocates output. Archival preflight retains its additional
+profile restrictions and passes the same prepared map to the writer. Normal
+PDF output does not inherit archival action or paint restrictions.
+
+Keep the existing `render_to_pdf` byte-vector signature. On font preparation
+failure it returns an empty vector before allocating output, rather than a
+partial PDF or a default-instance substitute. Document that legacy failure
+behavior. Native Word and PowerPoint Result consumers use the checked route
+and propagate the actual error before file publication. Valid existing output
+stays unchanged. Reuse the existing error variant with wording applicable to
+normal and archival PDF, without a new enum or dependency.
+
+This extends the core phase lease to existing oxml-pdf lib.rs and
+conformance.rs, with inline controls for missing fonts, failed selected
+instances, mixed valid and invalid contributing fonts, unused loaded fonts,
+unchanged source and no partial output. Native consumer wiring and file
+publication controls remain in the later facade phase. No additional file,
+module, trait, generic parameter or feature flag is introduced.
+
 ## Rejected alternatives
 
 - Changing only font names or style flags leaves metrics and actual glyphs unchanged.
