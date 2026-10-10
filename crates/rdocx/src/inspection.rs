@@ -453,7 +453,7 @@ fn validate_package(package: OpcPackage) -> Result<ValidationReport> {
     let empty_count = doc
         .paragraphs()
         .iter()
-        .filter(|p| p.text().trim().is_empty())
+        .filter(|p| !p.has_visible_content())
         .count();
     if empty_count > 0 {
         warnings.push(format!("{empty_count} empty paragraph(s) found"));
