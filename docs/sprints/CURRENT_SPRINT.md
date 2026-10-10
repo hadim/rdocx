@@ -24,7 +24,7 @@ and keep rolling contribution intake open.
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X192 | Complete the remaining Word bibliography catalogue | L | pending | - |
+| F-X192 | Complete the remaining Word bibliography catalogue | L | in-progress | codex |
 | F-283 | Complete numbering-aware navigation fields | L | pending | - |
 | F-X193 | Preserve semantic mark highlights through nested HTML runs | S | done | - |
 | F-X194 | Complete Python table text and indentation APIs | M | done | - |
