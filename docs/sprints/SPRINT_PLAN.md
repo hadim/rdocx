@@ -2138,35 +2138,40 @@ review, package checks and exact-SHA publication approval remain required.
 carried from S90, then resolve the new HTML, Python authoring, rendering and
 CLI validation reports before the template and form programme resumes.
 
-| F-ID | Title | Size | Delivery status |
-|------|-------|------|-----------------|
-| F-X192 | Complete the remaining Word bibliography catalogue | L | Locale source and stubs reviewed, full catalogue runtime acceptance pending |
-| F-283 | Complete numbering-aware navigation fields | L | Approved, implementation pending |
-| F-X193 | Preserve semantic mark highlights through nested HTML runs | S | Completed and integrated |
-| F-X194 | Complete Python table text and indentation APIs | M | Completed and integrated, scoped gates passed |
-| F-X195 | Honor caller fonts and variable styles across render paths | L | Core source reviewed, runtime gates and provider wiring remain |
-| F-X196 | Validate visible paragraph content without false empty warnings | S | Completed and integrated |
-| F-X197 | Unify Python colour inputs and font colour formats | L | Installed focused tests and typing passed, full suites and risk riders pending |
-| F-X198 | Preserve alternate text-box copies during scoped replacement | M | Completed and integrated |
-| F-X199 | Model namespace-qualified empty table cell margins | S | Completed and integrated |
-| F-X200 | Complete Python Word formatting and list parity | L | Approved, implementation pending |
-| F-X201 | Complete Python section stories and page authoring | L | Approved, implementation pending |
-| F-X202 | Complete Word tables pictures and internal links | L | Approved, implementation pending |
-| F-X203 | Complete Python Word document operations and validation | L | Approved, implementation pending |
-| F-X204 | Complete shared CLI one-shot editing commands | L | Approved, implementation pending |
-| F-X205 | Complete Python PowerPoint text fill and export parity | L | Approved, implementation pending |
-| F-X206 | Complete PowerPoint shape authoring and live handles | L | Approved, implementation pending |
-| F-X207 | Persist PowerPoint autofit and implement fit_text | L | Approved, implementation pending |
-| F-X208 | Author PowerPoint footer fields themes and transitions | L | Approved, implementation pending |
-| F-X209 | Edit PowerPoint masters layouts and themes | L | Approved, implementation pending |
-| F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | Approved, implementation pending |
-| F-X211 | Complete Python script compatibility and safe XML access | L | Approved, implementation pending |
-| F-X212 | Align native accessibility with visible paragraph content | M | Completed and integrated, scoped gates passed |
+| F-ID | Title | Size |
+|------|-------|------|
+| F-X192 | Complete the remaining Word bibliography catalogue | L |
+| F-283 | Complete numbering-aware navigation fields | L |
+| F-X193 | Preserve semantic mark highlights through nested HTML runs | S |
+| F-X194 | Complete Python table text and indentation APIs | M |
+| F-X195 | Honor caller fonts and variable styles across render paths | L |
+| F-X196 | Validate visible paragraph content without false empty warnings | S |
+| F-X197 | Unify Python colour inputs and font colour formats | L |
+| F-X198 | Preserve alternate text-box copies during scoped replacement | M |
+| F-X199 | Model namespace-qualified empty table cell margins | S |
+| F-X200 | Complete Python Word formatting and list parity | L |
+| F-X201 | Complete Python section stories and page authoring | L |
+| F-X202 | Complete Word tables pictures and internal links | L |
+| F-X203 | Complete Python Word document operations and validation | L |
+| F-X204 | Complete shared CLI one-shot editing commands | L |
+| F-X205 | Complete Python PowerPoint text fill and export parity | L |
+| F-X206 | Complete PowerPoint shape authoring and live handles | L |
+| F-X207 | Persist PowerPoint autofit and implement fit_text | L |
+| F-X208 | Author PowerPoint footer fields themes and transitions | L |
+| F-X209 | Edit PowerPoint masters layouts and themes | L |
+| F-X210 | Extend metric-compatible fonts and bullet fallbacks | L |
+| F-X211 | Complete Python script compatibility and safe XML access | L |
+| F-X212 | Align native accessibility with visible paragraph content | M |
 
 **Current delivery checkpoint, 2026-10-10**: six of twenty-two active stories
 are completed and integrated, F-X193, F-X194, F-X196, F-X198, F-X199 and F-X212.
 F-X192, F-X195 and F-X197 are in progress. Thirteen stories have
 approved designs and await implementation.
+F-X192 needs the remaining catalogue runtime acceptance and native Word
+controls. F-X195 needs its remaining runtime gates and provider wiring.
+F-X197 has passed the full Python suites, native checks, unchanged rendering
+hashes and verified packaging. Repository-policy corrections and final
+review remain before its completion.
 No design question remains outstanding. Final integrated verification,
 sprint review and verified sprint close remain outstanding.
 
