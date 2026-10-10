@@ -549,3 +549,17 @@ Complete source and discussion assessment is pending. Its proposed extra
 inline-wrapper and cross-control nesting policy is not automatically approved
 by intake. Contributor gates and hash expectations are not local evidence.
 The approved contract and completion prerequisites remain authoritative.
+
+### Completed immutable PR336 assessment
+
+Shared abstract-definition counter keys are reusable ingredients. The patch's
+once-per-num_id override tracking and blanket section resets do not satisfy
+approved per-level override consumption, rearm, pending section initialization
+or retained lvlRestart0 state. Preserve the authenticated P/Q/R/T/U native
+controls. EPUB must use the same selected counter semantics. Reuse only the
+conforming slice, then implement and verify the uncovered contract.
+
+Complete assessment: `/private/tmp/S91-PR336-c6ab986-intake/assessment.md`.
+All fourteen changed paths and twenty-eight base/head Git blobs were captured
+and independently authenticated. No contributor gates were executed or
+accepted as local completion evidence. No new module or F-ID is required.

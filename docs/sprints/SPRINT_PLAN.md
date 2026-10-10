@@ -2204,8 +2204,10 @@ PR317 spans several owners and is reconciled once across their accepted
 slices. PR326 and PR335 share group-transform changes, adopted once in F-X206.
 New PR336, head `c6ab986008782e8a376a9cdd0bda2afd4847cf47`, closes Issues331
 and321. Parsing belongs to F-X211 and numbering to F-X200. Its additional
-inline-wrapper and cross-control nesting policy requires complete immutable
-source assessment against both approved contracts before adoption. It creates
+inline-wrapper and cross-control nesting policy has been assessed. Preserve
+the approved qualified256 control limit and native per-level numbering
+contract. Do not adopt the additional64-wrapper refusal or incomplete
+numbering restart shortcuts. Reuse only conforming changes and verify locally. It creates
 no duplicate F-ID. Contribution claims do not replace local test evidence.
 
 F-X192 and F-283 additionally complete the bibliography and numbering-aware

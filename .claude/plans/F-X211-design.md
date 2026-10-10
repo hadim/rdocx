@@ -881,3 +881,19 @@ Complete source and discussion assessment is pending. Its proposed extra
 inline-wrapper and cross-control nesting policy is not automatically approved
 by intake. Contributor gates and hash expectations are not local evidence.
 The approved contract and completion prerequisites remain authoritative.
+
+### Completed immutable PR336 assessment
+
+Result-returning control admission and staged nested-reader parsing are
+reusable ingredients. The contribution counts matching local names across
+all namespaces, contrary to approved qualified-only admission and exact
+foreign/rebound preservation. Keep the approved inclusive256 qualified-control
+limit. Do not adopt the additional64 inline-wrapper refusal from this patch.
+Normal-stack boundary lifecycle, all story owners, sibling reset, namespace
+controls and atomic XML replacement remain required. Any additional wrapper
+resource policy needs separate evidence and a reviewed design amendment.
+
+Complete assessment: `/private/tmp/S91-PR336-c6ab986-intake/assessment.md`.
+All fourteen changed paths and twenty-eight base/head Git blobs were captured
+and independently authenticated. No contributor gates were executed or
+accepted as local completion evidence. No new module or F-ID is required.
