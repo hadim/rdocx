@@ -334,3 +334,23 @@ of twelve. The144 measurements retain36 matches and108 differences under
 /private/tmp/S91-F-X192-corefoundation-probe. This is a read-only candidate
 rejection, not a portable backend or a production dependency. APA person
 keys remain outside the complete-key comparator measurements.
+
+## Further bounded complete-key comparator probes
+
+Independently authored generic XSLT1.0 sorting with installed libxslt1.1.35
+was measured against fourteen retained complete-key vectors. Omitted lang,
+en-US and en-GB each match only five of fourteen, across forty-two actual
+exit0 invocations. Installed Harvard and APA sort nodes omit lang. FieldLCID
+alone does not establish the host comparison locale. Two additional ICU78.3
+en_GB hypotheses, explicit lower-first Tertiary and Shifted Quaternary, also
+match only five of fourteen. Resolved locale and warning facts are retained.
+
+Root authenticated all twenty-three retained artifacts under
+`/private/tmp/S91-F-X192-portable-full-key-followup`. Generic probe source is
+independently authored. No proprietary stylesheet was copied or executed.
+The five matches are three tie vectors and two same-key author controls.
+All five twenty-one-source and four whitespace corporate vectors still fail.
+These reject only the measured settings and runtimes. They do not prove a
+portable comparator or rule out unmeasured backends. APA person-key runtime
+properties remain a separate evidence barrier. Continue independent stories
+while identifying exact collation authority or a demonstrated candidate.
