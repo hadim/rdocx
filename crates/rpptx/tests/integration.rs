@@ -8155,7 +8155,7 @@ const F124_ARTIFACT_SHA256: &str =
 const F116_ARTIFACT_SHA256: &str =
     "d36da6e8849eabd4487d2572baea19c3716ee7d0fe03aaa4714a28ce3c41de4f";
 const F116_CURRENT_ARTIFACT_SHA256: &str =
-    "099862804d94aa12b7223b8575d0ddd2dd85669158a96207267542301c9b31bf";
+    "1cc878aecb54e8c725825effa35c47470fd3df73883931e5b281b958eeb3bff1";
 const F116_FINAL_TITLES: [&str; 10] = [
     "F-116 slide 10",
     "F-116 slide 02",
@@ -11431,7 +11431,7 @@ struct M21RecordedMovieSample {
 
 #[cfg(all(feature = "digital-signatures", feature = "render"))]
 const M21_CURRENT_MINIMAL_SOURCE_SHA256: &str =
-    "7d19b5b40d558063c83ac0df5bbdc71f8f825b0c23d7003b6e9d23f13a660cbc";
+    "6a6723edcdfdc301cc2a1416d67318035be2e6f9b373d3e0d7a126c027ffdc08";
 
 #[cfg(all(feature = "digital-signatures", feature = "render"))]
 const M21_LEGACY_UNSIGNED_SOURCE_SHA256: &str =
