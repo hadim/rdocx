@@ -363,3 +363,14 @@ baseline phase remains exclusive and follows F-X194's unchanged gate and
 F-X212's reviewed accessibility delta. Independently enumerate and review
 font deltas before recording. Later facade wiring consumes completed owners
 and is re-reviewed with the complete feature before handoff.
+
+### Complete PR315 immutable source capture
+
+The previously retained patch/metadata is now supplemented by all thirty-eight
+complete immutable head blobs, authenticated against the untruncated Git tree,
+Git blob identity, size and SHA256. Base versions reference authenticated local
+733ce6f7 Git objects rather than duplicate files. All forty capture calls
+actually exited0. Evidence is retained at
+`/private/tmp/S91-PR315-af388f2-intake/receipt.json`. Full semantic
+reconciliation precedes slice adoption. The six frozen core test stubs are
+not executed Base or feature acceptance evidence.

@@ -441,3 +441,15 @@ and shared tests remain reserved to their current owners until handover.
 Cargo, HLD/carrier writes and baseline changes remain serialized. F-X195's
 font baseline phase follows the completed F-X194 unchanged gate and F-X212's
 reviewed accessibility delta. No formal dependency is changed.
+
+## Current implementation checkpoint
+
+Four included stories are complete. F-X194, F-X212 and F-X195 are in
+progress, with fifteen approved stories still to implement. F-X194's full
+installed Python suites passed199 Word and86 PowerPoint tests. Corrected
+native/lint/WASM/hash and package gates remain outstanding. F-X212 retains
+real semantic Base failures and is completing the distinct typed field-cache
+control. F-X195 has six frozen disjoint core-font test stubs, with actual
+Base runs queued. Its thirty-eight immutable PR315 head and base blobs
+are independently authenticated. No contributor gate is credited locally.
+Final integrated full verification and sprint review have not run.

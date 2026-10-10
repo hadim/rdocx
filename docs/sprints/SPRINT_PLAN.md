@@ -2144,7 +2144,7 @@ CLI validation reports before the template and form programme resumes.
 | F-283 | Complete numbering-aware navigation fields | L | Approved, implementation pending |
 | F-X193 | Preserve semantic mark highlights through nested HTML runs | S | Completed and integrated |
 | F-X194 | Complete Python table text and indentation APIs | M | In progress |
-| F-X195 | Honor caller fonts and variable styles across render paths | L | Claimed, disjoint core font tests starting |
+| F-X195 | Honor caller fonts and variable styles across render paths | L | In progress, disjoint core font controls queued |
 | F-X196 | Validate visible paragraph content without false empty warnings | S | Completed and integrated |
 | F-X197 | Unify Python colour inputs and font colour formats | L | Approved, implementation pending |
 | F-X198 | Preserve alternate text-box copies during scoped replacement | M | Completed and integrated |
