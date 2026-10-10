@@ -7,7 +7,12 @@ raster rendering.
 
 - Page frames with positioned text, images, lines, rectangles, and paths.
 - Transforms, paints, effects, links, outlines, and logical structure.
-- Font discovery, shaping, metrics, and deterministic bundled fonts.
+- Font discovery, shaping, metrics, and deterministic bundled fonts:
+  metric-compatible faces for Calibri, Cambria, Arial, Times New Roman,
+  Courier New, Georgia (Gelasio) and Segoe UI (Selawik), Noto complex-script
+  fallbacks, and the Unicode equivalents of Symbol and Wingdings bullets.
+  Aptos has no open clone and falls back to Carlito, which layout
+  diagnostics report.
 - Multilingual line breaking, bidirectional text, tabs, and inline items.
 - Recursive groups, marked content, transforms, source ranges, and logical
   structure give downstream backends one complete positioned-page contract.

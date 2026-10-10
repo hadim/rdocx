@@ -405,7 +405,7 @@ ARCHIVE_MEASUREMENTS = {
     "rdocx": (3_526_287, 50_771_661, 37),
     "rdocx-cli": (74_278, 332_454, 8),
     "rdocx-html": (18_558, 72_244, 11),
-    "rdocx-layout": (311_019, 1_681_790, 15),
+    "rdocx-layout": (311_756, 1_686_493, 15),
     "rdocx-opc": (3_654, 9_668, 6),
     "rdocx-oxml": (453_042, 2_811_487, 32),
     "rdocx-pdf": (8_115, 26_758, 6),
@@ -414,7 +414,7 @@ ARCHIVE_MEASUREMENTS = {
     "rpptx-cli": (41_986, 185_081, 8),
     "rpptx-layout": (83_284, 483_107, 11),
     "rpptx-oxml": (160_542, 1_075_777, 20),
-    "rpptx-render": (65_006, 351_910, 8),
+    "rpptx-render": (65_317, 353_763, 8),
 }
 PACKAGE_VERSIONS = {
     **{name: "0.14.0" for name, _ in LOCAL_PATCHES if not name.startswith("rdocx")},
