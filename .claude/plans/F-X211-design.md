@@ -1017,3 +1017,27 @@ The updated PR336 body has the same immutable source head and links this
 report. Reuse the authenticated source once. Full issue/body evidence and
 actual read-only command receipts are retained at
 `/private/tmp/S91-rolling-refresh-20261010T084721Z`. Assessment is not acceptance.
+
+## PR333 advanced-head reconciliation, 2026-10-10
+
+Immutable head `b228d5dc650c9aff669fa78ebc5932b7d32159e3` replaces
+`8636af0949b192665490659041b7541ae5ef4090`. Root authenticated the manifest
+and all169 source records by Git blob identity, bytes and SHA-256 and inspected
+the exact six-path delta. Assessment and receipt are retained in
+`/private/tmp/S91-PR333-b228d5d-intake`. Issue316 remains F-X211, with each
+provider assigned once to its existing story.
+
+Reuse finite/type checks and qualified parent-child negative fixtures, with
+validation before publication. Positive-only line spacing needs compatibility
+classification and storage-quantum controls because tiny positive multiples
+can round to zero. Preserve imported values and canonical truncation. Broader
+child vocabulary membership does not prove cardinality, sequence or choice.
+Check actual owner context, including geometry versus gradient a:path, with
+positive saved/reopened edits and duplicate, order, choice and context refusal
+controls. Qualified element counts do not prove opaque attribute, text and
+order preservation. Keep exact bytes, relationships and causal token gates.
+
+No new contributed raw_xml module is authorized. The ten-name/fourteen-case
+matrix, inclusive256 control-depth policy and Issue337 bounded text-box
+acceptance remain. Contributor archive tuples must be replaced by measured
+local values, and contributor tests or CI provide no local acceptance credit.

@@ -289,3 +289,21 @@ commit, native styled-note control and deterministic delta review. Existing
 49-fixture claims do not prove unchanged note behavior. Full source assessment
 and cited gaps remain in the retained assessment, with no local test or
 acceptance claim.
+
+## PR328 advanced-head reconciliation, 2026-10-10
+
+Immutable head `381f76683fc28780219dd21e06bf701b63b22d49` replaces
+`30c2e61cbdec5499546997df94b6c94e3a1e446d`. Root authenticated the manifest
+and all41 source records by Git blob identity, bytes and SHA-256 and inspected
+the exact three-path delta. Assessment and receipt are retained in
+`/private/tmp/S91-PR328-381f766-intake`. Issue304 remains F-X201.
+
+Reuse default Header/Footer paragraph-style selection inside the approved
+single staged native insertion. Explicit style wins, lookup returns the actual
+style ID by ID/name, absent style stays None. Add all six story slots,
+localized IDs/names, explicit Title, absent styles and saved/reopened pStyle
+controls in the existing test entrypoint. Validate before publication and
+prove failure preserves bytes and tokens. Absent reads still must not create
+parts, and owner/lifetime and rich story acceptance remain mandatory. The
+contributed multi-call insertion and new story module are not authorized by
+this intake. Contributor tests and HLD changes are proposals, not local proof.

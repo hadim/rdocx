@@ -470,3 +470,14 @@ F-X212's mechanical extraction now passes its scoped check, five exact tests
 and all49 unchanged output hashes. Its intentional behavior phase remains
 unverified. F-X195 has ten frozen controls and the additional Base runs are
 queued. Final integrated verification and sprint review remain outstanding.
+
+## Advanced contribution heads reconciled, 2026-10-10
+
+The09:01:30UTC refresh retained18 open PRs and26 included issues. Issues264
+and281 remain excluded. Root authenticated complete manifests and237 source
+records and inspected exact deltas for PR318 at4fc65a5, PR328 at381f766 and
+PR333 atb228d5d. They remain F-X205/Issue308, F-X201/Issue304 and
+F-X211/Issue316 respectively. Existing plans now include spacing boundary and
+atomicity controls, default story styles, and qualified XML context controls.
+No duplicate story, contributor gate credit or completion is created. Full
+immutable heads and evidence are recorded in those three canonical plans.

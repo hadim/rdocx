@@ -2851,3 +2851,14 @@ expected hash or rewrite immutable cross-viewer acceptance evidence.
 
 This refresh has eight open PRs and23 open issues, with all scope linked to
 existing owners. Issues264 and281 remain excluded.
+
+## Advanced contribution heads reconciled, 2026-10-10
+
+The09:01:30UTC refresh retained18 open PRs and26 included issues. Issues264
+and281 remain excluded. Root authenticated complete manifests and237 source
+records and inspected exact deltas for PR318 at4fc65a5, PR328 at381f766 and
+PR333 atb228d5d. They remain F-X205/Issue308, F-X201/Issue304 and
+F-X211/Issue316 respectively. Existing plans now include spacing boundary and
+atomicity controls, default story styles, and qualified XML context controls.
+No duplicate story, contributor gate credit or completion is created. Full
+immutable heads and evidence are recorded in those three canonical plans.

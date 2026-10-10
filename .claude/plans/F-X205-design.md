@@ -508,3 +508,20 @@ source assessment and this approved contract remain valid. No duplicate
 implementation, revised baseline or new F-ID follows from commit identity
 alone. The unchanged contributor chart-hash comment remains a claim rather
 than a passing local oracle.
+
+## PR318 advanced-head reconciliation, 2026-10-10
+
+Immutable head `4fc65a50679e6afd12ea6d99b218007cad7d6e5d` replaces
+`1eab7066b69203e36df3782a2d343ff1ae1defd2`. Root authenticated the full
+capture manifest and all27 source records by Git blob identity, bytes and
+SHA-256, then inspected the exact two-path delta. Assessment and receipt are
+in `/private/tmp/S91-PR318-4fc65a5-intake`.
+
+Keep Issue308 with F-X205 and colour with F-X197. Preserve the approved
+integer/Length EMU truncation contract. The contribution's sub127EMU refusal
+cannot distinguish typed Length from an equal integer and its signed abs can
+overflow at i64 minimum. Validate before mutation without a magnitude-based
+unit guess. Add0,1,126,127,-126,-127 and typed equivalents, plus i64 minimum
+and maximum refusal controls with unchanged package bytes and live tokens.
+The prior template, export, diagnostic and provider acceptance barriers remain.
+No contributor source, tests or gates are accepted by this reconciliation.
