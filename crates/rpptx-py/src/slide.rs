@@ -476,7 +476,9 @@ impl PySlide {
             .inner
             .remove_media(index, shape_id)
             .map_err(|error| rpptx_to_pyerr(py, error))?;
-        presentation.revisions.bump();
+        presentation
+            .revisions
+            .invalidate(Scope::Shapes, "Slide.remove_media()");
         Ok(())
     }
 
@@ -1122,7 +1124,9 @@ impl PyHeaderFooter {
             .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
         let after = shape_paths(&presentation.inner, index);
         if !paths_kept(&[before], &[after]) {
-            presentation.revisions.bump();
+            presentation
+                .revisions
+                .invalidate(Scope::Shapes, "Slide.header_footer");
             self.path = presentation.revisions.capture(self.path.segs.clone());
         }
         Ok(())

@@ -1912,7 +1912,7 @@ impl PyFont {
         value: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         let color = match value {
-            Some(value) if !value.is_none() => Some(rgb_argument(value, "highlight_color")?),
+            Some(value) if !value.is_none() => Some(rgb_color(value, "highlight_color")?),
             _ => None,
         };
         self.update(py, |properties| {
@@ -1945,41 +1945,6 @@ impl PyFont {
             }
         })
     }
-}
-
-/// Reads a colour argument: an `RGBColor` or any `(red, green, blue)` triple
-/// of 0 to 255 integers, or a six-digit hex string with or without `#`. Any
-/// other type raises `TypeError` naming `parameter`.
-fn rgb_argument(value: &Bound<'_, PyAny>, parameter: &str) -> PyResult<RgbColor> {
-    if value.is_instance_of::<PyString>() {
-        let text = value.extract::<String>()?;
-        return RgbColor::parse(text.strip_prefix('#').unwrap_or(&text)).map_err(|_| {
-            PyValueError::new_err(format!(
-                "{parameter} must be six hexadecimal digits, such as 'FFFF00' or '#FFFF00', \
-                 got {text:?}"
-            ))
-        });
-    }
-    let (red, green, blue) = value.extract::<(i64, i64, i64)>().map_err(|_| {
-        PyTypeError::new_err(format!(
-            "{parameter} must be an RGBColor, a hex string such as 'FFFF00', or a \
-             (red, green, blue) tuple, got {}",
-            value
-                .get_type()
-                .name()
-                .map_or_else(|_| "?".to_owned(), |name| name.to_string())
-        ))
-    })?;
-    let channel = |value: i64| {
-        u8::try_from(value).map_err(|_| {
-            PyValueError::new_err(format!("{parameter} channels must be from 0 to 255"))
-        })
-    };
-    Ok(RgbColor::new(
-        channel(red)?,
-        channel(green)?,
-        channel(blue)?,
-    ))
 }
 
 fn sequence_item<T, F>(

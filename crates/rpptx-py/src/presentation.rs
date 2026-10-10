@@ -1152,7 +1152,8 @@ impl PyPresentation {
             .set_header_footer(&settings, hide_on_title)
             .map_err(|error| rpptx_to_pyerr(py, error))?;
         if !crate::slide::paths_kept(&before, &crate::slide::all_shape_paths(&self.inner)) {
-            self.revisions.bump();
+            self.revisions
+                .invalidate(Scope::Shapes, "Presentation.set_header_footer()");
         }
         Ok(())
     }

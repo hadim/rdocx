@@ -21,7 +21,7 @@ use crate::shape::{
 };
 use crate::table::{cell_mut_at, cell_ref_at};
 use crate::text::{PyFont, font_properties};
-use crate::{normalize_index, rpptx_to_pyerr, validate_path};
+use crate::{Scope, normalize_index, rpptx_to_pyerr, validate_path};
 
 const MAX_LINE_WIDTH_EMU: i64 = 20_116_800;
 
@@ -857,16 +857,22 @@ impl PyGradientStops {
         )
     }
 
-    /// Changes the stop list and advances the revision, because every stop
-    /// handle names an index.
+    /// Changes the stop list and invalidates the handles of the fill's own
+    /// scope (shape, table cell, or slide background), because every stop
+    /// handle names an index and validates through the fill's path.
     fn restructure(
         &self,
         py: Python<'_>,
+        cause: &'static str,
         edit: impl FnOnce(&mut Vec<GradientStop>) -> PyResult<()>,
     ) -> PyResult<()> {
         self.format(py)
             .edit_gradient(py, |gradient| edit(&mut gradient.stops))?;
-        self.presentation.borrow_mut(py).revisions.bump();
+        let scope = Scope::of(&self.path).unwrap_or(Scope::Shapes);
+        self.presentation
+            .borrow_mut(py)
+            .revisions
+            .invalidate(scope, cause);
         Ok(())
     }
 }
@@ -898,7 +904,7 @@ impl PyGradientStops {
         if len <= MIN_GRADIENT_STOPS {
             return Err(PyValueError::new_err("a gradient keeps at least two stops"));
         }
-        self.restructure(py, |stops| {
+        self.restructure(py, "del GradientStops[i]", |stops| {
             stops.remove(index);
             Ok(())
         })
@@ -909,7 +915,7 @@ impl PyGradientStops {
     fn append(&self, py: Python<'_>, position: f64) -> PyResult<Py<PyGradientStop>> {
         let position = stop_position(position)?;
         let mut inserted = 0;
-        self.restructure(py, |stops| {
+        self.restructure(py, "GradientStops.append()", |stops| {
             inserted = stops
                 .iter()
                 .position(|stop| stop.position.0 > position)
