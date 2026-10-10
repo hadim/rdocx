@@ -376,3 +376,12 @@ same full Git tree and parent as its previous assessed head, so its source
 work is not repeated. All15 heads from the23:30:53UTC snapshot are assessed.
 Intake is not implementation or verification completion. Revised X210 asset
 approval and the final integrated sprint gates remain outstanding.
+
+Issue [331](https://github.com/tensorbee/rdocx/issues/331) entered the
+2026-10-10T00:50:55Z refresh. F-X211 owns the shared native content-control
+nesting admission for document open and raw XML replacement. Its separate
+regressions cover normal-stack acceptance at256 and recoverable refusal
+at257/5000, namespace ownership, all story-part paths and atomic replacement.
+No duplicate CLI/Python fix or new F-ID is created. The frozen100-script
+Base remains unchanged. This checkpoint has15 open PRs and23 included
+issues, excluding264 and281.

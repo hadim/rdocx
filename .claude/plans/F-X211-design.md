@@ -346,7 +346,9 @@ rates in the eventual PR, after genuine measured completion.
 ## Risk routing
 
 - Parser/serializer. HLD04/06 mandatory, qualified root checks, correct child
-  sequence and exact unrelated opaque-byte round trips.
+  sequence and exact unrelated opaque-byte round trips. Issue331 adds bounded
+  control-depth admission, recoverable error propagation, default-stack
+  subprocess checks and at-limit traversal/clone/save/drop controls.
 - Published native APIs. HLD10/structural rules, explicit additive pre-1.0
   changes, affected-crate archive dry-run/size and actual measured carriers.
 - PyO3. HLD10, installed source-built tests, accurate strict mypy/stubtest,
@@ -377,8 +379,9 @@ change baselines or corpus denominators to manufacture a passing rate.
 
 - [ ] Reconcile provider ownership and final corpus/source capability barriers.
 - [ ] Freeze complete corpus IDs, statements, assertions and per-area denominators.
-- [ ] Measure actual isolated installed Base first-draft rate and missing API failures.
+- [x] Measure actual isolated installed Base first-draft rate and missing API failures.
 - [ ] Inventory each native XML owner/parser/namespace/relationship validator.
+- [ ] Apply the shared native Issue331 control-depth admission and default-stack regression gates.
 - [ ] Finalize concrete native/Python element signatures and atomic replacement.
 - [ ] Implement only assigned residual stable-owner/provenance/error behaviour.
 - [ ] Reuse provider silent-failure fixes with exact integrated public controls.
@@ -783,3 +786,58 @@ the frozen scripts, retry failures into pass credit or attribute later
 unexecuted operations as observed failures. Native rendering obligations
 and decoded-movie qualification remain pending. The full acceptance metric
 is unset, and no final source measurement or90-percent claim is made.
+
+## Issue331 shared native parser admission
+
+[Issue331](https://github.com/tensorbee/rdocx/issues/331) is assigned once
+to this story. It strengthens the same native admission used by document
+open and validated raw XML replacement. Do not add separate CLI or Python
+parser fixes. The reported5000-level crash is contributor evidence, not a
+local reproduction. Read-only source assessment is retained at
+/private/tmp/S91-issue331-readonly-assessment.md.
+
+Current inline admission calls CT_Sdt from text.rs:8115. The recursive
+cycle runs through content_control.rs:1010/:1061/:1427. The .ok() at:1011
+and RawXml fallback at:1431 erase typed parser errors. Body admission also
+falls back at document.rs:2760. A limit inside that optional branch alone
+cannot satisfy a recoverable document-open refusal. Guard before recursive
+construction at shared Result-bearing native admission boundaries. Retain
+ordinary unsupported opaque XML fallback, but never swallow a resource
+limit refusal into raw preservation.
+
+Select an inclusive limit of256 simultaneously nested namespace-qualified
+Word sdt controls, counted across paragraph, table/cell and control-owner
+transitions. A sibling starts after its predecessor closes, rather than
+consuming a cumulative document quota. Namespace aliases and defaults have
+the same count. Foreign or rebound lookalikes remain opaque and must not
+be mistaken for modeled Word controls. Existing table and revision limits
+remain in force, with no budget reset that lets alternating modeled owners
+bypass admission. Share the bounded native check in existing files and
+return the existing OxmlError::InvalidValue with an actionable message
+identifying content-control nesting and limit256. No new module, crate,
+dependency or integration binary is required.
+
+Cover every existing checked Word document and paragraph/control parse
+entry, including body, table/cell, header/footer and note/comment parts,
+plus native parsing used by element replacement. No binding-only guard,
+larger consumer thread stack or panic catching substitutes for the native
+check. Exact256 must be safe for normal-stack parse, accepted-tree traversal,
+clone, serialization and drop. If recursive implementation cannot prove
+that bound, make the affected traversal iterative inside existing files
+rather than lowering the accepted boundary silently.
+
+Add independent existing-entrypoint regressions for256 accepted,257 refused
+and5000 refused. Open crafted packages through native Document::open and
+ordinary CLI/Python subprocesses, requiring a controlled error or Python
+exception instead of interpreter abort. Check named limits, namespace
+alias/default equality, foreign/rebound preservation, sibling reset and
+alternating control/table ownership. Replacement refusal preserves owner
+XML, relationships, package bytes and generations. Run normal consumer
+stack controls in addition to the declared CI stack configuration.
+
+These are dedicated Issue331 regressions, not extra frozen corpus records.
+The observed100-script Base bodies, digest, denominator and result remain
+unchanged. Land the intentional over-limit parser refusal in a separate
+labelled commit. Ordinary valid deterministic outputs are expected unchanged
+and still require the hash harness. No source implementation or passing
+Issue331 regression is claimed by this amendment.

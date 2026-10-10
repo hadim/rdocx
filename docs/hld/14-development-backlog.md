@@ -7382,6 +7382,14 @@ caller-font, internal-link and section repairs stay with F-X195, F-X202 and
 F-X201. Add a public regression for each case and actionable errors for
 differently spelled upstream calls. Do not implement those fixes twice.
 
+Also resolve [Issue331](https://github.com/tensorbee/rdocx/issues/331) at the
+shared native parser boundary. Accept up to256 nested qualified Word content
+controls and reject deeper inputs with a recoverable named-limit error,
+including native document open and atomic raw XML replacement. Preserve
+opaque foreign XML, retain existing recursion budgets across owner changes
+and prove accepted traversal/save/drop on normal consumer stacks. Dedicated
+257/5000-depth refusal controls do not change the frozen corpus denominator.
+
 **Depends on**: F-X200 through F-X210 for final corpus acceptance, with
 source and prerequisite capability edges refined in the detailed design.
 **Test gate**: regression. Installed isolated bindings run the full corpus
