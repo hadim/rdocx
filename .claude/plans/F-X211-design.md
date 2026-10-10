@@ -726,3 +726,26 @@ This tool selection failure is not codec refusal or playback qualification.
 Preserve the separate failed AVAssetReader result. P-AREA-10 admission and
 additional native obligations still prevent a complete acceptance metric.
 R2 corpus bodies and allocation remain unchanged.
+
+## Selected preprovider Base and whole-tree runner
+
+The selected Base is the clean post-F-X199 integrated commit
+`d44304c7a9223bf34f4e6f8e99ec8d20659aaf7e`, root tree
+`86be028ad3f6e2745c35bc08a4d1c92652be355b`. Keep this selection for both
+families and final comparison. The immutable source capsule under
+/private/tmp/S91-F-X211-Base-d44304c7a922 authenticates2679 tracked blobs
+and87452686 bytes, including root licenses and packaging inputs.
+
+Runner R3 is /private/tmp/S91-F-X211-corpus-runner-prep-r3/runner.py, SHA256
+194a3b395474aa00b54dd86981a4f657ed3bb6172dee1f14a10549068eeb5561.
+Its root-reviewed guard requires exact whole tracked-tree membership,
+Git modes/blob identities and actual bytes, rejects extra untracked inputs
+and keeps target/log/wheel outputs outside the source capsule. It supersedes
+the earlier crates-only source guard. Frozen corpus revision2 is unchanged.
+
+The root-observed serial debug wheel build has started against that exact
+capsule with authenticated maturin1.15.0, CPython3.12.13 and the official
+retained Pillow12.3.0 wheel. Complete build/install exits, unchanged before/
+after inputs, installed-wheel correspondence and runner admission are still
+required before specimen execution. No Base rate, final rate or complete
+native/movie acceptance is asserted by source capture or build startup.
