@@ -168,47 +168,12 @@ const DIVERGENCES: &[(&str, &str, &str)] = &[
         "style",
         "use run.style_id = 'Emphasis', a character style ID",
     ),
-    (
-        "Run",
-        "add_picture",
-        "use document.add_picture(data, filename, width, height), which adds a paragraph holding the picture",
-    ),
-    (
-        "Run",
-        "add_break",
-        "use document.add_page_break(), or paragraph.paragraph_format.page_break_before = True",
-    ),
     ("Run", "add_text", "use run.text = run.text + text"),
     ("Run", "clear", "use run.text = ''"),
-    (
-        "Table",
-        "add_row",
-        "use table.clone_row(len(table.rows) - 1), then set the cells of the row it returns",
-    ),
     (
         "Cell",
         "merge",
         "use table.set_cell_grid_span(row, col, span) to merge across and table.set_cell_vertical_merge(row, col, 'restart' or 'continue') to merge down",
-    ),
-    (
-        "Section",
-        "header",
-        "use document.set_header(text), or document.create_section_story(section, 'header', 'default') and its story items",
-    ),
-    (
-        "Section",
-        "footer",
-        "use document.set_footer(text), or document.create_section_story(section, 'footer', 'default') and its story items",
-    ),
-    (
-        "Section",
-        "first_page_header",
-        "use document.create_section_story(section, 'header', 'first')",
-    ),
-    (
-        "Section",
-        "first_page_footer",
-        "use document.create_section_story(section, 'footer', 'first')",
     ),
     (
         "Section",
@@ -249,11 +214,6 @@ const DIVERGENCES: &[(&str, &str, &str)] = &[
         "Document",
         "inline_shapes",
         "use document.story_items to find drawings and document.set_picture_size(relationship_id, width, height) to resize one",
-    ),
-    (
-        "Document",
-        "settings",
-        "use document.update_fields_on_open for the setting rdocx exposes",
     ),
 ];
 
