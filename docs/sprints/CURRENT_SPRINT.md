@@ -30,7 +30,7 @@ and keep rolling contribution intake open.
 | F-X194 | Complete Python table text and indentation APIs | M | done | - |
 | F-X195 | Honor caller fonts and variable styles across render paths | L | in-progress | codex |
 | F-X196 | Validate visible paragraph content without false empty warnings | S | done | - |
-| F-X197 | Unify Python colour inputs and font colour formats | L | pending | - |
+| F-X197 | Unify Python colour inputs and font colour formats | L | in-progress | codex |
 | F-X198 | Preserve alternate text-box copies during scoped replacement | M | done | - |
 | F-X199 | Model namespace-qualified empty table cell margins | S | done | - |
 | F-X200 | Complete Python Word formatting and list parity | L | pending | - |
