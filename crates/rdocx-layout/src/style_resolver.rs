@@ -59,9 +59,13 @@ pub struct ResolvedNumbering {
     /// Contextual number suffixes beginning at each level, using source delimiters.
     #[doc(hidden)]
     pub number_suffixes_without_text: Vec<String>,
-    /// Concrete numbering instance that owns this counter sequence.
+    /// Concrete numbering instance of the paragraph.
     #[doc(hidden)]
     pub num_id: u32,
+    /// Abstract definition that owns this counter sequence, shared by every
+    /// instance of it.
+    #[doc(hidden)]
+    pub abstract_num_id: u32,
     /// Run properties for the marker.
     pub marker_rpr: CT_RPr,
     /// Item that follows the marker before paragraph content begins.
@@ -148,7 +152,7 @@ impl ResolvedNumbering {
     #[doc(hidden)]
     pub fn relative_to(&self, source: Option<&Self>, omit_text: bool) -> String {
         let mut start = source
-            .filter(|source| source.num_id == self.num_id)
+            .filter(|source| source.abstract_num_id == self.abstract_num_id)
             .map(|source| {
                 self.number_context
                     .iter()
@@ -727,6 +731,7 @@ pub fn generate_marker(
         number_context,
         number_suffixes_without_text,
         num_id,
+        abstract_num_id: definition,
         marker_rpr,
         suffix: lvl.suffix.unwrap_or(ST_LvlSuffix::Tab),
     })
@@ -1213,6 +1218,7 @@ mod tests {
                 "2".to_owned(),
             ],
             num_id: 7,
+            abstract_num_id: 3,
             marker_rpr: CT_RPr::default(),
             suffix: ST_LvlSuffix::Tab,
         };
@@ -1245,7 +1251,11 @@ mod tests {
         source.number_context = vec!["4".to_owned(), "3".to_owned(), "1".to_owned()];
         assert_eq!(embedded.relative_to(Some(&source), false), "5.2");
 
+        // Another instance of the same definition shares its counters, so
+        // its paragraphs give relative context too.
         source.num_id = 8;
+        assert_eq!(embedded.relative_to(Some(&source), false), "5.2");
+        source.abstract_num_id = 4;
         assert_eq!(target.relative_to(Some(&source), false), "4.5.Clause 2");
         assert_eq!(target.relative_to(None, true), "4.5.2");
     }
@@ -1328,12 +1338,13 @@ mod tests {
                 &[
                     (first, 0),
                     (first, 0),
-                    (restarted, 0),
+                    (first, 0),
                     (restarted, 0),
                     (first, 0),
                 ]
             ),
-            ["1.", "2.", "1.", "2.", "3."]
+            // Per-instance counters would number the last paragraph "4.".
+            ["1.", "2.", "3.", "1.", "2."]
         );
     }
 
