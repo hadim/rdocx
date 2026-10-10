@@ -350,7 +350,8 @@ request context and selected-instance identity through cache reuse.
 Start the existing core font-manager/output and PDF/raster/SVG test modules
 as a disjoint phase alongside F-X194 and F-X212. No formal dependency is
 added or removed. Initially reserve only existing oxml-layout font/output
-files and oxml-pdf font/raster/SVG files and their inline tests. Do not edit
+files and oxml-pdf font/raster files and their inline tests. SVG wiring lives
+in existing rdocx/src/svg.rs and remains in the later facade phase. Do not edit
 CLI commands, Python/native facade files, shared integration carriers or
 HLD/package measurements until root grants the corresponding handover.
 Read the retained complete PR315 capture before adopting any slice.
