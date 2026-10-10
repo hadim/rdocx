@@ -8135,6 +8135,7 @@ Pedro Assumpcao and the rdocx maintainers.
             "error": "operations",
             "field": "fields",
             "html": "operations",
+            "inspection": "operations",
             "math": "run",
             "odt": "operations",
             "oxml_chart": "drawing",
