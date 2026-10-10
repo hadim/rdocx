@@ -1447,8 +1447,9 @@ paragraph, and writing through a linked header edits the earlier story.
 Writing into a first-page story turns the section's title page on, and writing
 into an even story turns `w:evenAndOddHeaders` on. `add_page_number(template)`
 fills the story's lone empty paragraph, or appends one, with centred `PAGE`,
-`NUMPAGES` and `SECTIONPAGES` simple fields. A paragraph a new story holds and
-a page-number paragraph take the "Header" or "Footer" paragraph style when the
+`NUMPAGES` and `SECTIONPAGES` simple fields. A paragraph a new story holds, a
+paragraph `add_paragraph` appends without a `style` and a page-number paragraph
+take the "Header" or "Footer" paragraph style, found by ID or name, when the
 document defines it. Paragraph, run, font and paragraph-format handles inside a header or
 footer are the body types, with the story slot in their path, and
 `HeaderFooterTable.cell(row, col)` and `rows[i].cells` return a

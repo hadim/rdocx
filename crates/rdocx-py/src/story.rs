@@ -703,9 +703,16 @@ impl PyHeaderFooter {
     ) -> PyResult<rdocx::HeaderFooterParagraph> {
         self.check(py)?;
         let mut document = self.document.borrow_mut(py);
-        let style = style
-            .map(|style| style_id_of_type(&document.inner, style, rdocx::StyleType::Paragraph))
-            .transpose()?;
+        // An explicit style wins; otherwise the paragraph takes the story's
+        // "Header" or "Footer" style when the document defines it.
+        let style = match style {
+            Some(style) => Some(style_id_of_type(
+                &document.inner,
+                style,
+                rdocx::StyleType::Paragraph,
+            )?),
+            None => story_paragraph_style(&document.inner, self.slot),
+        };
         let story = story_or_create(py, &mut document, self.slot)?;
         let index = document
             .inner

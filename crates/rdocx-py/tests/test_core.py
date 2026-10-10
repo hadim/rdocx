@@ -5781,3 +5781,78 @@ def test_deeply_nested_content_controls_raise_instead_of_crashing():
         rdocx.RdocxError, match="content control nesting exceeds 64 levels"
     ):
         _replace_document_body(rdocx.Document(), body)
+
+
+def _story_paragraph_styles(document, attribute):
+    """The pStyle value of each paragraph of section 0's `attribute` story
+    in the saved package, None where a paragraph has no pStyle."""
+    slot = getattr(document.sections[0], attribute)
+    texts = [paragraph.text for paragraph in slot.paragraphs]
+    kind = "header" if attribute.endswith("header") else "footer"
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as archive:
+        for part in archive.namelist():
+            if not re.fullmatch(rf"word/{kind}\d+\.xml", part):
+                continue
+            xml = archive.read(part).decode()
+            paragraphs = re.findall(r"<w:p(?:/>|[ >].*?</w:p>)", xml, flags=re.S)
+            found = [
+                "".join(re.findall(r"<w:t(?: [^>]*)?>([^<]*)</w:t>", paragraph))
+                for paragraph in paragraphs
+            ]
+            if found == texts:
+                return [
+                    (match.group(1) if match else None)
+                    for match in (
+                        re.search(r'<w:pStyle w:val="([^"]*)"/>', paragraph)
+                        for paragraph in paragraphs
+                    )
+                ]
+    raise AssertionError(f"no {kind} part holds {texts!r}")
+
+
+@pytest.mark.parametrize(
+    ("names", "style_ids"),
+    [
+        (("Header", "Footer"), (None, None)),
+        (("header", "footer"), ("Header", "Footer")),
+        (("header", "footer"), ("En-tte", "Pieddepage")),
+    ],
+    ids=["python-docx", "word", "localized-word"],
+)
+def test_added_header_and_footer_paragraphs_take_the_header_and_footer_styles(names, style_ids):
+    import rdocx
+
+    expected = {
+        kind: style_id or name for kind, name, style_id in zip(("header", "footer"), names, style_ids)
+    }
+    attributes = (
+        "header",
+        "footer",
+        "first_page_header",
+        "first_page_footer",
+        "even_page_header",
+        "even_page_footer",
+    )
+
+    document = rdocx.Document()
+    document.add_paragraph("body")
+    for name, style_id in zip(names, style_ids):
+        document.add_style(name, "paragraph", style_id=style_id)
+    for attribute in attributes:
+        style = expected["header" if attribute.endswith("header") else "footer"]
+        slot = getattr(document.sections[0], attribute)
+        added = slot.add_paragraph(attribute)
+        assert added.style == style, attribute
+        explicit = slot.add_paragraph("explicit", style="Title")
+        assert explicit.style == "Title", attribute
+        # The story created on first access holds one empty paragraph that
+        # takes the style too.
+        assert [p.style for p in slot.paragraphs] == [style, style, "Title"], attribute
+        assert _story_paragraph_styles(document, attribute) == [style, style, "Title"]
+
+    plain = rdocx.Document()
+    plain.add_paragraph("body")
+    for attribute in attributes:
+        slot = getattr(plain.sections[0], attribute)
+        assert slot.add_paragraph(attribute).style is None, attribute
+        assert _story_paragraph_styles(plain, attribute) == [None, None]
