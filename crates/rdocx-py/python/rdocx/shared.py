@@ -1,5 +1,6 @@
 """Unit and color values shared by the public rdocx API."""
 
+from collections.abc import Callable
 from typing import Any, SupportsIndex, overload
 
 
@@ -140,11 +141,12 @@ class _Styles(tuple[Any, ...]):
 
     def _find(self, key: str) -> Any:
         lowered = key.lower()
-        for matches in (
+        checks: tuple[Callable[[Any], bool], ...] = (
             lambda style: style.style_id == key,
             lambda style: style.name == key,
             lambda style: (style.name or "").lower() == lowered,
-        ):
+        )
+        for matches in checks:
             for style in self:
                 if matches(style):
                     return style
