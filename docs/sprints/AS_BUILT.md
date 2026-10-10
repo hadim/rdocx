@@ -18872,3 +18872,68 @@ and close. Hash/policy, regression and unchanged-consumer receipts remain
 under /private/tmp/S91-F-X193-*. Current archive authority is
 /private/tmp/S91-F-X198-final-post-row-archive-receipt.json. No GitHub
 closure, push, main merge, tag or publication occurred.
+
+### F-X199, Model namespace-qualified empty table cell margins
+
+**Sprint.** S91
+**Completed.** 2026-10-10
+**Size.** S, estimated1 day, actual not recorded.
+
+**What was built.** Namespace-qualified self-closing empty cell margins
+expose the same typed reader facts as expanded empty margins. Namespace-only
+attributes are accepted. Real attributes, foreign elements and rebound
+prefixes retain exact opaque XML and unsupported-content flags. Empty edges
+inherit defaults. Existing schema slots and all21 generated cell texts
+survive save and reopen.
+
+**Non-obvious choices.** Adapted Pedro Assumpcao's PR302 at inspected immutable
+head7ac2851cb61b5e7b26427004517cc0cd4db0dbd9. The production change is one
+branch in the existing private parser. No API, dependency, version, module
+or implementation file was added. Both affected archive records were actually
+remeasured on the existing M5 host after integrating the HTML and text-box
+fixes. The current CLI measurement and historical performance rows remain
+unchanged.
+
+**Deviations from the design plan.** None. Sandbox DNS prevented the first
+integrated packaging attempt, which exited101. The network-enabled retry
+and post-row validation have actual exit0. No archive guard was loosened.
+
+**Spec sections touched.** HLD10 native Word facade and HLD14 F-X199.
+
+**Tests.** Genuine claimed-Base failures establish the gate. Worker54 focused
+table tests and the public21cell regression passed. OXML639 units and1
+doctest passed. Original full facade command35529 exited101 after515
+library and364 integration passes because one unchanged external consumer
+hit its300-second compile timeout. Prewarm and exact unchanged consumer
+recovery passed separately. Subsequent regression2325 passed with7 ignores,
+and2 doctests passed under the documented8MiB CI stack. Policy55950 exited0
+with141 tests and2 existing skips. Scoped clippy and formatting passed.
+The patched workspace publication dry-run exited0 with all22 package
+verifications complete. Its generated VCS metadata remains earlier dirty
+roadmap HEADd6e2cc09, distinct from reviewed source commit2d5c311d.
+Production microscope pass2 and independent integration pass1 report zero
+defects and smells. The exact integrated namespaced margin gate passed1 test. Its earlier
+unqualified exact filter executed0 tests and receives no gate credit.
+Failed commands remain failures.
+
+**Hash harness.** Worker command58574 exited0 and matched all49 entries
+without moving the baseline. Exact integrated parser and public regression
+bytes match the reviewed worker. Prior HTML and text-box sources remain
+unchanged. Both final combined rdocx archives authenticate at3529815 bytes,
+50787392 normalized member bytes and37 members. Both OXML archives are
+452311 bytes,2809322 normalized member bytes and32 members. All34 and29
+ordinary members, including current README files, match integrated source.
+Each compressed observation differs by1 byte from its adopted measurement
+within the unchanged64-byte tolerance. Generated VCS/manifest/lock metadata
+retain actual package-time provenance. This is scoped prerequisite completion.
+Full integrated sprint verification and sprint review remain due.
+
+**Notes for future sessions.** Worker source head2d5c311d8629c9a21cdc9329fd88e194a4ea2dfc
+and handoff tip0f5d5c6322295c7f4aa9b7773a5cd57825459cda are retained.
+Consumed integration commit31b25665 is recorded in the sprint run state.
+Actual combined measurement receipts are under
+/private/tmp/S91-F-X199-integrated-before-row-network and
+/private/tmp/S91-F-X199-integrated-after-row. Keep work/f-x199-codex through
+sprint verification and close. Its clean worktree may be removed after the
+consumed handoff and integration commit are recorded. No GitHub closure,
+push, main merge, tag or publication is claimed.

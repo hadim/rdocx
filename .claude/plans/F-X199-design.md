@@ -1,6 +1,6 @@
 # F-X199, Model namespace-qualified empty table cell margins
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: S
 **Depends on**: none
