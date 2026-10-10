@@ -170,7 +170,10 @@ to the default style for such an id. A style id inside a tracked property
 change is not checked, because it records the formatting before the change,
 and neither is one inside `mc:Fallback`, which Word does not read, or an empty
 id.
-Empty paragraphs, heading level gaps, and missing metadata are warnings.
+Empty paragraphs, heading level gaps, and missing metadata are warnings. So
+are a section whose `w:pgSz` lacks a width or a height, which leaves each
+consumer to guess the page, and an even-page header or footer while
+`w:evenAndOddHeaders` is off, which Word and Google Docs ignore.
 
 `layout --json` uses bundled deterministic fonts. It lists every direct body
 item, including preserved items that have no fragments. Each laid-out fragment

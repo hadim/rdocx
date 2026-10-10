@@ -4,6 +4,7 @@ mod document;
 mod formatting;
 mod paragraph;
 mod run;
+mod story;
 mod table;
 
 use pyo3::exceptions::{PyIndexError, PyRuntimeError, PyTypeError, PyValueError};
@@ -26,6 +27,9 @@ use document::{
 use formatting::{PyColorFormat, PyFont, PyParagraphFormat, PyTabStop, PyTabStops};
 use paragraph::{PyParagraph, PyParagraphCollection};
 use run::{PyRun, PyRunCollection};
+use story::{
+    PyHeaderFooter, PyHeaderFooterCell, PyHeaderFooterRow, PyHeaderFooterTable, PySettings,
+};
 use table::{
     PyCell, PyCellCollection, PyCellParagraphCollection, PyColumn, PyRow, PyRowCollection, PyTable,
     PyTableCollection,
@@ -224,6 +228,10 @@ fn _rdocx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyCustomProperties>()?;
     module.add_class::<PyAppProperties>()?;
     module.add_class::<paragraph::PyEquation>()?;
+    module.add_class::<PyHeaderFooter>()?;
+    module.add_class::<PyHeaderFooterTable>()?;
+    module.add_class::<PyHeaderFooterRow>()?;
+    module.add_class::<PyHeaderFooterCell>()?;
     Ok(())
 }
 

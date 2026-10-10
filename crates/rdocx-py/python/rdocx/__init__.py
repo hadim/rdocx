@@ -2,8 +2,8 @@
 
 from .enum.dml import MSO_COLOR_TYPE, MSO_THEME_COLOR
 from .enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_ROW_HEIGHT_RULE, WD_TABLE_ALIGNMENT
-from .enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT, WD_TAB_LEADER, WD_UNDERLINE
-from .shared import Cm, Emu, Inches, Length, Mm, Pt, RGBColor
+from .enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK, WD_TAB_ALIGNMENT, WD_TAB_LEADER, WD_UNDERLINE
+from .shared import Cm, Emu, Inches, Length, Mm, Pt, RGBColor, Twips
 
 
 class RdocxError(Exception):
@@ -68,6 +68,10 @@ from ._rdocx import (
     DocumentFragment,
     Equation,
     Font,
+    HeaderFooter,
+    HeaderFooterCell,
+    HeaderFooterRow,
+    HeaderFooterTable,
     HeaderFooterVariant,
     Hyperlink,
     LayoutFragment,
@@ -129,6 +133,10 @@ __all__ = [
     "Emu",
     "Equation",
     "Font",
+    "HeaderFooter",
+    "HeaderFooterCell",
+    "HeaderFooterRow",
+    "HeaderFooterTable",
     "HeaderFooterVariant",
     "Hyperlink",
     "Inches",
@@ -172,8 +180,10 @@ __all__ = [
     "TabStop",
     "TabStops",
     "TocRebuildReport",
+    "Twips",
     "ValidationReport",
     "WD_ALIGN_PARAGRAPH",
+    "WD_BREAK",
     "WD_CELL_VERTICAL_ALIGNMENT",
     "WD_ROW_HEIGHT_RULE",
     "WD_TAB_ALIGNMENT",
