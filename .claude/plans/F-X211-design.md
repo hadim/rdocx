@@ -897,3 +897,41 @@ Complete assessment: `/private/tmp/S91-PR336-c6ab986-intake/assessment.md`.
 All fourteen changed paths and twenty-eight base/head Git blobs were captured
 and independently authenticated. No contributor gates were executed or
 accepted as local completion evidence. No new module or F-ID is required.
+
+### PR336 updated-head intake
+
+The 2026-10-10 07:27:15 UTC refresh observed head
+`935ac165afcd29d34454568ba3b2287a4bac52dc`, replacing the retained assessed
+c6ab986 head. Complete incremental source assessment is pending. The new
+body claims64 controls,64 inline wrappers,512-element revision refusal and
+additional relative-REF numbering changes. These are contribution proposals,
+not automatically selected resource limits or locally executed gates. Preserve
+the approved contract until actual changed-source assessment is reconciled.
+The prior immutable assessment remains historical evidence, not approval of
+this new head. Issue331 and321 ownership is unchanged.
+
+## Qualified hyperlink attribute silent-failure intake
+
+F-X194's installed grouped-cell regression exposed a pre-existing shared
+reader gap. `crates/oxml-drawing/src/text/paragraph.rs:500` extracts literal
+r:id, while a valid alternate relationship prefix survives raw storage but
+leaves the modeled relationship_id absent. The binding then returns None at
+`crates/rpptx-py/src/text.rs:1044`. Canonical p/a/r input resolves the same
+relationship successfully. F-X194 retains the canonical imported-owner
+regression. This uncovered alias behavior belongs to this story's shared
+silent-failure and qualified XML contract, not a second cell-frame API.
+
+Preserve exact namespace URI ownership for inherited and locally declared
+relationship aliases, canonical and default element namespaces, rebound and
+foreign same-local-name attributes. Do not replace r:id with an unqualified
+local-name guess. Retain raw unknown attributes and avoid duplicate expanded
+attribute names during save/reopen. Prove hyperlink reads for ordinary and
+grouped shape/cell owners, correct slide relationship context, and unchanged
+package bytes on reads. Fix the shared reader once in existing files. The
+existing `crates/oxml-drawing/src/text/paragraph.rs` is an additional concrete
+source reservation under this owner, with shared parser/publication riders.
+
+Exact original and canonical fixture recipes and XML hashes are retained in
+`/private/tmp/S91-F-X194-evidence/grouped-fixture-cause/receipt.json`. The
+original valid-alias failure remains unresolved evidence, not a passed gate.
+The fixture correction does not claim that aliases have been repaired.

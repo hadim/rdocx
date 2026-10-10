@@ -2211,6 +2211,12 @@ contract. Do not adopt the additional64-wrapper refusal or incomplete
 numbering restart shortcuts. Reuse only conforming changes and verify locally. It creates
 no duplicate F-ID. Contribution claims do not replace local test evidence.
 
+PR336 advanced to `935ac165afcd29d34454568ba3b2287a4bac52dc` at the
+2026-10-10 07:27:15 UTC refresh. Incremental source assessment is pending.
+Its proposed64-control and512-element revision limits do not supersede the
+approved contract by intake. Relative REF changes must be reconciled with
+F-X200 and F-283 once, retaining numbering and navigation ownership.
+
 F-X192 and F-283 additionally complete the bibliography and numbering-aware
 navigation work carried from S90. Their full contracts remain in S91.
 

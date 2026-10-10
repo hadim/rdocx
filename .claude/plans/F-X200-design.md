@@ -563,3 +563,15 @@ Complete assessment: `/private/tmp/S91-PR336-c6ab986-intake/assessment.md`.
 All fourteen changed paths and twenty-eight base/head Git blobs were captured
 and independently authenticated. No contributor gates were executed or
 accepted as local completion evidence. No new module or F-ID is required.
+
+### PR336 updated-head intake
+
+The 2026-10-10 07:27:15 UTC refresh observed head
+`935ac165afcd29d34454568ba3b2287a4bac52dc`, replacing the retained assessed
+c6ab986 head. Complete incremental source assessment is pending. The new
+body claims64 controls,64 inline wrappers,512-element revision refusal and
+additional relative-REF numbering changes. These are contribution proposals,
+not automatically selected resource limits or locally executed gates. Preserve
+the approved contract until actual changed-source assessment is reconciled.
+The prior immutable assessment remains historical evidence, not approval of
+this new head. Issue331 and321 ownership is unchanged.
