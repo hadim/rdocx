@@ -26,7 +26,8 @@ References are out, categorically. Four options were weighed:
 ```rust
 pub enum PathSeg { Slide(usize), Shape(usize), Body(usize), Row(usize),
                    Cell(usize), Para(usize), Run(usize) }
-pub struct ContentPath { pub segs: SmallVec<[PathSeg; 5]>, pub revision: u64 }
+pub struct ContentPath { pub segs: SmallVec<[PathSeg; 5]>, pub revision: u64,
+                         pub text_revision: Option<u64> }
 pub struct RevisionCounter { current: u64 }
 
 #[pyclass(name = "Document")]
@@ -240,6 +241,15 @@ revision once, stales every earlier structural handle, and publishes only the
 native staged result. Python index errors are rejected before mutation, while
 native topology and serialization failures use the existing `RdocxError`
 mapping. Removing the only direct row is rejected.
+
+Word `Table.indent` is an optional Length with a setter accepting the existing
+integer EMU/Length convention or None. Positive, zero and negative values are
+explicit. The checked native set_indent_value validates signed-i32 twip bounds
+before creating properties and truncates EMU toward zero at635 EMU per twip.
+set_indent_checked delegates to that signed optional setter. None removes only
+direct tblInd and clearing an absent value creates no tblPr. Overflow and wrong
+Python types preserve source and handles. Existing alignment, cell margins,
+compatibility compensation and floating-table placement remain unchanged.
 
 `Table`, `Row` and `Cell` also bind the checked native formatting setters.
 `Table.set_borders(style, *, size, color)` sets every table edge and
@@ -616,8 +626,9 @@ nested collection raise `ValueError` too.
 
 A table `Cell` follows python-pptx for `merge(other_cell)`, `split()`,
 `is_merge_origin`, `is_spanned`, `span_height`, and `span_width`. Merge and
-split run the native staged table operations, which keep the rectangular grid,
-so they do not advance the revision. A cell of another table raises
+split run the native staged table operations, which keep the rectangular grid.
+They advance only the cell-text generation, leaving Table, Row, Column and
+Cell grid handles live while retiring previously captured nested text handles. A cell of another table raises
 `ValueError`, and a merge range that overlaps a merge or a split of a cell that
 is not a merge origin raises `RpptxError` and leaves the table unchanged.
 `Cell.fill` is a live `FillFormat` over the direct cell fill. `margin_left`,
@@ -632,6 +643,33 @@ of `Row` handles, like `columns`. `Row.height` reads the stored height as
 `Length`, and assigning it keeps the frame height equal to the sum of the rows,
 as a column width keeps the frame width. A height that is not positive raises
 `RpptxError`. None of these writes advances the revision.
+
+`Cell.text_frame` returns the same TextFrame surface used by shapes, including
+paragraphs, runs, fonts, spacing, alignment, bodyPr anchor and wrapping. The
+getter validates the complete explicit Row/Cell path and never creates missing
+text bodies. A merge continuation retains its own grid-cell address. The
+native immutable accessor returns TextFrameRef for the cell borrow lifetime,
+and TableCellMut::into_text_frame consumes its handle for safe mutable access.
+Missing-body reads remain explicit, while successful text authoring may create
+the body. Counted replacement preflights a missing body so zero matches, count
+mismatch and invalid empty placeholders preserve source and generations.
+
+PyPresentation owns text_revisions. Cell frames and all nested text handles
+inherit ContentPath.text_revision=Some(current cell-text generation). Ordinary
+shape captures retain None until their separate ancestor partition is added.
+Existing global revision validation runs first, then optional text validation.
+Cell.text, frame/paragraph text, paragraph/run addition and successful
+merge/split advance only this cell-text generation. Nested handles in other
+cells also retire conservatively. Run text and formatting edits retain both
+generations. Failed mutations and no-match replacement retain both. Stale
+messages identify cell-text topology and the fresh-cell retrieval path. Cell
+hyperlink reads resolve through the owning cell body, but assignment refuses
+before any slide relationship mutation. Actual cell vertical placement through
+a:tcPr anchor remains distinct from TextFrame bodyPr vertical_anchor.
+
+The optional public ContentPath field changes external struct-literal source
+compatibility before1.0. Existing constructors retain their signatures and
+initialize it to None. Native cell accessors are additive API changes.
 
 python-pptx has no public API to add or remove table rows and columns, and its
 users call `table._tbl.add_tr(height)`, which appends a row without cell

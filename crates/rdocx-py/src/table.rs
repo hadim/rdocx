@@ -393,6 +393,25 @@ impl PyTable {
     }
 
     #[getter]
+    fn indent(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        let index = self.validate(py)?;
+        self.document
+            .borrow(py)
+            .inner
+            .table(index)
+            .and_then(|table| table.indent())
+            .map(|length| length_object(py, length))
+            .transpose()
+    }
+
+    #[setter]
+    fn set_indent(&self, py: Python<'_>, value: Option<i64>) -> PyResult<()> {
+        self.edit(py, |table| {
+            table.set_indent_value(value.map(rdocx::Length::emu))
+        })
+    }
+
+    #[getter]
     fn alignment(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         let index = self.validate(py)?;
         self.document

@@ -374,6 +374,9 @@ def exercise_rpptx_types(path: Path) -> None:
 
 def exercise_rpptx_table_types(table: Table) -> None:
     origin: Cell = table.cell(0, 0)
+    cell_frame: TextFrame = origin.text_frame
+    cell_frame.word_wrap = True
+    cell_frame.paragraphs[0].font.bold = True
     origin.merge(table.cell(1, 1))
     spans: tuple[bool, bool, int, int] = (
         origin.is_merge_origin,

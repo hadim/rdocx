@@ -56977,7 +56977,7 @@ fn legacy_table_positions_use_resolved_cell_margins() {
     let margin = |side: &str, value: i32| format!(r#"<w:{side} w:w="{value}" w:type="dxa"/>"#);
     for mode in ["15", "14", "12", "absent-mode", "absent-compat"] {
         for nested in [false, true] {
-            for indent in [None, Some(0), Some(720)] {
+            for indent in [None, Some(-720), Some(0), Some(720)] {
                 for jc in ["left", "start", "center", "right", "end"] {
                     for location in ["table", "first", "last", "right"] {
                         let mut props = format!(r#"<w:jc w:val="{jc}"/>"#);

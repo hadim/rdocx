@@ -1059,3 +1059,36 @@ def test_word_highlight_keywords_round_trip_and_clear():
     assert reopened.paragraphs[0].runs[0].font.highlight == "yellow"
     reopened.paragraphs[0].runs[0].font.highlight = None
     assert Document.from_bytes(reopened.to_bytes()).paragraphs[0].runs[0].font.highlight is None
+
+
+def test_table_indent_accepts_negative_zero_positive_and_none():
+    from rdocx import Document, Inches
+
+    document = Document()
+    table = document.add_table(rows=1, cols=1)
+    assert table.indent is None
+    for value in (Inches(-0.25), 0, Inches(0.25), None):
+        table.indent = value
+        assert table.indent == value
+
+
+def test_invalid_table_indent_leaves_source_and_handles_unchanged():
+    from rdocx import Document, Inches
+    document = Document()
+    table = document.add_table(rows=1, cols=1)
+    table.indent = Inches(-0.25)
+    cell = table.cell(0, 0)
+    before = document.to_bytes()
+    from rdocx import RdocxError
+    for value in ("0.25", 0.25, (2**31) * 635, (-(2**31) - 1) * 635):
+        with pytest.raises((TypeError, RdocxError)):
+            table.indent = value
+        assert document.to_bytes() == before
+        assert cell.text == ""
+    reopened = Document.from_bytes(document.to_bytes())
+    assert reopened.tables[0].indent == Inches(-0.25)
+    table.indent = -636
+    assert table.indent == -635
+    assert Document.from_bytes(document.to_bytes()).tables[0].indent == -635
+    table.indent = None
+    assert b"tblInd" not in _document_xml(document.to_bytes()).encode()

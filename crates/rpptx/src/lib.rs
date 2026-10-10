@@ -8545,7 +8545,7 @@ pub struct TableCellRef<'a> {
     cell: &'a CT_TableCell,
 }
 
-impl TableCellRef<'_> {
+impl<'a> TableCellRef<'a> {
     /// Returns the cell's visible plain text.
     pub fn text(&self) -> String {
         self.cell
@@ -8555,7 +8555,7 @@ impl TableCellRef<'_> {
     }
 
     /// Returns the cell text body when present.
-    pub fn text_frame(&self) -> Option<TextFrameRef<'_>> {
+    pub fn text_frame(&self) -> Option<TextFrameRef<'a>> {
         self.cell
             .text_body
             .as_ref()
@@ -8624,7 +8624,7 @@ pub struct TableCellMut<'a> {
     column: usize,
 }
 
-impl TableCellMut<'_> {
+impl<'a> TableCellMut<'a> {
     /// Returns the cell's visible plain text.
     pub fn text(&self) -> String {
         self.cell_ref().text()
@@ -8643,6 +8643,14 @@ impl TableCellMut<'_> {
     pub fn text_frame(&mut self) -> TextFrame<'_> {
         let body = self
             .cell_mut()
+            .text_body
+            .get_or_insert_with(CT_TextBody::new);
+        TextFrame { body }
+    }
+
+    /// Consumes this cell handle and returns its text body for mutation.
+    pub fn into_text_frame(self) -> TextFrame<'a> {
+        let body = self.table.rows[self.row].cells[self.column]
             .text_body
             .get_or_insert_with(CT_TextBody::new);
         TextFrame { body }

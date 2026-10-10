@@ -152,6 +152,7 @@ impl From<&rpptx::ValidationIssue> for PyValidationIssue {
 pub struct PyPresentation {
     pub(crate) inner: rpptx::Presentation,
     pub(crate) revisions: RevisionCounter,
+    pub(crate) text_revisions: RevisionCounter,
 }
 
 impl PyPresentation {
@@ -159,6 +160,7 @@ impl PyPresentation {
         Self {
             inner,
             revisions: RevisionCounter::new(),
+            text_revisions: RevisionCounter::new(),
         }
     }
 

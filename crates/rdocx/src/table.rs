@@ -794,10 +794,21 @@ impl<'a> Table<'a> {
         self.ensure_tbl_pr().indent = Some(CT_TblWidth::dxa(length.as_twips().0));
     }
 
-    /// Set a checked nonnegative table indentation.
+    /// Set a checked signed table indentation.
     pub fn set_indent_checked(&mut self, length: Length) -> Result<()> {
-        let twips = checked_table_twips("indentation", length)?;
-        self.ensure_tbl_pr().indent = Some(CT_TblWidth::dxa(twips));
+        self.set_indent_value(Some(length))
+    }
+
+    /// Set or clear direct indentation without creating properties on clear.
+    pub fn set_indent_value(&mut self, length: Option<Length>) -> Result<()> {
+        let twips = length
+            .map(|length| checked_table_offset_twips("indentation", length))
+            .transpose()?;
+        if let Some(twips) = twips {
+            self.ensure_tbl_pr().indent = Some(CT_TblWidth::dxa(twips));
+        } else if let Some(properties) = self.inner.properties.as_mut() {
+            properties.indent = None;
+        }
         Ok(())
     }
 

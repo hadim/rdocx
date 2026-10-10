@@ -100,7 +100,25 @@ pub(crate) fn validate_path(
         kind,
         &recovery_hint(path, suffix),
     )
-    .map_err(|error| stale_to_pyerr(py, error))
+    .map_err(|error| stale_to_pyerr(py, error))?;
+    if let Some(captured) = path.text_revision {
+        let current = presentation.text_revisions.current();
+        if captured != current {
+            return Err(stale_to_pyerr(
+                py,
+                StaleElementError {
+                    element_kind: kind.to_owned(),
+                    captured_revision: captured,
+                    current_revision: current,
+                    recovery_hint: format!(
+                        "Cell-text topology changed. {}",
+                        recovery_hint(path, suffix)
+                    ),
+                },
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn rpptx_to_pyerr(py: Python<'_>, error: rpptx::Error) -> PyErr {

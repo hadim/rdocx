@@ -1,6 +1,6 @@
 # F-X194, Complete Python table text and indentation APIs
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: M
 **Depends on**: none
@@ -206,14 +206,14 @@ inputs or layout rules. An unexplained delta blocks completion.
 
 ## Implementation checklist
 
-- [ ] Reproduce both missing APIs on the claimed base.
-- [ ] Add native lifetime-safe accessors and cell-aware text resolvers.
-- [ ] Route every nested text and font operation through those resolvers.
-- [ ] Add Python cell text_frame and preserve revisions/ownership.
-- [ ] Add signed optional checked Word table indent and Python property.
-- [ ] Update existing stubs, examples and typing smoke.
-- [ ] Run installed Python/native regressions and risk riders.
-- [ ] Complete scoped verify and a zero-finding microscope.
+- [x] Reproduce both missing APIs on the claimed base.
+- [x] Add native lifetime-safe accessors and cell-aware text resolvers.
+- [x] Route every nested text and font operation through those resolvers.
+- [x] Add Python cell text_frame and preserve revisions/ownership.
+- [x] Add signed optional checked Word table indent and Python property.
+- [x] Update existing stubs, examples and typing smoke.
+- [x] Run installed Python/native regressions and risk riders.
+- [x] Complete scoped verify and a zero-finding microscope.
 
 Exclusive implementation paths include shared `oxml-py-support/src/lib.rs`,
 `rpptx-py/src/presentation.rs` and path validation in `rpptx-py/src/lib.rs`,

@@ -85,6 +85,9 @@ def exercise_rdocx_types(path: Path) -> None:
     for item in paragraphs:
         item.text
     table: Table = document.add_table(1, 1)
+    assert_type(table.indent, Length | None)
+    table.indent = Inches(-0.25)
+    table.indent = None
     row: Row = table.rows[0]
     cloned_row: Row = table.clone_row(0)
     table.remove_row(0)

@@ -14,6 +14,7 @@ use crate::presentation::PyPresentation;
 use crate::replacement_count_to_pyerr;
 use crate::rpptx_to_pyerr;
 use crate::shape::{shape_mut_at, shape_ref_at, slide_index};
+use crate::table::{cell_mut_at, cell_ref_at};
 use crate::validate_path;
 
 const EMU_PER_CENTIPOINT: i64 = 127;
@@ -115,14 +116,53 @@ fn run_index(path: &ContentPath) -> Option<usize> {
     })
 }
 
+fn names_cell(path: &ContentPath) -> bool {
+    path.segs
+        .iter()
+        .any(|segment| matches!(segment, PathSeg::Row(_)))
+        && path
+            .segs
+            .iter()
+            .any(|segment| matches!(segment, PathSeg::Cell(_)))
+}
+
+fn text_frame_ref_at<'a>(
+    presentation: &'a rpptx::Presentation,
+    path: &ContentPath,
+) -> Option<rpptx::TextFrameRef<'a>> {
+    if names_cell(path) {
+        cell_ref_at(presentation, path)?.text_frame()
+    } else {
+        shape_ref_at(presentation, path)?.text_frame()
+    }
+}
+
+fn text_frame_mut_at<'a>(
+    presentation: &'a mut rpptx::Presentation,
+    path: &ContentPath,
+) -> Option<rpptx::TextFrame<'a>> {
+    if names_cell(path) {
+        cell_mut_at(presentation, path).map(rpptx::TableCellMut::into_text_frame)
+    } else {
+        shape_mut_at(presentation, path)?.into_text_frame()
+    }
+}
+
+fn advance_text_topology(presentation: &mut PyPresentation, path: &ContentPath) {
+    if path.text_revision.is_some() {
+        presentation.text_revisions.bump();
+    } else {
+        presentation.revisions.bump();
+    }
+}
+
 fn font_properties(
     presentation: &rpptx::Presentation,
     path: &ContentPath,
 ) -> Option<rpptx::CT_TextCharacterProperties> {
     let paragraph = paragraph_index(path)?;
-    let paragraph = shape_ref_at(presentation, path)
-        .and_then(|shape| shape.text_frame())
-        .and_then(|frame| frame.paragraph(paragraph))?;
+    let paragraph =
+        text_frame_ref_at(presentation, path).and_then(|frame| frame.paragraph(paragraph))?;
     match run_index(path) {
         Some(run) => paragraph.run(run)?.properties().cloned(),
         None => paragraph.default_run_properties().cloned(),
@@ -156,8 +196,7 @@ impl PyTextFrame {
         read: impl FnOnce(rpptx::TextFrameRef<'_>) -> T,
     ) -> PyResult<T> {
         self.validate(py)?;
-        shape_ref_at(&self.presentation.borrow(py).inner, &self.path)
-            .and_then(|shape| shape.text_frame())
+        text_frame_ref_at(&self.presentation.borrow(py).inner, &self.path)
             .map(read)
             .ok_or_else(|| PyValueError::new_err("shape has no text frame"))
     }
@@ -169,8 +208,7 @@ impl PyTextFrame {
     ) -> PyResult<T> {
         self.validate(py)?;
         let mut presentation = self.presentation.borrow_mut(py);
-        shape_mut_at(&mut presentation.inner, &self.path)
-            .and_then(rpptx::ShapeMut::into_text_frame)
+        text_frame_mut_at(&mut presentation.inner, &self.path)
             .map(|mut frame| update(&mut frame))
             .ok_or_else(|| PyValueError::new_err("shape has no text frame"))
     }
@@ -213,8 +251,7 @@ impl PyTextFrame {
     #[getter]
     fn text(&self, py: Python<'_>) -> PyResult<String> {
         self.validate(py)?;
-        shape_ref_at(&self.presentation.borrow(py).inner, &self.path)
-            .and_then(|shape| shape.text_frame())
+        text_frame_ref_at(&self.presentation.borrow(py).inner, &self.path)
             .map(|frame| frame.text())
             .ok_or_else(|| PyValueError::new_err("shape has no text frame"))
     }
@@ -223,11 +260,10 @@ impl PyTextFrame {
     fn set_text(&self, py: Python<'_>, value: &str) -> PyResult<()> {
         self.validate(py)?;
         let mut presentation = self.presentation.borrow_mut(py);
-        shape_mut_at(&mut presentation.inner, &self.path)
-            .and_then(rpptx::ShapeMut::into_text_frame)
+        text_frame_mut_at(&mut presentation.inner, &self.path)
             .map(|mut frame| frame.set_text(value))
             .ok_or_else(|| PyValueError::new_err("shape has no text frame"))?;
-        presentation.revisions.bump();
+        advance_text_topology(&mut presentation, &self.path);
         Ok(())
     }
 
@@ -257,8 +293,24 @@ impl PyTextFrame {
     ) -> PyResult<usize> {
         self.validate(py)?;
         let mut presentation = self.presentation.borrow_mut(py);
-        let count = shape_mut_at(&mut presentation.inner, &self.path)
-            .and_then(rpptx::ShapeMut::into_text_frame)
+        if names_cell(&self.path) && text_frame_ref_at(&presentation.inner, &self.path).is_none() {
+            cell_ref_at(&presentation.inner, &self.path)
+                .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?;
+            if placeholder.is_empty() {
+                return Err(rpptx_to_pyerr(
+                    py,
+                    rpptx::Error::InvalidSlideMutation {
+                        operation: "replace text",
+                        message: "placeholder must not be empty".to_owned(),
+                    },
+                ));
+            }
+            if let Some(expected) = expect.filter(|&expected| expected != 0) {
+                return Err(replacement_count_to_pyerr(py, placeholder, expected, 0));
+            }
+            return Ok(0);
+        }
+        let count = text_frame_mut_at(&mut presentation.inner, &self.path)
             .ok_or_else(|| PyValueError::new_err("shape has no text frame"))?
             .try_replace_text(placeholder, replacement, expect)
             .map_err(|error| rpptx_to_pyerr(py, error))?;
@@ -266,7 +318,7 @@ impl PyTextFrame {
             return Err(replacement_count_to_pyerr(py, placeholder, expected, count));
         }
         if count > 0 {
-            presentation.revisions.bump();
+            advance_text_topology(&mut presentation, &self.path);
         }
         Ok(count)
     }
@@ -276,8 +328,7 @@ impl PyTextFrame {
         let original_path = self.path.clone();
         let index = {
             let mut presentation = self.presentation.borrow_mut(py);
-            let mut frame = shape_mut_at(&mut presentation.inner, &original_path)
-                .and_then(rpptx::ShapeMut::into_text_frame)
+            let mut frame = text_frame_mut_at(&mut presentation.inner, &original_path)
                 .ok_or_else(|| PyValueError::new_err("shape has no text frame"))?;
             let index = frame.paragraph_count();
             frame.add_paragraph();
@@ -285,10 +336,18 @@ impl PyTextFrame {
         };
         let path = {
             let mut presentation = self.presentation.borrow_mut(py);
-            presentation.revisions.bump();
+            advance_text_topology(&mut presentation, &self.path);
             let mut segments = original_path.segs.clone();
             segments.push(PathSeg::Para(index));
-            presentation.revisions.capture(segments)
+            {
+                let mut path = self.path.clone();
+                path.segs = segments;
+                path.revision = presentation.revisions.current();
+                if path.text_revision.is_some() {
+                    path.text_revision = Some(presentation.text_revisions.current());
+                }
+                path
+            }
         };
         Py::new(py, PyParagraph::new(self.presentation.clone_ref(py), path))
     }
@@ -297,8 +356,7 @@ impl PyTextFrame {
     fn autofit(&self, py: Python<'_>) -> PyResult<Option<&'static str>> {
         self.validate(py)?;
         Ok(
-            shape_ref_at(&self.presentation.borrow(py).inner, &self.path)
-                .and_then(|shape| shape.text_frame())
+            text_frame_ref_at(&self.presentation.borrow(py).inner, &self.path)
                 .and_then(|frame| frame.autofit_mode())
                 .map(|mode| match mode {
                     rpptx::AutofitMode::None => "none",
@@ -451,8 +509,7 @@ impl PyParagraph {
         read: impl FnOnce(Option<&CT_TextParagraphProperties>) -> T,
     ) -> PyResult<T> {
         let index = self.validate(py)?;
-        shape_ref_at(&self.presentation.borrow(py).inner, &self.path)
-            .and_then(|shape| shape.text_frame())
+        text_frame_ref_at(&self.presentation.borrow(py).inner, &self.path)
             .and_then(|frame| frame.paragraph(index))
             .map(|paragraph| read(paragraph.properties()))
             .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))
@@ -467,8 +524,7 @@ impl PyParagraph {
     ) -> PyResult<()> {
         let index = self.validate(py)?;
         let mut presentation = self.presentation.borrow_mut(py);
-        let mut paragraph = shape_mut_at(&mut presentation.inner, &self.path)
-            .and_then(rpptx::ShapeMut::into_text_frame)
+        let mut paragraph = text_frame_mut_at(&mut presentation.inner, &self.path)
             .and_then(|frame| frame.into_paragraph_mut(index))
             .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
         let current = paragraph.properties().cloned().unwrap_or_default();
@@ -545,8 +601,7 @@ impl PyParagraph {
     #[getter]
     fn text(&self, py: Python<'_>) -> PyResult<String> {
         let index = self.validate(py)?;
-        shape_ref_at(&self.presentation.borrow(py).inner, &self.path)
-            .and_then(|shape| shape.text_frame())
+        text_frame_ref_at(&self.presentation.borrow(py).inner, &self.path)
             .and_then(|frame| frame.paragraph(index))
             .map(|paragraph| paragraph.text())
             .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))
@@ -556,20 +611,18 @@ impl PyParagraph {
     fn set_text(&self, py: Python<'_>, value: &str) -> PyResult<()> {
         let index = self.validate(py)?;
         let mut presentation = self.presentation.borrow_mut(py);
-        shape_mut_at(&mut presentation.inner, &self.path)
-            .and_then(rpptx::ShapeMut::into_text_frame)
+        text_frame_mut_at(&mut presentation.inner, &self.path)
             .and_then(|frame| frame.into_paragraph_mut(index))
             .map(|mut paragraph| paragraph.set_text(value))
             .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
-        presentation.revisions.bump();
+        advance_text_topology(&mut presentation, &self.path);
         Ok(())
     }
 
     #[getter]
     fn level(&self, py: Python<'_>) -> PyResult<u8> {
         let index = self.validate(py)?;
-        shape_ref_at(&self.presentation.borrow(py).inner, &self.path)
-            .and_then(|shape| shape.text_frame())
+        text_frame_ref_at(&self.presentation.borrow(py).inner, &self.path)
             .and_then(|frame| frame.paragraph(index))
             .map(|paragraph| paragraph.level())
             .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))
@@ -578,8 +631,7 @@ impl PyParagraph {
     #[setter]
     fn set_level(&self, py: Python<'_>, value: u8) -> PyResult<()> {
         let index = self.validate(py)?;
-        let changed = shape_mut_at(&mut self.presentation.borrow_mut(py).inner, &self.path)
-            .and_then(rpptx::ShapeMut::into_text_frame)
+        let changed = text_frame_mut_at(&mut self.presentation.borrow_mut(py).inner, &self.path)
             .and_then(|frame| frame.into_paragraph_mut(index))
             .is_some_and(|mut paragraph| paragraph.set_level(value));
         if changed {
@@ -615,22 +667,28 @@ impl PyParagraph {
     #[pyo3(signature = (text = ""))]
     fn add_run(&self, py: Python<'_>, text: &str) -> PyResult<Py<PyRun>> {
         let index = self.validate(py)?;
-        let run = shape_ref_at(&self.presentation.borrow(py).inner, &self.path)
-            .and_then(|shape| shape.text_frame())
+        let run = text_frame_ref_at(&self.presentation.borrow(py).inner, &self.path)
             .and_then(|frame| frame.paragraph(index))
             .map(|paragraph| paragraph.run_count())
             .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
         let path = {
             let mut presentation = self.presentation.borrow_mut(py);
-            shape_mut_at(&mut presentation.inner, &self.path)
-                .and_then(rpptx::ShapeMut::into_text_frame)
+            text_frame_mut_at(&mut presentation.inner, &self.path)
                 .and_then(|frame| frame.into_paragraph_mut(index))
                 .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
                 .add_run(text);
-            presentation.revisions.bump();
+            advance_text_topology(&mut presentation, &self.path);
             let mut segments = self.path.segs.clone();
             segments.push(PathSeg::Run(run));
-            presentation.revisions.capture(segments)
+            {
+                let mut path = self.path.clone();
+                path.segs = segments;
+                path.revision = presentation.revisions.current();
+                if path.text_revision.is_some() {
+                    path.text_revision = Some(presentation.text_revisions.current());
+                }
+                path
+            }
         };
         Py::new(py, PyRun::new(self.presentation.clone_ref(py), path))
     }
@@ -805,8 +863,7 @@ impl PyParagraphCollection {
             ".text_frame.paragraphs",
         )?;
         drop(presentation);
-        shape_ref_at(&self.presentation.borrow(py).inner, &self.path)
-            .and_then(|shape| shape.text_frame())
+        text_frame_ref_at(&self.presentation.borrow(py).inner, &self.path)
             .map(|frame| frame.paragraph_count())
             .ok_or_else(|| PyValueError::new_err("shape has no text frame"))
     }
@@ -814,7 +871,8 @@ impl PyParagraphCollection {
     fn item(&self, py: Python<'_>, index: usize) -> PyResult<Py<PyParagraph>> {
         let mut segments = self.path.segs.clone();
         segments.push(PathSeg::Para(index));
-        let path = self.presentation.borrow(py).revisions.capture(segments);
+        let mut path = self.path.clone();
+        path.segs = segments;
         Py::new(py, PyParagraph::new(self.presentation.clone_ref(py), path))
     }
 }
@@ -890,8 +948,7 @@ impl PyRun {
             .ok_or_else(|| PyIndexError::new_err("paragraph index is missing"))?;
         let run =
             run_index(&self.path).ok_or_else(|| PyIndexError::new_err("run index is missing"))?;
-        shape_ref_at(&self.presentation.borrow(py).inner, &self.path)
-            .and_then(|shape| shape.text_frame())
+        text_frame_ref_at(&self.presentation.borrow(py).inner, &self.path)
             .and_then(|frame| frame.paragraph(paragraph))
             .and_then(|paragraph| paragraph.run(run))
             .map(|run| run.text().to_owned())
@@ -908,8 +965,7 @@ impl PyRun {
         let run =
             run_index(&self.path).ok_or_else(|| PyIndexError::new_err("run index is missing"))?;
         let mut presentation = self.presentation.borrow_mut(py);
-        let frame = shape_mut_at(&mut presentation.inner, &self.path)
-            .and_then(rpptx::ShapeMut::into_text_frame)
+        let frame = text_frame_mut_at(&mut presentation.inner, &self.path)
             .ok_or_else(|| PyValueError::new_err("shape has no text frame"))?;
         let mut paragraph = frame
             .into_paragraph_mut(paragraph)
@@ -966,8 +1022,7 @@ impl PyHyperlink {
             .ok_or_else(|| PyIndexError::new_err("paragraph index is missing"))?;
         let run =
             run_index(&self.path).ok_or_else(|| PyIndexError::new_err("run index is missing"))?;
-        shape_ref_at(&presentation.inner, &self.path)
-            .and_then(|shape| shape.text_frame())
+        text_frame_ref_at(&presentation.inner, &self.path)
             .and_then(|frame| frame.paragraph(paragraph))
             .and_then(|paragraph| paragraph.run(run))
             .map(|run| run.properties().cloned())
@@ -1007,6 +1062,11 @@ impl PyHyperlink {
             .ok_or_else(|| PyIndexError::new_err("paragraph index is missing"))?;
         let run =
             run_index(&self.path).ok_or_else(|| PyIndexError::new_err("run index is missing"))?;
+        if names_cell(&self.path) {
+            return Err(PyValueError::new_err(
+                "cell hyperlink assignment is not supported",
+            ));
+        }
         let shape_id = shape_ref_at(&presentation.inner, &self.path)
             .and_then(|shape| shape.non_visual_id())
             .ok_or_else(|| PyValueError::new_err("shape has no id"))?;
@@ -1044,8 +1104,7 @@ impl PyRunCollection {
         )?;
         let paragraph = paragraph_index(&self.path)
             .ok_or_else(|| PyIndexError::new_err("paragraph index is missing"))?;
-        shape_ref_at(&self.presentation.borrow(py).inner, &self.path)
-            .and_then(|shape| shape.text_frame())
+        text_frame_ref_at(&self.presentation.borrow(py).inner, &self.path)
             .and_then(|frame| frame.paragraph(paragraph))
             .map(|paragraph| paragraph.run_count())
             .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))
@@ -1054,7 +1113,8 @@ impl PyRunCollection {
     fn item(&self, py: Python<'_>, index: usize) -> PyResult<Py<PyRun>> {
         let mut segments = self.path.segs.clone();
         segments.push(PathSeg::Run(index));
-        let path = self.presentation.borrow(py).revisions.capture(segments);
+        let mut path = self.path.clone();
+        path.segs = segments;
         Py::new(py, PyRun::new(self.presentation.clone_ref(py), path))
     }
 }
@@ -1145,8 +1205,7 @@ impl PyFont {
         let paragraph = paragraph_index(&self.path)
             .ok_or_else(|| PyIndexError::new_err("paragraph index is missing"))?;
         let mut presentation = self.presentation.borrow_mut(py);
-        let mut paragraph = shape_mut_at(&mut presentation.inner, &self.path)
-            .and_then(rpptx::ShapeMut::into_text_frame)
+        let mut paragraph = text_frame_mut_at(&mut presentation.inner, &self.path)
             .and_then(|frame| frame.into_paragraph_mut(paragraph))
             .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
         if let Some(run) = run_index(&self.path) {

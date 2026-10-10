@@ -8100,7 +8100,7 @@ fn checked_table_setters_are_atomic() {
                 .set_width_mode(TableWidth::Fixed(Length::emu(i64::MAX)))
                 .is_err()
         );
-        assert!(table.set_indent_checked(Length::twips(-1)).is_err());
+        assert!(table.set_indent_checked(Length::emu(i64::MAX)).is_err());
         assert!(table.set_shading_checked("not-a-color").is_err());
         assert!(
             table
@@ -21186,7 +21186,7 @@ mod floating_table_placement_and_wrap {
     /// to contribute. An inline table with the same indent still takes it.
     #[test]
     fn a_floating_table_takes_its_origin_from_the_anchor_not_the_indent() {
-        let indented = |position: Option<TableFloatPosition>| {
+        let indented = |position: Option<TableFloatPosition>, indent: i32| {
             let mut document = Document::new();
             document.add_paragraph("One line above the table.");
             {
@@ -21194,7 +21194,7 @@ mod floating_table_placement_and_wrap {
                 table.set_column_width(0, Length::twips(1000));
                 table.set_column_width(1, Length::twips(1000));
                 table.set_width(Length::twips(2000));
-                table.set_indent(Length::twips(1440));
+                table.set_indent_checked(Length::twips(indent)).unwrap();
                 table
                     .set_float_position(position)
                     .expect("float position is valid");
@@ -21204,8 +21204,13 @@ mod floating_table_placement_and_wrap {
         };
 
         let float = float_at(TableAnchor::Margin, TableAnchor::Margin, 0, 0);
-        assert_eq!(indented(Some(float)), MARGIN_LEFT);
-        assert_eq!(indented(None), MARGIN_LEFT + 72.0);
+        for indent in [-1440, 0, 1440] {
+            assert_eq!(indented(Some(float), indent), MARGIN_LEFT);
+            assert_eq!(
+                indented(None, indent),
+                MARGIN_LEFT + f64::from(indent) / 20.0
+            );
+        }
     }
 }
 
@@ -24356,5 +24361,72 @@ fn issue_282_rtf_cell_import_keeps_empty_and_formatted_paragraphs() {
             assert!(rtf.contains("\\b "), "{rtf}");
             assert!(rtf.contains("\\i "), "{rtf}");
         }
+    }
+}
+
+#[test]
+fn checked_table_indentation_accepts_signed_twips_and_removes_direct_indent() {
+    let mut document = Document::new();
+    document.add_table(1, 1);
+    let before = document.to_bytes().unwrap();
+    document
+        .table_mut(0)
+        .unwrap()
+        .set_indent_value(None)
+        .unwrap();
+    assert_eq!(document.to_bytes().unwrap(), before);
+    for emu in [-914_400, -636, -634, 0, 634, 636, 914_400] {
+        document
+            .table_mut(0)
+            .unwrap()
+            .set_indent_value(Some(Length::emu(emu)))
+            .unwrap();
+        let bytes = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        assert_eq!(
+            reopened.table(0).unwrap().indent().unwrap().to_emu(),
+            (emu / 635) * 635
+        );
+    }
+    document
+        .table_mut(0)
+        .unwrap()
+        .set_indent_value(None)
+        .unwrap();
+    assert!(document.table(0).unwrap().indent().is_none());
+    let bytes = document.to_bytes().unwrap();
+    assert!(
+        Document::from_bytes(&bytes)
+            .unwrap()
+            .table(0)
+            .unwrap()
+            .indent()
+            .is_none()
+    );
+    for emu in [
+        i64::MIN,
+        i64::MAX,
+        (i64::from(i32::MAX) + 1) * 635,
+        (i64::from(i32::MIN) - 1) * 635,
+    ] {
+        assert!(
+            document
+                .table_mut(0)
+                .unwrap()
+                .set_indent_value(Some(Length::emu(emu)))
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), bytes);
+    }
+    for twips in [i32::MIN, i32::MAX] {
+        document
+            .table_mut(0)
+            .unwrap()
+            .set_indent_checked(Length::twips(twips))
+            .unwrap();
+        assert_eq!(
+            document.table(0).unwrap().indent().unwrap().to_emu(),
+            i64::from(twips) * 635
+        );
     }
 }

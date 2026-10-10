@@ -7,6 +7,7 @@ use crate::dml::{FillTarget, PyFillFormat, PyLineFormat};
 use crate::normalize_index;
 use crate::presentation::PyPresentation;
 use crate::shape::{length, shape_mut_at, shape_ref_at};
+use crate::text::PyTextFrame;
 use crate::{rpptx_to_pyerr, validate_path};
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -624,18 +625,23 @@ impl PyCell {
             .ok_or_else(|| PyIndexError::new_err("cell index out of range"))
     }
 
+    #[getter]
+    fn text_frame(&self, py: Python<'_>) -> PyResult<Py<PyTextFrame>> {
+        self.read(py, |_| ())?;
+        let mut path = self.path.clone();
+        path.text_revision = Some(self.presentation.borrow(py).text_revisions.current());
+        Py::new(py, PyTextFrame::new(self.presentation.clone_ref(py), path))
+    }
+
     #[setter]
     fn set_text(&self, py: Python<'_>, value: &str) -> PyResult<()> {
         validate_path(py, &self.presentation.borrow(py), &self.path, "cell", "")?;
-        let row =
-            row_index(&self.path).ok_or_else(|| PyIndexError::new_err("row index is missing"))?;
-        let cell =
-            cell_index(&self.path).ok_or_else(|| PyIndexError::new_err("cell index is missing"))?;
-        shape_mut_at(&mut self.presentation.borrow_mut(py).inner, &self.path)
-            .and_then(rpptx::ShapeMut::into_table_mut)
-            .and_then(|table| table.into_cell_mut(row, cell))
+        let mut presentation = self.presentation.borrow_mut(py);
+        cell_mut_at(&mut presentation.inner, &self.path)
             .map(|mut cell| cell.set_text(value))
-            .ok_or_else(|| PyIndexError::new_err("cell index out of range"))
+            .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?;
+        presentation.text_revisions.bump();
+        Ok(())
     }
 
     /// Merges the rectangle between this cell and `other_cell`, moving the
@@ -652,13 +658,17 @@ impl PyCell {
             return Err(PyIndexError::new_err("cell index is missing"));
         };
         self.edit(py, |cell| cell.merge_to(row, column))?
-            .map_err(|error| rpptx_to_pyerr(py, error))
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        self.presentation.borrow_mut(py).text_revisions.bump();
+        Ok(())
     }
 
     /// Splits this merge origin back into its grid cells.
     fn split(&self, py: Python<'_>) -> PyResult<()> {
         self.edit(py, |cell| cell.split())?
-            .map_err(|error| rpptx_to_pyerr(py, error))
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        self.presentation.borrow_mut(py).text_revisions.bump();
+        Ok(())
     }
 
     #[getter]

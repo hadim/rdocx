@@ -4689,3 +4689,285 @@ def test_issue_158_deck_fixture_acceptance(tmp_path):
         close = sum(max(errors[offset:offset + 3]) <= 24 for offset in range(0, len(errors), 3))
         assert close / (len(errors) / 3) >= min_close, label
         assert sum(errors) / len(errors) <= max_mean, label
+
+
+def test_table_cells_expose_the_same_editable_text_frame_surface_as_shapes():
+    from rpptx import Presentation
+    from rpptx.util import Inches
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    table = slide.shapes.add_table(2, 2, 0, 0, Inches(4), Inches(2)).table
+    cell = table.cell(0, 0)
+    frame = cell.text_frame
+    frame.text = "Cell text"
+    assert cell.text == "Cell text"
+    assert len(cell.text_frame.paragraphs) == 1
+
+
+def _f_x194_table():
+    from rpptx import Presentation, Inches
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    return prs, slide.shapes.add_table(2, 2, 0, 0, Inches(4), Inches(2)).table
+
+
+def test_cell_text_frame_structural_edits_stale_every_earlier_nested_handle():
+    from rpptx import StaleElementError
+    prs, table = _f_x194_table()
+    cell = table.cell(0, 0)
+    cell.text = "seed"
+    frame = cell.text_frame
+    paragraphs = frame.paragraphs
+    paragraph = paragraphs[0]
+    runs = paragraph.runs
+    run = runs[0]
+    font = run.font
+    other = table.cell(1, 1).text_frame
+    cell.text = "changed"
+    for operation in (lambda: frame.text, lambda: len(paragraphs), lambda: paragraph.text,
+                      lambda: len(runs), lambda: run.text, lambda: font.bold,
+                      lambda: other.text):
+        with pytest.raises(StaleElementError, match="Cell-text topology"):
+            operation()
+    assert cell.text == "changed"
+    assert len(table.rows) == 2
+    frame = cell.text_frame
+    new_paragraph = frame.add_paragraph()
+    assert new_paragraph.text == ""
+    with pytest.raises(StaleElementError):
+        _ = frame.text
+    fresh_frame = cell.text_frame
+    new_run = new_paragraph.add_run("new run")
+    assert new_run.text == "new run"
+    with pytest.raises(StaleElementError):
+        _ = new_paragraph.text
+    with pytest.raises(StaleElementError):
+        _ = fresh_frame.text
+    paragraph = cell.text_frame.paragraphs[0]
+    paragraph.text = "replacement"
+    with pytest.raises(StaleElementError):
+        _ = paragraph.text
+    assert cell.text.startswith("replacement")
+    assert prs.slides[0].shapes[0].table.cell(0, 0).text == cell.text
+
+
+def test_cell_text_topology_failures_and_no_match_preserve_source_and_handles():
+    from rpptx import ReplacementCountError
+    prs, table = _f_x194_table()
+    cell = table.cell(0, 0)
+    cell.text = "needle"
+    frame = cell.text_frame
+    paragraph = frame.paragraphs[0]
+    before = prs.to_bytes()
+    assert frame.try_replace_text("absent", "other", expect=0) == 0
+    with pytest.raises(ReplacementCountError):
+        frame.try_replace_text("needle", "other", expect=2)
+    with pytest.raises(Exception, match="empty"):
+        frame.try_replace_text("", "other")
+    with pytest.raises(Exception):
+        cell.merge(cell)
+    with pytest.raises(Exception):
+        cell.split()
+    assert prs.to_bytes() == before
+    assert paragraph.text == "needle"
+    assert frame.text == "needle"
+    assert frame.try_replace_text("needle", "other", expect=1) == 1
+    from rpptx import StaleElementError
+    with pytest.raises(StaleElementError):
+        _ = paragraph.text
+    assert cell.text == "other"
+
+
+def test_cell_text_frame_edits_preserve_merge_origin_and_continuation_ownership():
+    from rpptx import StaleElementError
+    prs, table = _f_x194_table()
+    origin, continuation = table.cell(0, 0), table.cell(0, 1)
+    origin.text = "origin"
+    continuation.text = "continuation"
+    old = continuation.text_frame
+    origin.merge(continuation)
+    with pytest.raises(StaleElementError):
+        _ = old.text
+    assert continuation.is_spanned
+    continuation.text = "explicit continuation"
+    assert continuation.text_frame.text == "explicit continuation"
+    assert "explicit continuation" not in origin.text_frame.text
+    old = origin.text_frame
+    origin.split()
+    with pytest.raises(StaleElementError):
+        _ = old.text
+    assert not continuation.is_spanned
+    assert table.cell(1, 1).text == ""
+    assert len(prs.slides[0].shapes[0].table.rows) == 2
+
+
+def test_cell_text_value_edits_retain_handles_and_global_structure_stales_them():
+    from rpptx import StaleElementError, Pt
+    from rpptx.enum.text import MSO_ANCHOR
+    prs, table = _f_x194_table()
+    cell = table.cell(0, 0)
+    cell.text = "value"
+    frame = cell.text_frame
+    p = frame.paragraphs[0]
+    run = p.runs[0]
+    font = run.font
+    run.text = "changed"
+    font.bold = True
+    font.size = Pt(18)
+    p.space_after = Pt(4)
+    frame.vertical_anchor = MSO_ANCHOR.MIDDLE
+    frame.word_wrap = True
+    assert frame.text == p.text == run.text == "changed"
+    assert font.bold is True
+    assert frame.vertical_anchor == MSO_ANCHOR.MIDDLE
+    prs.slides.add_slide(prs.slide_layouts[6])
+    for operation in (lambda: cell.text, lambda: frame.text, lambda: p.text,
+                      lambda: run.text, lambda: font.bold):
+        with pytest.raises(StaleElementError):
+            operation()
+
+
+def test_cell_hyperlink_assignment_rejects_before_relationship_mutation():
+    prs, table = _f_x194_table()
+    cell = table.cell(0, 0)
+    cell.text = "link"
+    hyperlink = cell.text_frame.paragraphs[0].runs[0].hyperlink
+    assert hyperlink.address is None
+    before = prs.to_bytes()
+    for value in ("https://example.com", None, ""):
+        with pytest.raises(ValueError, match="cell hyperlink assignment"):
+            hyperlink.address = value
+        assert prs.to_bytes() == before
+        assert hyperlink.address is None
+
+
+def test_cell_text_frame_getter_and_missing_body_failures_do_not_materialize_source():
+    from rpptx import Presentation, ReplacementCountError
+    prs, _ = _f_x194_table()
+    out = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(prs.to_bytes())) as source, zipfile.ZipFile(out, "w") as target:
+        for member in source.infolist():
+            data = source.read(member.filename)
+            if member.filename == "ppt/slides/slide1.xml":
+                data, count = re.subn(rb"<a:txBody\b[^>]*>.*?</a:txBody>", b"", data, count=1, flags=re.S)
+                assert count == 1
+            target.writestr(member, data)
+    prs = Presentation.from_bytes(out.getvalue())
+    cell = prs.slides[0].shapes[0].table.cell(0, 0)
+    before = prs.to_bytes()
+    frame = cell.text_frame
+    assert frame.autofit is None
+    assert frame.try_replace_text("absent", "replacement", expect=0) == 0
+    with pytest.raises(ReplacementCountError):
+        frame.try_replace_text("absent", "replacement", expect=1)
+    with pytest.raises(Exception, match="empty"):
+        frame.try_replace_text("", "replacement")
+    assert prs.to_bytes() == before
+    cell.text = "materialized by edit"
+    assert cell.text_frame.text == "materialized by edit"
+
+
+def test_cell_text_frame_edits_reach_pdf_and_raster_output(tmp_path):
+    import subprocess
+    from PIL import Image
+    from rpptx import Presentation, Pt
+    from rpptx.enum.text import PP_ALIGN, MSO_ANCHOR
+    prs, table = _f_x194_table()
+    cell = table.cell(0, 0)
+    cell.text = "F-X194 first"
+    p = cell.text_frame.paragraphs[0]
+    run = p.runs[0]
+    run.font.name = "Liberation Sans"
+    run.font.size = Pt(20)
+    run.font.bold = True
+    run.font.color = "CC0000"
+    p.alignment = PP_ALIGN.CENTER
+    p.line_spacing = 1.2
+    p.space_before = Pt(2)
+    p.space_after = Pt(3)
+    frame = cell.text_frame
+    frame.vertical_anchor = MSO_ANCHOR.MIDDLE
+    frame.word_wrap = True
+    p2 = frame.add_paragraph()
+    r2 = p2.add_run("F-X194 second")
+    r2.font.name = "Liberation Sans"
+    r2.font.size = Pt(18)
+    reopened = Presentation.from_bytes(prs.to_bytes())
+    cell = reopened.slides[0].shapes[0].table.cell(0, 0)
+    assert cell.text == "F-X194 first\nF-X194 second"
+    p = cell.text_frame.paragraphs[0]
+    assert p.runs[0].font.size == Pt(20)
+    assert p.runs[0].font.bold is True
+    assert p.runs[0].font.color == "CC0000"
+    assert p.alignment == PP_ALIGN.CENTER
+    assert p.space_before == Pt(2) and p.space_after == Pt(3)
+    assert cell.text_frame.word_wrap is True
+    pdf = tmp_path / "cell.pdf"
+    pdf.write_bytes(reopened.to_pdf())
+    extracted = subprocess.check_output(["pdftotext", str(pdf), "-"], text=True)
+    assert "F-X194 first" in extracted and "F-X194 second" in extracted
+    png = reopened.render_slide_to_png(0, dpi=72)
+    image = Image.open(io.BytesIO(png)).convert("RGB")
+    assert any(red > green + 40 and red > blue + 40 for red, green, blue in image.getdata())
+
+
+def test_grouped_table_cell_frame_resolves_and_imported_hyperlink_reads():
+    import xml.etree.ElementTree as ET
+    from rpptx import Presentation, Pt
+    prs, table = _f_x194_table()
+    table.cell(0, 0).text = "Grouped link"
+    pns = "http://schemas.openxmlformats.org/presentationml/2006/main"
+    ans = "http://schemas.openxmlformats.org/drawingml/2006/main"
+    rns = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    # Keep the fixture on the existing canonical-prefix parser contract.
+    ET.register_namespace("p", pns)
+    ET.register_namespace("a", ans)
+    ET.register_namespace("r", rns)
+    ET.register_namespace("", "http://schemas.openxmlformats.org/package/2006/relationships")
+    out = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(prs.to_bytes())) as source, zipfile.ZipFile(out, "w") as target:
+        for member in source.infolist():
+            data = source.read(member.filename)
+            if member.filename == "ppt/slides/slide1.xml":
+                root = ET.fromstring(data)
+                tree = root.find(".//{" + pns + "}spTree")
+                table_node = tree.find("{" + pns + "}graphicFrame")
+                tree.remove(table_node)
+                group = ET.SubElement(tree, "{" + pns + "}grpSp")
+                nv = ET.SubElement(group, "{" + pns + "}nvGrpSpPr")
+                ET.SubElement(nv, "{" + pns + "}cNvPr", id="10", name="Cell owner group")
+                ET.SubElement(nv, "{" + pns + "}cNvGrpSpPr")
+                ET.SubElement(nv, "{" + pns + "}nvPr")
+                props = ET.SubElement(group, "{" + pns + "}grpSpPr")
+                xfrm = ET.SubElement(props, "{" + ans + "}xfrm")
+                for tag, attrs in (("off", {"x":"0", "y":"0"}), ("ext", {"cx":"3657600", "cy":"1828800"}),
+                                   ("chOff", {"x":"0", "y":"0"}), ("chExt", {"cx":"3657600", "cy":"1828800"})):
+                    ET.SubElement(xfrm, "{" + ans + "}" + tag, attrs)
+                group.append(table_node)
+                run = table_node.find(".//{" + ans + "}r")
+                rp = run.find("{" + ans + "}rPr")
+                if rp is None:
+                    rp = ET.Element("{" + ans + "}rPr")
+                    run.insert(0, rp)
+                ET.SubElement(rp, "{" + ans + "}hlinkClick", {"{" + rns + "}id":"rIdCellLink"})
+                data = ET.tostring(root)
+            elif member.filename == "ppt/slides/_rels/slide1.xml.rels":
+                root = ET.fromstring(data)
+                ET.SubElement(root, "{http://schemas.openxmlformats.org/package/2006/relationships}Relationship",
+                              Id="rIdCellLink", Type=rns + "/hyperlink", Target="https://example.com/grouped", TargetMode="External")
+                data = ET.tostring(root)
+            target.writestr(member, data)
+    prs = Presentation.from_bytes(out.getvalue())
+    table = prs.slides[0].shapes[0].shapes[0].table
+    cell = table.cell(0, 0)
+    frame = cell.text_frame
+    run = frame.paragraphs[0].runs[0]
+    assert run.hyperlink.address == "https://example.com/grouped"
+    run.font.size = Pt(17)
+    run.text = "Grouped edited"
+    assert frame.text == "Grouped edited"
+    reopened = Presentation.from_bytes(prs.to_bytes())
+    cell = reopened.slides[0].shapes[0].shapes[0].table.cell(0, 0)
+    assert cell.text == "Grouped edited"
+    assert cell.text_frame.paragraphs[0].runs[0].font.size == Pt(17)

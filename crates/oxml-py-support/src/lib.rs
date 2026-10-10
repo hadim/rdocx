@@ -31,12 +31,18 @@ pub struct ContentPath {
     pub segs: SmallVec<[PathSeg; 5]>,
     /// Document revision at handle creation.
     pub revision: u64,
+    /// Optional cell-text generation inherited by nested presentation handles.
+    pub text_revision: Option<u64>,
 }
 
 impl ContentPath {
     /// Capture a path at `revision`.
     pub const fn new(segs: SmallVec<[PathSeg; 5]>, revision: u64) -> Self {
-        Self { segs, revision }
+        Self {
+            segs,
+            revision,
+            text_revision: None,
+        }
     }
 
     /// Reject a handle captured before or after `current_revision`.
