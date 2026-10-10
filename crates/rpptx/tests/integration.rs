@@ -28116,3 +28116,39 @@ fn connector_added_inside_a_rotated_flipped_scaled_group_matches_libreoffice() {
     }
     fs::remove_dir_all(root).unwrap();
 }
+
+#[test]
+fn an_unresolvable_group_member_is_named_and_its_siblings_still_draw() {
+    let presentation = rotated_flipped_scaled_group_with_connector(true, true);
+    let pixels = powerpoint_group_pixels(&presentation, &ROTATED_GROUP_PROBES);
+    let (input, layout) = presentation.render_deterministic().unwrap();
+    let slide = &input.slides[0];
+    let unsupported = slide
+        .shapes
+        .iter()
+        .map(|shape| shape.unsupported)
+        .collect::<Vec<_>>();
+    assert_eq!(unsupported, [None, Some("unresolved shape"), None]);
+    let messages = slide
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.message.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(messages.len(), 1, "{messages:?}");
+    assert!(
+        messages[0].starts_with(r#"unresolved slide shape 4 "Shape 4" retained as bounds: "#)
+            && messages[0].contains("99"),
+        "{messages:?}"
+    );
+    let png = oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap();
+    let colours = pixels
+        .iter()
+        .map(|pixel| primary_at(&png, *pixel))
+        .collect::<Vec<_>>();
+    // The blue rectangle keeps only its outline, so its centre is white.
+    assert_eq!(colours, [Some('r'), None, Some('g')], "{pixels:?}");
+    // The deck saves unchanged and the same failure is reported again.
+    let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
+    let (input, _) = reopened.render_deterministic().unwrap();
+    assert_eq!(input.slides[0].diagnostics, slide.diagnostics);
+}

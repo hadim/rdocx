@@ -229,7 +229,10 @@ static preview, unknown graphic frames,
 connectors with absent, unknown, or failed geometry,
 image media pending relationship resolution, preset geometry pending
 evaluation, and fill forms that the backend-neutral paint model cannot
-represent exactly. A connector preset uses the same generated preset evaluator
+represent exactly. A shape whose style, colour, or geometry fails to resolve
+stays visible the same way, as `unresolved shape`, with a diagnostic that names
+its source, `p:cNvPr` id, and name, so its group siblings and the rest of its
+slide still render. A connector preset uses the same generated preset evaluator
 as an ordinary shape and retains its transform, direct line, fill, and
 arrowheads. Connector custom geometry reuses the same checked DrawingML path
 evaluator as ordinary shape custom geometry. A horizontal or vertical
