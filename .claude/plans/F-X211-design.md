@@ -1047,8 +1047,10 @@ local values, and contributor tests or CI provide no local acceptance credit.
 [PR338](https://github.com/tensorbee/rdocx/pull/338), immutable initial head
 `c189dbd73b9a61543ed64a03d2305d0017bbf498`, closes existing Issue337 and
 remains F-X211. The09:35:24UTC root-authenticated refresh captures its body
-and stacked-on-PR336 ancestry. Complete source/discussion capture and
-independent assessment are in progress, with no implementation acceptance.
+and stacked-on-PR336 ancestry. Complete source/discussion capture and independent assessment are
+authenticated, with no implementation acceptance. Root checked all53 source
+records against Git blob identity, decoded bytes, SHA-256, modes and complete
+trees, and inspected the exact nine-path delta from PR336.
 Its proposed one-body ownership, namespace lookup ordering and measured
 resource bounds are useful evidence to assess against the existing contract.
 
@@ -1062,5 +1064,31 @@ block-control text-box discovery and drawing-local namespace story extraction
 need distinguishing controls under the full existing Issue337 owner contract.
 
 PR333 also advanced to `193819ca0a1dcf3415017c0be1186fe8df6bcb86`. Its
-previous authenticated assessment remains retained. The new delta is queued
-for complete immutable assessment before source adoption. No new F-ID.
+previous authenticated assessment remains retained. Root authenticated all202 source records, full ancestry and complete trees.
+The incremental change is one HLD10 prose punctuation correction, with no
+production, test, carrier or API delta. Reuse the prior b228d5d assessment
+without repeating implementation. No new F-ID.
+
+## PR338 independent source assessment, 2026-10-10
+
+Root authenticated both immutable source capsules and inspected the exact
+incremental diffs. Receipts and assessments are retained in
+`/private/tmp/S91-PR338-c189dbd-intake` and
+`/private/tmp/S91-PR333-193819c-intake`. Independent authentication is recorded
+in the09:35:24UTC refresh directory. Issue337 remains owned once by F-X211.
+
+Adapt one authoritative text-box body and cheap qualified eligibility before
+namespace scans, while preserving the public CT_Shape.text contract. The
+contributed boxed iterator adds indirection without a second implementation.
+Avoid it. Repeated raw subtree capture followed by recursive reparsing still
+needs linear retained-memory and traversal proof. Qualified admission must
+precede capture and recursion, not run only after a fragment is allocated.
+
+The proposed local-name quota counts foreign or rebound elements. Retain the
+approved inclusive256 qualified control boundary and independently measured
+text-box and combined budget. Cover block controls containing text boxes and
+drawing-local namespace declarations under the existing full story contract.
+An in-process2000-depth test and contributor release timing do not replace
+bounded native, installed CLI and Python subprocess refusal controls, ordinary
+consumer stacks and accepted-boundary release measurements. Archive tuples
+and CI are foreign evidence, not local verification.
