@@ -6123,6 +6123,13 @@ def test_python_pptx_values_that_would_write_a_wrong_file_raise():
     with pytest.raises(ValueError, match="would hold 0"):
         paragraph.space_after = 6
     paragraph.space_after = Pt(6)
+    paragraph.line_spacing = 1.5
+    for interline in [0, 0.0, -1, -0.5, Pt(0), Pt(-1), float("nan")]:
+        with pytest.raises(ValueError, match=re.escape("line_spacing must be a positive multiple such as 1.5 or a length such as Pt(18)")):
+            paragraph.line_spacing = interline
+    with pytest.raises(TypeError, match="line_spacing takes a multiple"):
+        paragraph.line_spacing = True
+    assert paragraph.line_spacing == 1.5
     with pytest.raises(ValueError, match="to_pdf"):
         prs.save("deck.pdf")
     with pytest.raises(AttributeError, match="font.color = RGBColor"):
@@ -6177,6 +6184,68 @@ def test_raw_xml_refuses_xml_powerpoint_refuses_or_repairs():
         "<p:txBody><a:bodyPr/><a:p><a:r><a:t><![CDATA[<a> & b]]></a:t></a:r></a:p></p:txBody>"
     )
     assert prs.slides[0].shapes[0].text_frame.text == "<a> & b"
+
+
+def test_raw_xml_refuses_unknown_elements_at_any_depth():
+    import rpptx
+
+    prs = rpptx.Presentation()
+    prs.slides.add_slide(prs.slide_layouts[6])
+    prs.slides[0].shapes.add_textbox(0, 0, 914400, 914400)
+    prs.slides[0].shapes[0].text_frame.text = "keep"
+    before = prs.to_bytes()
+    shape = prs.slides[0].shapes[0]
+    xml = shape.xml.decode()
+    body = shape.text_frame.xml.decode()
+    slide = prs.slides[0].xml.decode()
+    layout = prs.slide_layouts[0].xml.decode()
+    bogus = "<a:bogusElement/>"
+    for target, replacement, parent in [
+        (shape, xml.replace("<a:p>", "<a:p>" + bogus, 1), "a:p"),
+        (shape, xml.replace("<a:p>", "<a:p><a:pPr>" + bogus + "</a:pPr>", 1), "a:pPr"),
+        (
+            shape,
+            xml.replace("<a:p>", '<a:p><a:pPr><a:lnSpc><a:spcPct val="90000"/>' + bogus + "</a:lnSpc></a:pPr>", 1),
+            "a:lnSpc",
+        ),
+        (shape, xml.replace("<a:bodyPr/>", "<a:bodyPr>" + bogus + "</a:bodyPr>", 1), "a:bodyPr"),
+        (shape, xml.replace("<a:lstStyle/>", "<a:lstStyle>" + bogus + "</a:lstStyle>", 1), "a:lstStyle"),
+        (shape, xml.replace("<a:t>keep</a:t>", "<a:t>keep" + bogus + "</a:t>", 1), "a:t"),
+        (shape, xml.replace("<a:t>", '<a:rPr lang="en-US"><a:solidFill><a:srgbClr val="FF0000">' + bogus + "</a:srgbClr></a:solidFill></a:rPr><a:t>", 1), "a:srgbClr"),
+        (shape, xml.replace("<a:off ", bogus + "<a:off ", 1), "a:xfrm"),
+        (shape, xml.replace("<a:avLst/>", "<a:avLst>" + bogus + "</a:avLst>", 1), "a:avLst"),
+        (shape, xml.replace("<p:spPr>", "<p:spPr>" + bogus, 1), "p:spPr"),
+        (shape, xml.replace("<p:nvPr/>", "<p:nvPr><p:bogusElement/></p:nvPr>", 1), "p:nvPr"),
+        (shape.text_frame, body.replace("<a:p>", "<a:p><a:pPr>" + bogus + "</a:pPr>", 1), "a:pPr"),
+        (prs.slides[0], slide.replace("<a:bodyPr/>", "<a:bodyPr>" + bogus + "</a:bodyPr>", 1), "a:bodyPr"),
+        (
+            prs.slides[0],
+            slide.replace("<p:cSld>", '<p:cSld><p:bg><p:bgPr><a:noFill/>' + bogus + "</p:bgPr></p:bg>", 1),
+            "p:bgPr",
+        ),
+        (prs.slide_layouts[0], re.sub(r"(<a:off [^>]*/>)", r"\1" + bogus, layout, count=1), "a:xfrm"),
+    ]:
+        with pytest.raises(ValueError, match=re.escape(f"cannot sit directly in {parent}")):
+            target.replace_xml(replacement)
+    assert prs.to_bytes() == before
+    # Alternate content and elements mc:Ignorable covers stay allowed at any
+    # depth, and so does schema-valid nesting.
+    accepted = xml.replace("<p:sp ", '<p:sp xmlns:x14="urn:example:x14" mc:Ignorable="x14" ', 1).replace(
+        "<a:p>",
+        "<a:p><a:pPr><x14:future/>"
+        '<mc:AlternateContent><mc:Choice Requires="x14"><x14:other/></mc:Choice></mc:AlternateContent>'
+        '<a:lnSpc><a:spcPct val="90000"/></a:lnSpc><a:buFont typeface="Arial"/><a:buChar char="-"/></a:pPr>',
+        1,
+    )
+    accepted = accepted.replace(
+        "<a:noFill/></p:spPr>",
+        '<a:solidFill><a:schemeClr val="accent1"><a:lumMod val="75000"/></a:schemeClr></a:solidFill>'
+        '<a:ln w="12700"><a:solidFill><a:srgbClr val="000000"/></a:solidFill><a:prstDash val="dash"/></a:ln>'
+        "</p:spPr>",
+        1,
+    )
+    prs.slides[0].shapes[0].replace_xml(accepted)
+    assert prs.slides[0].shapes[0].text_frame.text == "keep"
 
 
 def test_notes_slide_creates_notes_and_presentations_use_streams():

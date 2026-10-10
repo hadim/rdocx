@@ -922,13 +922,32 @@ impl PyParagraph {
 
     #[setter]
     fn set_line_spacing(&self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        const NOT_POSITIVE: &str =
+            "line_spacing must be a positive multiple such as 1.5 or a length such as Pt(18)";
+        // As in rdocx, an interline of zero or less would collapse the
+        // lines onto each other, so it is refused rather than written.
         let spacing = match value {
             None => None,
             Some(value) if value.is_none() => None,
             Some(value) if value.is_instance(&py.import("rpptx")?.getattr("Length")?)? => {
-                Some(points_spacing(value.extract()?)?)
+                let emu: i64 = value.extract()?;
+                if emu <= 0 {
+                    return Err(PyValueError::new_err(NOT_POSITIVE));
+                }
+                Some(points_spacing(emu)?)
             }
-            Some(value) => Some(lines_spacing(value.extract()?)?),
+            Some(value) if value.is_instance_of::<PyBool>() => {
+                return Err(PyTypeError::new_err(
+                    "line_spacing takes a multiple such as 1.5 or a length such as Pt(18)",
+                ));
+            }
+            Some(value) => {
+                let lines: f64 = value.extract()?;
+                if !(lines.is_finite() && lines > 0.0) {
+                    return Err(PyValueError::new_err(NOT_POSITIVE));
+                }
+                Some(lines_spacing(lines)?)
+            }
         };
         self.update(py, |properties| properties.line_spacing = spacing)
     }
