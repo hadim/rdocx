@@ -7933,11 +7933,10 @@ Pedro Assumpcao and the rdocx maintainers.
                 else len(sprint_plan)
             )
             section = sprint_plan[marker.start() : end]
-            for fid, title, size in re.findall(
-                r"^\| (F-\d{3}) \| ([^|]+?) \| ([SML]) \|$",
-                section,
-                re.MULTILINE,
-            ):
+            row_pattern = r"^\| (F-\d{3}) \| ([^|]+?) \| ([SML]) \|$"
+            if "| F-ID | Title | Size | Delivery status |" in section:
+                row_pattern = row_pattern.removesuffix("$") + r" [^|\n]+ \|$"
+            for fid, title, size in re.findall(row_pattern, section, re.MULTILINE):
                 if fid in placements:
                     placements[fid].append((int(marker.group(1)), title.strip(), size))
         self.assertTrue(all(value for value in placements.values()))
