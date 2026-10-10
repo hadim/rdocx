@@ -1041,3 +1041,26 @@ No new contributed raw_xml module is authorized. The ten-name/fourteen-case
 matrix, inclusive256 control-depth policy and Issue337 bounded text-box
 acceptance remain. Contributor archive tuples must be replaced by measured
 local values, and contributor tests or CI provide no local acceptance credit.
+
+## PR338 rolling intake for Issue337
+
+[PR338](https://github.com/tensorbee/rdocx/pull/338), immutable initial head
+`c189dbd73b9a61543ed64a03d2305d0017bbf498`, closes existing Issue337 and
+remains F-X211. The09:35:24UTC root-authenticated refresh captures its body
+and stacked-on-PR336 ancestry. Complete source/discussion capture and
+independent assessment are in progress, with no implementation acceptance.
+Its proposed one-body ownership, namespace lookup ordering and measured
+resource bounds are useful evidence to assess against the existing contract.
+
+Do not copy public CT_Shape.text behavior changes,16-text-box/64-mixed limits
+or weight4 by intake. Preserve approved qualified256 control admission until
+actual independent resource measurements and compatibility review justify
+the final text-box and combined bounds. Reconcile the two new commits once
+against the existing PR336 provider work. Contributor CI, timing and stack
+claims are foreign evidence, not local completion proof. The reported missing
+block-control text-box discovery and drawing-local namespace story extraction
+need distinguishing controls under the full existing Issue337 owner contract.
+
+PR333 also advanced to `193819ca0a1dcf3415017c0be1186fe8df6bcb86`. Its
+previous authenticated assessment remains retained. The new delta is queued
+for complete immutable assessment before source adoption. No new F-ID.

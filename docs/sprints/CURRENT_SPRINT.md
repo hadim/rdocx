@@ -481,3 +481,14 @@ F-X211/Issue316 respectively. Existing plans now include spacing boundary and
 atomicity controls, default story styles, and qualified XML context controls.
 No duplicate story, contributor gate credit or completion is created. Full
 immutable heads and evidence are recorded in those three canonical plans.
+
+## PR338 and further PR333 head intake
+
+The09:35:24UTC refresh contains19 open PRs and26 included issues. Issues264
+and281 remain excluded. NewPR338 atc189dbd73b9a61543ed64a03d2305d0017bbf498
+closes existing Issue337 and joins F-X211, including its stacked PR336 work
+once. PR333 advanced to193819ca0a1dcf3415017c0be1186fe8df6bcb86 and retains
+F-X211/Issue316. Complete immutable source and discussion assessment is
+underway. Intake grants no contributor gate credit or arbitrary new nesting
+policy. The approved256 control policy and complete textbox resource,
+namespace, discovery and public compatibility acceptance remain mandatory.

@@ -2173,9 +2173,9 @@ sprint review and verified sprint close remain outstanding.
 **Resolution scope**: resolve every open issue and PR except
 [Issue264](https://github.com/tensorbee/rdocx/issues/264) and
 [Issue281](https://github.com/tensorbee/rdocx/issues/281). Keep those two open as
-requirements discussions. At 2026-10-10 09:19:23 UTC, the refreshed inventory
-contains eighteen open PRs and twenty-eight open issues, including the two
-exclusions. All twenty-six included issues and eighteen PRs map below.
+requirements discussions. At 2026-10-10 09:35:24 UTC, the refreshed inventory
+contains nineteen open PRs and twenty-eight open issues, including the two
+exclusions. All twenty-six included issues and nineteen PRs map below.
 A later PR attaches to its existing issue owner. Assessment is not completion.
 
 | Included issues | Included PRs | S91 acceptance owners | Resolution work |
@@ -2199,7 +2199,7 @@ A later PR attaches to its existing issue owner. Assessment is not completion.
 | [312](https://github.com/tensorbee/rdocx/issues/312) | [327](https://github.com/tensorbee/rdocx/pull/327) | F-X209 | Masters, layouts and themes after F-X208. |
 | [313](https://github.com/tensorbee/rdocx/issues/313) | [319](https://github.com/tensorbee/rdocx/pull/319) | F-X210, consumes F-X195 | Approved metric-compatible fonts and bullet fallbacks, including the approved 3968-byte checkbox subset. |
 | [314](https://github.com/tensorbee/rdocx/issues/314) | Contributions above | All applicable S91 owners | Umbrella checklist, each provider credited once. |
-| [316](https://github.com/tensorbee/rdocx/issues/316), [331](https://github.com/tensorbee/rdocx/issues/331), [337](https://github.com/tensorbee/rdocx/issues/337) | [333](https://github.com/tensorbee/rdocx/pull/333), [336](https://github.com/tensorbee/rdocx/pull/336) | F-X211, consumes completed providers | Frozen script corpus, safe XML, residual handles and bounded native control/text-box parsing. |
+| [316](https://github.com/tensorbee/rdocx/issues/316), [331](https://github.com/tensorbee/rdocx/issues/331), [337](https://github.com/tensorbee/rdocx/issues/337) | [333](https://github.com/tensorbee/rdocx/pull/333), [336](https://github.com/tensorbee/rdocx/pull/336), [338](https://github.com/tensorbee/rdocx/pull/338) | F-X211, consumes completed providers | Frozen script corpus, safe XML, residual handles and bounded native control/text-box parsing. |
 
 PR317 spans several owners and is reconciled once across their accepted
 slices. PR326 and PR335 share group-transform changes, adopted once in F-X206.
@@ -2862,3 +2862,14 @@ F-X211/Issue316 respectively. Existing plans now include spacing boundary and
 atomicity controls, default story styles, and qualified XML context controls.
 No duplicate story, contributor gate credit or completion is created. Full
 immutable heads and evidence are recorded in those three canonical plans.
+
+## PR338 and further PR333 head intake
+
+The09:35:24UTC refresh contains19 open PRs and26 included issues. Issues264
+and281 remain excluded. NewPR338 atc189dbd73b9a61543ed64a03d2305d0017bbf498
+closes existing Issue337 and joins F-X211, including its stacked PR336 work
+once. PR333 advanced to193819ca0a1dcf3415017c0be1186fe8df6bcb86 and retains
+F-X211/Issue316. Complete immutable source and discussion assessment is
+underway. Intake grants no contributor gate credit or arbitrary new nesting
+policy. The approved256 control policy and complete textbox resource,
+namespace, discovery and public compatibility acceptance remain mandatory.
