@@ -12835,6 +12835,15 @@ fn record_external_prefix_used(
     external_bindings: &[(String, String)],
     required: &mut Vec<String>,
 ) {
+    // The scope walk is linear in the element's depth, so it runs last, only
+    // for a prefix that could still be required.
+    if !external_bindings
+        .iter()
+        .any(|(candidate, _)| candidate == prefix)
+        || required.iter().any(|candidate| candidate == prefix)
+    {
+        return;
+    }
     let internally_bound = declarations
         .iter()
         .rev()
@@ -12843,12 +12852,7 @@ fn record_external_prefix_used(
             .iter()
             .rev()
             .any(|scope| scope.iter().rev().any(|(candidate, _)| candidate == prefix));
-    if !internally_bound
-        && external_bindings
-            .iter()
-            .any(|(candidate, _)| candidate == prefix)
-        && !required.iter().any(|candidate| candidate == prefix)
-    {
+    if !internally_bound {
         required.push(prefix.to_owned());
     }
 }
@@ -14279,8 +14283,10 @@ mod tests {
             Some("729FCF"),
             "the fill colour must win over the outline colour"
         );
-        assert_eq!(shape.text.len(), 1);
-        assert_eq!(shape.text[0].text(), "boxed");
+        assert!(shape.text.is_empty(), "a parsed shape keeps one copy");
+        let paragraphs: Vec<_> = shape.paragraphs().collect();
+        assert_eq!(paragraphs.len(), 1);
+        assert_eq!(paragraphs[0].text(), "boxed");
 
         // The fragment API supplies canonical w, but explicit foreign rebinding
         // must override that fallback at either the owner or paragraph boundary.
@@ -14303,7 +14309,7 @@ mod tests {
                 .as_ref()
                 .unwrap();
             assert!(
-                shape.text.is_empty(),
+                shape.paragraphs().next().is_none(),
                 "explicit foreign Word prefix is not admitted"
             );
             assert!(shape.text_body.as_ref().is_none_or(|body| {

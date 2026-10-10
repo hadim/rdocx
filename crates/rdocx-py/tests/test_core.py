@@ -5856,3 +5856,19 @@ def test_added_header_and_footer_paragraphs_take_the_header_and_footer_styles(na
         slot = getattr(plain.sections[0], attribute)
         assert slot.add_paragraph(attribute).style is None, attribute
         assert _story_paragraph_styles(plain, attribute) == [None, None]
+
+
+def test_deeply_nested_text_boxes_raise_instead_of_crashing():
+    import rdocx
+
+    depth = 2000
+    body = (
+        '<w:p><w:r><w:pict><v:shape xmlns:v="urn:schemas-microsoft-com:vml">'
+        "<v:textbox><w:txbxContent>"
+        + "<w:p><w:r><w:pict><v:shape><v:textbox><w:txbxContent>" * depth
+        + "<w:p/>"
+        + "</w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>" * depth
+        + "</w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>"
+    )
+    with pytest.raises(rdocx.RdocxError, match="text box nesting exceeds 16 levels"):
+        _replace_document_body(rdocx.Document(), body)

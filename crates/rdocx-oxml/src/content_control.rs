@@ -6,7 +6,7 @@ use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::error::{OxmlError, Result};
-use crate::namespace::{W_NS, matches_local_name, nesting_exceeds};
+use crate::namespace::{W_NS, matches_local_name, nesting_exceeds, weighted_nesting_exceeds};
 use crate::numbering::{local_namespace_overrides, namespace_bindings, word_prefixes_at};
 use crate::properties::is_word_element;
 use crate::raw_xml::{capture_element, capture_empty_element};
@@ -1558,8 +1558,25 @@ fn set_nth_inline_legacy_form(
 /// of wasm32 and the 2 MB default of spawned Rust threads.
 const MAX_CONTENT_CONTROL_NESTING: usize = 64;
 
-/// Reject a story part whose content controls nest deeper than
-/// [`MAX_CONTENT_CONTROL_NESTING`] anywhere, without recursing.
+/// Deepest `w:txbxContent` nesting the readers accept.
+///
+/// Word does not put a text box inside another one. Each level runs the
+/// drawing, text box and body parsers and the story walks once more, which
+/// costs about 40 KB of stack in a release build. At this depth a release
+/// build loads, edits and saves a document within about 0.75 MB of stack,
+/// the same bound as for content controls.
+const MAX_TEXT_BOX_NESTING: usize = 16;
+
+/// How many content control levels a text box level counts for when the two
+/// nest inside each other, so that any mix stays within the stack bound of
+/// either kind alone.
+const TEXT_BOX_NESTING_WEIGHT: usize = MAX_CONTENT_CONTROL_NESTING / MAX_TEXT_BOX_NESTING;
+
+/// Reject a story part whose content controls or text boxes nest deeper than
+/// [`MAX_CONTENT_CONTROL_NESTING`] and [`MAX_TEXT_BOX_NESTING`] anywhere,
+/// without recursing. A mix of the two may not nest deeper than
+/// [`MAX_CONTENT_CONTROL_NESTING`], a text box counting for
+/// [`TEXT_BOX_NESTING_WEIGHT`] levels.
 ///
 /// The typed parser checks each control it reads, but a control inside
 /// content kept as raw XML, such as a text box, alternate content or a
@@ -1568,10 +1585,25 @@ const MAX_CONTENT_CONTROL_NESTING: usize = 64;
 /// those passes within the same bound.
 #[doc(hidden)]
 pub fn validate_story_part_nesting(xml: &[u8]) -> Result<()> {
+    if !weighted_nesting_exceeds(
+        xml,
+        &[(b"sdt", 1), (b"txbxContent", TEXT_BOX_NESTING_WEIGHT)],
+        MAX_CONTENT_CONTROL_NESTING,
+    ) {
+        return Ok(());
+    }
     if nesting_exceeds(xml, &[b"sdt"], MAX_CONTENT_CONTROL_NESTING) {
         return Err(content_control_nesting_error());
     }
-    Ok(())
+    if nesting_exceeds(xml, &[b"txbxContent"], MAX_TEXT_BOX_NESTING) {
+        return Err(OxmlError::InvalidValue(format!(
+            "text box nesting exceeds {MAX_TEXT_BOX_NESTING} levels"
+        )));
+    }
+    Err(OxmlError::InvalidValue(format!(
+        "content control and text box nesting exceeds {MAX_CONTENT_CONTROL_NESTING} levels, \
+         a text box counting for {TEXT_BOX_NESTING_WEIGHT}"
+    )))
 }
 
 fn content_control_nesting_error() -> OxmlError {
