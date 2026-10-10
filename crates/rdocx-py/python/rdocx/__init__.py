@@ -2,7 +2,7 @@
 
 from .enum.dml import MSO_COLOR_TYPE, MSO_THEME_COLOR
 from .enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_ROW_HEIGHT_RULE, WD_TABLE_ALIGNMENT
-from .enum.text import WD_ALIGN_PARAGRAPH, WD_UNDERLINE
+from .enum.text import WD_ALIGN_PARAGRAPH, WD_TAB_ALIGNMENT, WD_TAB_LEADER, WD_UNDERLINE
 from .shared import Cm, Emu, Inches, Length, Mm, Pt, RGBColor
 
 
@@ -84,6 +84,8 @@ from ._rdocx import (
     SvgRenderResult,
     Table,
     TableCollection,
+    TabStop,
+    TabStops,
     TocRebuildReport,
 )
 
@@ -140,10 +142,14 @@ __all__ = [
     "SvgRenderResult",
     "Table",
     "TableCollection",
+    "TabStop",
+    "TabStops",
     "TocRebuildReport",
     "WD_ALIGN_PARAGRAPH",
     "WD_CELL_VERTICAL_ALIGNMENT",
     "WD_ROW_HEIGHT_RULE",
+    "WD_TAB_ALIGNMENT",
+    "WD_TAB_LEADER",
     "WD_TABLE_ALIGNMENT",
     "WD_UNDERLINE",
     "XmlError",

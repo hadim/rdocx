@@ -19,7 +19,7 @@ use document::{
     PyRunPosition, PyRunRange, PySection, PyStory, PyStoryItem, PyStoryRunPosition,
     PyStoryRunRange, PyStyle, PySvgDiagnostic, PySvgRenderResult, PyTocRebuildReport,
 };
-use formatting::{PyColorFormat, PyFont, PyParagraphFormat};
+use formatting::{PyColorFormat, PyFont, PyParagraphFormat, PyTabStop, PyTabStops};
 use paragraph::{PyParagraph, PyParagraphCollection};
 use run::{PyRun, PyRunCollection};
 use table::{
@@ -201,6 +201,8 @@ fn _rdocx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyFont>()?;
     module.add_class::<PyColorFormat>()?;
     module.add_class::<PyParagraphFormat>()?;
+    module.add_class::<PyTabStop>()?;
+    module.add_class::<PyTabStops>()?;
     module.add_class::<PyTable>()?;
     module.add_class::<PyTableCollection>()?;
     module.add_class::<PyRow>()?;
