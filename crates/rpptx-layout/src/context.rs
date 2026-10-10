@@ -5347,6 +5347,7 @@ mod tests {
         assert_eq!(stats.decks, EXPECTED_CORPUS_DECKS);
         assert!(stats.slides > EXPECTED_CORPUS_DECKS);
         assert_eq!(stats.contextual_errors, 0, "{}", stats.errors.join("\n"));
+        assert_eq!(stats.unresolved_shapes, 0, "{}", stats.errors.join("\n"));
         assert_eq!(stats.resolved, stats.slides);
         assert_eq!(stats.theme_references, 0);
     }
@@ -7206,6 +7207,7 @@ mod tests {
 
         assert_eq!(stats.decks, EXPECTED_CORPUS_DECKS);
         assert_eq!(stats.contextual_errors, 0, "{}", stats.errors.join("\n"));
+        assert_eq!(stats.unresolved_shapes, 0, "{}", stats.errors.join("\n"));
         assert!(
             stats.preset_inputs > 0,
             "corpus exercised no preset geometry"
@@ -7225,6 +7227,7 @@ mod tests {
         slides: usize,
         resolved: usize,
         contextual_errors: usize,
+        unresolved_shapes: usize,
         theme_references: usize,
         preset_inputs: usize,
         preset_evaluated: usize,
@@ -7360,6 +7363,31 @@ mod tests {
                                 )
                             })
                             .count();
+                        // A shape that failed to resolve is kept as its bounds
+                        // with a diagnostic, so count it as the error it is.
+                        let unresolved = resolved
+                            .shapes
+                            .iter()
+                            .filter(|shape| shape.unsupported == Some("unresolved shape"))
+                            .count();
+                        if unresolved > 0 {
+                            stats.unresolved_shapes += unresolved;
+                            stats.errors.extend(
+                                resolved
+                                    .diagnostics
+                                    .iter()
+                                    .filter(|diagnostic| {
+                                        diagnostic.message.starts_with("unresolved ")
+                                    })
+                                    .map(|diagnostic| {
+                                        format!(
+                                            "{} {slide_part}: {}",
+                                            path.display(),
+                                            diagnostic.message
+                                        )
+                                    }),
+                            );
+                        }
                         stats.resolved += 1;
                     }
                     Err(error) => {
