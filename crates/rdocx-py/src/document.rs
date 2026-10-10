@@ -1553,6 +1553,10 @@ struct StyleFormatting {
     tab_stops: Option<rdocx_oxml::CT_Tabs>,
 }
 
+/// The `borders` keyword of `Document.add_style` and `Document.set_style`:
+/// an edge name to `(style, size in eighths of a point, colour)`.
+type StyleBorders<'py> = BTreeMap<String, (String, u32, Bound<'py, PyAny>)>;
+
 /// The keyword arguments `Document.add_style` and `Document.set_style`
 /// share, read from Python into the native types the style is written with.
 struct StyleArguments<'py> {
@@ -1574,7 +1578,7 @@ struct StyleArguments<'py> {
     keep_together: Option<bool>,
     page_break_before: Option<bool>,
     shading: Option<Bound<'py, PyAny>>,
-    borders: Option<BTreeMap<String, (String, u32, Bound<'py, PyAny>)>>,
+    borders: Option<StyleBorders<'py>>,
     tab_stops: Option<Vec<Bound<'py, PyAny>>>,
 }
 
@@ -4363,7 +4367,7 @@ impl PyDocument {
         keep_together: Option<bool>,
         page_break_before: Option<bool>,
         shading: Option<Bound<'_, PyAny>>,
-        borders: Option<BTreeMap<String, (String, u32, Bound<'_, PyAny>)>>,
+        borders: Option<StyleBorders<'_>>,
         tab_stops: Option<Vec<Bound<'_, PyAny>>>,
     ) -> PyResult<PyStyle> {
         type NewStyle = fn(&str, &str) -> rdocx::StyleBuilder;
@@ -4509,7 +4513,7 @@ impl PyDocument {
         keep_together: Option<bool>,
         page_break_before: Option<bool>,
         shading: Option<Bound<'_, PyAny>>,
-        borders: Option<BTreeMap<String, (String, u32, Bound<'_, PyAny>)>>,
+        borders: Option<StyleBorders<'_>>,
         tab_stops: Option<Vec<Bound<'_, PyAny>>>,
     ) -> PyResult<PyStyle> {
         let (style_type, style_id) = defined_style(&self.inner, style)?;

@@ -798,8 +798,8 @@ impl PyPresentation {
             .map_err(|error| rpptx_to_pyerr(py, error))
     }
 
-    #[pyo3(signature = (*, fonts = None, font_dir = None))]
-    fn to_pdf<'py>(
+    #[pyo3(name = "to_pdf", signature = (*, fonts = None, font_dir = None))]
+    fn render_pdf<'py>(
         &mut self,
         py: Python<'py>,
         fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
