@@ -401,3 +401,18 @@ so they are implemented once. Member recovery has explicit diagnostics and
 a strict unresolved count that includes boundsless omissions. Complete
 source assessments are retained in the existing plans. Intake is not
 implementation acceptance. No additional F-ID or draft plan is created.
+
+## Resolution coverage checkpoint, 2026-10-10 07:05:15 UTC
+
+The refreshed inventory contains eighteen open PRs and twenty-seven open
+issues. All twenty-five included issues and eighteen PRs are explicitly
+mapped to S91 acceptance owners in SPRINT_PLAN.md. Issues264 and281 remain
+open as requirements discussions and are excluded from resolution. Four
+stories are completed, F-X194 is in progress and seventeen approved stories
+remain. Final integrated verification and sprint review are still due.
+
+New PR [336](https://github.com/tensorbee/rdocx/pull/336), head
+`c6ab986008782e8a376a9cdd0bda2afd4847cf47`, closes Issues331 and321. Its parser
+slice belongs to F-X211 and numbering slice to F-X200. Assess its complete
+immutable source before adoption, including its added inline-wrapper and
+cross-control limits. This creates no new F-ID or duplicate implementation.

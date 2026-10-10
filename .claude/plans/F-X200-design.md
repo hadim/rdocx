@@ -538,3 +538,14 @@ It adds U2610 to the prior16-codepoint asset at the same approved path.
 Consume that selected provider after F-X195/F-X210 implementation, without
 duplicating the subset or claiming unperformed native glyph acceptance.
 No checklist asset question remains.
+
+## PR336 rolling intake, 2026-10-10
+
+PR [336](https://github.com/tensorbee/rdocx/pull/336), immutable head
+`c6ab986008782e8a376a9cdd0bda2afd4847cf47`, contributes to Issue321 shared numbering counters.
+The same contribution also contains the other story's slice, owned by
+F-X211. Adopt accepted changes once per owner.
+Complete source and discussion assessment is pending. Its proposed extra
+inline-wrapper and cross-control nesting policy is not automatically approved
+by intake. Contributor gates and hash expectations are not local evidence.
+The approved contract and completion prerequisites remain authoritative.
