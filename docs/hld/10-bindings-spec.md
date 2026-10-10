@@ -76,9 +76,10 @@ the revision it created: an append moves no path, a paragraph text or raw XML
 replacement retires only the paths below that paragraph, and a body paragraph
 insertion moves the later body paragraphs one place down. A paragraph, run or
 table handle resolves its path through every edit recorded since its capture,
-so it survives appends and in-place edits as a python-docx element does. An
-edit with no record, such as a removal or a move, still retires every older
-handle, and a retired handle's error names the call that retired it.
+so it survives appends and in-place edits as a python-docx element does. A
+removal, a move or any other edit whose effect paths cannot follow retires
+every older handle. Every edit records its call, so a retired handle's error
+names the call that retired it.
 
 v0.2 upgrades to lazily-assigned stable ids backed by `w14:paraId`, which OOXML
 already defines for exactly this purpose, so they round-trip to disk and improve

@@ -4194,9 +4194,16 @@ def test_raw_xml_refuses_what_it_cannot_write_faithfully():
             '<w:p><w:hyperlink r:id="rId99"><w:r><w:t>x</w:t></w:r></w:hyperlink></w:p>',
             'r:id="rId99" names no relationship',
         ),
-        ("<w:p><w:pPr><w:sectPr/></w:pPr></w:p>", "section break"),
+        (
+            '<w:p><w:pPr><w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:pPr></w:p>',
+            "section break",
+        ),
         ("<w:p><w:r><w:rPr><w:b/><w:b/></w:rPr><w:t>x</w:t></w:r></w:p>", "would not keep b"),
-        ("<w:p><w:r><w:tbl/></w:r></w:p>", "only inside a text box"),
+        ("<w:p><w:r><w:tbl/></w:r></w:p>", "w:tbl cannot sit directly in w:r"),
+        (
+            "<w:p><w:sdt><w:sdtContent><w:p/></w:sdtContent></w:sdt></w:p>",
+            "only inside a text box",
+        ),
     ]:
         with pytest.raises(ValueError, match=message):
             paragraph.replace_xml(xml)
@@ -4334,9 +4341,9 @@ def test_python_docx_values_that_would_write_a_wrong_file_raise():
         (run.font, "size", 12),
         (paragraph.paragraph_format, "space_after", 6),
         (paragraph.paragraph_format, "left_indent", 100),
-        (paragraph.paragraph_format, "line_spacing", 12),
+        (paragraph.paragraph_format, "line_spacing", Pt(0.01)),
     ]:
-        with pytest.raises(ValueError, match="rounds to 0"):
+        with pytest.raises(ValueError, match="would hold 0"):
             setattr(target, name, value)
     for value in (0, 0.0, -1.5):
         with pytest.raises(ValueError, match="positive"):
@@ -4350,7 +4357,7 @@ def test_python_docx_values_that_would_write_a_wrong_file_raise():
         lambda: setattr(table.cell(0, 0), "width", 100),
         lambda: table.set_column_width(0, 300),
     ):
-        with pytest.raises(ValueError, match="rounds to 0"):
+        with pytest.raises(ValueError, match="would hold 0"):
             setter()
     document.remove_content(1)
     assert document.to_bytes() == before
@@ -4395,3 +4402,86 @@ def test_python_docx_names_rdocx_spells_differently_raise_with_the_rdocx_way():
         paragraph.nonsense
     with pytest.raises(AttributeError, match="not writable"):
         paragraph.runs = []
+
+
+def test_raw_xml_refuses_xml_word_refuses_or_repairs():
+    import rdocx
+
+    document = rdocx.Document()
+    paragraph = document.add_paragraph("keep")
+    table = document.add_table(rows=1, cols=1)
+    styles_id = re.search(
+        r'Id="(rId\d+)"[^>]*relationships/styles"|relationships/styles"[^>]*Id="(rId\d+)"',
+        _saved_part(document.to_bytes(), "word/_rels/document.xml.rels"),
+    )
+    styles_id = styles_id.group(1) or styles_id.group(2)
+    before = document.to_bytes()
+    for target, xml, message in [
+        (paragraph, "<w:p><w:r><w:b/><w:t>x</w:t></w:r></w:p>", "w:b cannot sit directly in w:r"),
+        (paragraph, '<w:p><w:jc w:val="center"/></w:p>', "w:jc cannot sit directly in w:p"),
+        (paragraph, "<w:p><w:pPr><w:jcc/></w:pPr></w:p>", "w:jcc cannot sit directly in w:pPr"),
+        (paragraph, '<w:p><x:foo xmlns:x="urn:x"/></w:p>', "x:foo cannot sit directly in w:p"),
+        (
+            paragraph,
+            '<!DOCTYPE w:p [<!ENTITY a "AAA">]><w:p><w:r><w:t>&a;</w:t></w:r></w:p>',
+            "DOCTYPE is not allowed",
+        ),
+        (
+            paragraph,
+            f'<w:p><w:hyperlink r:id="{styles_id}"><w:r><w:t>x</w:t></w:r></w:hyperlink></w:p>',
+            "names a styles relationship where Word expects hyperlink",
+        ),
+        (table.cell(0, 0), "<w:tc><w:tcPr/></w:tc>", "a w:tc must hold a w:p"),
+        (table, "<w:tbl><w:tblGrid><w:gridCol/></w:tblGrid><w:tr/></w:tbl>", "a w:tr must hold a w:tc"),
+    ]:
+        with pytest.raises(ValueError, match=re.escape(message)):
+            target.replace_xml(xml)
+    with pytest.raises(ValueError, match="w:pgSz with w:w and w:h"):
+        document.replace_section_xml(0, '<w:sectPr><w:pgSz w:w="12240"/></w:sectPr>')
+    assert document.to_bytes() == before
+
+    # CDATA is the text it holds, not literal markers.
+    paragraph.replace_xml("<w:p><w:r><w:t><![CDATA[<a> & b]]></w:t></w:r></w:p>")
+    assert paragraph.text == "<a> & b"
+    assert "CDATA" not in _saved_part(document.to_bytes())
+
+
+def test_every_handle_retiring_call_names_itself():
+    import rdocx
+
+    for call, change in [
+        ("Document.remove_content", lambda document: document.remove_content(0)),
+        ("Document.insert_table", lambda document: document.insert_table(0, 1, 1)),
+        ("Document.add_section", lambda document: document.add_section()),
+        ("Document.insert_section", lambda document: document.insert_section(0)),
+        ("Cell.text", lambda document: setattr(document.tables[0].cell(0, 0), "text", "x")),
+        ("Document.accept_all", lambda document: document.accept_all() or document.remove_content(0)),
+    ]:
+        document = rdocx.Document()
+        document.add_paragraph("one")
+        document.add_paragraph("two")
+        document.add_table(rows=1, cols=1)
+        held = document.paragraphs[1]
+        change(document)
+        if call == "Document.accept_all":
+            call = "Document.remove_content"
+        with pytest.raises(rdocx.StaleElementError, match=re.escape(f"{call} invalidated it")):
+            held.text
+
+
+def test_line_spacing_numbers_are_multiples_and_lengths_are_exact():
+    import rdocx
+    from rdocx import Pt
+
+    document = rdocx.Document()
+    paragraph = document.add_paragraph("x")
+    paragraph.paragraph_format.line_spacing = 2
+    assert paragraph.paragraph_format.line_spacing == 2.0
+    assert re.search(r'w:line="480" w:lineRule="auto"', _saved_part(document.to_bytes()))
+    paragraph.paragraph_format.line_spacing = Pt(18)
+    assert paragraph.paragraph_format.line_spacing == Pt(18)
+    assert 'w:line="360" w:lineRule="exact"' in _saved_part(document.to_bytes())
+    with pytest.raises(TypeError, match="multiple"):
+        paragraph.paragraph_format.line_spacing = True
+    with pytest.raises(ValueError, match=re.escape("at least Pt(0.5)")):
+        paragraph.runs[0].font.size = Pt(0.25)

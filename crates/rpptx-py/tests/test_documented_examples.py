@@ -4762,7 +4762,7 @@ def test_notes_slide_and_row_cells_follow_python_pptx():
     slide = prs.slides[0]
     assert slide.has_notes_slide is False
     assert slide.notes_slide.notes_text_frame.text == ""
-    slide.notes_slide.notes_text_frame.text = "Remember to smile."
+    prs.slides[0].notes_slide.notes_text_frame.text = "Remember to smile."
     assert prs.slides[0].has_notes_slide is True
     assert prs.slides[0].notes_text == "Remember to smile."
     with pytest.raises(AttributeError, match="notes_text_frame.text or slide.notes_text"):
@@ -4789,7 +4789,7 @@ def test_python_pptx_values_that_would_write_a_wrong_file_raise():
     prs.slides[0].shapes.add_textbox(0, 0, Inches(1), Inches(1))
     prs.slides[0].shapes[0].text_frame.text = "x"
     paragraph = prs.slides[0].shapes[0].text_frame.paragraphs[0]
-    with pytest.raises(ValueError, match="rounds to 0"):
+    with pytest.raises(ValueError, match="would hold 0"):
         paragraph.space_after = 6
     paragraph.space_after = Pt(6)
     with pytest.raises(ValueError, match="to_pdf"):
@@ -4816,3 +4816,47 @@ def test_python_pptx_names_rpptx_spells_differently_raise_with_the_rpptx_way():
         table.cell(0, 0).text_frame
     with pytest.raises(AttributeError, match="has no attribute 'nonsense'$"):
         prs.slides[0].nonsense
+
+
+def test_raw_xml_refuses_xml_powerpoint_refuses_or_repairs():
+    import rpptx
+
+    prs = rpptx.Presentation()
+    prs.slides.add_slide(prs.slide_layouts[6])
+    prs.slides[0].shapes.add_textbox(0, 0, 914400, 914400)
+    prs.slides[0].shapes[0].text_frame.text = "keep"
+    before = prs.to_bytes()
+    shape = prs.slides[0].shapes[0]
+    xml = shape.xml.decode()
+    rels = _deck_part(before, "ppt/slides/_rels/slide1.xml.rels")
+    layout_id = re.search(r'Id="(rId\d+)"', rels).group(1)
+    for replacement, message in [
+        (xml.replace("</p:sp>", "<p:bogus/></p:sp>"), "p:bogus cannot sit directly in p:sp"),
+        (xml.replace("<a:t>", "<a:b/><a:t>", 1), "a:b cannot sit directly in a:r"),
+        (
+            re.sub(r"(<p:cNvPr [^>]*?)/>", rf'\1><a:hlinkClick r:id="{layout_id}"/></p:cNvPr>', xml, count=1),
+            "names a slideLayout relationship",
+        ),
+        ('<!DOCTYPE p:sp [<!ENTITY a "AAA">]>' + xml, "DOCTYPE is not allowed"),
+    ]:
+        with pytest.raises(ValueError, match=re.escape(message)):
+            shape.replace_xml(replacement)
+    assert prs.to_bytes() == before
+    shape.text_frame.replace_xml(
+        "<p:txBody><a:bodyPr/><a:p><a:r><a:t><![CDATA[<a> & b]]></a:t></a:r></a:p></p:txBody>"
+    )
+    assert prs.slides[0].shapes[0].text_frame.text == "<a> & b"
+
+
+def test_notes_slide_creates_notes_and_presentations_use_streams():
+    import rpptx
+
+    prs = rpptx.Presentation()
+    prs.slides.add_slide(prs.slide_layouts[6])
+    assert prs.slides[0].has_notes_slide is False
+    prs.slides[0].notes_slide
+    assert prs.slides[0].has_notes_slide is True
+    stream = io.BytesIO()
+    prs.save(stream)
+    reopened = rpptx.Presentation(io.BytesIO(stream.getvalue()))
+    assert len(reopened.slides) == 1 and reopened.slides[0].has_notes_slide is True

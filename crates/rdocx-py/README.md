@@ -80,7 +80,8 @@ with open("report.pdf", "wb") as output:
 - Raw XML for a missing feature: `xml` and `replace_xml` on paragraphs, runs,
   tables and cells, and `section_xml` and `replace_section_xml` for section
   properties. A replacement that holds another element, would lose an element,
-  or references an unknown relationship id raises `ValueError`.
+  misplaces an element Word checks, or references an unknown relationship id
+  or one of the wrong type raises `ValueError`.
 - Python collections with negative indexes, slices, and iteration. Paragraph,
   run and table handles survive appends and in-place edits, and a handle a
   structural change moved raises a stale-handle error naming that change.

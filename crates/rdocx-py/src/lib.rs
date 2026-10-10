@@ -262,9 +262,16 @@ pub(crate) const HALF_POINT_EMU: i64 = 6_350;
 /// zero in the file, as a bare int meant as points or twips does.
 pub(crate) fn stored_length(name: &str, value: i64, unit_emu: i64) -> PyResult<rdocx::Length> {
     if value != 0 && value.abs() < unit_emu {
+        let short = |value: f64| {
+            let text = format!("{value:.3}");
+            text.trim_end_matches('0').trim_end_matches('.').to_owned()
+        };
+        let points = short(value as f64 / 12_700.0);
+        let step = short(unit_emu as f64 / 12_700.0);
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
-            "{name} takes a length in EMU, and {value} EMU rounds to 0 in the file: give a \
-             Length such as Pt({value}) or Inches(0.5)"
+            "{name} is {value} EMU ({points} pt), under the {step} pt step Word stores, so the \
+             file would hold 0: a bare int is read as EMU, give a Length of at least Pt({step}), \
+             such as Pt(12) or Inches(0.5)"
         )));
     }
     Ok(rdocx::Length::emu(value))

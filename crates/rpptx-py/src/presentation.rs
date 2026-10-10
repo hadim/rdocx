@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use oxml_py_support::RevisionCounter;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyList, PyTuple};
+use pyo3::types::{PyAny, PyBytes, PyList, PyTuple};
 use smallvec::smallvec;
 
 use crate::layout::PyTextFrameLayout;
@@ -230,11 +230,20 @@ impl PyPresentation {
         crate::set_attribute(slf.as_any(), "Presentation", name, value)
     }
 
+    /// Open a path or a binary file-like object, as python-pptx's
+    /// `Presentation(pptx)` does, or start from the default template.
     #[new]
     #[pyo3(signature = (path = None))]
-    fn new(path: Option<PathBuf>, py: Python<'_>) -> PyResult<Self> {
+    fn new(path: Option<&Bound<'_, PyAny>>, py: Python<'_>) -> PyResult<Self> {
         match path {
-            Some(path) => rpptx::Presentation::open(path)
+            Some(stream) if stream.hasattr("read")? => {
+                if stream.hasattr("seek")? {
+                    stream.call_method1("seek", (0,))?;
+                }
+                let bytes = stream.call_method0("read")?.extract::<Vec<u8>>()?;
+                Self::from_bytes(&bytes, py)
+            }
+            Some(path) => rpptx::Presentation::open(path.extract::<PathBuf>()?)
                 .map(Self::from_presentation)
                 .map_err(|error| rpptx_to_pyerr(py, error)),
             None => rpptx::Presentation::new()
@@ -250,7 +259,18 @@ impl PyPresentation {
             .map_err(|error| rpptx_to_pyerr(py, error))
     }
 
-    fn save(&self, path: PathBuf, py: Python<'_>) -> PyResult<()> {
+    /// Save to a path or write to a binary file-like object, as python-pptx
+    /// does.
+    fn save(&self, path: &Bound<'_, PyAny>, py: Python<'_>) -> PyResult<()> {
+        if path.hasattr("write")? {
+            let bytes = self
+                .inner
+                .to_bytes()
+                .map_err(|error| rpptx_to_pyerr(py, error))?;
+            path.call_method1("write", (PyBytes::new(py, &bytes),))?;
+            return Ok(());
+        }
+        let path = path.extract::<PathBuf>()?;
         check_save_extension(&path)?;
         self.inner
             .save(path)

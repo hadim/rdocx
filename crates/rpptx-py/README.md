@@ -67,7 +67,8 @@ with open("review.pdf", "wb") as output:
   `slide.has_notes_slide` and `row.cells`.
 - Raw XML for a missing feature: `xml` and `replace_xml` on slides, layouts,
   shapes and text frames. A replacement with another root element, an element
-  rpptx would lose, or an unknown relationship id raises `ValueError`.
+  rpptx would lose or PowerPoint would refuse there, or an unknown relationship
+  id or one of the wrong type raises `ValueError`.
 - An `AttributeError` that names the rpptx call when a python-pptx name is
   spelled differently, and a `ValueError` instead of a silently wrong file for
   a slide side outside 1 to 56 inches, a spacing that rounds to zero, or a

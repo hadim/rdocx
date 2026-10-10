@@ -299,13 +299,13 @@ impl PyTable {
     }
 
     pub(crate) fn validate(&self, py: Python<'_>) -> PyResult<usize> {
-        self.document.borrow(py).resolve_path(
+        let path = self.document.borrow(py).resolve_path(
             py,
             &self.path,
             "table",
             "Re-fetch it with doc.tables[i].",
         )?;
-        table_index(&self.path)
+        table_index(&path)
     }
 
     pub(crate) fn belongs_to(&self, py: Python<'_>, document: &Py<PyDocument>) -> bool {
@@ -611,7 +611,9 @@ impl PyTable {
         })?;
         // Absorbed or restored cells shift the indexes after this one.
         if changed {
-            self.document.borrow_mut(py).revisions.bump();
+            self.document
+                .borrow_mut(py)
+                .bump_edit("Table.set_cell_grid_span", EditScope::Moved);
         }
         Ok(())
     }
@@ -648,7 +650,7 @@ impl PyTable {
                 .inner
                 .clone_table_row(table_index, source, insert_at)
                 .map_err(|error| rdocx_to_pyerr(py, error))?;
-            document.revisions.bump();
+            document.bump_edit("Table.clone_row", EditScope::Moved);
             let mut segments = self.path.segs.clone();
             segments.push(PathSeg::Row(inserted));
             document.revisions.capture(segments)
@@ -669,7 +671,7 @@ impl PyTable {
             .inner
             .remove_table_row(table_index, row_index)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        document.revisions.bump();
+        document.bump_edit("Table.remove_row", EditScope::Moved);
         Ok(())
     }
 }
@@ -688,13 +690,13 @@ impl PyRowCollection {
         }
     }
     fn validate(&self, py: Python<'_>) -> PyResult<usize> {
-        self.document.borrow(py).resolve_path(
+        let path = self.document.borrow(py).resolve_path(
             py,
             &self.table_path,
             "row collection",
             "Re-fetch it with table.rows.",
         )?;
-        table_index(&self.table_path)
+        table_index(&path)
     }
     fn len(&self, py: Python<'_>) -> PyResult<usize> {
         let index = self.validate(py)?;
@@ -789,13 +791,13 @@ impl PyRow {
         Self { document, path }
     }
     fn validate(&self, py: Python<'_>) -> PyResult<(usize, usize)> {
-        self.document.borrow(py).resolve_path(
+        let path = self.document.borrow(py).resolve_path(
             py,
             &self.path,
             "row",
             "Re-fetch it with table.rows[i].",
         )?;
-        Ok((table_index(&self.path)?, row_index(&self.path)?))
+        Ok((table_index(&path)?, row_index(&path)?))
     }
 
     fn read<T>(&self, py: Python<'_>, read: impl FnOnce(rdocx::RowRef<'_>) -> T) -> PyResult<T> {
@@ -931,13 +933,13 @@ impl PyCellCollection {
         Self { document, row_path }
     }
     fn validate(&self, py: Python<'_>) -> PyResult<(usize, usize)> {
-        self.document.borrow(py).resolve_path(
+        let path = self.document.borrow(py).resolve_path(
             py,
             &self.row_path,
             "cell collection",
             "Re-fetch it with row.cells.",
         )?;
-        Ok((table_index(&self.row_path)?, row_index(&self.row_path)?))
+        Ok((table_index(&path)?, row_index(&path)?))
     }
     fn len(&self, py: Python<'_>) -> PyResult<usize> {
         let (table, row) = self.validate(py)?;
@@ -1032,17 +1034,13 @@ impl PyCell {
         Self { document, path }
     }
     fn validate(&self, py: Python<'_>) -> PyResult<(usize, usize, usize)> {
-        self.document.borrow(py).resolve_path(
+        let path = self.document.borrow(py).resolve_path(
             py,
             &self.path,
             "cell",
             "Re-fetch it with row.cells[i].",
         )?;
-        Ok((
-            table_index(&self.path)?,
-            row_index(&self.path)?,
-            cell_index(&self.path)?,
-        ))
+        Ok((table_index(&path)?, row_index(&path)?, cell_index(&path)?))
     }
 
     fn read<T>(&self, py: Python<'_>, read: impl FnOnce(rdocx::CellRef<'_>) -> T) -> PyResult<T> {
@@ -1100,7 +1098,7 @@ impl PyCell {
         let cell = self.validate(py)?;
         self.document
             .borrow_mut(py)
-            .scoped_replacement(py, |document| {
+            .scoped_replacement(py, "Cell.replace_text", |document| {
                 document.try_replace_text_in_cell(cell, None, old, new, expect)
             })
     }
@@ -1151,7 +1149,7 @@ impl PyCell {
         let inner = &mut document.inner;
         py.detach(|| inner.try_set_cell_text(table, row, cell, value))
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        document.revisions.bump();
+        document.bump_edit("Cell.text", EditScope::Moved);
         Ok(())
     }
     #[getter]
@@ -1178,7 +1176,7 @@ impl PyCell {
                 cell.add_paragraph(text);
                 paragraph
             };
-            document.revisions.bump();
+            document.bump_edit("Cell.add_paragraph", EditScope::Moved);
             document.revisions.capture(smallvec![
                 PathSeg::Body(table),
                 PathSeg::Row(row),
@@ -1325,17 +1323,13 @@ impl PyCellParagraphCollection {
         }
     }
     fn validate(&self, py: Python<'_>) -> PyResult<(usize, usize, usize)> {
-        self.document.borrow(py).resolve_path(
+        let path = self.document.borrow(py).resolve_path(
             py,
             &self.cell_path,
             "cell paragraph collection",
             "Re-fetch it with cell.paragraphs.",
         )?;
-        Ok((
-            table_index(&self.cell_path)?,
-            row_index(&self.cell_path)?,
-            cell_index(&self.cell_path)?,
-        ))
+        Ok((table_index(&path)?, row_index(&path)?, cell_index(&path)?))
     }
     fn len(&self, py: Python<'_>) -> PyResult<usize> {
         let (table, row, cell) = self.validate(py)?;

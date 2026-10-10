@@ -325,15 +325,21 @@ impl PySlide {
     }
 
     /// python-pptx's `slide.notes_slide`, whose `notes_text_frame.text`
-    /// reads and writes the same speaker notes as `notes_text`.
+    /// reads and writes the same speaker notes as `notes_text`. As in
+    /// python-pptx, it creates the notes slide when the slide has none.
     #[getter]
     fn notes_slide(&self, py: Python<'_>) -> PyResult<PyNotesSlide> {
         self.validate(py)?;
+        if self.notes_text(py)?.is_none() {
+            self.set_notes_text(py, "")?;
+        }
+        let path = self
+            .presentation
+            .borrow(py)
+            .revisions
+            .capture(self.path.segs.clone());
         Ok(PyNotesSlide {
-            slide: Py::new(
-                py,
-                PySlide::new(self.presentation.clone_ref(py), self.path.clone()),
-            )?,
+            slide: Py::new(py, PySlide::new(self.presentation.clone_ref(py), path))?,
         })
     }
 

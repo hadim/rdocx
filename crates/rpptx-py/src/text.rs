@@ -66,8 +66,10 @@ fn points_spacing(emu: i64) -> PyResult<TextSpacing> {
     }
     if emu != 0 && emu < EMU_PER_CENTIPOINT {
         return Err(PyValueError::new_err(format!(
-            "spacing takes a length in EMU, and {emu} EMU rounds to 0 in the file: give a \
-             Length such as Pt({emu}), or a float such as 1.5 for a multiple of the line"
+            "spacing is {emu} EMU ({} pt), under the 0.01 pt step PowerPoint stores, so the \
+             file would hold 0: a bare int is read as EMU, give a Length such as Pt(6), or a \
+             float such as 1.5 for a multiple of the line",
+            emu as f64 / 12_700.0
         )));
     }
     Ok(TextSpacing::Points((emu / EMU_PER_CENTIPOINT) as i32))

@@ -1,5 +1,5 @@
 use oxml_py_support::ContentPath;
-use pyo3::exceptions::{PyIndexError, PyValueError};
+use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 
@@ -767,16 +767,9 @@ impl PyParagraphFormat {
         match value {
             None => self.apply(py, ParagraphUpdate::LineSpacing(None)),
             Some(value) if value.is_none() => self.apply(py, ParagraphUpdate::LineSpacing(None)),
-            Some(value) if value.is_instance_of::<pyo3::types::PyFloat>() => {
-                let multiple: f64 = value.extract()?;
-                if multiple <= 0.0 {
-                    return Err(PyValueError::new_err(
-                        "line_spacing must be a positive multiple such as 1.5 or a length such as Pt(18)",
-                    ));
-                }
-                self.apply(py, ParagraphUpdate::LineSpacingMultiple(multiple))
-            }
-            Some(value) => {
+            // As in python-docx, a Length is an exact spacing and any other
+            // number is a multiple of single spacing, so 2 is double.
+            Some(value) if value.is_instance(&py.import("rdocx")?.getattr("Length")?)? => {
                 let emu: i64 = value.extract()?;
                 if emu <= 0 {
                     return Err(PyValueError::new_err(
@@ -785,6 +778,20 @@ impl PyParagraphFormat {
                 }
                 let spacing = stored_length("line_spacing", emu, TWIP_EMU)?;
                 self.apply(py, ParagraphUpdate::LineSpacing(Some(spacing)))
+            }
+            Some(value) => {
+                if value.is_instance_of::<pyo3::types::PyBool>() {
+                    return Err(PyTypeError::new_err(
+                        "line_spacing takes a multiple such as 1.5 or a length such as Pt(18)",
+                    ));
+                }
+                let multiple: f64 = value.extract()?;
+                if !(multiple.is_finite() && multiple > 0.0) {
+                    return Err(PyValueError::new_err(
+                        "line_spacing must be a positive multiple such as 1.5 or a length such as Pt(18)",
+                    ));
+                }
+                self.apply(py, ParagraphUpdate::LineSpacingMultiple(multiple))
             }
         }
     }

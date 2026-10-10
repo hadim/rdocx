@@ -24351,7 +24351,14 @@ fn raw_xml_round_trips_each_body_element_and_refuses_what_it_cannot_keep() {
         (&b"<w:tbl/>"[..], "got w:tbl"),
         (b"<w:p><w:r>", "not closed"),
         (b"<w:p><w:hyperlink r:id=\"rId99\"/></w:p>", "rId99"),
-        (b"<w:p><w:pPr><w:sectPr/></w:pPr></w:p>", "section break"),
+        (
+            b"<w:p><w:pPr><w:sectPr><w:pgSz w:w=\"12240\" w:h=\"15840\"/></w:sectPr></w:pPr></w:p>",
+            "section break",
+        ),
+        (
+            b"<w:p><w:r><w:b/></w:r></w:p>",
+            "w:b cannot sit directly in w:r",
+        ),
         (
             b"<w:p><w:r><w:rPr><w:b/><w:b/></w:rPr></w:r></w:p>",
             "would not keep b",

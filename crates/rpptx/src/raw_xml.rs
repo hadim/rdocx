@@ -2,16 +2,17 @@
 //! with checked XML, the way out when the model has no API for a feature.
 //!
 //! A replacement must have the root element of what it replaces, parse with
-//! the model, keep every element it names, and reference only relationships
-//! the owning part already has. Anything else is refused before the
-//! presentation changes.
+//! the model, keep every element it names, place the elements PowerPoint
+//! checks where the schema allows them, and reference only relationships of
+//! the right type that the owning part already has. Anything else is
+//! refused before the presentation changes.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use quick_xml::Reader;
-use quick_xml::events::Event;
-use quick_xml::name::ResolveResult;
+use quick_xml::events::{BytesText, Event};
+use quick_xml::name::{QName, ResolveResult};
 use quick_xml::reader::NsReader;
+use quick_xml::{Reader, Writer};
 use rpptx_oxml::connector::CT_ConnectionShape;
 use rpptx_oxml::graphic_frame::CT_GraphicFrame;
 use rpptx_oxml::namespace::{P_NS, R_NS};
@@ -22,6 +23,7 @@ use rpptx_oxml::slide_parts::{CT_Slide, CT_SlideLayout};
 use crate::{A_NS, Error, Presentation, Result};
 
 const OPERATION: &str = "replace_xml";
+const MC_NS: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
 
 fn refused(message: impl Into<String>) -> Error {
     Error::InvalidShapeMutation {
@@ -227,8 +229,8 @@ impl Presentation {
                 relationships
                     .items
                     .iter()
-                    .map(|relationship| relationship.id.clone())
-                    .collect::<BTreeSet<_>>()
+                    .map(|relationship| (relationship.id.clone(), relationship.rel_type.clone()))
+                    .collect::<BTreeMap<_, _>>()
             })
             .unwrap_or_default();
         let mut reader = NsReader::from_reader(xml);
@@ -254,7 +256,26 @@ impl Presentation {
                     continue;
                 }
                 let value = String::from_utf8_lossy(attribute.value.as_ref()).into_owned();
-                if !known.contains(&value) {
+                // PowerPoint writes an empty id for an action without a target,
+                // such as a jump to the next slide.
+                if value.is_empty() {
+                    continue;
+                }
+                if let Some(rel_type) = known.get(&value) {
+                    let kind = rel_type.rsplit('/').next().unwrap_or_default();
+                    if let Some(expected) =
+                        expected_relationship(element.local_name().as_ref(), local.as_ref())
+                        && !expected.contains(&kind)
+                    {
+                        return Err(refused(format!(
+                            "r:{}=\"{value}\" on {} names a {kind} relationship of {part} where \
+                             PowerPoint expects {}, reference a relationship of that type",
+                            String::from_utf8_lossy(local.as_ref()),
+                            String::from_utf8_lossy(element.name().as_ref()),
+                            expected.join(" or ")
+                        )));
+                    }
+                } else {
                     return Err(refused(format!(
                         "r:{}=\"{value}\" names no relationship of {part}, add the target first \
                          (for example with add_picture or a hyperlink address) and reference \
@@ -302,6 +323,11 @@ fn with_root_declarations(xml: &[u8], local: &str) -> Result<Vec<u8>> {
             }
             Event::Start(_) => depth += 1,
             Event::End(_) => depth = depth.saturating_sub(1),
+            Event::DocType(_) => {
+                return Err(refused(
+                    "a DOCTYPE is not allowed, write the text its entities stand for",
+                ));
+            }
             Event::Text(text) if depth == 0 && !text.iter().all(u8::is_ascii_whitespace) => {
                 return Err(refused(format!(
                     "expected one {local} element, the XML holds text outside it"
@@ -320,11 +346,277 @@ fn with_root_declarations(xml: &[u8], local: &str) -> Result<Vec<u8>> {
     if root_local != local {
         return Err(refused(format!("expected one {local} element, got {name}")));
     }
-    let mut declared = xml.to_vec();
+    let mut declared = cdata_as_text(xml)?;
     for (prefix, uri) in [("p", P_NS), ("a", A_NS), ("r", R_NS)] {
         declared = declare(&declared, prefix, uri)?;
     }
+    check_vocabulary(&declared).map_err(refused)?;
     Ok(declared)
+}
+
+/// The relationship types an `r:` attribute must name, by the local names
+/// of its element and attribute, or `None` when only its existence is
+/// checked.
+fn expected_relationship(element: &[u8], attribute: &[u8]) -> Option<&'static [&'static str]> {
+    Some(match (element, attribute) {
+        (b"hlinkClick" | b"hlinkHover" | b"hlinkMouseOver", b"id") => &["hyperlink", "slide"],
+        (b"blip", b"embed" | b"link") => &["image"],
+        (b"chart", b"id") => &["chart"],
+        (b"relIds", b"dm") => &["diagramData"],
+        (b"relIds", b"lo") => &["diagramLayout"],
+        (b"relIds", b"qs") => &["diagramQuickStyle"],
+        (b"relIds", b"cs") => &["diagramColors"],
+        (b"videoFile" | b"quickTimeFile", b"link") => &["video"],
+        (b"audioFile", b"link") => &["audio"],
+        (b"media", b"embed" | b"link") => &["media"],
+        (b"oleObj", b"id") => &["oleObject", "package"],
+        _ => return None,
+    })
+}
+
+/// `xml` with every CDATA section written as escaped text, which is what it
+/// stands for: the model would otherwise keep the markers as literal text.
+fn cdata_as_text(xml: &[u8]) -> Result<Vec<u8>> {
+    if !xml.windows(9).any(|window| window == b"<![CDATA[") {
+        return Ok(xml.to_vec());
+    }
+    let malformed = |error: quick_xml::Error| refused(format!("the XML is malformed: {error}"));
+    let mut reader = Reader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Vec::new());
+    let mut buffer = Vec::new();
+    loop {
+        let event = reader.read_event_into(&mut buffer).map_err(malformed)?;
+        let written = match event {
+            Event::Eof => return Ok(writer.into_inner()),
+            Event::CData(text) => {
+                let text = String::from_utf8_lossy(text.as_ref()).into_owned();
+                writer.write_event(Event::Text(BytesText::new(&text)))
+            }
+            event => writer.write_event(event),
+        };
+        written.map_err(|error| malformed(error.into()))?;
+        buffer.clear();
+    }
+}
+
+/// The namespace of a vocabulary entry: PresentationML or DrawingML.
+#[derive(Clone, Copy, PartialEq)]
+enum Ns {
+    P,
+    A,
+}
+
+const SHAPE_TREE: &[(Ns, &str)] = &[
+    (Ns::P, "nvGrpSpPr"),
+    (Ns::P, "grpSpPr"),
+    (Ns::P, "sp"),
+    (Ns::P, "grpSp"),
+    (Ns::P, "graphicFrame"),
+    (Ns::P, "cxnSp"),
+    (Ns::P, "pic"),
+    (Ns::P, "contentPart"),
+    (Ns::P, "extLst"),
+];
+const TEXT_BODY: &[(Ns, &str)] = &[(Ns::A, "bodyPr"), (Ns::A, "lstStyle"), (Ns::A, "p")];
+const RUN_PROPERTIES: &[(Ns, &str)] = &[
+    (Ns::A, "ln"),
+    (Ns::A, "noFill"),
+    (Ns::A, "solidFill"),
+    (Ns::A, "gradFill"),
+    (Ns::A, "blipFill"),
+    (Ns::A, "pattFill"),
+    (Ns::A, "grpFill"),
+    (Ns::A, "effectLst"),
+    (Ns::A, "effectDag"),
+    (Ns::A, "highlight"),
+    (Ns::A, "uLnTx"),
+    (Ns::A, "uLn"),
+    (Ns::A, "uFillTx"),
+    (Ns::A, "uFill"),
+    (Ns::A, "latin"),
+    (Ns::A, "ea"),
+    (Ns::A, "cs"),
+    (Ns::A, "sym"),
+    (Ns::A, "hlinkClick"),
+    (Ns::A, "hlinkMouseOver"),
+    (Ns::A, "rtl"),
+    (Ns::A, "extLst"),
+];
+
+/// The children a PresentationML or DrawingML element PowerPoint checks may
+/// hold.
+fn presentation_children(namespace: Ns, parent: &[u8]) -> Option<&'static [(Ns, &'static str)]> {
+    Some(match (namespace, parent) {
+        (Ns::P, b"sld") => &[
+            (Ns::P, "cSld"),
+            (Ns::P, "clrMapOvr"),
+            (Ns::P, "transition"),
+            (Ns::P, "timing"),
+            (Ns::P, "extLst"),
+        ],
+        (Ns::P, b"sldLayout") => &[
+            (Ns::P, "cSld"),
+            (Ns::P, "clrMapOvr"),
+            (Ns::P, "transition"),
+            (Ns::P, "timing"),
+            (Ns::P, "hf"),
+            (Ns::P, "extLst"),
+        ],
+        (Ns::P, b"cSld") => &[
+            (Ns::P, "bg"),
+            (Ns::P, "spTree"),
+            (Ns::P, "custDataLst"),
+            (Ns::P, "controls"),
+            (Ns::P, "extLst"),
+        ],
+        (Ns::P, b"spTree" | b"grpSp") => SHAPE_TREE,
+        (Ns::P, b"sp") => &[
+            (Ns::P, "nvSpPr"),
+            (Ns::P, "spPr"),
+            (Ns::P, "style"),
+            (Ns::P, "txBody"),
+            (Ns::P, "extLst"),
+        ],
+        (Ns::P, b"nvSpPr") => &[(Ns::P, "cNvPr"), (Ns::P, "cNvSpPr"), (Ns::P, "nvPr")],
+        (Ns::P, b"pic") => &[
+            (Ns::P, "nvPicPr"),
+            (Ns::P, "blipFill"),
+            (Ns::P, "spPr"),
+            (Ns::P, "style"),
+            (Ns::P, "extLst"),
+        ],
+        (Ns::P, b"nvPicPr") => &[(Ns::P, "cNvPr"), (Ns::P, "cNvPicPr"), (Ns::P, "nvPr")],
+        (Ns::P, b"cxnSp") => &[
+            (Ns::P, "nvCxnSpPr"),
+            (Ns::P, "spPr"),
+            (Ns::P, "style"),
+            (Ns::P, "extLst"),
+        ],
+        (Ns::P, b"nvCxnSpPr") => &[(Ns::P, "cNvPr"), (Ns::P, "cNvCxnSpPr"), (Ns::P, "nvPr")],
+        (Ns::P, b"graphicFrame") => &[
+            (Ns::P, "nvGraphicFramePr"),
+            (Ns::P, "xfrm"),
+            (Ns::A, "graphic"),
+            (Ns::P, "extLst"),
+        ],
+        (Ns::P, b"nvGraphicFramePr") => &[
+            (Ns::P, "cNvPr"),
+            (Ns::P, "cNvGraphicFramePr"),
+            (Ns::P, "nvPr"),
+        ],
+        (Ns::P | Ns::A, b"txBody") => TEXT_BODY,
+        (Ns::A, b"p") => &[
+            (Ns::A, "pPr"),
+            (Ns::A, "r"),
+            (Ns::A, "br"),
+            (Ns::A, "fld"),
+            (Ns::A, "endParaRPr"),
+        ],
+        (Ns::A, b"r") => &[(Ns::A, "rPr"), (Ns::A, "t")],
+        (Ns::A, b"rPr" | b"endParaRPr" | b"defRPr") => RUN_PROPERTIES,
+        _ => return None,
+    })
+}
+
+/// One open element of a vocabulary walk.
+struct VocabularyFrame {
+    /// The namespace and local name when the element is PresentationML or
+    /// DrawingML.
+    known: Option<(Ns, Vec<u8>)>,
+    /// The namespaces mc:Ignorable lists in scope.
+    ignorable: Vec<Vec<u8>>,
+    /// Inside mc:AlternateContent, whose choices PowerPoint resolves itself.
+    alternate: bool,
+}
+
+/// Refuse an element PowerPoint would refuse or repair in a replacement: a
+/// `p:` or `a:` element where its parent does not allow it, or an element
+/// of another namespace that mc:Ignorable does not cover.
+fn check_vocabulary(xml: &[u8]) -> std::result::Result<(), String> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut stack: Vec<VocabularyFrame> = Vec::new();
+    loop {
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| format!("the XML is malformed: {error}"))?;
+        let namespace = match namespace {
+            ResolveResult::Bound(uri) => uri.as_ref().to_vec(),
+            _ => Vec::new(),
+        };
+        let kind = if namespace == P_NS.as_bytes() {
+            Some(Ns::P)
+        } else if namespace == A_NS.as_bytes() {
+            Some(Ns::A)
+        } else {
+            None
+        };
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                let local = element.local_name().as_ref().to_vec();
+                let parent = stack.last();
+                let is_alternate = namespace == MC_NS.as_bytes() && local == b"AlternateContent";
+                let alternate = parent.is_some_and(|frame| frame.alternate) || is_alternate;
+                let mut ignorable = parent
+                    .map(|frame| frame.ignorable.clone())
+                    .unwrap_or_default();
+                for attribute in element.attributes().flatten() {
+                    let (attribute_namespace, attribute_local) =
+                        reader.resolver().resolve_attribute(attribute.key);
+                    if matches!(attribute_namespace, ResolveResult::Bound(uri) if uri.as_ref() == MC_NS.as_bytes())
+                        && attribute_local.as_ref() == b"Ignorable"
+                    {
+                        for prefix in
+                            String::from_utf8_lossy(attribute.value.as_ref()).split_whitespace()
+                        {
+                            let qualified = format!("{prefix}:x");
+                            if let (ResolveResult::Bound(uri), _) = reader
+                                .resolver()
+                                .resolve_element(QName(qualified.as_bytes()))
+                            {
+                                ignorable.push(uri.as_ref().to_vec());
+                            }
+                        }
+                    }
+                }
+                if let Some(frame) = parent
+                    && !frame.alternate
+                    && let Some((parent_kind, parent_local)) = &frame.known
+                    && let Some(allowed) = presentation_children(*parent_kind, parent_local)
+                {
+                    let accepted = match kind {
+                        Some(kind) => allowed.iter().any(|(child_kind, child)| {
+                            *child_kind == kind && child.as_bytes() == local
+                        }),
+                        None => is_alternate || frame.ignorable.contains(&namespace),
+                    };
+                    if !accepted {
+                        return Err(format!(
+                            "{} cannot sit directly in {}:{}, where PowerPoint refuses or \
+                             repairs the file, so the replacement was refused",
+                            String::from_utf8_lossy(element.name().as_ref()),
+                            if *parent_kind == Ns::P { "p" } else { "a" },
+                            String::from_utf8_lossy(parent_local)
+                        ));
+                    }
+                }
+                if matches!(event, Event::Start(_)) {
+                    stack.push(VocabularyFrame {
+                        known: kind.map(|kind| (kind, local)),
+                        ignorable,
+                        alternate,
+                    });
+                }
+            }
+            Event::End(_) => {
+                stack.pop();
+            }
+            Event::Eof => return Ok(()),
+            _ => {}
+        }
+        buffer.clear();
+    }
 }
 
 /// `xml` with `xmlns:prefix="uri"` on its root element unless the root

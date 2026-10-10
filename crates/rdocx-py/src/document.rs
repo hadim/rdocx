@@ -1554,6 +1554,8 @@ pub(crate) enum EditScope {
     /// A body paragraph was inserted at this paragraph index: the body
     /// paragraphs from it on moved one place down.
     BodyParagraphInserted(usize),
+    /// Content moved in ways the paths cannot follow: every path retires.
+    Moved,
 }
 
 impl EditScope {
@@ -1579,6 +1581,7 @@ impl EditScope {
                 }
                 Some(path)
             }
+            Self::Moved => None,
         }
     }
 }
@@ -1598,6 +1601,14 @@ impl PyDocument {
         let revision = self.revisions.bump();
         self.edits.insert(revision, HandleEdit { call, scope });
         revision
+    }
+
+    /// The call that made the first structural edit after `revision`.
+    pub(crate) fn retiring_call(&self, revision: u64) -> Option<&'static str> {
+        self.edits
+            .range(revision.saturating_add(1)..)
+            .next()
+            .map(|(_, edit)| edit.call)
     }
 
     /// Resolve a paragraph, run or table handle path at the current
@@ -1623,6 +1634,8 @@ impl PyDocument {
                         Some(edit) => format!("{} invalidated it. {hint}", edit.call),
                         None => hint.to_owned(),
                     };
+                    // Every bump records its call, so `None` is only a handle
+                    // from a newer revision, which cannot happen.
                     return Err(crate::stale_to_pyerr(
                         py,
                         StaleElementError {
@@ -1640,6 +1653,23 @@ impl PyDocument {
                 .map_err(|error| crate::stale_to_pyerr(py, error))?;
         }
         Ok(ContentPath::new(segments, current))
+    }
+
+    /// Insert a section before section `index` for `call`.
+    fn insert_section_for(
+        &mut self,
+        py: Python<'_>,
+        index: usize,
+        call: &'static str,
+    ) -> PyResult<()> {
+        if index > self.inner.section_count() {
+            return Err(PyIndexError::new_err("section index out of range"));
+        }
+        self.inner
+            .insert_section(index)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.bump_edit(call, EditScope::Moved);
+        Ok(())
     }
 
     /// Refuse to write a table without rows, which Word reports as
@@ -1800,7 +1830,12 @@ impl PyDocument {
                     element_kind: "story item".to_owned(),
                     captured_revision: item.revision,
                     current_revision: self.revisions.current(),
-                    recovery_hint: "Re-fetch it with document.story_items.".to_owned(),
+                    recovery_hint: match self.retiring_call(item.revision) {
+                        Some(call) => {
+                            format!("{call} invalidated it. Re-fetch it with document.story_items.")
+                        }
+                        None => "Re-fetch it with document.story_items.".to_owned(),
+                    },
                 },
             ));
         }
@@ -1992,6 +2027,7 @@ impl PyDocument {
     fn split_body_run(
         &mut self,
         py: Python<'_>,
+        call: &'static str,
         body_index: usize,
         run_index: usize,
         character_offset: usize,
@@ -2008,7 +2044,7 @@ impl PyDocument {
             .split_run(body_index, run_index, character_offset)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         if run_count(&self.inner) != before {
-            self.revisions.bump();
+            self.bump_edit(call, EditScope::Moved);
         }
         Ok(boundary)
     }
@@ -2017,7 +2053,12 @@ impl PyDocument {
     ///
     /// The GIL is released while it runs, and live handles are staled only
     /// when the count is nonzero.
-    fn counted_mutation<F>(&mut self, py: Python<'_>, mutation: F) -> PyResult<usize>
+    fn counted_mutation<F>(
+        &mut self,
+        py: Python<'_>,
+        call: &'static str,
+        mutation: F,
+    ) -> PyResult<usize>
     where
         F: FnOnce(&mut rdocx::Document) -> rdocx::Result<usize> + Send,
     {
@@ -2025,7 +2066,7 @@ impl PyDocument {
             .detach(|| mutation(&mut self.inner))
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         if count > 0 {
-            self.revisions.bump();
+            self.bump_edit(call, EditScope::Moved);
         }
         Ok(count)
     }
@@ -2036,6 +2077,7 @@ impl PyDocument {
     fn expected_replacements(
         &mut self,
         py: Python<'_>,
+        call: &'static str,
         pairs: &[(&str, &str, Option<usize>)],
         batch: bool,
     ) -> PyResult<Vec<usize>> {
@@ -2044,14 +2086,19 @@ impl PyDocument {
             .map_err(|error| rdocx_to_pyerr(py, error))?
             .map_err(|mismatch| crate::replacement_count_to_pyerr(py, &mismatch, batch))?;
         if counts.iter().any(|count| *count > 0) {
-            self.revisions.bump();
+            self.bump_edit(call, EditScope::Moved);
         }
         Ok(counts)
     }
 
     // Both checked item and physical cell routes share singular count/error and
     // publication policy. The concrete closures are the two actual consumers.
-    pub(crate) fn scoped_replacement<F>(&mut self, py: Python<'_>, mutation: F) -> PyResult<usize>
+    pub(crate) fn scoped_replacement<F>(
+        &mut self,
+        py: Python<'_>,
+        call: &'static str,
+        mutation: F,
+    ) -> PyResult<usize>
     where
         F: FnOnce(
                 &mut rdocx::Document,
@@ -2063,7 +2110,7 @@ impl PyDocument {
             .map_err(|error| rdocx_to_pyerr(py, error))?
             .map_err(|mismatch| crate::replacement_count_to_pyerr(py, &mismatch, false))?;
         if count > 0 {
-            self.revisions.bump();
+            self.bump_edit(call, EditScope::Moved);
         }
         Ok(count)
     }
@@ -2395,9 +2442,13 @@ impl PyDocument {
                     error
                 }
             })?;
-            return slf
-                .borrow_mut(py)
-                .split_body_run(py, body_index, run_index, character_offset);
+            return slf.borrow_mut(py).split_body_run(
+                py,
+                "Document.split_run",
+                body_index,
+                run_index,
+                character_offset,
+            );
         };
         let paragraph = paragraph.borrow();
         if !paragraph.belongs_to(py, &slf) {
@@ -2414,7 +2465,13 @@ impl PyDocument {
         };
         let mut document = slf.borrow_mut(py);
         if let Some(body_index) = document.inner.content_index_of_paragraph(paragraph_index) {
-            return document.split_body_run(py, body_index, run_index, character_offset);
+            return document.split_body_run(
+                py,
+                "Document.split_run",
+                body_index,
+                run_index,
+                character_offset,
+            );
         }
         // A paragraph inside a block content control has no direct body index.
         let run_count = |document: &rdocx::Document| {
@@ -2430,7 +2487,7 @@ impl PyDocument {
             .split_run(run_index, character_offset)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         if run_count(&document.inner) != before {
-            document.revisions.bump();
+            document.bump_edit("Document.split_run", EditScope::Moved);
         }
         Ok(boundary)
     }
@@ -2651,7 +2708,7 @@ impl PyDocument {
             })
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         if changed {
-            self.revisions.bump();
+            self.bump_edit("Document.compare", EditScope::Moved);
         }
         PyTuple::new(
             py,
@@ -2911,14 +2968,7 @@ impl PyDocument {
     }
 
     fn insert_section(&mut self, py: Python<'_>, index: usize) -> PyResult<()> {
-        if index > self.inner.section_count() {
-            return Err(PyIndexError::new_err("section index out of range"));
-        }
-        self.inner
-            .insert_section(index)
-            .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
-        Ok(())
+        self.insert_section_for(py, index, "Document.insert_section")
     }
 
     fn remove_section(&mut self, py: Python<'_>, index: usize) -> PyResult<()> {
@@ -2928,7 +2978,7 @@ impl PyDocument {
         self.inner
             .remove_section(index)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        self.bump_edit("Document.remove_section", EditScope::Moved);
         Ok(())
     }
 
@@ -2964,7 +3014,8 @@ impl PyDocument {
             }
         };
         let index = slf.borrow().inner.section_count();
-        slf.borrow_mut().insert_section(py, index)?;
+        slf.borrow_mut()
+            .insert_section_for(py, index, "Document.add_section")?;
         let options = pyo3::types::PyDict::new(py);
         options.set_item("break_type", break_type)?;
         slf.call_method("update_section", (index,), Some(&options))
@@ -3314,7 +3365,7 @@ impl PyDocument {
                     .create_section_story(section_index, kind, variant)
             })
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        self.bump_edit("Document.create_section_story", EditScope::Moved);
         Ok(story_snapshot(&story))
     }
 
@@ -3334,7 +3385,7 @@ impl PyDocument {
                     .link_section_story(section_index, kind, variant, &story)
             })
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        self.bump_edit("Document.link_section_story", EditScope::Moved);
         Ok(story_snapshot(&linked))
     }
 
@@ -3352,7 +3403,7 @@ impl PyDocument {
                     .unlink_section_story(section_index, kind, variant)
             })
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        self.bump_edit("Document.unlink_section_story", EditScope::Moved);
         Ok(story_snapshot(&story))
     }
 
@@ -3421,14 +3472,14 @@ impl PyDocument {
     fn set_header(&mut self, py: Python<'_>, text: &str) -> PyResult<()> {
         py.detach(|| self.inner.try_set_header(text))
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        self.bump_edit("Document.set_header", EditScope::Moved);
         Ok(())
     }
 
     fn set_footer(&mut self, py: Python<'_>, text: &str) -> PyResult<()> {
         py.detach(|| self.inner.try_set_footer(text))
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        self.bump_edit("Document.set_footer", EditScope::Moved);
         Ok(())
     }
 
@@ -3441,7 +3492,7 @@ impl PyDocument {
         let location = self.native_location(py, &item)?;
         py.detach(|| self.inner.set_story_text(&location, text))
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        self.bump_edit("Document.set_story_text", EditScope::Moved);
         Ok(())
     }
 
@@ -3455,7 +3506,7 @@ impl PyDocument {
         let story = self.native_story(py, &story)?;
         py.detach(|| self.inner.add_hyperlink_to_story(&story, text, url))
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        self.bump_edit("Document.add_hyperlink_to_story", EditScope::Moved);
         Ok(())
     }
 
@@ -3489,7 +3540,7 @@ impl PyDocument {
                 )
             })
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        self.bump_edit("Document.add_picture", EditScope::Moved);
         self.story_item_snapshot(py, &location)
     }
 
@@ -3529,7 +3580,7 @@ impl PyDocument {
             ));
         }
         .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        self.bump_edit("Document.add_comment", EditScope::Moved);
         Ok(id)
     }
 
@@ -3553,7 +3604,7 @@ impl PyDocument {
             .inner
             .add_comment_on_text(anchor, occurrence, author, initials, text, date)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        self.bump_edit("Document.add_comment_on_text", EditScope::Moved);
         Ok(id)
     }
 
@@ -3577,7 +3628,7 @@ impl PyDocument {
                 .move_comment(id, rdocx::StoryRunRange { start, end })
         })
         .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        self.bump_edit("Document.move_comment", EditScope::Moved);
         Ok(())
     }
 
@@ -3592,7 +3643,7 @@ impl PyDocument {
     ) -> PyResult<()> {
         py.detach(|| self.inner.move_comment_to_text(id, anchor, occurrence))
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        self.bump_edit("Document.move_comment_to_text", EditScope::Moved);
         Ok(())
     }
 
@@ -3609,7 +3660,7 @@ impl PyDocument {
             .inner
             .reply_to_with_date(parent_id, author, text, date)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        self.bump_edit("Document.reply_to", EditScope::Moved);
         Ok(id)
     }
 
@@ -3620,7 +3671,7 @@ impl PyDocument {
             .resolve_comment(id, resolved)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         if updated {
-            self.revisions.bump();
+            self.bump_edit("Document.resolve_comment", EditScope::Moved);
         }
         Ok(updated)
     }
@@ -3631,7 +3682,7 @@ impl PyDocument {
             .remove_comment(id)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         if removed {
-            self.revisions.bump();
+            self.bump_edit("Document.remove_comment", EditScope::Moved);
         }
         Ok(removed)
     }
@@ -3721,7 +3772,7 @@ impl PyDocument {
             })
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         if changed {
-            self.revisions.bump();
+            self.bump_edit("Document.rebuild_toc", EditScope::Moved);
         }
         Ok(PyTocRebuildReport {
             entry_count: report.entry_count,
@@ -3749,19 +3800,23 @@ impl PyDocument {
     }
 
     fn accept_all(&mut self, py: Python<'_>) -> PyResult<usize> {
-        self.counted_mutation(py, rdocx::Document::accept_all)
+        self.counted_mutation(py, "Document.accept_all", rdocx::Document::accept_all)
     }
 
     fn reject_all(&mut self, py: Python<'_>) -> PyResult<usize> {
-        self.counted_mutation(py, rdocx::Document::reject_all)
+        self.counted_mutation(py, "Document.reject_all", rdocx::Document::reject_all)
     }
 
     fn accept_revisions_by_author(&mut self, py: Python<'_>, author: &str) -> PyResult<usize> {
-        self.counted_mutation(py, |document| document.accept_revisions_by_author(author))
+        self.counted_mutation(py, "Document.accept_revisions_by_author", |document| {
+            document.accept_revisions_by_author(author)
+        })
     }
 
     fn reject_revisions_by_author(&mut self, py: Python<'_>, author: &str) -> PyResult<usize> {
-        self.counted_mutation(py, |document| document.reject_revisions_by_author(author))
+        self.counted_mutation(py, "Document.reject_revisions_by_author", |document| {
+            document.reject_revisions_by_author(author)
+        })
     }
 
     #[pyo3(signature = (*, start, end))]
@@ -3771,7 +3826,7 @@ impl PyDocument {
         start: &str,
         end: &str,
     ) -> PyResult<usize> {
-        self.counted_mutation(py, |document| {
+        self.counted_mutation(py, "Document.accept_revisions_in_date_range", |document| {
             document.accept_revisions_in_date_range(start, end)
         })
     }
@@ -3783,17 +3838,21 @@ impl PyDocument {
         start: &str,
         end: &str,
     ) -> PyResult<usize> {
-        self.counted_mutation(py, |document| {
+        self.counted_mutation(py, "Document.reject_revisions_in_date_range", |document| {
             document.reject_revisions_in_date_range(start, end)
         })
     }
 
     fn accept_revision_id(&mut self, py: Python<'_>, id: i32) -> PyResult<usize> {
-        self.counted_mutation(py, |document| document.accept_revision_id(id))
+        self.counted_mutation(py, "Document.accept_revision_id", |document| {
+            document.accept_revision_id(id)
+        })
     }
 
     fn reject_revision_id(&mut self, py: Python<'_>, id: i32) -> PyResult<usize> {
-        self.counted_mutation(py, |document| document.reject_revision_id(id))
+        self.counted_mutation(py, "Document.reject_revision_id", |document| {
+            document.reject_revision_id(id)
+        })
     }
 
     /// Replace literal text only inside a checked paragraph, table or control item.
@@ -3807,7 +3866,7 @@ impl PyDocument {
         expect: Option<usize>,
     ) -> PyResult<usize> {
         let location = self.native_location(py, item)?;
-        self.scoped_replacement(py, |document| {
+        self.scoped_replacement(py, "Document.replace_text_at", |document| {
             document.try_replace_text_at(&location, old, new, expect)
         })
     }
@@ -3821,12 +3880,16 @@ impl PyDocument {
         expect: Option<usize>,
     ) -> PyResult<usize> {
         if expect.is_none() {
-            return self.counted_mutation(py, |document| {
+            return self.counted_mutation(py, "Document.try_replace_text", |document| {
                 document.try_replace_text(placeholder, replacement)
             });
         }
-        let counts =
-            self.expected_replacements(py, &[(placeholder, replacement, expect)], false)?;
+        let counts = self.expected_replacements(
+            py,
+            "Document.try_replace_text",
+            &[(placeholder, replacement, expect)],
+            false,
+        )?;
         Ok(counts[0])
     }
 
@@ -3857,7 +3920,7 @@ impl PyDocument {
                 (placeholder.as_str(), replacement.as_str(), *expected)
             })
             .collect::<Vec<_>>();
-        let counts = self.expected_replacements(py, &pairs, true)?;
+        let counts = self.expected_replacements(py, "Document.replace_all", &pairs, true)?;
         PyTuple::new(py, counts)
     }
 
@@ -3866,7 +3929,9 @@ impl PyDocument {
         py: Python<'_>,
         patterns: Vec<(String, String)>,
     ) -> PyResult<usize> {
-        self.counted_mutation(py, |document| document.replace_all_regex(&patterns))
+        self.counted_mutation(py, "Document.replace_all_regex", |document| {
+            document.replace_all_regex(&patterns)
+        })
     }
 
     #[pyo3(signature = (
@@ -3914,7 +3979,9 @@ impl PyDocument {
             merge_record_number,
             merge_sequence_number,
         };
-        self.counted_mutation(py, |document| document.update_fields(&context))
+        self.counted_mutation(py, "Document.update_fields", |document| {
+            document.update_fields(&context)
+        })
     }
 
     fn update_page_fields(&mut self, py: Python<'_>) -> PyResult<usize> {
@@ -3922,7 +3989,7 @@ impl PyDocument {
             .detach(|| self.inner.update_page_fields())
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         if updated != 0 {
-            self.revisions.bump();
+            self.bump_edit("Document.update_page_fields", EditScope::Moved);
         }
         Ok(updated)
     }
@@ -3935,7 +4002,7 @@ impl PyDocument {
             .detach(|| self.inner.update_layout_backed_fields())
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         if report.updated_count() != 0 {
-            self.revisions.bump();
+            self.bump_edit("Document.update_layout_backed_fields", EditScope::Moved);
         }
         Ok(PyLayoutBackedFieldUpdateReport {
             page_fields: report.page_fields,
@@ -3958,7 +4025,7 @@ impl PyDocument {
         self.inner
             .insert_toc(index, max_level)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        self.bump_edit("Document.insert_toc", EditScope::Moved);
         Ok(())
     }
 
@@ -4081,7 +4148,7 @@ impl PyDocument {
             .detach(|| self.inner.try_remove_content(index))
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         if removed {
-            self.revisions.bump();
+            self.bump_edit("Document.remove_content", EditScope::Moved);
         }
         Ok(removed)
     }
@@ -4155,7 +4222,7 @@ impl PyDocument {
             let table = (0..document.inner.table_count())
                 .find(|table| document.inner.content_index_of_table(*table) == Some(index))
                 .expect("an inserted body table has a table index");
-            document.revisions.bump();
+            document.bump_edit("Document.insert_table", EditScope::Moved);
             document.revisions.capture(smallvec![PathSeg::Body(table)])
         };
         Py::new(py, PyTable::new(slf, path))
@@ -4181,7 +4248,8 @@ impl PyDocument {
             .inner
             .remove_content_at(&location)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        slf.borrow_mut(py).revisions.bump();
+        slf.borrow_mut(py)
+            .bump_edit("Document.pop_content", EditScope::Moved);
         Ok(PyContentFragment { inner: fragment })
     }
 
@@ -4208,7 +4276,8 @@ impl PyDocument {
             .inner
             .insert_content(&location, fragment)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        slf.borrow_mut(py).revisions.bump();
+        slf.borrow_mut(py)
+            .bump_edit("Document.insert_content", EditScope::Moved);
         Ok(())
     }
 
@@ -4233,7 +4302,8 @@ impl PyDocument {
             .inner
             .clone_content(&source, &destination)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        slf.borrow_mut(py).revisions.bump();
+        slf.borrow_mut(py)
+            .bump_edit("Document.clone_content", EditScope::Moved);
         Ok(())
     }
 
@@ -4258,7 +4328,8 @@ impl PyDocument {
             .inner
             .move_content(&source, &destination)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        slf.borrow_mut(py).revisions.bump();
+        slf.borrow_mut(py)
+            .bump_edit("Document.move_content", EditScope::Moved);
         Ok(())
     }
 }

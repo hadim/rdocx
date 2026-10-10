@@ -27966,6 +27966,10 @@ fn raw_xml_replaces_slides_layouts_shapes_and_text_bodies_and_refuses_bad_xml() 
     for (xml, message) in [
         (&b"<p:pic/>"[..], "got p:pic"),
         (b"<p:sp><p:nvSpPr>", "not closed"),
+        (
+            b"<p:sp><p:bogus/></p:sp>",
+            "p:bogus cannot sit directly in p:sp",
+        ),
     ] {
         let error = presentation.replace_shape_xml(0, &[0], xml).unwrap_err();
         assert!(error.to_string().contains(message), "{error}");

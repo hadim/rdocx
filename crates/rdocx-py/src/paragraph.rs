@@ -359,7 +359,7 @@ impl PyParagraph {
                     .paragraph_story_location(index)
                     .map_err(|error| crate::rdocx_to_pyerr(py, error))?
                     .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
-                document.scoped_replacement(py, |document| {
+                document.scoped_replacement(py, "Paragraph.replace_text", |document| {
                     document.try_replace_text_at(&location, old, new, expect)
                 })
             }
@@ -368,7 +368,7 @@ impl PyParagraph {
                 row,
                 cell,
                 paragraph,
-            } => document.scoped_replacement(py, |document| {
+            } => document.scoped_replacement(py, "Paragraph.replace_text", |document| {
                 document.try_replace_text_in_cell(
                     (table, row, cell),
                     Some(paragraph),

@@ -2,15 +2,17 @@
 //! checked XML, the way out when the model has no API for a feature.
 //!
 //! A replacement must hold exactly one element of the addressed kind, parse
-//! with the model, keep every element it names, and reference only
-//! relationships the main document part already has. Anything else is
+//! with the model, keep every element it names, place the elements Word
+//! checks where the schema allows them, and reference only relationships of
+//! the right type that the main document part already has. Anything else is
 //! refused before the document changes.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
-use quick_xml::events::Event;
-use quick_xml::name::ResolveResult;
-use quick_xml::{NsReader, Reader};
+use quick_xml::events::{BytesText, Event};
+use quick_xml::name::{QName, ResolveResult};
+use quick_xml::{NsReader, Reader, Writer};
 use rdocx_oxml::document::{BodyContent, CT_Body, CT_Document, CT_SectPr};
 use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc};
 use rdocx_oxml::text::{AcceptedRunPath, CT_P, CT_R};
@@ -20,6 +22,8 @@ use crate::{Document, Error, Result};
 
 const W_NS: &[u8] = b"http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const R_NS: &[u8] = b"http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+const M_NS: &[u8] = b"http://schemas.openxmlformats.org/officeDocument/2006/math";
+const MC_NS: &[u8] = b"http://schemas.openxmlformats.org/markup-compatibility/2006";
 
 /// A paragraph addressed by the indexes of [`Document::paragraph`], or of
 /// [`Document::table`], [`crate::TableRef::cell`] and
@@ -155,6 +159,11 @@ impl Document {
         };
         let fragment = strip_xml_declaration(xml);
         let root = single_root_name(fragment).map_err(invalid)?;
+        if root.rsplit(':').next() != Some(target.local_name()) {
+            return Err(invalid(format!("got {root}")));
+        }
+        let fragment = cdata_as_text(fragment)?;
+        let fragment = fragment.as_ref();
         let (before, after) = target.wrapper();
         let mut wrapped = self.shell_root()?;
         wrapped.extend_from_slice(b"<w:body>");
@@ -163,6 +172,7 @@ impl Document {
         wrapped.extend_from_slice(after.as_bytes());
         wrapped.extend_from_slice(b"</w:body></w:document>");
 
+        check_vocabulary(&wrapped).map_err(invalid)?;
         let parsed = CT_Document::from_xml(&wrapped)
             .map_err(|error| invalid(format!("the XML does not parse: {error}")))?;
         let element = extract(target, parsed.body).ok_or_else(|| {
@@ -231,8 +241,8 @@ impl Document {
                 relationships
                     .items
                     .iter()
-                    .map(|relationship| relationship.id.clone())
-                    .collect::<BTreeSet<_>>()
+                    .map(|relationship| (relationship.id.clone(), relationship.rel_type.clone()))
+                    .collect::<BTreeMap<_, _>>()
             })
             .unwrap_or_default();
         let mut reader = NsReader::from_reader(xml);
@@ -257,7 +267,26 @@ impl Document {
                             element.decoder(),
                         )
                         .map_err(xml_error)?;
-                    if !known.contains(value.as_ref()) {
+                    let attribute_local = String::from_utf8_lossy(local.as_ref()).into_owned();
+                    if let Some(rel_type) = known.get(value.as_ref()) {
+                        let element_local = element.local_name();
+                        if let Some(expected) = expected_relationship(
+                            element_local.as_ref(),
+                            attribute_local.as_bytes(),
+                        ) && !expected
+                            .iter()
+                            .any(|kind| rel_type.rsplit('/').next() == Some(*kind))
+                        {
+                            return Err(Error::Other(format!(
+                                "replace_xml refused: r:{attribute_local}=\"{value}\" on {} names a \
+                                 {} relationship where Word expects {}, reference a relationship \
+                                 of that type",
+                                String::from_utf8_lossy(element.name().as_ref()),
+                                rel_type.rsplit('/').next().unwrap_or_default(),
+                                expected.join(" or ")
+                            )));
+                        }
+                    } else {
                         return Err(Error::Other(format!(
                             "replace_xml refused: r:{}=\"{value}\" names no relationship of the \
                              document part, add the target first (for example with add_picture \
@@ -569,6 +598,11 @@ fn single_root_name(fragment: &[u8]) -> std::result::Result<String, String> {
             }
             Event::Start(_) => depth += 1,
             Event::End(_) => depth = depth.saturating_sub(1),
+            Event::DocType(_) => {
+                return Err(
+                    "a DOCTYPE is not allowed, write the text its entities stand for".to_owned(),
+                );
+            }
             Event::Text(text) if depth == 0 && !text.iter().all(u8::is_ascii_whitespace) => {
                 return Err("it holds text outside its root element".to_owned());
             }
@@ -579,6 +613,482 @@ fn single_root_name(fragment: &[u8]) -> std::result::Result<String, String> {
             _ => {}
         }
         buffer.clear();
+    }
+}
+
+/// The relationship types an `r:` attribute must name, by the local names
+/// of its element and attribute, or `None` when only its existence is
+/// checked.
+fn expected_relationship(element: &[u8], attribute: &[u8]) -> Option<&'static [&'static str]> {
+    Some(match (element, attribute) {
+        (b"hyperlink" | b"hlinkClick" | b"hlinkHover", b"id") => &["hyperlink"],
+        (b"blip", b"embed" | b"link") | (b"imagedata", b"id") => &["image"],
+        (b"headerReference", b"id") => &["header"],
+        (b"footerReference", b"id") => &["footer"],
+        (b"chart", b"id") => &["chart"],
+        (b"relIds", b"dm") => &["diagramData"],
+        (b"relIds", b"lo") => &["diagramLayout"],
+        (b"relIds", b"qs") => &["diagramQuickStyle"],
+        (b"relIds", b"cs") => &["diagramColors"],
+        (b"OLEObject", b"id") => &["oleObject", "package"],
+        (b"altChunk", b"id") => &["aFChunk"],
+        _ => return None,
+    })
+}
+
+/// `xml` with every CDATA section written as escaped text, which is what it
+/// stands for: the model would otherwise keep the markers as literal text.
+fn cdata_as_text(xml: &[u8]) -> Result<Cow<'_, [u8]>> {
+    if !xml.windows(9).any(|window| window == b"<![CDATA[") {
+        return Ok(Cow::Borrowed(xml));
+    }
+    let mut reader = Reader::from_reader(xml);
+    reader.config_mut().trim_text(false);
+    let mut writer = Writer::new(Vec::new());
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer).map_err(xml_error)? {
+            Event::Eof => return Ok(Cow::Owned(writer.into_inner())),
+            Event::CData(text) => {
+                let text = String::from_utf8_lossy(text.as_ref()).into_owned();
+                writer
+                    .write_event(Event::Text(BytesText::new(&text)))
+                    .map_err(|error| xml_error(error.into()))?;
+            }
+            event => writer
+                .write_event(event)
+                .map_err(|error| xml_error(error.into()))?,
+        }
+        buffer.clear();
+    }
+}
+
+/// Range and revision markers that may sit between the children of a
+/// paragraph, table, row or cell.
+const RANGE_MARKUP: &[&str] = &[
+    "bookmarkStart",
+    "bookmarkEnd",
+    "commentRangeStart",
+    "commentRangeEnd",
+    "proofErr",
+    "permStart",
+    "permEnd",
+    "moveFromRangeStart",
+    "moveFromRangeEnd",
+    "moveToRangeStart",
+    "moveToRangeEnd",
+    "customXmlInsRangeStart",
+    "customXmlInsRangeEnd",
+    "customXmlDelRangeStart",
+    "customXmlDelRangeEnd",
+    "customXmlMoveFromRangeStart",
+    "customXmlMoveFromRangeEnd",
+    "customXmlMoveToRangeStart",
+    "customXmlMoveToRangeEnd",
+    "ins",
+    "del",
+    "moveFrom",
+    "moveTo",
+];
+const PARAGRAPH_CONTENT: &[&str] = &[
+    "customXml",
+    "smartTag",
+    "sdt",
+    "dir",
+    "bdo",
+    "r",
+    "fldSimple",
+    "hyperlink",
+    "subDoc",
+];
+const RUN_CONTENT: &[&str] = &[
+    "rPr",
+    "br",
+    "t",
+    "contentPart",
+    "delText",
+    "instrText",
+    "delInstrText",
+    "noBreakHyphen",
+    "softHyphen",
+    "dayShort",
+    "monthShort",
+    "yearShort",
+    "dayLong",
+    "monthLong",
+    "yearLong",
+    "annotationRef",
+    "footnoteRef",
+    "endnoteRef",
+    "separator",
+    "continuationSeparator",
+    "sym",
+    "pgNum",
+    "cr",
+    "tab",
+    "object",
+    "pict",
+    "fldChar",
+    "ruby",
+    "footnoteReference",
+    "endnoteReference",
+    "commentReference",
+    "drawing",
+    "ptab",
+    "lastRenderedPageBreak",
+];
+const RUN_PROPERTIES: &[&str] = &[
+    "rStyle",
+    "rFonts",
+    "b",
+    "bCs",
+    "i",
+    "iCs",
+    "caps",
+    "smallCaps",
+    "strike",
+    "dstrike",
+    "outline",
+    "shadow",
+    "emboss",
+    "imprint",
+    "noProof",
+    "snapToGrid",
+    "vanish",
+    "webHidden",
+    "color",
+    "spacing",
+    "w",
+    "kern",
+    "position",
+    "sz",
+    "szCs",
+    "highlight",
+    "u",
+    "effect",
+    "bdr",
+    "shd",
+    "fitText",
+    "vertAlign",
+    "rtl",
+    "cs",
+    "em",
+    "lang",
+    "eastAsianLayout",
+    "specVanish",
+    "oMath",
+    "ins",
+    "del",
+    "moveFrom",
+    "moveTo",
+    "rPrChange",
+];
+const PARAGRAPH_PROPERTIES: &[&str] = &[
+    "pStyle",
+    "keepNext",
+    "keepLines",
+    "pageBreakBefore",
+    "framePr",
+    "widowControl",
+    "numPr",
+    "suppressLineNumbers",
+    "pBdr",
+    "shd",
+    "tabs",
+    "suppressAutoHyphens",
+    "kinsoku",
+    "wordWrap",
+    "overflowPunct",
+    "topLinePunct",
+    "autoSpaceDE",
+    "autoSpaceDN",
+    "bidi",
+    "adjustRightInd",
+    "snapToGrid",
+    "spacing",
+    "ind",
+    "contextualSpacing",
+    "mirrorIndents",
+    "suppressOverlap",
+    "jc",
+    "textDirection",
+    "textAlignment",
+    "textboxTightWrap",
+    "outlineLvl",
+    "divId",
+    "cnfStyle",
+    "rPr",
+    "sectPr",
+    "pPrChange",
+];
+const TABLE_PROPERTIES: &[&str] = &[
+    "tblStyle",
+    "tblpPr",
+    "tblOverlap",
+    "bidiVisual",
+    "tblStyleRowBandSize",
+    "tblStyleColBandSize",
+    "tblW",
+    "jc",
+    "tblCellSpacing",
+    "tblInd",
+    "tblBorders",
+    "shd",
+    "tblLayout",
+    "tblCellMar",
+    "tblLook",
+    "tblCaption",
+    "tblDescription",
+    "tblPrChange",
+];
+const ROW_PROPERTIES: &[&str] = &[
+    "cnfStyle",
+    "divId",
+    "gridBefore",
+    "gridAfter",
+    "wBefore",
+    "wAfter",
+    "cantSplit",
+    "trHeight",
+    "tblHeader",
+    "tblCellSpacing",
+    "jc",
+    "hidden",
+    "ins",
+    "del",
+    "trPrChange",
+];
+const CELL_PROPERTIES: &[&str] = &[
+    "cnfStyle",
+    "tcW",
+    "gridSpan",
+    "hMerge",
+    "vMerge",
+    "tcBorders",
+    "shd",
+    "noWrap",
+    "tcMar",
+    "textDirection",
+    "tcFitText",
+    "vAlign",
+    "hideMark",
+    "headers",
+    "cellIns",
+    "cellDel",
+    "cellMerge",
+    "tcPrChange",
+];
+const SECTION_PROPERTIES: &[&str] = &[
+    "headerReference",
+    "footerReference",
+    "footnotePr",
+    "endnotePr",
+    "type",
+    "pgSz",
+    "pgMar",
+    "paperSrc",
+    "pgBorders",
+    "lnNumType",
+    "pgNumType",
+    "cols",
+    "formProt",
+    "vAlign",
+    "noEndnote",
+    "titlePg",
+    "textDirection",
+    "bidi",
+    "rtlGutter",
+    "docGrid",
+    "printerSettings",
+    "sectPrChange",
+];
+
+/// The `w:` children a WordprocessingML element Word checks may hold, and
+/// whether it also takes math (`m:`) content.
+fn word_children(parent: &[u8]) -> Option<(&'static [&'static [&'static str]], bool)> {
+    Some(match parent {
+        b"p" => (&[&["pPr"], PARAGRAPH_CONTENT, RANGE_MARKUP], true),
+        b"hyperlink" => (&[PARAGRAPH_CONTENT, RANGE_MARKUP], true),
+        b"r" => (&[RUN_CONTENT], false),
+        b"rPr" => (&[RUN_PROPERTIES], false),
+        b"pPr" => (&[PARAGRAPH_PROPERTIES], false),
+        b"tbl" => (
+            &[
+                &["tblPr", "tblGrid", "tr", "customXml", "sdt"],
+                RANGE_MARKUP,
+            ],
+            false,
+        ),
+        b"tr" => (
+            &[&["tblPrEx", "trPr", "tc", "customXml", "sdt"], RANGE_MARKUP],
+            false,
+        ),
+        b"tc" => (
+            &[
+                &["tcPr", "p", "tbl", "customXml", "sdt", "altChunk"],
+                RANGE_MARKUP,
+            ],
+            false,
+        ),
+        b"tblPr" => (&[TABLE_PROPERTIES], false),
+        b"trPr" => (&[ROW_PROPERTIES], false),
+        b"tcPr" => (&[CELL_PROPERTIES], false),
+        b"sectPr" => (&[SECTION_PROPERTIES], false),
+        _ => return None,
+    })
+}
+
+/// The children one of which an element must hold for Word to open it.
+fn word_requirement(parent: &[u8]) -> Option<(&'static [&'static str], &'static str)> {
+    Some(match parent {
+        b"tc" => (&["p", "sdt", "customXml"], "a w:tc must hold a w:p"),
+        b"tr" => (&["tc", "sdt", "customXml"], "a w:tr must hold a w:tc"),
+        b"tbl" => (&["tr", "sdt", "customXml"], "a w:tbl must hold a w:tr"),
+        _ => return None,
+    })
+}
+
+/// One open element of a vocabulary walk.
+struct VocabularyFrame {
+    /// The local name when the element is in the `w:` namespace.
+    word: Option<Vec<u8>>,
+    /// The namespaces mc:Ignorable lists in scope.
+    ignorable: Vec<Vec<u8>>,
+    /// Inside mc:AlternateContent, whose choices Word resolves itself.
+    alternate: bool,
+    /// Whether the element holds one of the children it requires.
+    satisfied: bool,
+}
+
+/// Refuse an element Word would refuse or repair in a replacement: a `w:`
+/// element where its parent does not allow it, an element of another
+/// namespace that mc:Ignorable does not cover, a cell without a paragraph,
+/// a row without a cell, a table without a row, or section properties
+/// without a page width and height.
+fn check_vocabulary(xml: &[u8]) -> std::result::Result<(), String> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut stack: Vec<VocabularyFrame> = Vec::new();
+    loop {
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| format!("the XML is malformed: {error}"))?;
+        let namespace = match namespace {
+            ResolveResult::Bound(uri) => uri.as_ref().to_vec(),
+            _ => Vec::new(),
+        };
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                let local = element.local_name().as_ref().to_vec();
+                let name = String::from_utf8_lossy(element.name().as_ref()).into_owned();
+                let parent = stack.last();
+                let alternate = parent.is_some_and(|frame| frame.alternate)
+                    || (namespace == MC_NS && local == b"AlternateContent");
+                let mut ignorable = parent
+                    .map(|frame| frame.ignorable.clone())
+                    .unwrap_or_default();
+                for attribute in element.attributes().flatten() {
+                    let (attribute_namespace, attribute_local) =
+                        reader.resolver().resolve_attribute(attribute.key);
+                    if matches!(attribute_namespace, ResolveResult::Bound(uri) if uri.as_ref() == MC_NS)
+                        && attribute_local.as_ref() == b"Ignorable"
+                    {
+                        for prefix in
+                            String::from_utf8_lossy(attribute.value.as_ref()).split_whitespace()
+                        {
+                            let qualified = format!("{prefix}:x");
+                            if let (ResolveResult::Bound(uri), _) = reader
+                                .resolver()
+                                .resolve_element(QName(qualified.as_bytes()))
+                            {
+                                ignorable.push(uri.as_ref().to_vec());
+                            }
+                        }
+                    }
+                }
+                if let Some(frame) = parent
+                    && !frame.alternate
+                    && let Some(parent_local) = &frame.word
+                    && let Some((allowed, math)) = word_children(parent_local)
+                {
+                    let parent_name = String::from_utf8_lossy(parent_local);
+                    let known = if namespace == W_NS {
+                        allowed
+                            .iter()
+                            .any(|list| list.iter().any(|child| child.as_bytes() == local))
+                    } else {
+                        (math && namespace == M_NS)
+                            || (namespace == MC_NS && local == b"AlternateContent")
+                            || frame.ignorable.contains(&namespace)
+                    };
+                    if !known {
+                        return Err(format!(
+                            "{name} cannot sit directly in w:{parent_name}, where Word refuses \
+                             or repairs the file, so the replacement was refused"
+                        ));
+                    }
+                }
+                if let Some(frame) = stack.last_mut()
+                    && let Some(parent_local) = &frame.word
+                    && namespace == W_NS
+                {
+                    let satisfies = match parent_local.as_slice() {
+                        b"sectPr" => {
+                            local == b"pgSz"
+                                && [b"w".as_slice(), b"h"].iter().all(|wanted| {
+                                    element.attributes().flatten().any(|attribute| {
+                                        attribute.key.local_name().as_ref() == *wanted
+                                    })
+                                })
+                        }
+                        other => word_requirement(other).is_some_and(|(children, _)| {
+                            children.iter().any(|child| child.as_bytes() == local)
+                        }),
+                    };
+                    frame.satisfied |= satisfies;
+                }
+                let in_section_change = stack
+                    .last()
+                    .and_then(|frame| frame.word.as_deref())
+                    .is_some_and(|parent_local| parent_local == b"sectPrChange");
+                let frame = VocabularyFrame {
+                    word: (namespace == W_NS).then_some(local),
+                    ignorable,
+                    alternate,
+                    satisfied: in_section_change,
+                };
+                if matches!(event, Event::Empty(_)) {
+                    finish_frame(&frame)?;
+                } else {
+                    stack.push(frame);
+                }
+            }
+            Event::End(_) => {
+                if let Some(frame) = stack.pop() {
+                    finish_frame(&frame)?;
+                }
+            }
+            Event::Eof => return Ok(()),
+            _ => {}
+        }
+        buffer.clear();
+    }
+}
+
+/// Fail when a closed element lacks the child Word requires.
+fn finish_frame(frame: &VocabularyFrame) -> std::result::Result<(), String> {
+    if frame.alternate || frame.satisfied {
+        return Ok(());
+    }
+    match frame.word.as_deref() {
+        Some(b"sectPr") => Err(
+            "a w:sectPr must hold a w:pgSz with w:w and w:h, as Word needs a page size".to_owned(),
+        ),
+        Some(local) => match word_requirement(local) {
+            Some((_, message)) => Err(format!("{message}, which Word needs to open the file")),
+            None => Ok(()),
+        },
+        None => Ok(()),
     }
 }
 

@@ -157,10 +157,10 @@ class ValidationIssue:
 
 @_final
 class Presentation:
-    def __new__(cls, path: _Path | None = None) -> Presentation: ...
+    def __new__(cls, path: _Path | _IO[bytes] | None = None) -> Presentation: ...
     @staticmethod
     def from_bytes(bytes: bytes) -> Presentation: ...
-    def save(self, path: _Path) -> None: ...
+    def save(self, path: _Path | _IO[bytes]) -> None: ...
     def to_bytes(self) -> bytes: ...
     def to_pdf(self) -> bytes: ...
     def render_slide_to_png(self, slide_index: int, dpi: float = 150.0) -> bytes | None: ...
@@ -266,9 +266,12 @@ class Slide:
         """Replace this slide with one ``p:sld`` given as XML.
 
         Raises ``ValueError``, leaving the presentation unchanged, when the XML
-        is malformed, has another root element, does not parse, names an
-        element rpptx would drop, or references a relationship id the slide
-        lacks. The schema is not checked. Held handles retire.
+        is malformed or has a DOCTYPE, has another root element, does not
+        parse, names an element rpptx would drop, places a ``p:`` or ``a:``
+        element where PowerPoint refuses it or uses a namespace mc:Ignorable
+        does not cover, or references a relationship id the slide lacks or
+        one of the wrong type. CDATA is read as the text it holds. Held
+        handles retire.
         """
     def try_replace_text(
         self,
