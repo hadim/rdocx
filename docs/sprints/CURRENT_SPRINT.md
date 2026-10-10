@@ -494,7 +494,7 @@ F-X211 plan. Intake grants no contributor gate credit or arbitrary new nesting
 policy. The approved256 control policy and complete textbox resource,
 namespace, discovery and public compatibility acceptance remain mandatory.
 
-## S91 intake and verification checkpoint, 2026-10-10 10:20UTC
+## S91 intake and verification checkpoint, 2026-10-10 10:33UTC
 
 The latest read-only GitHub refresh found no additional or changed records.
 All19 PRs and26 included issues remain mapped above, with Issues264 and281
@@ -506,9 +506,9 @@ Python, typing, WASM, verified22 package, unchanged49-entry hash and141 policy
 gates. Two publication-dependent policy cases remain skipped. Its integrated
 source exactly matches the independently reviewed worker. F-X195 provider
 source is frozen for independent review, with core and provider runtime gates
-pending. F-X212 retains successful compile and eight parser tests. Its native
-fixture correction needs a test-only compile repair before the remaining
-native and CLI queue. Runtime and attributed hash gates remain outstanding.
-Five stories are completed and integrated, two are in progress and fifteen
+pending. F-X212 retains successful compile and eight parser tests. Its test-only fixture and UTF-8 corrections have clean supplemental reviews.
+The remaining native and CLI queue is running. Runtime and attributed hash gates remain outstanding.
+F-X197 has started in a separate worktree after F-X194 completion.
+Five stories are completed and integrated, three are in progress and fourteen
 remain approved. Final integrated verification, sprint review and close
 preflight remain outstanding. The sprint is not ready for close.

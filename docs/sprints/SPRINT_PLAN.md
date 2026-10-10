@@ -2146,7 +2146,7 @@ CLI validation reports before the template and form programme resumes.
 | F-X194 | Complete Python table text and indentation APIs | M | Completed and integrated, scoped gates passed |
 | F-X195 | Honor caller fonts and variable styles across render paths | L | Core source reviewed, runtime gates and provider wiring remain |
 | F-X196 | Validate visible paragraph content without false empty warnings | S | Completed and integrated |
-| F-X197 | Unify Python colour inputs and font colour formats | L | Approved, implementation pending |
+| F-X197 | Unify Python colour inputs and font colour formats | L | In progress, Base controls and source implementation |
 | F-X198 | Preserve alternate text-box copies during scoped replacement | M | Completed and integrated |
 | F-X199 | Model namespace-qualified empty table cell margins | S | Completed and integrated |
 | F-X200 | Complete Python Word formatting and list parity | L | Approved, implementation pending |
@@ -2165,8 +2165,8 @@ CLI validation reports before the template and form programme resumes.
 
 **Current delivery checkpoint, 2026-10-10**: five of twenty-two active stories
 are completed and integrated, F-X193, F-X194, F-X196, F-X198 and F-X199.
-F-X212 and F-X195 are in progress. Fifteen stories have approved designs and
-await implementation.
+F-X197, F-X212 and F-X195 are in progress. Fourteen stories have approved
+designs and await implementation.
 No design question remains outstanding. Final integrated verification,
 sprint review and verified sprint close remain outstanding.
 
@@ -2875,7 +2875,7 @@ F-X211 plan. Intake grants no contributor gate credit or arbitrary new nesting
 policy. The approved256 control policy and complete textbox resource,
 namespace, discovery and public compatibility acceptance remain mandatory.
 
-## S91 intake and verification checkpoint, 2026-10-10 10:20UTC
+## S91 intake and verification checkpoint, 2026-10-10 10:33UTC
 
 The latest read-only GitHub refresh found no additional or changed records.
 All19 PRs and26 included issues remain mapped above, with Issues264 and281
@@ -2887,9 +2887,9 @@ Python, typing, WASM, verified22 package, unchanged49-entry hash and141 policy
 gates. Two publication-dependent policy cases remain skipped. Its integrated
 source exactly matches the independently reviewed worker. F-X195 provider
 source is frozen for independent review, with core and provider runtime gates
-pending. F-X212 retains successful compile and eight parser tests. Its native
-fixture correction needs a test-only compile repair before the remaining
-native and CLI queue. Runtime and attributed hash gates remain outstanding.
-Five stories are completed and integrated, two are in progress and fifteen
+pending. F-X212 retains successful compile and eight parser tests. Its test-only fixture and UTF-8 corrections have clean supplemental reviews.
+The remaining native and CLI queue is running. Runtime and attributed hash gates remain outstanding.
+F-X197 has started in a separate worktree after F-X194 completion.
+Five stories are completed and integrated, three are in progress and fourteen
 remain approved. Final integrated verification, sprint review and close
 preflight remain outstanding. The sprint is not ready for close.
