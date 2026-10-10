@@ -993,3 +993,27 @@ A foreign/rebound textbox preservation control remains required. Use existing
 unit modules, native regression carrier and Python test_core.py. These are
 dedicated admission controls, not extra frozen compatibility corpus records.
 Do not claim universal parser safety from the content-control guard alone.
+
+## Issue337 rolling intake
+
+Issue [337](https://github.com/tensorbee/rdocx/issues/337), captured at
+2026-10-10 08:47:21 UTC, belongs to the existing typed text-box safety
+contract above. It reports exponential nested projection and normal-stack
+abort in bare and alternating control/text-box paths. These are contributor
+measurements, not local completion evidence. No duplicate F-ID is created.
+
+Freeze source-built 2000-level bare text-box and mixed control/text-box
+subprocess controls before implementation. Both native open and installed
+CLI/Python consumers must return an actionable resource error without abort.
+Measure accepted boundary open and extraction in a release build, retaining
+actual timing, input size and consumer stack. At the reviewed boundary the
+reported target is under one second. Show linear retained representation and
+traversal cost rather than timing alone. Preserve the independently reviewed
+qualified256 content-control boundary. The exact text-box or combined
+resource boundary still follows the measured and reviewed selection above,
+with admission before recursive capture, staging or clone.
+
+The updated PR336 body has the same immutable source head and links this
+report. Reuse the authenticated source once. Full issue/body evidence and
+actual read-only command receipts are retained at
+`/private/tmp/S91-rolling-refresh-20261010T084721Z`. Assessment is not acceptance.

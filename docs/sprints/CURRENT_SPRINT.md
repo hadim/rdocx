@@ -453,3 +453,20 @@ control. F-X195 has six frozen disjoint core-font test stubs, with actual
 Base runs queued. Its thirty-eight immutable PR315 head and base blobs
 are independently authenticated. No contributor gate is credited locally.
 Final integrated full verification and sprint review have not run.
+
+## Rolling Issue337 reconciliation
+
+The 2026-10-10 08:47:21 UTC refresh includes new
+[Issue337](https://github.com/tensorbee/rdocx/issues/337). Its nested text-box
+complexity and stack safety belong to F-X211's existing native admission
+contract. Freeze bare2000-level and mixed-owner subprocess controls, linear
+retained/traversal cost and release boundary timing. The precise resource
+boundary requires local measurement and independent review before adoption.
+PR336 changed its body but retains head935ac165afcd29d34454568ba3b2287a4bac52dc.
+The inventory is eighteen PRs and twenty-six included issues. Issues264 and
+281 stay excluded. No duplicate feature or contributor acceptance is recorded.
+
+F-X212's mechanical extraction now passes its scoped check, five exact tests
+and all49 unchanged output hashes. Its intentional behavior phase remains
+unverified. F-X195 has ten frozen controls and the additional Base runs are
+queued. Final integrated verification and sprint review remain outstanding.

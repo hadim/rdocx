@@ -2165,7 +2165,7 @@ CLI validation reports before the template and form programme resumes.
 
 **Current delivery checkpoint, 2026-10-10**: four of twenty-two active stories
 are completed and integrated, F-X193, F-X196, F-X198 and F-X199. F-X194 is in
-progress, alongside F-X212. Sixteen stories have approved designs and await
+progress, alongside F-X212 and F-X195. Fifteen stories have approved designs and await
 implementation.
 No design question remains outstanding. Final integrated verification,
 sprint review and verified sprint close remain outstanding.
@@ -2173,9 +2173,9 @@ sprint review and verified sprint close remain outstanding.
 **Resolution scope**: resolve every open issue and PR except
 [Issue264](https://github.com/tensorbee/rdocx/issues/264) and
 [Issue281](https://github.com/tensorbee/rdocx/issues/281). Keep those two open as
-requirements discussions. At 2026-10-10 07:05:15 UTC, the refreshed inventory
-contains eighteen open PRs and twenty-seven open issues, including the two
-exclusions. All twenty-five included issues and eighteen PRs map below.
+requirements discussions. At 2026-10-10 08:47:21 UTC, the refreshed inventory
+contains eighteen open PRs and twenty-eight open issues, including the two
+exclusions. All twenty-six included issues and eighteen PRs map below.
 A later PR attaches to its existing issue owner. Assessment is not completion.
 
 | Included issues | Included PRs | S91 acceptance owners | Resolution work |
@@ -2199,7 +2199,7 @@ A later PR attaches to its existing issue owner. Assessment is not completion.
 | [312](https://github.com/tensorbee/rdocx/issues/312) | [327](https://github.com/tensorbee/rdocx/pull/327) | F-X209 | Masters, layouts and themes after F-X208. |
 | [313](https://github.com/tensorbee/rdocx/issues/313) | [319](https://github.com/tensorbee/rdocx/pull/319) | F-X210, consumes F-X195 | Approved metric-compatible fonts and bullet fallbacks, including the approved 3968-byte checkbox subset. |
 | [314](https://github.com/tensorbee/rdocx/issues/314) | Contributions above | All applicable S91 owners | Umbrella checklist, each provider credited once. |
-| [316](https://github.com/tensorbee/rdocx/issues/316), [331](https://github.com/tensorbee/rdocx/issues/331) | [333](https://github.com/tensorbee/rdocx/pull/333), [336](https://github.com/tensorbee/rdocx/pull/336) | F-X211, consumes completed providers | Frozen script corpus, safe XML, residual handles and bounded native content-control parsing. |
+| [316](https://github.com/tensorbee/rdocx/issues/316), [331](https://github.com/tensorbee/rdocx/issues/331), [337](https://github.com/tensorbee/rdocx/issues/337) | [333](https://github.com/tensorbee/rdocx/pull/333), [336](https://github.com/tensorbee/rdocx/pull/336) | F-X211, consumes completed providers | Frozen script corpus, safe XML, residual handles and bounded native control/text-box parsing. |
 
 PR317 spans several owners and is reconciled once across their accepted
 slices. PR326 and PR335 share group-transform changes, adopted once in F-X206.
