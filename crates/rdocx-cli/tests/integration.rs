@@ -4805,6 +4805,8 @@ fn images_extract_writes_each_picture_once_with_a_listing() {
                 anchor: None,
                 name: Some("Logo".to_owned()),
                 description: Some("Company logo".to_owned()),
+                title: None,
+                decorative: false,
             },
         )
         .unwrap();
