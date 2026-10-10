@@ -5764,3 +5764,20 @@ def test_line_spacing_numbers_are_multiples_and_lengths_are_exact():
         paragraph.paragraph_format.line_spacing = True
     with pytest.raises(ValueError, match=re.escape("at least Pt(0.5)")):
         paragraph.runs[0].font.size = Pt(0.25)
+
+
+def test_deeply_nested_content_controls_raise_instead_of_crashing():
+    import rdocx
+
+    depth = 5000
+    body = (
+        "<w:p>"
+        + "<w:sdt><w:sdtContent>" * depth
+        + "<w:r><w:t>x</w:t></w:r>"
+        + "</w:sdtContent></w:sdt>" * depth
+        + "</w:p>"
+    )
+    with pytest.raises(
+        rdocx.RdocxError, match="content control nesting exceeds 64 levels"
+    ):
+        _replace_document_body(rdocx.Document(), body)
