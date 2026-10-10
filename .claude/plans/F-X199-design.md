@@ -34,6 +34,25 @@ changed files are `crates/rdocx-oxml/src/table.rs` and
 implementation and integration. Adapt accepted contributor changes rather
 than independently recreating the same patch.
 
+The pre-implementation refresh assessed updated head
+`7ac2851cb61b5e7b26427004517cc0cd4db0dbd9`. Its native source and regression
+patches are unchanged. Additional contributor README archive records correctly
+identify generated footprint maintenance required by these source changes.
+Include actual local measurements for both affected package inventories in
+the existing README and measurement-script records, generated through
+`python3 scripts/readme_doctests.py --record-measurements` against this worker's
+reviewed source before preparation. The command emits the full existing
+inventory, but only the two affected tuples and README rows change here.
+Root repeats measurement against final reviewed integrated sources at the
+sprint gate. Until actual local evidence and record updates exist, retain the
+noncompleted measurement checklist barrier.
+
+Contributor archive byte counts and Apple M3 platform values are not local
+evidence. The actual M5 host matches the existing platform pin, so omit the
+contributor-only per-package provenance dictionary and its M3 assertion.
+Preserve compression tolerances, inventory member counts and historical
+performance observations. No new policy mechanism or dependency is required.
+
 Add the qualified `tcMar` branch to the existing private
 `CT_TcPr::parse_property_element` path. Admit an empty container only when its
 attributes are namespace declarations. Resolve the element through the existing
@@ -109,6 +128,9 @@ do not change the sample generator or effective rendering defaults. Check all
 
 - `crates/rdocx-oxml/src/table.rs`
 - `crates/rdocx/tests/integration_test.rs`
+- `README.md`, the locally measured rdocx archive row only
+- `crates/rdocx-oxml/README.md`, the locally measured rdocx-oxml archive row only
+- `scripts/readme_doctests.py`, the two locally measured archive tuples only
 - The F-X199 HLD14 section and native Word empty-cell-margin reader prose in HLD10, updated under serialized completion ownership
 
 F-X193 owns html.rs and F-X198 owns document.rs and regression_test.rs, so
@@ -119,13 +141,14 @@ execution queues against the shared target without concurrent cache writes.
 
 ## Implementation checklist
 
-- [ ] Refresh PR302 immutable head, changed files and discussion.
-- [ ] Prove the generated public reproducer fails at claimed Base.
-- [ ] Reuse the accepted parser branch and contributor regressions.
-- [ ] Verify namespace, unknown-byte preservation, schema slots and all 21 texts.
-- [ ] Run focused checks, scoped gate and independent zero-finding microscope.
-- [ ] Update the declared HLD sections under serialized completion ownership.
-- [ ] Prepare the validated handoff with contributor provenance.
+- [x] Refresh PR302 immutable head, changed files and discussion.
+- [x] Prove the generated public reproducer fails at claimed Base.
+- [x] Reuse the accepted parser branch and contributor regressions.
+- [x] Verify namespace, unknown-byte preservation, schema slots and all 21 texts.
+- [x] Run focused checks, scoped gate and independent zero-finding microscope.
+- [x] Update the declared HLD sections under serialized completion ownership.
+- [x] Generate and record both affected worker package measurements with actual local provenance before preparation, preserving the completion barrier until evidence exists. Root repeats final integrated measurements.
+- [x] Prepare the validated handoff with contributor provenance.
 
 ## Open questions
 

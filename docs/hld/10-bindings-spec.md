@@ -1697,6 +1697,14 @@ typed alignment and direction, explicit or absent wrapping, conditional
 regions, and checked nested-table construction. Matching borrowed readers
 expose every stored typed value after reopen.
 
+An empty, namespace-qualified cell `w:tcMar` models the same typed margin
+container whether its source is self-closing or expanded. Namespace
+declarations alone do not make it unmodeled. Its four absent edge values
+inherit existing table margins rather than inventing explicit zeros. Genuine
+attributes on self-closing containers and foreign or rebound namespace
+lookalikes retain exact opaque XML and remain unmodeled. Typed serialization
+keeps the existing cell-property schema order and unsupported sibling slots.
+
 Operations whose validity depends on neighbouring cells live on `Table` and
 take checked row and cell indexes. Grid omissions reconcile only untouched
 empty edge cells. Horizontal spans consume or restore only untouched empty

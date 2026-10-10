@@ -6853,7 +6853,7 @@ ambiguous alternates through save/reopen.
 
 Adopt `pedroassumpcao`'s independent
 [PR302](https://github.com/tensorbee/rdocx/pull/302) at immutable head
-`30e4a93df7549990c5838da9c95866d19f1247b0`, based on
+`7ac2851cb61b5e7b26427004517cc0cd4db0dbd9`, based on
 `733ce6f7b2b816c5760692abf5c99d68b29ae897`. Qualified self-closing `w:tcMar`
 with no attributes except namespace declarations must model the same empty
 `CT_TblCellMar` as the expanded empty form. Ordinary cells therefore expose
@@ -6863,6 +6863,9 @@ as exact raw XML. Keep existing absolute cell-property schema slots and all
 unrelated source content. No public API, dependency or release version change
 is required. Assess updated contributor heads before implementing uncovered
 criteria and record actual local evidence rather than contributor test claims.
+Locally measured package archive records accompany the changed native source.
+Preserve actual-host provenance, inventory counts, compression tolerances and
+historical performance observations instead of copying foreign-host records.
 
 **Depends on**: none.
 **Test gate**: regression. Both self-closing spellings, expanded empty margins,
