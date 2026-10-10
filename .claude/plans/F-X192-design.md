@@ -378,3 +378,22 @@ unobserved. Successful isolated execution does not establish a supported
 Mac ABI. No production comparator, dependency or signed-bundle change follows.
 Further probes need concrete sorting-call authority rather than guessed
 flag or locale sweeps. Exact APA person-key assembly remains separately open.
+
+## Bounded full-key encoding discriminator
+
+Independently authored unsigned UTF16-unit and signed UTF8-byte ordering
+each matched five of fourteen complete native vectors. Actual subprocess
+exit0, twenty-second timeout unused, exact input bytes and all twenty-eight
+measurements are authenticated at
+`/private/tmp/S91-F-X192-encoding-discriminator/invocation-receipt.json`.
+Both fixed representations order Cyrillic before Chinese in both contexts,
+while the genuine whitespace corporate controls reverse that native order.
+This rejects those two simple encoding shortcuts only. It does not identify
+actual runtime preprocessing or a portable collation algorithm.
+
+The missing authority remains transient actual SortingString bytes bound to
+the native comparison identity, locale/flags, lengths and returns, separately
+from exact APA person author0 provenance. Static imports and isolated host
+probes do not establish those bibliography call parameters. No producer
+stylesheet execution, native process attachment, signed-bundle modification
+or speculative dependency is selected by this diagnostic.
