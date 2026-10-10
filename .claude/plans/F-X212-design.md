@@ -254,3 +254,40 @@ measurement carriers and HLD10 edits are queued after F-X194. Root owns the
 hash baseline. F-X212 baseline measurement and publication wait until the
 F-X194 unchanged-hash gate is complete. F-X197 remains behind F-X194 because
 its actual source paths overlap. No new source file or test binary is added.
+
+## Parser-owned nontext field-result exposure
+
+Base test preparation exposed an existing producer gap: parsed complex
+result runs are populated only for note/comment candidates at OXML
+text.rs:4440-4455 and:4981-5002. Simple result projection at:3225-3276
+likewise gates typed caches to nested fields or note/comment references.
+A valid Field::from_raw typed tab cache is a separate consistency-positive
+control. The two failed raw-tab cache fixture preconditions are not credited
+as semantic regression evidence and do not relax cached_result_runs filtering.
+
+Reserve existing `crates/rdocx-oxml/src/text.rs` for the smallest necessary
+parser-owned nontext result exposure. Reuse existing parsed_complex_cache_runs
+and existing parsed/simple cached-run fields at admitted complete owner
+boundaries. Preserve ordinary text-only projection and avoid unnecessary
+reparsing. Candidate raw hints may trigger qualified typed parsing, but never
+prove visible content by local names. Retain effective-cache consistency
+filtering, current public cache mutation semantics, accepted result order
+and source ownership. No new API, model field or local field-delimiter
+stack is selected. Do not independently reparse each document paragraph.
+
+The existing complex cache helper's fabricated conventional w paragraph
+at:10707-10721 must use an actual retained producer Word prefix as the
+existing simple helper does at:3232-3254. Preserve foreign/rebound bindings,
+default namespaces and locally declared child scopes. Unsupported owned
+projection remains absent, while source ambiguity/error produces the declared
+indeterminate result, not fabricated visibility.
+
+Add focused parser-owned result controls in the existing text unit module
+before these semantic edits. Prove meaningful Base failure separately from
+the authoritative typed from_raw control. Cover simple/complex nontext, nested
+and spanning fields, incomplete delimiters, namespaces, no-op save/reopen
+and changed public cache consistency. Review PartialEq and parse-cost effects
+explicitly. This adds the OXML changed-crate/parser and publication gates.
+Land only in the labelled intentional behavior stage after unchanged scanner
+extraction, preserving the exact forty-nine-key attribution contract. Any
+additional output delta stops for diagnosis and reviewed evidence.
