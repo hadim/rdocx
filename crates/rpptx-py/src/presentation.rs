@@ -5,7 +5,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList, PyTuple};
 use smallvec::smallvec;
 
-use crate::layout::PyTextFrameLayout;
+use crate::layout::{PyAutofitResult, PyTextFrameLayout};
 use crate::shape::length;
 use crate::slide::{
     PySlideCollection, PySlideLayoutCollection, PySlideMaster, PySlideMasterCollection,
@@ -617,6 +617,23 @@ impl PyCoreProperties {
 pub struct PyPresentation {
     pub(crate) inner: rpptx::Presentation,
     pub(crate) revisions: HandleRevisions,
+    /// Frames whose `auto_size` asked for autofit, by slide id and shape id,
+    /// refreshed before every save and render.
+    pub(crate) autofit_marks: Vec<(u32, u32)>,
+}
+
+/// The index path of the first shape with `shape_id` among `shapes` and
+/// their group members.
+fn shape_id_path(shapes: &[rpptx::ShapeRef<'_>], shape_id: u32) -> Option<Vec<usize>> {
+    shapes.iter().enumerate().find_map(|(index, shape)| {
+        if shape.non_visual_id() == Some(shape_id) {
+            return Some(vec![index]);
+        }
+        let children = shape.children().collect::<Vec<_>>();
+        let mut path = shape_id_path(&children, shape_id)?;
+        path.insert(0, index);
+        Some(path)
+    })
 }
 
 impl PyPresentation {
@@ -624,7 +641,36 @@ impl PyPresentation {
         Self {
             inner,
             revisions: HandleRevisions::new(),
+            autofit_marks: Vec::new(),
         }
+    }
+
+    /// Stores the autofit result of every marked frame that still exists,
+    /// resolving only the slides that hold one, and forgets the others.
+    pub(crate) fn refresh_marked_autofit(&mut self, py: Python<'_>) -> PyResult<()> {
+        if self.autofit_marks.is_empty() {
+            return Ok(());
+        }
+        let mut targets = Vec::new();
+        let inner = &self.inner;
+        self.autofit_marks.retain(|&(slide_id, shape_id)| {
+            let target = inner
+                .slides()
+                .enumerate()
+                .find(|(_, slide)| slide.id() == slide_id)
+                .and_then(|(slide_index, slide)| {
+                    let shapes = slide.shapes().collect::<Vec<_>>();
+                    shape_id_path(&shapes, shape_id).map(|path| (slide_index, path))
+                });
+            let found = target.is_some();
+            targets.extend(target);
+            found
+        });
+        targets.sort();
+        self.inner
+            .refresh_shapes_autofit(&targets)
+            .map(drop)
+            .map_err(|error| rpptx_to_pyerr(py, error))
     }
 
     fn set_slide_size(
@@ -668,14 +714,16 @@ impl PyPresentation {
             .map_err(|error| rpptx_to_pyerr(py, error))
     }
 
-    fn save(&self, path: PathBuf, py: Python<'_>) -> PyResult<()> {
+    fn save(&mut self, path: PathBuf, py: Python<'_>) -> PyResult<()> {
+        self.refresh_marked_autofit(py)?;
         self.inner
             .save(path)
             .map_err(|error| rpptx_to_pyerr(py, error))
     }
 
     #[pyo3(name = "to_bytes")]
-    fn serialize<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+    fn serialize<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+        self.refresh_marked_autofit(py)?;
         self.inner
             .to_bytes()
             .map(|bytes| PyBytes::new(py, &bytes))
@@ -684,12 +732,13 @@ impl PyPresentation {
 
     #[pyo3(signature = (*, fonts = None, font_dir = None))]
     fn to_pdf<'py>(
-        &self,
+        &mut self,
         py: Python<'py>,
         fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
         font_dir: Option<PathBuf>,
     ) -> PyResult<Bound<'py, PyBytes>> {
         let fonts = caller_fonts(fonts, font_dir)?;
+        self.refresh_marked_autofit(py)?;
         py.detach(|| {
             self.inner
                 .to_pdf_deterministic_with_fonts(&rpptx::FontFile::as_refs(&fonts))
@@ -700,7 +749,7 @@ impl PyPresentation {
 
     #[pyo3(signature = (slide_index, dpi = 150.0, *, fonts = None, font_dir = None))]
     fn render_slide_to_png<'py>(
-        &self,
+        &mut self,
         py: Python<'py>,
         slide_index: usize,
         dpi: f64,
@@ -708,6 +757,7 @@ impl PyPresentation {
         font_dir: Option<PathBuf>,
     ) -> PyResult<Option<Bound<'py, PyBytes>>> {
         let fonts = caller_fonts(fonts, font_dir)?;
+        self.refresh_marked_autofit(py)?;
         py.detach(|| {
             self.inner.slide_png_deterministic_with_fonts(
                 slide_index,
@@ -721,13 +771,14 @@ impl PyPresentation {
 
     #[pyo3(signature = (dpi = 150.0, *, fonts = None, font_dir = None))]
     fn render_all_slides<'py>(
-        &self,
+        &mut self,
         py: Python<'py>,
         dpi: f64,
         fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
         font_dir: Option<PathBuf>,
     ) -> PyResult<Bound<'py, PyList>> {
         let fonts = caller_fonts(fonts, font_dir)?;
+        self.refresh_marked_autofit(py)?;
         let slides = py
             .detach(|| {
                 self.inner
@@ -739,13 +790,14 @@ impl PyPresentation {
 
     #[pyo3(signature = (*, width_factor = 1.0, fonts = None, font_dir = None))]
     fn text_layout<'py>(
-        &self,
+        &mut self,
         py: Python<'py>,
         width_factor: f64,
         fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
         font_dir: Option<PathBuf>,
     ) -> PyResult<Bound<'py, PyTuple>> {
         let fonts = caller_fonts(fonts, font_dir)?;
+        self.refresh_marked_autofit(py)?;
         let frames = py
             .detach(|| {
                 self.inner.text_layout_deterministic_with_fonts(
@@ -755,6 +807,22 @@ impl PyPresentation {
             })
             .map_err(|error| rpptx_to_pyerr(py, error))?;
         PyTuple::new(py, frames.iter().map(PyTextFrameLayout::from))
+    }
+
+    /// Stores the autofit result of every slide text frame that asks for one.
+    ///
+    /// Normal autofit (`MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE`) gets the
+    /// `fontScale` and `lnSpcReduction` PowerPoint would store, and shape
+    /// autofit (`SHAPE_TO_FIT_TEXT`) the size of its text. Frames whose
+    /// `auto_size` was set are refreshed on every save and render anyway, so
+    /// call it for frames a template or another tool set, for example after
+    /// filling a template and before saving.
+    fn refresh_autofit<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let results = self
+            .inner
+            .refresh_autofit()
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        PyTuple::new(py, results.into_iter().map(PyAutofitResult::from))
     }
 
     #[pyo3(signature = (*, fonts = None, font_dir = None))]

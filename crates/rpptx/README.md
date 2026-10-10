@@ -23,6 +23,9 @@ presentation, notes, handout, PDF, and animation outputs.
   placeholders with a cropped picture.
 - Insert and remove table rows and columns, extending or shrinking merged
   cells and growing or shrinking the frame by the row or column size.
+- Store autofit results that stick: the `fontScale` and `lnSpcReduction`
+  PowerPoint would choose, the height of a shape that fits its text, and the
+  largest size that fits, as python-pptx's `fit_text` writes it.
 - Produce PDF, PDF/A, resolved slide frames, notes, handouts, and animations.
 - Import HTML, ODP, and PDF through explicit facade APIs.
 - Number slides and set footers and dates as PowerPoint's Header and Footer

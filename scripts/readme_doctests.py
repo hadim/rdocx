@@ -385,7 +385,7 @@ ARCHIVE_REMEASUREMENT_DATES = {
     "rpptx-oxml": "2026-10-10",
     "oxml-chart": "2026-10-09",
     "oxml-layout": "2026-10-09",
-    "rpptx-render": "2026-10-09",
+    "rpptx-render": "2026-10-10",
     "oxml-media": "2026-10-09",
     "oxml-sml": "2026-10-09",
     "rpptx-chart": "2026-10-09",
