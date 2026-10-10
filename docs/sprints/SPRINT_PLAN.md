@@ -2140,13 +2140,13 @@ CLI validation reports before the template and form programme resumes.
 
 | F-ID | Title | Size | Delivery status |
 |------|-------|------|-----------------|
-| F-X192 | Complete the remaining Word bibliography catalogue | L | Approved, implementation pending |
+| F-X192 | Complete the remaining Word bibliography catalogue | L | Claimed, own-locale regression controls in preparation |
 | F-283 | Complete numbering-aware navigation fields | L | Approved, implementation pending |
 | F-X193 | Preserve semantic mark highlights through nested HTML runs | S | Completed and integrated |
 | F-X194 | Complete Python table text and indentation APIs | M | Completed and integrated, scoped gates passed |
 | F-X195 | Honor caller fonts and variable styles across render paths | L | Core source reviewed, runtime gates and provider wiring remain |
 | F-X196 | Validate visible paragraph content without false empty warnings | S | Completed and integrated |
-| F-X197 | Unify Python colour inputs and font colour formats | L | In progress, Base controls and source implementation |
+| F-X197 | Unify Python colour inputs and font colour formats | L | Remediation reviewed, compiled binding and rendering gates pending |
 | F-X198 | Preserve alternate text-box copies during scoped replacement | M | Completed and integrated |
 | F-X199 | Model namespace-qualified empty table cell margins | S | Completed and integrated |
 | F-X200 | Complete Python Word formatting and list parity | L | Approved, implementation pending |
@@ -2161,12 +2161,12 @@ CLI validation reports before the template and form programme resumes.
 | F-X209 | Edit PowerPoint masters layouts and themes | L | Approved, implementation pending |
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | Approved, implementation pending |
 | F-X211 | Complete Python script compatibility and safe XML access | L | Approved, implementation pending |
-| F-X212 | Align native accessibility with visible paragraph content | M | Semantic source reviewed, runtime and hash gates remain |
+| F-X212 | Align native accessibility with visible paragraph content | M | Native, CLI and hash gates passed, package and policy gates pending |
 
 **Current delivery checkpoint, 2026-10-10**: five of twenty-two active stories
 are completed and integrated, F-X193, F-X194, F-X196, F-X198 and F-X199.
-F-X197, F-X212 and F-X195 are in progress. Fourteen stories have approved
-designs and await implementation.
+F-X192, F-X195, F-X197 and F-X212 are in progress. Thirteen stories have
+approved designs and await implementation.
 No design question remains outstanding. Final integrated verification,
 sprint review and verified sprint close remain outstanding.
 
@@ -2875,21 +2875,33 @@ F-X211 plan. Intake grants no contributor gate credit or arbitrary new nesting
 policy. The approved256 control policy and complete textbox resource,
 namespace, discovery and public compatibility acceptance remain mandatory.
 
-## S91 intake and verification checkpoint, 2026-10-10 10:33UTC
+## S91 intake and verification checkpoint, 2026-10-10 11:43UTC
 
-The latest read-only GitHub refresh found no additional or changed records.
-All19 PRs and26 included issues remain mapped above, with Issues264 and281
-excluded. PR338 and PR333 source assessment is complete in F-X211's existing
-plan. Assessment does not close their acceptance gates.
+The latest read-only GitHub refresh at11:25:57UTC found no additional or changed
+records. All19 PRs and26 included issues remain mapped above, with Issues264
+and281 excluded. PR338 and PR333 source assessment is complete in F-X211's
+existing plan. Assessment does not close their acceptance gates.
 
 F-X194 is completed and integrated with authenticated native, installed
 Python, typing, WASM, verified22 package, unchanged49-entry hash and141 policy
 gates. Two publication-dependent policy cases remain skipped. Its integrated
-source exactly matches the independently reviewed worker. F-X195 provider
-source is frozen for independent review, with core and provider runtime gates
-pending. F-X212 retains successful compile and eight parser tests. Its test-only fixture and UTF-8 corrections have clean supplemental reviews.
-The remaining native and CLI queue is running. Runtime and attributed hash gates remain outstanding.
-F-X197 has started in a separate worktree after F-X194 completion.
-Five stories are completed and integrated, three are in progress and fourteen
+source exactly matches the independently reviewed worker.
+
+F-X212 has clean semantic, hash attribution, lint, HLD and carrier reviews.
+Actual checks cover521 native unit tests,365 integration tests across the
+original run and qualified retries,2331 regressions,2 doctests,3 CLI unit
+tests and68 CLI integrations. Original failures remain recorded. Its updated
+hash check matches all49 entries, with exactly the three approved audit keys
+changed from the prior baseline. Verified22 packaging is running and policy
+checks remain. No scoped completion or final sprint gate is claimed.
+
+F-X197's three review findings are resolved and independent pass2 is clean.
+Compiled support, fresh installed bindings, rendering, typing and remaining
+scoped gates are pending. F-X195's core/provider source reviews are clean,
+with runtime gates and remaining facade/provider wiring pending. F-X192 is
+claimed for isolated own-locale regression preparation after completed F-282.
+Its portable comparator and APA key authority remain technical barriers.
+
+Five stories are completed and integrated, four are in progress and thirteen
 remain approved. Final integrated verification, sprint review and close
 preflight remain outstanding. The sprint is not ready for close.
