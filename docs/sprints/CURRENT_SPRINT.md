@@ -385,3 +385,9 @@ at257/5000, namespace ownership, all story-part paths and atomic replacement.
 No duplicate CLI/Python fix or new F-ID is created. The frozen100-script
 Base remains unchanged. This checkpoint has15 open PRs and23 included
 issues, excluding264 and281.
+
+The user approved the3968-byte F-X210 checkbox subset revision on
+2026-10-10. Its exact selected bytes and SHA are recorded in the approved
+F-X210 plan and shared F-X200 consumer contract. All18 unfinished active
+plans are now approved. No material design question remains from this
+asset intake. The implementation completion and integration barriers remain.

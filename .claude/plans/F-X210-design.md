@@ -1,6 +1,6 @@
 # F-X210, Extend metric-compatible fonts and bullet fallbacks
 
-**Status**: draft
+**Status**: approved
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X195
@@ -94,12 +94,14 @@ Existing cases that request Georgia, Segoe UI, Aptos or verified symbol fallback
 
 Ordered font_dirs, eight core assets, caller-only optional-pack route,
 section-square identity, bounded Selawik metrics and same-pass diagnostic
-consumers are resolved below. The exact3968-byte revised subset approval
-remains pending. It adds onlyU2610 to the same authorized ninth asset path.
-Do not adopt that revision under the older3916-byte hash approval. All27
-existing bundled faces lack a nonzero Unicode U2610 glyph in their eligible
-format4/12 cmaps, as authenticated in existing-bundled-checkbox-coverage.json.
-No other new file, family/axis modification or pack machinery is proposed.
+consumers are resolved below. The user approved the exact3968-byte revised
+subset on2026-10-10, answering "Approve the 3,968-byte revision". It adds
+onlyU2610 to the same authorized ninth asset path. This separate approval
+supersedes the3916-byte selection for implementation. All27 existing bundled
+faces lack a nonzero Unicode U2610 glyph in their eligible format4/12 cmaps,
+as authenticated in existing-bundled-checkbox-coverage.json. No unresolved
+material question remains. No other new file, family/axis modification or
+pack machinery is proposed.
 
 ## Performed bounded shaping experiment
 
@@ -339,9 +341,12 @@ These are selected future gates, not already implemented consumers.
 
 The exact revised3968-byte same-path subset adds onlyU2610, SHA
 a95e7d7421e30e8ad304a0eb48aa18aefabcfec568a0f652c1039d72da999373.
-Its actual approval answer remains pending. Original3916-byte approval and
-all eight core approvals remain valid for their exact bytes. Neither research
-nor elapsed time authorizes copying revised bytes.
+The user explicitly approved this exact revision on2026-10-10, answering
+"Approve the 3,968-byte revision". Root reauthenticated its3968 bytes and
+SHA256 before recording approval. Use these revised bytes at the existing
+approved ninth asset path and record the selected recipe in NOTICE-Noto.
+All eight core approvals remain valid. Asset integration still follows the
+F-X195 completion barrier and the normal implementation lifecycle.
 
 Use diagnostic companion names by adding _with_diagnostics to the existing
 Python byte-render methods, with their exact original parameters plus the

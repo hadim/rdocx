@@ -528,3 +528,13 @@ missing glyph. Resolve U2610 through the existing caller-font provider or
 an exact separately reviewed asset change when needed. Native PDF/raster
 appearance and deterministic fallback acceptance remain explicit joint
 F-X200/F-X210 obligations, tested once against their actual provider.
+
+## Resolved checklist provider asset
+
+On2026-10-10 the user approved F-X210's exact3968-byte symbol subset
+revision, SHA256
+a95e7d7421e30e8ad304a0eb48aa18aefabcfec568a0f652c1039d72da999373.
+It adds U2610 to the prior16-codepoint asset at the same approved path.
+Consume that selected provider after F-X195/F-X210 implementation, without
+duplicating the subset or claiming unperformed native glyph acceptance.
+No checklist asset question remains.
