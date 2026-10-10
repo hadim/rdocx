@@ -8,7 +8,7 @@ and alternate text-box ownership reports before templates and forms at S92.
 Issues264 and281 remain excluded. The expanded scope contains twenty-two active
 stories. The original nine-story estimate of 23 to 29 developer-days no longer
 covers the sprint. Estimate the twelve new large stories and the added medium accessibility story during detailed design
-and keep rolling contribution intake open.
+and complete the frozen contribution scope.
 
 ## Spec references
 
@@ -53,18 +53,20 @@ Complete actual prerequisites before starting any story. Source, Cargo,
 shared tests, HLD edits and the hash baseline remain exclusive resources.
 Design every unfinished story before implementation. Bibliography and
 navigation retain their full deferred contracts and saved native evidence.
-New contributions are assessed before duplicated implementation work begins.
+Reuse assessed contributor slices before implementing uncovered acceptance.
 The wave plan is recorded in S91-run.json after design and conflict analysis.
 
-## Rolling contribution intake
+## Contribution scope frozen
 
-Refresh open issues and PRs before design, implementation/resume checkpoints,
-integration and final verification/close. Attach later contributor PRs to an
-existing issue's F-ID, read updated immutable heads, reuse accepted changes,
-and implement uncovered acceptance only. New independent scope receives a
-new F-ID. Reconcile the plan, backlog, HLD14 and this record before proceeding.
-Issues264 and281 stay excluded at every refresh. SPRINT_PLAN.md defines the
-full rolling procedure. PR294 and Issues295 through301 are included at opening.
+The user froze S91 intake on 2026-10-10 after the authenticated 15:05:38 UTC
+inventory. Complete the existing twenty-two stories, nineteen PRs and
+twenty-six included issues. Issues264 and281 remain excluded and open.
+Stop searching for new issues, PRs or updated contribution heads. Later
+arrivals do not join S91. Reuse the already assessed immutable contributor
+changes once, against each approved story's complete acceptance criteria.
+The resolution map in SPRINT_PLAN.md and retained intake receipts define
+this scope. The following paragraphs retain historical intake checkpoints.
+
 PR302 entered the rolling intake at immutable head
 `30e4a93df7549990c5838da9c95866d19f1247b0`, adding independent F-X199.
 It has no linked issue and is now ready for review, contributed by `pedroassumpcao`.

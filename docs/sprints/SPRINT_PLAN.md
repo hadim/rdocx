@@ -2140,13 +2140,13 @@ CLI validation reports before the template and form programme resumes.
 
 | F-ID | Title | Size | Delivery status |
 |------|-------|------|-----------------|
-| F-X192 | Complete the remaining Word bibliography catalogue | L | Claimed, own-locale regression stubs reviewed, Base runtime pending |
+| F-X192 | Complete the remaining Word bibliography catalogue | L | Locale source and stubs reviewed, full catalogue runtime acceptance pending |
 | F-283 | Complete numbering-aware navigation fields | L | Approved, implementation pending |
 | F-X193 | Preserve semantic mark highlights through nested HTML runs | S | Completed and integrated |
 | F-X194 | Complete Python table text and indentation APIs | M | Completed and integrated, scoped gates passed |
 | F-X195 | Honor caller fonts and variable styles across render paths | L | Core source reviewed, runtime gates and provider wiring remain |
 | F-X196 | Validate visible paragraph content without false empty warnings | S | Completed and integrated |
-| F-X197 | Unify Python colour inputs and font colour formats | L | Remediation reviewed, compiled binding and rendering gates pending |
+| F-X197 | Unify Python colour inputs and font colour formats | L | Installed focused tests and typing passed, full suites and risk riders pending |
 | F-X198 | Preserve alternate text-box copies during scoped replacement | M | Completed and integrated |
 | F-X199 | Model namespace-qualified empty table cell margins | S | Completed and integrated |
 | F-X200 | Complete Python Word formatting and list parity | L | Approved, implementation pending |
@@ -2170,13 +2170,15 @@ approved designs and await implementation.
 No design question remains outstanding. Final integrated verification,
 sprint review and verified sprint close remain outstanding.
 
-**Resolution scope**: resolve every open issue and PR except
+**Resolution scope frozen by the user, 2026-10-10**: resolve the included
+issues and PRs below, except
 [Issue264](https://github.com/tensorbee/rdocx/issues/264) and
 [Issue281](https://github.com/tensorbee/rdocx/issues/281). Keep those two open as
-requirements discussions. At 2026-10-10 12:40:16 UTC, the refreshed inventory
+requirements discussions. At 2026-10-10 15:05:38 UTC, the final intake inventory
 contains nineteen open PRs and twenty-eight open issues, including the two
 exclusions. All twenty-six included issues and nineteen PRs map below.
-A later PR attaches to its existing issue owner. Assessment is not completion.
+Stop checking for new issues, PRs or changed heads. Later arrivals are outside
+S91. Assessment is not completion.
 
 | Included issues | Included PRs | S91 acceptance owners | Resolution work |
 |---|---|---|---|
@@ -2231,8 +2233,8 @@ leases. Cargo and hash-baseline changes remain serialized.
 
 The following paragraphs retain historical intake checkpoints. This current
 coverage table and execution order supersede their older inventory counts,
-PR draft descriptions and preliminary sequencing. Keep this table current as
-new records arrive. Close an issue only after its full acceptance is proved
+PR draft descriptions and preliminary sequencing. Keep delivery status current
+within the frozen inventory. Close an issue only after its full acceptance is proved
 at verified sprint close. Reconcile unmerged contributor PRs explicitly as
 integrated or superseded against actual delivery evidence.
 
@@ -2268,34 +2270,19 @@ requires a separate scope decision. Issue281 remains open for F-184 at S96.
 No spreadsheet implementation or publication is authorized by this intake.
 S90's intake freeze remains its completed delivery boundary.
 
-**Rolling contribution intake**: the user explicitly keeps S91 intake open.
-Refresh open GitHub issues and PRs before each design, before implementation
-starts or resumes, at saved feature checkpoints, before contribution
-integration, and before final sprint verification and close. Read new records
-and updated PR bodies, comments, changed files and immutable head SHAs.
-Keep Issues264 and281 excluded at every refresh. New issue or PR intake must
-update this plan, BACKLOG.md, HLD14 and the active sprint record together.
+**Frozen contribution intake**: the user ended rolling S91 intake on
+2026-10-10. The final authenticated inventory is nineteen PRs and twenty-six
+included issues at 15:05:38 UTC, with Issues264 and281 excluded. Stop
+searching for new records and updated heads. Complete all twenty-two stories
+and their existing full acceptance, including the S90 carryovers. Later
+contributions do not expand this sprint.
 
-Map each record to its existing F-ID and full acceptance criteria first. A
-contributor PR for an already included issue belongs to the same story, with
-its author, exact head, issue links and reusable changes recorded in that
-story's design and progress notes. Review incoming work before implementing
-the same change. Reuse accepted contribution code and tests where they meet
-the approved contract, then implement only uncovered criteria. An updated or
-stacked PR must be compared with both its previously assessed head and the
-integrated source to avoid replaying completed changes. Reassess affected
-checks after adaptation rather than claiming the contributor's tests passed
-locally. Never create another story merely because a PR arrives later.
-
-New acceptance criteria amend an existing story when they belong to its
-contract. Independent scope receives a new F-ID through normal design and
-tracking. Record additions and revise estimates and exclusive waves explicitly.
-If a late contribution changes the integrated source after verification,
-rerun the affected feature gate and review, then verify and review the actual
-final integrated result before close. Do not silently freeze intake or defer
-a new record. A PR that arrives after its issue is implemented is assessed
-against the existing evidence for reusable improvements and remaining gaps,
-without reopening completed behavior solely to reproduce the patch.
+Reuse each already assessed immutable contribution once, across its mapped
+owners. Retain contributor attribution, linked issues, exact accepted heads
+and locally verified evidence. Complete uncovered acceptance under the
+approved designs. An integrated source change still requires its affected
+feature gate and independent review. Final verification and sprint review
+must cover the actual completed integrated result before close.
 
 **Sprint gate**: full pinned Word bibliography and consistent navigation,
 HTML mark inheritance, editable Python table text and signed indentation,
@@ -2393,15 +2380,25 @@ no reopened story or duplicate work. S91 remains six completed, three in
 progress and thirteen approved. Final integrated verification and review
 remain pending.
 
-The 2026-10-10 14:32 UTC refresh found no new or changed open records.
-PR338 remains assigned to F-X211 for Issue337, with stacked PR336 changes
-assigned once across F-X211 and F-X200. The latest F-X197 installed scoped
-run passed all155 Word cases, strict typing and recursive stub checks.
-PowerPoint passed437 cases and failed60 cell-colour cases. Remediation is
-in progress. This failed scope does not complete F-X197 or its dependent
-stories. F-X195 native tests are prepared and reviewed, with execution and
-Python consumer wiring still required. Full bibliography acceptance remains
-F-X192. Sprint closure remains pending.
+The 2026-10-10 15:05 UTC refresh retains 19 open PRs and 26 included
+issues. No PR head advanced or new included record appeared. Issue264 has
+only a timestamp update and remains excluded with Issue281. PR338 remains
+assigned to F-X211 for Issue337, with stacked PR336 changes assigned once
+across F-X211 and F-X200.
+
+F-X197 installed scope passed all155 Word and497 PowerPoint cases, both
+strict typing checks and both recursive stub checks. The full Word suite
+then passed353 cases and failed one old malformed-colour error assertion.
+Its two legacy border and shading expectations have been migrated to the
+approved ValueError contract and independently reviewed with zero findings.
+The corrected scoped rerun passed all652 cases and both families' typing
+and stub checks. The complete Word and PowerPoint suites are running.
+Remaining risk riders and formal completion are pending. F-X195 native
+revision controls are prepared and independently reviewed, with native
+execution and Python
+consumer wiring still required. Full bibliography acceptance remains F-X192.
+S91 remains six completed, three in progress and thirteen approved stories.
+Final integrated verification, sprint review and closure remain pending.
 
 #### Sprint S92, Templates, controls, and forms
 
