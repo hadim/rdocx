@@ -39,7 +39,7 @@ and complete the frozen contribution scope.
 | F-X203 | Complete Python Word document operations and validation | L | pending | - |
 | F-X204 | Complete shared CLI one-shot editing commands | L | pending | - |
 | F-X205 | Complete Python PowerPoint text fill and export parity | L | pending | - |
-| F-X206 | Complete PowerPoint shape authoring and live handles | L | pending | - |
+| F-X206 | Complete PowerPoint shape authoring and live handles | L | in-progress | codex |
 | F-X207 | Persist PowerPoint autofit and implement fit_text | L | pending | - |
 | F-X208 | Author PowerPoint footer fields themes and transitions | L | pending | - |
 | F-X209 | Edit PowerPoint masters layouts and themes | L | pending | - |
