@@ -1336,7 +1336,9 @@ impl PyPresentation {
         };
         result.map_err(|error| rpptx_to_pyerr(py, error))?;
         self.revisions
-            .invalidate(Scope::Slides, "Presentation.apply_theme()");
+            .invalidate(Scope::Layouts, "Presentation.apply_theme()");
+        self.revisions
+            .invalidate(Scope::Shapes, "Presentation.apply_theme()");
         Ok(())
     }
 

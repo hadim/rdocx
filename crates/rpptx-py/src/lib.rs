@@ -67,31 +67,6 @@ const DIVERGENCES: &[(&str, &str, &str)] = &[
         "use prs.slides.remove(slide) to delete a slide and prs.slides.move(old_index, new_index) to reorder slides",
     ),
     (
-        "Shape",
-        "insert_picture",
-        "add the picture with slide.shapes.add_picture(image, placeholder.left, placeholder.top, placeholder.width, placeholder.height), then remove the placeholder with slide.shapes.remove(placeholder)",
-    ),
-    (
-        "Shape",
-        "placeholder_format",
-        "find a placeholder by its idx with slide.placeholders[idx], and read shape.name to tell placeholders apart",
-    ),
-    (
-        "Shape",
-        "is_placeholder",
-        "find placeholders with slide.placeholders[idx] or slide.shapes.placeholders",
-    ),
-    (
-        "Cell",
-        "text_frame",
-        "set cell.text, or edit the cell's a:txBody in the table shape's XML with shape.replace_xml(xml)",
-    ),
-    (
-        "Cell",
-        "vertical_anchor",
-        "edit the cell's a:tcPr anchor attribute in the table shape's XML with shape.replace_xml(xml)",
-    ),
-    (
         "NotesTextFrame",
         "paragraphs",
         "notes are read and written as plain text here: use notes_text_frame.text or slide.notes_text",
@@ -100,11 +75,6 @@ const DIVERGENCES: &[(&str, &str, &str)] = &[
         "NotesTextFrame",
         "add_paragraph",
         "append a line to notes_text_frame.text, for example text_frame.text += '\\nNext point'",
-    ),
-    (
-        "Presentation",
-        "slide_master",
-        "edit the layouts a deck uses through prs.slide_layouts[i].xml and replace_xml(xml)",
     ),
 ];
 
@@ -236,7 +206,15 @@ pub(crate) enum Scope {
     Tables = 2,
     Paragraphs = 3,
     Runs = 4,
+    /// Slide layout and slide master handles. Outside the slide chain: a
+    /// slide edit keeps them, and only layout and master edits (remove,
+    /// duplicate, theme import, raw XML) retire them.
+    Layouts = 5,
 }
+
+/// The scopes from [`Scope::Slides`] down to [`Scope::Runs`], which an
+/// invalidation of a wider one also retires.
+const CHAINED_SCOPES: usize = Scope::Runs as usize + 1;
 
 impl Scope {
     const fn name(self) -> &'static str {
@@ -246,14 +224,15 @@ impl Scope {
             Self::Tables => "table",
             Self::Paragraphs => "paragraph",
             Self::Runs => "run",
+            Self::Layouts => "layout",
         }
     }
 
     fn of(path: &ContentPath) -> Option<Self> {
         Some(match path.segs.last()? {
-            // Layout and master handles share the widest scope: removing,
-            // duplicating, or importing layouts renumbers them.
-            PathSeg::Slide(_) | PathSeg::Layout(_) | PathSeg::Master(_) => Self::Slides,
+            PathSeg::Slide(_) => Self::Slides,
+            // Removing, duplicating, or importing layouts renumbers them.
+            PathSeg::Layout(_) | PathSeg::Master(_) => Self::Layouts,
             PathSeg::Shape(_) => Self::Shapes,
             PathSeg::Row(_) | PathSeg::Cell(_) => Self::Tables,
             PathSeg::Body(_) | PathSeg::Para(_) => Self::Paragraphs,
@@ -267,22 +246,28 @@ impl Scope {
 /// One revision counter per [`Scope`], with the call that last advanced it.
 #[derive(Debug)]
 pub(crate) struct HandleRevisions {
-    counters: [RevisionCounter; 5],
-    causes: [&'static str; 5],
+    counters: [RevisionCounter; 6],
+    causes: [&'static str; 6],
 }
 
 impl HandleRevisions {
     pub(crate) fn new() -> Self {
         Self {
-            counters: [RevisionCounter::new(); 5],
-            causes: [""; 5],
+            counters: [RevisionCounter::new(); 6],
+            causes: [""; 6],
         }
     }
 
     /// Invalidates the handles of `scope` and of every narrower scope,
     /// recording `cause`, the public call, for the stale-handle message.
+    /// [`Scope::Layouts`] has no narrower scope.
     pub(crate) fn invalidate(&mut self, scope: Scope, cause: &'static str) {
-        for level in scope as usize..self.counters.len() {
+        let end = if scope == Scope::Layouts {
+            self.counters.len()
+        } else {
+            CHAINED_SCOPES
+        };
+        for level in scope as usize..end {
             self.counters[level].bump();
             self.causes[level] = cause;
         }

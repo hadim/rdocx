@@ -153,7 +153,7 @@ impl PySlideLayout {
             &self.presentation.borrow(py),
             &self.path,
             "slide layout",
-            &format!(".slide_layouts[{}]", self.index),
+            "",
         )
     }
 
@@ -240,7 +240,10 @@ impl PySlideLayout {
             .map_err(|error| crate::raw_xml_error(py, error))?;
         presentation
             .revisions
-            .invalidate(Scope::Slides, "SlideLayout.replace_xml()");
+            .invalidate(Scope::Layouts, "SlideLayout.replace_xml()");
+        presentation
+            .revisions
+            .invalidate(Scope::Shapes, "SlideLayout.replace_xml()");
         Ok(())
     }
 
@@ -549,7 +552,10 @@ impl PySlideLayoutCollection {
             .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
         presentation
             .revisions
-            .invalidate(Scope::Slides, "SlideLayoutCollection.remove()");
+            .invalidate(Scope::Layouts, "SlideLayoutCollection.remove()");
+        presentation
+            .revisions
+            .invalidate(Scope::Shapes, "SlideLayoutCollection.remove()");
         Ok(())
     }
 
@@ -569,7 +575,10 @@ impl PySlideLayoutCollection {
             .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
         presentation
             .revisions
-            .invalidate(Scope::Slides, "SlideLayoutCollection.duplicate()");
+            .invalidate(Scope::Layouts, "SlideLayoutCollection.duplicate()");
+        presentation
+            .revisions
+            .invalidate(Scope::Shapes, "SlideLayoutCollection.duplicate()");
         let path = presentation
             .revisions
             .capture(smallvec![PathSeg::Layout(copy)]);
@@ -1864,7 +1873,7 @@ impl PySlideMaster {
             &self.presentation.borrow(py),
             &self.path,
             "slide master",
-            &format!(".slide_masters[{}]", self.index),
+            "",
         )
     }
 
