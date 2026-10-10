@@ -524,3 +524,23 @@ Six stories are completed and integrated, three are in progress and thirteen
 remain approved. No design question is outstanding. Final integrated
 verification, sprint review and close preflight remain outstanding. The sprint
 is not ready for close.
+
+## PR #294 reconciliation, 2026-10-10 13:26 UTC
+
+The latest refresh retains 19 open PRs and 26 included issues, excluding
+issues #264 and #281. PR #294 advanced from
+63cd119dcb8fa9c367bf93141f79780db7f64886 to
+81494509dc27cbcdd3c6d31067089175cdc2313f. Its additional commit changes
+only README.md and the existing archive measurement script. Source and
+discussion assessment is complete. HTML production remains byte-identical
+to completed F-X193. Retain the stronger integrated tests and locally
+verified archive measurements. No story is reopened or duplicated.
+The subsequent description update adds validation notes without changing
+source or scope.
+
+F-X195 has six passing PDF controls and six passing Word controls after
+independently reviewed corrections. The corrected PowerPoint test has passed
+independent review. All five PowerPoint controls and all nine deterministic
+font controls pass.
+Consumer wiring and the remaining feature gates are outstanding.
+Six stories remain completed, three in progress and thirteen approved.

@@ -2383,6 +2383,16 @@ three-key feature_showcase delta belong to F-X212 under a separate labelled
 reviewed scope.
 No contributor test, archive or baseline record substitutes for local gates.
 
+The 2026-10-10 13:26 UTC rolling refresh retains 19 open PRs and 26 included
+issues, excluding #264 and #281. PR #294 advanced to
+81494509dc27cbcdd3c6d31067089175cdc2313f with archive measurement changes
+only. Authenticated HTML production matches completed F-X193 exactly.
+Its later description update adds validation notes without changing source.
+Retain the integrated tests and locally verified archive measurements, with
+no reopened story or duplicate work. S91 remains six completed, three in
+progress and thirteen approved. Final integrated verification and review
+remain pending.
+
 #### Sprint S92, Templates, controls, and forms
 
 **Goal**: freeze the container-wide template grammar, create and bind content
