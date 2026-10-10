@@ -4792,6 +4792,13 @@ def test_python_pptx_values_that_would_write_a_wrong_file_raise():
     with pytest.raises(ValueError, match="would hold 0"):
         paragraph.space_after = 6
     paragraph.space_after = Pt(6)
+    paragraph.line_spacing = 1.5
+    for interline in [0, 0.0, -1, -0.5, Pt(0), Pt(-1), float("nan")]:
+        with pytest.raises(ValueError, match=re.escape("line_spacing must be a positive multiple such as 1.5 or a length such as Pt(18)")):
+            paragraph.line_spacing = interline
+    with pytest.raises(TypeError, match="line_spacing takes a multiple"):
+        paragraph.line_spacing = True
+    assert paragraph.line_spacing == 1.5
     with pytest.raises(ValueError, match="to_pdf"):
         prs.save("deck.pdf")
     with pytest.raises(AttributeError, match="font.color = RGBColor"):
