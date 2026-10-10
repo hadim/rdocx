@@ -65,23 +65,6 @@ const THEME_COLORS: [(i32, &str); 16] = [
     (16, "background2"),
 ];
 
-fn checked_shading(value: &str) -> PyResult<&str> {
-    checked_hex_or_auto("shading", value)
-}
-
-/// A colour as the hex-string setters take it: six hex digits or `auto`.
-pub(crate) fn checked_hex_or_auto<'a>(param: &str, value: &'a str) -> PyResult<&'a str> {
-    if value.eq_ignore_ascii_case("auto") {
-        Ok("auto")
-    } else if value.len() == 6 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        Ok(value)
-    } else {
-        Err(PyValueError::new_err(format!(
-            "{param} must be six hexadecimal digits or auto, such as \"FF0000\""
-        )))
-    }
-}
-
 /// A tab stop alignment as `WD_TAB_ALIGNMENT` numbers it.
 pub(crate) fn tab_alignment_from_int(value: i32) -> PyResult<rdocx::TabAlignment> {
     match value {
@@ -1311,7 +1294,7 @@ impl PyTabStops {
 
 /// A border edge as `(style, size in eighths of a point, color)`, as
 /// `Table.border` reads one.
-type BorderSnapshot = (String, Option<u32>, Option<String>);
+type BorderSnapshot = (String, Option<u32>, Option<Py<PyAny>>);
 
 #[pymethods]
 impl PyParagraphFormat {
@@ -1518,29 +1501,35 @@ impl PyParagraphFormat {
         })
     }
 
-    /// The direct shading fill, six hex digits or `auto`.
+    /// The direct shading fill as an `RGBColor`, `None` when it is absent or
+    /// `auto`, as `Font.shading` reads it.
     #[getter]
-    fn shading(&self, py: Python<'_>) -> PyResult<Option<String>> {
+    fn shading(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         let location = self.validate(py)?;
-        read_paragraph(py, &self.document, location, |paragraph| {
+        let fill = read_paragraph(py, &self.document, location, |paragraph| {
             paragraph.shading_fill().map(str::to_owned)
-        })
+        })?;
+        match fill {
+            Some(value) => color_object(py, &value),
+            None => Ok(None),
+        }
     }
 
-    /// Write a clear `w:shd` with this fill, or remove the shading.
+    /// Write a clear `w:shd` with this fill, taken by the colour rule, or
+    /// remove the shading.
     #[setter]
-    fn set_shading(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
-        let fill = value.map(checked_shading).transpose()?;
+    fn set_shading(&self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        let fill = value.map(|value| color_hex(value, "shading")).transpose()?;
         let location = self.validate(py)?;
         edit_paragraph(py, &self.document, location, |paragraph| {
-            paragraph.set_shading_value(fill.map(|fill| ("clear", fill, "auto")))
+            paragraph.set_shading_value(fill.as_deref().map(|fill| ("clear", fill, "auto")))
         })
     }
 
     fn border(&self, py: Python<'_>, edge: &str) -> PyResult<Option<BorderSnapshot>> {
         let edge = paragraph_border_edge(edge)?;
         let location = self.validate(py)?;
-        read_paragraph(py, &self.document, location, |paragraph| {
+        let border = read_paragraph(py, &self.document, location, |paragraph| {
             paragraph.border(edge).map(|border| {
                 (
                     border.style().to_owned(),
@@ -1548,25 +1537,38 @@ impl PyParagraphFormat {
                     border.color().map(str::to_owned),
                 )
             })
-        })
+        })?;
+        border
+            .map(|(style, size, color)| {
+                let color = match color {
+                    Some(value) => color_object(py, &value)?,
+                    None => None,
+                };
+                Ok((style, size, color))
+            })
+            .transpose()
     }
 
     /// Set one border edge, a single line by default as Google Docs reads it.
-    #[pyo3(signature = (edge, style = "single", *, size = 4, color = "auto"))]
+    /// `color` follows the colour rule, `None` writing `auto`.
+    #[pyo3(signature = (edge, style = "single", *, size = 4, color = None))]
     fn set_border(
         &self,
         py: Python<'_>,
         edge: &str,
         style: &str,
         size: u32,
-        color: &str,
+        color: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<()> {
         let edge = paragraph_border_edge(edge)?;
         let style = checked_border(style, size)?;
-        let color = checked_hex_or_auto("color", color)?;
+        let color = match color {
+            Some(color) => color_hex(color, "color")?,
+            None => "auto".to_owned(),
+        };
         let location = self.validate(py)?;
         edit_paragraph(py, &self.document, location, |paragraph| {
-            paragraph.set_border_value(edge, Some((style, size, color)))
+            paragraph.set_border_value(edge, Some((style, size, &color)))
         })
     }
 

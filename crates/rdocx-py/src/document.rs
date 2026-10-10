@@ -1054,8 +1054,8 @@ struct StyleArguments<'py> {
     keep_with_next: Option<bool>,
     keep_together: Option<bool>,
     page_break_before: Option<bool>,
-    shading: Option<String>,
-    borders: Option<BTreeMap<String, (String, u32, String)>>,
+    shading: Option<Bound<'py, PyAny>>,
+    borders: Option<BTreeMap<String, (String, u32, Bound<'py, PyAny>)>>,
     tab_stops: Option<Vec<Bound<'py, PyAny>>>,
 }
 
@@ -1104,9 +1104,7 @@ impl StyleArguments<'_> {
                             .map_err(|error| PyValueError::new_err(error.to_string()))?,
                         sz: Some(size),
                         space: Some(1),
-                        color: Some(
-                            crate::formatting::checked_hex_or_auto("color", &color)?.to_owned(),
-                        ),
+                        color: Some(color_hex(&color, "color")?),
                         extra_attributes: Vec::new(),
                     });
                 }
@@ -1160,9 +1158,7 @@ impl StyleArguments<'_> {
             page_break_before: self.page_break_before,
             shading: self
                 .shading
-                .map(|value| {
-                    crate::formatting::checked_hex_or_auto("shading", &value).map(str::to_owned)
-                })
+                .map(|value| color_hex(&value, "shading"))
                 .transpose()?,
             borders,
             tab_stops,
@@ -3181,8 +3177,8 @@ impl PyDocument {
         keep_with_next: Option<bool>,
         keep_together: Option<bool>,
         page_break_before: Option<bool>,
-        shading: Option<String>,
-        borders: Option<BTreeMap<String, (String, u32, String)>>,
+        shading: Option<Bound<'_, PyAny>>,
+        borders: Option<BTreeMap<String, (String, u32, Bound<'_, PyAny>)>>,
         tab_stops: Option<Vec<Bound<'_, PyAny>>>,
     ) -> PyResult<PyStyle> {
         type NewStyle = fn(&str, &str) -> rdocx::StyleBuilder;
@@ -3327,8 +3323,8 @@ impl PyDocument {
         keep_with_next: Option<bool>,
         keep_together: Option<bool>,
         page_break_before: Option<bool>,
-        shading: Option<String>,
-        borders: Option<BTreeMap<String, (String, u32, String)>>,
+        shading: Option<Bound<'_, PyAny>>,
+        borders: Option<BTreeMap<String, (String, u32, Bound<'_, PyAny>)>>,
         tab_stops: Option<Vec<Bound<'_, PyAny>>>,
     ) -> PyResult<PyStyle> {
         let (style_type, style_id) = defined_style(&self.inner, style)?;

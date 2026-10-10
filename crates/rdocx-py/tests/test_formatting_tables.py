@@ -1264,7 +1264,7 @@ def test_issue_303_tab_stops_follow_python_docx_and_keep_position_order():
 
 
 def test_issue_303_paragraph_borders_shading_outline_level_and_direction():
-    from rdocx import Document
+    from rdocx import Document, RGBColor
 
     document = Document()
     paragraph_format = document.add_paragraph("Callout").paragraph_format
@@ -1281,11 +1281,11 @@ def test_issue_303_paragraph_borders_shading_outline_level_and_direction():
         '<w:shd w:val="clear" w:color="auto" w:fill="FFF2CC"/><w:bidi/><w:outlineLvl w:val="1"/>'
     ) in xml
     reopened = Document.from_bytes(document.to_bytes()).paragraphs[0].paragraph_format
-    assert reopened.border("bottom") == ("single", 12, "4472C4")
-    assert reopened.border("top") == ("single", 4, "auto")
+    assert reopened.border("bottom") == ("single", 12, RGBColor(0x44, 0x72, 0xC4))
+    assert reopened.border("top") == ("single", 4, None)
     assert reopened.border("left") is None
     assert (reopened.shading, reopened.outline_level, reopened.right_to_left) == (
-        "FFF2CC",
+        RGBColor(0xFF, 0xF2, 0xCC),
         1,
         True,
     )
@@ -1293,7 +1293,7 @@ def test_issue_303_paragraph_borders_shading_outline_level_and_direction():
     before = document.to_bytes()
     with pytest.raises(ValueError, match="border edge"):
         paragraph_format.set_border("insideH")
-    with pytest.raises(ValueError, match="six hexadecimal digits or auto"):
+    with pytest.raises(ValueError, match="six hexadecimal digits"):
         paragraph_format.set_border("left", color="blue")
     with pytest.raises(ValueError, match="1 to 96"):
         paragraph_format.set_border("left", size=0)
@@ -1349,7 +1349,7 @@ def test_issue_303_style_keywords_cover_paragraph_and_run_formatting():
         document.add_style("Mark", "character", tab_stops=[(Inches(1), 0)])
     with pytest.raises(ValueError, match="border edge"):
         document.set_style("Callout", borders={"middle": ("single", 4, "auto")})
-    with pytest.raises(ValueError, match="six hexadecimal digits or auto"):
+    with pytest.raises(ValueError, match="six hexadecimal digits"):
         document.set_style("Callout", shading="yellow")
     with pytest.raises(TypeError, match="tab stop must be"):
         document.set_style("Callout", tab_stops=[Inches(1)])

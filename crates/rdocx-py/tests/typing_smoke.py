@@ -411,7 +411,7 @@ def issue_303_formatting_signatures(document: Document, paragraph: Paragraph) ->
     assert_type(tab_stops.add_tab_stop(Inches(1), WD_TAB_ALIGNMENT.RIGHT, WD_TAB_LEADER.DOTS), TabStop)
     assert_type(tab_stops[0].alignment, WD_TAB_ALIGNMENT | None)
     paragraph.paragraph_format.set_border("bottom", size=6, color="4472C4")
-    assert_type(paragraph.paragraph_format.border("bottom"), tuple[str, int | None, str | None] | None)
+    assert_type(paragraph.paragraph_format.border("bottom"), tuple[str, int | None, RGBColor | None] | None)
     paragraph.paragraph_format.outline_level = 1
     document.add_style("Callout", tab_stops=[(Inches(1), WD_TAB_ALIGNMENT.LEFT)], borders={"left": ("single", 4, "auto")})
     assert_type(document.add_numbered_list_item("item", restart=True), Paragraph)

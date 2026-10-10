@@ -761,8 +761,8 @@ class Document:
         keep_with_next: bool | None = None,
         keep_together: bool | None = None,
         page_break_before: bool | None = None,
-        shading: str | None = None,
-        borders: _Mapping[_ParagraphBorderEdge, tuple[_BorderStyle, int, str]] | None = None,
+        shading: _Color | None = None,
+        borders: _Mapping[_ParagraphBorderEdge, tuple[_BorderStyle, int, _Color]] | None = None,
         tab_stops: _Sequence[
             tuple[int, _text.WD_TAB_ALIGNMENT]
             | tuple[int, _text.WD_TAB_ALIGNMENT, _text.WD_TAB_LEADER]
@@ -776,8 +776,9 @@ class Document:
         `based_on` and `next_style` take an ID or a name. Lengths and the font
         size are EMU. `line_spacing` is an exact `Length` or a float multiple
         of single spacing, as `ParagraphFormat.line_spacing` takes it.
-        `shading` is six hex digits or `auto`, `borders` maps an edge to
-        `(style, size in eighths of a point, hex color)`, and `tab_stops`
+        `shading` and the border colours follow the colour rule (`auto`
+        accepted), `borders` maps an edge to
+        `(style, size in eighths of a point, color)`, and `tab_stops`
         lists `(position, alignment[, leader])`. Raises `KeyError` when a
         base or next style names no style, and `ValueError` for a duplicate
         ID or name or any other invalid argument.
@@ -804,8 +805,8 @@ class Document:
         keep_with_next: bool | None = None,
         keep_together: bool | None = None,
         page_break_before: bool | None = None,
-        shading: str | None = None,
-        borders: _Mapping[_ParagraphBorderEdge, tuple[_BorderStyle, int, str]] | None = None,
+        shading: _Color | None = None,
+        borders: _Mapping[_ParagraphBorderEdge, tuple[_BorderStyle, int, _Color]] | None = None,
         tab_stops: _Sequence[
             tuple[int, _text.WD_TAB_ALIGNMENT]
             | tuple[int, _text.WD_TAB_ALIGNMENT, _text.WD_TAB_LEADER]
@@ -1312,20 +1313,22 @@ class ParagraphFormat:
     @right_to_left.setter
     def right_to_left(self, value: bool | None) -> None: ...
     @property
-    def shading(self) -> str | None:
-        """The direct shading fill, six hex digits or `auto`."""
+    def shading(self) -> _shared.RGBColor | None:
+        """The direct shading fill, `None` when absent or `auto`."""
     @shading.setter
-    def shading(self, value: str | None) -> None: ...
-    def border(self, edge: _ParagraphBorderEdge) -> tuple[str, int | None, str | None] | None: ...
+    def shading(self, value: _Color | None) -> None: ...
+    def border(
+        self, edge: _ParagraphBorderEdge
+    ) -> tuple[str, int | None, _shared.RGBColor | None] | None: ...
     def set_border(
         self,
         edge: _ParagraphBorderEdge,
         style: _BorderStyle = "single",
         *,
         size: int = 4,
-        color: str = "auto",
+        color: _Color | None = None,
     ) -> None:
-        """Set one edge, `size` in eighths of a point, `color` six hex digits or `auto`."""
+        """Set one edge, `size` in eighths of a point, `color` by the colour rule, `None` for `auto`."""
     def remove_border(self, edge: _ParagraphBorderEdge) -> None: ...
     def clear_borders(self) -> None: ...
 
