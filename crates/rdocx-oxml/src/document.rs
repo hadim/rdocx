@@ -2754,7 +2754,7 @@ impl CT_Body {
                             &capture_element(reader, e)?,
                             owner_bindings,
                         )?;
-                        if let Some(sdt) = CT_Sdt::from_body_raw(&raw, &prefixes) {
+                        if let Some(sdt) = CT_Sdt::from_body_raw(&raw, &prefixes)? {
                             content.push(BodyContent::ContentControl(sdt));
                         } else {
                             content.push(BodyContent::RawXml(raw));

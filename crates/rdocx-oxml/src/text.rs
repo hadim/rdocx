@@ -8112,7 +8112,7 @@ impl CT_P {
                         tracked_run_count += 1;
                     } else if is_word_element(name.as_ref(), b"sdt", &prefixes) {
                         let raw = capture_element(reader, e)?;
-                        if let Some(sdt) = CT_Sdt::from_inline_raw(&raw, &prefixes) {
+                        if let Some(sdt) = CT_Sdt::from_inline_raw(&raw, &prefixes)? {
                             let raw_before = raw_xml_count_at(&extra_xml, runs.len());
                             let markers_before = comment_ranges
                                 .iter()
