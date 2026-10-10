@@ -1999,6 +1999,14 @@ impl PyFont {
     fn set_spacing(&self, py: Python<'_>, value: Option<i64>) -> PyResult<()> {
         let spacing = value
             .map(|emu| {
+                if emu != 0 && emu.abs() < EMU_PER_CENTIPOINT {
+                    return Err(PyValueError::new_err(format!(
+                        "character spacing is {emu} EMU ({} pt), under the 0.01 pt step PowerPoint \
+                         stores, so the file would hold 0: a bare int is read as EMU, give a Length \
+                         such as Pt(2)",
+                        emu as f64 / 12_700.0
+                    )));
+                }
                 let centipoints = emu / EMU_PER_CENTIPOINT;
                 if (-MAX_FONT_SIZE..=MAX_FONT_SIZE).contains(&centipoints) {
                     Ok(TextPointValue::Centipoints(centipoints as i32))
