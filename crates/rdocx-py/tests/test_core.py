@@ -4141,6 +4141,6 @@ def test_deeply_nested_content_controls_raise_instead_of_crashing():
         + "</w:p>"
     )
     with pytest.raises(
-        rdocx.RdocxError, match="content control nesting exceeds 256 levels"
+        rdocx.RdocxError, match="content control nesting exceeds 64 levels"
     ):
         _replace_document_body(rdocx.Document(), body)

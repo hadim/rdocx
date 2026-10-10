@@ -971,7 +971,7 @@ impl CT_Sdt {
 
     /// Parse a content control at the reader's current `w:sdt` start.
     ///
-    /// Fails when content controls nest more than 256 levels deep.
+    /// Fails when content controls nest more than 64 levels deep.
     pub fn from_xml(reader: &mut Reader<&[u8]>, start: &BytesStart<'_>) -> Result<Self> {
         let raw = capture_element(reader, start)?;
         validate_content_control_nesting(&raw)?;
@@ -1383,7 +1383,10 @@ fn set_nth_inline_legacy_form(
 /// Word nests content controls a handful of levels deep. The typed parser,
 /// the serialiser and the story walks recurse once per level, so a bound far
 /// above anything a producer writes keeps every one of them within the stack.
-const MAX_CONTENT_CONTROL_NESTING: usize = 256;
+/// At this depth a release build loads, edits and saves a document within
+/// about 0.75 MB of stack, which fits the 1 MB stacks of Windows threads and
+/// of wasm32 and the 2 MB default of spawned Rust threads.
+const MAX_CONTENT_CONTROL_NESTING: usize = 64;
 
 /// Reject XML whose content controls nest deeper than
 /// [`MAX_CONTENT_CONTROL_NESTING`], without recursing.
@@ -2028,7 +2031,7 @@ mod tests {
         for name in ["block", "inline", "cell", "row"] {
             assert!(
                 document_error(&body(name, limit + 1))
-                    .contains("content control nesting exceeds 256 levels"),
+                    .contains("content control nesting exceeds 64 levels"),
                 "{name}"
             );
             parse_document(&body(name, limit));
