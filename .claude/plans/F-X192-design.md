@@ -354,3 +354,27 @@ These reject only the measured settings and runtimes. They do not prove a
 portable comparator or rule out unmeasured backends. APA person-key runtime
 properties remain a separate evidence barrier. Continue independent stories
 while identifying exact collation authority or a demonstrated candidate.
+
+## Host comparison authority and bounded diagnostic
+
+Read-in-place current Word load metadata links MSXML. Its imports identify
+CompareStringW, GetThreadLocale and GetLocaleInfoW from WLMKernel. Microsoft
+MS-XSLT2.2.11 C0016 identifies Windows MSXML sorting through NLS. This is a
+concrete authority lead, not proof of Mac bibliography call arguments or
+Mac and Windows equivalence. No binary or producer stylesheet was copied.
+
+Root selected an isolated flags0 comparison diagnostic using the documented
+Windows signature as an explicitly unproved Mac ABI hypothesis. The actual
+child exited0 within its twenty-second timeout in the default sandbox. All
+694 calls returned1,2 or3. Contextual LCIDs1033 and2057 each match only five
+of fourteen complete native vectors. The same three ties and two same-key
+author controls match, while five person and four whitespace corporate
+vectors differ. Source keys, UTF16 units, identities and every return remain
+in `/private/tmp/S91-F-X192-host-comparison-authority/host-measurement.json`,
+SHA256d7ea8117a025fa05270ebbc52f43cf5950f7d15fe487f11f6fadd65024535a70.
+
+Actual bibliography LCID, flags, preprocessing and transient sort keys remain
+unobserved. Successful isolated execution does not establish a supported
+Mac ABI. No production comparator, dependency or signed-bundle change follows.
+Further probes need concrete sorting-call authority rather than guessed
+flag or locale sweeps. Exact APA person-key assembly remains separately open.
