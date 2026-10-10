@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 222 | 201 | 4 | 13 |
-| **Total** | **547** | **475** | **4** | **64** |
+| X, Cross-cutting | 222 | 202 | 3 | 13 |
+| **Total** | **547** | **476** | **3** | **64** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -770,5 +770,5 @@ HLD14 contract before adopting contributor changes.
 | F-X209 | Edit PowerPoint masters layouts and themes | S91 | L | pending |
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | S91 | L | pending |
 | F-X211 | Complete Python script compatibility and safe XML access | S91 | L | pending |
-| F-X212 | Align native accessibility with visible paragraph content | S91 | M | in-progress |
+| F-X212 | Align native accessibility with visible paragraph content | S91 | M | done |
 <!-- AUTOGEN:backlog-MX END -->

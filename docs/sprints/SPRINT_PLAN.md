@@ -2161,11 +2161,11 @@ CLI validation reports before the template and form programme resumes.
 | F-X209 | Edit PowerPoint masters layouts and themes | L | Approved, implementation pending |
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | Approved, implementation pending |
 | F-X211 | Complete Python script compatibility and safe XML access | L | Approved, implementation pending |
-| F-X212 | Align native accessibility with visible paragraph content | M | Native, CLI, hash and package gates passed, policy rerun in progress |
+| F-X212 | Align native accessibility with visible paragraph content | M | Completed and integrated, scoped gates passed |
 
-**Current delivery checkpoint, 2026-10-10**: five of twenty-two active stories
-are completed and integrated, F-X193, F-X194, F-X196, F-X198 and F-X199.
-F-X192, F-X195, F-X197 and F-X212 are in progress. Thirteen stories have
+**Current delivery checkpoint, 2026-10-10**: six of twenty-two active stories
+are completed and integrated, F-X193, F-X194, F-X196, F-X198, F-X199 and F-X212.
+F-X192, F-X195 and F-X197 are in progress. Thirteen stories have
 approved designs and await implementation.
 No design question remains outstanding. Final integrated verification,
 sprint review and verified sprint close remain outstanding.
@@ -2173,7 +2173,7 @@ sprint review and verified sprint close remain outstanding.
 **Resolution scope**: resolve every open issue and PR except
 [Issue264](https://github.com/tensorbee/rdocx/issues/264) and
 [Issue281](https://github.com/tensorbee/rdocx/issues/281). Keep those two open as
-requirements discussions. At 2026-10-10 11:52:06 UTC, the refreshed inventory
+requirements discussions. At 2026-10-10 12:40:16 UTC, the refreshed inventory
 contains nineteen open PRs and twenty-eight open issues, including the two
 exclusions. All twenty-six included issues and nineteen PRs map below.
 A later PR attaches to its existing issue owner. Assessment is not completion.

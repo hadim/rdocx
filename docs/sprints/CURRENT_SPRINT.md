@@ -45,7 +45,7 @@ and keep rolling contribution intake open.
 | F-X209 | Edit PowerPoint masters layouts and themes | L | pending | - |
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | pending | - |
 | F-X211 | Complete Python script compatibility and safe XML access | L | pending | - |
-| F-X212 | Align native accessibility with visible paragraph content | M | in-progress | codex |
+| F-X212 | Align native accessibility with visible paragraph content | M | done | - |
 
 ## Sequencing note
 
@@ -494,9 +494,9 @@ F-X211 plan. Intake grants no contributor gate credit or arbitrary new nesting
 policy. The approved256 control policy and complete textbox resource,
 namespace, discovery and public compatibility acceptance remain mandatory.
 
-## S91 intake and verification checkpoint, 2026-10-10 12:02UTC
+## S91 intake and verification checkpoint, 2026-10-10 12:40UTC
 
-The11:52:06UTC GitHub refresh found no additional or changed records. The
+The12:40:16UTC GitHub refresh found no additional or changed records. The
 subsequent all-state PR lookup still identifies PR338 as the newest PR.
 All19 PRs and26 included issues remain mapped above, with Issues264 and281
 excluded. PR338 and PR333 source assessment is complete in F-X211's existing
@@ -512,10 +512,15 @@ separate worktree, with actual Base runtime and catalogue implementation pending
 F-X212 native, CLI and attributed49-entry hash gates pass. All22 package
 verification commands passed, and the corrected archive capture authenticates
 the fresh artifacts. The original failed capture wrapper remains recorded.
-Its policy rerun is in progress after the bounded roadmap-validator correction
-and an ignored alias to the existing shared Cargo cache.
+Its worker policy rerun passed all141 cases with two publication-dependent
+cases skipped after the bounded roadmap-validator correction. The combined
+sprint tree passes the focused native and CLI checks and all49 hash entries.
+Independent integration review is clean. Combined archive measurements retain
+F-X194 and F-X212 source exactly. Affected verified packaging and integrated
+policy checks passed with verified3 affected packages and policy141 with two publication-dependent skips, all actual exits0.
+F-X212 is formally completed with the reviewed combined source.
 
-Five stories are completed and integrated, four are in progress and thirteen
+Six stories are completed and integrated, three are in progress and thirteen
 remain approved. No design question is outstanding. Final integrated
 verification, sprint review and close preflight remain outstanding. The sprint
 is not ready for close.

@@ -18957,3 +18957,23 @@ push, main merge, tag or publication is claimed.
 **Hash harness.** Unchanged, all49 entries. Generator and baseline bytes remain unchanged. The integrated source and feature-local records exactly match source commit8886305e and validated worker tip4c15080c, consumed by integration120f600d. No semantic reconciliation was needed. Final integrated sprint verification remains due.
 
 **Notes for future sessions.** Preserve the original timeout, foreign-worktree cache failure and policy RED evidence separately. Scoped same-byte mtime invalidation restored artifact provenance without Cargo clean or another target. Actual final facade archive tuples are3530290/50789923/37 and463766/2402857/16. Gzip differences from recorded measurements remain inside the unchanged64-byte tolerance. The two policy skips require separately published shared families and were not counted as passes. Detailed authenticated evidence and terminal receipts remain under /private/tmp/S91-F-X194-evidence. The clean worker branch remains available through final sprint review.
+
+### F-X212, Align native accessibility with visible paragraph content
+
+**Sprint.** S91
+**Completed.** 2026-10-10
+**Size.** M, estimated 2 days, actual not recorded
+
+**What was built.** Native paragraph visibility and CLI validation share a qualified current-source scan. Accepted pictures, nontext content and complete field displays interrupt empty streaks. Parser-owned caches preserve namespace provenance and one authoritative nested graph. Native audit retains other findings and reports one indeterminate Warning on source failure.
+
+**Non-obvious choices.** Scanner extraction remains separate at ea803be1. Public cached-result reads retain consistency filtering, while child edits and refresh use authoritative ownership when parent caches are stale. Deleted-only results, loose markers and opaque hints do not imply display. Existing empty PAGE/NUMPAGES placeholders remain visible. Operations preserve source and package bytes.
+
+**Deviations from the design plan.** No product deviation. Separate reviewed test and lint repairs retain original failures. The coordinator roadmap validator recognizes the declared delivery-status column without weakening assertions. Publication Cargo0, original capture wrapper1 and corrected read-only capture0 remain distinct.
+
+**Spec sections touched.** HLD10 native visibility and CLI advisories, HLD12 deterministic testing and HLD14 F-X212.
+
+**Tests.** Genuine Base failures establish the regression. Worker OXML647 units and1 doctest, Word521 units/6 existing ignores, regression2331/7 existing ignores,2 doctests and CLI3 units/68 integrations passed. Original Word integration101 had360 passes,5 failures and8 ignores. Five unchanged-source exact retries passed, establishing qualified365 integration coverage without relabeling the whole-target failure. Retain the public-consumer300-second timeout and restricted renderer failures. Scoped lint and source reviews are clean. Integrated focused receipt762a5852 records all nine commands0, native/CLI source and cache controls, the preserved194 signed-indent gate and exact observed49 mapping. Independent integration review has zero defects and smells. Integrated three affected-package dry-runs and fresh archive validation both exited0, preserving exact source membership and measured tuples. Integrated policy exited0, running141 tests in607.263 seconds with two publication-dependent skips. Formatting, prose, generated-skill drift and both staged and unstaged diff checks exited0.
+
+**Hash harness.** Integrated hash0 and observed mapping match all49 updated entries. Exactly feature_showcase:word/document.xml, feature_showcase:pdf/pages and feature_showcase:pdf/bytes change because one false consecutive-empty finding is removed.46 keys remain unchanged. Independent audit-only reversal recovered original49 with child0, preserving the outer helper1 and exact two XML effects before source restoration. Integrated post-row archives authenticate at3537312/50838737/37,457661/2842528/32 and76292/350712/8. All ordinary members including README match combined source, compressed observations differ by1 within unchanged64-byte tolerance. Full sprint verification and review remain due.
+
+**Notes for future sessions.** Accepted source ff2099d26af9d9283b159e0726ecff71b7052257, handoff tip f6ba684d and consumed integration 3125cf58c9887e62a50964049152a377848de672 remain recorded. F-X194 source, stubs, table ownership and HLD contracts survive reconciliation. Evidence remains under /private/tmp/S91-F-X212-*. Keep the worker branch through final sprint verification and close. No GitHub closure, push, main merge, tag or publication is claimed.
