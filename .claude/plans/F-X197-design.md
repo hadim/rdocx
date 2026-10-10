@@ -270,3 +270,24 @@ transform preservation remain mandatory. No new enum file is approved.
 Use existing enum/export files for the required values, retaining public
 spelling where the existing package layout can support it without a new file.
 Contributor archive/hash records and host gate claims are not local evidence.
+
+## Pinned brightness oracle preparation
+
+A root-owned independent python-pptx1.0.2 probe executed56 cases over run
+font, paragraph font, solid fill and line colours. All56 colour trees retain
+their exact structure after save/reopen, and all24 refused operations retain
+the prior tree. Source module hashes, enum inventory, inputs, errors and
+structural results are authenticated under
+`/private/tmp/S91-F-X197-brightness-oracle/receipt.json`. This is oracle
+preparation, not a local F-X197 pass or rendering proof.
+
+Positive brightness writes lumMod plus lumOff, negative writes lumMod only,
+and zero removes those two adjustments while preserving existing alpha and
+tint. The measured0.123456 input stores87654/12346 and reads0.12346. Endpoints
+-1 and1 store0 modulation, with100000 offset only at1. Refused out-of-range,
+infinite and wrong-type values retain source. The oracle also accepts bool
+True as1 and NaN as zero, clearing luminance. These are measured compatibility
+discriminators, not an automatic local policy choice. Classify any deliberate
+divergence in the implemented control and cited HLD before completion.
+Unknown-transform, inheritance, local source/token, shadow and rendering
+controls remain required under the existing approved acceptance.
