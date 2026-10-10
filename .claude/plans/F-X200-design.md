@@ -599,3 +599,31 @@ abstract_num_id and relative_to changes affect numbered REF and belong to
 F-283's actual native discriminator, not marker-only inference. Preserve
 concrete numId identity and account for published struct-literal compatibility
 before adopting a new public field. Reuse accepted slices once per owner.
+
+## Existing exporter and style-indirection boundaries
+
+The updated PR336 names existing ODT continuation and abstract numStyleLink
+gaps. Exact issue and source reconciliation is authenticated at
+`/private/tmp/S91-PR336-935ac16-intake/acceptance-reconciliation/receipt.json`.
+Issues303/321 require native counters and render behavior. They do not
+establish unrestricted ODT list continuation or abstract numbering-style
+indirection acceptance. Preserve that distinction in capability documentation.
+
+Add a bounded loss diagnostic in existing `crates/rdocx/src/odt.rs` when
+shared-definition continuation cannot be represented by the existing concrete
+list writer. Use existing OdtWriteResult diagnostics, a stable numbered-owner
+path and source-built plain A,A,B,B controls. Assert deterministic write/reopen
+and diagnostic results, with explicit override and independent-definition
+controls so a second concrete instance alone does not falsely imply loss.
+Native and EPUB selected counter semantics remain required. Do not claim
+all exporters reproduce Word continuation. This is an additional existing
+source reservation and focused regression, not a new writer or counter.
+
+Retain raw abstract numStyleLink indirection without invented decimal markers
+when its local definition has no usable level. Add numbering save/reopen
+preservation and unresolved-marker controls in existing test modules.
+Supported paragraph-style links through numPr and level pStyle remain
+supported. Full abstract numStyleLink delegation is an existing unsupported
+capability, not evidence that those paragraph-style links fail. F-283 retains
+cache/diagnostic behavior for unresolved numbering sources. Update the
+already-listed capability, resolution and testing HLD sections accordingly.

@@ -959,3 +959,37 @@ abstract_num_id and relative_to changes affect numbered REF and belong to
 F-283's actual native discriminator, not marker-only inference. Preserve
 concrete numId identity and account for published struct-literal compatibility
 before adopting a new public field. Reuse accepted slices once per owner.
+
+## Typed text-box recursion safety reconciliation
+
+Issue331's native admission and staged replacement contract also reaches
+bare typed text boxes. The authenticated existing path is run text.rs:2627,
+drawing.rs:703-708 and text_box_body:1374-1389, which reparses CT_Body and
+deep-clones paragraphs while retaining the complete body. This establishes
+recursive duplication risk, not a locally measured crash or a proven limit.
+Exact source and issue evidence is retained at
+`/private/tmp/S91-PR336-935ac16-intake/acceptance-reconciliation/receipt.json`.
+
+The worker must remove unsafe recursive admission and unbounded duplicate
+projection cost in the existing text/drawing/body parser files. Prefer a
+qualified iterative path preserving admitted semantics. If a separate drawing
+resource refusal is necessary, first measure a bounded source-built normal
+consumer-stack probe, then record and independently review its exact boundary,
+accepted lifecycle and atomic refusal in this plan before production edits.
+No arbitrary drawing quota is selected now. Preserve inclusive256 qualified
+sdt admission and existing table/revision limits across mixed owner paths.
+
+Run linear qualified admission before recursive capture or cloning at every
+checked native story and independent paragraph-fragment entry used by staged
+replacement. AlternateContent's drawing.rs:370 .ok() must not conceal a
+resource refusal as successful opaque fallback. Foreign/rebound lookalikes
+remain preserved. No binding-only guard or enlarged consumer stack suffices.
+
+Add bare nested typed textbox open and CLI/Python subprocess controls, mixed
+textbox/control paths without budget reset, and accepted finite-depth parse,
+text traversal, clone, save/reopen and drop. Staged paragraph/run replacement
+failure preserves exact owner XML, relationships, package and generations.
+A foreign/rebound textbox preservation control remains required. Use existing
+unit modules, native regression carrier and Python test_core.py. These are
+dedicated admission controls, not extra frozen compatibility corpus records.
+Do not claim universal parser safety from the content-control guard alone.
