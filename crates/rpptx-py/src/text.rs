@@ -64,6 +64,12 @@ fn points_spacing(emu: i64) -> PyResult<TextSpacing> {
             "spacing must be from 0 to 1584 points",
         ));
     }
+    if emu != 0 && emu < EMU_PER_CENTIPOINT {
+        return Err(PyValueError::new_err(format!(
+            "spacing takes a length in EMU, and {emu} EMU rounds to 0 in the file: give a \
+             Length such as Pt({emu}), or a float such as 1.5 for a multiple of the line"
+        )));
+    }
     Ok(TextSpacing::Points((emu / EMU_PER_CENTIPOINT) as i32))
 }
 
@@ -210,6 +216,44 @@ type Insets = (Option<Emu>, Option<Emu>, Option<Emu>, Option<Emu>);
 
 #[pymethods]
 impl PyTextFrame {
+    /// This text frame's `p:txBody` element as standalone XML bytes.
+    #[getter]
+    fn xml<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyBytes>> {
+        self.validate(py)?;
+        let shape_path = crate::shape::shape_indices(&self.path).collect::<Vec<_>>();
+        let xml = self
+            .presentation
+            .borrow(py)
+            .inner
+            .text_body_xml(slide_index(&self.path)?, &shape_path)
+            .map_err(|error| crate::raw_xml_error(py, error))?
+            .ok_or_else(|| PyValueError::new_err("shape has no text frame"))?;
+        Ok(pyo3::types::PyBytes::new(py, &xml))
+    }
+
+    /// Replace this text frame's `p:txBody` with one given as XML, checked
+    /// as `Shape.replace_xml` checks a shape.
+    fn replace_xml(&self, py: Python<'_>, xml: &Bound<'_, PyAny>) -> PyResult<()> {
+        let xml = crate::raw_xml_argument(xml)?;
+        self.validate(py)?;
+        let shape_path = crate::shape::shape_indices(&self.path).collect::<Vec<_>>();
+        let mut presentation = self.presentation.borrow_mut(py);
+        presentation
+            .inner
+            .replace_text_body_xml(slide_index(&self.path)?, &shape_path, &xml)
+            .map_err(|error| crate::raw_xml_error(py, error))?;
+        presentation.revisions.bump();
+        Ok(())
+    }
+
+    fn __getattr__(&self, name: &str) -> PyResult<Py<PyAny>> {
+        Err(crate::missing_attribute("TextFrame", name))
+    }
+
+    fn __setattr__(slf: &Bound<'_, Self>, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        crate::set_attribute(slf.as_any(), "TextFrame", name, value)
+    }
+
     #[getter]
     fn text(&self, py: Python<'_>) -> PyResult<String> {
         self.validate(py)?;
@@ -542,6 +586,14 @@ fn alignment_from_value(value: i32) -> PyResult<TextAlignment> {
 
 #[pymethods]
 impl PyParagraph {
+    fn __getattr__(&self, name: &str) -> PyResult<Py<PyAny>> {
+        Err(crate::missing_attribute("Paragraph", name))
+    }
+
+    fn __setattr__(slf: &Bound<'_, Self>, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        crate::set_attribute(slf.as_any(), "Paragraph", name, value)
+    }
+
     #[getter]
     fn text(&self, py: Python<'_>) -> PyResult<String> {
         let index = self.validate(py)?;
@@ -883,6 +935,14 @@ impl PyRun {
 
 #[pymethods]
 impl PyRun {
+    fn __getattr__(&self, name: &str) -> PyResult<Py<PyAny>> {
+        Err(crate::missing_attribute("Run", name))
+    }
+
+    fn __setattr__(slf: &Bound<'_, Self>, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        crate::set_attribute(slf.as_any(), "Run", name, value)
+    }
+
     #[getter]
     fn text(&self, py: Python<'_>) -> PyResult<String> {
         validate_path(py, &self.presentation.borrow(py), &self.path, "run", "")?;
@@ -1249,6 +1309,14 @@ fn font_color(value: &Bound<'_, PyAny>) -> PyResult<RgbColor> {
 
 #[pymethods]
 impl PyFont {
+    fn __getattr__(&self, name: &str) -> PyResult<Py<PyAny>> {
+        Err(crate::missing_attribute("Font", name))
+    }
+
+    fn __setattr__(slf: &Bound<'_, Self>, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        crate::set_attribute(slf.as_any(), "Font", name, value)
+    }
+
     #[getter]
     fn bold(&self, py: Python<'_>) -> PyResult<Option<bool>> {
         self.read(py, |properties| {

@@ -2,14 +2,14 @@ use std::collections::{BTreeMap, HashMap};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
 
-use oxml_py_support::{PathSeg, RevisionCounter, StaleElementError};
+use oxml_py_support::{ContentPath, PathSeg, RevisionCounter, StaleElementError};
 use pyo3::exceptions::{
     PyFileNotFoundError, PyIndexError, PyNotADirectoryError, PyOverflowError, PyTypeError,
     PyValueError,
 };
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyList, PyTuple};
-use smallvec::smallvec;
+use smallvec::{SmallVec, smallvec};
 
 use rdocx_oxml::{ST_PageOrientation, ST_SectionType};
 
@@ -814,6 +814,10 @@ pub struct PySection {
 
 #[pymethods]
 impl PySection {
+    fn __getattr__(&self, name: &str) -> PyResult<Py<PyAny>> {
+        Err(crate::missing_attribute("Section", name))
+    }
+
     #[new]
     #[pyo3(signature = (*, ordinal, is_final, orientation, page_width, page_height, margin_top, margin_right, margin_bottom, margin_left, gutter, column_count, column_spacing, page_number_start, header_distance, footer_distance, different_first_page, break_type))]
     #[allow(clippy::too_many_arguments)]
@@ -879,6 +883,10 @@ pub struct PyStyle {
 
 #[pymethods]
 impl PyStyle {
+    fn __getattr__(&self, name: &str) -> PyResult<Py<PyAny>> {
+        Err(crate::missing_attribute("Style", name))
+    }
+
     #[new]
     #[pyo3(signature = (*, style_id, name, based_on, style_type, linked_style, next_style, priority, auto_redefine, hidden, semi_hidden, unhide_when_used, quick_format, locked, is_default))]
     #[allow(clippy::too_many_arguments)]
@@ -1502,10 +1510,77 @@ impl PyCoreProperties {
     }
 }
 
+/// The bytes of a `replace_xml` argument: `str`, `bytes` or `bytearray`.
+pub(crate) fn raw_xml_argument(xml: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
+    if let Ok(text) = xml.extract::<String>() {
+        return Ok(text.into_bytes());
+    }
+    xml.extract::<Vec<u8>>()
+        .map_err(|_| PyTypeError::new_err("xml must be str or bytes"))
+}
+
+/// A refused raw XML replacement is a `ValueError` that says why.
+pub(crate) fn raw_xml_error(py: Python<'_>, error: rdocx::Error) -> PyErr {
+    match error {
+        rdocx::Error::Other(message) => PyValueError::new_err(message),
+        error => rdocx_to_pyerr(py, error),
+    }
+}
+
 #[pyclass(name = "Document")]
 pub struct PyDocument {
     pub(crate) inner: rdocx::Document,
     pub(crate) revisions: RevisionCounter,
+    /// What each recorded structural edit did to older handles, by the
+    /// revision it created. A revision missing here retires every older
+    /// paragraph, run and table handle.
+    pub(crate) edits: BTreeMap<u64, HandleEdit>,
+}
+
+/// What one structural edit did to the content handles created before it,
+/// so that the handles it left in place stay valid, as in python-docx, and
+/// the others name the call that moved them.
+pub(crate) struct HandleEdit {
+    /// The Python call that made the edit.
+    call: &'static str,
+    scope: EditScope,
+}
+
+pub(crate) enum EditScope {
+    /// Content appended after every existing item: no path moved.
+    Appended,
+    /// Content below this path changed: the paths strictly below it retire.
+    Below(SmallVec<[PathSeg; 5]>),
+    /// A body paragraph was inserted at this paragraph index: the body
+    /// paragraphs from it on moved one place down.
+    BodyParagraphInserted(usize),
+}
+
+impl EditScope {
+    /// Where a path that predates this edit now points, or `None` when the
+    /// edit retired it.
+    fn translate(&self, mut path: SmallVec<[PathSeg; 5]>) -> Option<SmallVec<[PathSeg; 5]>> {
+        match self {
+            Self::Appended => Some(path),
+            // Body paragraph paths start `Body(0), Para(_)`, so they share the
+            // first step of table 0's path `Body(0)`: the paths inside a
+            // table continue with `Row(_)` instead.
+            Self::Below(prefix) => {
+                let inside_table =
+                    prefix.len() > 1 || !matches!(path.get(1), Some(PathSeg::Para(_)));
+                (path.len() <= prefix.len() || !path.starts_with(prefix) || !inside_table)
+                    .then_some(path)
+            }
+            Self::BodyParagraphInserted(at) => {
+                if let [PathSeg::Body(0), PathSeg::Para(index), ..] = path.as_mut_slice()
+                    && *index >= *at
+                {
+                    *index += 1;
+                }
+                Some(path)
+            }
+        }
+    }
 }
 
 impl PyDocument {
@@ -1513,7 +1588,112 @@ impl PyDocument {
         Self {
             inner,
             revisions: RevisionCounter::new(),
+            edits: BTreeMap::new(),
         }
+    }
+
+    /// Advance the revision after a structural edit made by `call`, whose
+    /// effect on older handles `scope` describes.
+    pub(crate) fn bump_edit(&mut self, call: &'static str, scope: EditScope) -> u64 {
+        let revision = self.revisions.bump();
+        self.edits.insert(revision, HandleEdit { call, scope });
+        revision
+    }
+
+    /// Resolve a paragraph, run or table handle path at the current
+    /// revision, through every edit recorded since it was captured.
+    ///
+    /// A handle that an edit retired, or that predates an unrecorded edit,
+    /// raises `StaleElementError` naming the call when it is known.
+    pub(crate) fn resolve_path(
+        &self,
+        py: Python<'_>,
+        path: &ContentPath,
+        kind: &str,
+        hint: &str,
+    ) -> PyResult<ContentPath> {
+        let current = self.revisions.current();
+        let mut segments = path.segs.clone();
+        for revision in path.revision.saturating_add(1)..=current {
+            let edit = self.edits.get(&revision);
+            match edit.and_then(|edit| edit.scope.translate(segments.clone())) {
+                Some(moved) => segments = moved,
+                None => {
+                    let hint = match edit {
+                        Some(edit) => format!("{} invalidated it. {hint}", edit.call),
+                        None => hint.to_owned(),
+                    };
+                    return Err(crate::stale_to_pyerr(
+                        py,
+                        StaleElementError {
+                            element_kind: kind.to_owned(),
+                            captured_revision: path.revision,
+                            current_revision: current,
+                            recovery_hint: hint,
+                        },
+                    ));
+                }
+            }
+        }
+        if path.revision > current {
+            path.validate_revision(current, kind, hint)
+                .map_err(|error| crate::stale_to_pyerr(py, error))?;
+        }
+        Ok(ContentPath::new(segments, current))
+    }
+
+    /// Refuse to write a table without rows, which Word reports as
+    /// unreadable content. python-docx scripts create one with
+    /// `add_table(rows=0, cols=n)` and add rows afterwards.
+    fn check_tables_have_rows(&self) -> PyResult<()> {
+        match (0..self.inner.table_count()).find(|index| {
+            self.inner
+                .table(*index)
+                .is_some_and(|table| table.row_count() == 0)
+        }) {
+            Some(index) => Err(PyValueError::new_err(format!(
+                "table {index} has no rows, which Word cannot open: add a row before saving, \
+                 or create it with add_table(rows=1, cols=n)"
+            ))),
+            None => Ok(()),
+        }
+    }
+
+    /// Append one body paragraph for `call`, styled when `style` names a
+    /// style by name or ID or is a `Style`.
+    pub(crate) fn append_paragraph(
+        slf: Py<Self>,
+        py: Python<'_>,
+        text: &str,
+        style: Option<&Bound<'_, PyAny>>,
+        call: &'static str,
+    ) -> PyResult<Py<PyParagraph>> {
+        let style = style
+            .map(|style| match style.cast::<PyStyle>() {
+                Ok(style) => Ok(style.get().style_id.clone()),
+                Err(_) => style.extract::<String>().map_err(|_| {
+                    PyTypeError::new_err("style must be a style name, a style ID or a Style")
+                }),
+            })
+            .transpose()?;
+        let path = {
+            let mut document = slf.borrow_mut(py);
+            if let Some(style) = &style {
+                crate::paragraph::ensure_builtin_style(py, &mut document.inner, style)?;
+                style_id_of_type(&document.inner, style, rdocx::StyleType::Paragraph)?;
+            }
+            let index = document.inner.paragraph_count();
+            document.inner.add_paragraph(text);
+            document.bump_edit(call, EditScope::Appended);
+            document
+                .revisions
+                .capture(smallvec![PathSeg::Body(0), PathSeg::Para(index)])
+        };
+        let paragraph = Py::new(py, PyParagraph::new(slf, path))?;
+        if style.is_some() {
+            paragraph.borrow(py).set_style(py, style)?;
+        }
+        Ok(paragraph)
     }
 
     /// The live native owner that a `Story` snapshot names.
@@ -2061,15 +2241,32 @@ fn style_snapshot(style: rdocx::style::Style<'_>) -> PyStyle {
 
 #[pymethods]
 impl PyDocument {
+    fn __getattr__(&self, name: &str) -> PyResult<Py<PyAny>> {
+        Err(crate::missing_attribute("Document", name))
+    }
+
+    fn __setattr__(slf: &Bound<'_, Self>, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        crate::set_attribute(slf.as_any(), "Document", name, value)
+    }
+
+    /// Open a path or a binary file-like object, as python-docx's
+    /// `Document(docx)` does, or start from the default template.
     #[new]
     #[pyo3(signature = (path = None))]
-    fn new(path: Option<PathBuf>, py: Python<'_>) -> PyResult<Self> {
-        match path {
-            Some(path) => rdocx::Document::open(path)
-                .map(Self::from_document)
-                .map_err(|error| rdocx_to_pyerr(py, error)),
-            None => Ok(Self::from_document(rdocx::Document::new())),
+    fn new(path: Option<&Bound<'_, PyAny>>, py: Python<'_>) -> PyResult<Self> {
+        let Some(path) = path else {
+            return Ok(Self::from_document(rdocx::Document::new()));
+        };
+        if path.hasattr("read")? {
+            if path.hasattr("seek")? {
+                path.call_method1("seek", (0,))?;
+            }
+            let bytes = path.call_method0("read")?.extract::<Vec<u8>>()?;
+            return Self::from_bytes(&bytes, py);
         }
+        rdocx::Document::open(path.extract::<PathBuf>()?)
+            .map(Self::from_document)
+            .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
     #[staticmethod]
@@ -2086,13 +2283,27 @@ impl PyDocument {
             .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
-    fn save(&mut self, path: PathBuf, py: Python<'_>) -> PyResult<()> {
+    /// Save to a path or write to a binary file-like object, as python-docx
+    /// does.
+    fn save(&mut self, path: &Bound<'_, PyAny>, py: Python<'_>) -> PyResult<()> {
+        if path.hasattr("write")? {
+            self.check_tables_have_rows()?;
+            let bytes = py
+                .detach(|| self.inner.to_bytes())
+                .map_err(|error| rdocx_to_pyerr(py, error))?;
+            path.call_method1("write", (PyBytes::new(py, &bytes),))?;
+            return Ok(());
+        }
+        let path = path.extract::<PathBuf>()?;
+        crate::check_save_extension(&path)?;
+        self.check_tables_have_rows()?;
         py.detach(|| self.inner.save(path))
             .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
     #[pyo3(name = "to_bytes")]
     fn serialize<'py>(&mut self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+        self.check_tables_have_rows()?;
         py.detach(|| self.inner.to_bytes())
             .map(|bytes| PyBytes::new(py, &bytes))
             .map_err(|error| rdocx_to_pyerr(py, error))
@@ -2721,9 +2932,42 @@ impl PyDocument {
         Ok(())
     }
 
+    /// The style snapshots, a tuple that is also indexed by style name or ID
+    /// as python-docx's `document.styles['Normal']` is.
     #[getter]
-    fn styles<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
-        PyTuple::new(py, self.inner.styles().into_iter().map(style_snapshot))
+    fn styles<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let styles = PyTuple::new(py, self.inner.styles().into_iter().map(style_snapshot))?;
+        py.import("rdocx.shared")?
+            .getattr("_Styles")?
+            .call1((styles,))
+    }
+
+    /// Append a section starting as `start_type` says (a `WD_SECTION`
+    /// member, `NEW_PAGE` by default) and return it, as python-docx does.
+    /// Paragraphs added after it belong to the new section.
+    #[pyo3(signature = (start_type = 2))]
+    fn add_section<'py>(
+        slf: &Bound<'py, Self>,
+        py: Python<'py>,
+        start_type: i64,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let break_type = match start_type {
+            0 => "continuous",
+            1 => "nextColumn",
+            2 => "nextPage",
+            3 => "evenPage",
+            4 => "oddPage",
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "start_type must be a WD_SECTION member, got {start_type}"
+                )));
+            }
+        };
+        let index = slf.borrow().inner.section_count();
+        slf.borrow_mut().insert_section(py, index)?;
+        let options = pyo3::types::PyDict::new(py);
+        options.set_item("break_type", break_type)?;
+        slf.call_method("update_section", (index,), Some(&options))
     }
 
     // Create a style as python-docx's `styles.add_style` does, deriving the
@@ -3728,33 +3972,108 @@ impl PyDocument {
         Py::new(py, PyTableCollection::new(slf))
     }
 
-    fn add_paragraph(slf: Py<Self>, py: Python<'_>, text: &str) -> PyResult<Py<PyParagraph>> {
-        let (index, path) = {
-            let mut document = slf.borrow_mut(py);
-            let index = document.inner.paragraph_count();
-            document.inner.add_paragraph(text);
-            document.revisions.bump();
-            let path = document
-                .revisions
-                .capture(smallvec![PathSeg::Body(0), PathSeg::Para(index)]);
-            (index, path)
-        };
-        debug_assert!(matches!(path.segs.last(), Some(PathSeg::Para(i)) if *i == index));
-        Py::new(py, PyParagraph::new(slf, path))
+    /// Append a paragraph, with `style` given by name or ID as python-docx
+    /// does. Every handle stays valid.
+    #[pyo3(signature = (text = "", style = None))]
+    fn add_paragraph(
+        slf: Py<Self>,
+        py: Python<'_>,
+        text: &str,
+        style: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyParagraph>> {
+        Self::append_paragraph(slf, py, text, style, "Document.add_paragraph")
     }
 
-    #[pyo3(signature = (rows, cols))]
-    fn add_table(slf: Py<Self>, py: Python<'_>, rows: usize, cols: usize) -> PyResult<Py<PyTable>> {
+    /// Append a heading paragraph: `level` 0 is the Title style and 1 to 9
+    /// the Heading styles, as in python-docx.
+    #[pyo3(signature = (text = "", level = 1))]
+    fn add_heading(
+        slf: Py<Self>,
+        py: Python<'_>,
+        text: &str,
+        level: i64,
+    ) -> PyResult<Py<PyParagraph>> {
+        let style = match level {
+            0 => "Title".to_owned(),
+            1..=9 => format!("Heading {level}"),
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "level must be in range 0-9, got {level}"
+                )));
+            }
+        };
+        let style = pyo3::types::PyString::new(py, &style);
+        Self::append_paragraph(slf, py, text, Some(style.as_any()), "Document.add_heading")
+    }
+
+    /// Append a paragraph holding only a page break, as python-docx does.
+    fn add_page_break(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<PyParagraph>> {
+        let document = slf.clone_ref(py);
+        let paragraph = Self::append_paragraph(slf, py, "", None, "Document.add_page_break")?;
+        let location = paragraph.borrow(py).validate(py)?;
+        let ParagraphLocation::Body(index) = location else {
+            unreachable!("an appended paragraph is a body paragraph");
+        };
+        document
+            .borrow_mut(py)
+            .inner
+            .paragraph_mut(index)
+            .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
+            .add_run("")
+            .add_break(rdocx::BreakKind::Page);
+        Ok(paragraph)
+    }
+
+    #[pyo3(signature = (rows, cols, style = None))]
+    fn add_table(
+        slf: Py<Self>,
+        py: Python<'_>,
+        rows: usize,
+        cols: usize,
+        style: Option<&str>,
+    ) -> PyResult<Py<PyTable>> {
+        if cols == 0 {
+            return Err(PyValueError::new_err(
+                "a table needs at least one column, which Word requires in every row",
+            ));
+        }
         let (index, path) = {
             let mut document = slf.borrow_mut(py);
             let index = document.inner.table_count();
             document.inner.add_table(rows, cols);
-            document.revisions.bump();
+            document.bump_edit("Document.add_table", EditScope::Appended);
             let path = document.revisions.capture(smallvec![PathSeg::Body(index)]);
             (index, path)
         };
         debug_assert!(matches!(path.segs.last(), Some(PathSeg::Body(i)) if *i == index));
-        Py::new(py, PyTable::new(slf, path))
+        let table = Py::new(py, PyTable::new(slf, path))?;
+        if let Some(style) = style {
+            table.borrow(py).set_style(py, style)?;
+        }
+        Ok(table)
+    }
+
+    /// The raw XML of section `index`'s `w:sectPr`, as bytes.
+    fn section_xml<'py>(&self, py: Python<'py>, index: usize) -> PyResult<Bound<'py, PyBytes>> {
+        let xml = self
+            .inner
+            .element_xml(&rdocx::XmlTarget::Section(index))
+            .map_err(|error| raw_xml_error(py, error))?;
+        Ok(PyBytes::new(py, &xml))
+    }
+
+    /// Replace section `index`'s `w:sectPr` with `xml`, checked as
+    /// `Paragraph.replace_xml` checks a paragraph.
+    fn replace_section_xml(
+        &mut self,
+        py: Python<'_>,
+        index: usize,
+        xml: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let xml = raw_xml_argument(xml)?;
+        self.inner
+            .replace_element_xml(&rdocx::XmlTarget::Section(index), &xml)
+            .map_err(|error| raw_xml_error(py, error))
     }
 
     fn remove_content(&mut self, py: Python<'_>, index: usize) -> PyResult<bool> {
@@ -3790,7 +4109,7 @@ impl PyDocument {
         PyTuple::new(py, self.inner.find_content_indices(text))
     }
 
-    fn insert_paragraph(
+    pub(crate) fn insert_paragraph(
         slf: Py<Self>,
         py: Python<'_>,
         index: usize,
@@ -3806,7 +4125,10 @@ impl PyDocument {
                 .inner
                 .paragraph_index_of_content(index)
                 .expect("an inserted body paragraph has a paragraph index");
-            document.revisions.bump();
+            document.bump_edit(
+                "Document.insert_paragraph",
+                EditScope::BodyParagraphInserted(paragraph),
+            );
             document
                 .revisions
                 .capture(smallvec![PathSeg::Body(0), PathSeg::Para(paragraph)])
