@@ -797,3 +797,15 @@ def exercise_rpptx_autofit_types(presentation: Presentation) -> None:
         fits: bool = result.fits
         substitutions: tuple[tuple[str, str], ...] = result.font_substitutions
         (slide_index, shape_id, name, autofit, scale, height, width, font_size, fits, substitutions)
+
+
+def exercise_rpptx_first_draft_and_raw_xml_types(slide: Slide, table: Table) -> None:
+    slide.notes_slide.notes_text_frame.text = "notes"
+    has_notes: bool = slide.has_notes_slide
+    xml: bytes = slide.xml
+    slide.replace_xml(xml)
+    shape = slide.shapes[0]
+    shape.replace_xml(shape.xml)
+    shape.text_frame.replace_xml(shape.text_frame.xml)
+    cells: list[Cell] = table.rows[0].cells
+    del has_notes, cells

@@ -1,11 +1,14 @@
 use oxml_py_support::ContentPath;
-use pyo3::exceptions::{PyIndexError, PyValueError};
+use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyIterator, PyList};
 
 use crate::document::PyDocument;
 use crate::paragraph::{ParagraphLocation, paragraph_location};
-use crate::{color_hex, color_object, enum_object, length_object, normalize_index, stale_to_pyerr};
+use crate::{
+    HALF_POINT_EMU, TWIP_EMU, color_hex, color_object, enum_object, length_object, normalize_index,
+    stale_to_pyerr, stored_length,
+};
 
 pub(crate) fn alignment_from_int(value: i32) -> PyResult<rdocx::Alignment> {
     match value {
@@ -43,6 +46,28 @@ fn checked_highlight(value: &str) -> PyResult<&str> {
         )),
     }
 }
+
+/// python-docx's `WD_COLOR_INDEX` values and the Word highlight names they
+/// write. `AUTO` writes `none`, which Word reads as no highlight.
+const HIGHLIGHT_INDEX: [(i32, &str); 17] = [
+    (0, "none"),
+    (1, "black"),
+    (2, "blue"),
+    (3, "cyan"),
+    (4, "green"),
+    (5, "magenta"),
+    (6, "red"),
+    (7, "yellow"),
+    (8, "white"),
+    (9, "darkBlue"),
+    (10, "darkCyan"),
+    (11, "darkGreen"),
+    (12, "darkMagenta"),
+    (13, "darkRed"),
+    (14, "darkYellow"),
+    (15, "darkGray"),
+    (16, "lightGray"),
+];
 
 /// `MSO_THEME_COLOR` values and the `w:themeColor` token each one writes,
 /// as python-docx maps them.
@@ -131,19 +156,36 @@ pub(crate) enum LineSpacing {
     Exact(rdocx::Length),
 }
 
+///
+/// As in python-docx, a `Length` is an exact spacing and any other number is
+/// a multiple of single spacing, so `2` is double.
 pub(crate) fn checked_line_spacing(value: &Bound<'_, PyAny>) -> PyResult<LineSpacing> {
-    let spacing = if value.is_instance_of::<pyo3::types::PyFloat>() {
-        let multiple = value.extract::<f64>()?;
-        (multiple.is_finite() && multiple > 0.0).then_some(LineSpacing::Multiple(multiple))
-    } else {
-        let emu = value.extract::<i64>()?;
-        (emu > 0).then_some(LineSpacing::Exact(rdocx::Length::emu(emu)))
-    };
-    spacing.ok_or_else(|| {
+    let invalid = || {
         PyValueError::new_err(
-            "line_spacing must be a positive Length such as Pt(18) or a positive float multiple such as 1.5",
+            "line_spacing must be a positive multiple such as 1.5 or a length such as Pt(18)",
         )
-    })
+    };
+    if value.is_instance(&value.py().import("rdocx")?.getattr("Length")?)? {
+        let emu: i64 = value.extract()?;
+        if emu <= 0 {
+            return Err(invalid());
+        }
+        return Ok(LineSpacing::Exact(stored_length(
+            "line_spacing",
+            emu,
+            TWIP_EMU,
+        )?));
+    }
+    if value.is_instance_of::<pyo3::types::PyBool>() {
+        return Err(PyTypeError::new_err(
+            "line_spacing takes a multiple such as 1.5 or a length such as Pt(18)",
+        ));
+    }
+    let multiple: f64 = value.extract()?;
+    if !(multiple.is_finite() && multiple > 0.0) {
+        return Err(invalid());
+    }
+    Ok(LineSpacing::Multiple(multiple))
 }
 
 /// A paragraph border style and size, `size` in eighths of a point.
@@ -339,16 +381,13 @@ impl PyFont {
     }
 
     fn validate(&self, py: Python<'_>) -> PyResult<(ParagraphLocation, usize)> {
-        let document = self.document.borrow(py);
-        self.path
-            .validate_revision(
-                document.revisions.current(),
-                "font",
-                "Re-fetch it with paragraph.runs[i].font.",
-            )
-            .map_err(|error| stale_to_pyerr(py, error))?;
-        let run = self
-            .path
+        let path = self.document.borrow(py).resolve_path(
+            py,
+            &self.path,
+            "font",
+            "Re-fetch it with paragraph.runs[i].font.",
+        )?;
+        let run = path
             .segs
             .iter()
             .find_map(|segment| match segment {
@@ -356,7 +395,7 @@ impl PyFont {
                 _ => None,
             })
             .ok_or_else(|| PyIndexError::new_err("run index is missing"))?;
-        Ok((paragraph_location(&self.path)?, run))
+        Ok((paragraph_location(&path)?, run))
     }
 
     fn snapshot(&self, py: Python<'_>) -> PyResult<FontSnapshot> {
@@ -482,6 +521,14 @@ pub(crate) fn apply_run_update(
 
 #[pymethods]
 impl PyFont {
+    fn __getattr__(&self, name: &str) -> PyResult<Py<PyAny>> {
+        Err(crate::missing_attribute("Font", name))
+    }
+
+    fn __setattr__(slf: &Bound<'_, Self>, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        crate::set_attribute(slf.as_any(), "Font", name, value)
+    }
+
     #[getter]
     fn name(&self, py: Python<'_>) -> PyResult<Option<String>> {
         Ok(self.snapshot(py)?.name)
@@ -489,6 +536,11 @@ impl PyFont {
 
     #[setter]
     fn set_name(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
+        if value.is_some_and(|name| name.trim().is_empty()) {
+            return Err(PyValueError::new_err(
+                "font.name cannot be empty: give a font name, or None to inherit the style's font",
+            ));
+        }
         self.apply(py, FontUpdate::Name(value))
     }
 
@@ -502,10 +554,15 @@ impl PyFont {
 
     #[setter]
     fn set_size(&self, py: Python<'_>, value: Option<i64>) -> PyResult<()> {
-        self.apply(
-            py,
-            FontUpdate::Size(value.map(|emu| rdocx::Length::emu(emu).to_pt())),
-        )
+        if value.is_some_and(|emu| emu < 0) {
+            return Err(PyValueError::new_err(
+                "font.size must be a positive length such as Pt(12)",
+            ));
+        }
+        let size = value
+            .map(|emu| stored_length("font.size", emu, HALF_POINT_EMU))
+            .transpose()?;
+        self.apply(py, FontUpdate::Size(size.map(rdocx::Length::to_pt)))
     }
 
     /// The run colour as a `ColorFormat`, as python-docx returns it.
@@ -585,6 +642,39 @@ impl PyFont {
     #[setter]
     fn set_highlight(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
         let value = value.map(checked_highlight).transpose()?;
+        self.apply(py, FontUpdate::Highlight(value))
+    }
+
+    /// python-docx's highlight as a `WD_COLOR_INDEX` member, the same
+    /// highlight `highlight` names.
+    #[getter]
+    fn highlight_color(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.snapshot(py)?
+            .highlight
+            .and_then(|name| {
+                HIGHLIGHT_INDEX
+                    .iter()
+                    .find(|(_, candidate)| *candidate == name)
+                    .map(|(index, _)| enum_object(py, "WD_COLOR_INDEX", *index))
+            })
+            .transpose()
+    }
+
+    #[setter]
+    fn set_highlight_color(&self, py: Python<'_>, value: Option<i32>) -> PyResult<()> {
+        let value = value
+            .map(|value| {
+                HIGHLIGHT_INDEX
+                    .iter()
+                    .find(|(index, _)| *index == value)
+                    .map(|(_, name)| *name)
+                    .ok_or_else(|| {
+                        PyValueError::new_err(format!(
+                            "highlight_color must be a WD_COLOR_INDEX member, got {value}"
+                        ))
+                    })
+            })
+            .transpose()?;
         self.apply(py, FontUpdate::Highlight(value))
     }
 
@@ -929,15 +1019,13 @@ impl PyParagraphFormat {
     }
 
     fn validate(&self, py: Python<'_>) -> PyResult<ParagraphLocation> {
-        let document = self.document.borrow(py);
-        self.path
-            .validate_revision(
-                document.revisions.current(),
-                "paragraph format",
-                "Re-fetch it with paragraph.paragraph_format.",
-            )
-            .map_err(|error| stale_to_pyerr(py, error))?;
-        paragraph_location(&self.path)
+        let path = self.document.borrow(py).resolve_path(
+            py,
+            &self.path,
+            "paragraph format",
+            "Re-fetch it with paragraph.paragraph_format.",
+        )?;
+        paragraph_location(&path)
     }
 
     fn snapshot(&self, py: Python<'_>) -> PyResult<ParagraphSnapshot> {
@@ -1318,6 +1406,14 @@ type BorderSnapshot = (String, Option<u32>, Option<Py<PyAny>>);
 
 #[pymethods]
 impl PyParagraphFormat {
+    fn __getattr__(&self, name: &str) -> PyResult<Py<PyAny>> {
+        Err(crate::missing_attribute("ParagraphFormat", name))
+    }
+
+    fn __setattr__(slf: &Bound<'_, Self>, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        crate::set_attribute(slf.as_any(), "ParagraphFormat", name, value)
+    }
+
     #[getter]
     fn alignment(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         self.snapshot(py)?
@@ -1346,7 +1442,11 @@ impl PyParagraphFormat {
     fn set_space_before(&self, py: Python<'_>, value: Option<i64>) -> PyResult<()> {
         self.apply(
             py,
-            ParagraphUpdate::SpaceBefore(value.map(rdocx::Length::emu)),
+            ParagraphUpdate::SpaceBefore(
+                value
+                    .map(|emu| stored_length("space_before", emu, TWIP_EMU))
+                    .transpose()?,
+            ),
         )
     }
 
@@ -1362,7 +1462,11 @@ impl PyParagraphFormat {
     fn set_space_after(&self, py: Python<'_>, value: Option<i64>) -> PyResult<()> {
         self.apply(
             py,
-            ParagraphUpdate::SpaceAfter(value.map(rdocx::Length::emu)),
+            ParagraphUpdate::SpaceAfter(
+                value
+                    .map(|emu| stored_length("space_after", emu, TWIP_EMU))
+                    .transpose()?,
+            ),
         )
     }
 
@@ -1378,7 +1482,11 @@ impl PyParagraphFormat {
     fn set_left_indent(&self, py: Python<'_>, value: Option<i64>) -> PyResult<()> {
         self.apply(
             py,
-            ParagraphUpdate::LeftIndent(value.map(rdocx::Length::emu)),
+            ParagraphUpdate::LeftIndent(
+                value
+                    .map(|emu| stored_length("left_indent", emu, TWIP_EMU))
+                    .transpose()?,
+            ),
         )
     }
 
@@ -1394,7 +1502,11 @@ impl PyParagraphFormat {
     fn set_right_indent(&self, py: Python<'_>, value: Option<i64>) -> PyResult<()> {
         self.apply(
             py,
-            ParagraphUpdate::RightIndent(value.map(rdocx::Length::emu)),
+            ParagraphUpdate::RightIndent(
+                value
+                    .map(|emu| stored_length("right_indent", emu, TWIP_EMU))
+                    .transpose()?,
+            ),
         )
     }
 
@@ -1410,7 +1522,11 @@ impl PyParagraphFormat {
     fn set_first_line_indent(&self, py: Python<'_>, value: Option<i64>) -> PyResult<()> {
         self.apply(
             py,
-            ParagraphUpdate::FirstLineIndent(value.map(rdocx::Length::emu)),
+            ParagraphUpdate::FirstLineIndent(
+                value
+                    .map(|emu| stored_length("first_line_indent", emu, TWIP_EMU))
+                    .transpose()?,
+            ),
         )
     }
 

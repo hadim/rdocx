@@ -565,3 +565,18 @@ def headers_footers_notes_and_page_setup(document: Document) -> None:
     document.set_page_borders(0, "single", width=Pt(1), color="FF0000", space=Pt(24))
     document.update_section(0, page_width=Twips(12240))
     document.set_note_numbering("footnote", restart="never")  # type: ignore[arg-type]
+
+
+def first_draft_and_raw_xml_signatures(document: Document, paragraph: Paragraph, cell: Cell) -> None:
+    assert_type(document.add_heading("Title", 0), Paragraph)
+    assert_type(document.add_paragraph(style="List Bullet"), Paragraph)
+    assert_type(document.add_page_break(), Paragraph)
+    assert_type(paragraph.insert_paragraph_before("before", style="Quote"), Paragraph)
+    assert_type(paragraph.xml, bytes)
+    assert_type(paragraph.replace_xml(paragraph.xml), None)
+    assert_type(cell.replace_xml("<w:tc><w:p/></w:tc>"), None)
+    assert_type(document.replace_section_xml(0, document.section_xml(0)), None)
+    run = paragraph.runs[0]
+    run.bold = True
+    assert_type(run.italic, bool | None)
+    assert "Normal" in document.styles

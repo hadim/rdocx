@@ -375,7 +375,7 @@ ARCHIVE_REMEASUREMENT_DATES = {
     "oxml-drawing": "2026-10-09",
     "oxml-opc": "2026-10-09",
     "oxml-pdf": "2026-10-09",
-    "rdocx": "2026-10-09",
+    "rdocx": "2026-10-10",
     "rdocx-cli": "2026-10-09",
     "rdocx-layout": "2026-10-09",
     "rdocx-oxml": "2026-10-09",

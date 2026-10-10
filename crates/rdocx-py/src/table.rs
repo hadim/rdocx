@@ -3,14 +3,14 @@ use pyo3::exceptions::{
     PyIndexError, PyKeyError, PyNotImplementedError, PyTypeError, PyUserWarning, PyValueError,
 };
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyList, PySlice, PyTuple};
+use pyo3::types::{PyAny, PyBytes, PyList, PySlice, PyTuple};
 use smallvec::smallvec;
 
-use crate::document::PyDocument;
+use crate::document::{EditScope, PyDocument, raw_xml_argument, raw_xml_error};
 use crate::paragraph::{PyParagraph, style_id_of_type};
 use crate::{
-    color_hex, color_object, enum_object, length_object, normalize_index, rdocx_to_pyerr,
-    stale_to_pyerr,
+    TWIP_EMU, color_hex, color_object, enum_object, length_object, normalize_index, rdocx_to_pyerr,
+    stored_length,
 };
 
 /// Where a table handle points: a table counted as `Document::table`
@@ -84,13 +84,9 @@ impl TableAddress {
     }
 }
 
-/// What a revision bump inside one table moved, so that table, row and cell
-/// handles it cannot have moved stay valid.
-pub(crate) struct TableEdit {
-    table: Vec<PathSeg>,
-    scope: TableEditScope,
-}
-
+/// What an edit inside one table moved, recorded as the document-wide
+/// [`EditScope`] so that table, row and cell handles it cannot have moved
+/// stay valid.
 enum TableEditScope {
     /// Rows or columns appended at the end: no existing index moved.
     Appended,
@@ -100,23 +96,8 @@ enum TableEditScope {
     Cell(usize, usize),
 }
 
-impl TableEdit {
-    fn keeps(&self, path: &[PathSeg]) -> bool {
-        let below = |prefix: &[PathSeg]| path.len() > prefix.len() && path.starts_with(prefix);
-        match self.scope {
-            TableEditScope::Appended => true,
-            TableEditScope::Grid => !below(&self.table),
-            TableEditScope::Cell(row, cell) => {
-                let mut prefix = self.table.clone();
-                prefix.extend([PathSeg::Row(row), PathSeg::Cell(cell)]);
-                !below(&prefix)
-            }
-        }
-    }
-}
-
-/// Check a table, row or cell handle: it is valid at its own revision and
-/// after every later bump that was a table edit leaving its path in place.
+/// Check a table, row or cell handle against every edit recorded since it
+/// was captured.
 fn check_table_path(
     py: Python<'_>,
     document: &PyDocument,
@@ -124,31 +105,29 @@ fn check_table_path(
     kind: &str,
     hint: &str,
 ) -> PyResult<()> {
-    let current = document.revisions.current();
-    let kept = path.revision <= current
-        && (path.revision + 1..=current).all(|revision| {
-            document
-                .table_edits
-                .get(&revision)
-                .is_some_and(|edit| edit.keeps(&path.segs))
-        });
-    if kept {
-        return Ok(());
-    }
-    path.validate_revision(current, kind, hint)
-        .map_err(|error| stale_to_pyerr(py, error))
+    document.resolve_path(py, path, kind, hint).map(drop)
 }
 
-/// Advance the revision for an edit inside the table at `table`.
-fn bump_table(document: &mut PyDocument, table: &[PathSeg], scope: TableEditScope) {
-    let revision = document.revisions.bump();
-    document.table_edits.insert(
-        revision,
-        TableEdit {
-            table: table.to_vec(),
-            scope,
-        },
-    );
+/// Advance the revision for `call`, an edit inside the table at `table`.
+fn bump_table(
+    document: &mut PyDocument,
+    table: &[PathSeg],
+    call: &'static str,
+    scope: TableEditScope,
+) {
+    let scope = match scope {
+        TableEditScope::Appended => EditScope::Appended,
+        TableEditScope::Grid => EditScope::Below(table.iter().copied().collect()),
+        TableEditScope::Cell(row, cell) => {
+            let mut prefix = table
+                .iter()
+                .copied()
+                .collect::<smallvec::SmallVec<[PathSeg; 5]>>();
+            prefix.extend([PathSeg::Row(row), PathSeg::Cell(cell)]);
+            EditScope::Below(prefix)
+        }
+    };
+    document.bump_edit(call, scope);
 }
 
 fn alignment_from_int(value: i32) -> PyResult<rdocx::Alignment> {
@@ -448,16 +427,22 @@ impl PyTable {
     fn edit_structure<T>(
         &self,
         py: Python<'_>,
+        call: &'static str,
         scope: TableEditScope,
         edit: impl FnOnce(&mut rdocx::Table<'_>) -> rdocx::Result<T>,
     ) -> PyResult<T> {
         let value = self.edit(py, edit)?;
-        self.bump(py, scope);
+        self.bump(py, call, scope);
         Ok(value)
     }
 
-    fn bump(&self, py: Python<'_>, scope: TableEditScope) {
-        bump_table(&mut self.document.borrow_mut(py), &self.path.segs, scope);
+    fn bump(&self, py: Python<'_>, call: &'static str, scope: TableEditScope) {
+        bump_table(
+            &mut self.document.borrow_mut(py),
+            &self.path.segs,
+            call,
+            scope,
+        );
     }
 
     /// Capture a path below this table at the current revision.
@@ -526,6 +511,46 @@ fn table_look(table: &rdocx::TableRef<'_>) -> rdocx::TableLook {
 
 #[pymethods]
 impl PyTable {
+    fn __getattr__(&self, name: &str) -> PyResult<Py<PyAny>> {
+        Err(crate::missing_attribute("Table", name))
+    }
+
+    fn __setattr__(slf: &Bound<'_, Self>, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        crate::set_attribute(slf.as_any(), "Table", name, value)
+    }
+
+    /// This table's `w:tbl` element as standalone XML bytes.
+    #[getter]
+    fn xml<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+        let table = self.address(py)?.top_level("Table.xml")?;
+        let target = rdocx::XmlTarget::Table(table);
+        let xml = self
+            .document
+            .borrow(py)
+            .inner
+            .element_xml(&target)
+            .map_err(|error| raw_xml_error(py, error))?;
+        Ok(PyBytes::new(py, &xml))
+    }
+
+    /// Replace this table with one `w:tbl` element given as XML. The table
+    /// handle stays valid and the handles inside it retire.
+    fn replace_xml(&self, py: Python<'_>, xml: &Bound<'_, PyAny>) -> PyResult<()> {
+        let xml = raw_xml_argument(xml)?;
+        let table = self.address(py)?.top_level("Table.replace_xml")?;
+        let target = rdocx::XmlTarget::Table(table);
+        let mut document = self.document.borrow_mut(py);
+        document
+            .inner
+            .replace_element_xml(&target, &xml)
+            .map_err(|error| raw_xml_error(py, error))?;
+        document.bump_edit(
+            "Table.replace_xml",
+            EditScope::Below(self.path.segs.clone()),
+        );
+        Ok(())
+    }
+
     #[getter]
     fn rows(&self, py: Python<'_>) -> PyResult<Py<PyRowCollection>> {
         self.address(py)?;
@@ -549,7 +574,7 @@ impl PyTable {
     /// Set the table style from its style ID or, as python-docx accepts, its
     /// name.
     #[setter]
-    fn set_style(&self, py: Python<'_>, value: &str) -> PyResult<()> {
+    pub(crate) fn set_style(&self, py: Python<'_>, value: &str) -> PyResult<()> {
         // Word draws a table whose style the package does not define with
         // the default table style. python-docx writes such a reference (its
         // template defines Word's built-in table styles), so an unknown value
@@ -608,8 +633,9 @@ impl PyTable {
 
     #[setter]
     fn set_width(&self, py: Python<'_>, value: i64) -> PyResult<()> {
+        let width = stored_length("table.width", value, TWIP_EMU)?;
         self.edit(py, |table| {
-            table.set_width(rdocx::Length::emu(value));
+            table.set_width(width);
             Ok(())
         })
     }
@@ -808,9 +834,8 @@ impl PyTable {
     fn set_column_width(&self, py: Python<'_>, column: isize, width: i64) -> PyResult<()> {
         let columns = self.read(py, |table| table.column_count())?;
         let column = normalize_index(column, columns, "column")?;
-        let applied = self.edit(py, |table| {
-            Ok(table.set_column_width(column, rdocx::Length::emu(width)))
-        })?;
+        let width = stored_length("column width", width, TWIP_EMU)?;
+        let applied = self.edit(py, |table| Ok(table.set_column_width(column, width)))?;
         if !applied {
             return Err(PyValueError::new_err(
                 "column width must be nonnegative and every row must fit the table grid",
@@ -836,7 +861,7 @@ impl PyTable {
         })?;
         // Absorbed or restored cells shift the indexes after this one.
         if changed {
-            self.bump(py, TableEditScope::Grid);
+            self.bump(py, "Table.set_cell_grid_span", TableEditScope::Grid);
         }
         Ok(())
     }
@@ -858,7 +883,7 @@ impl PyTable {
     /// python-docx `Table.add_row` does. The table and its other row and
     /// cell handles stay valid.
     fn add_row(&self, py: Python<'_>) -> PyResult<Py<PyRow>> {
-        let row = self.edit_structure(py, TableEditScope::Appended, |table| {
+        let row = self.edit_structure(py, "Table.add_row", TableEditScope::Appended, |table| {
             table.add_row()?;
             Ok(table.row_count() - 1)
         })?;
@@ -903,7 +928,7 @@ impl PyTable {
         } else {
             TableEditScope::Grid
         };
-        self.edit_structure(py, scope, |table| {
+        self.edit_structure(py, "Table.insert_column", scope, |table| {
             table.insert_column(index, width.map(rdocx::Length::emu))
         })
     }
@@ -918,7 +943,12 @@ impl PyTable {
             .inner
             .remove_table_column(table, column)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        bump_table(&mut document, &self.path.segs, TableEditScope::Grid);
+        bump_table(
+            &mut document,
+            &self.path.segs,
+            "Table.remove_column",
+            TableEditScope::Grid,
+        );
         Ok(())
     }
 
@@ -941,7 +971,12 @@ impl PyTable {
                 .inner
                 .clone_table_row(table_index, source, insert_at)
                 .map_err(|error| rdocx_to_pyerr(py, error))?;
-            bump_table(&mut document, &self.path.segs, TableEditScope::Grid);
+            bump_table(
+                &mut document,
+                &self.path.segs,
+                "Table.clone_row",
+                TableEditScope::Grid,
+            );
             let mut segments = self.path.segs.clone();
             segments.push(PathSeg::Row(inserted));
             document.revisions.capture(segments)
@@ -962,7 +997,12 @@ impl PyTable {
             .inner
             .remove_table_row(table_index, row_index)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        bump_table(&mut document, &self.path.segs, TableEditScope::Grid);
+        bump_table(
+            &mut document,
+            &self.path.segs,
+            "Table.remove_row",
+            TableEditScope::Grid,
+        );
         Ok(())
     }
 }
@@ -1196,6 +1236,14 @@ impl PyRow {
 
 #[pymethods]
 impl PyRow {
+    fn __getattr__(&self, name: &str) -> PyResult<Py<PyAny>> {
+        Err(crate::missing_attribute("Row", name))
+    }
+
+    fn __setattr__(slf: &Bound<'_, Self>, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        crate::set_attribute(slf.as_any(), "Row", name, value)
+    }
+
     #[getter]
     fn cells(&self, py: Python<'_>) -> PyResult<Py<PyCellCollection>> {
         self.validate(py)?;
@@ -1220,7 +1268,7 @@ impl PyRow {
         let exact = self
             .read(py, |row| row.height())?
             .is_some_and(|height| row_height_parts(height).1);
-        let height = row_height(rdocx::Length::emu(value), exact);
+        let height = row_height(stored_length("row.height", value, TWIP_EMU)?, exact);
         self.edit(py, |row| row.set_height_checked(height))
     }
 
@@ -1451,7 +1499,7 @@ impl PyCell {
     /// Advance the revision for an edit inside this cell, or across its
     /// table for `TableEditScope::Grid`. Handles outside what the edit
     /// moved stay valid.
-    fn bump(&self, py: Python<'_>, grid: bool) -> PyResult<()> {
+    fn bump(&self, py: Python<'_>, call: &'static str, grid: bool) -> PyResult<()> {
         let (_, row, cell) = self.validate(py)?;
         let table = &self.path.segs[..self.path.segs.len() - 2];
         let scope = if grid {
@@ -1459,7 +1507,7 @@ impl PyCell {
         } else {
             TableEditScope::Cell(row, cell)
         };
-        bump_table(&mut self.document.borrow_mut(py), table, scope);
+        bump_table(&mut self.document.borrow_mut(py), table, call, scope);
         Ok(())
     }
 
@@ -1474,6 +1522,43 @@ impl PyCell {
 
 #[pymethods]
 impl PyCell {
+    fn __getattr__(&self, name: &str) -> PyResult<Py<PyAny>> {
+        Err(crate::missing_attribute("Cell", name))
+    }
+
+    fn __setattr__(slf: &Bound<'_, Self>, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        crate::set_attribute(slf.as_any(), "Cell", name, value)
+    }
+
+    /// This cell's `w:tc` element as standalone XML bytes.
+    #[getter]
+    fn xml<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+        let (table, row, cell) = self.top_level(py, "Cell.xml")?;
+        let target = rdocx::XmlTarget::Cell { table, row, cell };
+        let xml = self
+            .document
+            .borrow(py)
+            .inner
+            .element_xml(&target)
+            .map_err(|error| raw_xml_error(py, error))?;
+        Ok(PyBytes::new(py, &xml))
+    }
+
+    /// Replace this cell with one `w:tc` element given as XML. The cell
+    /// handle stays valid and the handles inside it retire.
+    fn replace_xml(&self, py: Python<'_>, xml: &Bound<'_, PyAny>) -> PyResult<()> {
+        let xml = raw_xml_argument(xml)?;
+        let (table, row, cell) = self.top_level(py, "Cell.replace_xml")?;
+        let target = rdocx::XmlTarget::Cell { table, row, cell };
+        let mut document = self.document.borrow_mut(py);
+        document
+            .inner
+            .replace_element_xml(&target, &xml)
+            .map_err(|error| raw_xml_error(py, error))?;
+        document.bump_edit("Cell.replace_xml", EditScope::Below(self.path.segs.clone()));
+        Ok(())
+    }
+
     /// Replace literal text in this cell and its supported nested descendants.
     #[pyo3(signature = (old, new, *, expect = None))]
     fn replace_text(
@@ -1486,7 +1571,7 @@ impl PyCell {
         let cell = self.top_level(py, "Cell.replace_text")?;
         self.document
             .borrow_mut(py)
-            .scoped_replacement(py, |document| {
+            .scoped_replacement(py, "Cell.replace_text", |document| {
                 document.try_replace_text_in_cell(cell, None, old, new, expect)
             })
     }
@@ -1508,7 +1593,7 @@ impl PyCell {
         }
         // Only handles inside this cell moved, so its siblings, its row and
         // its table stay valid, as in `table.add_row().cells` loops.
-        self.bump(py, false)
+        self.bump(py, "Cell.text", false)
     }
     #[getter]
     fn paragraphs(&self, py: Python<'_>) -> PyResult<Py<PyCellParagraphCollection>> {
@@ -1520,7 +1605,7 @@ impl PyCell {
     }
     fn add_paragraph(&self, py: Python<'_>, text: &str) -> PyResult<Py<PyParagraph>> {
         let (table, row, cell) = self.top_level(py, "Cell.add_paragraph")?;
-        self.bump(py, false)?;
+        self.bump(py, "Cell.add_paragraph", false)?;
         let path = {
             let mut document = self.document.borrow_mut(py);
             let paragraph = {
@@ -1601,7 +1686,7 @@ impl PyCell {
             }
             Ok(())
         })?;
-        self.bump(py, false)?;
+        self.bump(py, "Cell.add_table", false)?;
         self.nested_table(py, index)
     }
 
@@ -1610,7 +1695,7 @@ impl PyCell {
     /// many cells the merge became.
     fn split(&self, py: Python<'_>) -> PyResult<usize> {
         let cells = self.edit_table(py, |table, row, cell| table.split_cell(row, cell))?;
-        self.bump(py, true)?;
+        self.bump(py, "Cell.split", true)?;
         Ok(cells)
     }
 
@@ -1622,8 +1707,9 @@ impl PyCell {
     }
     #[setter]
     fn set_width(&self, py: Python<'_>, value: i64) -> PyResult<()> {
+        let width = stored_length("cell.width", value, TWIP_EMU)?;
         self.edit(py, |cell| {
-            cell.set_width(rdocx::Length::emu(value));
+            cell.set_width(width);
             Ok(())
         })
     }

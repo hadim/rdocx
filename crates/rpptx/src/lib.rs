@@ -9,6 +9,7 @@ mod arrange;
 mod embedded;
 mod header_footer;
 mod masters;
+mod raw_xml;
 mod transition;
 
 pub use arrange::{ArrangeReference, ConnectorEnd, DistributeDirection, ShapeAlignment};

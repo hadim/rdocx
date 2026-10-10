@@ -5968,3 +5968,174 @@ def test_master_layout_collections_hyperlinks_and_colours_from_python(tmp_path):
     assert str(paragraph_font.color.rgb) == "010203"
     with pytest.raises(TypeError, match="color must be an RGBColor"):
         paragraph_font.color = 3.5
+
+
+def _deck_part(data, name="ppt/slides/slide1.xml"):
+    with zipfile.ZipFile(io.BytesIO(data)) as package:
+        return package.read(name).decode("utf-8")
+
+
+def test_raw_xml_reads_and_replaces_shapes_text_bodies_slides_and_layouts():
+    import rpptx
+
+    prs = rpptx.Presentation()
+    prs.slides.add_slide(prs.slide_layouts[6])
+    prs.slides[0].shapes.add_textbox(0, 0, 914400, 914400)
+    prs.slides[0].shapes[0].text_frame.text = "hello"
+
+    shape = prs.slides[0].shapes[0]
+    shape.replace_xml(shape.xml.replace(b"hello", b"HELLO"))
+    frame = prs.slides[0].shapes[0].text_frame
+    assert frame.text == "HELLO" and frame.xml.startswith(b"<p:txBody ")
+    # Prefixes are declared when the XML leaves them out.
+    frame.replace_xml("<p:txBody><a:bodyPr/><a:p><a:r><a:t>body</a:t></a:r></a:p></p:txBody>")
+    assert prs.slides[0].shapes[0].text_frame.text == "body"
+
+    slide = prs.slides[0]
+    slide.replace_xml(slide.xml.replace(b">body<", b">slide<"))
+    assert prs.slides[0].shapes[0].text_frame.text == "slide"
+    layout = prs.slide_layouts[0]
+    layout.replace_xml(layout.xml.replace(b'name="Title Slide"', b'name="Opening"'))
+    assert prs.slide_layouts[0].name == "Opening"
+
+    data = prs.to_bytes()
+    assert "slide" in _deck_part(data)
+    assert rpptx.Presentation.from_bytes(data).slide_layouts[0].name == "Opening"
+
+
+def test_raw_xml_refuses_what_it_cannot_write_faithfully():
+    import rpptx
+
+    prs = rpptx.Presentation()
+    prs.slides.add_slide(prs.slide_layouts[6])
+    prs.slides[0].shapes.add_textbox(0, 0, 914400, 914400)
+    prs.slides[0].shapes[0].text_frame.text = "keep"
+    before = prs.to_bytes()
+    shape = prs.slides[0].shapes[0]
+    xml = shape.xml.decode()
+    for replacement, message in [
+        ("<p:pic/>", "expected one sp element, got p:pic"),
+        ("<p:sp><p:nvSpPr>", "not closed"),
+        (xml + xml, "more than one root"),
+        (xml.replace("<a:bodyPr", "<a:bodyPr/><a:bodyPr", 1), "does not parse"),
+        (
+            re.sub(r"(<p:cNvPr [^>]*?)/>", r'\1><a:hlinkClick r:id="rId42"/></p:cNvPr>', xml, count=1),
+            'r:id="rId42"',
+        ),
+    ]:
+        with pytest.raises(ValueError, match=message):
+            shape.replace_xml(replacement)
+    with pytest.raises(ValueError, match="expected one txBody element"):
+        shape.text_frame.replace_xml("<p:sp/>")
+    with pytest.raises(ValueError, match="expected one sld element"):
+        prs.slides[0].replace_xml("<p:sldLayout/>")
+    assert prs.to_bytes() == before
+
+
+def test_notes_slide_and_row_cells_follow_python_pptx():
+    import rpptx
+    from rpptx.util import Inches
+
+    prs = rpptx.Presentation()
+    prs.slides.add_slide(prs.slide_layouts[6])
+    slide = prs.slides[0]
+    assert slide.has_notes_slide is False
+    assert slide.notes_slide.notes_text_frame.text == ""
+    prs.slides[0].notes_slide.notes_text_frame.text = "Remember to smile."
+    assert prs.slides[0].has_notes_slide is True
+    assert prs.slides[0].notes_text == "Remember to smile."
+    with pytest.raises(AttributeError, match="notes_text_frame.text or slide.notes_text"):
+        prs.slides[0].notes_slide.notes_text_frame.paragraphs
+
+    table = prs.slides[0].shapes.add_table(2, 3, 0, 0, Inches(3), Inches(1)).table
+    cells = table.rows[1].cells
+    assert len(cells) == 3
+    cells[2].text = "last"
+    assert prs.slides[0].shapes[0].table.cell(1, 2).text == "last"
+
+
+def test_python_pptx_values_that_would_write_a_wrong_file_raise():
+    import rpptx
+    from rpptx.util import Inches, Pt
+
+    prs = rpptx.Presentation()
+    before = prs.to_bytes()
+    for name, value in [("slide_width", 1000), ("slide_height", Inches(60))]:
+        with pytest.raises(ValueError, match="1 inch"):
+            setattr(prs, name, value)
+    assert prs.to_bytes() == before
+    prs.slides.add_slide(prs.slide_layouts[6])
+    prs.slides[0].shapes.add_textbox(0, 0, Inches(1), Inches(1))
+    prs.slides[0].shapes[0].text_frame.text = "x"
+    paragraph = prs.slides[0].shapes[0].text_frame.paragraphs[0]
+    with pytest.raises(ValueError, match="would hold 0"):
+        paragraph.space_after = 6
+    paragraph.space_after = Pt(6)
+    with pytest.raises(ValueError, match="to_pdf"):
+        prs.save("deck.pdf")
+    with pytest.raises(AttributeError, match="font.color = RGBColor"):
+        rpptx.RGBColor(1, 2, 3).rgb = rpptx.RGBColor(4, 5, 6)
+
+
+def test_python_pptx_names_rpptx_spells_differently_raise_with_the_rpptx_way():
+    import rpptx
+
+    prs = rpptx.Presentation()
+    prs.slides.add_slide(prs.slide_layouts[8])
+    for action, hint in [
+        (lambda: prs.slides._sldIdLst, "prs.slides.remove(slide)"),
+        (lambda: prs.slides[0].placeholders[1].insert_picture, "slide.shapes.add_picture"),
+        (lambda: prs.slides[0].shapes[0].placeholder_format, "slide.placeholders[idx]"),
+        (lambda: prs.slides[0].shapes[0]._element, "shape.replace_xml(xml)"),
+    ]:
+        with pytest.raises(AttributeError, match=re.escape(hint)):
+            action()
+    table = prs.slides[0].shapes.add_table(1, 1, 0, 0, 914400, 914400).table
+    with pytest.raises(AttributeError, match=re.escape("shape.replace_xml(xml)")):
+        table.cell(0, 0).text_frame
+    with pytest.raises(AttributeError, match="has no attribute 'nonsense'$"):
+        prs.slides[0].nonsense
+
+
+def test_raw_xml_refuses_xml_powerpoint_refuses_or_repairs():
+    import rpptx
+
+    prs = rpptx.Presentation()
+    prs.slides.add_slide(prs.slide_layouts[6])
+    prs.slides[0].shapes.add_textbox(0, 0, 914400, 914400)
+    prs.slides[0].shapes[0].text_frame.text = "keep"
+    before = prs.to_bytes()
+    shape = prs.slides[0].shapes[0]
+    xml = shape.xml.decode()
+    rels = _deck_part(before, "ppt/slides/_rels/slide1.xml.rels")
+    layout_id = re.search(r'Id="(rId\d+)"', rels).group(1)
+    for replacement, message in [
+        (xml.replace("</p:sp>", "<p:bogus/></p:sp>"), "p:bogus cannot sit directly in p:sp"),
+        (xml.replace("<a:t>", "<a:b/><a:t>", 1), "a:b cannot sit directly in a:r"),
+        (
+            re.sub(r"(<p:cNvPr [^>]*?)/>", rf'\1><a:hlinkClick r:id="{layout_id}"/></p:cNvPr>', xml, count=1),
+            "names a slideLayout relationship",
+        ),
+        ('<!DOCTYPE p:sp [<!ENTITY a "AAA">]>' + xml, "DOCTYPE is not allowed"),
+    ]:
+        with pytest.raises(ValueError, match=re.escape(message)):
+            shape.replace_xml(replacement)
+    assert prs.to_bytes() == before
+    shape.text_frame.replace_xml(
+        "<p:txBody><a:bodyPr/><a:p><a:r><a:t><![CDATA[<a> & b]]></a:t></a:r></a:p></p:txBody>"
+    )
+    assert prs.slides[0].shapes[0].text_frame.text == "<a> & b"
+
+
+def test_notes_slide_creates_notes_and_presentations_use_streams():
+    import rpptx
+
+    prs = rpptx.Presentation()
+    prs.slides.add_slide(prs.slide_layouts[6])
+    assert prs.slides[0].has_notes_slide is False
+    prs.slides[0].notes_slide
+    assert prs.slides[0].has_notes_slide is True
+    stream = io.BytesIO()
+    prs.save(stream)
+    reopened = rpptx.Presentation(io.BytesIO(stream.getvalue()))
+    assert len(reopened.slides) == 1 and reopened.slides[0].has_notes_slide is True
