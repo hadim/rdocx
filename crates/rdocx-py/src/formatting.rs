@@ -7,7 +7,7 @@ use crate::document::PyDocument;
 use crate::paragraph::{ParagraphLocation, paragraph_location};
 use crate::{
     HALF_POINT_EMU, TWIP_EMU, color_hex, color_object, enum_object, length_object, normalize_index,
-    stale_to_pyerr, stored_length,
+    stored_length,
 };
 
 pub(crate) fn alignment_from_int(value: i32) -> PyResult<rdocx::Alignment> {

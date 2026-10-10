@@ -372,7 +372,9 @@ impl PyTextFrame {
             .inner
             .replace_text_body_xml(slide_index(&self.path)?, &shape_path, &xml)
             .map_err(|error| crate::raw_xml_error(py, error))?;
-        presentation.revisions.bump();
+        presentation
+            .revisions
+            .invalidate(Scope::Shapes, "TextFrame.replace_xml()");
         Ok(())
     }
 

@@ -238,7 +238,9 @@ impl PySlideLayout {
             .inner
             .replace_layout_xml(self.index, &xml)
             .map_err(|error| crate::raw_xml_error(py, error))?;
-        presentation.revisions.bump();
+        presentation
+            .revisions
+            .invalidate(Scope::Slides, "SlideLayout.replace_xml()");
         Ok(())
     }
 
@@ -718,7 +720,9 @@ impl PySlide {
             .inner
             .replace_slide_xml(index, &xml)
             .map_err(|error| crate::raw_xml_error(py, error))?;
-        presentation.revisions.bump();
+        presentation
+            .revisions
+            .invalidate(Scope::Slides, "Slide.replace_xml()");
         Ok(())
     }
 

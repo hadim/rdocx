@@ -612,7 +612,9 @@ impl PyShape {
             .inner
             .replace_shape_xml(slide_index(&self.path)?, &shape_path, &xml)
             .map_err(|error| crate::raw_xml_error(py, error))?;
-        presentation.revisions.bump();
+        presentation
+            .revisions
+            .invalidate(Scope::Shapes, "Shape.replace_xml()");
         Ok(())
     }
 

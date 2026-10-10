@@ -192,7 +192,7 @@ impl PyRun {
     #[getter]
     fn xml<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
         let (location, _) = self.validate(py)?;
-        let target = rdocx::XmlTarget::Run(xml_paragraph(location), self.run_path.clone());
+        let target = rdocx::XmlTarget::Run(xml_paragraph(location)?, self.run_path.clone());
         let xml = self
             .document
             .borrow(py)
@@ -207,7 +207,7 @@ impl PyRun {
     fn replace_xml(&self, py: Python<'_>, xml: &Bound<'_, PyAny>) -> PyResult<()> {
         let xml = raw_xml_argument(xml)?;
         let (location, _) = self.validate(py)?;
-        let target = rdocx::XmlTarget::Run(xml_paragraph(location), self.run_path.clone());
+        let target = rdocx::XmlTarget::Run(xml_paragraph(location)?, self.run_path.clone());
         self.document
             .borrow_mut(py)
             .inner
