@@ -4144,3 +4144,19 @@ def test_deeply_nested_content_controls_raise_instead_of_crashing():
         rdocx.RdocxError, match="content control nesting exceeds 64 levels"
     ):
         _replace_document_body(rdocx.Document(), body)
+
+
+def test_deeply_nested_text_boxes_raise_instead_of_crashing():
+    import rdocx
+
+    depth = 2000
+    body = (
+        '<w:p><w:r><w:pict><v:shape xmlns:v="urn:schemas-microsoft-com:vml">'
+        "<v:textbox><w:txbxContent>"
+        + "<w:p><w:r><w:pict><v:shape><v:textbox><w:txbxContent>" * depth
+        + "<w:p/>"
+        + "</w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>" * depth
+        + "</w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>"
+    )
+    with pytest.raises(rdocx.RdocxError, match="text box nesting exceeds 16 levels"):
+        _replace_document_body(rdocx.Document(), body)
