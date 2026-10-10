@@ -1,5 +1,5 @@
 # area: pictures
-# needs: #322
+# expected: pass
 from rdocx import Document
 from rdocx.enum.text import WD_ALIGN_PARAGRAPH
 from rdocx.shared import Inches

@@ -1,5 +1,5 @@
 # area: tables
-# needs: #322
+# expected: pass
 from rdocx import Document
 from rdocx.enum.table import WD_TABLE_ALIGNMENT
 

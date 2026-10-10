@@ -1,5 +1,5 @@
 # area: shapes
-# needs: #326
+# expected: pass
 from rpptx import Presentation
 from rpptx.enum.shapes import MSO_SHAPE
 from rpptx.util import Inches

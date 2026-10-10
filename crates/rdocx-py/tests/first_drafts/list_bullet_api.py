@@ -1,5 +1,5 @@
 # area: lists
-# needs: #320
+# expected: pass
 # rdocx's own bullet helper, as an agent finds it in the rdocx docs
 from rdocx import Document
 

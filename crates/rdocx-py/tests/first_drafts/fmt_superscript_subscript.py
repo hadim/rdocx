@@ -1,5 +1,5 @@
 # area: formatting
-# needs: #320
+# expected: pass
 from rdocx import Document
 
 doc = Document()

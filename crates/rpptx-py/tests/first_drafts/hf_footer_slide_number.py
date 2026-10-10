@@ -1,5 +1,5 @@
 # area: headers-footers
-# needs: #324
+# expected: pass
 # rpptx's one-call footer, as an agent finds it in the rpptx docs
 from rpptx import Presentation
 

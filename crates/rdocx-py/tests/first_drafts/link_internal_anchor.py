@@ -1,5 +1,5 @@
 # area: links
-# needs: #322
+# expected: pass
 from rdocx import Document
 
 doc = Document()

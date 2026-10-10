@@ -1,5 +1,5 @@
 # area: notes
-# needs: #304
+# expected: pass
 from rdocx import Document
 
 doc = Document()

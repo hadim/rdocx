@@ -1,5 +1,5 @@
 # area: tables
-# needs: #322
+# expected: pass
 from rdocx import Document
 
 records = ((3, '101', 'Spam'), (7, '422', 'Eggs'), (4, '631', 'Spam, spam, eggs, and spam'))

@@ -1,5 +1,5 @@
 # area: docs
-# needs: #326
+# expected: pass
 # python-pptx getting started, add_shape() example
 from rpptx import Presentation
 from rpptx.enum.shapes import MSO_SHAPE

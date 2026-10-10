@@ -1,5 +1,5 @@
 # area: tables
-# needs: #322
+# expected: pass
 from rdocx import Document
 
 data = [['Name', 'Score'], ['Ann', '91'], ['Bob', '78']]

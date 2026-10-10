@@ -1,5 +1,5 @@
 # area: sections
-# needs: #304
+# expected: pass
 from rdocx import Document
 from rdocx.enum.text import WD_BREAK
 

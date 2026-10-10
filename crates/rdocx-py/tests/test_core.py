@@ -3794,10 +3794,14 @@ def test_comment_removal_paths_preserve_atomicity_and_revisions():
 
     document = commented("cell")
     held = document.paragraphs[0]
+    held_row = document.tables[0].rows[1]
     document.tables[0].remove_row(0)
     assert document.comments == ()
+    # A removed row renumbers the rows below it, whose handles retire. With
+    # #333's edit scopes a body paragraph outside the table stays valid.
     with pytest.raises(rdocx.StaleElementError):
-        held.text
+        held_row.cells
+    assert held.text == "body anchor"
     assert rdocx.Document.from_bytes(document.to_bytes()).comments == ()
 
     document = commented("cell")
@@ -5077,6 +5081,11 @@ def test_header_paragraphs_are_live_handles_in_their_own_story():
     assert second.style == "Title"
     assert [p.text for p in header.paragraphs] == ["Annual report site", "Second line"]
     second.add_run(" more")
+    # Appending a run keeps paragraph handles valid (#333). An edit that
+    # renumbers content retires them, naming the header path to re-fetch.
+    assert second.text == "Second line more"
+    document.add_paragraph("tail")
+    document.remove_content(1)
     with pytest.raises(rdocx.StaleElementError, match=r"sections\[0\]\.header\.paragraphs\[1\]"):
         second.text
 
@@ -5655,14 +5664,15 @@ def test_python_docx_names_rdocx_spells_differently_raise_with_the_rdocx_way():
     for action, hint in [
         (lambda: paragraph._element, "paragraph.replace_xml(xml), and delete it with document.remove_content"),
         (lambda: setattr(run, "style", "Emphasis"), "run.style_id = 'Emphasis'"),
-        (lambda: run.add_break(), "document.add_page_break()"),
-        (lambda: document.sections[0].footer, "document.set_footer(text)"),
         (lambda: document.sections[0].left_margin, "margin_left"),
         (lambda: document.styles["Normal"].font, "document.set_style"),
         (lambda: document.add_table(rows=1, cols=2).cell(0, 0).merge, "set_cell_grid_span"),
     ]:
         with pytest.raises(AttributeError, match=re.escape(hint)):
             action()
+    # run.add_break (#304) and section.footer (#304) are rdocx attributes now.
+    assert run.add_break() is None
+    assert document.sections[0].footer.kind == "footer"
     with pytest.raises(AttributeError, match="has no attribute 'nonsense'$"):
         paragraph.nonsense
     with pytest.raises(AttributeError, match="not writable"):
@@ -5726,7 +5736,11 @@ def test_every_handle_retiring_call_names_itself():
         document.add_paragraph("one")
         document.add_paragraph("two")
         document.add_table(rows=1, cols=1)
-        held = document.paragraphs[1]
+        # #322's Cell.text scope retires only the handles inside that cell.
+        if call == "Cell.text":
+            held = document.tables[0].cell(0, 0).paragraphs[0]
+        else:
+            held = document.paragraphs[1]
         change(document)
         if call == "Document.accept_all":
             call = "Document.remove_content"

@@ -1,5 +1,5 @@
 # area: docs
-# needs: #322
+# expected: pass
 # python-docx quickstart.rst, iterating a table
 from rdocx import Document
 

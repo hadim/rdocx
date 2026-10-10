@@ -1,5 +1,5 @@
 # area: sections
-# needs: #304
+# expected: pass
 from rdocx import Document
 from rdocx.enum.section import WD_SECTION
 

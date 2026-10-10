@@ -1,5 +1,5 @@
 # area: docs
-# needs: #326
+# expected: pass
 # python-pptx getting started, "Hello World!" example
 from rpptx import Presentation
 

@@ -2840,7 +2840,11 @@ def test_table_cell_text_frame_formats_cell_text_and_survives_save_render_and_pd
     held_run = held_paragraphs[0].runs[0]
     with pytest.raises(ValueError, match="table cell"):
         held_run.hyperlink.address = "https://example.com"
+    # Since #326 an appended slide keeps held handles valid, and a move that
+    # renumbers the slides retires them.
     reopened.slides.add_slide(reopened.slide_layouts[6])
+    assert len(held_paragraphs) == 2
+    reopened.slides.move(1, 0)
     with pytest.raises(
         rpptx.StaleElementError, match=r"table\.cell\(0, 0\)\.text_frame\.paragraphs"
     ):
@@ -5454,8 +5458,8 @@ def test_header_footer_fields_theme_and_transitions_from_python(tmp_path):
 
     # Placeholders are added after the other shapes and rewritten in place,
     # so held handles stay valid. Removing the footer moves the slide number
-    # that follows it, which advances the revision, and the header-footer
-    # handle follows it.
+    # that follows it, which retires shape handles (#326 scopes), and the
+    # header-footer handle follows it.
     second = prs.slides[2]
     header_footer = second.header_footer
     header_footer.date = "auto"
@@ -5463,10 +5467,11 @@ def test_header_footer_fields_theme_and_transitions_from_python(tmp_path):
     header_footer.date_format = "datetime4"
     assert header_footer.date_format == "datetime4"
     assert len(second.shapes) == 5
+    slide_number = second.shapes[4]
     header_footer.footer = None
     assert header_footer.footer is None
     with pytest.raises(StaleElementError):
-        second.shapes
+        slide_number.name
     second = prs.slides[2]
     second.header_footer.footer = "Back"
     assert len(second.shapes) == 5
@@ -5825,6 +5830,7 @@ def test_issue_309_layout_and_slide_handles_survive_appends_and_text_edits():
 
 def test_masters_layouts_and_themes_from_python(tmp_path):
     from rpptx import Inches, Presentation, RGBColor, Pt
+    from rpptx.enum.dml import MSO_FILL_TYPE
 
     _write_tiny_png(tmp_path / "logo.png")
     prs = Presentation()
@@ -5856,8 +5862,9 @@ def test_masters_layouts_and_themes_from_python(tmp_path):
     assert (len(stops), str(stops[0].color.rgb), stops[1].position) == (2, "FFFFFF", 0.8)
     prs.slide_layouts[5].background.fill.picture(tmp_path / "logo.png")
     assert not prs.slide_layouts[5].follow_master_background
-    with pytest.raises(TypeError, match="backgrounds only"):
-        prs.slides[0].shapes[0].fill.picture(tmp_path / "logo.png")
+    # #318 gives shapes picture fills too.
+    prs.slides[0].shapes[0].fill.picture(tmp_path / "logo.png")
+    assert prs.slides[0].shapes[0].fill.type == MSO_FILL_TYPE.PICTURE
 
     # Theme colours and fonts in one place, master text styles.
     theme = prs.slide_master.theme
@@ -6084,15 +6091,15 @@ def test_python_pptx_names_rpptx_spells_differently_raise_with_the_rpptx_way():
     prs.slides.add_slide(prs.slide_layouts[8])
     for action, hint in [
         (lambda: prs.slides._sldIdLst, "prs.slides.remove(slide)"),
-        (lambda: prs.slides[0].placeholders[1].insert_picture, "slide.shapes.add_picture"),
-        (lambda: prs.slides[0].shapes[0].placeholder_format, "slide.placeholders[idx]"),
         (lambda: prs.slides[0].shapes[0]._element, "shape.replace_xml(xml)"),
     ]:
         with pytest.raises(AttributeError, match=re.escape(hint)):
             action()
+    # insert_picture (#326), placeholder_format (#324) and Cell.text_frame
+    # (#317) are rpptx attributes now, so they no longer raise.
+    assert prs.slides[0].shapes[0].placeholder_format.idx == 0
     table = prs.slides[0].shapes.add_table(1, 1, 0, 0, 914400, 914400).table
-    with pytest.raises(AttributeError, match=re.escape("shape.replace_xml(xml)")):
-        table.cell(0, 0).text_frame
+    assert table.cell(0, 0).text_frame.text == ""
     with pytest.raises(AttributeError, match="has no attribute 'nonsense'$"):
         prs.slides[0].nonsense
 

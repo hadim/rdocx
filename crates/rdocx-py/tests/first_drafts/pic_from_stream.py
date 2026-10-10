@@ -1,5 +1,5 @@
 # area: pictures
-# needs: #322
+# expected: pass
 import io
 from rdocx import Document
 from rdocx.shared import Inches

@@ -1,5 +1,5 @@
 # area: docs
-# needs: #322
+# expected: pass
 # python-docx quickstart.rst, two cells written through one held row
 from rdocx import Document
 

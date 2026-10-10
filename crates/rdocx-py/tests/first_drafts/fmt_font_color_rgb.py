@@ -1,5 +1,5 @@
 # area: formatting
-# needs: #317
+# expected: pass
 from rdocx import Document
 from rdocx.shared import RGBColor
 

@@ -1,5 +1,5 @@
 # area: templates
-# needs: #326
+# expected: pass
 from rpptx import Presentation
 
 prs = Presentation('template.pptx')
