@@ -545,8 +545,9 @@ independently reviewed corrections. The corrected PowerPoint test has passed
 independent review. All five PowerPoint controls and all nine deterministic
 font controls pass.
 Consumer wiring and the remaining feature gates are outstanding.
-Seven stories are completed and integrated, F-X192 and F-X195 remain in
-progress and thirteen stories have approved designs awaiting implementation.
+Seven stories are completed and integrated. F-X192, F-X195, F-X200 and
+F-X206 are in progress. Eleven stories have approved designs awaiting
+implementation.
 F-X197 completes its reviewed shared colour contract with scoped652 and
 strict typing/stubs, explicit retained R14 Word354 and fresh R15 PowerPoint583,
 native/WASM gates, verified22 packages and policy141 with2 expected

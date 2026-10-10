@@ -2165,8 +2165,8 @@ CLI validation reports before the template and form programme resumes.
 
 **Current delivery checkpoint, 2026-10-10**: seven of twenty-two active stories
 are completed and integrated, F-X193, F-X194, F-X196, F-X197, F-X198, F-X199
-and F-X212. F-X192 and F-X195 are in progress. Thirteen stories have approved
-designs and await implementation.
+and F-X212. F-X192, F-X195, F-X200 and F-X206 are in progress. Eleven stories
+have approved designs and await implementation.
 F-X192 needs the remaining catalogue runtime acceptance and native Word
 controls. F-X195 needs its remaining runtime gates and provider wiring.
 F-X197 completes the scoped dependency prefix with reviewed live colours,
