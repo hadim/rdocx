@@ -2140,7 +2140,7 @@ CLI validation reports before the template and form programme resumes.
 
 | F-ID | Title | Size | Delivery status |
 |------|-------|------|-----------------|
-| F-X192 | Complete the remaining Word bibliography catalogue | L | Claimed, own-locale regression controls in preparation |
+| F-X192 | Complete the remaining Word bibliography catalogue | L | Claimed, own-locale regression stubs reviewed, Base runtime pending |
 | F-283 | Complete numbering-aware navigation fields | L | Approved, implementation pending |
 | F-X193 | Preserve semantic mark highlights through nested HTML runs | S | Completed and integrated |
 | F-X194 | Complete Python table text and indentation APIs | M | Completed and integrated, scoped gates passed |
@@ -2161,7 +2161,7 @@ CLI validation reports before the template and form programme resumes.
 | F-X209 | Edit PowerPoint masters layouts and themes | L | Approved, implementation pending |
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | Approved, implementation pending |
 | F-X211 | Complete Python script compatibility and safe XML access | L | Approved, implementation pending |
-| F-X212 | Align native accessibility with visible paragraph content | M | Native, CLI and hash gates passed, package and policy gates pending |
+| F-X212 | Align native accessibility with visible paragraph content | M | Native, CLI, hash and package gates passed, policy rerun in progress |
 
 **Current delivery checkpoint, 2026-10-10**: five of twenty-two active stories
 are completed and integrated, F-X193, F-X194, F-X196, F-X198 and F-X199.
@@ -2173,7 +2173,7 @@ sprint review and verified sprint close remain outstanding.
 **Resolution scope**: resolve every open issue and PR except
 [Issue264](https://github.com/tensorbee/rdocx/issues/264) and
 [Issue281](https://github.com/tensorbee/rdocx/issues/281). Keep those two open as
-requirements discussions. At 2026-10-10 09:35:24 UTC, the refreshed inventory
+requirements discussions. At 2026-10-10 11:52:06 UTC, the refreshed inventory
 contains nineteen open PRs and twenty-eight open issues, including the two
 exclusions. All twenty-six included issues and nineteen PRs map below.
 A later PR attaches to its existing issue owner. Assessment is not completion.

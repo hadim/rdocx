@@ -494,21 +494,28 @@ F-X211 plan. Intake grants no contributor gate credit or arbitrary new nesting
 policy. The approved256 control policy and complete textbox resource,
 namespace, discovery and public compatibility acceptance remain mandatory.
 
-## S91 intake and verification checkpoint, 2026-10-10 10:33UTC
+## S91 intake and verification checkpoint, 2026-10-10 12:02UTC
 
-The latest read-only GitHub refresh found no additional or changed records.
+The11:52:06UTC GitHub refresh found no additional or changed records. The
+subsequent all-state PR lookup still identifies PR338 as the newest PR.
 All19 PRs and26 included issues remain mapped above, with Issues264 and281
 excluded. PR338 and PR333 source assessment is complete in F-X211's existing
-plan. Assessment does not close their acceptance gates.
+plan. Their acceptance implementation and verification remain pending.
 
 F-X194 is completed and integrated with authenticated native, installed
 Python, typing, WASM, verified22 package, unchanged49-entry hash and141 policy
-gates. Two publication-dependent policy cases remain skipped. Its integrated
-source exactly matches the independently reviewed worker. F-X195 provider
-source is frozen for independent review, with core and provider runtime gates
-pending. F-X212 retains successful compile and eight parser tests. Its test-only fixture and UTF-8 corrections have clean supplemental reviews.
-The remaining native and CLI queue is running. Runtime and attributed hash gates remain outstanding.
-F-X197 has started in a separate worktree after F-X194 completion.
-Five stories are completed and integrated, three are in progress and fourteen
-remain approved. Final integrated verification, sprint review and close
-preflight remain outstanding. The sprint is not ready for close.
+gates. Two publication-dependent policy cases remain skipped.
+F-X195 core and provider source reviews are clean, with runtime and consumer
+wiring pending. F-X197 remediation is reviewed, with fresh installed-binding
+and rendering gates pending. F-X192 owns reviewed regression stubs in its
+separate worktree, with actual Base runtime and catalogue implementation pending.
+F-X212 native, CLI and attributed49-entry hash gates pass. All22 package
+verification commands passed, and the corrected archive capture authenticates
+the fresh artifacts. The original failed capture wrapper remains recorded.
+Its policy rerun is in progress after the bounded roadmap-validator correction
+and an ignored alias to the existing shared Cargo cache.
+
+Five stories are completed and integrated, four are in progress and thirteen
+remain approved. No design question is outstanding. Final integrated
+verification, sprint review and close preflight remain outstanding. The sprint
+is not ready for close.
