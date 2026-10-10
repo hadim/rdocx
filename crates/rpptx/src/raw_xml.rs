@@ -407,7 +407,10 @@ enum Ns {
     A,
 }
 
-const SHAPE_TREE: &[(Ns, &str)] = &[
+/// One group of children an element may hold.
+type Children = &'static [(Ns, &'static str)];
+
+const SHAPE_TREE: Children = &[
     (Ns::P, "nvGrpSpPr"),
     (Ns::P, "grpSpPr"),
     (Ns::P, "sp"),
@@ -418,8 +421,8 @@ const SHAPE_TREE: &[(Ns, &str)] = &[
     (Ns::P, "contentPart"),
     (Ns::P, "extLst"),
 ];
-const TEXT_BODY: &[(Ns, &str)] = &[(Ns::A, "bodyPr"), (Ns::A, "lstStyle"), (Ns::A, "p")];
-const RUN_PROPERTIES: &[(Ns, &str)] = &[
+const TEXT_BODY: Children = &[(Ns::A, "bodyPr"), (Ns::A, "lstStyle"), (Ns::A, "p")];
+const RUN_PROPERTIES: Children = &[
     (Ns::A, "ln"),
     (Ns::A, "noFill"),
     (Ns::A, "solidFill"),
@@ -443,78 +446,494 @@ const RUN_PROPERTIES: &[(Ns, &str)] = &[
     (Ns::A, "rtl"),
     (Ns::A, "extLst"),
 ];
+const PARAGRAPH_PROPERTIES: Children = &[
+    (Ns::A, "lnSpc"),
+    (Ns::A, "spcBef"),
+    (Ns::A, "spcAft"),
+    (Ns::A, "buClrTx"),
+    (Ns::A, "buClr"),
+    (Ns::A, "buSzTx"),
+    (Ns::A, "buSzPct"),
+    (Ns::A, "buSzPts"),
+    (Ns::A, "buFontTx"),
+    (Ns::A, "buFont"),
+    (Ns::A, "buNone"),
+    (Ns::A, "buAutoNum"),
+    (Ns::A, "buChar"),
+    (Ns::A, "buBlip"),
+    (Ns::A, "tabLst"),
+    (Ns::A, "defRPr"),
+    (Ns::A, "extLst"),
+];
+const BODY_PROPERTIES: Children = &[
+    (Ns::A, "prstTxWarp"),
+    (Ns::A, "noAutofit"),
+    (Ns::A, "normAutofit"),
+    (Ns::A, "spAutoFit"),
+    (Ns::A, "scene3d"),
+    (Ns::A, "sp3d"),
+    (Ns::A, "flatTx"),
+    (Ns::A, "extLst"),
+];
+const LIST_STYLE: Children = &[
+    (Ns::A, "defPPr"),
+    (Ns::A, "lvl1pPr"),
+    (Ns::A, "lvl2pPr"),
+    (Ns::A, "lvl3pPr"),
+    (Ns::A, "lvl4pPr"),
+    (Ns::A, "lvl5pPr"),
+    (Ns::A, "lvl6pPr"),
+    (Ns::A, "lvl7pPr"),
+    (Ns::A, "lvl8pPr"),
+    (Ns::A, "lvl9pPr"),
+    (Ns::A, "extLst"),
+];
+/// `EG_FillProperties`.
+const FILLS: Children = &[
+    (Ns::A, "noFill"),
+    (Ns::A, "solidFill"),
+    (Ns::A, "gradFill"),
+    (Ns::A, "blipFill"),
+    (Ns::A, "pattFill"),
+    (Ns::A, "grpFill"),
+];
+/// `EG_EffectProperties`.
+const EFFECTS: Children = &[(Ns::A, "effectLst"), (Ns::A, "effectDag")];
+/// `EG_ColorChoice`.
+const COLOR: Children = &[
+    (Ns::A, "scrgbClr"),
+    (Ns::A, "srgbClr"),
+    (Ns::A, "hslClr"),
+    (Ns::A, "sysClr"),
+    (Ns::A, "schemeClr"),
+    (Ns::A, "prstClr"),
+];
+/// `EG_ColorTransform`.
+const COLOR_TRANSFORMS: Children = &[
+    (Ns::A, "tint"),
+    (Ns::A, "shade"),
+    (Ns::A, "comp"),
+    (Ns::A, "inv"),
+    (Ns::A, "gray"),
+    (Ns::A, "alpha"),
+    (Ns::A, "alphaOff"),
+    (Ns::A, "alphaMod"),
+    (Ns::A, "hue"),
+    (Ns::A, "hueOff"),
+    (Ns::A, "hueMod"),
+    (Ns::A, "sat"),
+    (Ns::A, "satOff"),
+    (Ns::A, "satMod"),
+    (Ns::A, "lum"),
+    (Ns::A, "lumOff"),
+    (Ns::A, "lumMod"),
+    (Ns::A, "red"),
+    (Ns::A, "redOff"),
+    (Ns::A, "redMod"),
+    (Ns::A, "green"),
+    (Ns::A, "greenOff"),
+    (Ns::A, "greenMod"),
+    (Ns::A, "blue"),
+    (Ns::A, "blueOff"),
+    (Ns::A, "blueMod"),
+    (Ns::A, "gamma"),
+    (Ns::A, "invGamma"),
+];
+const SHAPE_PROPERTIES: Children = &[
+    (Ns::A, "xfrm"),
+    (Ns::A, "custGeom"),
+    (Ns::A, "prstGeom"),
+    (Ns::A, "ln"),
+    (Ns::A, "scene3d"),
+    (Ns::A, "sp3d"),
+    (Ns::A, "extLst"),
+];
+const LINE: Children = &[
+    (Ns::A, "noFill"),
+    (Ns::A, "solidFill"),
+    (Ns::A, "gradFill"),
+    (Ns::A, "pattFill"),
+    (Ns::A, "prstDash"),
+    (Ns::A, "custDash"),
+    (Ns::A, "round"),
+    (Ns::A, "bevel"),
+    (Ns::A, "miter"),
+    (Ns::A, "headEnd"),
+    (Ns::A, "tailEnd"),
+    (Ns::A, "extLst"),
+];
+const BLIP_FILL: Children = &[
+    (Ns::A, "blip"),
+    (Ns::A, "srcRect"),
+    (Ns::A, "tile"),
+    (Ns::A, "stretch"),
+];
+const BLIP: Children = &[
+    (Ns::A, "alphaBiLevel"),
+    (Ns::A, "alphaCeiling"),
+    (Ns::A, "alphaFloor"),
+    (Ns::A, "alphaInv"),
+    (Ns::A, "alphaMod"),
+    (Ns::A, "alphaModFix"),
+    (Ns::A, "alphaRepl"),
+    (Ns::A, "biLevel"),
+    (Ns::A, "blur"),
+    (Ns::A, "clrChange"),
+    (Ns::A, "clrRepl"),
+    (Ns::A, "duotone"),
+    (Ns::A, "fillOverlay"),
+    (Ns::A, "grayscl"),
+    (Ns::A, "hsl"),
+    (Ns::A, "lum"),
+    (Ns::A, "tint"),
+    (Ns::A, "extLst"),
+];
+const PATH: Children = &[
+    (Ns::A, "fillToRect"),
+    (Ns::A, "close"),
+    (Ns::A, "moveTo"),
+    (Ns::A, "lnTo"),
+    (Ns::A, "arcTo"),
+    (Ns::A, "quadBezTo"),
+    (Ns::A, "cubicBezTo"),
+];
+const EFFECT_LIST: Children = &[
+    (Ns::A, "blur"),
+    (Ns::A, "fillOverlay"),
+    (Ns::A, "glow"),
+    (Ns::A, "innerShdw"),
+    (Ns::A, "outerShdw"),
+    (Ns::A, "prstShdw"),
+    (Ns::A, "reflection"),
+    (Ns::A, "softEdge"),
+];
+const CELL_PROPERTIES: Children = &[
+    (Ns::A, "lnL"),
+    (Ns::A, "lnR"),
+    (Ns::A, "lnT"),
+    (Ns::A, "lnB"),
+    (Ns::A, "lnTlToBr"),
+    (Ns::A, "lnBlToTr"),
+    (Ns::A, "cell3D"),
+    (Ns::A, "headers"),
+    (Ns::A, "extLst"),
+];
+const EXTENSIONS: Children = &[(Ns::A, "extLst")];
+/// DrawingML elements that hold no child element.
+const DRAWING_LEAVES: &[&[u8]] = &[
+    b"off",
+    b"chOff",
+    b"chExt",
+    b"spcPct",
+    b"spcPts",
+    b"buClrTx",
+    b"buSzTx",
+    b"buSzPct",
+    b"buSzPts",
+    b"buFontTx",
+    b"buFont",
+    b"buNone",
+    b"buAutoNum",
+    b"buChar",
+    b"latin",
+    b"ea",
+    b"cs",
+    b"sym",
+    b"tab",
+    b"snd",
+    b"noFill",
+    b"grpFill",
+    b"gd",
+    b"pt",
+    b"pos",
+    b"close",
+    b"arcTo",
+    b"prstDash",
+    b"ds",
+    b"round",
+    b"bevel",
+    b"miter",
+    b"headEnd",
+    b"tailEnd",
+    b"srcRect",
+    b"fillRect",
+    b"tileRect",
+    b"fillToRect",
+    b"lin",
+    b"tile",
+    b"rot",
+    b"anchor",
+    b"norm",
+    b"up",
+    b"bevelT",
+    b"bevelB",
+    b"noAutofit",
+    b"normAutofit",
+    b"spAutoFit",
+    b"flatTx",
+    b"stCxn",
+    b"endCxn",
+    b"tableStyleId",
+    b"masterClrMapping",
+    b"tint",
+    b"shade",
+    b"comp",
+    b"inv",
+    b"gray",
+    b"alpha",
+    b"alphaOff",
+    b"hue",
+    b"hueOff",
+    b"hueMod",
+    b"sat",
+    b"satOff",
+    b"satMod",
+    b"lum",
+    b"lumOff",
+    b"lumMod",
+    b"red",
+    b"redOff",
+    b"redMod",
+    b"green",
+    b"greenOff",
+    b"greenMod",
+    b"blue",
+    b"blueOff",
+    b"blueMod",
+    b"gamma",
+    b"invGamma",
+];
 
 /// The children a PresentationML or DrawingML element PowerPoint checks may
-/// hold.
-fn presentation_children(namespace: Ns, parent: &[u8]) -> Option<&'static [(Ns, &'static str)]> {
+/// hold, at any depth of a slide, layout, shape or text body, as groups.
+/// An element missing here, such as `a:graphicData` or `p:timing`, is not
+/// checked, but its descendants that are listed still are.
+fn presentation_children(namespace: Ns, parent: &[u8]) -> Option<&'static [Children]> {
     Some(match (namespace, parent) {
-        (Ns::P, b"sld") => &[
+        (Ns::P, b"sld") => &[&[
             (Ns::P, "cSld"),
             (Ns::P, "clrMapOvr"),
             (Ns::P, "transition"),
             (Ns::P, "timing"),
             (Ns::P, "extLst"),
-        ],
-        (Ns::P, b"sldLayout") => &[
+        ]],
+        (Ns::P, b"sldLayout") => &[&[
             (Ns::P, "cSld"),
             (Ns::P, "clrMapOvr"),
             (Ns::P, "transition"),
             (Ns::P, "timing"),
             (Ns::P, "hf"),
             (Ns::P, "extLst"),
-        ],
-        (Ns::P, b"cSld") => &[
+        ]],
+        (Ns::P, b"cSld") => &[&[
             (Ns::P, "bg"),
             (Ns::P, "spTree"),
             (Ns::P, "custDataLst"),
             (Ns::P, "controls"),
             (Ns::P, "extLst"),
-        ],
-        (Ns::P, b"spTree" | b"grpSp") => SHAPE_TREE,
-        (Ns::P, b"sp") => &[
+        ]],
+        (Ns::P, b"bg") => &[&[(Ns::P, "bgPr"), (Ns::P, "bgRef")]],
+        (Ns::P, b"bgPr") => &[FILLS, EFFECTS, &[(Ns::P, "extLst")]],
+        (Ns::P, b"bgRef") => &[COLOR],
+        (Ns::P, b"clrMapOvr") => &[&[(Ns::A, "masterClrMapping"), (Ns::A, "overrideClrMapping")]],
+        (Ns::P, b"custDataLst") => &[&[(Ns::P, "custData"), (Ns::P, "tags")]],
+        (Ns::P, b"hf" | b"ph") => &[&[(Ns::P, "extLst")]],
+        (Ns::P, b"extLst") => &[&[(Ns::P, "ext")]],
+        (Ns::P, b"spTree" | b"grpSp") => &[SHAPE_TREE],
+        (Ns::P, b"sp") => &[&[
             (Ns::P, "nvSpPr"),
             (Ns::P, "spPr"),
             (Ns::P, "style"),
             (Ns::P, "txBody"),
             (Ns::P, "extLst"),
-        ],
-        (Ns::P, b"nvSpPr") => &[(Ns::P, "cNvPr"), (Ns::P, "cNvSpPr"), (Ns::P, "nvPr")],
-        (Ns::P, b"pic") => &[
+        ]],
+        (Ns::P, b"nvSpPr") => &[&[(Ns::P, "cNvPr"), (Ns::P, "cNvSpPr"), (Ns::P, "nvPr")]],
+        (Ns::P, b"pic") => &[&[
             (Ns::P, "nvPicPr"),
             (Ns::P, "blipFill"),
             (Ns::P, "spPr"),
             (Ns::P, "style"),
             (Ns::P, "extLst"),
-        ],
-        (Ns::P, b"nvPicPr") => &[(Ns::P, "cNvPr"), (Ns::P, "cNvPicPr"), (Ns::P, "nvPr")],
-        (Ns::P, b"cxnSp") => &[
+        ]],
+        (Ns::P, b"nvPicPr") => &[&[(Ns::P, "cNvPr"), (Ns::P, "cNvPicPr"), (Ns::P, "nvPr")]],
+        (Ns::P, b"cxnSp") => &[&[
             (Ns::P, "nvCxnSpPr"),
             (Ns::P, "spPr"),
             (Ns::P, "style"),
             (Ns::P, "extLst"),
-        ],
-        (Ns::P, b"nvCxnSpPr") => &[(Ns::P, "cNvPr"), (Ns::P, "cNvCxnSpPr"), (Ns::P, "nvPr")],
-        (Ns::P, b"graphicFrame") => &[
+        ]],
+        (Ns::P, b"nvCxnSpPr") => &[&[(Ns::P, "cNvPr"), (Ns::P, "cNvCxnSpPr"), (Ns::P, "nvPr")]],
+        (Ns::P, b"graphicFrame") => &[&[
             (Ns::P, "nvGraphicFramePr"),
             (Ns::P, "xfrm"),
             (Ns::A, "graphic"),
             (Ns::P, "extLst"),
-        ],
-        (Ns::P, b"nvGraphicFramePr") => &[
+        ]],
+        (Ns::P, b"nvGraphicFramePr") => &[&[
             (Ns::P, "cNvPr"),
             (Ns::P, "cNvGraphicFramePr"),
             (Ns::P, "nvPr"),
+        ]],
+        (Ns::P, b"nvGrpSpPr") => &[&[(Ns::P, "cNvPr"), (Ns::P, "cNvGrpSpPr"), (Ns::P, "nvPr")]],
+        (Ns::P, b"cNvPr") => &[&[
+            (Ns::A, "hlinkClick"),
+            (Ns::A, "hlinkHover"),
+            (Ns::A, "extLst"),
+        ]],
+        (Ns::P, b"cNvSpPr") => &[&[(Ns::A, "spLocks"), (Ns::A, "extLst")]],
+        (Ns::P, b"cNvPicPr") => &[&[(Ns::A, "picLocks"), (Ns::A, "extLst")]],
+        (Ns::P, b"cNvGrpSpPr") => &[&[(Ns::A, "grpSpLocks"), (Ns::A, "extLst")]],
+        (Ns::P, b"cNvCxnSpPr") => &[&[
+            (Ns::A, "cxnSpLocks"),
+            (Ns::A, "stCxn"),
+            (Ns::A, "endCxn"),
+            (Ns::A, "extLst"),
+        ]],
+        (Ns::P, b"cNvGraphicFramePr") => &[&[(Ns::A, "graphicFrameLocks"), (Ns::A, "extLst")]],
+        (Ns::P, b"nvPr") => &[&[
+            (Ns::P, "ph"),
+            (Ns::A, "audioCd"),
+            (Ns::A, "wavAudioFile"),
+            (Ns::A, "audioFile"),
+            (Ns::A, "videoFile"),
+            (Ns::A, "quickTimeFile"),
+            (Ns::P, "custDataLst"),
+            (Ns::P, "extLst"),
+        ]],
+        (Ns::P, b"spPr") => &[SHAPE_PROPERTIES, FILLS, EFFECTS],
+        (Ns::P, b"grpSpPr") => &[
+            &[(Ns::A, "xfrm"), (Ns::A, "scene3d"), (Ns::A, "extLst")],
+            FILLS,
+            EFFECTS,
         ],
-        (Ns::P | Ns::A, b"txBody") => TEXT_BODY,
-        (Ns::A, b"p") => &[
+        (Ns::P, b"style") => &[&[
+            (Ns::A, "lnRef"),
+            (Ns::A, "fillRef"),
+            (Ns::A, "effectRef"),
+            (Ns::A, "fontRef"),
+        ]],
+        (Ns::P | Ns::A, b"blipFill") => &[BLIP_FILL],
+        (Ns::P, b"xfrm") => &[&[(Ns::A, "off"), (Ns::A, "ext")]],
+        (Ns::P | Ns::A, b"txBody") => &[TEXT_BODY],
+        (Ns::A, b"bodyPr") => &[BODY_PROPERTIES],
+        (Ns::A, b"prstTxWarp" | b"prstGeom") => &[&[(Ns::A, "avLst")]],
+        (Ns::A, b"lstStyle") => &[LIST_STYLE],
+        (
+            Ns::A,
+            b"pPr" | b"defPPr" | b"lvl1pPr" | b"lvl2pPr" | b"lvl3pPr" | b"lvl4pPr" | b"lvl5pPr"
+            | b"lvl6pPr" | b"lvl7pPr" | b"lvl8pPr" | b"lvl9pPr",
+        ) => &[PARAGRAPH_PROPERTIES],
+        (Ns::A, b"lnSpc" | b"spcBef" | b"spcAft") => &[&[(Ns::A, "spcPct"), (Ns::A, "spcPts")]],
+        (Ns::A, b"tabLst") => &[&[(Ns::A, "tab")]],
+        (Ns::A, b"buBlip") => &[&[(Ns::A, "blip")]],
+        (Ns::A, b"p") => &[&[
             (Ns::A, "pPr"),
             (Ns::A, "r"),
             (Ns::A, "br"),
             (Ns::A, "fld"),
             (Ns::A, "endParaRPr"),
+        ]],
+        (Ns::A, b"r") => &[&[(Ns::A, "rPr"), (Ns::A, "t")]],
+        (Ns::A, b"br") => &[&[(Ns::A, "rPr")]],
+        (Ns::A, b"fld") => &[&[(Ns::A, "rPr"), (Ns::A, "pPr"), (Ns::A, "t")]],
+        (Ns::A, b"rPr" | b"endParaRPr" | b"defRPr") => &[RUN_PROPERTIES],
+        (Ns::A, b"hlinkClick" | b"hlinkHover" | b"hlinkMouseOver") => {
+            &[&[(Ns::A, "snd"), (Ns::A, "extLst")]]
+        }
+        (Ns::A, b"ln" | b"uLn" | b"lnL" | b"lnR" | b"lnT" | b"lnB" | b"lnTlToBr" | b"lnBlToTr") => {
+            &[LINE]
+        }
+        (Ns::A, b"custDash") => &[&[(Ns::A, "ds")]],
+        (Ns::A, b"uFill" | b"fillOverlay") => &[FILLS],
+        (
+            Ns::A,
+            b"solidFill" | b"gs" | b"fgClr" | b"bgClr" | b"buClr" | b"highlight" | b"outerShdw"
+            | b"innerShdw" | b"prstShdw" | b"glow" | b"extrusionClr" | b"contourClr" | b"lnRef"
+            | b"fillRef" | b"effectRef" | b"fontRef",
+        ) => &[COLOR],
+        (Ns::A, b"scrgbClr" | b"srgbClr" | b"hslClr" | b"sysClr" | b"schemeClr" | b"prstClr") => {
+            &[COLOR_TRANSFORMS]
+        }
+        (Ns::A, b"gradFill") => &[&[
+            (Ns::A, "gsLst"),
+            (Ns::A, "lin"),
+            (Ns::A, "path"),
+            (Ns::A, "tileRect"),
+        ]],
+        (Ns::A, b"gsLst") => &[&[(Ns::A, "gs")]],
+        (Ns::A, b"pattFill") => &[&[(Ns::A, "fgClr"), (Ns::A, "bgClr")]],
+        (Ns::A, b"stretch") => &[&[(Ns::A, "fillRect")]],
+        (Ns::A, b"blip") => &[BLIP],
+        (Ns::A, b"xfrm") => &[&[
+            (Ns::A, "off"),
+            (Ns::A, "ext"),
+            (Ns::A, "chOff"),
+            (Ns::A, "chExt"),
+        ]],
+        (Ns::A, b"avLst" | b"gdLst") => &[&[(Ns::A, "gd")]],
+        (Ns::A, b"custGeom") => &[&[
+            (Ns::A, "avLst"),
+            (Ns::A, "gdLst"),
+            (Ns::A, "ahLst"),
+            (Ns::A, "cxnLst"),
+            (Ns::A, "rect"),
+            (Ns::A, "pathLst"),
+        ]],
+        (Ns::A, b"ahLst") => &[&[(Ns::A, "ahXY"), (Ns::A, "ahPolar")]],
+        (Ns::A, b"ahXY" | b"ahPolar" | b"cxn") => &[&[(Ns::A, "pos")]],
+        (Ns::A, b"cxnLst") => &[&[(Ns::A, "cxn")]],
+        (Ns::A, b"pathLst") => &[&[(Ns::A, "path")]],
+        (Ns::A, b"path") => &[PATH],
+        (Ns::A, b"moveTo" | b"lnTo" | b"quadBezTo" | b"cubicBezTo") => &[&[(Ns::A, "pt")]],
+        (Ns::A, b"effectLst") => &[EFFECT_LIST],
+        (Ns::A, b"scene3d") => &[&[
+            (Ns::A, "camera"),
+            (Ns::A, "lightRig"),
+            (Ns::A, "backdrop"),
+            (Ns::A, "extLst"),
+        ]],
+        (Ns::A, b"camera" | b"lightRig") => &[&[(Ns::A, "rot")]],
+        (Ns::A, b"backdrop") => &[&[
+            (Ns::A, "anchor"),
+            (Ns::A, "norm"),
+            (Ns::A, "up"),
+            (Ns::A, "extLst"),
+        ]],
+        (Ns::A, b"sp3d") => &[&[
+            (Ns::A, "bevelT"),
+            (Ns::A, "bevelB"),
+            (Ns::A, "extrusionClr"),
+            (Ns::A, "contourClr"),
+            (Ns::A, "extLst"),
+        ]],
+        (Ns::A, b"graphic") => &[&[(Ns::A, "graphicData")]],
+        (Ns::A, b"tbl") => &[&[(Ns::A, "tblPr"), (Ns::A, "tblGrid"), (Ns::A, "tr")]],
+        (Ns::A, b"tblPr") => &[
+            FILLS,
+            EFFECTS,
+            &[
+                (Ns::A, "tableStyle"),
+                (Ns::A, "tableStyleId"),
+                (Ns::A, "extLst"),
+            ],
         ],
-        (Ns::A, b"r") => &[(Ns::A, "rPr"), (Ns::A, "t")],
-        (Ns::A, b"rPr" | b"endParaRPr" | b"defRPr") => RUN_PROPERTIES,
+        (Ns::A, b"tblGrid") => &[&[(Ns::A, "gridCol")]],
+        (Ns::A, b"tr") => &[&[(Ns::A, "tc"), (Ns::A, "extLst")]],
+        (Ns::A, b"tc") => &[&[(Ns::A, "txBody"), (Ns::A, "tcPr"), (Ns::A, "extLst")]],
+        (Ns::A, b"tcPr") => &[CELL_PROPERTIES, FILLS],
+        (
+            Ns::A,
+            b"gridCol"
+            | b"spLocks"
+            | b"picLocks"
+            | b"grpSpLocks"
+            | b"cxnSpLocks"
+            | b"graphicFrameLocks"
+            | b"overrideClrMapping",
+        ) => &[EXTENSIONS],
+        (Ns::A, b"extLst") => &[&[(Ns::A, "ext")]],
+        (Ns::A, b"t") => &[],
+        (Ns::A, leaf) if DRAWING_LEAVES.contains(&leaf) => &[],
         _ => return None,
     })
 }
@@ -586,8 +1005,10 @@ fn check_vocabulary(xml: &[u8]) -> std::result::Result<(), String> {
                     && let Some(allowed) = presentation_children(*parent_kind, parent_local)
                 {
                     let accepted = match kind {
-                        Some(kind) => allowed.iter().any(|(child_kind, child)| {
-                            *child_kind == kind && child.as_bytes() == local
+                        Some(kind) => allowed.iter().any(|group| {
+                            group.iter().any(|(child_kind, child)| {
+                                *child_kind == kind && child.as_bytes() == local
+                            })
                         }),
                         None => is_alternate || frame.ignorable.contains(&namespace),
                     };
