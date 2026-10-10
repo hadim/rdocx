@@ -2161,7 +2161,7 @@ CLI validation reports before the template and form programme resumes.
 | F-X209 | Edit PowerPoint masters layouts and themes | L | Approved, implementation pending |
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | Approved, implementation pending |
 | F-X211 | Complete Python script compatibility and safe XML access | L | Approved, implementation pending |
-| F-X212 | Align native accessibility with visible paragraph content | M | Independent semantic review in progress, runtime gates remain |
+| F-X212 | Align native accessibility with visible paragraph content | M | Semantic source reviewed, runtime and hash gates remain |
 
 **Current delivery checkpoint, 2026-10-10**: four of twenty-two active stories
 are completed and integrated, F-X193, F-X196, F-X198 and F-X199. F-X194 is in
