@@ -749,3 +749,37 @@ retained Pillow12.3.0 wheel. Complete build/install exits, unchanged before/
 after inputs, installed-wheel correspondence and runner admission are still
 required before specimen execution. No Base rate, final rate or complete
 native/movie acceptance is asserted by source capture or build startup.
+
+## Observed frozen Base measurement
+
+The original build attempt ended with actual exit1 after the idle Word
+compiler was explicitly interrupted. Its failed execution and unchanged
+source inventories remain under
+/private/tmp/S91-F-X211-Base-d44304c7a922. Recovery-r1 reused the same
+immutable selected source, tools, debug profile, locked offline dependency
+inputs and shared target. All12 recovery commands ended with actual exit0,
+including both wheel builds and installations. The original failure remains
+distinct. The independent artifact authentication receipt is
+/private/tmp/S91-F-X211-Base-recovery-helper/artifact-authentication.json.
+
+Root admission completed with actual exit0. Both isolated native imports
+and whole-tree, wheel, installed-byte and external-input checks passed.
+Its separate approved config is under
+/private/tmp/S91-F-X211-Base-admission-r1, SHA256
+5a0651dc689241cc2ac83de985e48595edd964aae4ef5dd50acce7b75e5216fe.
+The original recovery config remains unapproved and unchanged.
+
+The unchanged revision2 corpus ran all100 scripts against selected Base
+with no timeouts. Positive script assertions passed17 of100. The24 BASE
+scripts passed15, the14 XML scripts passed0, the16 LIFE scripts passed1
+and the46 AREA scripts passed1. The runner ended with actual exit1 for
+83 failed scripts after its final source and installed-input checks.
+All per-case traces and produced artifacts remain under
+/private/tmp/S91-F-X211-Base-corpus-r1. Terminal evidence is
+/private/tmp/S91-F-X211-Base-corpus-terminal-receipt.json.
+
+These are Base observations with the fixed denominator100. Do not repair
+the frozen scripts, retry failures into pass credit or attribute later
+unexecuted operations as observed failures. Native rendering obligations
+and decoded-movie qualification remain pending. The full acceptance metric
+is unset, and no final source measurement or90-percent claim is made.
