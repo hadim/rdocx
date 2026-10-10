@@ -102,12 +102,12 @@ class RGBColor(tuple[int, int, int]):
     def from_string(cls, value: str) -> "RGBColor":
         """Create a color from a six-character hexadecimal string."""
 
-        if len(value) != 6:
-            raise ValueError("RGB color strings must contain exactly six hexadecimal digits")
-        try:
-            return cls(*(int(value[offset : offset + 2], 16) for offset in (0, 2, 4)))
-        except ValueError as error:
-            raise ValueError("RGB color strings must contain only hexadecimal digits") from error
+        if not isinstance(value, str):
+            raise TypeError(f"RGBColor.from_string accepts a six-digit ASCII hex string with optional #, got {type(value).__name__}")
+        source = value.removeprefix("#")
+        if len(source) != 6 or any(character not in "0123456789abcdefABCDEF" for character in source):
+            raise ValueError("RGBColor.from_string requires exactly six ASCII hexadecimal digits with an optional single #")
+        return cls(*(int(source[offset : offset + 2], 16) for offset in (0, 2, 4)))
 
     def __str__(self) -> str:
         return "%02X%02X%02X" % self

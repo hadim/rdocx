@@ -1,6 +1,6 @@
 # F-X197, Unify Python colour inputs and font colour formats
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: L
 **Depends on**: none
@@ -207,16 +207,16 @@ blocks completion.
 
 ## Implementation checklist
 
-- [ ] Reproduce the nested font colour failure on the claimed base.
-- [ ] Freeze and recheck the full existing setter/getter inventory.
-- [ ] Implement the single shared PyO3 colour extractor and both consumers.
-- [ ] Add Word live format and extend existing PowerPoint format.
-- [ ] Expose supported type/theme source values without flattening themes.
-- [ ] Migrate styles, borders, shading and every inventoried setter.
-- [ ] Normalize scalar getters while preserving auto and legacy inputs.
-- [ ] Update existing examples, runtime tests, stubs and typing smoke.
-- [ ] Run installed regressions, rendering controls and risk riders.
-- [ ] Complete scoped verify and a zero-finding microscope.
+- [x] Reproduce the nested font colour failure on the claimed base.
+- [x] Freeze and recheck the full existing setter/getter inventory.
+- [x] Implement the single shared PyO3 colour extractor and both consumers.
+- [x] Add Word live format and extend existing PowerPoint format.
+- [x] Expose supported type/theme source values without flattening themes.
+- [x] Migrate styles, borders, shading and every inventoried setter.
+- [x] Normalize scalar getters while preserving auto and legacy inputs.
+- [x] Update existing examples, runtime tests, stubs and typing smoke.
+- [x] Run installed regressions, rendering controls and risk riders.
+- [x] Complete scoped verify and a zero-finding microscope.
 
 Exclusive paths include both Python families' existing formatting/text,
 dml/table/document binding files, RGBColor Python files, exports, stubs,

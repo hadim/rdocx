@@ -4,6 +4,48 @@ use smallvec::SmallVec;
 use thiserror::Error;
 
 use oxml_core::Length;
+use pyo3::exceptions::{PyOverflowError, PyTypeError, PyValueError};
+use pyo3::prelude::*;
+use pyo3::types::PyString;
+
+/// Validate an RGBColor, a legacy channel triple, or optional-hash ASCII hex.
+/// Callers handle their own None and auto policies before extraction.
+pub fn rgb_channels(value: &Bound<'_, PyAny>, parameter: &str) -> PyResult<(u8, u8, u8)> {
+    if value.is_instance_of::<PyString>() {
+        let malformed = || {
+            PyValueError::new_err(format!(
+                "{parameter} must contain exactly six ASCII hexadecimal digits, optionally preceded by one #"
+            ))
+        };
+        let source = value.extract::<String>().map_err(|_| malformed())?;
+        let hex = source.strip_prefix('#').unwrap_or(&source);
+        if hex.len() != 6 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(malformed());
+        }
+        let channel = |start| {
+            u8::from_str_radix(&hex[start..start + 2], 16)
+                .expect("six ASCII hexadecimal digits were validated")
+        };
+        return Ok((channel(0), channel(2), channel(4)));
+    }
+    let (red, green, blue) = value.extract::<(i64, i64, i64)>().map_err(|error| {
+        if error.is_instance_of::<PyOverflowError>(value.py()) {
+            return PyValueError::new_err(format!("{parameter} channels must be integers from 0 to 255"));
+        }
+        PyTypeError::new_err(format!(
+            "{parameter} accepts RGBColor, a legacy triple of integer channels, or six ASCII hexadecimal digits with optional #, got {}",
+            value.get_type().name().map(|name| name.to_string()).unwrap_or_else(|_| "unknown type".to_owned())
+        ))
+    })?;
+    let channel = |channel| {
+        u8::try_from(channel).map_err(|_| {
+            PyValueError::new_err(format!(
+                "{parameter} channels must be integers from 0 to 255"
+            ))
+        })
+    };
+    Ok((channel(red)?, channel(green)?, channel(blue)?))
+}
 
 /// One index step in a Word or PowerPoint content handle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -167,6 +209,59 @@ pub fn twips_from_emu(value: i64) -> i32 {
 mod tests {
     use super::*;
     use smallvec::smallvec;
+
+    #[test]
+    fn rgb_inputs_are_strict_and_keep_parameter_errors() {
+        Python::initialize();
+        Python::attach(|py| {
+            for source in ["123abc", "#123ABC"] {
+                let value = PyString::new(py, source);
+                assert_eq!(
+                    rgb_channels(value.as_any(), "Font.color").unwrap(),
+                    (18, 58, 188)
+                );
+            }
+            for source in ["##123456", "#12345", "１２３４５６", "12 456", "1234567"] {
+                let value = PyString::new(py, source);
+                let error = rgb_channels(value.as_any(), "Font.color").unwrap_err();
+                assert!(error.is_instance_of::<PyValueError>(py));
+                assert!(error.to_string().contains("Font.color"));
+            }
+            let surrogate = py
+                .import("builtins")
+                .unwrap()
+                .getattr("chr")
+                .unwrap()
+                .call1((0xD800_u32,))
+                .unwrap();
+            let error = rgb_channels(&surrogate, "Font.color.rgb").unwrap_err();
+            assert!(error.is_instance_of::<PyValueError>(py));
+            assert!(error.to_string().contains("Font.color.rgb"));
+            assert!(error.to_string().contains("ASCII hexadecimal"));
+            let value = (1_i64, 2_i64, 3_i64).into_pyobject(py).unwrap();
+            assert_eq!(
+                rgb_channels(value.as_any(), "Cell.shading").unwrap(),
+                (1, 2, 3)
+            );
+            let invalid = 42_i64.into_pyobject(py).unwrap();
+            let error = rgb_channels(invalid.as_any(), "Cell.shading").unwrap_err();
+            assert!(error.is_instance_of::<PyTypeError>(py));
+            assert!(error.to_string().contains("Cell.shading"));
+            assert!(error.to_string().contains("int"));
+            let overflow = (i128::MAX, 2_i64, 3_i64).into_pyobject(py).unwrap();
+            assert!(
+                rgb_channels(overflow.as_any(), "Font.color")
+                    .unwrap_err()
+                    .is_instance_of::<PyValueError>(py)
+            );
+            let invalid = (-1_i64, 2_i64, 3_i64).into_pyobject(py).unwrap();
+            assert!(
+                rgb_channels(invalid.as_any(), "Font.color")
+                    .unwrap_err()
+                    .is_instance_of::<PyValueError>(py)
+            );
+        });
+    }
 
     #[test]
     fn stale_path_reports_both_revisions() {

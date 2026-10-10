@@ -1,11 +1,11 @@
 use oxml_py_support::ContentPath;
-use pyo3::exceptions::{PyIndexError, PyValueError};
+use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyAny;
 
 use crate::document::PyDocument;
 use crate::paragraph::{ParagraphLocation, paragraph_location};
-use crate::{enum_object, length_object, stale_to_pyerr};
+use crate::{color_hex, color_object, enum_object, length_object, stale_to_pyerr};
 
 pub(crate) fn alignment_from_int(value: i32) -> PyResult<rdocx::Alignment> {
     match value {
@@ -44,22 +44,32 @@ fn checked_highlight(value: &str) -> PyResult<&str> {
     }
 }
 
-fn checked_shading(value: &str) -> PyResult<&str> {
-    if value.eq_ignore_ascii_case("auto") {
-        Ok("auto")
-    } else if value.len() == 6 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        Ok(value)
-    } else {
-        Err(PyValueError::new_err(
-            "shading must be six hexadecimal digits or auto",
-        ))
-    }
-}
+const THEME_COLORS: [&str; 16] = [
+    "dark1",
+    "light1",
+    "dark2",
+    "light2",
+    "accent1",
+    "accent2",
+    "accent3",
+    "accent4",
+    "accent5",
+    "accent6",
+    "hyperlink",
+    "followedHyperlink",
+    "text1",
+    "background1",
+    "text2",
+    "background2",
+];
 
 pub(crate) struct FontSnapshot {
     name: Option<String>,
     size: Option<f64>,
     color: Option<String>,
+    color_theme: Option<String>,
+    color_theme_tint: Option<u8>,
+    color_theme_shade: Option<u8>,
     bold: Option<bool>,
     italic: Option<bool>,
     underline: Option<i32>,
@@ -75,6 +85,9 @@ impl FontSnapshot {
             name: run.font_name().map(str::to_owned),
             size: run.size(),
             color: run.color().map(str::to_owned),
+            color_theme: run.color_theme().map(str::to_owned),
+            color_theme_tint: run.color_theme_tint(),
+            color_theme_shade: run.color_theme_shade(),
             bold: run.bold_value(),
             italic: run.italic_value(),
             underline: run.underline_code_value(),
@@ -90,6 +103,7 @@ pub(crate) enum FontUpdate<'a> {
     Name(Option<&'a str>),
     Size(Option<f64>),
     Color(Option<String>),
+    ColorTheme(Option<String>, Option<u8>, Option<u8>),
     Bold(Option<bool>),
     Italic(Option<bool>),
     Underline(Option<i32>),
@@ -105,6 +119,9 @@ impl FontUpdate<'_> {
             Self::Name(value) => run.set_font_value(value),
             Self::Size(value) => run.set_size_value(value),
             Self::Color(value) => run.set_color_value(value.as_deref()),
+            Self::ColorTheme(value, tint, shade) => {
+                run.set_color_theme(value.as_deref(), tint, shade)
+            }
             Self::Bold(value) => run.set_bold_value(value),
             Self::Italic(value) => run.set_italic_value(value),
             Self::Underline(value) => {
@@ -273,26 +290,25 @@ impl PyFont {
     }
 
     #[getter]
-    fn color(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
-        let Some(value) = self.snapshot(py)?.color else {
-            return Ok(None);
-        };
-        if value.eq_ignore_ascii_case("auto") {
-            return Ok(None);
-        }
-        py.import("rdocx")?
-            .getattr("RGBColor")?
-            .call_method1("from_string", (value,))
-            .map(Bound::unbind)
-            .map(Some)
+    fn color(&self, py: Python<'_>) -> PyResult<Py<PyColorFormat>> {
+        self.snapshot(py)?;
+        Py::new(
+            py,
+            PyColorFormat {
+                document: self.document.clone_ref(py),
+                path: self.path.clone(),
+                run_path: self.run_path.clone(),
+            },
+        )
     }
 
     #[setter]
-    fn set_color(&self, py: Python<'_>, value: Option<(u8, u8, u8)>) -> PyResult<()> {
-        self.apply(
-            py,
-            FontUpdate::Color(value.map(|(r, g, b)| format!("{r:02X}{g:02X}{b:02X}"))),
-        )
+    fn set_color(&self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        let value = value
+            .filter(|value| !value.is_none())
+            .map(|value| color_hex(value, "Font.color"))
+            .transpose()?;
+        self.apply(py, FontUpdate::Color(value))
     }
 
     #[getter]
@@ -362,14 +378,119 @@ impl PyFont {
     }
 
     #[getter]
-    fn shading(&self, py: Python<'_>) -> PyResult<Option<String>> {
-        Ok(self.snapshot(py)?.shading)
+    fn shading(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.snapshot(py)?
+            .shading
+            .as_deref()
+            .map(|value| color_object(py, value))
+            .transpose()
     }
 
     #[setter]
-    fn set_shading(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
-        let value = value.map(checked_shading).transpose()?;
-        self.apply(py, FontUpdate::Shading(value))
+    fn set_shading(&self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        let value = value
+            .filter(|value| !value.is_none())
+            .map(|value| {
+                if value
+                    .extract::<String>()
+                    .is_ok_and(|text| text.eq_ignore_ascii_case("auto"))
+                {
+                    Ok("auto".to_owned())
+                } else {
+                    color_hex(value, "Font.shading")
+                }
+            })
+            .transpose()?;
+        self.apply(py, FontUpdate::Shading(value.as_deref()))
+    }
+}
+
+/// A live view of a run's literal and theme colour source.
+#[pyclass(name = "ColorFormat")]
+pub struct PyColorFormat {
+    document: Py<PyDocument>,
+    path: ContentPath,
+    run_path: rdocx::AcceptedRunPath,
+}
+
+impl PyColorFormat {
+    fn font(&self, py: Python<'_>) -> PyFont {
+        PyFont::new(
+            self.document.clone_ref(py),
+            self.path.clone(),
+            self.run_path.clone(),
+        )
+    }
+}
+
+#[pymethods]
+impl PyColorFormat {
+    #[getter]
+    fn rgb(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        let snapshot = self.font(py).snapshot(py)?;
+        match snapshot.color.as_deref() {
+            None => Ok(None),
+            Some(value) if value.eq_ignore_ascii_case("auto") => Ok(None),
+            Some(value) => color_object(py, value).map(Some),
+        }
+    }
+
+    #[setter]
+    fn set_rgb(&self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        let value = value
+            .filter(|value| !value.is_none())
+            .map(|value| color_hex(value, "Font.color.rgb"))
+            .transpose()?;
+        self.font(py).apply(py, FontUpdate::Color(value))
+    }
+
+    #[getter(r#type)]
+    fn color_type(&self, py: Python<'_>) -> PyResult<Option<&'static str>> {
+        let snapshot = self.font(py).snapshot(py)?;
+        Ok(if snapshot.color_theme.is_some() {
+            Some("theme")
+        } else {
+            snapshot.color.as_deref().map(|value| {
+                if value.eq_ignore_ascii_case("auto") {
+                    "auto"
+                } else {
+                    "rgb"
+                }
+            })
+        })
+    }
+
+    #[getter]
+    fn theme_color(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        Ok(self.font(py).snapshot(py)?.color_theme)
+    }
+
+    #[setter]
+    fn set_theme_color(&self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        let value = value.filter(|value| !value.is_none()).map(|value| {
+            let token = if let Ok(token) = value.extract::<String>() { token }
+                else {
+                    let code = if value.is_instance_of::<pyo3::types::PyBool>() {
+                        None
+                    } else { value.extract::<i32>().ok() };
+                    let code = code.ok_or_else(|| PyTypeError::new_err(format!(
+                        "Font.color.theme_color accepts a supported theme string or MSO_THEME_COLOR, got {}",
+                        value.get_type().name().map(|name| name.to_string()).unwrap_or_else(|_| "unknown type".to_owned())
+                    )))?;
+                    THEME_COLORS.get(usize::try_from(code).ok().and_then(|code| code.checked_sub(1)).unwrap_or(usize::MAX))
+                        .ok_or_else(|| PyValueError::new_err("Font.color.theme_color is not a supported MSO_THEME_COLOR"))?.to_string()
+                };
+            if !THEME_COLORS.contains(&token.as_str()) {
+                return Err(PyValueError::new_err("Font.color.theme_color is not a supported theme token"));
+            }
+            Ok(token)
+        }).transpose()?;
+        let font = self.font(py);
+        let current = font.snapshot(py)?;
+        font.apply(
+            py,
+            FontUpdate::ColorTheme(value, current.color_theme_tint, current.color_theme_shade),
+        )
     }
 }
 

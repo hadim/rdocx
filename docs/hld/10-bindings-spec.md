@@ -219,6 +219,68 @@ doc.save_pdf("out.pdf")                        # documented as an rdocx extensio
   domain error maps to `StaleElementError`. `oxml-py-support` therefore remains
   independent of any Python base class.
 
+## Python colour inputs and live font formats
+
+Both families accept `RGBColor`, legacy integer channel triples and exactly
+six ASCII hexadecimal digits with an optional single leading hash at every
+existing scalar RGB setter. Hex values normalize to uppercase. The inventory
+covers Word style creation/update, run fonts, run and cell shading, and table
+and cell borders. PowerPoint covers run and paragraph-default fonts, including
+table cells, plus supported fills, lines, cell borders and outer shadows.
+Named Word highlight values retain their separate vocabulary.
+
+One shared concrete extractor validates before mutable source access. Wrong
+types raise `TypeError` naming the full parameter, accepted forms and actual
+Python type. Malformed, non-ASCII or surrogate-bearing hex strings and channel
+range or overflow failures raise parameter-qualified `ValueError`. Arbitrary
+string coercion is not accepted. Failed assignments preserve source and
+revisions. `RGBColor.from_string` accepts the same optional hash syntax, and
+`str(RGBColor(...))` remains uppercase hexadecimal.
+
+`Font.color` always returns a live `ColorFormat`, including when no direct
+colour exists. It re-resolves the concrete run owner and follows structural
+and cell-text invalidation. Getter reads create no properties or revisions.
+Direct scalar reads use `font.color.rgb`. The getter deliberately replaces
+the earlier Word `RGBColor | None` and PowerPoint `str | None` return types.
+Direct `font.color = value` remains a shortcut, and `None` removes its direct
+colour. The shared signatures and handwritten stubs are:
+
+```python
+Font.color -> ColorFormat
+Font.color = RGBColor | tuple[int, int, int] | str | None
+ColorFormat.rgb -> RGBColor | None
+ColorFormat.rgb = RGBColor | tuple[int, int, int] | str | None
+ColorFormat.type -> str | None
+ColorFormat.theme_color -> str | None
+ColorFormat.theme_color = str | MSO_THEME_COLOR | None
+```
+
+`None` in these colour-format setter signatures clears only font sources.
+Existing fill, line and shadow colour setters reject it. Word `type` reports
+`rgb`, `theme` or `auto`, while PowerPoint additionally models `preset` and
+`system`. Unset or unmodeled direct colours report `None`. Scheme references
+are not flattened to guessed RGB. Word `rgb` can expose an existing cached
+literal beside its theme reference, and reads `None` for `auto`. Editing a
+Word theme reference keeps that cached literal, tint, shade and opaque source.
+Clearing the reference removes tint and shade but keeps the cached literal.
+An explicit literal assignment retains the existing native clearing policy.
+The native Word tint/shade calculation remains unchanged.
+
+Both top-level packages export `MSO_THEME_COLOR` from their existing enum
+files. Supported values 1 through 16 cover dark/light, six accents, hyperlink,
+followed hyperlink, text and background slots. Word tokens use `dark1`,
+`light1`, `dark2`, `light2`, `hyperlink`, `followedHyperlink`, `text1`,
+`background1`, `text2` and `background2`. PowerPoint uses `dk1`, `lt1`, `dk2`,
+`lt2`, `hlink`, `folHlink`, `tx1`, `bg1`, `tx2` and `bg2`, and also accepts
+`phClr`. Both use `accent1` through `accent6`. `NOT_THEME_COLOR` and `MIXED`
+are exported sentinels that cannot author a theme reference.
+
+Word shading snapshots return `RGBColor | "auto" | None`, and border snapshots
+return `(style, size, RGBColor | "auto" | None)`. Their existing `auto`,
+omission and clearing behavior remains surface-specific. Python examples,
+runtime assertions and typing smoke use the live getter and these scalar
+snapshot types.
+
 The S33 formatting inventory is intentionally bounded to font name, size,
 colour, bold, italic, underline and strike, plus paragraph alignment, spacing,
 indentation, keep-with-next, keep-together, page-break-before and widow
@@ -226,8 +288,8 @@ control. Assigning `None` clears direct tri-state formatting. `Paragraph` also
 exposes its style ID and its list numbering as a `(num_id, level)` pair, `Run`
 its character `style_id`, and `Font` its named Word highlight and separate
 shading fill. Highlight reads and writes `ST_HighlightColor` names through
-`w:highlight`. Shading accepts six hexadecimal digits or `auto` through
-`w:shd`. These setters also clear with `None`. The S33 table
+`w:highlight`. Shading accepts the shared RGB forms or `auto` through
+`w:shd`, and reads `RGBColor`, `auto` or `None`. These setters also clear with `None`. The S33 table
 inventory is lazy table, row, cell and nested paragraph lookup, table style,
 alignment and width, plus cell text, width and vertical alignment. These
 handles use `Body`, `Row`, `Cell`, `Para` and `Run` path segments and reach the
@@ -518,8 +580,12 @@ normalized below 360 and writes them with round-half-even into the
 return live `FillFormat` and `LineFormat` views for ordinary shapes, pictures,
 and connectors, and raise `ValueError` for other kinds. `FillFormat` offers
 `type`, `solid()`, `background()`, and `fore_color`. `ColorFormat.rgb` reads an
-sRGB colour as `RGBColor`, or `None` for any other colour, and writing it keeps
-the transforms of an existing sRGB colour. Reading `LineFormat.color` changes
+sRGB colour as `RGBColor`, or `None` for any other colour. RGB replacement
+keeps transforms and opaque children of an existing sRGB colour. Theme
+replacement keeps those of an existing scheme colour. Replacing another
+colour kind discards that kind's transforms and raw children, except that an
+outer shadow keeps its modeled alpha. Brightness edits keep all non-luminance
+transforms and exact opaque children, including foreign metadata. Reading `LineFormat.color` changes
 nothing, and assigning its `rgb` makes the line fill solid. `LineFormat.width`
 reads zero without a width, writes `None` as zero, and rejects values above
 the `ST_LineWidth` maximum. `LineFormat.dash_style` reads the `a:prstDash`
@@ -700,7 +766,8 @@ edit. A style GUID supplied this way is a package-level edit, not a Python
 
 `TextFrame.autofit`
 reports `none`, `normal`, or `shape` when the body carries an explicit choice.
-`Run.font` reads the run's direct Latin name, size, and sRGB colour, while the
+`Run.font` reads the run's direct Latin name and size and exposes its live
+colour format, while the
 `Run.text` setter replaces only that run's text and preserves its typed and
 unmodelled properties. `Run.hyperlink` returns a live `Hyperlink` whose
 `address` reads the target of the run's `a:hlinkClick`, or `None`. Assigning
@@ -755,11 +822,24 @@ place and do not advance the revision. `rpptx` and `rpptx.enum.text` export
   `MSO_UNDERLINE` member otherwise. `strike` reads `True` for a single or
   double strike, and assigning `True` keeps a double strike. `all_caps` does
   not name `cap="small"`, which is preserved until `all_caps` is assigned.
-  `color` still reads the direct sRGB solid fill as an `RRGGBB` string for
-  compatibility, and the setter takes an `RGBColor`, any triple of 0 to 255
-  integers, or a six-digit hexadecimal string. It changes an existing sRGB
-  value in place, keeping transforms such as `a:alpha`, replaces any other
-  colour, and `None` removes the direct fill.
+  `color` is the shared live `ColorFormat`, whose `rgb` reads `RGBColor`
+  rather than an `RRGGBB` string. Direct assignment accepts the shared RGB
+  forms, and `None` removes the direct fill. Run and paragraph-default font
+  sources reuse the existing font property update path, including cell fonts.
+  Clearing an absent direct value remains a byte-stable no-op.
+
+PowerPoint `ColorFormat.brightness -> float | None` reports `None` without a
+modeled explicit colour, the first luminance offset when present, otherwise
+the first luminance modulation minus one, or zero without either transform.
+Its setter takes a finite number from -1 to 1 and requires an explicit modeled
+colour. Booleans and nonnumbers raise `TypeError`, while nonfinite or
+out-of-range values raise `ValueError`, before mutation. Positive brightness
+writes `lumMod = 1 - b` and `lumOff = b`, negative brightness writes only
+`lumMod = 1 - abs(b)`, and zero removes both. Values use round-half-even at
+100000 units. Other transforms and raw children remain intact. This finite
+policy deliberately refuses boolean and NaN inputs accepted by the pinned
+python-pptx oracle. Existing fill foreground prerequisites, line
+solidification and shadow opacity behavior remain unchanged.
 
 `Presentation.try_replace_text(placeholder, replacement, *, expect=None)`
 runs the native staged literal replacement over slides and speaker notes with

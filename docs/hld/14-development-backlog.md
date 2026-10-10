@@ -6822,10 +6822,20 @@ stale handles and actual rendering distinguish correct formats from coercion
 or source loss. Strict typing and stub checks agree with the runtime API.
 
 Shared expanded acceptance from Issues303 and308 remains owned by F-X197:
-one extractor in existing oxml-py-support serves both real bindings, with
-surface-specific None/auto behavior retained. Existing enum/export files
-expose supported theme values, and PowerPoint formats expose source-preserving
-brightness using existing transforms. Later parity stories reuse this result.
+one concrete PyO3 extractor in existing oxml-py-support serves both real
+bindings, with surface-specific None/auto behavior retained. All scalar RGB
+setters include legacy triples and strict optional-hash ASCII hex validation,
+including parameter-qualified surrogate and channel overflow errors before
+mutation. Unconditional live font formats use existing owner paths and move
+direct scalar reads to font.color.rgb. Word theme edits retain cached RGB and
+tint/shade, while native tint arithmetic stays unchanged. PowerPoint same-kind
+edits preserve transforms and exact foreign/unmodeled children, and kind
+changes retain only shadow alpha. Existing enum/export files expose the
+supported MSO_THEME_COLOR slots. Finite brightness edits change only existing
+luminance transforms and refuse booleans and nonfinite values atomically.
+Installed regressions, deterministic theme/brightness pixels, strict typing,
+stubs and package/source-preservation riders distinguish API acceptance from
+rendering or compatibility evidence. Later parity stories reuse this result.
 
 ### F-X198, Preserve alternate text-box copies during scoped replacement (M)
 

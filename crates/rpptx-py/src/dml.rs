@@ -292,7 +292,10 @@ fn no_foreground(fill: Option<&rpptx::Fill>) -> PyErr {
     ))
 }
 
-fn with_rgb(color: Option<rpptx::ColorChoice>, rgb: rpptx::RgbColor) -> rpptx::ColorChoice {
+pub(crate) fn with_rgb(
+    color: Option<rpptx::ColorChoice>,
+    rgb: rpptx::RgbColor,
+) -> rpptx::ColorChoice {
     match color {
         Some(rpptx::ColorChoice::Srgb {
             transforms,
@@ -396,6 +399,8 @@ enum ColorSource {
     Fill { target: FillTarget, solidify: bool },
     /// The colour of the outer shadow.
     Shadow,
+    /// Direct run or paragraph-default font colour, including table cells.
+    Font,
 }
 
 impl ColorSource {
@@ -403,6 +408,7 @@ impl ColorSource {
         match self {
             Self::Fill { target, .. } => target.suffix(),
             Self::Shadow => ".shadow.color",
+            Self::Font => ".font.color",
         }
     }
 }
@@ -415,13 +421,22 @@ pub struct PyColorFormat {
     source: ColorSource,
 }
 
-#[pymethods]
 impl PyColorFormat {
-    #[getter]
-    fn rgb(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+    pub(crate) fn font(presentation: Py<PyPresentation>, path: ContentPath) -> Self {
+        Self {
+            presentation,
+            path,
+            source: ColorSource::Font,
+        }
+    }
+
+    fn color(&self, py: Python<'_>) -> PyResult<Option<rpptx::ColorChoice>> {
+        if matches!(self.source, ColorSource::Font) {
+            return crate::text::font_color_at(py, &self.presentation, &self.path);
+        }
         let presentation = self.presentation.borrow(py);
         validate_path(py, &presentation, &self.path, "color", self.source.suffix())?;
-        let color = match self.source {
+        Ok(match self.source {
             ColorSource::Fill { target, .. } => {
                 match current_fill(&presentation.inner, &self.path, target)? {
                     Some(rpptx::Fill::Solid(fill)) => fill.color,
@@ -432,9 +447,83 @@ impl PyColorFormat {
             ColorSource::Shadow => {
                 current_shadow(&presentation.inner, &self.path)?.and_then(|shadow| shadow.color)
             }
+            ColorSource::Font => unreachable!("font owner was resolved above"),
+        })
+    }
+
+    fn authoring_color(&self, py: Python<'_>) -> PyResult<Option<rpptx::ColorChoice>> {
+        if !matches!(self.source, ColorSource::Shadow) {
+            return self.color(py);
+        }
+        let presentation = self.presentation.borrow(py);
+        validate_path(py, &presentation, &self.path, "color", self.source.suffix())?;
+        Ok(current_shadow(&presentation.inner, &self.path)?
+            .map_or_else(|| default_outer_shadow().color, |shadow| shadow.color))
+    }
+
+    fn write_color(&self, py: Python<'_>, color: Option<rpptx::ColorChoice>) -> PyResult<()> {
+        if matches!(self.source, ColorSource::Font) {
+            return crate::text::write_font_color(py, &self.presentation, &self.path, color);
+        }
+        let color = color.ok_or_else(|| {
+            PyTypeError::new_err(
+                "ColorFormat clearing with None is supported only for font colours",
+            )
+        })?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        validate_path(py, &presentation, &self.path, "color", self.source.suffix())?;
+        let (target, solidify) = match self.source {
+            ColorSource::Fill { target, solidify } => (target, solidify),
+            ColorSource::Shadow => {
+                return edit_shadow(py, &mut presentation.inner, &self.path, |shadow| {
+                    shadow.replace_color(color)
+                });
+            }
+            ColorSource::Font => unreachable!("font owner was resolved above"),
         };
-        drop(presentation);
-        let Some(rpptx::ColorChoice::Srgb { value, .. }) = color else {
+        let fill = match current_fill(&presentation.inner, &self.path, target)? {
+            Some(rpptx::Fill::Solid(mut fill)) => {
+                fill.color = Some(color);
+                rpptx::Fill::Solid(fill)
+            }
+            Some(rpptx::Fill::Pattern(mut fill)) => {
+                fill.foreground = Some(color);
+                rpptx::Fill::Pattern(fill)
+            }
+            _ if solidify => {
+                let mut fill = rpptx::SolidFill::default();
+                fill.color = Some(color);
+                rpptx::Fill::Solid(fill)
+            }
+            other => return Err(no_foreground(other.as_ref())),
+        };
+        write_fill(py, &mut presentation.inner, &self.path, target, fill)
+    }
+
+    fn parameter(&self, property: &str) -> String {
+        let owner = match self.source {
+            ColorSource::Font => "Font.color",
+            ColorSource::Shadow => "ShadowFormat.color",
+            ColorSource::Fill {
+                target: FillTarget::Line | FillTarget::CellBorder(_),
+                ..
+            } => "LineFormat.color",
+            ColorSource::Fill { .. } => "FillFormat.fore_color",
+        };
+        format!("{owner}.{property}")
+    }
+}
+
+const THEME_COLORS: [&str; 16] = [
+    "dk1", "lt1", "dk2", "lt2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6",
+    "hlink", "folHlink", "tx1", "bg1", "tx2", "bg2",
+];
+
+#[pymethods]
+impl PyColorFormat {
+    #[getter]
+    fn rgb(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        let Some(rpptx::ColorChoice::Srgb { value, .. }) = self.color(py)? else {
             return Ok(None);
         };
         let [red, green, blue] = value.components();
@@ -446,42 +535,178 @@ impl PyColorFormat {
 
     #[setter]
     fn set_rgb(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
-        let rgb_class = py.import("rpptx.dml.color")?.getattr("RGBColor")?;
-        if !value.is_instance(&rgb_class)? {
-            return Err(PyValueError::new_err(
-                "assigned value must be type RGBColor",
-            ));
+        if value.is_none() && matches!(self.source, ColorSource::Font) {
+            return self.write_color(py, None);
         }
-        let (red, green, blue) = value.extract::<(u8, u8, u8)>()?;
+        let (red, green, blue) = oxml_py_support::rgb_channels(value, &self.parameter("rgb"))?;
         let rgb = rpptx::RgbColor::new(red, green, blue);
-        let mut presentation = self.presentation.borrow_mut(py);
-        validate_path(py, &presentation, &self.path, "color", self.source.suffix())?;
-        let (target, solidify) = match self.source {
-            ColorSource::Fill { target, solidify } => (target, solidify),
-            ColorSource::Shadow => {
-                return edit_shadow(py, &mut presentation.inner, &self.path, |shadow| {
-                    let color = shadow_rgb(shadow.color.take(), rgb);
-                    shadow.replace_color(color);
-                });
-            }
+        let current = self.authoring_color(py)?;
+        let color = if matches!(self.source, ColorSource::Shadow) {
+            shadow_rgb(current, rgb)
+        } else {
+            with_rgb(current, rgb)
         };
-        let fill = match current_fill(&presentation.inner, &self.path, target)? {
-            Some(rpptx::Fill::Solid(mut fill)) => {
-                fill.color = Some(with_rgb(fill.color.take(), rgb));
-                rpptx::Fill::Solid(fill)
-            }
-            Some(rpptx::Fill::Pattern(mut fill)) => {
-                fill.foreground = Some(with_rgb(fill.foreground.take(), rgb));
-                rpptx::Fill::Pattern(fill)
-            }
-            _ if solidify => {
-                let mut fill = rpptx::SolidFill::default();
-                fill.color = Some(rpptx::ColorChoice::srgb(rgb));
-                rpptx::Fill::Solid(fill)
-            }
-            other => return Err(no_foreground(other.as_ref())),
+        self.write_color(py, Some(color))
+    }
+
+    #[getter(r#type)]
+    fn color_type(&self, py: Python<'_>) -> PyResult<Option<&'static str>> {
+        Ok(self.color(py)?.map(|color| match color {
+            rpptx::ColorChoice::Srgb { .. } => "rgb",
+            rpptx::ColorChoice::Scheme { .. } => "theme",
+            rpptx::ColorChoice::System { .. } => "system",
+            rpptx::ColorChoice::Preset { .. } => "preset",
+        }))
+    }
+
+    #[getter]
+    fn theme_color(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        Ok(match self.color(py)? {
+            Some(rpptx::ColorChoice::Scheme { value, .. }) => Some(value),
+            _ => None,
+        })
+    }
+
+    #[setter]
+    fn set_theme_color(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        if value.is_none() && matches!(self.source, ColorSource::Font) {
+            return self.write_color(py, None);
+        }
+        let parameter = self.parameter("theme_color");
+        let token = if let Ok(token) = value.extract::<String>() {
+            token
+        } else {
+            let code = if value.is_instance_of::<pyo3::types::PyBool>() {
+                None
+            } else {
+                value.extract::<i32>().ok()
+            };
+            let code = code.ok_or_else(|| {
+                PyTypeError::new_err(format!(
+                    "{parameter} accepts a supported theme string or MSO_THEME_COLOR, got {}",
+                    value
+                        .get_type()
+                        .name()
+                        .map(|name| name.to_string())
+                        .unwrap_or_else(|_| "unknown type".to_owned())
+                ))
+            })?;
+            THEME_COLORS
+                .get(
+                    usize::try_from(code)
+                        .ok()
+                        .and_then(|code| code.checked_sub(1))
+                        .unwrap_or(usize::MAX),
+                )
+                .ok_or_else(|| {
+                    PyValueError::new_err(format!("{parameter} is not a supported MSO_THEME_COLOR"))
+                })?
+                .to_string()
         };
-        write_fill(py, &mut presentation.inner, &self.path, target, fill)
+        if token != "phClr" && !THEME_COLORS.contains(&token.as_str()) {
+            return Err(PyValueError::new_err(format!(
+                "{parameter} is not a supported theme token"
+            )));
+        }
+        let color = match self.authoring_color(py)? {
+            Some(rpptx::ColorChoice::Scheme {
+                transforms,
+                raw_children,
+                ..
+            }) => rpptx::ColorChoice::Scheme {
+                value: token,
+                transforms,
+                raw_children,
+            },
+            current => rpptx::ColorChoice::Scheme {
+                value: token,
+                transforms: if matches!(self.source, ColorSource::Shadow) {
+                    current
+                        .iter()
+                        .flat_map(rpptx::ColorChoice::transforms)
+                        .filter(|value| matches!(value, rpptx::ColorTransform::Alpha(_)))
+                        .copied()
+                        .collect()
+                } else {
+                    Vec::new()
+                },
+                raw_children: Default::default(),
+            },
+        };
+        self.write_color(py, Some(color))
+    }
+
+    #[getter]
+    fn brightness(&self, py: Python<'_>) -> PyResult<Option<f64>> {
+        let Some(color) = self.color(py)? else {
+            return Ok(None);
+        };
+        let transforms = color.transforms();
+        if let Some(value) = transforms.iter().find_map(|value| match value {
+            rpptx::ColorTransform::LuminanceOffset(value) => Some(value.to_fraction()),
+            _ => None,
+        }) {
+            return Ok(Some(value));
+        }
+        Ok(Some(
+            transforms
+                .iter()
+                .find_map(|value| match value {
+                    rpptx::ColorTransform::LuminanceModulation(value) => {
+                        Some(value.to_fraction() - 1.0)
+                    }
+                    _ => None,
+                })
+                .unwrap_or(0.0),
+        ))
+    }
+
+    #[setter]
+    fn set_brightness(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let parameter = self.parameter("brightness");
+        let value = if value.is_instance_of::<pyo3::types::PyBool>() {
+            None
+        } else {
+            value.extract::<f64>().ok()
+        }
+        .ok_or_else(|| {
+            PyTypeError::new_err(format!(
+                "{parameter} accepts a finite number from -1 to 1, got {}",
+                value
+                    .get_type()
+                    .name()
+                    .map(|name| name.to_string())
+                    .unwrap_or_else(|_| "unknown type".to_owned())
+            ))
+        })?;
+        if !value.is_finite() || !(-1.0..=1.0).contains(&value) {
+            return Err(PyValueError::new_err(format!(
+                "{parameter} must be finite and from -1 to 1"
+            )));
+        }
+        let mut color = self.color(py)?.ok_or_else(|| {
+            PyValueError::new_err(format!("{parameter} requires a modeled explicit colour"))
+        })?;
+        let transforms = color_transforms_mut(&mut color);
+        transforms.retain(|value| {
+            !matches!(
+                value,
+                rpptx::ColorTransform::LuminanceModulation(_)
+                    | rpptx::ColorTransform::LuminanceOffset(_)
+            )
+        });
+        if value != 0.0 {
+            let modulation = ((1.0 - value.abs()) * 100_000.0).round_ties_even() as i32;
+            transforms.push(rpptx::ColorTransform::LuminanceModulation(
+                rpptx::Percent1000(modulation),
+            ));
+            if value > 0.0 {
+                transforms.push(rpptx::ColorTransform::LuminanceOffset(rpptx::Percent1000(
+                    (value * 100_000.0).round_ties_even() as i32,
+                )));
+            }
+        }
+        self.write_color(py, Some(color))
     }
 }
 

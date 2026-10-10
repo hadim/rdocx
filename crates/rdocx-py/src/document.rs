@@ -2760,13 +2760,17 @@ impl PyDocument {
         font_size: Option<i64>,
         bold: Option<bool>,
         italic: Option<bool>,
-        color: Option<(u8, u8, u8)>,
+        color: Option<&Bound<'_, PyAny>>,
         space_before: Option<i64>,
         space_after: Option<i64>,
         left_indent: Option<i64>,
         right_indent: Option<i64>,
         first_line_indent: Option<i64>,
     ) -> PyResult<PyStyle> {
+        let color = color
+            .filter(|value| !value.is_none())
+            .map(|value| oxml_py_support::rgb_channels(value, "Document.add_style(color)"))
+            .transpose()?;
         type NewStyle = fn(&str, &str) -> rdocx::StyleBuilder;
         let (native_type, new_style): (rdocx::StyleType, NewStyle) = match style_type {
             "paragraph" => (rdocx::StyleType::Paragraph, rdocx::StyleBuilder::paragraph),
@@ -2878,13 +2882,17 @@ impl PyDocument {
         font_size: Option<i64>,
         bold: Option<bool>,
         italic: Option<bool>,
-        color: Option<(u8, u8, u8)>,
+        color: Option<&Bound<'_, PyAny>>,
         space_before: Option<i64>,
         space_after: Option<i64>,
         left_indent: Option<i64>,
         right_indent: Option<i64>,
         first_line_indent: Option<i64>,
     ) -> PyResult<PyStyle> {
+        let color = color
+            .filter(|value| !value.is_none())
+            .map(|value| oxml_py_support::rgb_channels(value, "Document.set_style(color)"))
+            .transpose()?;
         let (style_type, style_id) = defined_style(&self.inner, style)?;
         let existing = self.inner.style(&style_id).expect("the style was found");
         let name = existing.name().unwrap_or(&style_id).to_owned();

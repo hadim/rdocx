@@ -1,5 +1,6 @@
 """Python bindings for rdocx."""
 
+from .enum import MSO_THEME_COLOR
 from .enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_ROW_HEIGHT_RULE, WD_TABLE_ALIGNMENT
 from .enum.text import WD_ALIGN_PARAGRAPH, WD_UNDERLINE
 from .shared import Cm, Emu, Inches, Length, Mm, Pt, RGBColor
@@ -56,6 +57,7 @@ from ._rdocx import (
     CoreProperties,
     Document,
     Font,
+    ColorFormat,
     HeaderFooterVariant,
     Hyperlink,
     LayoutFragment,
@@ -86,6 +88,7 @@ from ._rdocx import (
 )
 
 __all__ = [
+    "MSO_THEME_COLOR",
     "Bookmark",
     "BoundingBox",
     "Cm",
@@ -99,6 +102,7 @@ __all__ = [
     "Document",
     "Emu",
     "Font",
+    "ColorFormat",
     "HeaderFooterVariant",
     "Hyperlink",
     "Inches",

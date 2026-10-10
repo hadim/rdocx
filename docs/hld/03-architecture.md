@@ -17,7 +17,7 @@ crates/
   oxml-cli-support   range parsing, JSON envelope, output-path defaulting
   oxml-chart         ChartML model and renderer
   oxml-py-support    content paths, revision checks, stale-domain errors,
-                     Length conversion helpers
+                     Length conversion helpers, shared PyO3 RGB input validation
 
   # WordprocessingML
   rdocx-opc          deprecated shim over oxml-opc
@@ -68,6 +68,16 @@ carried breaking changes neither could publish first, so the adapter moved to
 the side that owns its target type.
 
 ## Why these seams
+
+**Python RGB input belongs to `oxml-py-support`.** One concrete
+`rgb_channels(value: &Bound<PyAny>, parameter: &str) -> PyResult<(u8, u8, u8)>`
+serves both binding crates. This unpublished support crate takes the existing
+workspace PyO3 dependency without enabling `extension-module`. That feature
+stays in `rdocx-py` and `rpptx-py`. The facades and both WASM graphs do not
+consume the Python support crate. Each binding adapts the channels to its
+existing native colour representation and owns its surface-specific `None`
+and Word `auto` policy. Live colour formats keep document and content-path
+ownership in their binding, not in a second document or colour model.
 
 **`oxml-opc` does not depend on `oxml-core`.** It has its own small local-name
 handling. Staying independent means it is publishable first and consumable

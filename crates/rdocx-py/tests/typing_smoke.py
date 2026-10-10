@@ -93,7 +93,7 @@ def exercise_rdocx_types(path: Path) -> None:
     table.remove_row(0)
     cell: Cell = row.cells[0]
     cell.text = first.text
-    assert_type(table.border("top"), tuple[str, int | None, str | None] | None)
+    assert_type(table.border("top"), tuple[str, int | None, RGBColor | Literal["auto"] | None] | None)
     table.set_borders("single", size=4, color="000000")
     table.set_border("insideV", "dashed", size=8, color="FF0000")
     assert_type(
@@ -112,8 +112,8 @@ def exercise_rdocx_types(path: Path) -> None:
     row.height_rule = WD_ROW_HEIGHT_RULE.EXACTLY
     row.cant_split = True
     row.is_header = None
-    assert_type(cell.shading, str | None)
-    assert_type(cell.border("bottom"), tuple[str, int | None, str | None] | None)
+    assert_type(cell.shading, RGBColor | Literal["auto"] | None)
+    assert_type(cell.border("bottom"), tuple[str, int | None, RGBColor | Literal["auto"] | None] | None)
     assert_type(
         cell.margins,
         tuple[Length | None, Length | None, Length | None, Length | None] | None,
@@ -374,3 +374,18 @@ def scoped_replacement_signatures_cover_paragraph_cell_and_story_item(document: 
 def whole_story_setter_signatures(document: Document) -> None:
     assert_type(document.set_header(text="header"), None)
     assert_type(document.set_footer(text="footer"), None)
+
+
+def colour_formats() -> None:
+    from rdocx import Document, MSO_THEME_COLOR, RGBColor
+    from rdocx._rdocx import ColorFormat
+    document = Document()
+    font = document.add_paragraph("").add_run("colour").font
+    assert_type(font.color, ColorFormat)
+    assert_type(font.color.rgb, RGBColor | None)
+    assert_type(font.color.theme_color, str | None)
+    font.color = "#123456"
+    font.color = (1, 2, 3)
+    font.color.rgb = RGBColor(1, 2, 3)
+    font.color.rgb = None
+    font.color.theme_color = MSO_THEME_COLOR.ACCENT_1

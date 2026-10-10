@@ -1,6 +1,6 @@
 import io
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, assert_type
 
 from rpptx import (
     BoundingBox,
@@ -90,7 +90,7 @@ def exercise_rpptx_types(path: Path) -> None:
     run.text = "updated"
     run_font_name: str | None = run.font.name
     run_font_size: Length | None = run.font.size
-    run_font_color: str | None = run.font.color
+    run_font_color: RGBColor | None = run.font.color.rgb
     frame: TextFrame = presentation.slides[0].shapes[-1].text_frame
     frame.margin_left = Inches(0.1)
     frame.margin_right = None
@@ -544,3 +544,21 @@ if TYPE_CHECKING:
     TextFrameLayout()  # type: ignore[call-arg]
     TextLineLayout()  # type: ignore[call-arg]
     ValidationIssue()  # type: ignore[call-arg]
+
+
+def colour_formats() -> None:
+    from rpptx import Presentation, MSO_THEME_COLOR
+    from rpptx._rpptx import ColorFormat
+    from rpptx.dml.color import RGBColor
+    presentation = Presentation()
+    slide = presentation.slides.add_slide(presentation.slide_layouts[6])
+    font = slide.shapes.add_textbox(0, 0, 914400, 914400).text_frame.paragraphs[0].font
+    assert_type(font.color, ColorFormat)
+    assert_type(font.color.rgb, RGBColor | None)
+    assert_type(font.color.theme_color, str | None)
+    assert_type(font.color.brightness, float | None)
+    font.color = "#123456"
+    font.color = (1, 2, 3)
+    font.color.rgb = None
+    font.color.theme_color = MSO_THEME_COLOR.ACCENT_1
+    font.color.brightness = 0.25

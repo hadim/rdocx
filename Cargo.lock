@@ -1179,6 +1179,7 @@ name = "oxml-py-support"
 version = "0.16.0"
 dependencies = [
  "oxml-core",
+ "pyo3",
  "smallvec",
  "thiserror",
 ]

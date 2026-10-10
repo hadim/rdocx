@@ -1,5 +1,6 @@
 """Python bindings for rpptx."""
 
+from .enum.dml import MSO_THEME_COLOR
 from .dml.color import RGBColor
 from .enum.shapes import MSO_SHAPE
 from .enum.text import MSO_ANCHOR, MSO_AUTO_SIZE, MSO_UNDERLINE, PP_ALIGN
@@ -38,6 +39,7 @@ from ._rpptx import Comment, CommentAuthor, CommentReply, Presentation
 from ._rpptx import BoundingBox, TextFrameLayout, TextLineLayout, ValidationIssue
 
 __all__ = [
+    "MSO_THEME_COLOR",
     "BoundingBox",
     "Inches",
     "Length",

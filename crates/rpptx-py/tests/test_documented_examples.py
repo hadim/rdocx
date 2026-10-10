@@ -1094,7 +1094,7 @@ def test_python_round_three_authoring_and_inspection_is_typed_and_lossless(tmp_p
     run = shape.text_frame.paragraphs[0].runs[0]
     assert run.font.name == "Aptos"
     assert run.font.size == rpptx.Pt(18)
-    assert run.font.color == "123456"
+    assert str(run.font.color.rgb) == "123456"
     run.text = "updated"
     presentation.slides[0].notes_text = "final note"
     presentation.save(output)
@@ -1356,7 +1356,7 @@ def test_run_font_setters_round_trip_and_none_clears_each_attribute(tmp_path):
     presentation = _textbox_presentation(rpptx)
     font = presentation.slides[0].shapes[0].text_frame.paragraphs[0].runs[0].font
     names = ("italic", "underline", "strike", "all_caps", "name", "color", "size", "bold")
-    assert [getattr(font, name) for name in names] == [None] * len(names)
+    assert [font.color.rgb if name == "color" else getattr(font, name) for name in names] == [None] * len(names)
 
     font.italic = True
     font.underline = True
@@ -1376,13 +1376,13 @@ def test_run_font_setters_round_trip_and_none_clears_each_attribute(tmp_path):
     ) in _text_body_xml(output)
     presentation = rpptx.Presentation(output)
     font = presentation.slides[0].shapes[0].text_frame.paragraphs[0].runs[0].font
-    assert [getattr(font, name) for name in names] == [
+    assert [font.color.rgb if name == "color" else getattr(font, name) for name in names] == [
         True,
         True,
         True,
         True,
         "Georgia",
-        "123456",
+        RGBColor(0x12, 0x34, 0x56),
         rpptx.Pt(20),
         False,
     ]
@@ -1432,14 +1432,14 @@ def test_font_color_takes_triples_or_hex_and_keeps_transforms_it_does_not_name(t
     presentation = rpptx.Presentation(colored)
     paragraph = presentation.slides[0].shapes[0].text_frame.paragraphs[0]
     alpha, theme = paragraph.runs[0].font, paragraph.runs[1].font
-    assert alpha.color == "FF0000"
-    assert theme.color is None
+    assert str(alpha.color.rgb) == "FF0000"
+    assert theme.color.rgb is None
     alpha.color = "00ff00"
     theme.color = (1, 2, 3)
-    assert (alpha.color, theme.color) == ("00FF00", "010203")
-    assert paragraph.font.color is None
+    assert (str(alpha.color.rgb), str(theme.color.rgb)) == ("00FF00", "010203")
+    assert paragraph.font.color.rgb is None
     paragraph.font.color = rpptx.RGBColor.from_string("ABCDEF")
-    assert paragraph.font.color == "ABCDEF"
+    assert str(paragraph.font.color.rgb) == "ABCDEF"
     presentation.save(output)
 
     body = _text_body_xml(output)
@@ -1679,7 +1679,7 @@ def test_text_properties_agree_with_python_pptx_in_both_directions(tmp_path):
     assert paragraph.line_spacing == 2.5
     assert (paragraph.space_before, paragraph.space_after) == (rpptx.Pt(12), rpptx.Pt(3))
     font = paragraph.runs[0].font
-    assert (font.italic, font.underline, font.name, font.color, font.size) == (
+    assert (font.italic, font.underline, font.name, str(font.color.rgb), font.size) == (
         True,
         rpptx.MSO_UNDERLINE.DOUBLE_LINE,
         "Georgia",
@@ -2345,8 +2345,8 @@ def test_fill_and_line_formats_write_what_python_pptx_reads(tmp_path):
     fill.solid()
     assert shape.fill.fore_color.rgb == RGBColor(0xFF, 0x00, 0x00)
     assert str(shape.fill.fore_color.rgb) == "FF0000"
-    with pytest.raises(ValueError, match="assigned value must be type RGBColor"):
-        fill.fore_color.rgb = (1, 2, 3)
+    with pytest.raises(TypeError, match="FillFormat.fore_color.rgb"):
+        fill.fore_color.rgb = (1, 2)
 
     line = shape.line
     assert (line.width, line.color.rgb, line.fill.type) == (0, None, None)
@@ -3001,8 +3001,8 @@ def test_shadow_parameters_write_the_outer_shadow_on_every_kind_python_pptx_shad
         shapes[0].shadow.blur_radius = -1
     with pytest.raises(ValueError, match="shadow direction must be a finite number"):
         shapes[0].shadow.direction = float("nan")
-    with pytest.raises(ValueError, match="assigned value must be type RGBColor"):
-        shapes[0].shadow.color.rgb = (1, 2, 3)
+    with pytest.raises(TypeError, match="ShadowFormat.color.rgb"):
+        shapes[0].shadow.color.rgb = (1, 2)
     held = shapes[0].shadow
     held_color = held.color
     prs.slides.add_slide(prs.slide_layouts[6])
@@ -4899,7 +4899,7 @@ def test_cell_text_frame_edits_reach_pdf_and_raster_output(tmp_path):
     p = cell.text_frame.paragraphs[0]
     assert p.runs[0].font.size == Pt(20)
     assert p.runs[0].font.bold is True
-    assert p.runs[0].font.color == "CC0000"
+    assert str(p.runs[0].font.color.rgb) == "CC0000"
     assert p.alignment == PP_ALIGN.CENTER
     assert p.space_before == Pt(2) and p.space_after == Pt(3)
     assert cell.text_frame.word_wrap is True
@@ -4971,3 +4971,468 @@ def test_grouped_table_cell_frame_resolves_and_imported_hyperlink_reads():
     cell = reopened.slides[0].shapes[0].shapes[0].table.cell(0, 0)
     assert cell.text == "Grouped edited"
     assert cell.text_frame.paragraphs[0].runs[0].font.size == Pt(17)
+
+
+def _f_x197_ppt_colour_surface(prs, surface):
+    from rpptx.enum.shapes import MSO_CONNECTOR
+    slide = prs.slides[0]
+    if surface.startswith("font"):
+        if "cell" in surface:
+            cell = slide.shapes.add_table(1, 1, 0, 0, 100, 100).table.cell(0, 0)
+            frame = cell.text_frame
+            frame.text = "colour"
+            frame = cell.text_frame
+        else:
+            frame = slide.shapes[0].text_frame
+        paragraph = frame.paragraphs[0]
+        font = paragraph.font if "default" in surface else paragraph.runs[0].font
+        colour = font.color
+        if surface.endswith("direct"):
+            return lambda value: setattr(font, "color", value), colour
+        return lambda value: setattr(colour, "rgb", value), colour
+    if surface == "background-fill":
+        fill = slide.background.fill
+        fill.solid()
+        colour = fill.fore_color
+    elif surface.startswith("cell"):
+        cell = slide.shapes.add_table(1, 1, 0, 0, 100, 100).table.cell(0, 0)
+        if surface == "cell-fill":
+            cell.fill.solid()
+            colour = cell.fill.fore_color
+        else:
+            colour = getattr(cell, "border_" + surface.removeprefix("cell-")).color
+    else:
+        kind, property_name = surface.split("-")
+        if kind == "picture":
+            shape = slide.shapes.add_picture(io.BytesIO(_tiny_png()), 0, 0)
+        elif kind == "connector":
+            shape = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, 0, 0, 100, 100)
+        elif kind == "group":
+            shape = slide.shapes.add_group_shape()
+        else:
+            shape = slide.shapes[0]
+        if property_name == "fill":
+            shape.fill.solid()
+            colour = shape.fill.fore_color
+        elif property_name == "line":
+            colour = shape.line.color
+        else:
+            colour = shape.shadow.color
+    return lambda value: setattr(colour, "rgb", value), colour
+
+
+_F_X197_PPT_COLOUR_SURFACES = [
+    "font-run-direct", "font-run-rgb", "font-default-direct", "font-default-rgb",
+    "font-cell-direct", "font-cell-rgb", "font-cell-default-direct", "font-cell-default-rgb",
+    "shape-fill", "picture-fill", "connector-fill", "cell-fill", "background-fill",
+    "shape-line", "picture-line", "connector-line", "cell-top", "cell-bottom", "cell-left", "cell-right",
+    "shape-shadow", "picture-shadow", "connector-shadow", "group-shadow",
+]
+
+
+@pytest.mark.parametrize("surface", _F_X197_PPT_COLOUR_SURFACES)
+@pytest.mark.parametrize("form", ["rgb", "triple", "hex", "hash"])
+def test_every_powerpoint_colour_setter_accepts_rgb_and_optional_hash_hex(surface, form):
+    import rpptx
+    from rpptx.dml.color import RGBColor
+    from xml.etree import ElementTree as ET
+    prs = _textbox_presentation(rpptx)
+    expected = RGBColor(0xA1, 0xB2, 0xC3)
+    assert RGBColor.from_string("#a1b2c3") == expected
+    assert RGBColor.from_string("a1b2c3") == expected
+    value = {"rgb": expected, "triple": tuple(expected), "hex": "a1b2c3", "hash": "#a1b2c3"}[form]
+    setter, colour = _f_x197_ppt_colour_surface(prs, surface)
+    setter(value)
+    assert colour.rgb == expected and isinstance(colour.rgb, RGBColor)
+    saved = prs.to_bytes()
+    setter(value)
+    assert prs.to_bytes() == saved
+    reopened = rpptx.Presentation.from_bytes(saved)
+    with zipfile.ZipFile(io.BytesIO(reopened.to_bytes())) as package:
+        root = ET.fromstring(package.read("ppt/slides/slide1.xml"))
+        assert any(node.get("val") == "A1B2C3" for node in root.iter("{http://schemas.openxmlformats.org/drawingml/2006/main}srgbClr"))
+
+
+@pytest.mark.parametrize("surface", _F_X197_PPT_COLOUR_SURFACES)
+@pytest.mark.parametrize("value,error_type", [(object(), TypeError), (7, TypeError), ((1, 2), TypeError), ((1.5, 2, 3), TypeError), ((10**100, 2, 3), ValueError), ((-1, 2, 3), ValueError), ("##123456", ValueError), ("１２３４５６", ValueError), ("12345\ud800", ValueError), (" 123456", ValueError)])
+def test_powerpoint_colour_errors_are_atomic_on_every_existing_owner(surface, value, error_type):
+    import rpptx
+    prs = _textbox_presentation(rpptx)
+    setter, colour = _f_x197_ppt_colour_surface(prs, surface)
+    before = prs.to_bytes()
+    prior = colour.rgb
+    with pytest.raises(error_type) as caught:
+        setter(value)
+    parameter = "Font.color" + ("" if surface.endswith("direct") else ".rgb") if surface.startswith("font") else "ShadowFormat.color.rgb" if surface.endswith("shadow") else "LineFormat.color.rgb" if surface.endswith("line") or surface in ("cell-top", "cell-bottom", "cell-left", "cell-right") else "FillFormat.fore_color.rgb"
+    assert parameter in str(caught.value)
+    if error_type is TypeError:
+        assert type(value).__name__ in str(caught.value)
+    assert "RGBColor" in str(caught.value) or "hex" in str(caught.value) or "channels" in str(caught.value)
+    assert prs.to_bytes() == before
+    assert colour.rgb == prior
+
+
+def test_powerpoint_font_colour_format_preserves_theme_and_transform_sources():
+    import rpptx
+    prs = _textbox_presentation(rpptx)
+    colour = prs.slides[0].shapes[0].text_frame.paragraphs[0].runs[0].font.color
+    assert colour.rgb is None
+    colour.theme_color = "accent1"
+    colour.brightness = 0.25
+    assert colour.type == "theme"
+    assert colour.theme_color == "accent1"
+    assert colour.rgb is None
+    reopened = rpptx.Presentation.from_bytes(prs.to_bytes())
+    actual = reopened.slides[0].shapes[0].text_frame.paragraphs[0].runs[0].font.color
+    assert actual.theme_color == "accent1"
+    assert actual.brightness == 0.25
+
+
+@pytest.mark.parametrize("surface", ["font-run-rgb", "font-default-rgb", "shape-fill", "shape-line"])
+@pytest.mark.parametrize("value,modulation,offset", [(-1.0, 0, None), (-0.4, 60000, None), (0.0, None, None), (0.4, 60000, 40000), (1.0, 0, 100000), (0.123456, 87654, 12346)])
+def test_powerpoint_brightness_matches_pinned_finite_oracle_and_preserves_non_luminance(surface, value, modulation, offset):
+    import rpptx
+    import re
+    from xml.etree import ElementTree as ET
+    prs = _textbox_presentation(rpptx)
+    setter, colour = _f_x197_ppt_colour_surface(prs, surface)
+    colour.theme_color = "accent1"
+    parts = _package_parts(prs.to_bytes())
+    xml = parts["ppt/slides/slide1.xml"]
+    # The explicit accent1 below belongs to the selected colour owner.
+    xml, count = re.subn(rb'<a:schemeClr val="accent1"\s*/>', b'<a:schemeClr val="accent1"><a:alpha val="43000"/><a:tint val="12000"/><a:lumMod val="70000"/><a:lumOff val="30000"/></a:schemeClr>', xml)
+    assert count == 1
+    parts["ppt/slides/slide1.xml"] = xml
+    prs = rpptx.Presentation.from_bytes(_package_bytes(parts))
+    if surface.startswith("font"):
+        paragraph = prs.slides[0].shapes[0].text_frame.paragraphs[0]
+        colour = (paragraph.font if "default" in surface else paragraph.runs[0].font).color
+    else:
+        colour = prs.slides[0].shapes[0].fill.fore_color if surface == "shape-fill" else prs.slides[0].shapes[0].line.color
+    colour.brightness = value
+    expected = offset / 100000 if offset is not None else modulation / 100000 - 1 if modulation is not None else 0.0
+    assert colour.brightness == pytest.approx(expected)
+    reopened = rpptx.Presentation.from_bytes(prs.to_bytes())
+    root = ET.fromstring(_package_parts(reopened.to_bytes())["ppt/slides/slide1.xml"])
+    ns = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    node = next(node for node in root.iter(ns + "schemeClr") if node.get("val") == "accent1")
+    actual = {child.tag.removeprefix(ns): int(child.get("val")) for child in node}
+    wanted = {"alpha": 43000, "tint": 12000}
+    if modulation is not None:
+        wanted["lumMod"] = modulation
+    if offset is not None:
+        wanted["lumOff"] = offset
+    assert actual == wanted
+
+
+@pytest.mark.parametrize("surface", ["font-run-rgb", "font-default-rgb", "shape-fill", "shape-line", "shape-shadow"])
+@pytest.mark.parametrize("value,error_type", [(True, TypeError), (None, TypeError), ("0.4", TypeError), (float("nan"), ValueError), (float("inf"), ValueError), (-1.1, ValueError), (1.1, ValueError)])
+def test_powerpoint_brightness_strict_finite_policy_errors_are_atomic(surface, value, error_type):
+    import rpptx
+    prs = _textbox_presentation(rpptx)
+    setter, colour = _f_x197_ppt_colour_surface(prs, surface)
+    colour.theme_color = "accent1"
+    before = prs.to_bytes()
+    with pytest.raises(error_type, match="brightness"):
+        colour.brightness = value
+    assert prs.to_bytes() == before
+    assert colour.theme_color == "accent1"
+
+
+@pytest.mark.parametrize("surface", ["font-run-rgb", "font-default-rgb", "font-cell-rgb", "cell-fill", "cell-top", "shape-shadow"])
+def test_powerpoint_colour_views_reject_stale_owners_without_mutating_source(surface):
+    import rpptx
+    prs = _textbox_presentation(rpptx)
+    setter, colour = _f_x197_ppt_colour_surface(prs, surface)
+    setter("123456")
+    prs.slides.add_slide(prs.slide_layouts[6])
+    before = prs.to_bytes()
+    with pytest.raises(rpptx.StaleElementError):
+        _ = colour.rgb
+    with pytest.raises(rpptx.StaleElementError):
+        colour.rgb = "ABCDEF"
+    assert prs.to_bytes() == before
+
+
+_F_X197_RAW_COLOUR_CHILDREN = (
+    b'<a:futureTransform val="12345"/>',
+    b'<fx:colourMetadata xmlns:fx="urn:f-x197:opaque" marker="  retain &amp; exact  "><fx:child/>opaque<!--keep--></fx:colourMetadata>',
+)
+
+
+@pytest.mark.parametrize("surface", ["font-run-rgb", "font-default-rgb", "shape-fill", "shape-line", "shape-shadow"])
+@pytest.mark.parametrize("source_kind,replacement", [("rgb", "rgb"), ("theme", "theme"), ("theme", "rgb"), ("rgb", "theme")])
+def test_powerpoint_colour_replacement_preserves_family_specific_transforms_and_opaque_children(surface, source_kind, replacement):
+    import rpptx
+    import re
+    from xml.etree import ElementTree as ET
+    prs = _textbox_presentation(rpptx)
+    setter, colour = _f_x197_ppt_colour_surface(prs, surface)
+    if source_kind == "rgb":
+        setter("123456")
+        tag, original = "srgbClr", "123456"
+    else:
+        colour.theme_color = "accent1"
+        tag, original = "schemeClr", "accent1"
+    parts = _package_parts(prs.to_bytes())
+    xml = parts["ppt/slides/slide1.xml"]
+    # Replace exactly the chosen owner's explicit colour, preserving all siblings.
+    pattern = rb'<a:' + tag.encode() + rb' val="' + original.encode() + rb'"(?:\s*/>|>.*?</a:' + tag.encode() + rb'>)'
+    fixture = '<a:' + tag + ' val="' + original + '"><a:alpha val="43000"/><a:tint val="12000"/><a:gamma/>' + b''.join(_F_X197_RAW_COLOUR_CHILDREN).decode() + '</a:' + tag + '>'
+    xml, count = re.subn(pattern, fixture.encode(), xml, flags=re.DOTALL)
+    assert count == 1
+    parts["ppt/slides/slide1.xml"] = xml
+    prs = rpptx.Presentation.from_bytes(_package_bytes(parts))
+    shape = prs.slides[0].shapes[0]
+    if surface.startswith("font"):
+        paragraph = shape.text_frame.paragraphs[0]
+        colour = (paragraph.font if "default" in surface else paragraph.runs[0].font).color
+    elif surface == "shape-fill":
+        colour = shape.fill.fore_color
+    elif surface == "shape-line":
+        colour = shape.line.color
+    else:
+        colour = shape.shadow.color
+    before = prs.to_bytes()
+    assert colour.type == ("rgb" if source_kind == "rgb" else "theme")
+    _ = colour.rgb, colour.theme_color, colour.brightness
+    assert prs.to_bytes() == before
+    for raw in _F_X197_RAW_COLOUR_CHILDREN:
+        assert _package_parts(before)["ppt/slides/slide1.xml"].count(raw) == 1
+    colour.brightness = 0.25
+    brightness_saved = prs.to_bytes()
+    brightness_reopened = rpptx.Presentation.from_bytes(brightness_saved)
+    brightness_xml = _package_parts(brightness_reopened.to_bytes())["ppt/slides/slide1.xml"]
+    for raw in _F_X197_RAW_COLOUR_CHILDREN:
+        assert brightness_xml.count(raw) == 1
+    assert colour.brightness == 0.25
+    if replacement == "rgb":
+        colour.rgb = "ABCDEF"
+        target_tag, target_value = "srgbClr", "ABCDEF"
+    else:
+        colour.theme_color = "accent2"
+        target_tag, target_value = "schemeClr", "accent2"
+    reopened = rpptx.Presentation.from_bytes(prs.to_bytes())
+    actual_parts = _package_parts(reopened.to_bytes())
+    ns = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    root = ET.fromstring(actual_parts["ppt/slides/slide1.xml"])
+    node = next(node for node in root.iter(ns + target_tag) if node.get("val") == target_value)
+    actual = {child.tag.removeprefix(ns): child.get("val") for child in node if child.tag in {ns + name for name in ("alpha", "tint", "gamma", "lumMod", "lumOff")}}
+    if source_kind == replacement:
+        assert actual == {"alpha": "43000", "tint": "12000", "gamma": None, "lumMod": "75000", "lumOff": "25000"}
+        for raw in _F_X197_RAW_COLOUR_CHILDREN:
+            assert actual_parts["ppt/slides/slide1.xml"].count(raw) == 1
+        assert b"<a:gamma/>" in actual_parts["ppt/slides/slide1.xml"]
+    elif surface == "shape-shadow":
+        assert actual == {"alpha": "43000"}
+    else:
+        assert actual == {}
+    if source_kind != replacement:
+        for raw in _F_X197_RAW_COLOUR_CHILDREN:
+            assert raw not in actual_parts["ppt/slides/slide1.xml"]
+    assert actual_parts["ppt/slides/_rels/slide1.xml.rels"] == parts["ppt/slides/_rels/slide1.xml.rels"]
+
+
+@pytest.mark.parametrize("surface", ["font-run-rgb", "font-default-rgb", "font-cell-rgb", "font-cell-default-rgb"])
+def test_powerpoint_unset_font_colour_reads_and_clears_do_not_create_properties(surface):
+    import rpptx
+    prs = _textbox_presentation(rpptx)
+    setter, colour = _f_x197_ppt_colour_surface(prs, surface)
+    before = prs.to_bytes()
+    assert (colour.rgb, colour.type, colour.theme_color, colour.brightness) == (None, None, None, None)
+    assert prs.to_bytes() == before
+    colour.rgb = None
+    assert prs.to_bytes() == before
+    colour.theme_color = None
+    assert prs.to_bytes() == before
+    with pytest.raises(ValueError, match="explicit colour"):
+        colour.brightness = 0.4
+    assert prs.to_bytes() == before
+
+
+@pytest.mark.parametrize("surface", ["shape-fill", "shape-line", "shape-shadow", "cell-fill", "cell-top"])
+def test_powerpoint_non_font_colours_retain_none_refusal_and_source(surface):
+    import rpptx
+    prs = _textbox_presentation(rpptx)
+    setter, colour = _f_x197_ppt_colour_surface(prs, surface)
+    before = prs.to_bytes()
+    with pytest.raises(TypeError):
+        colour.rgb = None
+    with pytest.raises(TypeError):
+        colour.theme_color = None
+    assert prs.to_bytes() == before
+
+
+def test_powerpoint_nested_font_colour_reaches_saved_rendered_pixels():
+    import rpptx
+    from PIL import Image
+    def render(value):
+        prs = _textbox_presentation(rpptx)
+        font = prs.slides[0].shapes[0].text_frame.paragraphs[0].runs[0].font
+        font.name = "Liberation Sans"
+        font.size = rpptx.Pt(28)
+        font.color.rgb = value
+        return rpptx.Presentation.from_bytes(prs.to_bytes()).render_slide_to_png(0, dpi=72)
+    red = render("#FF0000")
+    assert red == render("ff0000")
+    blue = render("0000FF")
+    assert red != blue
+    assert any(r > g + 40 and r > b + 40 for r, g, b in Image.open(io.BytesIO(red)).convert("RGB").getdata())
+    assert any(b > g + 40 and b > r + 40 for r, g, b in Image.open(io.BytesIO(blue)).convert("RGB").getdata())
+
+
+def test_powerpoint_theme_and_brightness_reach_deterministic_pdf_and_raster_pixels(tmp_path):
+    import shutil
+    import subprocess
+    from xml.etree import ElementTree as ET
+    from PIL import Image
+    import rpptx
+    executable = shutil.which("pdftoppm")
+    assert executable is not None
+    version = subprocess.run([executable, "-v"], capture_output=True, text=True, timeout=60)
+    assert version.returncode == 0 and "26.01.0" in version.stdout + version.stderr
+    namespace = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    def render(name, rgb=None, theme=None, brightness=0.0):
+        prs = _textbox_presentation(rpptx)
+        font = prs.slides[0].shapes[0].text_frame.paragraphs[0].runs[0].font
+        font.name = "Liberation Sans"
+        font.size = rpptx.Pt(28)
+        if theme is None:
+            font.color.rgb = rgb
+        else:
+            font.color.theme_color = theme
+            font.color.brightness = brightness
+        parts = _package_parts(prs.to_bytes())
+        tree = ET.fromstring(parts["ppt/theme/theme1.xml"])
+        for token, value in (("accent1", "FF0000"), ("accent2", "0000FF")):
+            colour = tree.find(".//" + namespace + token + "/" + namespace + "srgbClr")
+            assert colour is not None
+            colour.set("val", value)
+        parts["ppt/theme/theme1.xml"] = ET.tostring(tree)
+        reopened = rpptx.Presentation.from_bytes(_package_bytes(parts))
+        if theme is not None:
+            colour = reopened.slides[0].shapes[0].text_frame.paragraphs[0].runs[0].font.color
+            assert colour.rgb is None and colour.theme_color == theme
+            assert colour.brightness == pytest.approx(brightness)
+        png = Image.open(io.BytesIO(reopened.render_slide_to_png(0, dpi=72))).convert("RGB")
+        pdf = reopened.to_pdf()
+        assert pdf.startswith(b"%PDF")
+        source = tmp_path / (name + ".pdf")
+        source.write_bytes(pdf)
+        prefix = tmp_path / name
+        result = subprocess.run([executable, "-f", "1", "-singlefile", "-r", "72", "-png", str(source), str(prefix)], capture_output=True, text=True, timeout=60)
+        assert result.returncode == 0, result.stdout + result.stderr
+        raster = Image.open(prefix.with_suffix(".png")).convert("RGB")
+        return png, raster
+    red = render("literal-red", rgb="FF0000")
+    blue = render("literal-blue", rgb="0000FF")
+    theme_red = render("theme-red", theme="accent1")
+    theme_blue = render("theme-blue", theme="accent2")
+    lighter = render("theme-lighter", theme="accent1", brightness=0.4)
+    darker = render("theme-darker", theme="accent1", brightness=-0.4)
+    for index in (0, 1):
+        assert theme_red[index].size == red[index].size == lighter[index].size == darker[index].size
+        assert theme_red[index].tobytes() == red[index].tobytes()
+        assert theme_blue[index].tobytes() == blue[index].tobytes()
+        baseline = list(red[index].getdata())
+        solid = [position for position, pixel in enumerate(baseline) if pixel == (255, 0, 0)]
+        assert len(solid) > 5
+        light_pixels = list(lighter[index].getdata())
+        dark_pixels = list(darker[index].getdata())
+        for position in solid:
+            r, g, b = light_pixels[position]
+            assert r > 220 and g > 40 and b > 40
+            r, g, b = dark_pixels[position]
+            assert 0 < r < 220 and g < 10 and b < 10
+        assert any(b > r + 40 and b > g + 40 for r, g, b in blue[index].getdata())
+
+
+@pytest.mark.parametrize("code,token", list(enumerate(["dk1", "lt1", "dk2", "lt2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6", "hlink", "folHlink", "tx1", "bg1", "tx2", "bg2"], start=1)))
+def test_powerpoint_supported_theme_enum_values_round_trip_without_invented_rgb(code, token):
+    import rpptx
+    from rpptx.enum.dml import MSO_THEME_COLOR
+    prs = _textbox_presentation(rpptx)
+    colour = prs.slides[0].shapes[0].text_frame.paragraphs[0].runs[0].font.color
+    colour.theme_color = MSO_THEME_COLOR(code)
+    assert colour.rgb is None and colour.type == "theme"
+    assert colour.theme_color == token
+    reopened = rpptx.Presentation.from_bytes(prs.to_bytes())
+    assert reopened.slides[0].shapes[0].text_frame.paragraphs[0].runs[0].font.color.theme_color == token
+
+
+def test_powerpoint_fill_foreground_prerequisite_and_shadow_default_opacity_remain_intact():
+    import rpptx
+    prs = _textbox_presentation(rpptx)
+    shape = prs.slides[0].shapes[0]
+    before = prs.to_bytes()
+    with pytest.raises(TypeError, match="foreground"):
+        _ = shape.fill.fore_color
+    assert prs.to_bytes() == before
+    shadow = shape.shadow
+    shadow.color.rgb = "123456"
+    assert shadow.alpha == 0.4
+    shadow.alpha = 0.25
+    shadow.color.theme_color = "accent1"
+    assert shadow.alpha == 0.25
+    shadow.color.rgb = "654321"
+    assert shadow.alpha == 0.25
+
+
+@pytest.mark.parametrize("surface", ["font-run-rgb", "font-default-rgb", "shape-fill", "shape-line", "shape-shadow", "cell-fill", "cell-top"])
+@pytest.mark.parametrize("value,error_type", [("unknown", ValueError), (0, ValueError), (-2, ValueError), (17, ValueError), (True, TypeError), (object(), TypeError)])
+def test_powerpoint_invalid_theme_selection_is_atomic_on_all_colour_owner_kinds(surface, value, error_type):
+    import rpptx
+    prs = _textbox_presentation(rpptx)
+    setter, colour = _f_x197_ppt_colour_surface(prs, surface)
+    setter("123456")
+    before = prs.to_bytes()
+    with pytest.raises(error_type, match="theme_color"):
+        colour.theme_color = value
+    assert prs.to_bytes() == before
+    assert str(colour.rgb) == "123456"
+
+
+@pytest.mark.parametrize("kind,source,type_token", [("srgbClr", '<a:srgbClr val="123456"/>', "rgb"), ("schemeClr", '<a:schemeClr val="accent1"/>', "theme"), ("prstClr", '<a:prstClr val="red"/>', "preset"), ("sysClr", '<a:sysClr val="windowText" lastClr="000000"/>', "system")])
+def test_powerpoint_imported_colour_kind_reads_do_not_invent_rgb_or_materialize_source(kind, source, type_token):
+    import rpptx
+    import re
+    prs = _textbox_presentation(rpptx)
+    font = prs.slides[0].shapes[0].text_frame.paragraphs[0].runs[0].font
+    font.color = "123456"
+    parts = _package_parts(prs.to_bytes())
+    parts["ppt/slides/slide1.xml"], count = re.subn(rb'<a:srgbClr val="123456"\s*/>', source.encode(), parts["ppt/slides/slide1.xml"])
+    assert count == 1
+    prs = rpptx.Presentation.from_bytes(_package_bytes(parts))
+    colour = prs.slides[0].shapes[0].text_frame.paragraphs[0].runs[0].font.color
+    before = prs.to_bytes()
+    assert colour.type == type_token
+    assert colour.theme_color == ("accent1" if kind == "schemeClr" else None)
+    if kind == "srgbClr":
+        assert str(colour.rgb) == "123456"
+    else:
+        assert colour.rgb is None
+    assert prs.to_bytes() == before
+
+
+def test_powerpoint_cell_colour_view_obeys_the_existing_cell_text_generation():
+    import rpptx
+    prs, table = _f_x194_table()
+    cell = table.cell(0, 0)
+    cell.text = "first"
+    colour = cell.text_frame.paragraphs[0].runs[0].font.color
+    colour.rgb = "123456"
+    cell.text = "second"
+    before = prs.to_bytes()
+    with pytest.raises(rpptx.StaleElementError, match="Cell-text topology"):
+        _ = colour.rgb
+    with pytest.raises(rpptx.StaleElementError, match="Cell-text topology"):
+        colour.theme_color = "accent1"
+    assert prs.to_bytes() == before
+    fresh = cell.text_frame.paragraphs[0].runs[0]
+    assert fresh.text == "second"
+    assert str(fresh.font.color.rgb) == "123456"
+    assert prs.to_bytes() == before
+    reopened = rpptx.Presentation.from_bytes(before)
+    actual = reopened.slides[0].shapes[0].table.cell(0, 0).text_frame.paragraphs[0].runs[0]
+    assert actual.text == "second"
+    assert str(actual.font.color.rgb) == "123456"

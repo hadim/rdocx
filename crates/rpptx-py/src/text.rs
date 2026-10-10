@@ -1173,6 +1173,10 @@ pub struct PyFont {
 }
 
 impl PyFont {
+    pub(crate) fn new(presentation: Py<PyPresentation>, path: ContentPath) -> Self {
+        Self { presentation, path }
+    }
+
     fn validate(&self, py: Python<'_>) -> PyResult<()> {
         validate_path(
             py,
@@ -1233,6 +1237,40 @@ impl PyFont {
     }
 }
 
+/// Read direct run or paragraph-default colour through the validated font owner.
+pub(crate) fn font_color_at(
+    py: Python<'_>,
+    presentation: &Py<PyPresentation>,
+    path: &ContentPath,
+) -> PyResult<Option<ColorChoice>> {
+    PyFont::new(presentation.clone_ref(py), path.clone()).read(py, |properties| {
+        match properties.and_then(|properties| properties.fill.as_ref()) {
+            Some(Fill::Solid(fill)) => fill.color.clone(),
+            _ => None,
+        }
+    })
+}
+
+/// Replace direct font colour, preserving existing solid-fill source metadata.
+pub(crate) fn write_font_color(
+    py: Python<'_>,
+    presentation: &Py<PyPresentation>,
+    path: &ContentPath,
+    color: Option<ColorChoice>,
+) -> PyResult<()> {
+    PyFont::new(presentation.clone_ref(py), path.clone()).update(py, |properties| {
+        match (properties.fill.as_mut(), color) {
+            (_, None) => properties.fill = None,
+            (Some(Fill::Solid(fill)), Some(color)) => fill.color = Some(color),
+            (_, Some(color)) => {
+                let mut fill = SolidFill::default();
+                fill.color = Some(color);
+                properties.fill = Some(Fill::Solid(fill));
+            }
+        }
+    })
+}
+
 fn underline_from_value(value: i32) -> PyResult<TextUnderline> {
     Ok(match value {
         0 => TextUnderline::None,
@@ -1282,28 +1320,6 @@ fn underline_value(underline: TextUnderline) -> i32 {
         TextUnderline::WavyHeavy => 16,
         TextUnderline::WavyDouble => 17,
     }
-}
-
-/// Reads a font colour: an `RGBColor` or any triple of 0 to 255 integers,
-/// or a six-digit hexadecimal string such as `3C2F80`.
-fn font_color(value: &Bound<'_, PyAny>) -> PyResult<RgbColor> {
-    if value.is_instance_of::<PyString>() {
-        return RgbColor::parse(&value.extract::<String>()?).map_err(|_| {
-            PyValueError::new_err("font color strings must contain six hexadecimal digits")
-        });
-    }
-    let (red, green, blue) = value.extract::<(i64, i64, i64)>().map_err(|_| {
-        PyTypeError::new_err("font color must be an RGBColor, a six-digit hex string, or None")
-    })?;
-    let channel = |value: i64| {
-        u8::try_from(value)
-            .map_err(|_| PyValueError::new_err("font color channels must be from 0 to 255"))
-    };
-    Ok(RgbColor::new(
-        channel(red)?,
-        channel(green)?,
-        channel(blue)?,
-    ))
 }
 
 #[pymethods]
@@ -1421,44 +1437,26 @@ impl PyFont {
     }
 
     #[getter]
-    fn color(&self, py: Python<'_>) -> PyResult<Option<String>> {
-        self.read(py, |properties| {
-            let Some(Fill::Solid(fill)) = properties?.fill.as_ref() else {
-                return None;
-            };
-            let Some(ColorChoice::Srgb { value, .. }) = fill.color.as_ref() else {
-                return None;
-            };
-            Some(value.to_string())
-        })
+    fn color(&self, py: Python<'_>) -> PyResult<Py<crate::dml::PyColorFormat>> {
+        self.validate(py)?;
+        Py::new(
+            py,
+            crate::dml::PyColorFormat::font(self.presentation.clone_ref(py), self.path.clone()),
+        )
     }
 
     #[setter]
     fn set_color(&self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
-        let color = match value {
-            None => None,
-            Some(value) if value.is_none() => None,
-            Some(value) => Some(font_color(value)?),
-        };
-        self.update(py, |properties| {
-            let Some(color) = color else {
-                properties.fill = None;
-                return;
-            };
-            match properties.fill.as_mut() {
-                // An existing sRGB colour keeps its transforms, such as `a:alpha`.
-                Some(Fill::Solid(SolidFill {
-                    color: Some(ColorChoice::Srgb { value, .. }),
-                    ..
-                })) => *value = color,
-                Some(Fill::Solid(fill)) => fill.color = Some(ColorChoice::srgb(color)),
-                _ => {
-                    let mut fill = SolidFill::default();
-                    fill.color = Some(ColorChoice::srgb(color));
-                    properties.fill = Some(Fill::Solid(fill));
-                }
-            }
-        })
+        let color = value
+            .filter(|value| !value.is_none())
+            .map(|value| {
+                let (red, green, blue) = oxml_py_support::rgb_channels(value, "Font.color")?;
+                Ok::<_, PyErr>(RgbColor::new(red, green, blue))
+            })
+            .transpose()?;
+        let current = font_color_at(py, &self.presentation, &self.path)?;
+        let color = color.map(|rgb| crate::dml::with_rgb(current, rgb));
+        write_font_color(py, &self.presentation, &self.path, color)
     }
 
     #[getter]

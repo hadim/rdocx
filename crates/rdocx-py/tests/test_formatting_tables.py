@@ -3,6 +3,8 @@ from zipfile import ZIP_DEFLATED, ZipFile
 
 import pytest
 
+from rdocx import RGBColor
+
 
 def _document_xml(document_bytes):
     with ZipFile(BytesIO(document_bytes)) as package:
@@ -121,7 +123,7 @@ def test_font_and_paragraph_format_values_round_trip():
     paragraph_format = paragraph.paragraph_format
     assert font.name == "Aptos"
     assert font.size == Pt(12)
-    assert font.color == RGBColor(0x12, 0x34, 0x56)
+    assert font.color.rgb == RGBColor(0x12, 0x34, 0x56)
     assert font.underline == WD_UNDERLINE.DOT_DASH
     assert paragraph.alignment == WD_ALIGN_PARAGRAPH.RIGHT
     assert paragraph_format.alignment == WD_ALIGN_PARAGRAPH.RIGHT
@@ -283,7 +285,7 @@ def test_automatic_font_color_reads_as_none_after_reopen():
     )
     reopened = Document.from_bytes(automatic)
 
-    assert reopened.paragraphs[0].runs[0].font.color is None
+    assert reopened.paragraphs[0].runs[0].font.color.rgb is None
 
 
 def test_table_rows_are_cloned_with_their_formatting_and_removed():
@@ -359,9 +361,9 @@ def test_table_borders_margins_and_grid_widths_round_trip():
     assert '<w:gridCol w:w="2160"/>' in xml
 
     table = Document.from_bytes(document.to_bytes()).tables[0]
-    assert table.border("top") == ("single", 4, "000000")
-    assert table.border("insideH") == ("single", 4, "000000")
-    assert table.border("insideV") == ("dashed", 8, "FF0000")
+    assert table.border("top") == ("single", 4, RGBColor.from_string("000000"))
+    assert table.border("insideH") == ("single", 4, RGBColor.from_string("000000"))
+    assert table.border("insideV") == ("dashed", 8, RGBColor.from_string("FF0000"))
     assert table.cell_margins == (Pt(1), Pt(2), Pt(3), Pt(4))
     assert table.grid_widths == (Inches(1), Inches(2), Inches(1.5))
     assert table.width == Inches(4.5)
@@ -426,7 +428,7 @@ def test_cell_shading_borders_and_margins_round_trip():
     assert '<w:bottom w:val="double" w:sz="6" w:space="0" w:color="auto"/>' in xml
 
     cell = Document.from_bytes(document.to_bytes()).tables[0].cell(0, 1)
-    assert cell.shading == "D9D9D9"
+    assert cell.shading == RGBColor.from_string("D9D9D9")
     assert cell.border("bottom") == ("double", 6, "auto")
     assert cell.border("top") is None
     assert cell.margins == (0, Pt(5), 0, Pt(5))
@@ -447,13 +449,13 @@ def test_invalid_table_formatting_changes_nothing_and_keeps_handles_live():
         cell.set_border("middle", "single", size=4, color="000000")
     with pytest.raises(RdocxError, match="border width"):
         table.set_border("top", "single", size=97, color="000000")
-    with pytest.raises(RdocxError, match="border color"):
+    with pytest.raises(ValueError, match=r"Cell\.set_border\(color\).*six ASCII hexadecimal digits"):
         cell.set_border("top", "single", size=4, color="red")
     with pytest.raises(RdocxError, match="cannot be negative"):
         table.set_cell_margins(top=-635, right=0, bottom=0, left=0)
     with pytest.raises(RdocxError, match="cannot be negative"):
         cell.set_margins(top=0, right=0, bottom=0, left=-635)
-    with pytest.raises(RdocxError, match="shading color"):
+    with pytest.raises(ValueError, match=r"Cell\.shading.*six ASCII hexadecimal digits"):
         cell.shading = "yellow"
     with pytest.raises(RdocxError, match="exactly 2 positive column widths"):
         table.grid_widths = [914400]
@@ -474,7 +476,7 @@ def test_invalid_table_formatting_changes_nothing_and_keeps_handles_live():
     table.set_borders("single", size=4, color="auto")
     row.cant_split = True
     cell.shading = "FFFFFF"
-    assert (row.cant_split, cell.shading) == (True, "FFFFFF")
+    assert (row.cant_split, cell.shading) == (True, RGBColor.from_string("FFFFFF"))
 
 
 def test_insert_table_at_a_body_index_returns_the_new_table():
@@ -671,7 +673,7 @@ def test_python_paragraph_and_run_formatting_matches_native_facades():
     reopened = Document.from_bytes(document.to_bytes()).paragraphs[0].runs[0]
     assert reopened.style_id == "Strong"
     assert reopened.font.highlight == "yellow"
-    assert reopened.font.shading == "FFFF00"
+    assert reopened.font.shading == RGBColor.from_string("FFFF00")
 
     run.font.shading = "AUTO"
     reopened = Document.from_bytes(document.to_bytes()).paragraphs[0].runs[0]
@@ -1092,3 +1094,273 @@ def test_invalid_table_indent_leaves_source_and_handles_unchanged():
     assert Document.from_bytes(document.to_bytes()).tables[0].indent == -635
     table.indent = None
     assert b"tblInd" not in _document_xml(document.to_bytes()).encode()
+
+
+def _f_x197_word_colour_surface(document, surface):
+    if surface == "style-create":
+        return lambda value: document.add_style("Colour Control", color=value), None
+    if surface == "style-update":
+        document.add_style("Colour Control")
+        return lambda value: document.set_style("Colour Control", color=value), None
+    if surface.startswith("font"):
+        font = document.add_paragraph("").add_run("colour").font
+        if surface == "font-direct":
+            return lambda value: setattr(font, "color", value), lambda: font.color.rgb
+        if surface == "font-rgb":
+            return lambda value: setattr(font.color, "rgb", value), lambda: font.color.rgb
+        return lambda value: setattr(font, "shading", value), lambda: font.shading
+    table = document.add_table(1, 1)
+    if surface == "table-borders":
+        return lambda value: table.set_borders("single", size=4, color=value), lambda: (table.border("top") or (None, None, None))[2]
+    if surface == "table-border":
+        return lambda value: table.set_border("top", "single", size=4, color=value), lambda: (table.border("top") or (None, None, None))[2]
+    cell = table.cell(0, 0)
+    if surface == "cell-border":
+        return lambda value: cell.set_border("left", "single", size=4, color=value), lambda: (cell.border("left") or (None, None, None))[2]
+    assert surface == "cell-shading"
+    return lambda value: setattr(cell, "shading", value), lambda: cell.shading
+
+
+_F_X197_WORD_COLOUR_SURFACES = ["style-create", "style-update", "font-direct", "font-rgb", "font-shading", "table-borders", "table-border", "cell-border", "cell-shading"]
+
+
+@pytest.mark.parametrize("surface", _F_X197_WORD_COLOUR_SURFACES)
+@pytest.mark.parametrize("form", ["rgb", "triple", "hex", "hash"])
+def test_every_word_colour_setter_accepts_rgb_and_optional_hash_hex(surface, form):
+    from rdocx import Document, RGBColor
+    from xml.etree import ElementTree as ET
+    document = Document()
+    expected = RGBColor(0xA1, 0xB2, 0xC3)
+    assert RGBColor.from_string("#a1b2c3") == expected
+    assert RGBColor.from_string("a1b2c3") == expected
+    value = {"rgb": expected, "triple": tuple(expected), "hex": "a1b2c3", "hash": "#a1b2c3"}[form]
+    setter, getter = _f_x197_word_colour_surface(document, surface)
+    setter(value)
+    if getter is not None:
+        assert getter() == expected
+        assert isinstance(getter(), RGBColor)
+    saved = document.to_bytes()
+    if surface != "style-create":
+        setter(value)
+        assert document.to_bytes() == saved
+    reopened = Document.from_bytes(saved)
+    with ZipFile(BytesIO(reopened.to_bytes())) as package:
+        member = "word/styles.xml" if surface.startswith("style") else "word/document.xml"
+        tree = ET.fromstring(package.read(member))
+        namespace = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        if surface.startswith("style"):
+            tree = next(node for node in tree.iter(namespace + "style") if node.get(namespace + "styleId") == "ColourControl")
+        assert any(node.get(namespace + name) == "A1B2C3" for node in tree.iter() for name in ("val", "fill", "color"))
+
+
+def test_style_colour_inputs_are_validated_before_style_mutation():
+    from rdocx import Document
+    document = Document()
+    document.add_style("Colour Control", color="#123456")
+    before = document.to_bytes()
+    with pytest.raises(ValueError, match="hex"):
+        document.set_style("Colour Control", color="##123456")
+    assert document.to_bytes() == before
+
+
+def test_word_font_colour_format_supports_rgb_theme_and_direct_assignment():
+    from rdocx import Document, RGBColor
+    document = Document()
+    font = document.add_paragraph("").add_run("colour").font
+    colour = font.color
+    assert colour.rgb is None
+    assert colour.type is None
+    font.color = "#123456"
+    assert colour.rgb == RGBColor(0x12, 0x34, 0x56)
+    colour.theme_color = "accent1"
+    assert colour.theme_color == "accent1"
+    font.color = None
+    assert colour.rgb is None
+
+
+def test_word_scalar_rgb_getters_return_rgbcolor_and_keep_auto():
+    from rdocx import Document, RGBColor
+    document = Document()
+    cell = document.add_table(1, 1).cell(0, 0)
+    cell.shading = "123456"
+    assert cell.shading == RGBColor(0x12, 0x34, 0x56)
+    cell.shading = "auto"
+    assert cell.shading == "auto"
+
+
+@pytest.mark.parametrize("surface", _F_X197_WORD_COLOUR_SURFACES)
+@pytest.mark.parametrize("value,error_type", [(object(), TypeError), (7, TypeError), ((1, 2), TypeError), ((1.5, 2, 3), TypeError), ((10**100, 2, 3), ValueError), ((256, 2, 3), ValueError), ("##123456", ValueError), ("１２３４５６", ValueError), ("12345\ud800", ValueError), (" 123456", ValueError)])
+def test_invalid_colour_inputs_name_the_parameter_and_leave_source_unchanged(surface, value, error_type):
+    from rdocx import Document
+    document = Document()
+    setter, getter = _f_x197_word_colour_surface(document, surface)
+    before = document.to_bytes()
+    with pytest.raises(error_type) as error:
+        setter(value)
+    parameter = {"style-create": "Document.add_style(color)", "style-update": "Document.set_style(color)", "font-direct": "Font.color", "font-rgb": "Font.color.rgb", "font-shading": "Font.shading", "table-borders": "Table.set_borders(color)", "table-border": "Table.set_border(color)", "cell-border": "Cell.set_border(color)", "cell-shading": "Cell.shading"}[surface]
+    assert parameter in str(error.value)
+    assert "RGBColor" in str(error.value) or "hex" in str(error.value) or "channels" in str(error.value)
+    if error_type is TypeError:
+        assert type(value).__name__ in str(error.value)
+    assert document.to_bytes() == before
+    if getter is not None:
+        assert getter() is None
+
+
+def test_colour_format_handles_follow_structural_invalidation():
+    from rdocx import Document, StaleElementError
+    document = Document()
+    colour = document.add_paragraph("").add_run("colour").font.color
+    assert colour.rgb is None
+    document.add_paragraph("invalidate")
+    with pytest.raises(StaleElementError):
+        _ = colour.rgb
+
+
+def _f_x197_word_pdf_pixels(pdf, tmp_path, name):
+    import shutil
+    import subprocess
+    from PIL import Image
+    executable = shutil.which("pdftoppm")
+    assert executable is not None
+    version = subprocess.run([executable, "-v"], capture_output=True, text=True, timeout=60)
+    assert version.returncode == 0 and "26.01.0" in version.stdout + version.stderr
+    source = tmp_path / (name + ".pdf")
+    source.write_bytes(pdf)
+    assert pdf.startswith(b"%PDF")
+    prefix = tmp_path / name
+    result = subprocess.run([executable, "-f", "1", "-singlefile", "-r", "72", "-png", str(source), str(prefix)], capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stdout + result.stderr
+    return Image.open(prefix.with_suffix(".png")).convert("RGB")
+
+
+def test_colour_inputs_and_nested_font_formats_reach_actual_rendering(tmp_path):
+    from rdocx import Document, Pt
+    from xml.etree import ElementTree as ET
+    namespace = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    def render(value, theme=None):
+        document = Document()
+        font = document.add_paragraph("").add_run("COLOUR CONTROL").font
+        font.name = "Liberation Sans"
+        font.size = Pt(28)
+        font.color.rgb = value
+        if theme is not None:
+            font.color.theme_color = theme
+        output = BytesIO()
+        with ZipFile(BytesIO(document.to_bytes())) as source, ZipFile(output, "w") as target:
+            for member in source.infolist():
+                data = source.read(member.filename)
+                if member.filename == "word/theme/theme1.xml":
+                    tree = ET.fromstring(data)
+                    for token, rgb in (("accent1", "FF0000"), ("accent2", "0000FF")):
+                        colour = tree.find(".//" + namespace + token + "/" + namespace + "srgbClr")
+                        assert colour is not None
+                        colour.set("val", rgb)
+                    data = ET.tostring(tree)
+                target.writestr(member, data)
+        reopened = Document.from_bytes(output.getvalue())
+        if theme is not None:
+            colour = reopened.paragraphs[0].runs[0].font.color
+            assert colour.theme_color == theme
+            assert colour.rgb == RGBColor(0, 255, 0)
+        return _f_x197_word_pdf_pixels(reopened.to_pdfa_deterministic(), tmp_path, (theme or value).replace("#", "hash"))
+    red = render("#FF0000")
+    blue = render("#0000FF")
+    assert red.tobytes() == render("ff0000").tobytes()
+    assert red.tobytes() != blue.tobytes()
+    assert any(r > g + 40 and r > b + 40 for r, g, b in red.getdata())
+    assert any(b > g + 40 and b > r + 40 for r, g, b in blue.getdata())
+    assert render("00FF00", "accent1").tobytes() == red.tobytes()
+    assert render("00FF00", "accent2").tobytes() == blue.tobytes()
+
+
+def test_word_theme_colour_view_retains_cached_rgb_modifiers_and_opaque_source():
+    from rdocx import Document, RGBColor, MSO_THEME_COLOR
+    from xml.etree import ElementTree as ET
+    document = Document()
+    document.add_paragraph("").add_run("source").font.color = "123456"
+    output = BytesIO()
+    with ZipFile(BytesIO(document.to_bytes())) as source, ZipFile(output, "w") as target:
+        for member in source.infolist():
+            data = source.read(member.filename)
+            if member.filename == "word/document.xml":
+                assert data.count(b'w:val="123456"') == 1
+                data = data.replace(b'w:val="123456"', b'w:val="123456" w:themeColor="accent1" w:themeTint="80" w:themeShade="40"')
+                data = data.replace(b"</w:rPr>", b'<w:unknownColourMetadata value="retain"/></w:rPr>', 1)
+            target.writestr(member, data)
+    document = Document.from_bytes(output.getvalue())
+    colour = document.paragraphs[0].runs[0].font.color
+    before = document.to_bytes()
+    assert colour.type == "theme" and colour.theme_color == "accent1"
+    assert colour.rgb == RGBColor(0x12, 0x34, 0x56)
+    assert document.to_bytes() == before
+    colour.theme_color = MSO_THEME_COLOR.ACCENT_2
+    reopened = Document.from_bytes(document.to_bytes())
+    assert reopened.paragraphs[0].runs[0].font.color.theme_color == "accent2"
+    with ZipFile(BytesIO(reopened.to_bytes())) as package:
+        xml = package.read("word/document.xml")
+        assert b'<w:unknownColourMetadata value="retain"/>' in xml
+        root = ET.fromstring(xml)
+        ns = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        node = root.find(".//" + ns + "color")
+        assert {key: node.get(ns + key) for key in ("val", "themeColor", "themeTint", "themeShade")} == {"val": "123456", "themeColor": "accent2", "themeTint": "80", "themeShade": "40"}
+    before = document.to_bytes()
+    for invalid in ("unknown", 0, -2, 17, True):
+        with pytest.raises((TypeError, ValueError)):
+            colour.theme_color = invalid
+        assert document.to_bytes() == before
+    colour.theme_color = None
+    assert colour.type == "rgb" and colour.rgb == RGBColor(0x12, 0x34, 0x56)
+
+
+@pytest.mark.parametrize("surface", ["font-shading", "table-borders", "table-border", "cell-border", "cell-shading"])
+def test_word_shading_and_border_scalar_auto_remains_distinct_from_rgb(surface):
+    from rdocx import Document
+    document = Document()
+    setter, getter = _f_x197_word_colour_surface(document, surface)
+    setter("auto")
+    assert getter() == "auto"
+    assert '="auto"' in _document_xml(Document.from_bytes(document.to_bytes()).to_bytes())
+
+
+@pytest.mark.parametrize("code,token", list(enumerate(["dark1", "light1", "dark2", "light2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6", "hyperlink", "followedHyperlink", "text1", "background1", "text2", "background2"], start=1)))
+def test_word_supported_theme_enum_values_round_trip_without_invented_rgb(code, token):
+    from rdocx import Document, MSO_THEME_COLOR
+    document = Document()
+    colour = document.add_paragraph("").add_run("theme").font.color
+    colour.theme_color = MSO_THEME_COLOR(code)
+    assert colour.rgb is None and colour.type == "theme"
+    assert colour.theme_color == token
+    assert Document.from_bytes(document.to_bytes()).paragraphs[0].runs[0].font.color.theme_color == token
+
+
+def test_word_unset_colour_view_and_none_clear_preserve_absent_source():
+    from rdocx import Document, ColorFormat
+    document = Document()
+    font = document.add_paragraph("").add_run("unset").font
+    before = document.to_bytes()
+    assert isinstance(font.color, ColorFormat)
+    assert (font.color.rgb, font.color.type, font.color.theme_color) == (None, None, None)
+    font.color.rgb = None
+    font.color.theme_color = None
+    font.color = None
+    assert document.to_bytes() == before
+
+
+def test_word_cell_font_colour_view_uses_accepted_run_paths_and_rejects_structural_staleness():
+    from rdocx import Document, RGBColor, StaleElementError
+    document = Document()
+    cell = document.add_table(1, 1).cell(0, 0)
+    cell.text = "cell colour"
+    cell = document.tables[0].cell(0, 0)
+    colour = cell.paragraphs[0].runs[0].font.color
+    colour.rgb = "#123456"
+    assert colour.rgb == RGBColor(0x12, 0x34, 0x56)
+    assert Document.from_bytes(document.to_bytes()).tables[0].cell(0, 0).paragraphs[0].runs[0].font.color.rgb == colour.rgb
+    document.add_paragraph("invalidate")
+    before = document.to_bytes()
+    with pytest.raises(StaleElementError):
+        _ = colour.rgb
+    with pytest.raises(StaleElementError):
+        colour.rgb = "ABCDEF"
+    assert document.to_bytes() == before
