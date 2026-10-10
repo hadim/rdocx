@@ -427,6 +427,8 @@ intentional baseline phase. F-X197 remains queued after F-X194 integration.
 
 PR336's 07:27:15 UTC updated head is
 `935ac165afcd29d34454568ba3b2287a4bac52dc`. Complete incremental source
-assessment is pending with existing F-X200 and F-X211 ownership. Its proposed
-resource limits and relative-REF changes are not adopted by recording intake.
+assessment is now reconciled with existing F-X200 and F-X211 ownership. Keep
+qualified256 controls and the selected per-level numbering contract. Proposed
+64-control and512-element limits are not adopted. F-283 owns the added
+cross-instance REF native discriminator.
 The open inventory remains eighteen PRs and twenty-five included issues.

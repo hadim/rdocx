@@ -575,3 +575,27 @@ not automatically selected resource limits or locally executed gates. Preserve
 the approved contract until actual changed-source assessment is reconciled.
 The prior immutable assessment remains historical evidence, not approval of
 this new head. Issue331 and321 ownership is unchanged.
+
+### Completed updated-head source assessment
+
+Incremental assessment of immutable935ac165afcd29d34454568ba3b2287a4bac52dc
+is complete, superseding the pending checkpoint above. All sixteen changed
+full blobs, five reused blobs and seven missing prior versions were
+authenticated by Git identity, size and SHA256. Source and discussion
+evidence is retained at `/private/tmp/S91-PR336-935ac16-intake/receipt.json`
+and its `assessment.md`. No contributor gate is local completion evidence.
+
+Related-story preflight and staged parsing are reusable ingredients, including
+comments, footnotes/endnotes, headers/footers and glossary relationships.
+Preserve inclusive256 qualified-control admission, exact foreign/rebound
+content and the normal-stack lifecycle. Do not inherit proposed64 controls,
+64 inline wrappers or512 total XML-element revision depth. The new revision
+guard runs after transaction staging and does not establish staging safety.
+
+The updated numbering state still lacks selected per-level override
+consumption/rearm and deferred section initialization with retained
+lvlRestart0 counts. Preserve native P/Q/R/T/U acceptance. The new
+abstract_num_id and relative_to changes affect numbered REF and belong to
+F-283's actual native discriminator, not marker-only inference. Preserve
+concrete numId identity and account for published struct-literal compatibility
+before adopting a new public field. Reuse accepted slices once per owner.

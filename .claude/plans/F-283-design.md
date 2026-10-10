@@ -186,3 +186,22 @@ authoritative results for visible markers and all navigation fields. Preserve
 actual concrete source numIds and prove numbered REF context separately.
 The fresh navigation oracle must cover shared-definition plain instances
 and explicit restarts, rather than replaying an independent Python counter.
+
+## PR336 cross-instance REF discriminator
+
+Immutable PR336 head935ac165afcd29d34454568ba3b2287a4bac52dc adds public
+doc-hidden ResolvedNumbering.abstract_num_id and changes relative_to
+context from concrete instance to abstract definition. This is a numbered
+REF proposal owned here, distinct from F-X200's visible-marker counter
+change. Source assessment is complete at
+`/private/tmp/S91-PR336-935ac16-intake/assessment.md`. It is not native
+acceptance evidence.
+
+Extend the existing fresh Word rider with cross-instance shared-definition
+REF context, same-instance controls and explicit restarts. Assert supported
+n/r/w/t results against actual updated and reopened native fields, retaining
+source paths and concrete numIds. Do not infer relative reference semantics
+from matching visible markers or the contributor unit test. Adopt a shared
+representation only when that evidence requires it. If a public field is
+selected, doc-hidden does not exempt downstream struct-literal compatibility
+from published API and actual consumer/package gates. No new F-ID is needed.
