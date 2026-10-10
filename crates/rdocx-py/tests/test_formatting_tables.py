@@ -1590,7 +1590,7 @@ def _shape(table):
 
 
 def test_table_columns_are_inserted_and_removed_through_merges():
-    from rdocx import Document, Inches, RdocxError
+    from rdocx import Document, Inches, RdocxError, RGBColor
 
     document = _merged_table()
     table = document.tables[0]
@@ -1605,7 +1605,7 @@ def test_table_columns_are_inserted_and_removed_through_merges():
         [(1, None, "10"), (1, None, ""), (1, None, "11"), (1, "restart", "12")],
         [(1, None, "20"), (1, None, ""), (1, None, "21"), (1, "continue", "22")],
     ]
-    assert table.cell(1, 1).shading == "D9E2F3"
+    assert table.cell(1, 1).shading == RGBColor.from_string("D9E2F3")
     assert table.cell(0, 0).width == Inches(3)
 
     document = _merged_table()
@@ -1656,7 +1656,7 @@ def test_merged_cells_split_back_into_grid_cells():
 
 
 def test_add_row_copies_the_last_row_formatting():
-    from rdocx import Document, Inches
+    from rdocx import Document, Inches, RGBColor
 
     document = _merged_table()
     document.tables[0].cell(2, 0).shading = "E2EFDA"
@@ -1669,13 +1669,13 @@ def test_add_row_copies_the_last_row_formatting():
     last = table.rows[3]
     assert last.cant_split is True
     assert [cell.text for cell in last.cells] == ["added", "", ""]
-    assert last.cells[0].shading == "E2EFDA"
+    assert last.cells[0].shading == RGBColor.from_string("E2EFDA")
     assert last.cells[2].vertical_merge is None
     assert last.cells[1].width == Inches(1)
 
 
 def test_nested_tables_are_added_and_edited_through_their_cell():
-    from rdocx import Document, Inches
+    from rdocx import Document, Inches, RGBColor
 
     document = Document()
     document.add_table(1, 2)
@@ -1699,7 +1699,7 @@ def test_nested_tables_are_added_and_edited_through_their_cell():
     assert len(inner.rows) == 3
     assert len(inner.grid_widths) == 3
     assert inner.cell(0, 0).text == "inner"
-    assert inner.cell(0, 1).shading == "FFF2CC"
+    assert inner.cell(0, 1).shading == RGBColor.from_string("FFF2CC")
     assert inner.autofit is False
     assert reopened.tables[0].cell(0, 0).tables == []
     with pytest.raises(NotImplementedError):
