@@ -21,6 +21,11 @@ presentation, notes, handout, PDF, and animation outputs.
   cells and growing or shrinking the frame by the row or column size.
 - Produce PDF, PDF/A, resolved slide frames, notes, handouts, and animations.
 - Import HTML, ODP, and PDF through explicit facade APIs.
+- Number slides and set footers and dates as PowerPoint's Header and Footer
+  dialog does, with slide-owned placeholders that PowerPoint and Google Slides
+  both show, and insert slide-number and date fields.
+- Read each master's theme colours and fonts, and author the common slide
+  transitions with direction, duration and advance timing.
 - Resolve master, layout, placeholder, theme, chart, SmartArt, media, notes,
   comments, and timing state while preserving unmodelled package content.
 

@@ -1645,6 +1645,7 @@ mod tests {
             media: HashMap::new(),
             fonts: Vec::new(),
             metadata: None,
+            first_slide_number: 1,
         };
         let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
 
@@ -1834,6 +1835,7 @@ mod tests {
             media: HashMap::new(),
             fonts: Vec::new(),
             metadata: None,
+            first_slide_number: 1,
         };
         let mut fonts = FontManager::new_with_fonts(Vec::new());
 
@@ -1917,6 +1919,7 @@ mod tests {
             media: HashMap::new(),
             fonts: Vec::new(),
             metadata: None,
+            first_slide_number: 1,
         };
         layout_slide_with_fonts(&input, 0, &mut fonts).expect("separators lay out");
     }
@@ -1971,6 +1974,7 @@ mod tests {
             media: HashMap::new(),
             fonts: Vec::new(),
             metadata: None,
+            first_slide_number: 1,
         };
 
         let layout = layout_presentation(&input).expect("layout presentation text");
@@ -2869,6 +2873,7 @@ mod tests {
             media: HashMap::new(),
             fonts: Vec::new(),
             metadata: None,
+            first_slide_number: 1,
         };
         let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
 
@@ -2972,6 +2977,7 @@ mod tests {
             media: HashMap::new(),
             fonts: Vec::new(),
             metadata: None,
+            first_slide_number: 1,
         };
         let mut expected_fonts = FontManager::new_deterministic().expect("deterministic fonts");
         let expected = shape_run(&mut expected_fonts, "baseline", &style).expect("shape baseline");
@@ -3032,6 +3038,7 @@ mod tests {
             media: HashMap::new(),
             fonts: Vec::new(),
             metadata: None,
+            first_slide_number: 1,
         };
         let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
 
@@ -3580,6 +3587,7 @@ mod tests {
             media: HashMap::new(),
             fonts: Vec::new(),
             metadata: None,
+            first_slide_number: 1,
         };
         let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
 

@@ -87,6 +87,13 @@ with open("review.pdf", "wb") as output:
   video and audio clips with their posters.
 - JPEG and multi-page TIFF slide images, PDF/A, audience handouts, and ODP
   conversion both ways.
+- `shape.is_placeholder` and `shape.placeholder_format` with `PP_PLACEHOLDER`
+  as in python-pptx.
+- Slide numbers, footer and date on every slide in one call,
+  `prs.set_header_footer(slide_number=True, footer="ACME", hide_on_title=True)`,
+  per slide through `slide.header_footer`, and `paragraph.add_field("slidenum")`.
+- `prs.slide_master.theme` colours and fonts, and `slide.transition` with type,
+  direction, duration, advance timing and `apply_to_all()`.
 
 ## Use it when
 
