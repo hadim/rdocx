@@ -27,7 +27,7 @@ and keep rolling contribution intake open.
 | F-X192 | Complete the remaining Word bibliography catalogue | L | pending | - |
 | F-283 | Complete numbering-aware navigation fields | L | pending | - |
 | F-X193 | Preserve semantic mark highlights through nested HTML runs | S | done | - |
-| F-X194 | Complete Python table text and indentation APIs | M | in-progress | codex |
+| F-X194 | Complete Python table text and indentation APIs | M | done | - |
 | F-X195 | Honor caller fonts and variable styles across render paths | L | in-progress | codex |
 | F-X196 | Validate visible paragraph content without false empty warnings | S | done | - |
 | F-X197 | Unify Python colour inputs and font colour formats | L | pending | - |
@@ -494,20 +494,21 @@ F-X211 plan. Intake grants no contributor gate credit or arbitrary new nesting
 policy. The approved256 control policy and complete textbox resource,
 namespace, discovery and public compatibility acceptance remain mandatory.
 
-## S91 intake and verification checkpoint, 2026-10-10 09:51UTC
+## S91 intake and verification checkpoint, 2026-10-10 10:20UTC
 
 The latest read-only GitHub refresh found no additional or changed records.
 All19 PRs and26 included issues remain mapped above, with Issues264 and281
-excluded. PR338 and PR333 source assessment is complete and retained in
-F-X211's existing plan. Assessment does not close their acceptance gates.
+excluded. PR338 and PR333 source assessment is complete in F-X211's existing
+plan. Assessment does not close their acceptance gates.
 
-F-X194 native, installed Python, typing, WASM and unchanged49-entry hash gates
-have passed. Verified22 package dry-runs are running. Final workflow policy
-checks are queued after package verification. F-X195 has observed genuine Word request-trace and PowerPoint warm
-trace failures. Two separately reviewed test compile repairs preserve the
-original failure evidence and geometry controls. Provider repair is being implemented in parallel with package verification.
-Remaining core and provider tests are pending. F-X212 semantic source has a clean
-independent review and awaits scoped runtime and attributed hash checks.
-Four stories are completed and integrated, three are in progress and fifteen
+F-X194 is completed and integrated with authenticated native, installed
+Python, typing, WASM, verified22 package, unchanged49-entry hash and141 policy
+gates. Two publication-dependent policy cases remain skipped. Its integrated
+source exactly matches the independently reviewed worker. F-X195 provider
+source is frozen for independent review, with core and provider runtime gates
+pending. F-X212 retains successful compile and eight parser tests. Its native
+fixture correction needs a test-only compile repair before the remaining
+native and CLI queue. Runtime and attributed hash gates remain outstanding.
+Five stories are completed and integrated, two are in progress and fifteen
 remain approved. Final integrated verification, sprint review and close
 preflight remain outstanding. The sprint is not ready for close.

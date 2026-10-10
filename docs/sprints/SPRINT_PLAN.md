@@ -2143,7 +2143,7 @@ CLI validation reports before the template and form programme resumes.
 | F-X192 | Complete the remaining Word bibliography catalogue | L | Approved, implementation pending |
 | F-283 | Complete numbering-aware navigation fields | L | Approved, implementation pending |
 | F-X193 | Preserve semantic mark highlights through nested HTML runs | S | Completed and integrated |
-| F-X194 | Complete Python table text and indentation APIs | M | Python/native regressions pass, WASM and package gates remain |
+| F-X194 | Complete Python table text and indentation APIs | M | Completed and integrated, scoped gates passed |
 | F-X195 | Honor caller fonts and variable styles across render paths | L | Core source reviewed, runtime gates and provider wiring remain |
 | F-X196 | Validate visible paragraph content without false empty warnings | S | Completed and integrated |
 | F-X197 | Unify Python colour inputs and font colour formats | L | Approved, implementation pending |
@@ -2163,10 +2163,10 @@ CLI validation reports before the template and form programme resumes.
 | F-X211 | Complete Python script compatibility and safe XML access | L | Approved, implementation pending |
 | F-X212 | Align native accessibility with visible paragraph content | M | Semantic source reviewed, runtime and hash gates remain |
 
-**Current delivery checkpoint, 2026-10-10**: four of twenty-two active stories
-are completed and integrated, F-X193, F-X196, F-X198 and F-X199. F-X194 is in
-progress, alongside F-X212 and F-X195. Fifteen stories have approved designs and await
-implementation.
+**Current delivery checkpoint, 2026-10-10**: five of twenty-two active stories
+are completed and integrated, F-X193, F-X194, F-X196, F-X198 and F-X199.
+F-X212 and F-X195 are in progress. Fifteen stories have approved designs and
+await implementation.
 No design question remains outstanding. Final integrated verification,
 sprint review and verified sprint close remain outstanding.
 
@@ -2181,7 +2181,7 @@ A later PR attaches to its existing issue owner. Assessment is not completion.
 | Included issues | Included PRs | S91 acceptance owners | Resolution work |
 |---|---|---|---|
 | No linked issue | [294](https://github.com/tensorbee/rdocx/pull/294) | F-X193 | Semantic HTML highlights, completed. |
-| [295](https://github.com/tensorbee/rdocx/issues/295), [300](https://github.com/tensorbee/rdocx/issues/300) | [317](https://github.com/tensorbee/rdocx/pull/317) | F-X194 | Cell text frames and signed removable table indentation, in progress. |
+| [295](https://github.com/tensorbee/rdocx/issues/295), [300](https://github.com/tensorbee/rdocx/issues/300) | [317](https://github.com/tensorbee/rdocx/pull/317) | F-X194 | Cell text frames and signed removable table indentation, completed with scoped acceptance. |
 | [296](https://github.com/tensorbee/rdocx/issues/296), [297](https://github.com/tensorbee/rdocx/issues/297) | [315](https://github.com/tensorbee/rdocx/pull/315) | F-X195 | Caller fonts and variable styles across layout and output. |
 | [298](https://github.com/tensorbee/rdocx/issues/298) | [317](https://github.com/tensorbee/rdocx/pull/317) | F-X196, F-X212 | CLI validation complete. Native accessibility remains F-X212. |
 | [299](https://github.com/tensorbee/rdocx/issues/299) | [317](https://github.com/tensorbee/rdocx/pull/317) | F-X197 | Shared Python colour inputs and font colour formats. |
@@ -2875,20 +2875,21 @@ F-X211 plan. Intake grants no contributor gate credit or arbitrary new nesting
 policy. The approved256 control policy and complete textbox resource,
 namespace, discovery and public compatibility acceptance remain mandatory.
 
-## S91 intake and verification checkpoint, 2026-10-10 09:51UTC
+## S91 intake and verification checkpoint, 2026-10-10 10:20UTC
 
 The latest read-only GitHub refresh found no additional or changed records.
 All19 PRs and26 included issues remain mapped above, with Issues264 and281
-excluded. PR338 and PR333 source assessment is complete and retained in
-F-X211's existing plan. Assessment does not close their acceptance gates.
+excluded. PR338 and PR333 source assessment is complete in F-X211's existing
+plan. Assessment does not close their acceptance gates.
 
-F-X194 native, installed Python, typing, WASM and unchanged49-entry hash gates
-have passed. Verified22 package dry-runs are running. Final workflow policy
-checks are queued after package verification. F-X195 has observed genuine Word request-trace and PowerPoint warm
-trace failures. Two separately reviewed test compile repairs preserve the
-original failure evidence and geometry controls. Provider repair is being implemented in parallel with package verification.
-Remaining core and provider tests are pending. F-X212 semantic source has a clean
-independent review and awaits scoped runtime and attributed hash checks.
-Four stories are completed and integrated, three are in progress and fifteen
+F-X194 is completed and integrated with authenticated native, installed
+Python, typing, WASM, verified22 package, unchanged49-entry hash and141 policy
+gates. Two publication-dependent policy cases remain skipped. Its integrated
+source exactly matches the independently reviewed worker. F-X195 provider
+source is frozen for independent review, with core and provider runtime gates
+pending. F-X212 retains successful compile and eight parser tests. Its native
+fixture correction needs a test-only compile repair before the remaining
+native and CLI queue. Runtime and attributed hash gates remain outstanding.
+Five stories are completed and integrated, two are in progress and fifteen
 remain approved. Final integrated verification, sprint review and close
 preflight remain outstanding. The sprint is not ready for close.

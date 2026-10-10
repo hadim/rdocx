@@ -18937,3 +18937,23 @@ Actual combined measurement receipts are under
 sprint verification and close. Its clean worktree may be removed after the
 consumed handoff and integration commit are recorded. No GitHub closure,
 push, main merge, tag or publication is claimed.
+
+### F-X194, Complete Python table text and indentation APIs
+
+**Sprint.** S91
+**Completed.** 2026-10-10
+**Size.** M, estimated 2 days, actual not recorded
+
+**What was built.** PowerPoint table cells expose editable text frames through the existing paragraph, run, font and frame APIs. Cell-local topology generations protect nested handles while value edits and rejected mutations preserve ownership and bytes. Word table indentation accepts signed Length or integer inputs and None, with checked validation before mutation. Existing stubs and typing examples cover both APIs.
+
+**Non-obvious choices.** Reads do not create missing text bodies. Explicit cell paths include merge continuations. Cell hyperlink assignment refuses before relationship changes. The retained relationship-alias read gap remains F-X211. Base missing-API controls failed in the authenticated d443 installation with relevant production files matched to claimed Base400. This proves scoped source equivalence, not a complete Base400 installation.
+
+**Deviations from the design plan.** No product deviation. An inherited static OXML archive date mismatch required a separately reviewed one-date script correction. The unchanged Base README already named the corrected date and identical archive tuple. All22 verified archives exclude that script.
+
+**Spec sections touched.** docs/hld/10-bindings-spec.md, table text ownership, generations and signed optional indentation.
+
+**Tests.** Both named missing-API gates passed after implementation, along with11 focused installed controls, full installed Word199 and PowerPoint86, strict typing and stub checks. Retained successful native coverage includes support6, Word514 units,366 integrations,2331 regressions and2 docs, plus PowerPoint85 units and284 integrations. Existing ignored regeneration cases and zero-case doc commands receive no positive testcase credit. Five-crate all-target/all-feature clippy and both WASM checks passed. Verified22 current-version package dry-runs passed with every archive below10MiB and no publication. Final policy ran141 tests successfully with2 publication-dependent skips, then diff check passed. Five independent review records have zero defects and zero smells.
+
+**Hash harness.** Unchanged, all49 entries. Generator and baseline bytes remain unchanged. The integrated source and feature-local records exactly match source commit8886305e and validated worker tip4c15080c, consumed by integration120f600d. No semantic reconciliation was needed. Final integrated sprint verification remains due.
+
+**Notes for future sessions.** Preserve the original timeout, foreign-worktree cache failure and policy RED evidence separately. Scoped same-byte mtime invalidation restored artifact provenance without Cargo clean or another target. Actual final facade archive tuples are3530290/50789923/37 and463766/2402857/16. Gzip differences from recorded measurements remain inside the unchanged64-byte tolerance. The two policy skips require separately published shared families and were not counted as passes. Detailed authenticated evidence and terminal receipts remain under /private/tmp/S91-F-X194-evidence. The clean worker branch remains available through final sprint review.
