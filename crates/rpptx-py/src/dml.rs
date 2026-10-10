@@ -16,7 +16,7 @@ use pyo3::types::{PyList, PyString};
 
 use crate::presentation::PyPresentation;
 use crate::shape::{
-    ANGLE_UNITS_PER_DEGREE, ANGLE_UNITS_PER_TURN, MAX_COORDINATE, image_bytes, length,
+    ANGLE_UNITS_PER_DEGREE, ANGLE_UNITS_PER_TURN, MAX_COORDINATE, image_bytes, length, part_of,
     shape_mut_at, shape_ref_at, slide_index,
 };
 use crate::table::{cell_mut_at, cell_ref_at};
@@ -123,9 +123,8 @@ fn current_fill(
             current_line(presentation, path, target)?.and_then(|line| line.fill)
         }
         FillTarget::Background => presentation
-            .slide(slide_index(path)?)
-            .ok_or_else(|| PyIndexError::new_err("slide index out of range"))?
-            .background_fill()
+            .part_background_fill(part_of(path)?)
+            .map_err(|error| PyIndexError::new_err(error.to_string()))?
             .cloned(),
         FillTarget::TableCell => cell_ref_at(presentation, path)
             .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?
@@ -135,7 +134,8 @@ fn current_fill(
 }
 
 /// Writes a fill. Replacing a picture fill releases the image it showed
-/// when nothing else on the slide shows it.
+/// when nothing else on the slide shows it. A background fill releases its
+/// own relationships, on a slide, layout, or master.
 fn write_fill(
     py: Python<'_>,
     presentation: &mut rpptx::Presentation,
@@ -143,14 +143,15 @@ fn write_fill(
     target: FillTarget,
     fill: rpptx::Fill,
 ) -> PyResult<()> {
-    let replaces_picture = matches!(
-        current_fill(presentation, path, target)?,
-        Some(rpptx::Fill::Blip(_))
-    );
+    let replaces_picture = target != FillTarget::Background
+        && matches!(
+            current_fill(presentation, path, target)?,
+            Some(rpptx::Fill::Blip(_))
+        );
     write_fill_only(py, presentation, path, target, fill)?;
-    if replaces_picture {
+    if replaces_picture && let rpptx::PartRef::Slide(index) = part_of(path)? {
         presentation
-            .release_unused_slide_images(slide_index(path)?)
+            .release_unused_slide_images(index)
             .map_err(|error| rpptx_to_pyerr(py, error))?;
     }
     Ok(())
@@ -173,21 +174,7 @@ fn write_fill_only(
             line.fill = Some(fill);
             return write_line(py, presentation, path, target, line);
         }
-        FillTarget::Background => {
-            let index = slide_index(path)?;
-            let direct = presentation
-                .slide(index)
-                .ok_or_else(|| PyIndexError::new_err("slide index out of range"))?
-                .background_fill()
-                .is_some();
-            let mut slide = presentation
-                .slide_mut(index)
-                .ok_or_else(|| PyIndexError::new_err("slide index out of range"))?;
-            if !direct {
-                slide.remove_background();
-            }
-            slide.set_background(fill)
-        }
+        FillTarget::Background => presentation.set_part_background(part_of(path)?, fill),
         FillTarget::TableCell => {
             cell_mut_at(presentation, path)
                 .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?
@@ -623,7 +610,8 @@ impl PyFillFormat {
     }
 
     /// Fills with a stretched picture, from a path or a binary file object.
-    /// A slide background or a table cell takes one too, a line does not.
+    /// A slide, layout, or master background or a table cell takes one too,
+    /// a line does not.
     fn picture(&self, py: Python<'_>, image_file: &Bound<'_, PyAny>) -> PyResult<()> {
         if matches!(self.target, FillTarget::Line | FillTarget::CellBorder(_)) {
             return Err(PyTypeError::new_err("a line cannot take a picture fill"));
@@ -631,6 +619,14 @@ impl PyFillFormat {
         self.fill(py)?;
         let (bytes, filename) = image_bytes(image_file)?;
         let mut presentation = self.presentation.borrow_mut(py);
+        if self.target == FillTarget::Background {
+            // A slide, layout, or master background takes the image on its
+            // own part, and releases the picture it replaces.
+            return presentation
+                .inner
+                .set_part_picture_background(part_of(&self.path)?, &bytes, &filename)
+                .map_err(|error| rpptx_to_pyerr(py, error));
+        }
         let relationship_id = presentation
             .inner
             .add_slide_image(slide_index(&self.path)?, &bytes, &filename)

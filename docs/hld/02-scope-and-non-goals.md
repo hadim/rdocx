@@ -29,7 +29,8 @@ its cost is recorded in `00-vision.md`.
 | Slide transitions | Read any. Author fade, push, wipe, split, cover, uncover, cut and zoom with direction, duration and click or timed advance, per slide or for all |
 | `remove_slide`, `move_slide`, `duplicate_slide` | Beyond python-pptx |
 | Slide size get and set | |
-| Slide masters and layouts, layout lookup by name | Read, with each master's theme colours and fonts |
+| Slide masters and layouts, layout lookup by name | Read and write: master and layout shapes and pictures, backgrounds, `showMasterSp`, master text styles, layout rename, duplicate and removal of unused layouts |
+| Themes | Read and write each master's colours and fonts, apply the theme of another deck, `.potx` or `.thmx`, optionally with its master and layouts |
 | Core, app and custom properties | Shared with rdocx via `oxml-core` |
 | Notes slides | Read and write |
 | Notes-master and handout-master header and footer settings | Native Rust read and write |

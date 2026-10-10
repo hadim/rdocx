@@ -205,7 +205,41 @@ Presentation::set_all_transitions(&mut self, transition: Option<&SlideTransition
 SlideRef::transition(&self) -> Option<SlideTransition>;
 SlideMut::set_transition(&mut self, transition: Option<&SlideTransition>) -> Result<()>;
 TextParagraphMut::add_field(&mut self, field_type: &str, text: Option<&str>) -> Result<()>;
+Presentation::part_shapes(&self, part: PartRef) -> Result<impl ExactSizeIterator<Item = ShapeRef<'_>>>;
+Presentation::part_shape_mut(&mut self, part: PartRef, index: usize) -> Option<ShapeMut<'_>>;
+Presentation::part_shapes_mut(&mut self, part: PartRef, group: &[usize]) -> Option<ShapesMut<'_>>;
+Presentation::remove_part_shape(&mut self, part: PartRef, shape_index: usize) -> Result<()>;
+Presentation::set_part_background(&mut self, part: PartRef, fill: Fill) -> Result<()>;
+Presentation::set_part_picture_background(&mut self, part: PartRef, image_data: &[u8], image_filename: &str) -> Result<()>;
+Presentation::set_show_master_shapes(&mut self, part: PartRef, show: bool) -> Result<()>;
+Presentation::master_text_style_mut(&mut self, master_index: usize, style: MasterTextStyle, level: usize) -> Result<&mut CT_TextParagraphProperties>;
+Presentation::set_layout_name(&mut self, layout_index: usize, name: &str) -> Result<()>;
+Presentation::duplicate_layout(&mut self, layout_index: usize) -> Result<usize>;
+Presentation::remove_layout(&mut self, layout_index: usize) -> Result<()>;
+Presentation::set_theme_color(&mut self, master_index: usize, slot: &str, color: RgbColor) -> Result<()>;
+Presentation::set_theme_font(&mut self, master_index: usize, role: ThemeFontRole, script: ThemeFontScript, typeface: &str) -> Result<()>;
+Presentation::apply_theme(&mut self, source: &Presentation, import_master: bool) -> Result<()>;
+Presentation::apply_theme_bytes(&mut self, bytes: &[u8], import_master: bool) -> Result<()>;
 ```
+
+Masters, layouts and themes are editable parts (issue 312). `PartRef` names a
+slide, a layout or a master, and the shape, picture and background calls take
+it, so a picture added to a master shows on every slide whose layout shows
+master shapes, with its image relationship on the master part. Layout records
+and the parsed masters, kept in `p:sldMasterIdLst` order, carry a dirty flag,
+and edited themes are kept by part name. Staging the package writes the dirty
+ones back, and every reader of a master or theme goes through these records,
+so rendering and validation see unsaved edits. A master that does not parse
+keeps its error, so such a package still opens. A layout in use is not
+removed, as python-pptx refuses it, nor is a master's last layout. A
+duplicate goes right after its source in the master's relationships and
+`p:sldLayoutIdLst`, with an id above every layout and master id.
+`apply_theme` copies the source's first theme part and its pictures over every
+master's theme. With `import_master` the source master's XML replaces each
+master's, keeping its layout list, and each source layout replaces the layout
+of the same type, or for custom layouts the same name, or is added. Slides
+keep their layout relationships and content. A relationship other than a
+picture or an external link on a copied part is refused.
 
 Slide numbers, footers and dates follow PowerPoint's Header and Footer dialog.
 A slide shows them only through date, footer and slide-number placeholders it

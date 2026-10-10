@@ -29648,3 +29648,553 @@ fn a_rotated_mirrored_arrow_renders_as_powerpoint_draws_it() {
         .count();
     assert!(at_top < at_bottom, "tip must point up: {points:?}");
 }
+
+// Masters, layouts and themes (#312).
+#[cfg(all(feature = "render", feature = "default-template"))]
+mod masters_layouts_and_themes {
+    use std::io::Cursor;
+
+    use oxml_layout::{PositionedElement, walk};
+    use oxml_opc::OpcPackage;
+    use rpptx::{
+        ColorChoice, Emu, Fill, MasterTextStyle, PartRef, Presentation, RgbColor, SolidFill,
+        ThemeFontRole, ThemeFontScript,
+    };
+
+    use super::solid_rgba_png;
+
+    /// A title slide then three content slides with text on the default template.
+    fn deck() -> Presentation {
+        let mut presentation = Presentation::new().unwrap();
+        presentation.add_slide(0).unwrap();
+        for _ in 0..3 {
+            presentation.add_slide(1).unwrap();
+        }
+        for index in 0..4 {
+            let mut slide = presentation.slide_mut(index).unwrap();
+            slide
+                .shape_mut(0)
+                .unwrap()
+                .set_text(&format!("Title {index}"))
+                .unwrap();
+        }
+        presentation
+    }
+
+    fn part_text(bytes: &[u8], part: &str) -> String {
+        let package = OpcPackage::from_reader(Cursor::new(bytes)).unwrap();
+        String::from_utf8(package.get_part(part).unwrap().to_vec()).unwrap()
+    }
+
+    fn has_image_relationship(bytes: &[u8], part: &str) -> bool {
+        OpcPackage::from_reader(Cursor::new(bytes))
+            .unwrap()
+            .get_part_rels(part)
+            .is_some_and(|relationships| {
+                relationships
+                    .items
+                    .iter()
+                    .any(|relationship| relationship.rel_type.ends_with("/image"))
+            })
+    }
+
+    /// The images each rendered slide draws, as their top-left corners in points.
+    fn slide_images(presentation: &Presentation) -> Vec<Vec<(i64, i64)>> {
+        let (_, layout) = presentation.render_deterministic().unwrap();
+        layout
+            .pages
+            .iter()
+            .map(|page| {
+                let mut images = Vec::new();
+                walk(&page.elements, &mut |element, _| {
+                    if let PositionedElement::Image { rect, .. } = element {
+                        images.push((rect.x.round() as i64, rect.y.round() as i64));
+                    }
+                });
+                images
+            })
+            .collect()
+    }
+
+    /// The colour and size of the first text run of each rendered slide.
+    fn first_runs(presentation: &Presentation) -> Vec<Option<(u8, u8, u8, f64)>> {
+        let (_, layout) = presentation.render_deterministic().unwrap();
+        layout
+            .pages
+            .iter()
+            .map(|page| {
+                let mut found = None;
+                walk(&page.elements, &mut |element, _| {
+                    let channel = |value: f64| (value * 255.0).round() as u8;
+                    let run = match element {
+                        PositionedElement::Text(run) if !run.text.trim().is_empty() => {
+                            Some((run.color, run.font_size))
+                        }
+                        PositionedElement::MultilingualText(run)
+                            if !run.logical_text.trim().is_empty() =>
+                        {
+                            Some((run.color, run.font_size))
+                        }
+                        _ => None,
+                    };
+                    if let Some((color, size)) = run
+                        && found.is_none()
+                    {
+                        found = Some((channel(color.r), channel(color.g), channel(color.b), size));
+                    }
+                });
+                found
+            })
+            .collect()
+    }
+
+    fn add_logo(presentation: &mut Presentation, part: PartRef, color: [u8; 4], left: i64) {
+        presentation
+            .part_shapes_mut(part, &[])
+            .unwrap()
+            .add_picture(
+                &solid_rgba_png(40, 20, color),
+                "logo.png",
+                Emu(left),
+                Emu(91_440),
+                Some(Emu(1_188_720)),
+                Some(Emu(594_360)),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn master_logo_shows_on_every_slide_except_where_a_layout_hides_it() {
+        let mut presentation = deck();
+        add_logo(
+            &mut presentation,
+            PartRef::Master(0),
+            [230, 80, 0, 255],
+            9_144_000,
+        );
+        presentation
+            .set_show_master_shapes(PartRef::Layout(0), false)
+            .unwrap();
+        add_logo(
+            &mut presentation,
+            PartRef::Layout(1),
+            [0, 80, 230, 255],
+            457_200,
+        );
+        assert!(!presentation.show_master_shapes(PartRef::Layout(0)).unwrap());
+        assert!(presentation.show_master_shapes(PartRef::Layout(1)).unwrap());
+        assert!(
+            presentation
+                .show_master_shapes(PartRef::Master(0))
+                .unwrap_err()
+                .to_string()
+                .contains("use it on a layout or slide")
+        );
+
+        let images = slide_images(&presentation);
+        assert!(images[0].is_empty(), "{images:?}");
+        for slide in &images[1..] {
+            assert_eq!(slide.len(), 2, "{images:?}");
+        }
+        assert!(presentation.validate().is_empty());
+        let bytes = presentation.to_bytes().unwrap();
+        assert!(
+            part_text(&bytes, "/ppt/slideLayouts/slideLayout1.xml").contains("showMasterSp=\"0\"")
+        );
+        assert!(has_image_relationship(
+            &bytes,
+            "/ppt/slideMasters/slideMaster1.xml"
+        ));
+        assert!(has_image_relationship(
+            &bytes,
+            "/ppt/slideLayouts/slideLayout2.xml"
+        ));
+        let reopened = Presentation::from_bytes(&bytes).unwrap();
+        assert_eq!(slide_images(&reopened), images);
+        assert_eq!(
+            reopened.part_shapes(PartRef::Master(0)).unwrap().len(),
+            presentation.part_shapes(PartRef::Master(0)).unwrap().len()
+        );
+
+        // A slide hides the master and layout logos on its own.
+        let mut presentation = reopened;
+        presentation
+            .set_show_master_shapes(PartRef::Slide(2), false)
+            .unwrap();
+        assert!(slide_images(&presentation)[2].is_empty());
+
+        // Removing the master logo drops its relationship and image part.
+        let logo = presentation.part_shapes(PartRef::Master(0)).unwrap().len() - 1;
+        presentation
+            .remove_part_shape(PartRef::Master(0), logo)
+            .unwrap();
+        let bytes = presentation.to_bytes().unwrap();
+        assert!(!has_image_relationship(
+            &bytes,
+            "/ppt/slideMasters/slideMaster1.xml"
+        ));
+        assert_eq!(slide_images(&presentation)[1].len(), 1);
+    }
+
+    #[test]
+    fn backgrounds_set_on_master_layout_and_slide_follow_the_inheritance_chain() {
+        let mut presentation = deck();
+        let gradient = Fill::from_xml(
+            br#"<a:gradFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:gsLst><a:gs pos="0"><a:srgbClr val="FFFFFF"/></a:gs><a:gs pos="100000"><a:srgbClr val="1A237E"/></a:gs></a:gsLst><a:lin ang="5400000" scaled="0"/></a:gradFill>"#,
+        )
+        .unwrap();
+        presentation
+            .set_part_background(PartRef::Master(0), gradient.clone())
+            .unwrap();
+        presentation
+            .set_part_picture_background(
+                PartRef::Layout(1),
+                &solid_rgba_png(16, 9, [10, 120, 60, 255]),
+                "bg.png",
+            )
+            .unwrap();
+        let mut solid = SolidFill::default();
+        solid.color = Some(ColorChoice::srgb(RgbColor::new(0xEE, 0xEE, 0xEE)));
+        presentation
+            .set_part_background(PartRef::Slide(3), Fill::Solid(solid))
+            .unwrap();
+        assert_eq!(
+            presentation
+                .part_background_fill(PartRef::Master(0))
+                .unwrap(),
+            Some(&gradient)
+        );
+        assert!(matches!(
+            presentation
+                .part_background_fill(PartRef::Layout(1))
+                .unwrap(),
+            Some(Fill::Blip(_))
+        ));
+        assert!(
+            presentation
+                .set_part_background(
+                    PartRef::Layout(1),
+                    presentation
+                        .part_background_fill(PartRef::Layout(1))
+                        .unwrap()
+                        .unwrap()
+                        .clone()
+                )
+                .unwrap_err()
+                .to_string()
+                .contains("set_part_picture_background")
+        );
+        let images = slide_images(&presentation);
+        assert!(
+            images[0].is_empty(),
+            "the title layout follows the master gradient"
+        );
+        assert_eq!(
+            images[1],
+            vec![(0, 0)],
+            "the picture background covers the slide"
+        );
+        assert!(images[3].is_empty(), "slide 4 has its own solid background");
+
+        let bytes = presentation.to_bytes().unwrap();
+        let layout = part_text(&bytes, "/ppt/slideLayouts/slideLayout2.xml");
+        assert!(layout.contains("<a:blipFill"), "{layout}");
+        assert!(part_text(&bytes, "/ppt/slideMasters/slideMaster1.xml").contains("<a:gradFill>"));
+        let reopened = Presentation::from_bytes(&bytes).unwrap();
+        assert!(reopened.validate().is_empty());
+        assert_eq!(slide_images(&reopened), images);
+
+        // Following the master again drops the picture and its relationship.
+        let mut presentation = reopened;
+        presentation
+            .remove_part_background(PartRef::Layout(1))
+            .unwrap();
+        assert!(
+            !presentation
+                .part_has_background(PartRef::Layout(1))
+                .unwrap()
+        );
+        let bytes = presentation.to_bytes().unwrap();
+        assert!(!has_image_relationship(
+            &bytes,
+            "/ppt/slideLayouts/slideLayout2.xml"
+        ));
+    }
+
+    #[test]
+    fn master_title_style_sets_every_title_font_size_and_colour() {
+        let mut presentation = deck();
+        let level = presentation
+            .master_text_style_mut(0, MasterTextStyle::Title, 1)
+            .unwrap();
+        let properties = level
+            .default_run_properties
+            .get_or_insert_with(Default::default);
+        properties.font_size = Some(5000);
+        let mut fill = SolidFill::default();
+        fill.color = Some(ColorChoice::srgb(RgbColor::new(0x1A, 0x23, 0x7E)));
+        properties.fill = Some(Fill::Solid(fill));
+        let runs = first_runs(&presentation);
+        for run in &runs {
+            assert_eq!(
+                run.map(|(r, g, b, size)| (r, g, b, size)),
+                Some((0x1A, 0x23, 0x7E, 50.0)),
+                "{runs:?}"
+            );
+        }
+        assert!(
+            presentation
+                .master_text_style(0, MasterTextStyle::Body, 10)
+                .unwrap_err()
+                .to_string()
+                .contains("outside 1 to 9")
+        );
+        let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            reopened
+                .master_text_style(0, MasterTextStyle::Title, 1)
+                .unwrap()
+                .and_then(|level| level.default_run_properties.as_ref())
+                .and_then(|properties| properties.font_size),
+            Some(5000)
+        );
+        assert_eq!(first_runs(&reopened), runs);
+    }
+
+    #[test]
+    fn layouts_are_renamed_duplicated_and_removed_only_when_unused() {
+        let mut presentation = deck();
+        let count = presentation.layout_count();
+        presentation.set_layout_name(1, "Content").unwrap();
+        assert_eq!(presentation.layout_name(1), Some("Content"));
+        assert_eq!(presentation.layout_slides(1), vec![1, 2, 3]);
+        assert_eq!(presentation.layout_master(1), Some(0));
+
+        let copy = presentation.duplicate_layout(1).unwrap();
+        assert_eq!(copy, 2);
+        assert_eq!(presentation.layout_count(), count + 1);
+        assert_eq!(presentation.layout_name(copy), Some("1_Content"));
+        assert!(presentation.layout_slides(copy).is_empty());
+        let bytes = presentation.to_bytes().unwrap();
+        let master = part_text(&bytes, "/ppt/slideMasters/slideMaster1.xml");
+        assert_eq!(
+            master.matches("<p:sldLayoutId ").count(),
+            count + 1,
+            "{master}"
+        );
+        assert!(presentation.validate().is_empty());
+        let reopened = Presentation::from_bytes(&bytes).unwrap();
+        assert_eq!(reopened.layout_name(copy), Some("1_Content"));
+        assert_eq!(reopened.layout_slides(1), vec![1, 2, 3]);
+
+        let error = presentation.remove_layout(1).unwrap_err().to_string();
+        assert!(error.contains("is used by slides [1, 2, 3]"), "{error}");
+        presentation.set_slide_layout(3, copy).unwrap();
+        presentation.remove_layout(copy).unwrap_err();
+        presentation.set_slide_layout(3, 1).unwrap();
+        presentation.remove_layout(copy).unwrap();
+        assert_eq!(presentation.layout_count(), count);
+        let bytes = presentation.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(Cursor::new(&bytes)).unwrap();
+        assert!(
+            !package
+                .parts
+                .keys()
+                .any(|part| part.ends_with(&format!("slideLayout{}.xml", count + 1)))
+        );
+        assert_eq!(
+            part_text(&bytes, "/ppt/slideMasters/slideMaster1.xml")
+                .matches("<p:sldLayoutId ")
+                .count(),
+            count
+        );
+        assert!(
+            Presentation::from_bytes(&bytes)
+                .unwrap()
+                .validate()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn theme_colours_and_fonts_change_in_one_place_for_every_slide() {
+        let mut presentation = deck();
+        presentation
+            .set_theme_color(0, "tx1", RgbColor::new(1, 2, 3))
+            .unwrap_err();
+        presentation
+            .set_theme_color(0, "dk1", RgbColor::new(0xC0, 0x10, 0x20))
+            .unwrap();
+        presentation
+            .set_theme_color(0, "accent1", RgbColor::new(0xFF, 0x66, 0x00))
+            .unwrap();
+        presentation
+            .set_theme_font(
+                0,
+                ThemeFontRole::Major,
+                ThemeFontScript::Latin,
+                "Montserrat",
+            )
+            .unwrap();
+        assert!(
+            presentation
+                .set_theme_font(0, ThemeFontRole::Minor, ThemeFontScript::Latin, " ")
+                .is_err()
+        );
+        let theme = presentation.theme(0).unwrap().unwrap();
+        assert_eq!(
+            theme.color("accent1"),
+            Some(RgbColor::new(0xFF, 0x66, 0x00))
+        );
+        assert_eq!(theme.major_font.latin, "Montserrat");
+        for run in first_runs(&presentation) {
+            let (r, g, b, _) = run.unwrap();
+            assert_eq!((r, g, b), (0xC0, 0x10, 0x20));
+        }
+        let bytes = presentation.to_bytes().unwrap();
+        let theme_xml = part_text(&bytes, "/ppt/theme/theme1.xml");
+        assert!(
+            theme_xml.contains("<a:accent1><a:srgbClr val=\"FF6600\"/></a:accent1>"),
+            "{theme_xml}"
+        );
+        assert!(
+            theme_xml.contains("<a:latin typeface=\"Montserrat\""),
+            "{theme_xml}"
+        );
+        let reopened = Presentation::from_bytes(&bytes).unwrap();
+        assert_eq!(reopened.theme(0).unwrap(), Some(theme));
+    }
+
+    /// A brand deck: theme colours and fonts, a master logo and background.
+    fn brand() -> Vec<u8> {
+        let mut brand = Presentation::new().unwrap();
+        brand
+            .set_theme_color(0, "dk1", RgbColor::new(0x1A, 0x23, 0x7E))
+            .unwrap();
+        brand
+            .set_theme_font(0, ThemeFontRole::Major, ThemeFontScript::Latin, "Roboto")
+            .unwrap();
+        add_logo(&mut brand, PartRef::Master(0), [230, 80, 0, 255], 9_144_000);
+        brand.set_layout_name(1, "Brand content").unwrap();
+        brand.to_bytes().unwrap()
+    }
+
+    #[test]
+    fn apply_theme_takes_colours_and_fonts_and_optionally_the_master_design() {
+        let brand_bytes = brand();
+        let mut presentation = deck();
+        let texts_before = presentation
+            .slides()
+            .map(|slide| slide.text())
+            .collect::<Vec<_>>();
+        let mut themed = presentation.clone();
+        themed.apply_theme_bytes(&brand_bytes, false).unwrap();
+        let theme = themed.theme(0).unwrap().unwrap();
+        assert_eq!(theme.color("dk1"), Some(RgbColor::new(0x1A, 0x23, 0x7E)));
+        assert_eq!(theme.major_font.latin, "Roboto");
+        assert!(slide_images(&themed).iter().all(Vec::is_empty));
+        assert_eq!(themed.layout_name(1), presentation.layout_name(1));
+
+        presentation.apply_theme_bytes(&brand_bytes, true).unwrap();
+        assert!(presentation.validate().is_empty());
+        let images = slide_images(&presentation);
+        assert!(images.iter().all(|slide| slide.len() == 1), "{images:?}");
+        assert_eq!(presentation.layout_name(1), Some("Brand content"));
+        assert_eq!(
+            presentation
+                .slides()
+                .map(|slide| slide.text())
+                .collect::<Vec<_>>(),
+            texts_before
+        );
+        for run in first_runs(&presentation) {
+            let (r, g, b, _) = run.unwrap();
+            assert_eq!((r, g, b), (0x1A, 0x23, 0x7E));
+        }
+        let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
+        assert!(reopened.validate().is_empty());
+        assert_eq!(slide_images(&reopened), images);
+    }
+
+    #[test]
+    fn a_master_logo_takes_a_click_hyperlink() {
+        let mut presentation = deck();
+        add_logo(
+            &mut presentation,
+            PartRef::Master(0),
+            [230, 80, 0, 255],
+            9_144_000,
+        );
+        let logo = presentation.part_shapes(PartRef::Master(0)).unwrap().len() - 1;
+        let id = presentation
+            .part_shape(PartRef::Master(0), logo)
+            .unwrap()
+            .non_visual_id()
+            .unwrap();
+        presentation
+            .set_part_shape_hyperlink(PartRef::Master(0), id, Some("https://example.com"))
+            .unwrap();
+        assert_eq!(
+            presentation
+                .part_shape_hyperlink_address(PartRef::Master(0), id)
+                .unwrap(),
+            Some("https://example.com")
+        );
+        assert!(presentation.validate().is_empty());
+        let bytes = presentation.to_bytes().unwrap();
+        assert!(part_text(&bytes, "/ppt/slideMasters/slideMaster1.xml").contains("<a:hlinkClick"));
+        let mut reopened = Presentation::from_bytes(&bytes).unwrap();
+        assert_eq!(
+            reopened
+                .part_shape_hyperlink_address(PartRef::Master(0), id)
+                .unwrap(),
+            Some("https://example.com")
+        );
+        reopened
+            .set_part_shape_hyperlink(PartRef::Master(0), id, None)
+            .unwrap();
+        let bytes = reopened.to_bytes().unwrap();
+        let package = OpcPackage::from_reader(Cursor::new(&bytes)).unwrap();
+        assert!(
+            !package
+                .get_part_rels("/ppt/slideMasters/slideMaster1.xml")
+                .unwrap()
+                .items
+                .iter()
+                .any(|relationship| relationship.rel_type.ends_with("/hyperlink"))
+        );
+    }
+
+    #[test]
+    fn a_thmx_theme_applies_its_theme_only() {
+        let brand = Presentation::from_bytes(&brand()).unwrap();
+        let brand_bytes = brand.to_bytes().unwrap();
+        let brand_package = OpcPackage::from_reader(Cursor::new(&brand_bytes)).unwrap();
+        let mut thmx = OpcPackage::with_main_part(
+            "/theme/theme/theme1.xml",
+            "application/vnd.openxmlformats-officedocument.theme+xml",
+        );
+        thmx.set_part(
+            "/theme/theme/theme1.xml",
+            brand_package
+                .get_part("/ppt/theme/theme1.xml")
+                .unwrap()
+                .to_vec(),
+        );
+        let mut bytes = Cursor::new(Vec::new());
+        thmx.write_to(&mut bytes).unwrap();
+        let bytes = bytes.into_inner();
+
+        let mut presentation = deck();
+        let error = presentation
+            .apply_theme_bytes(&bytes, true)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("applies its theme only"), "{error}");
+        presentation.apply_theme_bytes(&bytes, false).unwrap();
+        assert_eq!(
+            presentation.theme(0).unwrap().unwrap().major_font.latin,
+            "Roboto"
+        );
+    }
+}

@@ -276,8 +276,8 @@ order:
 
 1. **Background.** Slide `p:bg`, else layout `p:bg`, else master `p:bg`. An
    absent background at all three levels produces no background paint.
-2. **The master's non-placeholder shapes**, if the layout's `showMasterSp` is
-   not `0`.
+2. **The master's non-placeholder shapes**, if neither the layout's nor the
+   slide's `showMasterSp` is `0`.
 3. **The layout's non-placeholder shapes**, if the slide's `showMasterSp` is not
    `0`.
 4. **The slide's own `p:spTree`**, in document order.
@@ -333,8 +333,9 @@ precise diagnostic. A colliding relationship ID in the master scope must not
 satisfy it.
 
 The layout `showMasterSp` controls only the master non-placeholder pass. The
-slide `showMasterSp` controls only the layout non-placeholder pass. An absent
-value means true. Ordinary master and layout placeholders remain templates and
+slide `showMasterSp` controls the layout and the master non-placeholder passes,
+because PowerPoint's Hide Background Graphics on a slide hides both (checked
+against a PowerPoint export for issue #312). An absent value means true. Ordinary master and layout placeholders remain templates and
 are omitted, latent ones included. An occupied latent placeholder has
 nonempty run text or at least one field. Latent placeholders match by type
 across the level-specific indices used by masters, layouts and slides. Direct
@@ -394,6 +395,15 @@ properties, while each fill and typeface slot is atomic. Effective values do
 not inherit opaque XML or hyperlink actions. `cap="all"` and `cap="none"`
 overlay as character properties through the same chain. Other capitalization
 values remain unmodelled and preserved.
+
+Bullet characters are a known divergence, measured against a PowerPoint for
+Mac PDF export for issue 312. PowerPoint drew no `▪` (U+25AA) bullet with
+`a:buFont` Arial, Calibri or Segoe UI Symbol, nor without `a:buFont`, while
+rpptx draws it through font fallback. It drew Wingdings `§` as a square, which
+rpptx draws as a literal `§` because symbol-font remapping is not modelled.
+`•` and `–` in Arial draw alike in both. Which characters PowerPoint drops
+depends on the fonts installed, so rpptx does not imitate the drop, and the
+API documentation steers callers to `•` and `–`.
 
 Each paragraph also resolves `a:endParaRPr` as a final character-property
 overlay on the same inherited paragraph style. This terminal style supplies

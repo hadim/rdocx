@@ -12,7 +12,6 @@ use rpptx_oxml::slide_parts::{CT_HeaderFooter, CT_Slide, CT_SlideLayout, CT_Slid
 
 use crate::{
     Error, Presentation, Result, invalid_slide_mutation, rel_types, related_internal_part,
-    required_part,
 };
 
 /// The date, footer and slide number of slides, as PowerPoint's Header and
@@ -553,15 +552,11 @@ impl Presentation {
         &self,
         layout_index: usize,
     ) -> Result<(String, CT_SlideMaster)> {
-        let record = &self.layouts[layout_index];
-        let master_part =
-            related_internal_part(&self.package, &record.part_name, rel_types::SLIDE_MASTER)?
-                .ok_or_else(|| {
-                    malformed(&record.part_name, "layout has no slide master relationship")
-                })?;
-        let master = CT_SlideMaster::from_xml(required_part(&self.package, &master_part)?)
-            .map_err(|error| malformed(&master_part, error))?;
-        Ok((master_part, master))
+        let master_index = self.layout_master_index(layout_index)?;
+        Ok((
+            self.masters[master_index].part_name.clone(),
+            self.master_model(master_index)?.clone(),
+        ))
     }
 
     /// The latent placeholders a new slide on this layout receives.
@@ -580,9 +575,9 @@ impl Presentation {
         let layout_part = &self.layouts[layout_index].part_name;
         let master =
             match related_internal_part(&self.package, layout_part, rel_types::SLIDE_MASTER)? {
-                Some(master_part) => Some(
-                    CT_SlideMaster::from_xml(required_part(&self.package, &master_part)?)
-                        .map_err(|error| malformed(&master_part, error))?,
+                Some(_) => Some(
+                    self.master_model(self.layout_master_index(layout_index)?)?
+                        .clone(),
                 ),
                 None => None,
             };
@@ -734,10 +729,16 @@ impl Presentation {
         for (master_part, mut master) in masters {
             master.header_footer = Some(header_footer_flags(settings));
             update_templates(&mut master.common_slide_data.shape_tree.children, settings)?;
-            let xml = master
+            master
                 .to_xml()
                 .map_err(|error| malformed(&master_part, error))?;
-            staged.package.set_part(&master_part, xml);
+            let record = staged
+                .masters
+                .iter_mut()
+                .find(|record| record.part_name == master_part)
+                .expect("every collected master has a record");
+            record.master = Ok(master);
+            record.dirty = true;
         }
         self.commit_candidate(staged)
     }
