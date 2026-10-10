@@ -4773,6 +4773,10 @@ def test_issue_308_run_baseline_spacing_language_and_typefaces_round_trip():
         run.font.baseline = 2.0
     with pytest.raises(ValueError, match="language must be a tag"):
         run.font.language = "fr FR"
+    # A bare int is EMU: under 127 it would round to spc="0", so it raises.
+    for bare in (2, -2, 126):
+        with pytest.raises(ValueError, match=r"give a Length such as Pt"):
+            run.font.spacing = bare
     xml = prs.slides[0].shapes[0].xml.decode()
     assert 'baseline="-25000"' in xml and 'spc="150"' in xml and 'lang="fr-FR"' in xml
     reopened = rpptx.Presentation.from_bytes(prs.to_bytes())
