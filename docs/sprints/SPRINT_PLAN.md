@@ -2143,8 +2143,8 @@ CLI validation reports before the template and form programme resumes.
 | F-X192 | Complete the remaining Word bibliography catalogue | L | Approved, implementation pending |
 | F-283 | Complete numbering-aware navigation fields | L | Approved, implementation pending |
 | F-X193 | Preserve semantic mark highlights through nested HTML runs | S | Completed and integrated |
-| F-X194 | Complete Python table text and indentation APIs | M | In progress |
-| F-X195 | Honor caller fonts and variable styles across render paths | L | In progress, disjoint core font controls queued |
+| F-X194 | Complete Python table text and indentation APIs | M | Python/native regressions pass, WASM and package gates remain |
+| F-X195 | Honor caller fonts and variable styles across render paths | L | Core source reviewed, runtime gates and provider wiring remain |
 | F-X196 | Validate visible paragraph content without false empty warnings | S | Completed and integrated |
 | F-X197 | Unify Python colour inputs and font colour formats | L | Approved, implementation pending |
 | F-X198 | Preserve alternate text-box copies during scoped replacement | M | Completed and integrated |
@@ -2161,7 +2161,7 @@ CLI validation reports before the template and form programme resumes.
 | F-X209 | Edit PowerPoint masters layouts and themes | L | Approved, implementation pending |
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | Approved, implementation pending |
 | F-X211 | Complete Python script compatibility and safe XML access | L | Approved, implementation pending |
-| F-X212 | Align native accessibility with visible paragraph content | M | In progress |
+| F-X212 | Align native accessibility with visible paragraph content | M | Independent semantic review in progress, runtime gates remain |
 
 **Current delivery checkpoint, 2026-10-10**: four of twenty-two active stories
 are completed and integrated, F-X193, F-X196, F-X198 and F-X199. F-X194 is in
@@ -2173,7 +2173,7 @@ sprint review and verified sprint close remain outstanding.
 **Resolution scope**: resolve every open issue and PR except
 [Issue264](https://github.com/tensorbee/rdocx/issues/264) and
 [Issue281](https://github.com/tensorbee/rdocx/issues/281). Keep those two open as
-requirements discussions. At 2026-10-10 08:47:21 UTC, the refreshed inventory
+requirements discussions. At 2026-10-10 09:19:23 UTC, the refreshed inventory
 contains eighteen open PRs and twenty-eight open issues, including the two
 exclusions. All twenty-six included issues and eighteen PRs map below.
 A later PR attaches to its existing issue owner. Assessment is not completion.
