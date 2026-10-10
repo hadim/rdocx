@@ -16,7 +16,11 @@ presentation, notes, handout, PDF, and animation outputs.
 - Author and edit text, pictures, shapes, groups, tables, charts, comments,
   SmartArt text, and media.
 - Populate groups, nested to any depth, with text boxes, preset shapes,
-  connectors, groups, tables, and pictures.
+  connectors, groups, tables, and pictures, group and ungroup existing shapes
+  in place, align and distribute shapes, and glue connectors to connection
+  sites.
+- Set alternative text, decorative flags, and flips, and fill picture
+  placeholders with a cropped picture.
 - Insert and remove table rows and columns, extending or shrinking merged
   cells and growing or shrinking the frame by the row or column size.
 - Produce PDF, PDF/A, resolved slide frames, notes, handouts, and animations.

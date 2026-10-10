@@ -1702,7 +1702,7 @@ fn inspect_json_adds_shape_details_without_changing_existing_slide_keys() {
                     {
                         "index": 0,
                         "id": 2,
-                        "name": "Placeholder 2",
+                        "name": "Title 1",
                         "kind": "shape",
                         "placeholder": { "type": "title", "idx": 0 },
                         "position": null,
@@ -1716,7 +1716,7 @@ fn inspect_json_adds_shape_details_without_changing_existing_slide_keys() {
                     {
                         "index": 1,
                         "id": 3,
-                        "name": "Placeholder 3",
+                        "name": "Content Placeholder 2",
                         "kind": "shape",
                         "placeholder": { "type": null, "idx": 1 },
                         "position": null,
