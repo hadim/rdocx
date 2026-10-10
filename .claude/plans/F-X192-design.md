@@ -397,3 +397,21 @@ from exact APA person author0 provenance. Static imports and isolated host
 probes do not establish those bibliography call parameters. No producer
 stylesheet execution, native process attachment, signed-bundle modification
 or speculative dependency is selected by this diagnostic.
+
+## Bounded static comparison branch follow-up
+
+Root authenticated the pinned WLMKernel SHA, selected4654-byte static
+CompareStringW range and isolated LCID127 flags0 probe artifacts under
+`/private/tmp/S91-F-X192-comparison-abi-static`. The corrected static read and
+twenty-second child each exited0. Fourteen exact complete-key vectors still
+yield only five native-order matches. Earlier failed reader options and
+retired expanded output retain their actual receipts. No binary was copied,
+producer stylesheet executed, native process attached or application changed.
+
+Static provider dispatch, UTF16 loads and an invariant-locale branch do not
+identify the actual bibliography call, provider, flags or transient operands.
+This is another bounded rejection, with no production comparator selection.
+Exact APA person runtime properties remain a separate completion barrier.
+The documented custom-style route is Windows-specific and does not establish
+Mac discovery or an arbitrary style-path setter. No custom style is installed.
+Further work needs concrete native authority instead of repeated locale grids.
