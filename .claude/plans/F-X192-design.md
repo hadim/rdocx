@@ -415,3 +415,23 @@ Exact APA person runtime properties remain a separate completion barrier.
 The documented custom-style route is Windows-specific and does not establish
 Mac discovery or an arbitrary style-path setter. No custom style is installed.
 Further work needs concrete native authority instead of repeated locale grids.
+
+## Current Mac native member capability, 2026-10-10
+
+A bounded read-only Word UI check found both Bibliography.BibliographyStyle
+and Options.BibliographyStyle in the installed Object Browser. The property
+signature is String. Two Immediate Window getters returned the displayed
+Harvard Anglia style name while the existing APA6-year-varied study remained
+open. No setter, stylesheet installation or execution, document save/edit,
+macro injection or security change occurred. The agent observed an incidental
+SaveEncoding panel change, so whole-application state equality is not claimed.
+
+The3349-byte capability receipt is retained in the existing diagnostic
+directory. Root authenticated its input design, input receipt and all four
+original file identities. Getter values are native UI observations retained
+in the tool transcript, not an independent observation of APA transform
+parameters. This establishes actual installed getter support, not absolute
+path loading, style discovery, Locals equality, original comparator arguments
+or F-X192 acceptance. The inert independently authored diagnostic remains
+unexecuted. Any next qualification needs a concrete bounded reversible route
+and its own review before execution.
