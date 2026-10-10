@@ -237,3 +237,20 @@ Required source-built controls before changing the F-X196 list at commands.rs:24
 - A standalone DeletedText typed item can contribute to CT_R::text at :2314 today. Its exclusion from final accepted visibility is a separately reviewed CLI refinement, not an unnoticed consequence of the extraction. Insertion/moveTo accepted content and deletion/moveFrom rejection must agree across raw wrappers and typed projections.
 
 Prove each discriminator through the existing native audit and public CLI validation entrypoints, before and after source edits, with exact no-mutation bytes and unchanged other findings. No discriminator, test or Cargo command has run during this design task. Only the later approved intentional audit behavior may earn the already proposed three feature_showcase hash deltas, and all46 other keys must remain unchanged unless a new measured and reviewed contract explicitly supersedes that expectation.
+
+## Parallel source reservation, 2026-10-10
+
+Use the existing inline native audit test module in
+`crates/rdocx/src/document.rs` for the required public actual-picture regression
+and native discriminators. These tests invoke Document::audit_accessibility
+and Document::paragraph_visibility directly. The existing CLI carrier is
+`crates/rdocx-cli/tests/integration.rs`. Do not edit the native integration or
+regression entrypoints reserved by F-X194. This changes test placement only,
+not the required public regression, Base failure or acceptance controls.
+
+F-X196 is completed. F-X212 may begin disjoint source work in wave2 alongside
+F-X194. Cargo remains leased to F-X194 until explicit handover. Shared package
+measurement carriers and HLD10 edits are queued after F-X194. Root owns the
+hash baseline. F-X212 baseline measurement and publication wait until the
+F-X194 unchanged-hash gate is complete. F-X197 remains behind F-X194 because
+its actual source paths overlap. No new source file or test binary is added.

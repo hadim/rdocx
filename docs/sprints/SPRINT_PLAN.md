@@ -2161,11 +2161,12 @@ CLI validation reports before the template and form programme resumes.
 | F-X209 | Edit PowerPoint masters layouts and themes | L | Approved, implementation pending |
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | Approved, implementation pending |
 | F-X211 | Complete Python script compatibility and safe XML access | L | Approved, implementation pending |
-| F-X212 | Align native accessibility with visible paragraph content | M | Approved, implementation pending |
+| F-X212 | Align native accessibility with visible paragraph content | M | In progress |
 
 **Current delivery checkpoint, 2026-10-10**: four of twenty-two active stories
 are completed and integrated, F-X193, F-X196, F-X198 and F-X199. F-X194 is in
-progress. Seventeen stories have approved designs and await implementation.
+progress, alongside F-X212. Sixteen stories have approved designs and await
+implementation.
 No design question remains outstanding. Final integrated verification,
 sprint review and verified sprint close remain outstanding.
 
@@ -2213,8 +2214,8 @@ no duplicate F-ID. Contribution claims do not replace local test evidence.
 F-X192 and F-283 additionally complete the bibliography and numbering-aware
 navigation work carried from S90. Their full contracts remain in S91.
 
-**Approved execution order**: wave 1 is complete. Wave 2 is F-X194. Wave 3 is
-F-X197 and F-X212, wave 4 F-X195, wave 5 F-X210, wave 6 F-X206 and F-X192,
+**Approved execution order**: wave 1 is complete. Wave 2 is F-X194 and F-X212,
+using disjoint existing native test carriers. Wave 3 is F-X197, wave 4 F-X195, wave 5 F-X210, wave 6 F-X206 and F-X192,
 wave 7 F-X200 and F-X207, wave 8 F-X201 and F-X208, wave 9 F-X203,
 wave 10 F-X205, wave 11 F-X202 and F-X209, wave 12 F-283, wave 13 F-X204,
 and wave 14 F-X211. F-X192 retains its approved portable bibliography evidence

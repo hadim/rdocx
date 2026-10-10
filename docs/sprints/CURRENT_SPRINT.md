@@ -45,7 +45,7 @@ and keep rolling contribution intake open.
 | F-X209 | Edit PowerPoint masters layouts and themes | L | pending | - |
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | pending | - |
 | F-X211 | Complete Python script compatibility and safe XML access | L | pending | - |
-| F-X212 | Align native accessibility with visible paragraph content | M | pending | - |
+| F-X212 | Align native accessibility with visible paragraph content | M | in-progress | codex |
 
 ## Sequencing note
 
@@ -416,3 +416,11 @@ New PR [336](https://github.com/tensorbee/rdocx/pull/336), head
 slice belongs to F-X211 and numbering slice to F-X200. Assess its complete
 immutable source before adoption, including its added inline-wrapper and
 cross-control limits. This creates no new F-ID or duplicate implementation.
+
+## Parallel source reservation checkpoint
+
+F-X212 starts alongside F-X194 using the existing document.rs inline native
+audit tests and CLI integration carrier. Its production and test paths are
+disjoint. F-X194 retains Cargo and package-carrier priority. F-X212 waits for
+explicit Cargo handover and for the unchanged F-X194 hash gate before its
+intentional baseline phase. F-X197 remains queued after F-X194 integration.
