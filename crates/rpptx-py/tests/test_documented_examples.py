@@ -5521,6 +5521,47 @@ def test_header_footer_fields_theme_and_transitions_from_python(tmp_path):
     assert (added.header_footer.slide_number, added.header_footer.footer) == (True, "ACME - Confidential")
 
 
+def test_header_footer_removing_the_last_placeholder_retires_shape_handles():
+    from rpptx import Presentation, StaleElementError
+    from rpptx.enum.shapes import PP_PLACEHOLDER
+
+    prs = Presentation()
+    prs.slides.add_slide(prs.slide_layouts[6]).shapes.add_textbox(0, 0, 914400, 914400)
+    prs.set_header_footer(slide_number=True, hide_on_title=False)
+    slide = prs.slides[0]
+    textbox = slide.shapes[0]
+    number = slide.shapes[-1]
+    assert number.placeholder_format.type == PP_PLACEHOLDER.SLIDE_NUMBER
+    # Adding a placeholder after the others keeps held handles valid.
+    slide.header_footer.footer = "Draft"
+    assert number.name == slide.shapes[1].name and textbox.left == 0
+    # Removing the last shape moves nothing, but the handle to it is retired
+    # as ShapeCollection.remove() retires it, naming the call.
+    footer = slide.shapes[-1]
+    assert footer.placeholder_format.type == PP_PLACEHOLDER.FOOTER
+    slide.header_footer.footer = None
+    with pytest.raises(StaleElementError, match=r"shape revision .* because Slide\.header_footer renumbered"):
+        footer.left
+    with pytest.raises(StaleElementError, match=r"Slide\.header_footer"):
+        footer.left = 0
+    number = slide.shapes[-1]
+    slide.header_footer.slide_number = False
+    with pytest.raises(StaleElementError, match=r"because Slide\.header_footer renumbered"):
+        number.left
+    with pytest.raises(StaleElementError):
+        textbox.left
+    # The slide handle and its header_footer follow the edit.
+    assert slide.header_footer.slide_number is False
+    assert len(slide.shapes) == 1
+
+    # The presentation-wide call retires them the same way.
+    prs.set_header_footer(slide_number=True, hide_on_title=False)
+    number = prs.slides[0].shapes[-1]
+    prs.set_header_footer(slide_number=False, hide_on_title=False)
+    with pytest.raises(StaleElementError, match=r"because Presentation\.set_header_footer\(\) renumbered"):
+        number.left
+
+
 # Shape authoring gaps, tensorbee/rdocx#309.
 
 

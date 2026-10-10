@@ -1498,20 +1498,21 @@ pub(crate) fn all_shape_paths(
         .collect()
 }
 
-/// Whether every shape that survived an edit kept its index path. Date,
-/// footer and slide-number placeholders are appended after the other shapes,
-/// so adding them or rewriting their text leaves every held handle valid,
-/// and only removing one before another shape moves anything.
+/// Whether every shape is still there at its index path after an edit.
+/// Date, footer and slide-number placeholders are appended after the other
+/// shapes, so adding them or rewriting their text leaves every held handle
+/// valid. Removing one retires shape handles even when it was the last
+/// shape, as `ShapeCollection.remove()` does, so a handle held to the removed
+/// placeholder raises `StaleElementError` rather than reading nothing.
 pub(crate) fn paths_kept(
     before: &[std::collections::HashMap<u32, Vec<usize>>],
     after: &[std::collections::HashMap<u32, Vec<usize>>],
 ) -> bool {
     before.len() == after.len()
-        && before.iter().zip(after).all(|(before, after)| {
-            before
-                .iter()
-                .all(|(id, path)| after.get(id).is_none_or(|moved| moved == path))
-        })
+        && before
+            .iter()
+            .zip(after)
+            .all(|(before, after)| before.iter().all(|(id, path)| after.get(id) == Some(path)))
 }
 
 /// Today's local date as the cached text of a `datetime1` to `datetime7` field.
@@ -1560,8 +1561,9 @@ pub(crate) fn header_footer_settings(
 ///
 /// Each assignment adds or removes the slide's own placeholders, copied from
 /// its layout. Added placeholders go after the other shapes, so held slide
-/// and shape handles stay valid. Only removing a placeholder that other
-/// shapes follow advances the revision, which stales held handles.
+/// and shape handles stay valid. Removing a placeholder advances the shape
+/// revision, as `ShapeCollection.remove()` does, which stales held shape
+/// handles; the slide handle and this one stay valid.
 #[pyclass(name = "HeaderFooter")]
 pub struct PyHeaderFooter {
     presentation: Py<PyPresentation>,

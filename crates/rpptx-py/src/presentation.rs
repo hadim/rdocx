@@ -1269,8 +1269,7 @@ impl PyPresentation {
     /// PowerPoint and Google Slides display, and the masters and layouts get
     /// matching `p:hf` flags so slides added later follow. New placeholders
     /// go after the other shapes, so held handles stay valid unless a
-    /// removed placeholder was followed by other shapes, which advances the
-    /// revision.
+    /// placeholder is removed, which advances the shape revision.
     #[pyo3(signature = (slide_number = true, footer = None, date = None, hide_on_title = true, date_format = "datetime1"))]
     fn set_header_footer(
         &mut self,
