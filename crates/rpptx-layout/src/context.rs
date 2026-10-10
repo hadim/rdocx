@@ -554,6 +554,9 @@ impl<'a> ResolveCtx<'a> {
                 } => {
                     push_group_diagnostics(group_issues, &mut slide.diagnostics);
                     let mut shape_text_directions = Vec::new();
+                    // A shape that fails to resolve reports only its own
+                    // failure, not what it found before failing.
+                    let mut shape_diagnostics = Vec::new();
                     let placement = ShapePlacement {
                         source,
                         group_scale,
@@ -566,8 +569,9 @@ impl<'a> ResolveCtx<'a> {
                             media,
                             (hyperlinks, charts),
                             fonts.as_deref_mut(),
-                            (&mut slide.diagnostics, &mut shape_text_directions),
+                            (&mut shape_diagnostics, &mut shape_text_directions),
                         )
+                        .inspect(|_| slide.diagnostics.append(&mut shape_diagnostics))
                         .unwrap_or_else(|error| {
                             shape_text_directions.clear();
                             self.unresolved_shape_fallback(
