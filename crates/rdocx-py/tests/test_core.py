@@ -4814,9 +4814,11 @@ def test_content_controls_list_and_set_by_tag_or_alias():
         document.set_content_control_value("x", tag="missing")
     with pytest.raises(TypeError, match="exactly one"):
         document.set_content_control_value("x")
-    with pytest.raises(ValueError, match="checkbox control, which holds no text value"):
+    with pytest.raises(ValueError, match="is a check box"):
         document.set_content_control_value("x", tag="agree")
     assert document.content_controls[1].text == "X"
+    assert document.set_content_control_value("yes", tag="agree") == 1
+    assert document.content_controls[1].text == "\u2612"
 
 
 def test_render_template_refuses_cyclic_and_too_deep_data():

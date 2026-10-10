@@ -3315,7 +3315,7 @@ impl PyDocument {
         {
             return Err(PyValueError::new_err(format!(
                 "content control with {key} {name:?} is a {} control, which holds no text value; \
-                 only rich_text, plain_text, combo_box, dropdown_list and date controls take one",
+                 only rich_text, plain_text, combo_box, dropdown_list, date and checkbox controls take one",
                 content_control_type_name(control.control_type())
             )));
         }
@@ -6114,7 +6114,7 @@ fn content_control_type_name(
 fn content_control_takes_text(control_type: Option<rdocx_oxml::content_control::SdtType>) -> bool {
     matches!(
         content_control_type_name(control_type),
-        "rich_text" | "plain_text" | "combo_box" | "dropdown_list" | "date"
+        "rich_text" | "plain_text" | "combo_box" | "dropdown_list" | "date" | "checkbox"
     )
 }
 

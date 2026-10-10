@@ -394,7 +394,7 @@ MEASUREMENT_PLATFORM = "macOS 26.6.2, Apple M5 Max, arm64"
 ARCHIVE_COMPRESSION_TOLERANCE_BYTES = 64
 ARCHIVE_MEASUREMENTS = {
     "oxml-chart": (102_059, 659_431, 6),
-    "oxml-cli-support": (8_612, 30_840, 6),
+    "oxml-cli-support": (11_281, 40_193, 6),
     "oxml-core": (21_795, 104_404, 15),
     "oxml-drawing": (182_040, 1_226_103, 24),
     "oxml-layout": (4_637_649, 9_281_973, 51),

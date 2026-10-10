@@ -73,8 +73,9 @@ impl ContentControlRef<'_> {
     }
 
     /// Check that `value` suits the control as the value setters write it:
-    /// an item of a drop-down list, or an ISO date (`YYYY-MM-DD`, with an
-    /// optional time) for a date control.
+    /// an item of a drop-down list, an ISO date (`YYYY-MM-DD`, with an
+    /// optional time) for a date control, or true or false (also 1/0, yes/no)
+    /// for a check box. A picture or group control takes no text value.
     pub fn check_value(&self, value: &str) -> Result<()> {
         prepare_control_value(self.inner, value).map(|_| ())
     }
@@ -91,6 +92,8 @@ struct ControlValue {
     full_date: Option<String>,
     /// The `w:lastValue` of a drop-down list or combo box.
     last_value: Option<String>,
+    /// The `w14:checked` state of a check box.
+    checked: Option<bool>,
 }
 
 /// Turn a caller value into what one control shows and stores, refusing a
@@ -102,6 +105,7 @@ fn prepare_control_value(control: &CT_Sdt, value: &str) -> Result<ControlValue> 
         bound: value.to_owned(),
         full_date: None,
         last_value: None,
+        checked: None,
     };
     let Some(properties) = &control.properties else {
         return Ok(plain);
@@ -126,6 +130,7 @@ fn prepare_control_value(control: &CT_Sdt, value: &str) -> Result<ControlValue> 
                         bound: stored.clone().unwrap_or_default(),
                         full_date: None,
                         last_value: stored,
+                        checked: None,
                     })
                 }
                 None if control_type == SdtType::ComboBox => Ok(ControlValue {
@@ -167,8 +172,50 @@ fn prepare_control_value(control: &CT_Sdt, value: &str) -> Result<ControlValue> 
                 bound,
                 full_date: Some(full_date),
                 last_value: None,
+                checked: None,
             })
         }
+        Some(SdtType::CheckBox) => {
+            let checked = match value.trim().to_ascii_lowercase().as_str() {
+                "true" | "1" | "yes" => true,
+                "false" | "0" | "no" => false,
+                _ => {
+                    return Err(Error::Other(format!(
+                        "content control {name:?} is a check box, and {value:?} is not true or false (also 1/0, yes/no)"
+                    )));
+                }
+            };
+            // Word's default glyphs are U+2612 and U+2610, in MS Gothic.
+            let state = if checked {
+                "checkedState"
+            } else {
+                "uncheckedState"
+            };
+            let code = properties
+                .type_child_value(state)?
+                .unwrap_or_else(|| if checked { "2612" } else { "2610" }.to_owned());
+            let glyph = u32::from_str_radix(&code, 16)
+                .ok()
+                .and_then(char::from_u32)
+                .ok_or_else(|| {
+                    Error::Other(format!(
+                        "content control {name:?} has a {state} glyph {code:?} that is not a hexadecimal character code"
+                    ))
+                })?;
+            Ok(ControlValue {
+                display: glyph.to_string(),
+                bound: checked.to_string(),
+                full_date: None,
+                last_value: None,
+                checked: Some(checked),
+            })
+        }
+        Some(SdtType::Picture) => Err(Error::Other(format!(
+            "content control {name:?} is a picture control, which takes an image rather than text: replace its picture with replace_image"
+        ))),
+        Some(SdtType::Group) => Err(Error::Other(format!(
+            "content control {name:?} is a group control, which holds other content: set the controls inside it instead"
+        ))),
         _ => Ok(plain),
     }
 }
@@ -510,6 +557,9 @@ fn replace_one_control(
             }
             if let Some(last_value) = &value.last_value {
                 properties.set_type_attribute("lastValue", last_value);
+            }
+            if let Some(checked) = value.checked {
+                properties.set_checkbox_checked(checked)?;
             }
         }
     }

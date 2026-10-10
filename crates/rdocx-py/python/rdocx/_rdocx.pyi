@@ -1331,8 +1331,12 @@ class Document:
         """Set the text of every body content control with this tag, or this
         alias, and of the custom XML it is bound to. Returns the count.
 
+        A checkbox takes ``"true"`` or ``"false"`` (also ``"1"``/``"0"``,
+        ``"yes"``/``"no"``) and shows its checked or unchecked glyph.
+
         Raises `KeyError` when no control matches and `ValueError` for a
-        picture, checkbox or group control, which holds no text value.
+        picture or group control, which holds no text value, or for a value
+        the control does not take.
         """
     def add_comment(
         self,
