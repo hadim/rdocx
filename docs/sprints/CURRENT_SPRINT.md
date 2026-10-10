@@ -28,7 +28,7 @@ and keep rolling contribution intake open.
 | F-283 | Complete numbering-aware navigation fields | L | pending | - |
 | F-X193 | Preserve semantic mark highlights through nested HTML runs | S | done | - |
 | F-X194 | Complete Python table text and indentation APIs | M | in-progress | codex |
-| F-X195 | Honor caller fonts and variable styles across render paths | L | pending | - |
+| F-X195 | Honor caller fonts and variable styles across render paths | L | in-progress | codex |
 | F-X196 | Validate visible paragraph content without false empty warnings | S | done | - |
 | F-X197 | Unify Python colour inputs and font colour formats | L | pending | - |
 | F-X198 | Preserve alternate text-box copies during scoped replacement | M | done | - |
@@ -432,3 +432,12 @@ qualified256 controls and the selected per-level numbering contract. Proposed
 64-control and512-element limits are not adopted. F-283 owns the added
 cross-instance REF native discriminator.
 The open inventory remains eighteen PRs and twenty-five included issues.
+
+## Additional disjoint font worker reservation
+
+F-X195 starts its existing font-manager/output and PDF/PNG/SVG core tests in
+parallel with F-X194 and F-X212. CLI commands, Python/native facade carriers
+and shared tests remain reserved to their current owners until handover.
+Cargo, HLD/carrier writes and baseline changes remain serialized. F-X195's
+font baseline phase follows the completed F-X194 unchanged gate and F-X212's
+reviewed accessibility delta. No formal dependency is changed.

@@ -2144,7 +2144,7 @@ CLI validation reports before the template and form programme resumes.
 | F-283 | Complete numbering-aware navigation fields | L | Approved, implementation pending |
 | F-X193 | Preserve semantic mark highlights through nested HTML runs | S | Completed and integrated |
 | F-X194 | Complete Python table text and indentation APIs | M | In progress |
-| F-X195 | Honor caller fonts and variable styles across render paths | L | Approved, implementation pending |
+| F-X195 | Honor caller fonts and variable styles across render paths | L | Claimed, disjoint core font tests starting |
 | F-X196 | Validate visible paragraph content without false empty warnings | S | Completed and integrated |
 | F-X197 | Unify Python colour inputs and font colour formats | L | Approved, implementation pending |
 | F-X198 | Preserve alternate text-box copies during scoped replacement | M | Completed and integrated |
@@ -2220,8 +2220,9 @@ F-X200 and F-283 once, retaining numbering and navigation ownership.
 F-X192 and F-283 additionally complete the bibliography and numbering-aware
 navigation work carried from S90. Their full contracts remain in S91.
 
-**Approved execution order**: wave 1 is complete. Wave 2 is F-X194 and F-X212,
-using disjoint existing native test carriers. Wave 3 is F-X197, wave 4 F-X195, wave 5 F-X210, wave 6 F-X206 and F-X192,
+**Approved execution order**: wave 1 is complete. Wave 2 is F-X194, F-X212 and the disjoint core-font phase of F-X195.
+CLI and binding wiring waits for existing file owners. Wave 3 is F-X197,
+wave 4 completes F-X195 wiring, wave 5 F-X210, wave 6 F-X206 and F-X192,
 wave 7 F-X200 and F-X207, wave 8 F-X201 and F-X208, wave 9 F-X203,
 wave 10 F-X205, wave 11 F-X202 and F-X209, wave 12 F-283, wave 13 F-X204,
 and wave 14 F-X211. F-X192 retains its approved portable bibliography evidence

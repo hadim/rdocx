@@ -344,3 +344,21 @@ The diagnosed unmatched_requests defect belongs to unintegrated PR319.
 Current canonical font.rs has no such map, so it is not a claimed live bug
 or a reason to adopt contributor diagnostic code unchanged. Retain actual
 request context and selected-instance identity through cache reuse.
+
+## Parallel phase reservation
+
+Start the existing core font-manager/output and PDF/raster/SVG test modules
+as a disjoint phase alongside F-X194 and F-X212. No formal dependency is
+added or removed. Initially reserve only existing oxml-layout font/output
+files and oxml-pdf font/raster/SVG files and their inline tests. Do not edit
+CLI commands, Python/native facade files, shared integration carriers or
+HLD/package measurements until root grants the corresponding handover.
+Read the retained complete PR315 capture before adopting any slice.
+
+Create meaningful test stubs first, freeze them and queue actual Base controls
+under the global Cargo lease. Do not reuse contributor gates or previous
+feature binaries as this source's acceptance. The start/hash and intentional
+baseline phase remains exclusive and follows F-X194's unchanged gate and
+F-X212's reviewed accessibility delta. Independently enumerate and review
+font deltas before recording. Later facade wiring consumes completed owners
+and is re-reviewed with the complete feature before handoff.
