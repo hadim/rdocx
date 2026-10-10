@@ -400,3 +400,25 @@ actually exited0. Evidence is retained at
 `/private/tmp/S91-PR315-af388f2-intake/receipt.json`. Full semantic
 reconciliation precedes slice adoption. The six frozen core test stubs are
 not executed Base or feature acceptance evidence.
+
+## Disjoint contributing-request source reservation
+
+Extend the provider phase to the existing private Word shaping/cache code in
+`crates/rdocx-layout/src/engine.rs` and PowerPoint text shaping in
+`crates/rpptx-render/src/text.rs`. These are disjoint from the active native
+facade and Python binding owners. Preserve original requested family through
+private item/language-slot metadata into the actual final successful shaping
+event. A concrete request-aware FontManager paragraph operation has two
+current consumers, these Word and PowerPoint paths. Keep existing shaping
+signatures compatible and place the actual algorithm in one implementation.
+Do not add a public TextSegment field, reconstruct a request from FontId, or
+introduce a forwarding-only public wrapper.
+
+Replay the bounded contributing trace with validated selected instances.
+Account for owned request strings in every touched paragraph, table and
+header/footer cache carrier and retain overflow bypass. Empty or attempted
+resolver probes do not earn contribution credit. The warm/cold and exact
+output controls in the provider section remain mandatory. Freeze and measure
+these controls against Base before crediting implementation. This reservation
+does not grant writes to native facade, CLI, Python, shared integration,
+HLD or package carriers still held by other phases.
