@@ -878,3 +878,20 @@ under a separate narrow remediation. Native paint and installed acceptance
 remain due. F-X200 exact source and two-key hash proposals are prepared, with
 its joint checklist gate and reviewed completion lifecycle still outstanding.
 All four stories remain in progress. No final sprint gate is claimed.
+
+## Further scoped checkpoint, 2026-10-11 19:03UTC
+
+F-X206 exact chart control now passes the unchanged150DPI fixed750 by450
+crop and zero-differing-pixel assertion. Independent attribution pass73
+approved only the measured package expectation for two specified placeholder
+names and explained lexical serialization. The actual reading-order/raster
+control also remains passing. Remaining ten native package rows are admitted
+under the existing private target, with all failed historical receipts retained.
+
+F-X207 scoped lint remediation has clean independent pass6, all-target
+checks, Clippy and29 meaningful controls passing. Whole-feature installed
+and native paint acceptance remain due. F-X210 actual genuine-font paint
+acceptance has a new failed symbol fallback result. The physically painted
+Noto checkmark assertion failed and is under read-only diagnosis. It is not
+a sixteen-case pass. Both installed companions and four typing gates remain
+their separately authenticated passing results.
