@@ -639,3 +639,50 @@ FitReport separates native-informed Q facts from actual persisted S facts.
 The Python result projection and F-X204 CLI use these actual recorded facts,
 not a second measurement or global last-render registry. Existing-file
 classes/structures are justified by these two current named consumers.
+
+## Actual Shape resize and size controls, 2026-10-11
+
+Native PowerPoint16.113.4, build16.113.26100421, opened generated local
+Shape-autofit controls without repair. The earlier Normal oracle remains
+bound to16.113.3. Separate native copies received genuine final-period edits
+and normal save, close, reopen and save operations. The exact Arial6.80i
+source face remains SHA15663c7e8495594c6136eb51b11983eb8f5bbcdd07bb2c327e0d1e83415b0f06.
+No expected resized geometry was authored into the inputs.
+
+The top, centre and bottom controls share three20-point lines, all four
+45720EMU insets, width3657600EMU, initial height457200EMU and y914400EMU.
+Native height becomes1015663EMU for each. Native y values are914400,
+635169 and355937EMU respectively. Top and bottom anchors remain exact,
+while the centre differs by0.5EMU. The native first-slide XML is byte exact
+after normal reopen. Both local print PDFs retain identical text. Their
+page-one content streams differ in run and kerning representation. Pinned
+Poppler26.01.0 at144DPI finds48 differing pixels out of1920x1080, with
+mean absolute channel difference0.0029513889. This is measured native
+export variation, not a product paint pass or a selected tolerance.
+
+The complete capture receipt is
+`/private/tmp/S91-F-X207-native-shape-anchor-root-1/capture-receipt.json`,
+SHAdeebceecaaf90ef173a8355518c7a44405705558d3cdd291bf95c5dd239f0aa6.
+An actual source-built comparison preserves all three source anchors and
+the exact text, but computes height1005840EMU. Its9823EMU smaller height
+also explains its centre and bottom position differences. This does not
+establish native sizing parity. Preserve the diagnostic as an acceptance
+boundary rather than introducing an unexplained geometry multiplier.
+
+A second native capture varies font size and line count, with explicit
+matching end properties, top anchors, the same insets and width3200400EMU.
+Its actual heights are400110EMU for20-point one-line text,707886EMU for
+20-point two-line text,830997EMU for16-point three-line text,1200329EMU
+for24-point three-line text and1015663EMU for20-point three-line text.
+Every control received a genuine edit and normal reopen. First-slide bytes
+remain exact. These results distinguish line-count and size-dependent
+allocation from a fixed9823EMU correction. No PDF was captured for this
+second study. Its exact receipt is
+`/private/tmp/S91-F-X207-native-shape-sizing-root-2/capture-receipt.json`,
+SHA29673a53ae7f2f4c4a7019eaec1c98d079157c7962b6da923588c6301ddd0d12.
+
+These standalone unrotated observations do not prove grouped or rotated
+Shape resizing, mixed-font or bullet paint, installed implementation gates
+or whole-feature completion. The selected physical-segment contract and
+all remaining plan gates still apply. Additional sizing policy must follow
+actual provider and paint evidence, not a fitted constant.
