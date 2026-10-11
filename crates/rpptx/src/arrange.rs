@@ -946,6 +946,45 @@ impl Presentation {
     }
 }
 
+/// How many group and alternate content levels `child` adds, counted as
+/// the parser counts them at open, so that a deck grouped here reopens.
+fn nesting_depth(child: &ShapeTreeChild) -> usize {
+    match child {
+        ShapeTreeChild::GroupShape(group) => {
+            1 + group.children.iter().map(nesting_depth).max().unwrap_or(0)
+        }
+        ShapeTreeChild::AlternateContent(alternate) => raw_nesting_depth(alternate.raw_xml()),
+        _ => 0,
+    }
+}
+
+/// The deepest `grpSp` and `AlternateContent` nesting in a captured subtree.
+fn raw_nesting_depth(xml: &[u8]) -> usize {
+    use quick_xml::events::Event;
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut open = Vec::new();
+    let (mut depth, mut deepest) = (0usize, 0usize);
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(start)) => {
+                let counts = matches!(start.local_name().as_ref(), b"grpSp" | b"AlternateContent");
+                depth += usize::from(counts);
+                deepest = deepest.max(depth);
+                open.push(counts);
+            }
+            Ok(Event::Empty(start)) => {
+                let counts = matches!(start.local_name().as_ref(), b"grpSp" | b"AlternateContent");
+                deepest = deepest.max(depth + usize::from(counts));
+            }
+            Ok(Event::End(_)) => depth -= usize::from(open.pop().unwrap_or(false)),
+            Ok(Event::Eof) | Err(_) => return deepest,
+            Ok(_) => {}
+        }
+        buffer.clear();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Affine, members_to_parent, place_in_parent};
@@ -1028,44 +1067,5 @@ mod tests {
         );
         assert_eq!(placed.rotation, Angle(80 * 60_000));
         assert!(placed.flip_horizontal && !placed.flip_vertical);
-    }
-}
-
-/// How many group and alternate content levels `child` adds, counted as
-/// the parser counts them at open, so that a deck grouped here reopens.
-fn nesting_depth(child: &ShapeTreeChild) -> usize {
-    match child {
-        ShapeTreeChild::GroupShape(group) => {
-            1 + group.children.iter().map(nesting_depth).max().unwrap_or(0)
-        }
-        ShapeTreeChild::AlternateContent(alternate) => raw_nesting_depth(alternate.raw_xml()),
-        _ => 0,
-    }
-}
-
-/// The deepest `grpSp` and `AlternateContent` nesting in a captured subtree.
-fn raw_nesting_depth(xml: &[u8]) -> usize {
-    use quick_xml::events::Event;
-    let mut reader = quick_xml::Reader::from_reader(xml);
-    let mut buffer = Vec::new();
-    let mut open = Vec::new();
-    let (mut depth, mut deepest) = (0usize, 0usize);
-    loop {
-        match reader.read_event_into(&mut buffer) {
-            Ok(Event::Start(start)) => {
-                let counts = matches!(start.local_name().as_ref(), b"grpSp" | b"AlternateContent");
-                depth += usize::from(counts);
-                deepest = deepest.max(depth);
-                open.push(counts);
-            }
-            Ok(Event::Empty(start)) => {
-                let counts = matches!(start.local_name().as_ref(), b"grpSp" | b"AlternateContent");
-                deepest = deepest.max(depth + usize::from(counts));
-            }
-            Ok(Event::End(_)) => depth -= usize::from(open.pop().unwrap_or(false)),
-            Ok(Event::Eof) | Err(_) => return deepest,
-            Ok(_) => {}
-        }
-        buffer.clear();
     }
 }
