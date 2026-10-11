@@ -453,7 +453,9 @@ def exercise_rpptx_chart_types(slide: Slide) -> None:
     categories: tuple[str, ...] = chart.categories
     series: tuple[ChartSeries, ...] = chart.series
     name: str = series[0].name
-    cached: tuple[float, ...] = series[0].values
+    cached: tuple[float | None, ...] = series[0].values
+    chart.replace_data(data)
+    chart.replace_data(xy_data)
     (values, has_chart, chart_type, categories, name, cached)
 
 

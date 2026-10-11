@@ -67,7 +67,7 @@ def exercise_rdocx_chart_types(document: Document, after: StoryItem) -> None:
     assert_type(charts[0].categories, tuple[str, ...])
     series: tuple[ChartSeries, ...] = charts[0].series
     assert_type(series[0].name, str)
-    assert_type(series[0].values, tuple[float, ...])
+    assert_type(series[0].values, tuple[float | None, ...])
     (added, item)
 
 

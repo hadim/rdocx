@@ -66,21 +66,23 @@ impl PyChart {
         Self { presentation, path }
     }
 
-    fn read(&self, py: Python<'_>) -> PyResult<(Option<rpptx::ChartKind>, rpptx::ChartData)> {
-        let presentation = self.presentation.borrow(py);
-        validate_path(py, &presentation, &self.path, "chart", ".chart")?;
-        let shape_path = self
-            .path
+    fn shape_path(&self) -> Vec<usize> {
+        self.path
             .segs
             .iter()
             .filter_map(|segment| match segment {
                 PathSeg::Shape(index) => Some(*index),
                 _ => None,
             })
-            .collect::<Vec<_>>();
+            .collect()
+    }
+
+    fn read(&self, py: Python<'_>) -> PyResult<(Option<rpptx::ChartKind>, rpptx::ChartData)> {
+        let presentation = self.presentation.borrow(py);
+        validate_path(py, &presentation, &self.path, "chart", ".chart")?;
         presentation
             .inner
-            .chart(slide_index(&self.path)?, &shape_path)
+            .chart(slide_index(&self.path)?, &self.shape_path())
             .map_err(|error| rpptx_to_pyerr(py, error))
     }
 }
@@ -111,6 +113,20 @@ impl PyChart {
         PyTuple::new(py, self.read(py)?.1.categories)
     }
 
+    /// Replaces the categories and series of the chart and its embedded
+    /// workbook with a `CategoryChartData` or `XyChartData`, as python-pptx
+    /// `replace_data` does. Remaining series keep their formatting, and an
+    /// added series takes the formatting of the last one with its own colour.
+    fn replace_data(&self, py: Python<'_>, chart_data: &Bound<'_, PyAny>) -> PyResult<()> {
+        let data = self::chart_data(chart_data)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        validate_path(py, &presentation, &self.path, "chart", ".chart")?;
+        presentation
+            .inner
+            .replace_chart_data(slide_index(&self.path)?, &self.shape_path(), &data)
+            .map_err(|error| rpptx_to_pyerr(py, error))
+    }
+
     /// Each series with its name and cached values, in plot order.
     #[getter]
     fn series<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
@@ -139,8 +155,14 @@ impl PyChartSeries {
         &self.name
     }
 
+    /// The cached values, with `None` for a point the cache leaves out.
     #[getter]
     fn values<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
-        PyTuple::new(py, &self.values)
+        PyTuple::new(
+            py,
+            self.values
+                .iter()
+                .map(|value| (!value.is_nan()).then_some(*value)),
+        )
     }
 }

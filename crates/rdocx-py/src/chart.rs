@@ -112,8 +112,14 @@ impl PyChartSeries {
         &self.name
     }
 
+    /// The cached values, with `None` for a point the cache leaves out.
     #[getter]
     fn values<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
-        PyTuple::new(py, &self.values)
+        PyTuple::new(
+            py,
+            self.values
+                .iter()
+                .map(|value| (!value.is_nan()).then_some(*value)),
+        )
     }
 }

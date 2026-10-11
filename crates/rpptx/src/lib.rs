@@ -4611,6 +4611,115 @@ impl Presentation {
         slide_index: usize,
         shape_path: &[usize],
     ) -> Result<(Option<ChartKind>, ChartData)> {
+        let part = self.chart_part_name(slide_index, shape_path, "read chart")?;
+        let xml = self.package.get_part(&part).ok_or_else(|| {
+            invalid_chart_mutation("read chart", format!("chart part {part} is missing"))
+        })?;
+        oxml_chart::read_chart_data(xml)
+            .map_err(|error| invalid_chart_mutation("read chart", error.to_string()))
+    }
+
+    /// Replaces the categories and series of one slide chart and its embedded
+    /// workbook, as python-pptx `chart.replace_data` does.
+    ///
+    /// `shape_path` is as for [`Presentation::chart`]. See
+    /// [`oxml_chart::replace_chart_data`] for how series formatting carries
+    /// over. The workbook is laid out as [`Presentation::add_chart`] lays it
+    /// out. An embedded workbook that only this chart uses is rewritten in
+    /// place. A missing, linked, shared or non-xlsx workbook is replaced by a
+    /// new embedded one, and an old part nothing else uses is removed. The
+    /// presentation is unchanged on error.
+    pub fn replace_chart_data(
+        &mut self,
+        slide_index: usize,
+        shape_path: &[usize],
+        data: &ChartData,
+    ) -> Result<()> {
+        const OPERATION: &str = "replace chart data";
+        let chart_error =
+            |error: oxml_chart::ChartError| invalid_chart_mutation(OPERATION, error.to_string());
+        let chart_part = self.chart_part_name(slide_index, shape_path, OPERATION)?;
+        let chart_xml = self.package.get_part(&chart_part).ok_or_else(|| {
+            invalid_chart_mutation(OPERATION, format!("chart part {chart_part} is missing"))
+        })?;
+        let existing_id =
+            oxml_chart::chart_workbook_relationship_id(chart_xml).map_err(chart_error)?;
+        let mut package = self.package.clone();
+        let existing = existing_id
+            .as_deref()
+            .and_then(|id| package.get_part_rels(&chart_part)?.get_by_id(id).cloned());
+        let reused_part = existing.as_ref().and_then(|relationship| {
+            if relationship.rel_type != rel_types::PACKAGE || relationship_is_external(relationship)
+            {
+                return None;
+            }
+            let part = OpcPackage::resolve_rel_target(&chart_part, &relationship.target);
+            let references = package
+                .part_rels
+                .iter()
+                .flat_map(|(source, relationships)| {
+                    relationships.items.iter().map(move |item| (source, item))
+                })
+                .filter(|(source, item)| {
+                    !relationship_is_external(item)
+                        && OpcPackage::resolve_rel_target(source, &item.target)
+                            .eq_ignore_ascii_case(&part)
+                })
+                .count();
+            (package.content_types.content_type_for(&part)
+                == Some(content_types::EMBEDDED_WORKBOOK)
+                && references == 1)
+                .then_some(part)
+        });
+        let (workbook_part, new_id) = match reused_part {
+            Some(part) => (part, None),
+            None => {
+                let number =
+                    next_numbered_part_number(&package, "/ppt/embeddings/Workbook", ".xlsx");
+                let part = format!("/ppt/embeddings/Workbook{number}.xlsx");
+                let id = package.get_or_create_part_rels(&chart_part).add(
+                    rel_types::PACKAGE,
+                    &relative_part_target(&chart_part, &part),
+                );
+                (part, Some(id))
+            }
+        };
+        let (chart_xml, workbook_bytes) =
+            oxml_chart::replace_chart_data(chart_xml, data, new_id.as_deref())
+                .map_err(chart_error)?;
+        if new_id.is_some()
+            && let Some(old) = existing
+        {
+            if let Some(relationships) = package.get_part_rels_mut(&chart_part) {
+                relationships.items.retain(|item| item.id != old.id);
+            }
+            if !relationship_is_external(&old) {
+                prune_unreachable_parts(
+                    &mut package,
+                    &HashSet::from([OpcPackage::resolve_rel_target(&chart_part, &old.target)]),
+                );
+            }
+        }
+        package.set_part(&chart_part, chart_xml);
+        package.set_part(&workbook_part, workbook_bytes);
+        if package.content_types.content_type_for(&workbook_part)
+            != Some(content_types::EMBEDDED_WORKBOOK)
+        {
+            package
+                .content_types
+                .add_override(&workbook_part, content_types::EMBEDDED_WORKBOOK);
+        }
+        self.package = package;
+        Ok(())
+    }
+
+    /// Resolves the chart part of the graphic frame at `shape_path`.
+    fn chart_part_name(
+        &self,
+        slide_index: usize,
+        shape_path: &[usize],
+        operation: &'static str,
+    ) -> Result<String> {
         let record = self
             .slides
             .get(slide_index)
@@ -4618,7 +4727,7 @@ impl Presentation {
                 index: slide_index,
                 slide_count: self.slides.len(),
             })?;
-        let not_a_chart = || invalid_chart_mutation("read chart", "shape is not a chart");
+        let not_a_chart = || invalid_chart_mutation(operation, "shape is not a chart");
         let (first, children) = shape_path.split_first().ok_or_else(not_a_chart)?;
         let mut shape = record
             .slide
@@ -4648,16 +4757,14 @@ impl Presentation {
             })
             .ok_or_else(|| {
                 invalid_chart_mutation(
-                    "read chart",
+                    operation,
                     format!("chart relationship {relationship_id} is missing or external"),
                 )
             })?;
-        let part = OpcPackage::resolve_rel_target(&record.part_name, &relationship.target);
-        let xml = self.package.get_part(&part).ok_or_else(|| {
-            invalid_chart_mutation("read chart", format!("chart part {part} is missing"))
-        })?;
-        oxml_chart::read_chart_data(xml)
-            .map_err(|error| invalid_chart_mutation("read chart", error.to_string()))
+        Ok(OpcPackage::resolve_rel_target(
+            &record.part_name,
+            &relationship.target,
+        ))
     }
 }
 

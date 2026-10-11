@@ -4151,6 +4151,131 @@ def test_issue_345_add_chart_writes_bar_and_line_charts_that_read_back_and_rende
         assert chart_png.crop(box).tobytes() != empty_png.crop(box).tobytes()
 
 
+def test_issue_346_replace_data_rewrites_chart_caches_and_embedded_workbook(tmp_path):
+    import posixpath
+    import xml.etree.ElementTree as ElementTree
+
+    import rpptx
+    from rpptx import Inches
+    from rpptx.chart.data import CategoryChartData, XyChartData
+    from rpptx.enum.chart import XL_CHART_TYPE
+
+    def category_data(series_count, category_count):
+        data = CategoryChartData()
+        data.categories = [f"Week {index + 1}" for index in range(category_count)]
+        for item in range(series_count):
+            data.add_series(f"Region {item}", [item * 100 + index + 0.25 for index in range(category_count)])
+        return data
+
+    def workbook_cells(path):
+        """Map each cell of the chart's embedded workbook to its text."""
+        with zipfile.ZipFile(path) as archive:
+            slide_rels = ElementTree.fromstring(archive.read("ppt/slides/_rels/slide1.xml.rels"))
+            (chart_target,) = (item.get("Target") for item in slide_rels if item.get("Type").endswith("/chart"))
+            chart_part = posixpath.normpath(posixpath.join("ppt/slides", chart_target))
+            folder, file_name = posixpath.split(chart_part)
+            chart_rels = ElementTree.fromstring(archive.read(f"{folder}/_rels/{file_name}.rels"))
+            (workbook_target,) = (item.get("Target") for item in chart_rels if item.get("Type").endswith("/package"))
+            workbook = archive.read(posixpath.normpath(posixpath.join(folder, workbook_target)))
+        namespace = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+        with zipfile.ZipFile(io.BytesIO(workbook)) as book:
+            strings = [
+                "".join(text.text or "" for text in item.iterfind(".//s:t", namespace))
+                for item in ElementTree.fromstring(book.read("xl/sharedStrings.xml")).iterfind("s:si", namespace)
+            ]
+            sheet = ElementTree.fromstring(book.read("xl/worksheets/sheet1.xml"))
+        cells = {}
+        for cell in sheet.iterfind(".//s:c", namespace):
+            value = cell.findtext("s:v", default="", namespaces=namespace)
+            cells[cell.get("r")] = strings[int(value)] if cell.get("t") == "s" else value
+        return cells
+
+    def expected_cells(data):
+        cells = {"A1": "Category"}
+        for row, label in enumerate(data.categories, start=2):
+            cells[f"A{row}"] = label
+        for column, series in zip("BCDEFG", data._data()[1]):
+            cells[f"{column}1"] = series[0]
+            for row, value in enumerate(series[1], start=2):
+                cells[f"{column}{row}"] = repr(value)
+        return cells
+
+    sources = []
+    authored = rpptx.Presentation()
+    authored.slides.add_slide(authored.slide_layouts[6])
+    authored.slides[0].shapes.add_chart(
+        XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(1), Inches(1), Inches(6), Inches(4), category_data(2, 3)
+    )
+    sources.append(("rpptx", authored.to_bytes()))
+    try:
+        import pptx
+        from pptx.chart.data import CategoryChartData as OracleChartData
+        from pptx.enum.chart import XL_CHART_TYPE as ORACLE_CHART_TYPE
+        from pptx.util import Inches as OracleInches
+    except ImportError:
+        pptx = None
+    else:
+        foreign = pptx.Presentation()
+        oracle_data = OracleChartData()
+        oracle_data.categories = ["East", "West", "North"]
+        oracle_data.add_series("Sales", (1.5, 2.5, 3.5))
+        oracle_data.add_series("Costs", (1.0, 2.0, 3.0))
+        slide = foreign.slides.add_slide(foreign.slide_layouts[6])
+        slide.shapes.add_chart(
+            ORACLE_CHART_TYPE.LINE_MARKERS, OracleInches(1), OracleInches(1), OracleInches(6), OracleInches(4), oracle_data
+        )
+        stream = io.BytesIO()
+        foreign.save(stream)
+        sources.append(("python-pptx", stream.getvalue()))
+
+    for origin, source in sources:
+        original = rpptx.Presentation.from_bytes(source)
+        (frame,) = (shape for shape in original.slides[0].shapes if shape.has_chart)
+        chart_type = frame.chart.chart_type
+        count = len(frame.chart.series)
+        categories = len(frame.chart.categories)
+        for series_count, category_count in ((1, categories), (count + 2, categories), (count, categories + 3)):
+            prs = rpptx.Presentation.from_bytes(source)
+            (frame,) = (shape for shape in prs.slides[0].shapes if shape.has_chart)
+            data = category_data(series_count, category_count)
+            frame.chart.replace_data(data)
+            output = tmp_path / f"issue-346-{origin}-{series_count}-{category_count}.pptx"
+            prs.save(output)
+
+            reopened = rpptx.Presentation(output)
+            assert reopened.validate() == ()
+            (chart,) = (shape.chart for shape in reopened.slides[0].shapes if shape.has_chart)
+            assert chart.chart_type == chart_type
+            assert chart.categories == tuple(data.categories)
+            assert [(series.name, series.values) for series in chart.series] == [
+                (name, tuple(values)) for name, values in data._data()[1]
+            ]
+            assert workbook_cells(output) == expected_cells(data), origin
+            if pptx is not None:
+                (oracle,) = (shape.chart for shape in pptx.Presentation(output).slides[0].shapes if shape.has_chart)
+                assert tuple(oracle.plots[0].categories) == chart.categories
+                assert [(series.name, series.values) for series in oracle.series] == [
+                    (series.name, series.values) for series in chart.series
+                ]
+                assert [series.index for series in oracle.series] == list(range(series_count))
+
+    prs = rpptx.Presentation.from_bytes(sources[0][1])
+    (frame,) = (shape for shape in prs.slides[0].shapes if shape.has_chart)
+    unchanged = prs.to_bytes()
+    short = CategoryChartData()
+    short.categories = ["a", "b"]
+    short.add_series("A", [1])
+    with pytest.raises(rpptx.RpptxError):
+        frame.chart.replace_data(short)
+    with pytest.raises(TypeError):
+        frame.chart.replace_data({"categories": ["a"]})
+    xy_data = XyChartData()
+    xy_data.add_series("Up").add_data_point(1, 2)
+    frame.chart.replace_data(xy_data)
+    assert frame.chart.categories == ("1.0",)
+    assert prs.to_bytes() != unchanged
+
+
 def test_issue_169_replace_text_alias_is_counted_and_atomic():
     import rpptx
 

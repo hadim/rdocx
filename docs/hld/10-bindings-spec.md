@@ -636,7 +636,13 @@ in an XY chart, one set of x values. `Shape.has_chart` and `Shape.chart` follow
 python-pptx. The `Chart` reads `chart_type`, `categories`, and the `series`
 names and values from the chart part on each access through
 `Presentation::chart`, and a chart type the native authoring cannot write
-reads `None`.
+reads `None`. A value the cache leaves out reads `None`.
+`Chart.replace_data(chart_data)` takes the same data objects and runs the
+native `Presentation::replace_chart_data`, which rewrites the series caches,
+their formulas and the embedded workbook. Remaining series keep their
+formatting, removed series go, and added series clone the last series with
+their own index and theme accent. A rejected data object or chart leaves the
+deck unchanged.
 
 A table `Cell` follows python-pptx for `merge(other_cell)`, `split()`,
 `is_merge_origin`, `is_spanned`, `span_height`, and `span_width`. Merge and
