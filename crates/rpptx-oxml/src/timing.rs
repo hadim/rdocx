@@ -13,7 +13,9 @@ use oxml_core::xml_text::resolve_entity;
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::{Reader, Writer};
 
-use crate::namespace::{MC_NS, NamespaceBindings, P_NS, all_attributes};
+use crate::namespace::{
+    MAX_NESTING, MC_NS, NamespaceBindings, P_NS, all_attributes, nesting_error, nesting_exceeds,
+};
 
 pub type Result<T> = std::result::Result<T, OxmlError>;
 
@@ -274,7 +276,13 @@ impl CT_Timing {
         Self::from_fragment(xml, &NamespaceBindings::default())
     }
 
+    /// Fails when time node lists nest more than [`MAX_NESTING`] levels deep.
     pub(crate) fn from_fragment(xml: &[u8], inherited: &NamespaceBindings) -> Result<Self> {
+        // The parser and the walkers of the retained XML recurse once per
+        // time node list, so the bound is checked first, without recursing.
+        if nesting_exceeds(xml, &[b"childTnLst", b"subTnLst"], MAX_NESTING) {
+            return Err(nesting_error("time node"));
+        }
         let mut reader = Reader::from_reader(xml);
         let mut buffer = Vec::new();
         loop {
@@ -282,7 +290,7 @@ impl CT_Timing {
                 Event::Start(start) => {
                     let namespaces = inherited.with_start(&start)?;
                     validate_element(&start, &namespaces, b"timing")?;
-                    let (nodes, builds) = parse_timing_children(&mut reader, &namespaces)?;
+                    let (nodes, builds) = parse_timing_children(&mut reader, xml, &namespaces)?;
                     let condition_target_presence =
                         collect_condition_target_presence(xml, inherited)?;
                     return Ok(Self {
@@ -1011,7 +1019,7 @@ fn collect_owned_media_node_list(
                     buffer.clear();
                     continue;
                 }
-                let node = parse_timing_node(&raw, parent, &scope)?;
+                let node = parse_timing_node_fragment(&raw, &scope)?;
                 let owned = match &node {
                     TimingNode::Audio(media) | TimingNode::Video(media) => {
                         media.common.target == TimingTarget::Shape(shape_id)
@@ -1428,8 +1436,15 @@ impl CT_SlideTransition {
     }
 }
 
+/// Parses the children of the `p:timing` whose start tag `reader` has just
+/// read. `reader` reads `source` from its first byte.
+///
+/// Time nodes are parsed in place, each read once, rather than captured and
+/// parsed again at every level, which made the work grow with the square of
+/// the depth.
 fn parse_timing_children(
     reader: &mut Reader<&[u8]>,
+    source: &[u8],
     namespaces: &NamespaceBindings,
 ) -> Result<(Vec<TimingNode>, Vec<TimingBuild>)> {
     let mut nodes = Vec::new();
@@ -1442,7 +1457,6 @@ fn parse_timing_children(
             Event::Start(child) => {
                 let child_ns = namespaces.with_start(&child)?;
                 let local = local_name(child.name().as_ref()).to_vec();
-                let raw = capture_element(reader, &child)?;
                 if child_ns.element_uri(child.name().as_ref()) == Some(P_NS) && local == b"tnLst" {
                     if seen_tn_list {
                         return Err(duplicate("tnLst"));
@@ -1451,10 +1465,12 @@ fn parse_timing_children(
                         return Err(out_of_order("tnLst"));
                     }
                     seen_tn_list = true;
-                    nodes = parse_node_list(&raw, namespaces, b"tnLst")?;
-                } else if child_ns.element_uri(child.name().as_ref()) == Some(P_NS)
-                    && local == b"bldLst"
-                {
+                    nodes = parse_node_list(reader, source, &child_ns, b"tnLst")?;
+                    buffer.clear();
+                    continue;
+                }
+                let raw = capture_element(reader, &child)?;
+                if child_ns.element_uri(child.name().as_ref()) == Some(P_NS) && local == b"bldLst" {
                     if seen_build_list {
                         return Err(duplicate("bldLst"));
                     }
@@ -1493,37 +1509,40 @@ fn parse_timing_children(
     }
 }
 
+/// Parses the time nodes of the list whose start tag `reader` has just read.
+///
+/// `reader` reads `source` from its first byte, and `scope` holds the
+/// namespaces in scope on the list.
 fn parse_node_list(
-    xml: &[u8],
-    inherited: &NamespaceBindings,
+    reader: &mut Reader<&[u8]>,
+    source: &[u8],
+    scope: &NamespaceBindings,
     expected: &[u8],
 ) -> Result<Vec<TimingNode>> {
-    let mut reader = Reader::from_reader(xml);
-    let mut buffer = Vec::new();
-    let mut root = None;
     let mut nodes = Vec::new();
+    let mut buffer = Vec::new();
     loop {
+        let position = reader.buffer_position() as usize;
         match reader.read_event_into(&mut buffer)? {
-            Event::Start(start) if root.is_none() => {
-                let namespaces = inherited.with_start(&start)?;
-                validate_element(&start, &namespaces, expected)?;
-                root = Some(namespaces);
-            }
             Event::Start(child) => {
-                let namespaces = root.as_ref().expect("root set").with_start(&child)?;
-                let raw = capture_element(&mut reader, &child)?;
+                let namespaces = scope.with_start(&child)?;
                 nodes.push(parse_timing_node(
-                    &raw,
-                    root.as_ref().expect("root set"),
+                    reader,
+                    source,
+                    position,
+                    &child,
+                    false,
                     &namespaces,
                 )?);
             }
             Event::Empty(child) => {
-                let namespaces = root.as_ref().expect("root set").with_start(&child)?;
-                let raw = capture_empty_element(&child)?;
+                let namespaces = scope.with_start(&child)?;
                 nodes.push(parse_timing_node(
-                    &raw,
-                    root.as_ref().expect("root set"),
+                    reader,
+                    source,
+                    position,
+                    &child,
+                    true,
                     &namespaces,
                 )?);
             }
@@ -1535,77 +1554,18 @@ fn parse_node_list(
     }
 }
 
-fn parse_timing_node(
-    xml: &[u8],
-    inherited: &NamespaceBindings,
-    element_namespaces: &NamespaceBindings,
-) -> Result<TimingNode> {
+/// Parses one captured time node, as [`parse_node_list`] parses one in place.
+fn parse_timing_node_fragment(xml: &[u8], scope: &NamespaceBindings) -> Result<TimingNode> {
     let mut reader = Reader::from_reader(xml);
     let mut buffer = Vec::new();
     loop {
+        let position = reader.buffer_position() as usize;
         match reader.read_event_into(&mut buffer)? {
-            Event::Start(start) | Event::Empty(start) => {
-                let start_name = start.name();
-                let local = local_name(start_name.as_ref());
-                let is_p = element_namespaces.element_uri(start.name().as_ref()) == Some(P_NS);
-                if !is_p {
-                    return Ok(unsupported(local, xml));
-                }
-                return match local {
-                    b"par" => Ok(TimingNode::Parallel(TimingContainer {
-                        common: parse_container_common(xml, inherited)?,
-                    })),
-                    b"seq" => Ok(TimingNode::Sequence(parse_sequence(xml, inherited)?)),
-                    b"set" => {
-                        let behavior = parse_behavior(xml, inherited)?;
-                        Ok(TimingNode::Set(TimingSet {
-                            common: behavior.common,
-                            target: behavior.target,
-                            attribute_name: behavior.attribute_name,
-                            value: parse_set_value(xml, inherited)?,
-                        }))
-                    }
-                    b"anim" => {
-                        let behavior = parse_behavior(xml, inherited)?;
-                        let attrs = all_attributes(&start)?;
-                        Ok(TimingNode::Animate(TimingAnimate {
-                            common: behavior.common,
-                            target: behavior.target,
-                            attribute_name: behavior.attribute_name,
-                            from: attribute(&attrs, "from").map(str::to_owned),
-                            to: attribute(&attrs, "to").map(str::to_owned),
-                            by: attribute(&attrs, "by").map(str::to_owned),
-                        }))
-                    }
-                    b"animEffect" => {
-                        let behavior = parse_behavior(xml, inherited)?;
-                        let attrs = all_attributes(&start)?;
-                        Ok(TimingNode::Effect(TimingEffect {
-                            common: behavior.common,
-                            target: behavior.target,
-                            transition: attribute(&attrs, "transition").map(str::to_owned),
-                            filter: attribute(&attrs, "filter").map(str::to_owned),
-                        }))
-                    }
-                    b"animMotion" => {
-                        let behavior = parse_behavior(xml, inherited)?;
-                        let attrs = all_attributes(&start)?;
-                        Ok(TimingNode::Motion(TimingMotionPath {
-                            common: behavior.common,
-                            target: behavior.target,
-                            path: attribute(&attrs, "path").map(str::to_owned),
-                            origin: attribute(&attrs, "origin").map(str::to_owned),
-                        }))
-                    }
-                    b"audio" => Ok(TimingNode::Audio(parse_media(xml, inherited, false)?)),
-                    b"video" => Ok(TimingNode::Video(parse_media(xml, inherited, true)?)),
-                    b"cmd" => match parse_media_command(xml, inherited) {
-                        Ok(command) => Ok(TimingNode::MediaCommand(command)),
-                        Err(OxmlError::MissingElement(_)) => Ok(unsupported(local, xml)),
-                        Err(error) => Err(error),
-                    },
-                    _ => Ok(unsupported(local, xml)),
-                };
+            Event::Start(start) => {
+                return parse_timing_node(&mut reader, xml, position, &start, false, scope);
+            }
+            Event::Empty(start) => {
+                return parse_timing_node(&mut reader, xml, position, &start, true, scope);
             }
             Event::Eof => return Err(OxmlError::MissingElement("timing node".to_owned())),
             _ => {}
@@ -1614,38 +1574,176 @@ fn parse_timing_node(
     }
 }
 
-fn parse_media(xml: &[u8], inherited: &NamespaceBindings, video: bool) -> Result<TimingMedia> {
-    let mut reader = Reader::from_reader(xml);
+/// Captures the element whose start or empty tag `reader` has just read.
+fn capture_node(
+    reader: &mut Reader<&[u8]>,
+    start: &BytesStart<'_>,
+    empty: bool,
+) -> Result<Vec<u8>> {
+    if empty {
+        Ok(capture_empty_element(start)?)
+    } else {
+        Ok(capture_element(reader, start)?)
+    }
+}
+
+/// Captures the element that begins at `position` in `source`, after a parse
+/// that `reader` started there gave up, and moves `reader` past its end.
+fn recapture_element(
+    reader: &mut Reader<&[u8]>,
+    source: &[u8],
+    position: usize,
+) -> Result<Vec<u8>> {
+    let mut element_reader = Reader::from_reader(&source[position..]);
     let mut buffer = Vec::new();
-    let mut root = None;
-    let mut full_screen = None;
+    let raw = match element_reader.read_event_into(&mut buffer)? {
+        Event::Start(start) => capture_element(&mut element_reader, &start)?,
+        Event::Empty(start) => capture_empty_element(&start)?,
+        _ => return Err(OxmlError::MissingElement("timing node".to_owned())),
+    };
+    let end = position + element_reader.buffer_position() as usize;
+    while (reader.buffer_position() as usize) < end {
+        buffer.clear();
+        if matches!(reader.read_event_into(&mut buffer)?, Event::Eof) {
+            break;
+        }
+    }
+    Ok(raw)
+}
+
+/// The value of a `p:set` node from the `p:to` children its behaviour kept,
+/// `None` standing for an empty one.
+fn set_value(set_values: &[Option<Vec<u8>>], scope: &NamespaceBindings) -> Result<Option<String>> {
+    let mut value = None;
+    for raw in set_values {
+        let parsed = match raw {
+            Some(raw) => parse_animation_variant(raw, scope)?,
+            None => None,
+        };
+        set_once(&mut value, parsed, "to")?;
+    }
+    Ok(value.flatten())
+}
+
+/// Parses the time node whose start tag, beginning at `position` in
+/// `source`, `reader` has just read, or whose empty tag it has read when
+/// `empty`. `scope` holds the namespaces in scope on the node.
+fn parse_timing_node(
+    reader: &mut Reader<&[u8]>,
+    source: &[u8],
+    position: usize,
+    start: &BytesStart<'_>,
+    empty: bool,
+    scope: &NamespaceBindings,
+) -> Result<TimingNode> {
+    let start_name = start.name();
+    let local = local_name(start_name.as_ref());
+    if scope.element_uri(start_name.as_ref()) != Some(P_NS) {
+        return Ok(unsupported(local, &capture_node(reader, start, empty)?));
+    }
+    let missing = |name: &str| Err(OxmlError::MissingElement(name.to_owned()));
+    match local {
+        b"par" | b"seq" if empty => missing("p:cTn"),
+        b"set" | b"anim" | b"animEffect" | b"animMotion" if empty => missing("p:cBhvr"),
+        b"audio" | b"video" if empty => missing("p:cMediaNode"),
+        b"par" => Ok(TimingNode::Parallel(TimingContainer {
+            common: parse_container_common(reader, source, scope)?,
+        })),
+        b"seq" => Ok(TimingNode::Sequence(parse_sequence(
+            reader, source, start, scope,
+        )?)),
+        b"set" => {
+            let behavior = parse_behavior(reader, source, scope)?;
+            let value = set_value(&behavior.set_values, scope)?;
+            Ok(TimingNode::Set(TimingSet {
+                common: behavior.common,
+                target: behavior.target,
+                attribute_name: behavior.attribute_name,
+                value,
+            }))
+        }
+        b"anim" => {
+            let behavior = parse_behavior(reader, source, scope)?;
+            let attrs = all_attributes(start)?;
+            Ok(TimingNode::Animate(TimingAnimate {
+                common: behavior.common,
+                target: behavior.target,
+                attribute_name: behavior.attribute_name,
+                from: attribute(&attrs, "from").map(str::to_owned),
+                to: attribute(&attrs, "to").map(str::to_owned),
+                by: attribute(&attrs, "by").map(str::to_owned),
+            }))
+        }
+        b"animEffect" => {
+            let behavior = parse_behavior(reader, source, scope)?;
+            let attrs = all_attributes(start)?;
+            Ok(TimingNode::Effect(TimingEffect {
+                common: behavior.common,
+                target: behavior.target,
+                transition: attribute(&attrs, "transition").map(str::to_owned),
+                filter: attribute(&attrs, "filter").map(str::to_owned),
+            }))
+        }
+        b"animMotion" => {
+            let behavior = parse_behavior(reader, source, scope)?;
+            let attrs = all_attributes(start)?;
+            Ok(TimingNode::Motion(TimingMotionPath {
+                common: behavior.common,
+                target: behavior.target,
+                path: attribute(&attrs, "path").map(str::to_owned),
+                origin: attribute(&attrs, "origin").map(str::to_owned),
+            }))
+        }
+        b"audio" => Ok(TimingNode::Audio(parse_media(
+            reader, source, start, scope, false,
+        )?)),
+        b"video" => Ok(TimingNode::Video(parse_media(
+            reader, source, start, scope, true,
+        )?)),
+        b"cmd" if empty => Ok(unsupported(local, &capture_empty_element(start)?)),
+        b"cmd" => match parse_media_command(reader, source, start, scope) {
+            Ok(command) => Ok(TimingNode::MediaCommand(command)),
+            Err(OxmlError::MissingElement(_)) => Ok(unsupported(
+                local,
+                &recapture_element(reader, source, position)?,
+            )),
+            Err(error) => Err(error),
+        },
+        _ => Ok(unsupported(local, &capture_node(reader, start, empty)?)),
+    }
+}
+
+/// Parses the `p:audio` or `p:video` whose start tag `reader` has just read.
+fn parse_media(
+    reader: &mut Reader<&[u8]>,
+    source: &[u8],
+    start: &BytesStart<'_>,
+    scope: &NamespaceBindings,
+    video: bool,
+) -> Result<TimingMedia> {
+    let attributes = all_attributes(start)?;
+    let full_screen = parse_optional_bool(attribute(&attributes, "fullScrn"), "fullScrn")?;
     let mut common = None;
+    let mut buffer = Vec::new();
     loop {
         match reader.read_event_into(&mut buffer)? {
-            Event::Start(start) if root.is_none() => {
-                let attributes = all_attributes(&start)?;
-                full_screen = parse_optional_bool(attribute(&attributes, "fullScrn"), "fullScrn")?;
-                root = Some(inherited.with_start(&start)?);
-            }
             Event::Start(child) => {
-                let scope = root.as_ref().expect("media root").with_start(&child)?;
-                let is_common = scope.element_uri(child.name().as_ref()) == Some(P_NS)
-                    && local_name(child.name().as_ref()) == b"cMediaNode";
-                let raw = capture_element(&mut reader, &child)?;
-                if is_common {
+                let child_scope = scope.with_start(&child)?;
+                if child_scope.element_uri(child.name().as_ref()) == Some(P_NS)
+                    && local_name(child.name().as_ref()) == b"cMediaNode"
+                {
                     set_once(
                         &mut common,
-                        parse_common_media_node(&raw, root.as_ref().expect("media root"))?,
+                        parse_common_media_node(reader, source, &child, &child_scope)?,
                         "cMediaNode",
                     )?;
+                } else {
+                    let _ = capture_element(reader, &child)?;
                 }
             }
-            Event::Empty(_) if root.is_none() => {
-                return Err(OxmlError::MissingElement("p:cMediaNode".to_owned()));
-            }
             Event::Empty(child) => {
-                let scope = root.as_ref().expect("media root").with_start(&child)?;
-                if scope.element_uri(child.name().as_ref()) == Some(P_NS)
+                let child_scope = scope.with_start(&child)?;
+                if child_scope.element_uri(child.name().as_ref()) == Some(P_NS)
                     && local_name(child.name().as_ref()) == b"cMediaNode"
                 {
                     return Err(OxmlError::MissingElement("p:cTn".to_owned()));
@@ -1667,72 +1765,62 @@ fn parse_media(xml: &[u8], inherited: &NamespaceBindings, video: bool) -> Result
     }
 }
 
-fn parse_common_media_node(xml: &[u8], inherited: &NamespaceBindings) -> Result<CommonMediaNode> {
-    let mut reader = Reader::from_reader(xml);
-    let mut buffer = Vec::new();
-    let mut root = None;
-    let mut attributes = Vec::new();
+/// Parses the `p:cMediaNode` whose start tag `reader` has just read.
+fn parse_common_media_node(
+    reader: &mut Reader<&[u8]>,
+    source: &[u8],
+    start: &BytesStart<'_>,
+    scope: &NamespaceBindings,
+) -> Result<CommonMediaNode> {
+    let attributes = all_attributes(start)?;
     let mut common = None;
     let mut common_attributes = None;
     let mut target = None;
     let mut boundary = 0u8;
+    let mut buffer = Vec::new();
     loop {
         match reader.read_event_into(&mut buffer)? {
-            Event::Start(start) if root.is_none() => {
-                attributes = all_attributes(&start)?;
-                root = Some(inherited.with_start(&start)?);
-            }
             Event::Start(child) => {
-                let scope = root
-                    .as_ref()
-                    .expect("common media root")
-                    .with_start(&child)?;
+                let child_scope = scope.with_start(&child)?;
                 let local = local_name(child.name().as_ref()).to_vec();
-                let raw = capture_element(&mut reader, &child)?;
-                if scope.element_uri(child.name().as_ref()) == Some(P_NS) {
-                    let rank = match local.as_slice() {
-                        b"cTn" => 1,
-                        b"tgtEl" => 2,
-                        _ => 0,
-                    };
-                    if rank != 0 && rank < boundary {
-                        return Err(out_of_order(&String::from_utf8_lossy(&local)));
+                if child_scope.element_uri(child.name().as_ref()) != Some(P_NS) {
+                    let _ = capture_element(reader, &child)?;
+                    buffer.clear();
+                    continue;
+                }
+                let rank = match local.as_slice() {
+                    b"cTn" => 1,
+                    b"tgtEl" => 2,
+                    _ => 0,
+                };
+                if rank != 0 && rank < boundary {
+                    return Err(out_of_order(&String::from_utf8_lossy(&local)));
+                }
+                boundary = boundary.max(rank);
+                match local.as_slice() {
+                    b"cTn" => {
+                        let parsed = parse_common_time_node(reader, source, &child, &child_scope)?;
+                        set_once(&mut common, parsed, "cTn")?;
+                        common_attributes = Some(all_attributes(&child)?);
                     }
-                    boundary = boundary.max(rank);
-                    match local.as_slice() {
-                        b"cTn" => {
-                            let parsed = parse_common_time_node(
-                                &raw,
-                                root.as_ref().expect("common media root"),
-                            )?;
-                            set_once(&mut common, parsed, "cTn")?;
-                            common_attributes = Some(all_attributes(&child)?);
-                        }
-                        b"tgtEl" => set_once(
-                            &mut target,
-                            parse_target(&raw, root.as_ref().expect("common media root"))?,
-                            "tgtEl",
-                        )?,
-                        _ => {}
+                    b"tgtEl" => {
+                        let raw = capture_element(reader, &child)?;
+                        set_once(&mut target, parse_target(&raw, scope)?, "tgtEl")?;
+                    }
+                    _ => {
+                        let _ = capture_element(reader, &child)?;
                     }
                 }
             }
             Event::Empty(child) => {
-                let scope = root
-                    .as_ref()
-                    .expect("common media root")
-                    .with_start(&child)?;
+                let child_scope = scope.with_start(&child)?;
                 let child_name = child.name();
                 let local = local_name(child_name.as_ref());
-                if scope.element_uri(child.name().as_ref()) == Some(P_NS) && local == b"cTn" {
-                    let parsed = parse_common_time_node(
-                        &capture_empty_element(&child)?,
-                        root.as_ref().expect("common media root"),
-                    )?;
-                    set_once(&mut common, parsed, "cTn")?;
+                if child_scope.element_uri(child.name().as_ref()) == Some(P_NS) && local == b"cTn" {
+                    set_once(&mut common, common_from_start(&child)?, "cTn")?;
                     common_attributes = Some(all_attributes(&child)?);
                     boundary = 1;
-                } else if scope.element_uri(child.name().as_ref()) == Some(P_NS)
+                } else if child_scope.element_uri(child.name().as_ref()) == Some(P_NS)
                     && local == b"tgtEl"
                 {
                     set_once(&mut target, TimingTarget::Unsupported, "tgtEl")?;
@@ -1784,26 +1872,21 @@ fn parse_common_media_node(xml: &[u8], inherited: &NamespaceBindings) -> Result<
     }
 }
 
-fn parse_media_command(xml: &[u8], inherited: &NamespaceBindings) -> Result<TimingMediaCommand> {
-    let behavior = parse_behavior(xml, inherited)?;
-    let mut reader = Reader::from_reader(xml);
-    let mut buffer = Vec::new();
-    loop {
-        match reader.read_event_into(&mut buffer)? {
-            Event::Start(start) | Event::Empty(start) => {
-                let attributes = all_attributes(&start)?;
-                let lexical = attribute(&attributes, "cmd").unwrap_or_default();
-                return Ok(TimingMediaCommand {
-                    common: behavior.common,
-                    target: behavior.target,
-                    command: parse_media_command_kind(lexical)?,
-                });
-            }
-            Event::Eof => return Err(OxmlError::MissingElement("p:cmd".to_owned())),
-            _ => {}
-        }
-        buffer.clear();
-    }
+/// Parses the `p:cmd` whose start tag `reader` has just read.
+fn parse_media_command(
+    reader: &mut Reader<&[u8]>,
+    source: &[u8],
+    start: &BytesStart<'_>,
+    scope: &NamespaceBindings,
+) -> Result<TimingMediaCommand> {
+    let behavior = parse_behavior(reader, source, scope)?;
+    let attributes = all_attributes(start)?;
+    let lexical = attribute(&attributes, "cmd").unwrap_or_default();
+    Ok(TimingMediaCommand {
+        common: behavior.common,
+        target: behavior.target,
+        command: parse_media_command_kind(lexical)?,
+    })
 }
 
 fn parse_media_command_kind(value: &str) -> Result<MediaCommandKind> {
@@ -1846,56 +1929,71 @@ struct ParsedBehavior {
     common: CommonTimeNode,
     target: TimingTarget,
     attribute_name: Option<String>,
+    /// The `p:to` children of the behaviour node, captured, or `None` for an
+    /// empty one, which a `p:set` node reads its value from.
+    set_values: Vec<Option<Vec<u8>>>,
 }
 
-fn parse_behavior(xml: &[u8], inherited: &NamespaceBindings) -> Result<ParsedBehavior> {
-    let mut reader = Reader::from_reader(xml);
-    let mut buffer = Vec::new();
-    let mut root = None;
+/// Parses the children of the behaviour node whose start tag `reader` has
+/// just read, its `p:cBhvr` in place.
+fn parse_behavior(
+    reader: &mut Reader<&[u8]>,
+    source: &[u8],
+    scope: &NamespaceBindings,
+) -> Result<ParsedBehavior> {
     let mut behavior = None;
     let mut passed_behavior_slot = false;
+    let mut set_values = Vec::new();
+    let mut buffer = Vec::new();
     loop {
         match reader.read_event_into(&mut buffer)? {
-            Event::Start(start) if root.is_none() => {
-                root = Some(inherited.with_start(&start)?);
-            }
             Event::Start(child) => {
-                let scope = root.as_ref().expect("root").with_start(&child)?;
-                let is_behavior = scope.element_uri(child.name().as_ref()) == Some(P_NS)
-                    && local_name(child.name().as_ref()) == b"cBhvr";
-                let raw = capture_element(&mut reader, &child)?;
-                if is_behavior {
+                let child_scope = scope.with_start(&child)?;
+                let is_p = child_scope.element_uri(child.name().as_ref()) == Some(P_NS);
+                let child_name = child.name();
+                let local = local_name(child_name.as_ref());
+                if is_p && local == b"cBhvr" {
                     if passed_behavior_slot {
                         return Err(out_of_order("cBhvr"));
                     }
                     set_once(
                         &mut behavior,
-                        parse_common_behavior(&raw, root.as_ref().expect("root"))?,
+                        parse_common_behavior(reader, source, &child_scope)?,
                         "cBhvr",
                     )?;
-                } else if scope.element_uri(child.name().as_ref()) == Some(P_NS) {
-                    passed_behavior_slot = true;
+                } else {
+                    let raw = capture_element(reader, &child)?;
+                    if is_p {
+                        passed_behavior_slot = true;
+                        if local == b"to" {
+                            set_values.push(Some(raw));
+                        }
+                    }
                 }
             }
-            Event::Empty(_) if root.is_none() => {
-                return Err(OxmlError::MissingElement("p:cBhvr".to_owned()));
-            }
             Event::Empty(child) => {
-                let scope = root.as_ref().expect("root").with_start(&child)?;
-                if scope.element_uri(child.name().as_ref()) == Some(P_NS)
-                    && local_name(child.name().as_ref()) == b"cBhvr"
-                {
+                let child_scope = scope.with_start(&child)?;
+                let is_p = child_scope.element_uri(child.name().as_ref()) == Some(P_NS);
+                let child_name = child.name();
+                let local = local_name(child_name.as_ref());
+                if is_p && local == b"cBhvr" {
                     if behavior.is_some() {
                         return Err(duplicate("cBhvr"));
                     }
                     return Err(OxmlError::MissingElement("p:cTn".to_owned()));
                 }
-                if scope.element_uri(child.name().as_ref()) == Some(P_NS) {
+                if is_p {
                     passed_behavior_slot = true;
+                    if local == b"to" {
+                        set_values.push(None);
+                    }
                 }
             }
             Event::End(_) => {
-                return behavior.ok_or_else(|| OxmlError::MissingElement("p:cBhvr".to_owned()));
+                let mut behavior: ParsedBehavior =
+                    behavior.ok_or_else(|| OxmlError::MissingElement("p:cBhvr".to_owned()))?;
+                behavior.set_values = set_values;
+                return Ok(behavior);
             }
             Event::Eof => return Err(OxmlError::MissingElement("p:cBhvr".to_owned())),
             _ => {}
@@ -1904,67 +2002,66 @@ fn parse_behavior(xml: &[u8], inherited: &NamespaceBindings) -> Result<ParsedBeh
     }
 }
 
-fn parse_common_behavior(xml: &[u8], inherited: &NamespaceBindings) -> Result<ParsedBehavior> {
-    let mut reader = Reader::from_reader(xml);
-    let mut buffer = Vec::new();
-    let mut root = None;
+/// Parses the `p:cBhvr` whose start tag `reader` has just read.
+fn parse_common_behavior(
+    reader: &mut Reader<&[u8]>,
+    source: &[u8],
+    scope: &NamespaceBindings,
+) -> Result<ParsedBehavior> {
     let mut common = None;
     let mut target = None;
     let mut attribute_name = None;
     let mut boundary = 0u8;
+    let mut buffer = Vec::new();
     loop {
         match reader.read_event_into(&mut buffer)? {
-            Event::Start(start) if root.is_none() => {
-                root = Some(inherited.with_start(&start)?);
-            }
             Event::Start(child) => {
-                let scope = root.as_ref().expect("root").with_start(&child)?;
+                let child_scope = scope.with_start(&child)?;
                 let local = local_name(child.name().as_ref()).to_vec();
-                let raw = capture_element(&mut reader, &child)?;
-                if scope.element_uri(child.name().as_ref()) == Some(P_NS) {
-                    let rank = behavior_child_rank(&local);
-                    if rank != 0 && rank < boundary {
-                        return Err(out_of_order(&String::from_utf8_lossy(&local)));
+                if child_scope.element_uri(child.name().as_ref()) != Some(P_NS) {
+                    let _ = capture_element(reader, &child)?;
+                    buffer.clear();
+                    continue;
+                }
+                let rank = behavior_child_rank(&local);
+                if rank != 0 && rank < boundary {
+                    return Err(out_of_order(&String::from_utf8_lossy(&local)));
+                }
+                boundary = boundary.max(rank);
+                match local.as_slice() {
+                    b"cTn" => set_once(
+                        &mut common,
+                        parse_common_time_node(reader, source, &child, &child_scope)?,
+                        "cTn",
+                    )?,
+                    b"tgtEl" => {
+                        let raw = capture_element(reader, &child)?;
+                        set_once(&mut target, parse_target(&raw, scope)?, "tgtEl")?;
                     }
-                    boundary = boundary.max(rank);
-                    match local.as_slice() {
-                        b"cTn" => set_once(
-                            &mut common,
-                            parse_common_time_node(&raw, root.as_ref().expect("root"))?,
-                            "cTn",
-                        )?,
-                        b"tgtEl" => set_once(
-                            &mut target,
-                            parse_target(&raw, root.as_ref().expect("root"))?,
-                            "tgtEl",
-                        )?,
-                        b"attrNameLst" => set_once(
+                    b"attrNameLst" => {
+                        let raw = capture_element(reader, &child)?;
+                        set_once(
                             &mut attribute_name,
-                            parse_attribute_name(&raw, root.as_ref().expect("root"))?,
+                            parse_attribute_name(&raw, scope)?,
                             "attrNameLst",
-                        )?,
-                        _ => {}
+                        )?;
+                    }
+                    _ => {
+                        let _ = capture_element(reader, &child)?;
                     }
                 }
             }
             Event::Empty(child) => {
-                let scope = root.as_ref().expect("root").with_start(&child)?;
+                let child_scope = scope.with_start(&child)?;
                 let local = local_name(child.name().as_ref()).to_vec();
-                if scope.element_uri(child.name().as_ref()) == Some(P_NS) {
+                if child_scope.element_uri(child.name().as_ref()) == Some(P_NS) {
                     let rank = behavior_child_rank(&local);
                     if rank != 0 && rank < boundary {
                         return Err(out_of_order(&String::from_utf8_lossy(&local)));
                     }
                     boundary = boundary.max(rank);
                     match local.as_slice() {
-                        b"cTn" => set_once(
-                            &mut common,
-                            parse_common_time_node(
-                                &capture_empty_element(&child)?,
-                                root.as_ref().expect("root"),
-                            )?,
-                            "cTn",
-                        )?,
+                        b"cTn" => set_once(&mut common, common_from_start(&child)?, "cTn")?,
                         b"tgtEl" => set_once(&mut target, TimingTarget::Unsupported, "tgtEl")?,
                         b"attrNameLst" => set_once(&mut attribute_name, None, "attrNameLst")?,
                         _ => {}
@@ -1976,6 +2073,7 @@ fn parse_common_behavior(xml: &[u8], inherited: &NamespaceBindings) -> Result<Pa
                     common: common.ok_or_else(|| OxmlError::MissingElement("p:cTn".to_owned()))?,
                     target: target.unwrap_or(TimingTarget::Unsupported),
                     attribute_name: attribute_name.flatten(),
+                    set_values: Vec::new(),
                 });
             }
             Event::Eof => return Err(OxmlError::MissingElement("closing p:cBhvr".to_owned())),
@@ -1994,50 +2092,47 @@ fn behavior_child_rank(local: &[u8]) -> u8 {
     }
 }
 
-fn parse_container_common(xml: &[u8], inherited: &NamespaceBindings) -> Result<CommonTimeNode> {
-    let mut reader = Reader::from_reader(xml);
-    let mut buffer = Vec::new();
-    let mut root = None;
+/// Parses the children of the `p:par` whose start tag `reader` has just
+/// read, its `p:cTn` in place.
+fn parse_container_common(
+    reader: &mut Reader<&[u8]>,
+    source: &[u8],
+    scope: &NamespaceBindings,
+) -> Result<CommonTimeNode> {
     let mut common = None;
     let mut passed_common_slot = false;
+    let mut buffer = Vec::new();
     loop {
         match reader.read_event_into(&mut buffer)? {
-            Event::Start(start) if root.is_none() => root = Some(inherited.with_start(&start)?),
             Event::Start(child) => {
-                let scope = root.as_ref().expect("root").with_start(&child)?;
-                let is_common = scope.element_uri(child.name().as_ref()) == Some(P_NS)
-                    && local_name(child.name().as_ref()) == b"cTn";
-                let raw = capture_element(&mut reader, &child)?;
-                if is_common {
+                let child_scope = scope.with_start(&child)?;
+                let is_p = child_scope.element_uri(child.name().as_ref()) == Some(P_NS);
+                if is_p && local_name(child.name().as_ref()) == b"cTn" {
                     if passed_common_slot {
                         return Err(out_of_order("cTn"));
                     }
                     set_once(
                         &mut common,
-                        parse_common_time_node(&raw, root.as_ref().expect("root"))?,
+                        parse_common_time_node(reader, source, &child, &child_scope)?,
                         "cTn",
                     )?;
-                } else if scope.element_uri(child.name().as_ref()) == Some(P_NS) {
-                    passed_common_slot = true;
+                } else {
+                    let _ = capture_element(reader, &child)?;
+                    if is_p {
+                        passed_common_slot = true;
+                    }
                 }
             }
             Event::Empty(child) => {
-                let scope = root.as_ref().expect("root").with_start(&child)?;
-                if scope.element_uri(child.name().as_ref()) == Some(P_NS)
+                let child_scope = scope.with_start(&child)?;
+                if child_scope.element_uri(child.name().as_ref()) == Some(P_NS)
                     && local_name(child.name().as_ref()) == b"cTn"
                 {
                     if passed_common_slot {
                         return Err(out_of_order("cTn"));
                     }
-                    set_once(
-                        &mut common,
-                        parse_common_time_node(
-                            &capture_empty_element(&child)?,
-                            root.as_ref().expect("root"),
-                        )?,
-                        "cTn",
-                    )?;
-                } else if scope.element_uri(child.name().as_ref()) == Some(P_NS) {
+                    set_once(&mut common, common_from_start(&child)?, "cTn")?;
+                } else if child_scope.element_uri(child.name().as_ref()) == Some(P_NS) {
                     passed_common_slot = true;
                 }
             }
@@ -2051,84 +2146,72 @@ fn parse_container_common(xml: &[u8], inherited: &NamespaceBindings) -> Result<C
     }
 }
 
-fn parse_sequence(xml: &[u8], inherited: &NamespaceBindings) -> Result<TimingSequence> {
-    let mut reader = Reader::from_reader(xml);
-    let mut buffer = Vec::new();
-    let mut root = None;
+/// Parses the `p:seq` whose start tag `reader` has just read.
+fn parse_sequence(
+    reader: &mut Reader<&[u8]>,
+    source: &[u8],
+    start: &BytesStart<'_>,
+    scope: &NamespaceBindings,
+) -> Result<TimingSequence> {
+    let attributes = all_attributes(start)?;
     let mut common = None;
     let mut previous_conditions = None;
     let mut next_conditions = None;
-    let mut attributes = Vec::new();
     let mut boundary = 0u8;
+    let mut buffer = Vec::new();
     loop {
         match reader.read_event_into(&mut buffer)? {
-            Event::Start(start) if root.is_none() => {
-                attributes = all_attributes(&start)?;
-                let scope = inherited.with_start(&start)?;
-                validate_element(&start, &scope, b"seq")?;
-                root = Some(scope);
-            }
-            Event::Empty(start) if root.is_none() => {
-                let scope = inherited.with_start(&start)?;
-                validate_element(&start, &scope, b"seq")?;
-                return Err(OxmlError::MissingElement("p:cTn".to_owned()));
-            }
             Event::Start(child) => {
-                let scope = root.as_ref().expect("root").with_start(&child)?;
+                let child_scope = scope.with_start(&child)?;
                 let local = local_name(child.name().as_ref()).to_vec();
-                let raw = capture_element(&mut reader, &child)?;
-                if scope.element_uri(child.name().as_ref()) == Some(P_NS) {
-                    let rank = sequence_child_rank(&local);
-                    if rank != 0 && rank < boundary {
-                        return Err(out_of_order(&String::from_utf8_lossy(&local)));
-                    }
-                    boundary = boundary.max(rank);
-                    match local.as_slice() {
-                        b"cTn" => set_once(
-                            &mut common,
-                            parse_common_time_node(&raw, root.as_ref().expect("root"))?,
-                            "cTn",
-                        )?,
-                        b"prevCondLst" => set_once(
+                if child_scope.element_uri(child.name().as_ref()) != Some(P_NS) {
+                    let _ = capture_element(reader, &child)?;
+                    buffer.clear();
+                    continue;
+                }
+                let rank = sequence_child_rank(&local);
+                if rank != 0 && rank < boundary {
+                    return Err(out_of_order(&String::from_utf8_lossy(&local)));
+                }
+                boundary = boundary.max(rank);
+                match local.as_slice() {
+                    b"cTn" => set_once(
+                        &mut common,
+                        parse_common_time_node(reader, source, &child, &child_scope)?,
+                        "cTn",
+                    )?,
+                    b"prevCondLst" => {
+                        let raw = capture_element(reader, &child)?;
+                        set_once(
                             &mut previous_conditions,
-                            parse_condition_list(
-                                &raw,
-                                root.as_ref().expect("root"),
-                                b"prevCondLst",
-                            )?,
+                            parse_condition_list(&raw, scope, b"prevCondLst")?,
                             "prevCondLst",
-                        )?,
-                        b"nextCondLst" => set_once(
+                        )?;
+                    }
+                    b"nextCondLst" => {
+                        let raw = capture_element(reader, &child)?;
+                        set_once(
                             &mut next_conditions,
-                            parse_condition_list(
-                                &raw,
-                                root.as_ref().expect("root"),
-                                b"nextCondLst",
-                            )?,
+                            parse_condition_list(&raw, scope, b"nextCondLst")?,
                             "nextCondLst",
-                        )?,
-                        _ => {}
+                        )?;
+                    }
+                    _ => {
+                        let _ = capture_element(reader, &child)?;
                     }
                 }
             }
             Event::Empty(child) => {
-                let scope = root.as_ref().expect("root").with_start(&child)?;
+                let child_scope = scope.with_start(&child)?;
                 let local = local_name(child.name().as_ref()).to_vec();
-                if scope.element_uri(child.name().as_ref()) == Some(P_NS) {
+                if child_scope.element_uri(child.name().as_ref()) == Some(P_NS) {
                     let rank = sequence_child_rank(&local);
                     if rank != 0 && rank < boundary {
                         return Err(out_of_order(&String::from_utf8_lossy(&local)));
                     }
                     boundary = boundary.max(rank);
                     match local.as_slice() {
-                        b"cTn" => set_once(
-                            &mut common,
-                            parse_common_time_node(
-                                &capture_empty_element(&child)?,
-                                root.as_ref().expect("root"),
-                            )?,
-                            "cTn",
-                        )?,
+                        b"cTn" => set_once(&mut common, common_from_start(&child)?, "cTn")?,
                         b"prevCondLst" => {
                             set_once(&mut previous_conditions, Vec::new(), "prevCondLst")?
                         }
@@ -2152,44 +2235,6 @@ fn parse_sequence(xml: &[u8], inherited: &NamespaceBindings) -> Result<TimingSeq
                 });
             }
             Event::Eof => return Err(OxmlError::MissingElement("closing p:seq".to_owned())),
-            _ => {}
-        }
-        buffer.clear();
-    }
-}
-
-fn parse_set_value(xml: &[u8], inherited: &NamespaceBindings) -> Result<Option<String>> {
-    let mut reader = Reader::from_reader(xml);
-    let mut buffer = Vec::new();
-    let mut root = None;
-    let mut value = None;
-    loop {
-        match reader.read_event_into(&mut buffer)? {
-            Event::Start(start) if root.is_none() => {
-                root = Some(inherited.with_start(&start)?);
-            }
-            Event::Start(child) => {
-                let scope = root.as_ref().expect("root").with_start(&child)?;
-                let is_to = scope.element_uri(child.name().as_ref()) == Some(P_NS)
-                    && local_name(child.name().as_ref()) == b"to";
-                let raw = capture_element(&mut reader, &child)?;
-                if is_to {
-                    set_once(
-                        &mut value,
-                        parse_animation_variant(&raw, root.as_ref().expect("root"))?,
-                        "to",
-                    )?;
-                }
-            }
-            Event::Empty(child) => {
-                let scope = root.as_ref().expect("root").with_start(&child)?;
-                if scope.element_uri(child.name().as_ref()) == Some(P_NS)
-                    && local_name(child.name().as_ref()) == b"to"
-                {
-                    set_once(&mut value, None, "to")?;
-                }
-            }
-            Event::End(_) | Event::Eof => return Ok(value.flatten()),
             _ => {}
         }
         buffer.clear();
@@ -2257,55 +2302,50 @@ fn sequence_child_rank(local: &[u8]) -> u8 {
     }
 }
 
-fn parse_common_time_node(xml: &[u8], inherited: &NamespaceBindings) -> Result<CommonTimeNode> {
-    let mut reader = Reader::from_reader(xml);
-    let mut buffer = Vec::new();
-    let mut root = None;
-    let mut value = None;
+/// Parses the `p:cTn` whose start tag `reader` has just read, its
+/// `p:childTnLst` in place.
+fn parse_common_time_node(
+    reader: &mut Reader<&[u8]>,
+    source: &[u8],
+    start: &BytesStart<'_>,
+    scope: &NamespaceBindings,
+) -> Result<CommonTimeNode> {
+    let mut value = common_from_start(start)?;
     let mut seen_children = [false; 7];
     let mut boundary = 0usize;
+    let mut buffer = Vec::new();
     loop {
         match reader.read_event_into(&mut buffer)? {
-            Event::Start(start) if root.is_none() => {
-                let scope = inherited.with_start(&start)?;
-                validate_element(&start, &scope, b"cTn")?;
-                value = Some(common_from_start(&start)?);
-                root = Some(scope);
-            }
-            Event::Empty(start) if root.is_none() => return common_from_start(&start),
             Event::Start(child) => {
-                let scope = root.as_ref().expect("root").with_start(&child)?;
+                let child_scope = scope.with_start(&child)?;
                 let local = local_name(child.name().as_ref()).to_vec();
-                let raw = capture_element(&mut reader, &child)?;
-                if scope.element_uri(child.name().as_ref()) == Some(P_NS) {
-                    let rank = common_child_rank(&local);
-                    check_sequence_child(&mut seen_children, &mut boundary, rank, &local)?;
+                if child_scope.element_uri(child.name().as_ref()) != Some(P_NS) {
+                    let _ = capture_element(reader, &child)?;
+                    buffer.clear();
+                    continue;
+                }
+                let rank = common_child_rank(&local);
+                check_sequence_child(&mut seen_children, &mut boundary, rank, &local)?;
+                if local == b"childTnLst" {
+                    value.children = parse_node_list(reader, source, &child_scope, b"childTnLst")?;
+                } else {
+                    let raw = capture_element(reader, &child)?;
                     if local == b"stCondLst" {
-                        value.as_mut().expect("value").start_conditions =
-                            parse_condition_list(&raw, root.as_ref().expect("root"), b"stCondLst")?;
+                        value.start_conditions = parse_condition_list(&raw, scope, b"stCondLst")?;
                     } else if local == b"endCondLst" {
-                        value.as_mut().expect("value").end_conditions = parse_condition_list(
-                            &raw,
-                            root.as_ref().expect("root"),
-                            b"endCondLst",
-                        )?;
-                    } else if local == b"childTnLst" {
-                        value.as_mut().expect("value").children =
-                            parse_node_list(&raw, root.as_ref().expect("root"), b"childTnLst")?;
+                        value.end_conditions = parse_condition_list(&raw, scope, b"endCondLst")?;
                     }
                 }
             }
             Event::Empty(child) => {
-                let scope = root.as_ref().expect("root").with_start(&child)?;
+                let child_scope = scope.with_start(&child)?;
                 let local = local_name(child.name().as_ref()).to_vec();
-                if scope.element_uri(child.name().as_ref()) == Some(P_NS) {
+                if child_scope.element_uri(child.name().as_ref()) == Some(P_NS) {
                     let rank = common_child_rank(&local);
                     check_sequence_child(&mut seen_children, &mut boundary, rank, &local)?;
                 }
             }
-            Event::End(end) if local_name(end.name().as_ref()) == b"cTn" => {
-                return value.ok_or_else(|| OxmlError::MissingElement("p:cTn".to_owned()));
-            }
+            Event::End(end) if local_name(end.name().as_ref()) == b"cTn" => return Ok(value),
             Event::Eof => return Err(OxmlError::MissingElement("closing p:cTn".to_owned())),
             _ => {}
         }
@@ -2411,56 +2451,50 @@ fn collect_condition_target_presence(
     inherited: &NamespaceBindings,
 ) -> Result<HashMap<(u32, bool, usize), bool>> {
     let mut presence = HashMap::new();
-    collect_condition_target_presence_in_element(xml, inherited, &mut presence)?;
-    Ok(presence)
-}
-
-fn collect_condition_target_presence_in_element(
-    xml: &[u8],
-    inherited: &NamespaceBindings,
-    presence: &mut HashMap<(u32, bool, usize), bool>,
-) -> Result<()> {
     let mut reader = Reader::from_reader(xml);
     let mut buffer = Vec::new();
-    let mut root = None;
-    let mut node_id = None;
+    // The namespaces in scope on each open element, and its id when it is a
+    // `p:cTn`, walked without recursing.
+    let mut open: Vec<(NamespaceBindings, Option<u32>)> = Vec::new();
     loop {
         match reader.read_event_into(&mut buffer)? {
-            Event::Start(start) if root.is_none() => {
-                let namespaces = inherited.with_start(&start)?;
-                if namespaces.element_uri(start.name().as_ref()) == Some(P_NS)
-                    && local_name(start.name().as_ref()) == b"cTn"
+            Event::Start(start) => {
+                let namespaces = match open.last() {
+                    Some((parent, _)) => parent.with_start(&start)?,
+                    None => inherited.with_start(&start)?,
+                };
+                let is_p = namespaces.element_uri(start.name().as_ref()) == Some(P_NS);
+                let start_name = start.name();
+                let local = local_name(start_name.as_ref());
+                if let Some((parent, Some(node_id))) = open.last()
+                    && is_p
+                    && matches!(local, b"stCondLst" | b"endCondLst")
                 {
-                    let attrs = all_attributes(&start)?;
-                    node_id = attribute(&attrs, "id").and_then(|value| value.parse().ok());
-                }
-                root = Some(namespaces);
-            }
-            Event::Start(child) => {
-                let namespaces = root.as_ref().expect("root set").with_start(&child)?;
-                let local = local_name(child.name().as_ref()).to_vec();
-                let raw = capture_element(&mut reader, &child)?;
-                if let Some(node_id) = node_id
-                    && namespaces.element_uri(child.name().as_ref()) == Some(P_NS)
-                    && matches!(local.as_slice(), b"stCondLst" | b"endCondLst")
-                {
+                    let raw = capture_element(&mut reader, &start)?;
                     collect_condition_list_target_presence(
                         &raw,
-                        root.as_ref().expect("root set"),
-                        node_id,
+                        parent,
+                        *node_id,
                         local == b"endCondLst",
-                        presence,
+                        &mut presence,
                     )?;
                 } else {
-                    collect_condition_target_presence_in_element(
-                        &raw,
-                        root.as_ref().expect("root set"),
-                        presence,
-                    )?;
+                    let node_id = if is_p && local == b"cTn" {
+                        attribute(&all_attributes(&start)?, "id")
+                            .and_then(|value| value.parse().ok())
+                    } else {
+                        None
+                    };
+                    open.push((namespaces, node_id));
                 }
             }
-            Event::Empty(_) => {}
-            Event::End(_) | Event::Eof => return Ok(()),
+            Event::End(_) => {
+                open.pop();
+                if open.is_empty() {
+                    return Ok(presence);
+                }
+            }
+            Event::Eof => return Ok(presence),
             _ => {}
         }
         buffer.clear();

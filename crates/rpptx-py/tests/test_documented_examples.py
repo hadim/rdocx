@@ -507,6 +507,53 @@ def test_missing_package_raises_the_named_package_error(tmp_path):
         rpptx.Presentation(tmp_path / "missing.pptx")
 
 
+def test_issue_344_deeply_nested_slides_raise_instead_of_crashing(tmp_path):
+    import rpptx
+
+    source = tmp_path / "blank.pptx"
+    prs = rpptx.Presentation()
+    prs.slides.add_slide(prs.slide_layouts[6])
+    prs.save(source)
+    with zipfile.ZipFile(source) as archive:
+        parts = {name: archive.read(name) for name in archive.namelist()}
+    blank = parts["ppt/slides/slide1.xml"].decode()
+
+    depth = 1000
+    group = (
+        '<p:grpSp><p:nvGrpSpPr><p:cNvPr id="{}" name="Group"/><p:cNvGrpSpPr/>'
+        "<p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>"
+    )
+    groups = "".join(group.format(level + 10) for level in range(depth))
+    groups += "</p:grpSp>" * depth
+    alternate = (
+        '<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/'
+        'markup-compatibility/2006"><mc:Fallback>'
+    ) + "<mc:AlternateContent><mc:Fallback>" * (depth - 1)
+    alternate += "</mc:Fallback></mc:AlternateContent>" * depth
+    time_nodes = '<p:timing><p:tnLst><p:par><p:cTn id="1">'
+    time_nodes += "".join(
+        f'<p:childTnLst><p:par><p:cTn id="{level + 2}">' for level in range(depth)
+    )
+    time_nodes += "</p:cTn></p:par></p:childTnLst>" * depth
+    time_nodes += "</p:cTn></p:par></p:tnLst></p:timing>"
+    after = "</p:clrMapOvr>" if "</p:clrMapOvr>" in blank else "</p:cSld>"
+    shape_message = "group and alternate content nesting exceeds 16 levels"
+    cases = [
+        (blank.replace("</p:spTree>", groups + "</p:spTree>", 1), shape_message),
+        (blank.replace("</p:spTree>", alternate + "</p:spTree>", 1), shape_message),
+        (blank.replace(after, after + time_nodes, 1), "time node nesting exceeds 16 levels"),
+    ]
+    for slide, message in cases:
+        deck = tmp_path / "nested.pptx"
+        with zipfile.ZipFile(deck, "w") as archive:
+            for name, data in parts.items():
+                if name == "ppt/slides/slide1.xml":
+                    data = slide.encode()
+                archive.writestr(name, data)
+        with pytest.raises(rpptx.XmlError, match=message):
+            rpptx.Presentation(deck)
+
+
 def _author_documented_decks(Presentation, Inches, Pt, MSO_SHAPE, root, image_path):
     root.mkdir()
     paths = {name: root / f"{name}.pptx" for name in (

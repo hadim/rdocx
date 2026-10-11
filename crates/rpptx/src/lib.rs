@@ -110,7 +110,7 @@ pub use rpptx_oxml::diagram::{
     DiagramPoint, DiagramPointKind, DiagramRelationshipIds, DiagramShapeStyle,
 };
 use rpptx_oxml::graphic_frame::{CT_GraphicFrame, GraphicDataPayload};
-use rpptx_oxml::namespace::{P_NS, R_NS};
+use rpptx_oxml::namespace::{MAX_NESTING, P_NS, R_NS};
 use rpptx_oxml::notes_parts::{CT_HandoutMaster, CT_NotesMaster, CT_NotesSlide};
 pub use rpptx_oxml::picture::MediaKind;
 use rpptx_oxml::picture::{CT_Picture, MediaSource as PictureMediaSource, PictureMedia};
@@ -8502,7 +8502,16 @@ impl ShapesMut<'_> {
     /// writes, because python-pptx cannot refit a group whose member group
     /// has none. One added to the slide's own shapes has no transform, as
     /// [`SlideMut::add_group_shape`] writes it.
+    ///
+    /// Fails in a group already [`MAX_NESTING`] levels deep, because a deck
+    /// nested deeper does not open again.
     pub fn add_group_shape(&mut self) -> Result<ShapeMut<'_>> {
+        if self.group.len() >= MAX_NESTING {
+            return Err(Error::InvalidShapeMutation {
+                operation: "add group shape",
+                message: format!("group nesting exceeds {MAX_NESTING} levels"),
+            });
+        }
         let nested = !self.group.is_empty();
         self.append(|id| Ok(group_member(id, nested)))
     }
