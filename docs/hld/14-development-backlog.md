@@ -7096,7 +7096,20 @@ Require scoped verification and independent zero-defect, zero-smell review.
 
 Resolve [Issue313](https://github.com/tensorbee/rdocx/issues/313) in S91,
 part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
-coverage checklist. Reuse caller-font and real variable-instance work from F-X195 for Issues296 and297. Add licensed Gelasio and Selawik with verified metric-compatible mapping, truthful Aptos fallback diagnostics, and documented common Symbol/Wingdings private-use bullet mappings to bundled Unicode glyphs. Assess the optional Google font pack proposal separately before any new crate, downloaded distribution or dependencies. Existing caller-font ingestion remains the supported route until that design decision is settled.
+coverage checklist. Reuse caller-font and real variable-instance work from
+F-X195 for Issues296 and297. Map Georgia to original variable Gelasio and
+Segoe UI to Selawik with explicit bounded advance, kerning and line-metric
+limitations. Selawik italic uses declared synthesis, and Bold metric parity
+is not implied. Aptos approximation diagnostics follow actual contributing
+requests and physically authenticated selected faces, including warm replay.
+Owned layout, byte-render companions, frame records, CLI and fit consumers
+use the same successful output facts. Qualified Symbol/Wingdings fallbacks
+preserve original source codes and use monochrome semantic Unicode coverage,
+without original-outline parity or arbitrary private-use rewriting.
+The exact approved3968-byte symbols subset includes U2610 and U2611.
+Caller font directories are the supported optional-font route. No optional
+font-pack crate, distributed pack, automatic fetch or runtime dependency is
+introduced.
 
 **Depends on**: F-X195.
 **Test gate**: regression. Reproduce each missing operation or reported defect

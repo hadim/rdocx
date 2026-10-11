@@ -28614,6 +28614,22 @@ impl Document {
         )?)
     }
 
+    /// Encode one bundled-fallback caller-font archival bundle with its owned diagnostics.
+    pub fn to_pdfa_with_diagnostics(
+        &self,
+        profile: oxml_pdf::PdfConformance,
+        font_files: &[(&str, &[u8])],
+        options: RenderOptions,
+    ) -> Result<(Vec<u8>, Vec<oxml_layout::Diagnostic>)> {
+        let layout =
+            self.layout_with_fonts_and_bundled_fallback_and_options(font_files, options)?;
+        let bytes = oxml_pdf::render_to_pdf_with_options(
+            &layout.layout,
+            oxml_pdf::PdfOptions::new(profile),
+        )?;
+        Ok((bytes, layout.layout.diagnostics.clone()))
+    }
+
     /// Render the selected revision view to deterministic PDF bytes.
     pub fn to_pdf_deterministic_with_options(&self, options: RenderOptions) -> Result<Vec<u8>> {
         let layout = self.layout_for_options(options, true)?;
@@ -28928,6 +28944,63 @@ impl Document {
     ) -> Result<Vec<Vec<u8>>> {
         let layout = self.layout_with_options(options)?;
         Ok(oxml_pdf::render_all_pages(&layout.layout, dpi))
+    }
+
+    /// Encode one normal-fallback bundle and return its owned diagnostics.
+    pub fn to_pdf_with_diagnostics(
+        &self,
+        font_files: &[(&str, &[u8])],
+        options: RenderOptions,
+    ) -> Result<(Vec<u8>, Vec<oxml_layout::Diagnostic>)> {
+        let layout = self.layout_with_additional_fonts_and_options(font_files, options)?;
+        let bytes = oxml_pdf::render_to_pdf_checked(&layout.layout)?;
+        Ok((bytes, layout.layout.diagnostics.clone()))
+    }
+
+    /// Paint one PNG page from one bundle without rerendering for diagnostics.
+    pub fn render_page_to_png_with_diagnostics(
+        &self,
+        page_index: usize,
+        dpi: f64,
+        font_files: &[(&str, &[u8])],
+        options: RenderOptions,
+    ) -> Result<(Option<Vec<u8>>, Vec<oxml_layout::Diagnostic>)> {
+        let layout = self.layout_with_additional_fonts_and_options(font_files, options)?;
+        let bytes = oxml_pdf::render_page_to_png(&layout.layout, page_index, dpi);
+        Ok((bytes, layout.layout.diagnostics.clone()))
+    }
+
+    /// Paint every PNG page once and return the same bundle's ordered facts.
+    pub fn render_all_pages_with_diagnostics(
+        &self,
+        dpi: f64,
+        font_files: &[(&str, &[u8])],
+        options: RenderOptions,
+    ) -> Result<(Vec<Vec<u8>>, Vec<oxml_layout::Diagnostic>)> {
+        let layout = self.layout_with_additional_fonts_and_options(font_files, options)?;
+        let bytes = oxml_pdf::render_all_pages(&layout.layout, dpi);
+        Ok((bytes, layout.layout.diagnostics.clone()))
+    }
+
+    /// Paint explicit or all pages from one configured bundle, preserving TIFF.
+    pub fn render_pages_with_diagnostics(
+        &self,
+        page_indices: Option<&[usize]>,
+        raster_options: oxml_pdf::RasterOptions,
+        font_files: &[(&str, &[u8])],
+        options: RenderOptions,
+    ) -> Result<(oxml_pdf::RasterOutput, Vec<oxml_layout::Diagnostic>)> {
+        let layout = self.layout_with_additional_fonts_and_options(font_files, options)?;
+        let all_pages;
+        let selected = match page_indices {
+            Some(selected) => selected,
+            None => {
+                all_pages = (0..layout.layout.pages.len()).collect::<Vec<_>>();
+                &all_pages
+            }
+        };
+        let bytes = oxml_pdf::render_pages(&layout.layout, selected, raster_options)?;
+        Ok((bytes, layout.layout.diagnostics.clone()))
     }
 
     /// Render caller-selected normal fonts to one zero-based PNG page.
@@ -43857,6 +43930,301 @@ mod odttf_tests {
         assert_eq!(document.document, model);
         assert_eq!(document.to_bytes().unwrap(), before);
         assert!(document.try_set_header("invalid \u{1}").is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+
+    fn fx210_layout_runs(layout: &oxml_layout::LayoutResult) -> Vec<oxml_layout::GlyphRun> {
+        let mut runs = Vec::new();
+        for page in &layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, _| match element {
+                oxml_layout::PositionedElement::Text(run) => runs.push(run.clone()),
+                oxml_layout::PositionedElement::MultilingualText(run) => {
+                    runs.push(run.legacy_projection())
+                }
+                _ => {}
+            });
+        }
+        runs
+    }
+
+    #[test]
+    fn fx210_word_public_aptos_diagnostics_follow_actual_owned_contributions() {
+        let mut document = Document::new();
+        for family in ["Aptos", "Aptos", "Aptos Display", "Calibri"] {
+            document.add_paragraph("").add_run("iiiiWWWW").font(family);
+        }
+        document.add_paragraph("").add_run("").font("Aptos");
+        let before = document.to_bytes().unwrap();
+        let cold = document
+            .layout_with_fonts_and_bundled_fallback(&[])
+            .unwrap();
+        let runs = fx210_layout_runs(&cold.layout);
+        assert_eq!(
+            runs.iter().filter(|run| run.text == "iiiiWWWW").count(),
+            4,
+            "actual final contribution precondition"
+        );
+        for run in &runs {
+            assert!(run.glyph_ids.iter().all(|glyph| *glyph != 0));
+            let selected = cold
+                .layout
+                .fonts
+                .iter()
+                .find(|font| font.id == run.font_id)
+                .unwrap();
+            assert_eq!(
+                selected.family, "Carlito",
+                "actual approximate-face precondition"
+            );
+            assert_eq!(
+                selected.data.as_ref(),
+                include_bytes!("../../oxml-layout/fonts/Carlito-Regular.ttf").as_slice()
+            );
+        }
+        let messages: Vec<_> = cold
+            .layout
+            .diagnostics
+            .iter()
+            .filter(|d| d.message.contains("Aptos"))
+            .map(|d| d.message.clone())
+            .collect();
+        assert_eq!(
+            messages.len(),
+            2,
+            "F-X210 Word owned layout must report both Aptos requests once"
+        );
+        assert!(messages[0].contains("Aptos") && !messages[0].contains("Aptos Display"));
+        assert!(messages[1].contains("Aptos Display"));
+        assert!(
+            messages
+                .iter()
+                .all(|message| message.contains("Carlito") && message.contains("approximate"))
+        );
+        let warm = document
+            .layout_with_fonts_and_bundled_fallback(&[])
+            .unwrap();
+        assert_eq!(warm.layout.diagnostics, cold.layout.diagnostics);
+        assert_eq!(fx210_layout_runs(&warm.layout), runs);
+        assert_eq!(document.to_bytes().unwrap(), before);
+        for index in 0..4 {
+            document
+                .paragraph_mut(index)
+                .unwrap()
+                .run_mut(0)
+                .unwrap()
+                .set_font("Calibri");
+        }
+        let non_aptos = document
+            .layout_with_fonts_and_bundled_fallback(&[])
+            .unwrap();
+        assert!(
+            !non_aptos
+                .layout
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("Aptos")),
+            "prior FontIds must not contaminate a later non-Aptos output"
+        );
+    }
+
+    #[test]
+    fn fx210_word_public_symbols_and_list_markers_use_only_qualified_semantics() {
+        let cases = [
+            ("Wingdings", 0xa7, '\u{25aa}'),
+            ("Wingdings", 0xd8, '\u{27a2}'),
+            ("Wingdings", 0xfc, '\u{2713}'),
+            ("Wingdings", 0x76, '\u{2756}'),
+            ("Wingdings", 0x71, '\u{2751}'),
+            ("Wingdings", 0x6e, '\u{25a0}'),
+            ("Wingdings", 0xfe, '\u{2611}'),
+            ("Symbol", 0xb7, '\u{2022}'),
+        ];
+        for (family, code, target) in cases {
+            for original in [code, 0xf000 + code] {
+                let mut document = Document::new();
+                document
+                    .add_paragraph("")
+                    .add_run("")
+                    .add_symbol_char(family, original);
+                let before = document.to_bytes().unwrap();
+                let source = document.document.to_xml().unwrap();
+                let result = document.layout_deterministic().unwrap();
+                let runs = fx210_layout_runs(&result.layout);
+                assert_eq!(
+                    runs.len(),
+                    1,
+                    "explicit symbol fixture must reach one painted run"
+                );
+                assert_eq!(
+                    runs[0].text,
+                    target.to_string(),
+                    "F-X210 Word explicit symbol must use its qualified Unicode target"
+                );
+                assert!(runs[0].glyph_ids.iter().all(|glyph| *glyph != 0));
+                assert_eq!(document.document.to_xml().unwrap(), source);
+                assert_eq!(document.to_bytes().unwrap(), before);
+                let reopened = Document::from_bytes(&before).unwrap();
+                assert_eq!(
+                    fx210_layout_runs(&reopened.layout_deterministic().unwrap().layout),
+                    runs
+                );
+            }
+            let mut document = Document::new();
+            let marker = char::from_u32(u32::from(0xf000 + code))
+                .unwrap()
+                .to_string();
+            let level = ListLevel::bullet()
+                .level_text(&marker)
+                .marker_properties(CT_RPr {
+                    font_ascii: Some(family.to_owned()),
+                    font_hansi: Some(family.to_owned()),
+                    ..Default::default()
+                });
+            let id = document.add_list_definition(&[level]);
+            assert!(document.add_paragraph("item").set_numbering(id, 0));
+            let before = document.to_bytes().unwrap();
+            let result = document.layout_deterministic().unwrap();
+            let runs = fx210_layout_runs(&result.layout);
+            let visible = runs
+                .iter()
+                .find(|run| run.text != "item")
+                .expect("a real list marker is emitted");
+            assert_eq!(
+                visible.text.trim(),
+                target.to_string(),
+                "F-X210 Word list marker must use its qualified Unicode target"
+            );
+            assert!(visible.glyph_ids.iter().all(|glyph| *glyph != 0));
+            assert_eq!(document.to_bytes().unwrap(), before);
+        }
+        // Ordinary text, unknown codes and other font families retain source semantics.
+        for (family, character, explicit) in [
+            ("Wingdings", '\u{f0a7}', false),
+            ("Wingdings", '\u{f001}', true),
+            ("Wingdings 2", '\u{f0a7}', true),
+            ("Unrelated face", '\u{f0a7}', true),
+        ] {
+            let mut document = Document::new();
+            let mut paragraph = document.add_paragraph("");
+            let mut run = paragraph.add_run("");
+            run.set_font(family);
+            if explicit {
+                run.add_symbol_char(family, character as u16);
+            } else {
+                run.add_text(&character.to_string());
+            }
+            let before = document.to_bytes().unwrap();
+            let result = document.layout_deterministic().unwrap();
+            assert_eq!(
+                fx210_layout_runs(&result.layout)[0].text,
+                character.to_string()
+            );
+            assert_eq!(document.to_bytes().unwrap(), before);
+        }
+    }
+    #[test]
+    fn fx210_word_diagnostic_companions_keep_payload_and_one_layout() {
+        let mut document = Document::new();
+        document
+            .add_paragraph("")
+            .add_run("Actual contributing text")
+            .font("Aptos");
+        let before = document.to_bytes().unwrap();
+        let fonts = [(
+            "Aptos",
+            include_bytes!("../../oxml-layout/fonts/Carlito-Regular.ttf").as_slice(),
+        )];
+        let options = RenderOptions::default();
+        super::LAYOUT_INVOCATIONS.set(0);
+        let (pdf, facts) = document.to_pdf_with_diagnostics(&fonts, options).unwrap();
+        assert_eq!(
+            super::LAYOUT_INVOCATIONS.get(),
+            1,
+            "diagnostic companions must not infer earlier bytes from another render"
+        );
+        assert_eq!(
+            facts
+                .iter()
+                .filter(|d| d.message.contains("Font 'Aptos' is approximate"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            pdf,
+            document
+                .to_pdf_with_fonts_and_options(&fonts, options)
+                .unwrap()
+        );
+        super::LAYOUT_INVOCATIONS.set(0);
+        let (png, png_facts) = document
+            .render_page_to_png_with_diagnostics(0, 72.0, &fonts, options)
+            .unwrap();
+        assert_eq!(super::LAYOUT_INVOCATIONS.get(), 1);
+        assert_eq!(png_facts, facts);
+        assert_eq!(
+            png,
+            document
+                .render_page_to_png_with_fonts_and_options(0, 72.0, &fonts, options)
+                .unwrap()
+        );
+        assert!(png.unwrap().starts_with(b"\x89PNG"));
+        let raster_options = oxml_pdf::RasterOptions {
+            dpi: 72.0,
+            format: oxml_pdf::RasterFormat::Png {
+                transparent_background: false,
+            },
+        };
+        super::LAYOUT_INVOCATIONS.set(0);
+        let (all, all_facts) = document
+            .render_pages_with_diagnostics(None, raster_options, &fonts, options)
+            .unwrap();
+        assert_eq!(super::LAYOUT_INVOCATIONS.get(), 1);
+        assert_eq!(all_facts, facts);
+        let oxml_pdf::RasterOutput::SeparatePages(all) = all else {
+            panic!("PNG must retain the separate-page payload");
+        };
+        assert_eq!(all.len(), 1);
+        let empty_error = document
+            .render_pages_with_diagnostics(Some(&[]), raster_options, &fonts, options)
+            .unwrap_err();
+        assert!(matches!(
+            empty_error,
+            crate::Error::Raster(oxml_pdf::RasterError::EmptyPageSelection)
+        ));
+        assert_eq!(document.to_bytes().unwrap(), before);
+        let (tiff, _) = document
+            .render_pages_with_diagnostics(
+                None,
+                oxml_pdf::RasterOptions {
+                    dpi: 72.0,
+                    format: oxml_pdf::RasterFormat::Tiff,
+                },
+                &fonts,
+                options,
+            )
+            .unwrap();
+        assert!(matches!(tiff, oxml_pdf::RasterOutput::MultiPageTiff(_)));
+        super::LAYOUT_INVOCATIONS.set(0);
+        let (archival, archival_facts) = document
+            .to_pdfa_with_diagnostics(oxml_pdf::PdfConformance::PdfA2b, &fonts, options)
+            .unwrap();
+        assert_eq!(super::LAYOUT_INVOCATIONS.get(), 1);
+        assert_eq!(archival_facts, facts);
+        assert_eq!(
+            archival,
+            document
+                .to_pdfa_with_fonts_deterministic(&fonts, oxml_pdf::PdfConformance::PdfA2b)
+                .unwrap()
+        );
+        let svg = document
+            .render_page_to_svg_with_fonts_and_options(0, &fonts, options)
+            .unwrap()
+            .unwrap();
+        assert!(
+            svg.diagnostics
+                .iter()
+                .any(|d| d.message.contains("Font 'Aptos' is approximate"))
+        );
         assert_eq!(document.to_bytes().unwrap(), before);
     }
 }

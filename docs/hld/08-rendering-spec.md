@@ -1251,6 +1251,47 @@ decoded-output ceiling, and call the shared PNG backend without introducing a
 binding-private render path. Python PDF, slide PNG, notes PDF, and notes PNG
 methods release the GIL around these native operations.
 
+Bundled Georgia fallback selects the original Gelasio upright or italic
+variable face at the requested selected weight. Segoe UI fallback selects
+Selawik Regular or Bold. Selawik has no genuine italic face, so missing styles
+use the provider's explicit synthesis policy. Authentic caller and embedded
+faces retain precedence. Unrelated family and CJK selection remain unchanged.
+These are approximate substitutes with bounded measured guarantees, not
+universal outline, wrapping or line-pitch equivalence.
+
+For pinned Georgia references, Gelasio matches the95 isolated printable ASCII
+advances in regular, bold and italic. Bold-italic differs on j by1/2048em.
+The21 measured string controls differ on two ligature-rich strings in each
+style, even with kerning disabled. Selected line extents differ by
+0.13330078125em. At12pt and180pt width, an independent greedy regular control
+wraps to35 versus36 lines. That algorithm is not native Word or product
+pagination authority. Pinned Selawik Regular and Segoe UI Regular5.31 match
+95 isolated ASCII and21 kern-disabled string advances. Kerning-enabled
+controls differ on19/21 strings, with a measured maximum0.39111328125em.
+Selected Word line totals agree, while generic HarfBuzz line extents differ.
+No measured Segoe UI Bold parity is established.
+
+Aptos and Aptos Display remain approximate fallbacks when the actual selected
+physical face is not the requested family. Caller aliases select faces but
+cannot authenticate their physical family. Successful nonempty final
+contributions produce an ordered, deduplicated diagnostic naming the request
+and actual selected face. Provisional probes and rejected scopes do not
+contribute warnings. Cache replay preserves committed request identity.
+Diagnostics are operation-owned facts copied into returned layouts, not a
+persistent last-render registry. They do not independently change paint bytes.
+
+Explicit Word symbol runs and qualified numbering bullets use a bounded
+original-family mapping when no authentic original face covers the stored
+code. SymbolB7 maps to U2022. WingdingsA7, D8, FC,76,71,6E and FE map to U25AA,
+U27A2, U2713, U2756, U2751, U25A0 and U2611 respectively. Low-byte and F000
+forms share the qualified interpretation. The existing PPT F0B7 bullet route
+remains compatible. Caller labels alone cannot claim original symbol identity.
+Unknown codes, Wingdings2/3, unrelated private-use text and ordinary text are
+not globally rewritten. Source XML and stored codes remain unchanged.
+Monochrome Unicode substitutes preserve the measured semantic symbol, not
+original Wingdings outlines, dimensions or advances. U2610 checkbox coverage
+is separate from the WingdingsA7 section-square mapping.
+
 Normal `FontManager` construction clones one process-lifetime snapshot of the
 bundled and system face table. Installing, removing, or replacing a system font
 therefore takes effect after process restart. File-backed faces share an

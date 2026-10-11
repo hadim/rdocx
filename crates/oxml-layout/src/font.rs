@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crate::error::{LayoutError, Result};
 use crate::line::TextSegment;
-use crate::output::{FontId, SourceSpan};
+use crate::output::{Diagnostic, FontId, SourceSpan};
 
 /// Font data provided by the user or extracted from an OOXML file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -645,6 +645,7 @@ pub struct FontContributionScope {
     event_start: usize,
     depth: usize,
     owns_trace: bool,
+    diagnostic_start: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -707,6 +708,9 @@ pub struct FontManager {
     paragraph_font_trace: Option<ParagraphFontTrace>,
     /// Distinct current-layout fonts in first-resolution order.
     layout_fonts: Vec<FontId>,
+    // At most one current-output message per Aptos request spelling.
+    // Scope capture rolls provisional messages back with their contributions.
+    layout_font_diagnostics: Vec<Diagnostic>,
 }
 
 /// Families with broad non-Latin coverage, tried before scanning everything.
@@ -821,6 +825,7 @@ impl FontManager {
             shaping_memo: Mutex::new(ShapingMemo::new()),
             paragraph_font_trace: None,
             layout_fonts: Vec::new(),
+            layout_font_diagnostics: Vec::new(),
         }
     }
 
@@ -1005,6 +1010,7 @@ impl FontManager {
     pub fn begin_layout(&mut self) {
         self.paragraph_font_trace = None;
         self.layout_fonts = Vec::new();
+        self.layout_font_diagnostics = Vec::new();
     }
 
     /// Begin recording exact events for one bounded cache candidate.
@@ -1104,6 +1110,7 @@ impl FontManager {
             event_start: trace.events.len(),
             depth,
             owns_trace,
+            diagnostic_start: self.layout_font_diagnostics.len(),
         })
     }
 
@@ -1125,6 +1132,8 @@ impl FontManager {
             ));
         }
         if trace.overflowed {
+            self.layout_font_diagnostics
+                .truncate(scope.diagnostic_start);
             if scope.owns_trace {
                 self.paragraph_font_trace = None;
             } else {
@@ -1166,6 +1175,8 @@ impl FontManager {
             ));
         }
         result.extend(staged.iter().cloned());
+        self.layout_font_diagnostics
+            .truncate(scope.diagnostic_start);
         if scope.owns_trace {
             self.paragraph_font_trace = None;
         } else {
@@ -1277,6 +1288,7 @@ impl FontManager {
         if !self.layout_fonts.contains(&font_id) {
             self.layout_fonts.push(font_id);
         }
+        self.record_font_approximation(font_id, requested_family);
         Ok(())
     }
 
@@ -1377,6 +1389,9 @@ impl FontManager {
             };
             if !self.layout_fonts.contains(&id) {
                 self.layout_fonts.push(id);
+            }
+            if let FontTraceEvent::Contribution(contribution) = event {
+                self.record_font_approximation(id, contribution.requested_family.as_deref());
             }
         }
         Ok(())
@@ -1504,6 +1519,120 @@ impl FontManager {
             None => Ok(primary),
             Some(id) => Ok(id),
         }
+    }
+
+    /// Current layout's owned approximation facts, never loaded-font history.
+    #[doc(hidden)]
+    pub fn current_font_diagnostics(&self) -> &[Diagnostic] {
+        &self.layout_font_diagnostics
+    }
+
+    // Selection aliases name requests, not the physical family of a face.
+    // Authenticate the selected collection face from its original source bytes.
+    fn physical_requested_family_matches(&self, index: usize, requested: &str) -> bool {
+        let Some(font) = self.fonts.get(index) else {
+            return false;
+        };
+        let Ok(face) = ttf_parser::Face::parse(&font.data, font.face_index) else {
+            return false;
+        };
+        face.names().into_iter().any(|name| {
+            matches!(
+                name.name_id,
+                ttf_parser::name_id::FAMILY
+                    | ttf_parser::name_id::TYPOGRAPHIC_FAMILY
+                    | ttf_parser::name_id::WWS_FAMILY
+            ) && name
+                .to_string()
+                .is_some_and(|family| family.eq_ignore_ascii_case(requested))
+        })
+    }
+
+    fn record_font_approximation(&mut self, id: FontId, requested: Option<&str>) {
+        let Some(requested) = requested else {
+            return;
+        };
+        let requested = if requested.eq_ignore_ascii_case("Aptos") {
+            "Aptos"
+        } else if requested.eq_ignore_ascii_case("Aptos Display") {
+            "Aptos Display"
+        } else {
+            return;
+        };
+        let Some(index) = self.index_of(id) else {
+            return;
+        };
+        if self.physical_requested_family_matches(index, requested) {
+            return;
+        }
+        let prefix = format!("Font '{requested}' is approximate: ");
+        if self
+            .layout_font_diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.message.starts_with(&prefix))
+        {
+            return;
+        }
+        self.layout_font_diagnostics.push(Diagnostic {
+            message: format!(
+                "{prefix}selected '{}' for contributing text",
+                self.fonts[index].family
+            ),
+        });
+    }
+
+    /// Select an explicit symbol or bullet without changing its source owner.
+    /// Genuine original-code coverage wins over the bounded semantic substitute.
+    pub fn resolve_symbol_text(
+        &mut self,
+        family: Option<&str>,
+        bold: bool,
+        italic: bool,
+        original: &str,
+        ppt_bullet_compatibility: bool,
+    ) -> Result<(String, FontId)> {
+        let primary = self.resolve_font(family, bold, italic)?;
+        if let Some(index) = self.index_of(primary)
+            && family.is_some_and(|family| self.physical_requested_family_matches(index, family))
+            && self.uncovered(index, original).is_empty()
+        {
+            return Ok((original.to_owned(), primary));
+        }
+        let displayed: String = original
+            .chars()
+            .map(|character| {
+                let code = character as u32;
+                let code = if (0xf000..=0xf0ff).contains(&code) {
+                    code - 0xf000
+                } else {
+                    code
+                };
+                let mapped = if family.is_some_and(|name| name.eq_ignore_ascii_case("Wingdings")) {
+                    match code {
+                        0xa7 => Some('\u{25aa}'),
+                        0xd8 => Some('\u{27a2}'),
+                        0xfc => Some('\u{2713}'),
+                        0x76 => Some('\u{2756}'),
+                        0x71 => Some('\u{2751}'),
+                        0x6e => Some('\u{25a0}'),
+                        0xfe => Some('\u{2611}'),
+                        0xb7 if ppt_bullet_compatibility && character == '\u{f0b7}' => {
+                            Some('\u{2022}')
+                        }
+                        _ => None,
+                    }
+                } else if family.is_some_and(|name| name.eq_ignore_ascii_case("Symbol"))
+                    && code == 0xb7
+                {
+                    Some('\u{2022}')
+                } else {
+                    None
+                };
+                mapped.unwrap_or(character)
+            })
+            .collect();
+        let selected = self.resolve_font_for_text(family, bold, italic, &displayed)?;
+        Ok((displayed, selected))
     }
 
     /// The characters in `text` that the font at `idx` cannot draw.
@@ -2695,10 +2824,10 @@ fn map_font_name(name: &str) -> &[&str] {
         "Times New Roman" => &["Times New Roman", "Liberation Serif", "Times"],
         "Courier New" => &["Courier New", "Liberation Mono", "Courier"],
         "Consolas" => &["Consolas", "Liberation Mono", "DejaVu Sans Mono"],
-        "Segoe UI" => &["Segoe UI", "Carlito", "Liberation Sans"],
+        "Segoe UI" => &["Segoe UI", "Selawik", "Carlito", "Liberation Sans"],
         "Tahoma" => &["Tahoma", "Liberation Sans", "Helvetica"],
         "Verdana" => &["Verdana", "Liberation Sans", "DejaVu Sans"],
-        "Georgia" => &["Georgia", "Caladea", "Liberation Serif"],
+        "Georgia" => &["Georgia", "Gelasio", "Caladea", "Liberation Serif"],
         "Palatino Linotype" => &["Palatino Linotype", "Palatino", "Liberation Serif"],
         "Book Antiqua" => &["Book Antiqua", "Palatino", "Liberation Serif"],
         "Garamond" => &["Garamond", "Caladea", "Liberation Serif"],
@@ -4361,5 +4490,264 @@ mod tests {
                 "no bundled face covers {text}"
             );
         }
+    }
+
+    #[test]
+    fn fx210_owned_diagnostics_roll_back_provisional_scopes_and_replay_final_events() {
+        let mut fonts = FontManager::new_deterministic().unwrap();
+        fonts.begin_layout();
+        let id = fonts.resolve_font(Some("Calibri"), false, false).unwrap();
+        fonts
+            .record_font_contribution(id, Some("Aptos"), "accepted")
+            .unwrap();
+        let accepted = fonts.current_font_diagnostics().to_vec();
+        assert_eq!(accepted.len(), 1);
+        let outer = fonts.begin_font_contribution_scope().unwrap();
+        fonts
+            .record_font_contribution(id, Some("Aptos Display"), "provisional")
+            .unwrap();
+        let inner = fonts.begin_font_contribution_scope().unwrap();
+        fonts
+            .record_font_contribution(id, Some("Aptos"), "nested")
+            .unwrap();
+        let nested = fonts
+            .finish_font_contribution_scope(inner)
+            .unwrap()
+            .unwrap();
+        assert_eq!(fonts.current_font_diagnostics().len(), 2);
+        let staged = fonts
+            .finish_font_contribution_scope(outer)
+            .unwrap()
+            .unwrap();
+        assert_eq!(fonts.current_font_diagnostics(), accepted);
+        fonts.replay_font_trace_events(&staged).unwrap();
+        assert_eq!(fonts.current_font_diagnostics().len(), 2);
+        fonts.replay_font_trace_events(&nested).unwrap();
+        assert_eq!(fonts.current_font_diagnostics().len(), 2);
+        let final_facts = fonts.current_font_diagnostics().to_vec();
+        fonts.begin_layout();
+        assert!(fonts.current_font_diagnostics().is_empty());
+        fonts
+            .record_font_contribution(id, Some("Aptos"), "")
+            .unwrap();
+        fonts
+            .record_font_contribution(id, Some("Calibri"), "accepted")
+            .unwrap();
+        assert!(fonts.current_font_diagnostics().is_empty());
+        fonts.replay_font_trace_events(&staged).unwrap();
+        assert_eq!(fonts.current_font_diagnostics(), &final_facts[1..]);
+    }
+
+    #[test]
+    fn fx210_overflow_cannot_lose_committed_warning_or_publish_provisional_warning() {
+        let mut fonts = FontManager::new_deterministic().unwrap();
+        fonts.begin_layout();
+        let id = fonts.resolve_font(Some("Calibri"), false, false).unwrap();
+        fonts
+            .record_font_contribution(id, Some("Aptos"), "accepted")
+            .unwrap();
+        let accepted = fonts.current_font_diagnostics().to_vec();
+        let scope = fonts.begin_font_contribution_scope().unwrap();
+        for _ in 0..=PARAGRAPH_FONT_TRACE_MAX_ENTRIES {
+            fonts
+                .record_font_contribution(id, Some("Aptos Display"), "staged")
+                .unwrap();
+        }
+        assert!(
+            fonts
+                .finish_font_contribution_scope(scope)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(fonts.current_font_diagnostics(), accepted);
+        fonts.begin_paragraph_font_trace();
+        for _ in 0..=PARAGRAPH_FONT_TRACE_MAX_ENTRIES {
+            fonts
+                .record_font_contribution(id, Some("Calibri"), "accepted")
+                .unwrap();
+        }
+        fonts
+            .record_font_contribution(id, Some("Aptos Display"), "accepted")
+            .unwrap();
+        assert!(fonts.finish_paragraph_font_events().is_none());
+        assert_eq!(fonts.current_font_diagnostics().len(), 2);
+        let before = fonts.current_font_diagnostics().to_vec();
+        assert!(
+            fonts
+                .replay_font_trace_events(&[FontTraceEvent::Contribution(FontContribution {
+                    font_id: FontId(u32::MAX),
+                    requested_family: Some("Aptos".into()),
+                })])
+                .is_err()
+        );
+        assert_eq!(fonts.current_font_diagnostics(), before);
+    }
+
+    #[test]
+    fn fx210_explicit_symbol_table_is_bounded_and_covered() {
+        let mut fonts = FontManager::new_deterministic().unwrap();
+        for (family, code, target) in [
+            ("Wingdings", 0xa7, '\u{25aa}'),
+            ("Wingdings", 0xd8, '\u{27a2}'),
+            ("Wingdings", 0xfc, '\u{2713}'),
+            ("Wingdings", 0x76, '\u{2756}'),
+            ("Wingdings", 0x71, '\u{2751}'),
+            ("Wingdings", 0x6e, '\u{25a0}'),
+            ("Wingdings", 0xfe, '\u{2611}'),
+            ("Symbol", 0xb7, '\u{2022}'),
+        ] {
+            for code in [code, code + 0xf000] {
+                let original = char::from_u32(code).unwrap().to_string();
+                let (display, id) = fonts
+                    .resolve_symbol_text(Some(family), false, false, &original, false)
+                    .unwrap();
+                assert_eq!(display, target.to_string());
+                let shaped = fonts.shape_text(id, &display, 12.0).unwrap();
+                assert!(!shaped.glyph_ids.is_empty());
+                assert!(shaped.glyph_ids.iter().all(|glyph| *glyph != 0));
+            }
+        }
+        for (family, original) in [
+            ("Wingdings 2", "\u{f0a7}"),
+            ("Unrelated", "\u{f0a7}"),
+            ("Wingdings", "\u{f001}"),
+            ("Wingdings", "\u{f0b7}"),
+        ] {
+            assert_eq!(
+                fonts
+                    .resolve_symbol_text(Some(family), false, false, original, false)
+                    .unwrap()
+                    .0,
+                original
+            );
+        }
+        assert_eq!(
+            fonts
+                .resolve_symbol_text(Some("Wingdings"), false, false, "\u{f0b7}", true)
+                .unwrap()
+                .0,
+            "\u{2022}"
+        );
+        let id = fonts.resolve_font(Some("Carlito"), false, false).unwrap();
+        assert_eq!(
+            fonts
+                .resolve_symbol_text(Some("Carlito"), false, false, "v", false)
+                .unwrap(),
+            ("v".into(), id)
+        );
+    }
+    #[test]
+    fn fx210_caller_labels_cannot_authenticate_aptos_or_original_symbol_faces() {
+        let source = bundled_font_data()
+            .into_iter()
+            .find(|(family, _)| *family == "Carlito")
+            .unwrap()
+            .1;
+        let mut fonts = FontManager::new_deterministic().unwrap();
+        fonts.load_additional_fonts(&[FontFile {
+            family: "Aptos".to_owned(),
+            data: source.to_vec(),
+        }]);
+        fonts.begin_layout();
+        let selected = fonts.resolve_font(Some("Aptos"), false, false).unwrap();
+        let index = fonts.index_of(selected).unwrap();
+        assert_eq!(fonts.fonts[index].data.as_ref(), source);
+        assert_eq!(fonts.fonts[index].face_index, 0);
+        assert!(fonts.physical_requested_family_matches(index, "Carlito"));
+        assert!(!fonts.physical_requested_family_matches(index, "Aptos"));
+        fonts
+            .record_font_contribution(selected, Some("Aptos"), "actual")
+            .unwrap();
+        assert_eq!(fonts.current_font_diagnostics().len(), 1);
+        assert!(
+            fonts.current_font_diagnostics()[0]
+                .message
+                .contains("Font 'Aptos' is approximate")
+        );
+        assert!(
+            fonts.current_font_diagnostics()[0]
+                .message
+                .contains("Carlito")
+        );
+        // Accepted caller aliases still choose the same original bytes on replay.
+        fonts.begin_paragraph_font_trace();
+        fonts
+            .record_font_contribution(selected, Some("Aptos"), "actual")
+            .unwrap();
+        let events = fonts.finish_paragraph_font_events().unwrap();
+        fonts.begin_layout();
+        fonts.replay_font_trace_events(&events).unwrap();
+        assert_eq!(fonts.current_font_diagnostics().len(), 1);
+        assert_eq!(fonts.font_data(selected).unwrap().data.as_ref(), source);
+
+        fonts.load_additional_fonts(&[FontFile {
+            family: "Wingdings".to_owned(),
+            data: source.to_vec(),
+        }]);
+        let aliased = fonts.resolve_font(Some("Wingdings"), false, false).unwrap();
+        let index = fonts.index_of(aliased).unwrap();
+        assert_eq!(fonts.fonts[index].data.as_ref(), source);
+        assert!(
+            fonts.uncovered(index, "ü").is_empty(),
+            "Carlito genuinely covers the low-byte operand"
+        );
+        assert!(!fonts.physical_requested_family_matches(index, "Wingdings"));
+        let (display, id) = fonts
+            .resolve_symbol_text(Some("Wingdings"), false, false, "ü", false)
+            .unwrap();
+        assert_eq!(
+            display, "✓",
+            "a caller label cannot give Carlito's Latin glyph original Wingdings precedence"
+        );
+        assert!(
+            fonts
+                .shape_text(id, &display, 12.0)
+                .unwrap()
+                .glyph_ids
+                .iter()
+                .all(|glyph| *glyph != 0)
+        );
+        let (original, genuine) = fonts
+            .resolve_symbol_text(Some("Carlito"), false, false, "ü", false)
+            .unwrap();
+        assert_eq!(original, "ü");
+        let index = fonts.index_of(genuine).unwrap();
+        assert!(fonts.physical_requested_family_matches(index, "Carlito"));
+        assert!(fonts.uncovered(index, &original).is_empty());
+        assert_eq!(fonts.fonts[index].data.as_ref(), source);
+    }
+
+    #[test]
+    fn fx210_physical_family_authentication_reads_the_selected_collection_face() {
+        let bundled = bundled_font_data();
+        let caladea = bundled
+            .iter()
+            .find(|(family, _)| *family == "Caladea")
+            .unwrap()
+            .1;
+        let carlito = bundled
+            .iter()
+            .find(|(family, _)| *family == "Carlito")
+            .unwrap()
+            .1;
+        let collection = test_ttc(&[caladea, carlito]);
+        let mut fonts = FontManager::new_deterministic().unwrap();
+        fonts.load_additional_fonts(&[FontFile {
+            family: "Two physical families".to_owned(),
+            data: collection.clone(),
+        }]);
+        let selected = fonts.resolve_font(Some("Carlito"), false, false).unwrap();
+        let index = fonts.index_of(selected).unwrap();
+        assert_eq!(fonts.fonts[index].data.as_ref(), collection);
+        assert_eq!(fonts.fonts[index].face_index, 1);
+        assert!(fonts.physical_requested_family_matches(index, "Carlito"));
+        assert!(!fonts.physical_requested_family_matches(index, "Caladea"));
+        assert!(!fonts.physical_requested_family_matches(index, "Two physical families"));
+        let first = fonts.resolve_font(Some("Caladea"), false, false).unwrap();
+        let index = fonts.index_of(first).unwrap();
+        assert_eq!(fonts.fonts[index].face_index, 0);
+        assert!(fonts.physical_requested_family_matches(index, "Caladea"));
+        assert!(!fonts.physical_requested_family_matches(index, "Carlito"));
+        assert!(!fonts.physical_requested_family_matches(usize::MAX, "Carlito"));
     }
 }

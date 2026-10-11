@@ -244,6 +244,28 @@ impl PyPresentation {
         .map_err(|error| rpptx_to_pyerr(py, error))
     }
 
+    #[pyo3(signature = (*, fonts = None, font_dir = None, font_dirs = None))]
+    fn to_pdf_with_diagnostics<'py>(
+        &self,
+        py: Python<'py>,
+        fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
+        font_dir: Option<PathBuf>,
+        font_dirs: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyTuple>)> {
+        let caller_fonts = collect_caller_fonts(py, fonts, font_dir, font_dirs)?;
+        let font_refs = caller_fonts.as_ref().map(|files| {
+            files
+                .iter()
+                .map(|font| (font.family.as_str(), font.data.as_slice()))
+                .collect::<Vec<_>>()
+        });
+        let font_refs = font_refs.as_deref().unwrap_or(&[]);
+        let (payload, diagnostics) = py
+            .detach(|| self.inner.to_pdf_with_diagnostics(font_refs))
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        let messages = PyTuple::new(py, diagnostics.iter().map(|d| d.message.as_str()))?;
+        Ok((PyBytes::new(py, &payload), messages))
+    }
     #[pyo3(signature = (slide_index, dpi = 150.0, *, fonts = None, font_dir = None, font_dirs = None))]
     #[allow(clippy::too_many_arguments)]
     fn render_slide_to_png<'py>(
@@ -273,6 +295,34 @@ impl PyPresentation {
         .map_err(|error| rpptx_to_pyerr(py, error))
     }
 
+    #[pyo3(signature = (slide_index, dpi = 150.0, *, fonts = None, font_dir = None, font_dirs = None))]
+    #[allow(clippy::too_many_arguments)]
+    fn render_slide_to_png_with_diagnostics<'py>(
+        &self,
+        py: Python<'py>,
+        slide_index: usize,
+        dpi: f64,
+        fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
+        font_dir: Option<PathBuf>,
+        font_dirs: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<(Option<Bound<'py, PyBytes>>, Bound<'py, PyTuple>)> {
+        let caller_fonts = collect_caller_fonts(py, fonts, font_dir, font_dirs)?;
+        let font_refs = caller_fonts.as_ref().map(|files| {
+            files
+                .iter()
+                .map(|font| (font.family.as_str(), font.data.as_slice()))
+                .collect::<Vec<_>>()
+        });
+        let font_refs = font_refs.as_deref().unwrap_or(&[]);
+        let (payload, diagnostics) = py
+            .detach(|| {
+                self.inner
+                    .render_slide_to_png_with_diagnostics(slide_index, dpi, font_refs)
+            })
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        let messages = PyTuple::new(py, diagnostics.iter().map(|d| d.message.as_str()))?;
+        Ok((payload.map(|bytes| PyBytes::new(py, &bytes)), messages))
+    }
     #[pyo3(signature = (dpi = 150.0, *, fonts = None, font_dir = None, font_dirs = None))]
     fn render_all_slides<'py>(
         &self,
@@ -299,6 +349,35 @@ impl PyPresentation {
         PyList::new(py, slides.iter().map(|slide| PyBytes::new(py, slide)))
     }
 
+    #[pyo3(signature = (dpi = 150.0, *, fonts = None, font_dir = None, font_dirs = None))]
+    fn render_all_slides_with_diagnostics<'py>(
+        &self,
+        py: Python<'py>,
+        dpi: f64,
+        fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
+        font_dir: Option<PathBuf>,
+        font_dirs: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<(Bound<'py, PyList>, Bound<'py, PyTuple>)> {
+        let caller_fonts = collect_caller_fonts(py, fonts, font_dir, font_dirs)?;
+        let font_refs = caller_fonts.as_ref().map(|files| {
+            files
+                .iter()
+                .map(|font| (font.family.as_str(), font.data.as_slice()))
+                .collect::<Vec<_>>()
+        });
+        let font_refs = font_refs.as_deref().unwrap_or(&[]);
+        let (payload, diagnostics) = py
+            .detach(|| {
+                self.inner
+                    .render_all_slides_with_diagnostics(dpi, font_refs)
+            })
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        let messages = PyTuple::new(py, diagnostics.iter().map(|d| d.message.as_str()))?;
+        Ok((
+            PyList::new(py, payload.iter().map(|bytes| PyBytes::new(py, bytes)))?,
+            messages,
+        ))
+    }
     #[pyo3(signature = (*, width_factor = 1.0, fonts = None, font_dir = None, font_dirs = None))]
     fn text_layout<'py>(
         &self,
@@ -377,6 +456,55 @@ impl PyPresentation {
             })
             .map_err(|error| rpptx_to_pyerr(py, error))?;
         PyList::new(py, notes.iter().map(|page| PyBytes::new(py, page)))
+    }
+
+    #[pyo3(signature = (*, fonts = None, font_dir = None, font_dirs = None))]
+    fn to_notes_pdf_with_diagnostics<'py>(
+        &self,
+        py: Python<'py>,
+        fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
+        font_dir: Option<PathBuf>,
+        font_dirs: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyTuple>)> {
+        let caller_fonts = collect_caller_fonts(py, fonts, font_dir, font_dirs)?;
+        let font_refs = caller_fonts.as_ref().map(|files| {
+            files
+                .iter()
+                .map(|font| (font.family.as_str(), font.data.as_slice()))
+                .collect::<Vec<_>>()
+        });
+        let font_refs = font_refs.as_deref().unwrap_or(&[]);
+        let (payload, diagnostics) = py
+            .detach(|| self.inner.to_notes_pdf_with_diagnostics(font_refs))
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        let messages = PyTuple::new(py, diagnostics.iter().map(|d| d.message.as_str()))?;
+        Ok((PyBytes::new(py, &payload), messages))
+    }
+    #[pyo3(signature = (dpi = 150.0, *, fonts = None, font_dir = None, font_dirs = None))]
+    fn render_all_notes_with_diagnostics<'py>(
+        &self,
+        py: Python<'py>,
+        dpi: f64,
+        fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
+        font_dir: Option<PathBuf>,
+        font_dirs: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<(Bound<'py, PyList>, Bound<'py, PyTuple>)> {
+        let caller_fonts = collect_caller_fonts(py, fonts, font_dir, font_dirs)?;
+        let font_refs = caller_fonts.as_ref().map(|files| {
+            files
+                .iter()
+                .map(|font| (font.family.as_str(), font.data.as_slice()))
+                .collect::<Vec<_>>()
+        });
+        let font_refs = font_refs.as_deref().unwrap_or(&[]);
+        let (payload, diagnostics) = py
+            .detach(|| self.inner.render_all_notes_with_diagnostics(dpi, font_refs))
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        let messages = PyTuple::new(py, diagnostics.iter().map(|d| d.message.as_str()))?;
+        Ok((
+            PyList::new(py, payload.iter().map(|bytes| PyBytes::new(py, bytes)))?,
+            messages,
+        ))
     }
 
     /// Replaces literal text in slides and speaker notes and returns the count.

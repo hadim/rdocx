@@ -389,13 +389,11 @@ pub fn convert(
     let mut stdout = io::stdout().lock();
     match format {
         "pdf" => {
-            stage_and_publish(
-                &[(
-                    output.clone(),
-                    presentation.to_pdf_deterministic_with_fonts(&font_refs)?,
-                )],
-                force,
-            )?;
+            let (bytes, diagnostics) = presentation.to_pdf_with_diagnostics(&font_refs)?;
+            stage_and_publish(&[(output.clone(), bytes)], force)?;
+            for diagnostic in &diagnostics {
+                eprintln!("{}", diagnostic.message);
+            }
             writeln!(stdout, "Written to {}", output.display())?;
         }
         "png" | "jpg" | "jpeg" | "tif" | "tiff" => {
@@ -446,6 +444,9 @@ pub fn convert(
                         writeln!(stdout, "Slide {one_based} -> {}", path.display())?;
                     }
                 }
+            }
+            for diagnostic in &layout.diagnostics {
+                eprintln!("{}", diagnostic.message);
             }
         }
         _ => unreachable!(),
@@ -658,6 +659,10 @@ pub fn render(
             }
         }
     }
+    for diagnostic in &layout.diagnostics {
+        eprintln!("{}", diagnostic.message);
+    }
+
     Ok(())
 }
 

@@ -209,7 +209,7 @@ impl NumberingState {
                 size,
             }) => {
                 self.levels[level] = None;
-                (map_bullet_characters(character), font, color, size)
+                (character.clone(), font, color, size)
             }
             Some(ResolvedBullet::AutoNumber {
                 scheme,
@@ -448,7 +448,14 @@ fn shape_marker(
     if let Some(color) = color {
         style.fill = Some(Paint::Solid(color));
     }
-    shaping_cache.shape(font_manager, text, &style)
+    let (displayed, _) = font_manager.resolve_symbol_text(
+        typeface_for_text(&style, text),
+        style.bold,
+        style.italic,
+        text,
+        true,
+    )?;
+    shaping_cache.shape(font_manager, &displayed, &style)
 }
 
 fn first_run_style(paragraph: &ResolvedParagraph) -> &ResolvedRunStyle {
@@ -480,10 +487,6 @@ static DEFAULT_RUN_STYLE: ResolvedRunStyle = ResolvedRunStyle {
     symbol_typeface: None,
     hyperlink_url: None,
 };
-
-fn map_bullet_characters(character: &str) -> String {
-    character.replace('\u{f0b7}', "\u{2022}")
-}
 
 fn format_auto_number(scheme: &str, value: u32) -> String {
     match scheme {

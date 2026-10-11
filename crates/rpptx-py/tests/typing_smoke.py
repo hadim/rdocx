@@ -574,3 +574,10 @@ def fx195_caller_font_render_signatures(presentation: Presentation, directory: P
     assert_type(presentation.to_notes_pdf(fonts=fonts, font_dirs=dirs), bytes)
     assert_type(presentation.render_all_notes(fonts=fonts, font_dirs=dirs), list[bytes])
     assert_type(presentation.to_pdf(font_dir=directory), bytes)
+
+
+def fx210_notes_diagnostic_companion_signatures(presentation: Presentation, directory: Path) -> None:
+    fonts: list[tuple[str, bytes]] = [("Aptos", b"font")]
+    dirs: list[str | Path] = [directory, str(directory)]
+    assert_type(presentation.to_notes_pdf_with_diagnostics(fonts=fonts, font_dir=directory, font_dirs=dirs), tuple[bytes, tuple[str, ...]])
+    assert_type(presentation.render_all_notes_with_diagnostics(72.0, fonts=fonts, font_dir=directory, font_dirs=dirs), tuple[list[bytes], tuple[str, ...]])

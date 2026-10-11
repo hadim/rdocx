@@ -3550,6 +3550,7 @@ impl Engine {
                 ));
             }
         };
+        diagnostics.extend(self.font_manager.current_font_diagnostics().iter().cloned());
         Ok((height, diagnostics))
     }
 
@@ -5056,6 +5057,7 @@ impl Engine {
         }
         drop(restart_identity_memo);
         let mut result = LayoutResult::new(pages, fonts, metadata, outlines);
+        diagnostics.extend(self.font_manager.current_font_diagnostics().iter().cloned());
         result.diagnostics = diagnostics;
         result.structure = Some(structure);
         let references = num_state.references_only();
@@ -8820,12 +8822,29 @@ fn layout_paragraph_with_source_and_table(
 
             // Bullet glyphs are not in every font either, so the marker gets
             // the same coverage check as body text.
-            if let Ok(font_id) = fm.resolve_font_for_text(
-                marker_font_family,
-                marker_bold,
-                marker_italic,
-                &marker.marker_text,
-            ) && let Ok(shaped) = fm.shape_text(font_id, &marker.marker_text, marker_font_size)
+            let display_selection = if marker
+                .marker_text
+                .chars()
+                .any(|character| (0xf000..=0xf0ff).contains(&(character as u32)))
+            {
+                fm.resolve_symbol_text(
+                    marker_font_family,
+                    marker_bold,
+                    marker_italic,
+                    &marker.marker_text,
+                    false,
+                )
+            } else {
+                fm.resolve_font_for_text(
+                    marker_font_family,
+                    marker_bold,
+                    marker_italic,
+                    &marker.marker_text,
+                )
+                .map(|id| (marker.marker_text.clone(), id))
+            };
+            if let Ok((display_text, font_id)) = display_selection
+                && let Ok(shaped) = fm.shape_text(font_id, &display_text, marker_font_size)
             {
                 let metrics = fm.metrics(font_id, marker_font_size)?;
                 let color = marker_rpr
@@ -8846,7 +8865,7 @@ fn layout_paragraph_with_source_and_table(
                     },
                 );
                 inline_items.push(InlineItem::Marker(TextSegment {
-                    text: marker.marker_text,
+                    text: display_text,
                     direction: TextDirection::Auto,
                     source: None,
                     font_id,
@@ -9696,9 +9715,13 @@ fn layout_paragraph_with_source_and_table(
                     let Some(symbol) = char::from_u32(u32::from(*char_code)) else {
                         continue;
                     };
-                    let text = symbol.to_string();
-                    let symbol_font_id =
-                        fm.resolve_font_for_text(Some(font.as_str()), bold, italic, &text)?;
+                    let (text, symbol_font_id) = fm.resolve_symbol_text(
+                        Some(font.as_str()),
+                        bold,
+                        italic,
+                        &symbol.to_string(),
+                        false,
+                    )?;
                     let symbol_metrics = fm.metrics(symbol_font_id, font_size)?;
                     let shaped = fm.shape_text(symbol_font_id, &text, font_size)?;
                     multilingual_styles.insert(

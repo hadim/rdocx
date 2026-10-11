@@ -219,6 +219,8 @@ pub struct TextFrameLayout {
     /// The autofit mode in effect after placeholder inheritance.
     pub autofit: AutofitMode,
     pub layout: rpptx_render::ShapeTextLayout,
+    /// Ordered facts from this exact shape measurement, not another render.
+    pub diagnostics: Vec<oxml_layout::Diagnostic>,
 }
 const DEFAULT_POWERPOINT_AUTHORS_PART: &str = "/ppt/authors.xml";
 const DEFAULT_POWERPOINT_COMMENTS_PART: &str = "/ppt/comments/comment1.xml";
@@ -1125,6 +1127,42 @@ impl Presentation {
         Ok(oxml_pdf::render_to_pdf_checked(&layout)?)
     }
 
+    /// Encode one deterministic caller-font bundle with owned diagnostics.
+    #[cfg(feature = "render")]
+    pub fn to_pdf_with_diagnostics(
+        &self,
+        font_files: &[(&str, &[u8])],
+    ) -> Result<(Vec<u8>, Vec<oxml_layout::Diagnostic>)> {
+        let (_, layout) = self.render_deterministic_with_fonts(font_files)?;
+        let bytes = oxml_pdf::render_to_pdf_checked(&layout)?;
+        Ok((bytes, layout.diagnostics))
+    }
+
+    /// Paint one slide and retain the same successful bundle's facts.
+    #[cfg(feature = "render")]
+    pub fn render_slide_to_png_with_diagnostics(
+        &self,
+        slide_index: usize,
+        dpi: f64,
+        font_files: &[(&str, &[u8])],
+    ) -> Result<(Option<Vec<u8>>, Vec<oxml_layout::Diagnostic>)> {
+        let (_, layout) = self.render_deterministic_with_fonts(font_files)?;
+        let bytes = render_export_png(&layout, slide_index, dpi)?;
+        Ok((bytes, layout.diagnostics))
+    }
+
+    /// Paint all slides once with owned ordered diagnostics.
+    #[cfg(feature = "render")]
+    pub fn render_all_slides_with_diagnostics(
+        &self,
+        dpi: f64,
+        font_files: &[(&str, &[u8])],
+    ) -> Result<(Vec<Vec<u8>>, Vec<oxml_layout::Diagnostic>)> {
+        let (_, layout) = self.render_deterministic_with_fonts(font_files)?;
+        let bytes = render_export_pngs(&layout, dpi)?;
+        Ok((bytes, layout.diagnostics))
+    }
+
     /// Render caller-selected fonts to the requested archival profile.
     #[cfg(feature = "render")]
     pub fn to_pdfa_deterministic_with_fonts(
@@ -1137,6 +1175,19 @@ impl Presentation {
             &layout,
             oxml_pdf::PdfOptions::new(profile),
         )?)
+    }
+
+    /// Encode one caller-selected archival bundle and retain its owned diagnostics.
+    #[cfg(feature = "render")]
+    pub fn to_pdfa_with_diagnostics(
+        &self,
+        profile: oxml_pdf::PdfConformance,
+        font_files: &[(&str, &[u8])],
+    ) -> Result<(Vec<u8>, Vec<oxml_layout::Diagnostic>)> {
+        let (_, layout) = self.render_deterministic_with_fonts(font_files)?;
+        let bytes =
+            oxml_pdf::render_to_pdf_with_options(&layout, oxml_pdf::PdfOptions::new(profile))?;
+        Ok((bytes, layout.diagnostics))
     }
 
     /// Rasterize one slide from the caller-selected bundle.
@@ -1214,6 +1265,64 @@ impl Presentation {
             &caller_font_files(font_files),
         )?;
         render_export_pngs(&layout, dpi)
+    }
+
+    /// Encode the prepared export and return only that bundle's owned diagnostics.
+    #[cfg(feature = "render")]
+    pub fn to_notes_pdf_with_diagnostics(
+        &self,
+        font_files: &[(&str, &[u8])],
+    ) -> Result<(Vec<u8>, Vec<oxml_layout::Diagnostic>)> {
+        let layout =
+            render_notes_pages(&self.staged_package(false)?, &caller_font_files(font_files))?;
+        let bytes = oxml_pdf::render_to_pdf_checked(&layout)?;
+        Ok((bytes, layout.diagnostics))
+    }
+
+    /// Encode the prepared export and return only that bundle's owned diagnostics.
+    #[cfg(feature = "render")]
+    pub fn render_all_notes_with_diagnostics(
+        &self,
+        dpi: f64,
+        font_files: &[(&str, &[u8])],
+    ) -> Result<(Vec<Vec<u8>>, Vec<oxml_layout::Diagnostic>)> {
+        let layout =
+            render_notes_pages(&self.staged_package(false)?, &caller_font_files(font_files))?;
+        let bytes = render_export_pngs(&layout, dpi)?;
+        Ok((bytes, layout.diagnostics))
+    }
+
+    /// Encode the prepared export and return only that bundle's owned diagnostics.
+    #[cfg(feature = "render")]
+    pub fn to_handout_pdf_with_diagnostics(
+        &self,
+        arrangement: HandoutLayout,
+        font_files: &[(&str, &[u8])],
+    ) -> Result<(Vec<u8>, Vec<oxml_layout::Diagnostic>)> {
+        let layout = render_handout_pages(
+            &self.staged_package(false)?,
+            arrangement,
+            &caller_font_files(font_files),
+        )?;
+        let bytes = oxml_pdf::render_to_pdf_checked(&layout)?;
+        Ok((bytes, layout.diagnostics))
+    }
+
+    /// Encode the prepared export and return only that bundle's owned diagnostics.
+    #[cfg(feature = "render")]
+    pub fn render_all_handouts_with_diagnostics(
+        &self,
+        arrangement: HandoutLayout,
+        dpi: f64,
+        font_files: &[(&str, &[u8])],
+    ) -> Result<(Vec<Vec<u8>>, Vec<oxml_layout::Diagnostic>)> {
+        let layout = render_handout_pages(
+            &self.staged_package(false)?,
+            arrangement,
+            &caller_font_files(font_files),
+        )?;
+        let bytes = render_export_pngs(&layout, dpi)?;
+        Ok((bytes, layout.diagnostics))
     }
 
     /// Evaluates and renders one slide at an explicit slide-local timestamp.
@@ -1395,6 +1504,7 @@ impl Presentation {
                 else {
                     continue;
                 };
+                assembly.font_manager.begin_layout();
                 let layout = rpptx_render::layout_shape_text(
                     shape,
                     text,
@@ -1419,6 +1529,7 @@ impl Presentation {
                     slide_index,
                     shape_id: child.non_visual_id(),
                     name: child.non_visual_name(),
+                    diagnostics: assembly.font_manager.current_font_diagnostics().to_vec(),
                     autofit: match text.autofit {
                         ResolvedAutofit::None => AutofitMode::None,
                         ResolvedAutofit::Normal { .. } => AutofitMode::Normal,
@@ -4771,6 +4882,7 @@ fn render_prepared_timeline_request(
         legacy_font_manager.load_additional_fonts(&assembly.input.fonts);
         &mut legacy_font_manager
     };
+    font_manager.begin_layout();
     let mut incoming_context = ResolveCtx::new(
         &incoming_source.theme,
         render_effective_color_map(
@@ -4919,6 +5031,7 @@ fn render_prepared_timeline_request(
     }
     diagnostics.extend(incoming_media_diagnostics);
     diagnostics.extend(composed.diagnostics);
+    diagnostics.extend(font_manager.current_font_diagnostics().iter().cloned());
     Ok((
         DeterministicTimelineFrame {
             page: composed.page,
@@ -10176,6 +10289,20 @@ fn validate_export_png_pages(pages: &[std::sync::Arc<PageFrame>], dpi: f64) -> R
 }
 
 #[cfg(feature = "render")]
+fn append_export_font_facts(
+    diagnostics: &mut Vec<oxml_layout::Diagnostic>,
+    seen: &mut Vec<oxml_layout::Diagnostic>,
+    facts: &[oxml_layout::Diagnostic],
+) {
+    for fact in facts {
+        if !seen.contains(fact) {
+            diagnostics.push(fact.clone());
+            seen.push(fact.clone());
+        }
+    }
+}
+
+#[cfg(feature = "render")]
 fn render_notes_pages(
     package: &OpcPackage,
     font_files: &[oxml_layout::FontFile],
@@ -10232,6 +10359,7 @@ fn render_notes_pages(
     let mut export_package = package.clone();
     let mut pages = Vec::with_capacity(assembly.slides.len());
     let mut diagnostics = assembly.layout.diagnostics.clone();
+    let mut seen_font_facts = assembly.font_manager.current_font_diagnostics().to_vec();
     for (slide_index, prepared) in assembly.slides.iter().enumerate() {
         let notes = resolve_notes(package, &prepared.slide_part)?;
         if let Some(notes) = &notes {
@@ -10272,6 +10400,7 @@ fn render_notes_pages(
             assembly.table_styles.as_ref(),
         )?;
         diagnostics.append(&mut page.1);
+        append_export_font_facts(&mut diagnostics, &mut seen_font_facts, &page.2);
         pages.push(std::sync::Arc::new(page.0));
     }
     let mut result = LayoutResult::new(
@@ -10435,9 +10564,10 @@ fn render_handout_pages(
     let page_count = assembly.layout.pages.len().div_ceil(capacity);
     let mut pages = Vec::with_capacity(page_count);
     let mut diagnostics = assembly.layout.diagnostics.clone();
+    let mut seen_font_facts = assembly.font_manager.current_font_diagnostics().to_vec();
     for page_index in 0..page_count {
         let common = compose_handout_common(&handout_master, page_index + 1)?;
-        let (mut base, mut page_diagnostics) = render_export_surface(
+        let (mut base, mut page_diagnostics, page_font_facts) = render_export_surface(
             package,
             &handout_master_part,
             common,
@@ -10454,6 +10584,7 @@ fn render_handout_pages(
             assembly.table_styles.as_ref(),
         )?;
         diagnostics.append(&mut page_diagnostics);
+        append_export_font_facts(&mut diagnostics, &mut seen_font_facts, &page_font_facts);
         let start = page_index * capacity;
         let end = (start + capacity).min(assembly.layout.pages.len());
         let mut elements = std::mem::take(&mut base.elements);
@@ -10464,6 +10595,11 @@ fn render_handout_pages(
             page_size,
             &mut assembly.font_manager,
         )?;
+        append_export_font_facts(
+            &mut diagnostics,
+            &mut seen_font_facts,
+            assembly.font_manager.current_font_diagnostics(),
+        );
         elements.append(&mut thumbnails);
         base.elements = elements;
         pages.push(std::sync::Arc::new(base));
@@ -10811,7 +10947,11 @@ fn render_export_surface(
     deck_media: &mut HashMap<MediaId, MediaData>,
     font_manager: &mut FontManager,
     table_styles: Option<&CT_TableStyleList>,
-) -> Result<(PageFrame, Vec<oxml_layout::Diagnostic>)> {
+) -> Result<(
+    PageFrame,
+    Vec<oxml_layout::Diagnostic>,
+    Vec<oxml_layout::Diagnostic>,
+)> {
     let mut slide = CT_Slide::new(CT_ShapeTree::new());
     slide.common_slide_data = common;
     let mut layout = shell_layout.clone();
@@ -10887,7 +11027,6 @@ fn render_export_surface(
         };
         shape.content = ResolvedContent::Group(page_thumbnail_group(preview, target).0);
     }
-    let diagnostics = resolved.diagnostics.clone();
     let input = RenderInput {
         slides: vec![resolved],
         media: deck_media.clone(),
@@ -10906,7 +11045,12 @@ fn render_export_surface(
         .map(|page| page.as_ref().clone())
         .ok_or_else(|| render_failure("export surface produced no page"))?;
     page.page_number = page_number;
-    Ok((page, diagnostics))
+    // The renderer appends exactly these owned facts after ordinary slide warnings.
+    // Keep the contributions separate so only font facts are deduplicated by exporters.
+    let font_facts = font_manager.current_font_diagnostics().to_vec();
+    let mut diagnostics = layout_result.diagnostics;
+    diagnostics.truncate(diagnostics.len() - font_facts.len());
+    Ok((page, diagnostics, font_facts))
 }
 
 #[cfg(feature = "render")]
@@ -13560,5 +13704,551 @@ mod write_tests {
         let part = media.insert(&mut package, png, "duplicate.png");
 
         assert_eq!(part, "/ppt/media/image1.png");
+    }
+
+    #[cfg(feature = "render")]
+    fn fx210_layout_runs(layout: &oxml_layout::LayoutResult) -> Vec<oxml_layout::GlyphRun> {
+        let mut runs = Vec::new();
+        for page in &layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, _| match element {
+                oxml_layout::PositionedElement::Text(run) => runs.push(run.clone()),
+                oxml_layout::PositionedElement::MultilingualText(run) => {
+                    runs.push(run.legacy_projection())
+                }
+                _ => {}
+            });
+        }
+        runs
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn fx210_ppt_public_aptos_diagnostics_follow_actual_owned_contributions() {
+        let mut presentation = Presentation::new().unwrap();
+        presentation.add_slide(6).unwrap();
+        {
+            let mut slide = presentation.slide_mut(0).unwrap();
+            let mut shape = slide
+                .add_textbox(Emu(100_000), Emu(100_000), Emu(6_000_000), Emu(3_000_000))
+                .unwrap();
+            shape.set_text("").unwrap();
+            let mut frame = shape.text_frame().unwrap();
+            for (index, family) in ["Aptos", "Aptos", "Aptos Display", "Calibri"]
+                .into_iter()
+                .enumerate()
+            {
+                let mut paragraph = if index == 0 {
+                    frame.paragraph_mut(0).unwrap()
+                } else {
+                    frame.add_paragraph()
+                };
+                paragraph.set_text("iiiiWWWW");
+                paragraph
+                    .run_mut(0)
+                    .unwrap()
+                    .set_font(Some(TextFont::new(family).unwrap()));
+            }
+        }
+        let before = presentation.to_bytes().unwrap();
+        let (_, cold) = presentation.render_deterministic().unwrap();
+        let runs = fx210_layout_runs(&cold);
+        assert_eq!(
+            runs.iter().filter(|run| run.text == "iiiiWWWW").count(),
+            4,
+            "actual final contribution precondition"
+        );
+        for run in &runs {
+            assert!(run.glyph_ids.iter().all(|glyph| *glyph != 0));
+            let selected = cold
+                .fonts
+                .iter()
+                .find(|font| font.id == run.font_id)
+                .unwrap();
+            assert_eq!(
+                selected.family, "Carlito",
+                "actual approximate-face precondition"
+            );
+            assert_eq!(
+                selected.data.as_ref(),
+                include_bytes!("../../oxml-layout/fonts/Carlito-Regular.ttf").as_slice()
+            );
+        }
+        let messages: Vec<_> = cold
+            .diagnostics
+            .iter()
+            .filter(|d| d.message.contains("Aptos"))
+            .map(|d| d.message.clone())
+            .collect();
+        assert_eq!(
+            messages.len(),
+            2,
+            "F-X210 PPT owned layout must report both Aptos requests once"
+        );
+        assert!(messages[0].contains("Aptos") && !messages[0].contains("Aptos Display"));
+        assert!(messages[1].contains("Aptos Display"));
+        assert!(
+            messages
+                .iter()
+                .all(|message| message.contains("Carlito") && message.contains("approximate"))
+        );
+        let (_, repeat) = presentation.render_deterministic().unwrap();
+        assert_eq!(repeat.diagnostics, cold.diagnostics);
+        assert_eq!(fx210_layout_runs(&repeat), runs);
+        let frames = presentation.text_layout_deterministic(1.0).unwrap();
+        assert_eq!(frames.len(), 1);
+        assert_eq!(presentation.to_bytes().unwrap(), before);
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn fx210_ppt_public_bullets_use_only_qualified_symbol_semantics() {
+        let cases = [
+            ("Wingdings", '\u{f0a7}', '\u{25aa}'),
+            ("Wingdings", '\u{f0d8}', '\u{27a2}'),
+            ("Wingdings", '\u{f0fc}', '\u{2713}'),
+            ("Wingdings", '\u{f076}', '\u{2756}'),
+            ("Wingdings", '\u{f071}', '\u{2751}'),
+            ("Wingdings", '\u{f06e}', '\u{25a0}'),
+            ("Wingdings", '\u{f0fe}', '\u{2611}'),
+            ("Symbol", '\u{f0b7}', '\u{2022}'),
+        ];
+        for (family, original, target) in
+            cases
+                .into_iter()
+                .chain([("Wingdings", '\u{f0b7}', '\u{2022}')])
+        {
+            let mut presentation = Presentation::new().unwrap();
+            presentation.add_slide(6).unwrap();
+            {
+                let mut slide = presentation.slide_mut(0).unwrap();
+                let mut shape = slide
+                    .add_textbox(Emu(100_000), Emu(100_000), Emu(3_000_000), Emu(1_000_000))
+                    .unwrap();
+                shape.set_text("item").unwrap();
+                let mut frame = shape.text_frame().unwrap();
+                frame.paragraph_mut(0).unwrap().set_bullet(Some(TextBullet {
+                    font: Some(TextFont::new(family).unwrap()),
+                    choice: Some(TextBulletChoice::Character(
+                        TextBulletCharacter::new(original.to_string()).unwrap(),
+                    )),
+                    ..Default::default()
+                }));
+            }
+            let before = presentation.to_bytes().unwrap();
+            let (_, result) = presentation.render_deterministic().unwrap();
+            let runs = fx210_layout_runs(&result);
+            let marker = runs
+                .iter()
+                .find(|run| run.text != "item")
+                .expect("real bullet reaches positioned output");
+            assert_eq!(
+                marker.text,
+                target.to_string(),
+                "F-X210 PPT bullet must use its qualified Unicode target"
+            );
+            assert!(marker.glyph_ids.iter().all(|glyph| *glyph != 0));
+            assert_eq!(presentation.to_bytes().unwrap(), before);
+            let reopened = Presentation::from_bytes(&before).unwrap();
+            assert_eq!(
+                fx210_layout_runs(&reopened.render_deterministic().unwrap().1),
+                runs
+            );
+        }
+    }
+    #[cfg(feature = "render")]
+    #[test]
+    fn fx210_ppt_diagnostic_companions_and_frame_facts_are_output_owned() {
+        let mut presentation = Presentation::new().unwrap();
+        presentation.add_slide(6).unwrap();
+        for (index, family) in ["Aptos", "Calibri"].into_iter().enumerate() {
+            let mut shapes = presentation.shapes_mut(0, &[]).unwrap();
+            let mut shape = shapes
+                .add_textbox(
+                    Emu(0),
+                    Emu(index as i64 * 914400),
+                    Emu(4000000),
+                    Emu(914400),
+                )
+                .unwrap();
+            shape.set_text("Actual contributing text").unwrap();
+            shape
+                .text_frame()
+                .unwrap()
+                .paragraph_mut(0)
+                .unwrap()
+                .run_mut(0)
+                .unwrap()
+                .set_font(Some(TextFont::new(family).unwrap()));
+        }
+        let before = presentation.to_bytes().unwrap();
+        let fonts = [(
+            "Aptos",
+            include_bytes!("../../oxml-layout/fonts/Carlito-Regular.ttf").as_slice(),
+        )];
+        let (pdf, facts) = presentation.to_pdf_with_diagnostics(&fonts).unwrap();
+        assert_eq!(
+            facts
+                .iter()
+                .filter(|d| d.message.contains("Font 'Aptos' is approximate"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            pdf,
+            presentation
+                .to_pdf_deterministic_with_fonts(&fonts)
+                .unwrap()
+        );
+        let (png, png_facts) = presentation
+            .render_slide_to_png_with_diagnostics(0, 72.0, &fonts)
+            .unwrap();
+        assert_eq!(
+            png,
+            presentation
+                .slide_png_deterministic_with_fonts(0, 72.0, &fonts)
+                .unwrap()
+        );
+        assert_eq!(png_facts, facts);
+        let (all, all_facts) = presentation
+            .render_all_slides_with_diagnostics(72.0, &fonts)
+            .unwrap();
+        assert_eq!(
+            all,
+            presentation
+                .slide_pngs_deterministic_with_fonts(72.0, &fonts)
+                .unwrap()
+        );
+        assert_eq!(all_facts, facts);
+        let frames = presentation
+            .text_layout_deterministic_with_fonts(1.0, &fonts)
+            .unwrap();
+        assert_eq!(frames.len(), 2);
+        assert!(
+            frames[0]
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("Aptos") && d.message.contains("approximate"))
+        );
+        assert!(
+            !frames[1]
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("Aptos")),
+            "the previous shape's warning is not this measured output"
+        );
+        let repeat = presentation
+            .text_layout_deterministic_with_fonts(1.0, &fonts)
+            .unwrap();
+        assert_eq!(repeat, frames);
+        assert_eq!(presentation.to_bytes().unwrap(), before);
+        let (archival, archival_facts) = presentation
+            .to_pdfa_with_diagnostics(oxml_pdf::PdfConformance::PdfA2b, &fonts)
+            .unwrap();
+        assert_eq!(archival_facts, facts);
+        assert_eq!(
+            archival,
+            presentation
+                .to_pdfa_deterministic_with_fonts(oxml_pdf::PdfConformance::PdfA2b, &fonts)
+                .unwrap()
+        );
+        let timeline = presentation
+            .render_timeline_deterministic_with_fonts(0, TimelinePosition::default(), None, &fonts)
+            .unwrap();
+        assert!(
+            timeline
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("Font 'Aptos' is approximate"))
+        );
+        let repeated_timeline = presentation
+            .render_timeline_deterministic_with_fonts(0, TimelinePosition::default(), None, &fonts)
+            .unwrap();
+        assert_eq!(repeated_timeline.diagnostics, timeline.diagnostics);
+        assert_eq!(presentation.to_bytes().unwrap(), before);
+        // Only the export surface requests Aptos, not its slide preview.
+        presentation
+            .slide_mut(0)
+            .unwrap()
+            .shape_mut(0)
+            .unwrap()
+            .text_frame()
+            .unwrap()
+            .paragraph_mut(0)
+            .unwrap()
+            .run_mut(0)
+            .unwrap()
+            .set_font(Some(TextFont::new("Calibri").unwrap()));
+        assert!(
+            !presentation
+                .to_pdf_with_diagnostics(&fonts)
+                .unwrap()
+                .1
+                .iter()
+                .any(|d| d.message.contains("Aptos"))
+        );
+        presentation
+            .set_notes_text(0, "Actual Aptos speaker notes")
+            .unwrap();
+        {
+            let notes = presentation.slides[0].notes.as_mut().unwrap();
+            let body = first_notes_body_mut(&mut notes.notes.common_slide_data.shape_tree.children)
+                .unwrap();
+            let TextRun::Run(run) = &mut body.paragraph_mut(0).unwrap().runs[0] else {
+                panic!("typed notes run");
+            };
+            run.properties
+                .get_or_insert_with(CT_TextCharacterProperties::default)
+                .latin = Some(TextFont::new("Aptos").unwrap());
+        }
+        let covered_timeline = presentation
+            .render_timeline_deterministic_with_fonts(0, TimelinePosition::default(), None, &fonts)
+            .unwrap();
+        assert!(
+            !covered_timeline
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("Aptos")),
+            "notes-only Aptos cannot leak into the covered main-slide timeline"
+        );
+        let notes_only_before = presentation.to_bytes().unwrap();
+        let notes_only = presentation.to_notes_pdf_with_diagnostics(&fonts).unwrap();
+        assert_eq!(
+            notes_only
+                .1
+                .iter()
+                .filter(|d| d.message.contains("Font 'Aptos' is approximate"))
+                .count(),
+            1,
+            "notes-only Aptos must publish its actual surface fact"
+        );
+        assert_eq!(
+            presentation.to_notes_pdf_with_diagnostics(&fonts).unwrap(),
+            notes_only
+        );
+        assert_eq!(
+            Presentation::from_bytes(&notes_only_before)
+                .unwrap()
+                .to_notes_pdf_with_diagnostics(&fonts)
+                .unwrap(),
+            notes_only
+        );
+        assert_eq!(presentation.to_bytes().unwrap(), notes_only_before);
+        // Even identical ordinary warning text must keep its own multiplicity.
+        let ordinary = notes_only
+            .1
+            .iter()
+            .find(|d| d.message.contains("Font 'Aptos' is approximate"))
+            .unwrap()
+            .clone();
+        let mut merged = vec![ordinary.clone(), ordinary.clone()];
+        let mut seen = Vec::new();
+        append_export_font_facts(&mut merged, &mut seen, std::slice::from_ref(&ordinary));
+        merged.push(oxml_layout::Diagnostic {
+            message: "ordinary paint warning".into(),
+        });
+        append_export_font_facts(&mut merged, &mut seen, std::slice::from_ref(&ordinary));
+        assert_eq!(
+            merged,
+            vec![
+                ordinary.clone(),
+                ordinary.clone(),
+                ordinary,
+                oxml_layout::Diagnostic {
+                    message: "ordinary paint warning".into()
+                }
+            ]
+        );
+        let mut fixture_package = presentation.staged_package(false).unwrap();
+        let theme_part = render_exact_related_part(
+            &fixture_package,
+            presentation.notes_master_part.as_deref().unwrap(),
+            rel_types::THEME,
+            content_types::THEME,
+        )
+        .unwrap();
+        let handout_part = "/ppt/handoutMasters/fx210HandoutMaster.xml";
+        let handout_xml = format!(
+            r#"<p:handoutMaster xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr><p:sp><p:nvSpPr><p:cNvPr id="2" name="FX210 caller handout text"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="100000" y="100000"/><a:ext cx="5000000" cy="800000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr sz="2000"><a:latin typeface="{}"/></a:rPr><a:t>FX210HANDOUTiiiiWWWW</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld><p:clrMap accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" bg1="lt1" bg2="lt2" folHlink="folHlink" hlink="hlink" tx1="dk1" tx2="dk2"/></p:handoutMaster>"#,
+            fonts[0].0
+        );
+        CT_HandoutMaster::from_xml(handout_xml.as_bytes()).unwrap();
+        fixture_package.set_part(handout_part, handout_xml.into_bytes());
+        fixture_package
+            .content_types
+            .add_override(handout_part, content_types::HANDOUT_MASTER);
+        fixture_package
+            .get_or_create_part_rels(handout_part)
+            .add_with_id("fx210Theme", rel_types::THEME, &theme_part);
+        fixture_package
+            .get_or_create_part_rels(&presentation.presentation_part)
+            .add_with_id("fx210Handout", rel_types::HANDOUT_MASTER, handout_part);
+        let presentation_xml = String::from_utf8(
+            fixture_package
+                .get_part(&presentation.presentation_part)
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert_eq!(presentation_xml.matches("<p:sldIdLst>").count(), 1);
+        let presentation_xml = presentation_xml.replacen(
+            "<p:sldIdLst>",
+            r#"<p:handoutMasterIdLst><p:handoutMasterId r:id="fx210Handout"/></p:handoutMasterIdLst><p:sldIdLst>"#,
+            1,
+        );
+        fixture_package.set_part(
+            &presentation.presentation_part,
+            presentation_xml.into_bytes(),
+        );
+        assert_eq!(
+            render_exact_related_part(
+                &fixture_package,
+                &presentation.presentation_part,
+                rel_types::HANDOUT_MASTER,
+                content_types::HANDOUT_MASTER,
+            )
+            .unwrap(),
+            handout_part
+        );
+        let mut fixture_bytes = std::io::Cursor::new(Vec::new());
+        fixture_package.write_to(&mut fixture_bytes).unwrap();
+        presentation = Presentation::from_bytes(fixture_bytes.get_ref()).unwrap();
+        assert_eq!(
+            presentation.handout_master_part.as_deref(),
+            Some(handout_part)
+        );
+        assert!(presentation.handout_master.is_some());
+        let export_before = presentation.to_bytes().unwrap();
+        let (notes_pdf, notes_facts) = presentation.to_notes_pdf_with_diagnostics(&fonts).unwrap();
+        assert!(
+            notes_facts
+                .iter()
+                .any(|d| d.message.contains("Font 'Aptos' is approximate"))
+        );
+        assert_eq!(
+            notes_pdf,
+            presentation
+                .to_notes_pdf_deterministic_with_fonts(&fonts)
+                .unwrap()
+        );
+        let (notes_png, notes_png_facts) = presentation
+            .render_all_notes_with_diagnostics(72.0, &fonts)
+            .unwrap();
+        assert!(!notes_png.is_empty());
+        assert_eq!(notes_png_facts, notes_facts);
+        assert_eq!(
+            notes_png,
+            presentation
+                .notes_page_pngs_deterministic_with_fonts(72.0, &fonts)
+                .unwrap()
+        );
+        assert_eq!(presentation.to_bytes().unwrap(), export_before);
+        {
+            let notes = presentation.slides[0].notes.as_mut().unwrap();
+            let body = first_notes_body_mut(&mut notes.notes.common_slide_data.shape_tree.children)
+                .unwrap();
+            let TextRun::Run(run) = &mut body.paragraph_mut(0).unwrap().runs[0] else {
+                panic!("typed notes run");
+            };
+            run.properties.as_mut().unwrap().latin = Some(TextFont::new("Calibri").unwrap());
+        }
+        let export_before = presentation.to_bytes().unwrap();
+        assert!(
+            !presentation
+                .to_notes_pdf_with_diagnostics(&fonts)
+                .unwrap()
+                .1
+                .iter()
+                .any(|d| d.message.contains("Aptos"))
+        );
+        let (handout, handout_facts) = presentation
+            .to_handout_pdf_with_diagnostics(HandoutLayout::Six, &fonts)
+            .unwrap();
+        assert!(
+            handout_facts
+                .iter()
+                .any(|d| d.message.contains("Font 'Aptos' is approximate"))
+        );
+        assert_eq!(
+            handout_facts
+                .iter()
+                .filter(|d| d.message.contains("Font 'Aptos' is approximate"))
+                .count(),
+            1,
+            "handout-only Aptos must publish its actual surface fact"
+        );
+        assert_eq!(
+            presentation
+                .to_handout_pdf_with_diagnostics(HandoutLayout::Six, &fonts)
+                .unwrap(),
+            (handout.clone(), handout_facts.clone())
+        );
+        assert_eq!(
+            Presentation::from_bytes(&export_before)
+                .unwrap()
+                .to_handout_pdf_with_diagnostics(HandoutLayout::Six, &fonts)
+                .unwrap(),
+            (handout.clone(), handout_facts.clone())
+        );
+        assert_eq!(
+            handout,
+            presentation
+                .to_handout_pdf_deterministic_with_fonts(HandoutLayout::Six, &fonts)
+                .unwrap()
+        );
+        let (handout_png, handout_png_facts) = presentation
+            .render_all_handouts_with_diagnostics(HandoutLayout::Six, 72.0, &fonts)
+            .unwrap();
+        assert!(!handout_png.is_empty());
+        assert_eq!(handout_png_facts, handout_facts);
+        assert_eq!(
+            handout_png,
+            presentation
+                .handout_page_pngs_deterministic_with_fonts(HandoutLayout::Six, 72.0, &fonts)
+                .unwrap()
+        );
+        assert!(
+            presentation
+                .render_all_notes_with_diagnostics(0.0, &fonts)
+                .is_err()
+        );
+        assert!(
+            presentation
+                .render_all_handouts_with_diagnostics(HandoutLayout::Six, 0.0, &fonts)
+                .is_err()
+        );
+        assert_eq!(presentation.to_bytes().unwrap(), export_before);
+        // A preview and its surface can contribute the same approximation.
+        // Keep one first-use font fact in the composed output.
+        presentation
+            .slide_mut(0)
+            .unwrap()
+            .shape_mut(0)
+            .unwrap()
+            .text_frame()
+            .unwrap()
+            .paragraph_mut(0)
+            .unwrap()
+            .run_mut(0)
+            .unwrap()
+            .set_font(Some(TextFont::new("Aptos").unwrap()));
+        let combined_before = presentation.to_bytes().unwrap();
+        let combined = presentation
+            .to_handout_pdf_with_diagnostics(HandoutLayout::Six, &fonts)
+            .unwrap();
+        assert_eq!(
+            combined
+                .1
+                .iter()
+                .filter(|d| d.message.contains("Font 'Aptos' is approximate"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            presentation
+                .to_handout_pdf_with_diagnostics(HandoutLayout::Six, &fonts)
+                .unwrap(),
+            combined
+        );
+        assert_eq!(presentation.to_bytes().unwrap(), combined_before);
     }
 }

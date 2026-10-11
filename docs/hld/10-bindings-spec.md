@@ -2436,6 +2436,34 @@ TIFF returns one multi-page byte stream. DPI, quality, transparency and revision
 selection preserve the existing raster contracts. Measurement results remain
 immutable, with no binding-private renderer or public invocation counter.
 
+Diagnostic companions add `_with_diagnostics` to existing PDF, PNG and raster
+byte-render methods. Native results pair the unchanged payload with an owned
+`Vec<Diagnostic>`. Python results pair that payload with `tuple[str, ...]`.
+Python signatures retain the original parameters and the caller-font keywords
+`fonts`, `font_dir` and `font_dirs`. Native companions take the corresponding
+render options or selection and one explicit font-files slice. The facade
+prepares one configured layout and encodes or paints that same bundle once.
+Existing byte-only methods retain their signatures. No rerender or mutable
+last-render registry supplies diagnostics for earlier bytes.
+
+Native and Python Word companions cover PDF, individual PNG, all-page PNG
+and selected raster pages. Native Word also covers archival PDF. Native and
+Python PPT companions cover PDF, individual slide PNG and all-slide PNG.
+Native PPT additionally covers archival PDF, notes PDF, all-notes PNG,
+handout PDF and all-handouts PNG. Python PPT adds notes PDF and all-notes
+PNG companions. Python archival and handout companions are not exposed.
+Word omitted page selection means all actual pages. Explicit empty selection
+retains `RasterError::EmptyPageSelection` and Python `LayoutError`, with source
+unchanged. PNG/JPEG keep list payloads and TIFF keeps its byte stream.
+Existing SVG results retain their named diagnostic result.
+
+Native PPT `TextFrameLayout` owns the diagnostics from the same measured
+shape. The frozen Python frame exposes those messages as an immutable tuple.
+A subsequent shape measurement cannot replace an earlier frame's facts.
+Adding the native public field requires external pre-1.0 struct literals to
+include it. CLI render and conversion publish the successful output's ordered
+facts to stderr once. Fit reports consume those same output-owned facts.
+
 Native Word SVG adds `SvgDiagnostic`, `SvgRenderResult`, and four additive
 `Document` methods. `render_page_to_svg` and
 `render_page_to_svg_with_options` reuse normal layout. Their deterministic

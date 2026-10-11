@@ -731,12 +731,13 @@ pub fn convert(
     let mut stdout = io::stdout().lock();
     match to {
         "pdf" => {
-            let bytes = if font_dir.is_some() {
-                doc.to_pdf_with_fonts_deterministic_and_options(&font_refs, render_options)?
-            } else {
-                doc.to_pdf_deterministic_with_options(render_options)?
-            };
+            let layout =
+                doc.layout_with_fonts_and_bundled_fallback_and_options(&font_refs, render_options)?;
+            let bytes = oxml_pdf::render_to_pdf_checked(&layout.layout)?;
             stage_and_publish(&[(output_path.clone(), bytes)], force)?;
+            for diagnostic in &layout.layout.diagnostics {
+                eprintln!("{}", diagnostic.message);
+            }
         }
         "html" => {
             let mut html = doc.to_html();
@@ -806,6 +807,9 @@ pub fn convert(
                         )?;
                     }
                 }
+            }
+            for diagnostic in &layout.layout.diagnostics {
+                eprintln!("{}", diagnostic.message);
             }
             return Ok(());
         }
@@ -2082,6 +2086,10 @@ pub fn render(
                 writeln!(stdout, "Rendered {} page(s) at {dpi} DPI", selected.len())?;
             }
         }
+    }
+
+    for diagnostic in &layout.layout.diagnostics {
+        eprintln!("{}", diagnostic.message);
     }
 
     Ok(())

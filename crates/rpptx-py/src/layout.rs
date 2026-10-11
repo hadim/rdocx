@@ -70,6 +70,7 @@ pub struct PyTextFrameLayout {
     height: f64,
     overflow: bool,
     lines: Vec<PyTextLineLayout>,
+    diagnostics: Vec<String>,
 }
 
 impl From<&rpptx::TextFrameLayout> for PyTextFrameLayout {
@@ -77,6 +78,11 @@ impl From<&rpptx::TextFrameLayout> for PyTextFrameLayout {
         let layout = &frame.layout;
         Self {
             slide_index: frame.slide_index,
+            diagnostics: frame
+                .diagnostics
+                .iter()
+                .map(|d| d.message.clone())
+                .collect(),
             shape_id: frame.shape_id,
             name: frame.name.clone(),
             autofit: match frame.autofit {
@@ -121,6 +127,11 @@ impl From<&rpptx::TextFrameLayout> for PyTextFrameLayout {
 
 #[pymethods]
 impl PyTextFrameLayout {
+    #[getter]
+    fn diagnostics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, &self.diagnostics)
+    }
+
     #[getter]
     fn slide_index(&self) -> usize {
         self.slide_index

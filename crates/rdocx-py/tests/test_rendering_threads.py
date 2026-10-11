@@ -1946,3 +1946,30 @@ def test_fx195_svg_geometry_normalizer_keeps_semantics_without_global_prefix_sta
     changes.append(ET.tostring(tree, encoding='unicode'))
     for changed in changes:
         assert normalized(changed) != normalized(default)
+
+
+def test_fx210_word_companions_preserve_payload_and_owned_messages():
+    from rdocx import Document
+
+    document = Document()
+    document.add_paragraph("").add_run("Actual contributing text").font.name = "Aptos"
+    source = (Path(__file__).resolve().parents[2] / "oxml-layout/fonts/Carlito-Regular.ttf").read_bytes()
+    kwargs = {"fonts": [("Aptos", source)]}
+    pdf, facts = document.to_pdf_with_diagnostics(**kwargs)
+    assert pdf == document.to_pdf(**kwargs)
+    assert isinstance(facts, tuple) and all(isinstance(value, str) for value in facts)
+    assert sum("Font 'Aptos' is approximate" in value for value in facts) == 1
+    png, png_facts = document.render_page_to_png_with_diagnostics(0, 72.0, **kwargs)
+    assert png == document.render_page_to_png(0, 72.0, **kwargs)
+    assert png_facts == facts
+    pages, page_facts = document.render_pages_with_diagnostics(dpi=72.0, **kwargs)
+    assert pages == document.render_pages(dpi=72.0, **kwargs)
+    assert page_facts == facts
+    from rdocx import LayoutError
+
+    before_empty = document.to_bytes()
+    with pytest.raises(LayoutError, match="^raster export error: at least one raster page is required$"):
+        document.render_pages_with_diagnostics(pages=[], dpi=72.0, **kwargs)
+    assert document.to_bytes() == before_empty
+    tiff, _ = document.render_pages_with_diagnostics(format="tiff", dpi=72.0, **kwargs)
+    assert isinstance(tiff, bytes)

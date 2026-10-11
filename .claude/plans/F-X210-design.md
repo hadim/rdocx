@@ -1,6 +1,6 @@
 # F-X210, Extend metric-compatible fonts and bullet fallbacks
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X195
@@ -81,14 +81,14 @@ Existing cases that request Georgia, Segoe UI, Aptos or verified symbol fallback
 
 ## Implementation checklist
 
-- [ ] Settle plural font_dirs scope and optional-pack decision with the canonical owner.
-- [ ] Approve the exact asset file list, immutable sources, licenses and availability of metric references.
-- [ ] Prove focused public failures on claimed Base.
-- [ ] Reuse F-X195 selection and implement approved bundled mappings and lifecycle diagnostics.
-- [ ] Verify font-specific PUA controls without source mutation.
-- [ ] Record measured Gelasio/Selawik compatibility and actual limitations.
-- [ ] Run scoped, oracle, packaging, license, binding and WASM riders.
-- [ ] Review actual harness changes and update declared HLD sections.
+- [x] Settle plural font_dirs scope and optional-pack decision with the canonical owner.
+- [x] Approve the exact asset file list, immutable sources, licenses and availability of metric references.
+- [x] Prove focused public failures on claimed Base.
+- [x] Reuse F-X195 selection and implement approved bundled mappings and lifecycle diagnostics.
+- [x] Verify font-specific PUA controls without source mutation.
+- [x] Record measured Gelasio/Selawik compatibility and actual limitations.
+- [x] Run scoped, oracle, packaging, license, binding and WASM riders.
+- [x] Review actual harness changes and update declared HLD sections.
 
 ## Open questions
 
@@ -376,3 +376,9 @@ This completes the joint checkbox paint obligation. F-X210 still requires its re
 ## Existing font inventory carriers
 
 Update the existing CLAUDE.md inventory and .github/workflows/ci.yml package-member inventory to32 fonts and10 legal files. scripts/test_sprint_workflow.py retains the actual inventory assertions with those counts. Independent review21 covers this three-carrier correction. No additional product file or new acceptance waiver is introduced. Actual verified archive measurements remain required before changing their existing README and policy carriers.
+
+## Scoped completion evidence
+
+Full current implementation and risk gates are qualified in whole-working review29. The consolidated scoped evidence is /private/tmp/S91-F-X210-crate-README-measurements-r1-prepared/consolidated-scoped-completion-evidence.json, SHA256b61ed332ad25d1912e9f67f1b18cef7ff9454ce6b46e8b1630ea0ef60a193084. Current product, assets and wheel-source bytes retain native967978 equivalence. Metadata and two independently reviewed installed fixture corrections are separate. Original genuine provider Base2 and consumer Base4 reached semantic failures before production adoption. Current native, installed, typing, genuine16 and joint checkbox gates pass. No failed wrapper or historical run is relabelled.
+
+Seven verified dry-run archive source/member/mode proofs remain retained. Final metadata remeasurement and two policy recoveries, prose and diff passed in actual receiptbbf9b470473ea68f0b384d4ae27ac3fd388f0782c66f69256655eff92eb3a4fe. Policy completion is composite139 pass and2 existing skips. Actual hash49 passes at receipte4715741e26b8442e5d15c542a6e41b6ebd4341dcd36261d2e33f6d3813288a1 after only the12 reviewed Georgia-to-Gelasio values changed, with37 entries exact. Integrated sprint verification remains due.

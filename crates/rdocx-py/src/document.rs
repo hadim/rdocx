@@ -2246,6 +2246,30 @@ impl PyDocument {
         .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
+    #[pyo3(signature = (*, fonts = None, font_dir = None, font_dirs = None, revision_view = "accepted"))]
+    fn to_pdf_with_diagnostics<'py>(
+        &self,
+        py: Python<'py>,
+        fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
+        font_dir: Option<PathBuf>,
+        font_dirs: Option<Bound<'py, PyAny>>,
+        revision_view: &str,
+    ) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyTuple>)> {
+        let options = parse_render_options(revision_view)?;
+        let caller_fonts = collect_caller_fonts(py, fonts, font_dir, font_dirs)?;
+        let font_refs = caller_fonts.as_ref().map(|files| {
+            files
+                .iter()
+                .map(|font| (font.family.as_str(), font.data.as_slice()))
+                .collect::<Vec<_>>()
+        });
+        let font_refs = font_refs.as_deref().unwrap_or(&[]);
+        let (payload, diagnostics) = py
+            .detach(|| self.inner.to_pdf_with_diagnostics(font_refs, options))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let messages = PyTuple::new(py, diagnostics.iter().map(|d| d.message.as_str()))?;
+        Ok((PyBytes::new(py, &payload), messages))
+    }
     #[pyo3(signature = (profile = "pdfa-2b"))]
     fn to_pdfa_deterministic<'py>(
         &self,
@@ -2298,6 +2322,36 @@ impl PyDocument {
         .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
+    #[pyo3(signature = (page_index, dpi = 150.0, *, fonts = None, font_dir = None, font_dirs = None, revision_view = "accepted"))]
+    #[allow(clippy::too_many_arguments)]
+    fn render_page_to_png_with_diagnostics<'py>(
+        &self,
+        py: Python<'py>,
+        page_index: usize,
+        dpi: f64,
+        fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
+        font_dir: Option<PathBuf>,
+        font_dirs: Option<Bound<'py, PyAny>>,
+        revision_view: &str,
+    ) -> PyResult<(Option<Bound<'py, PyBytes>>, Bound<'py, PyTuple>)> {
+        let options = parse_render_options(revision_view)?;
+        let caller_fonts = collect_caller_fonts(py, fonts, font_dir, font_dirs)?;
+        let font_refs = caller_fonts.as_ref().map(|files| {
+            files
+                .iter()
+                .map(|font| (font.family.as_str(), font.data.as_slice()))
+                .collect::<Vec<_>>()
+        });
+        let font_refs = font_refs.as_deref().unwrap_or(&[]);
+        let (payload, diagnostics) = py
+            .detach(|| {
+                self.inner
+                    .render_page_to_png_with_diagnostics(page_index, dpi, font_refs, options)
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let messages = PyTuple::new(py, diagnostics.iter().map(|d| d.message.as_str()))?;
+        Ok((payload.map(|bytes| PyBytes::new(py, &bytes)), messages))
+    }
     #[pyo3(signature = (page_index, *, fonts = None, font_dir = None, font_dirs = None))]
     fn render_page_to_svg<'py>(
         &self,
@@ -2366,6 +2420,37 @@ impl PyDocument {
         PyList::new(py, pages.iter().map(|page| PyBytes::new(py, page)))
     }
 
+    #[pyo3(signature = (dpi = 150.0, *, fonts = None, font_dir = None, font_dirs = None, revision_view = "accepted"))]
+    fn render_all_pages_with_diagnostics<'py>(
+        &self,
+        py: Python<'py>,
+        dpi: f64,
+        fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
+        font_dir: Option<PathBuf>,
+        font_dirs: Option<Bound<'py, PyAny>>,
+        revision_view: &str,
+    ) -> PyResult<(Bound<'py, PyList>, Bound<'py, PyTuple>)> {
+        let options = parse_render_options(revision_view)?;
+        let caller_fonts = collect_caller_fonts(py, fonts, font_dir, font_dirs)?;
+        let font_refs = caller_fonts.as_ref().map(|files| {
+            files
+                .iter()
+                .map(|font| (font.family.as_str(), font.data.as_slice()))
+                .collect::<Vec<_>>()
+        });
+        let font_refs = font_refs.as_deref().unwrap_or(&[]);
+        let (payload, diagnostics) = py
+            .detach(|| {
+                self.inner
+                    .render_all_pages_with_diagnostics(dpi, font_refs, options)
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let messages = PyTuple::new(py, diagnostics.iter().map(|d| d.message.as_str()))?;
+        Ok((
+            PyList::new(py, payload.iter().map(|bytes| PyBytes::new(py, bytes)))?,
+            messages,
+        ))
+    }
     #[pyo3(signature = (*, dpi = 150.0, format = "png", quality = 90, transparent = false, pages = None, fonts = None, font_dir = None, font_dirs = None, revision_view = "accepted"))]
     #[allow(clippy::too_many_arguments)]
     fn render_pages<'py>(
@@ -2431,6 +2516,54 @@ impl PyDocument {
         }
     }
 
+    #[pyo3(signature = (*, dpi = 150.0, format = "png", quality = 90, transparent = false, pages = None, fonts = None, font_dir = None, font_dirs = None, revision_view = "accepted"))]
+    #[allow(clippy::too_many_arguments)]
+    fn render_pages_with_diagnostics<'py>(
+        &self,
+        py: Python<'py>,
+        dpi: f64,
+        format: &str,
+        quality: u8,
+        transparent: bool,
+        pages: Option<Vec<usize>>,
+        fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
+        font_dir: Option<PathBuf>,
+        font_dirs: Option<Bound<'py, PyAny>>,
+        revision_view: &str,
+    ) -> PyResult<(Py<PyAny>, Bound<'py, PyTuple>)> {
+        let options = parse_render_options(revision_view)?;
+        let caller_fonts = collect_caller_fonts(py, fonts, font_dir, font_dirs)?;
+        let font_refs = caller_fonts.as_ref().map(|files| {
+            files
+                .iter()
+                .map(|font| (font.family.as_str(), font.data.as_slice()))
+                .collect::<Vec<_>>()
+        });
+        let font_refs = font_refs.as_deref().unwrap_or(&[]);
+        let (rendered, diagnostics) = py
+            .detach(|| {
+                let format = parse_raster_format(format, quality, transparent)?;
+                self.inner.render_pages_with_diagnostics(
+                    pages.as_deref(),
+                    rdocx::RasterOptions { dpi, format },
+                    font_refs,
+                    options,
+                )
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let payload = match rendered {
+            rdocx::RasterOutput::SeparatePages(pages) => {
+                PyList::new(py, pages.iter().map(|bytes| PyBytes::new(py, bytes)))?
+                    .into_any()
+                    .unbind()
+            }
+            rdocx::RasterOutput::MultiPageTiff(bytes) => {
+                PyBytes::new(py, &bytes).into_any().unbind()
+            }
+        };
+        let messages = PyTuple::new(py, diagnostics.iter().map(|d| d.message.as_str()))?;
+        Ok((payload, messages))
+    }
     #[pyo3(signature = (
         edited,
         author,

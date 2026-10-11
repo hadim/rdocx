@@ -410,6 +410,30 @@ copyright, trademark and designer attribution in `NOTICE-Caladea`. The
 `bundled_fonts.rs` module documentation identifies Caladea as Apache-2.0 and
 the Carlito and Liberation families as SIL Open Font License 1.1.
 
+The bundled inventory includes original Gelasio upright and italic variable
+faces and Selawik Regular and Bold. The9 approved added assets total444812
+bytes, including licenses, notices and the3968-byte Noto Sans Symbols2 subset.
+Gelasio retains upstream commit9228e69b160d79f33950e026293f6e13ba9780d0.
+Selawik retains official release1.01 at commit
+b65ff9ce7c4673e75ec5c622924a6b6f61f2f876. Original family names, axes and
+license texts remain unchanged. Gelasio and Selawik use their own
+`LICENSE-*` and `NOTICE-*` files. The symbols subset uses `LICENSE-Noto` and
+its exact pinned recipe and attribution in `NOTICE-Noto`. Package membership
+includes these assets without replacing existing unrelated font bytes.
+
+Licensed Georgia, Segoe UI and original symbol-font references remain local
+oracle inputs read in place, never redistributed. Independent metric controls
+pin physical font hashes, selected face/axis, HarfBuzz14.4.0, scale, language,
+direction and kern mode. Isolated advances, shaped strings, generic extents,
+Word line selection and wrapping are separate comparisons. Real ligature,
+kerning and vertical-metric differences remain explicit and asserted.
+A finite measured maximum is not a universal tolerance or a paint guarantee.
+No genuine Segoe UI Bold reference is asserted where only Regular was measured.
+Deterministic baselines require reviewed actual integrated output deltas.
+
+Caller-supplied licensed directories remain the optional-font route. There is
+no downloaded default font pack, automatic network loader or new pack crate.
+
 ## Publishing
 
 The dependency order grows to roughly twenty crates:
@@ -774,9 +798,10 @@ disposable pull requests are closed and unmerged. Their verified remote head
 refs were deleted and are absent. Their disposable worktrees and local branches
 were removed cleanly.
 
-**A dedicated `oxml-layout` package job.** It checks the exact 24-font and six
+**A dedicated `oxml-layout` package job.** It checks the exact 32-font and ten
 licence-and-notice-file inventory, builds and verifies the generated archive,
-and enforces the crates.io 10 MiB limit.
+and enforces the crates.io 10 MiB limit. Package membership retains all
+existing unrelated font and legal bytes.
 
 **`--exclude rdocx-py --exclude rpptx-py` on every `--all-features` job.**
 `pyo3/extension-module` tells the linker the Python symbols come from the host

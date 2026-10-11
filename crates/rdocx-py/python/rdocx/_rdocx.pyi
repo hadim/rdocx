@@ -608,6 +608,14 @@ class Document:
     def split_run(
         self, body_index: int | Paragraph, run_index: int, character_offset: int
     ) -> int: ...
+    def to_pdf_with_diagnostics(
+        self,
+        *,
+        fonts: _Sequence[tuple[str, bytes]] | None = None,
+        font_dir: _Path | None = None,
+        font_dirs: _Sequence[_Path] | None = None,
+        revision_view: _RevisionView = "accepted",
+    ) -> tuple[bytes, tuple[str, ...]]: ...
     def to_pdf(
         self,
         *,
@@ -626,9 +634,24 @@ class Document:
     def to_pdfa_deterministic(
         self, profile: _Literal["pdfa-2b", "pdfa-3b"] = "pdfa-2b"
     ) -> bytes: ...
+    def render_page_to_png_with_diagnostics(self, page_index: int, dpi: float = 150.0, *, fonts: _Sequence[tuple[str, bytes]] | None = None, font_dir: _Path | None = None, font_dirs: _Sequence[_Path] | None = None, revision_view: _RevisionView = "accepted") -> tuple[bytes | None, tuple[str, ...]]: ...
     def render_page_to_png(self, page_index: int, dpi: float = 150.0, *, fonts: _Sequence[tuple[str, bytes]] | None = None, font_dir: _Path | None = None, font_dirs: _Sequence[_Path] | None = None, revision_view: _RevisionView = "accepted") -> bytes | None: ...
     def render_page_to_svg(self, page_index: int, *, fonts: _Sequence[tuple[str, bytes]] | None = None, font_dir: _Path | None = None, font_dirs: _Sequence[_Path] | None = None) -> SvgRenderResult | None: ...
+    def render_all_pages_with_diagnostics(self, dpi: float = 150.0, *, fonts: _Sequence[tuple[str, bytes]] | None = None, font_dir: _Path | None = None, font_dirs: _Sequence[_Path] | None = None, revision_view: _RevisionView = "accepted") -> tuple[list[bytes], tuple[str, ...]]: ...
     def render_all_pages(self, dpi: float = 150.0, *, fonts: _Sequence[tuple[str, bytes]] | None = None, font_dir: _Path | None = None, font_dirs: _Sequence[_Path] | None = None, revision_view: _RevisionView = "accepted") -> list[bytes]: ...
+    def render_pages_with_diagnostics(
+        self,
+        *,
+        dpi: float = 150.0,
+        format: str = "png",
+        quality: int = 90,
+        transparent: bool = False,
+        pages: list[int] | None = None,
+        fonts: _Sequence[tuple[str, bytes]] | None = None,
+        font_dir: _Path | None = None,
+        font_dirs: _Sequence[_Path] | None = None,
+        revision_view: _RevisionView = "accepted",
+    ) -> tuple[list[bytes] | bytes, tuple[str, ...]]: ...
     def render_pages(
         self,
         *,

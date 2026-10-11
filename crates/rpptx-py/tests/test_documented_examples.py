@@ -6843,3 +6843,48 @@ def test_fx195_installed_ppt_styles_match_independent_paint(method, style_case, 
     pdf = lambda:presentation.to_notes_pdf(**kwargs) if notes else presentation.to_pdf(**kwargs)
     png = lambda:presentation.render_all_notes(dpi=72,**kwargs)[0] if notes else presentation.render_slide_to_png(0,dpi=72,**kwargs)
     _fx195_assert_installed_style(case,method,invoke,pdf,png,before,presentation.to_bytes,tmp_path,preview_scale)
+
+
+def test_fx210_ppt_companions_and_frame_diagnostics_share_actual_output():
+    from pathlib import Path
+    from rpptx import Presentation
+
+    presentation = Presentation()
+    presentation.slides.add_slide(presentation.slide_layouts[6])
+    for index, family in enumerate(("Aptos", "Calibri")):
+        shape = presentation.slides[0].shapes.add_textbox(0, index * 914400, 4000000, 914400)
+        shape.text = "Actual contributing text"
+        shape = presentation.slides[0].shapes[index]
+        shape.text_frame.paragraphs[0].runs[0].font.name = family
+    source = (Path(__file__).resolve().parents[2] / "oxml-layout/fonts/Carlito-Regular.ttf").read_bytes()
+    kwargs = {"fonts": [("Aptos", source)]}
+    pdf, facts = presentation.to_pdf_with_diagnostics(**kwargs)
+    assert pdf == presentation.to_pdf(**kwargs)
+    assert isinstance(facts, tuple) and all(isinstance(value, str) for value in facts)
+    assert sum("Font 'Aptos' is approximate" in value for value in facts) == 1
+    png, png_facts = presentation.render_slide_to_png_with_diagnostics(0, 72.0, **kwargs)
+    assert png == presentation.render_slide_to_png(0, 72.0, **kwargs)
+    assert png_facts == facts
+    all_pngs, all_facts = presentation.render_all_slides_with_diagnostics(72.0, **kwargs)
+    assert all_pngs == presentation.render_all_slides(72.0, **kwargs)
+    assert all_facts == facts
+    frames = presentation.text_layout(**kwargs)
+    assert len(frames) == 2
+    assert any("Aptos" in value and "approximate" in value for value in frames[0].diagnostics)
+    assert not any("Aptos" in value for value in frames[1].diagnostics)
+    assert presentation.text_layout(**kwargs) == frames
+
+    notes = _fx195_presentation("Aptos")
+    notes.slides[0].shapes[0].text_frame.paragraphs[0].runs[0].font.name = "Calibri"
+    assert not any("Aptos" in value for value in notes.to_pdf_with_diagnostics(**kwargs)[1])
+    before_notes = notes.to_bytes()
+    notes_pdf, notes_facts = notes.to_notes_pdf_with_diagnostics(**kwargs)
+    assert notes_pdf == notes.to_notes_pdf(**kwargs)
+    assert isinstance(notes_facts, tuple)
+    assert sum("Font 'Aptos' is approximate" in value for value in notes_facts) == 1
+    notes_png, png_facts = notes.render_all_notes_with_diagnostics(72.0, **kwargs)
+    assert notes_png == notes.render_all_notes(72.0, **kwargs)
+    assert png_facts == notes_facts
+    assert notes_png and all(page.startswith(b"\x89PNG") for page in notes_png)
+    assert notes.to_notes_pdf_with_diagnostics(**kwargs) == (notes_pdf, notes_facts)
+    assert notes.to_bytes() == before_notes

@@ -308,6 +308,7 @@ fn layout_presentation_with_font_manager_inner(
     font_manager: &mut FontManager,
     text_directions: Option<&[ResolvedSlideTextDirections]>,
 ) -> Result<LayoutResult, RenderInputError> {
+    font_manager.begin_layout();
     let pages = (0..input.slides.len())
         .map(|index| {
             layout_slide_with_fonts_and_text_directions(
@@ -322,7 +323,7 @@ fn layout_presentation_with_font_manager_inner(
             .map(Arc::new)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let diagnostics = input
+    let mut diagnostics: Vec<_> = input
         .slides
         .iter()
         .flat_map(|slide| slide.diagnostics.iter().cloned())
@@ -333,6 +334,7 @@ fn layout_presentation_with_font_manager_inner(
         input.metadata.clone(),
         Vec::new(),
     );
+    diagnostics.extend(font_manager.current_font_diagnostics().iter().cloned());
     layout.diagnostics = diagnostics;
     Ok(layout)
 }
