@@ -9739,7 +9739,7 @@ fn issue_53_related_stories_keep_the_700_paragraph_facade_workload_bounded() {
 #[test]
 fn unsupported_html_css_is_diagnosed_without_dropping_supported_siblings() {
     let parsed = Document::from_html(
-        "<!doctype html><html><head><link rel='STYLESHEET' href='external.css'><script>head()</script><style>@media print { p { color: red } } p:hover { color: blue } p { color: rgb(1, 2, 3); made-up: yes }</style></head><body><p>before<blink style='unknown-value: yes'>kept</blink>after<a href='https://example.invalid'>link</a><img alt='picture'><script>ignored()</script><input value='field'><iframe>frame</iframe></p><form>form text</form><p><b><i>repaired</b></p></body></html>",
+        "<!doctype html><html><head><link rel='STYLESHEET' href='external.css'><script>head()</script><style>@media print { p { color: red } } p:hover { color: blue } p { color: rgb(1, 2, 3); made-up: yes }</style></head><body><p>before<blink style='unknown-value: yes'>kept</blink>after<a href='javascript:void(0)'>link</a><img alt='picture'><script>ignored()</script><input value='field'><iframe>frame</iframe></p><form>form text</form><p><b><i>repaired</b></p></body></html>",
     )
     .expect("recoverable unsupported HTML");
     assert_eq!(

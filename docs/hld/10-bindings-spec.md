@@ -1714,9 +1714,16 @@ message. Invalid UTF-8, resource-limit violations, and unrecoverable projection
 failures return `Error::Html` without publishing a partial document. The path
 constructor caps reads at 64 MiB even if the file changes after its metadata is
 read. The importer supports source-ordered paragraphs, runs, nested lists, and
-spanned tables plus the bounded inline and embedded CSS subset. It does not
-fetch external resources. Python, WASM, and CLI surfaces gain no HTML import
-entry point and retain their existing methods and error contracts.
+spanned tables plus the bounded inline and embedded CSS subset. It keeps safe
+hyperlinks and base64 data URI images, as a fragment insertion does, and keeps
+the alternate text of an image it cannot decode. It does not fetch external
+resources. Python binds both constructors as `Document.from_html` and
+`Document.open_html`, each returning the document and a tuple of frozen
+`HtmlDiagnostic` values, and binds fragment insertion as
+`Document.insert_html(html, after=None)`, which inserts after a direct story
+item or at the end of the body and returns the diagnostics. The CLI `convert`
+command reads a `.html` or `.htm` input as HTML, writes DOCX by default, and
+prints each diagnostic on stderr. WASM gains no HTML import entry point.
 
 Native Rust callers can also insert rich HTML into an existing Word story with
 `Document::insert_html_fragment(&ContentLocation, &str,
@@ -1727,8 +1734,31 @@ body, cell, header, and footer destinations supported by the story API. Its
 child range, and ordered `HtmlDiagnostic` values. Links and images are scoped
 to the physical destination part. Unsupported or unresolved markup is
 diagnosed, while invalid locations, malformed resources, bound failures, and
-package failures leave the document unchanged. This surface remains native
-Rust only.
+package failures leave the document unchanged. Python reaches it through
+`Document.insert_html` without image resources, so only data URI images
+resolve there.
+
+Native Rust callers can create a document from CommonMark with GitHub tables
+and strikethrough through `Document::from_markdown`,
+`Document::from_markdown_with_options`, `Document::open_markdown`, and
+`Document::open_markdown_with_options`. Each returns a `MarkdownReadResult`
+with the document and ordered `MarkdownDiagnostic` values that name a Markdown
+line. The Markdown is projected through the HTML importer, so headings take
+`Heading N`, lists take numbering, block quotes take `Quote`, and code blocks
+take `HTML Preformatted`, the style the HTML importer now gives `pre`, which
+is created when the document lacks it. `MarkdownOptions` names the directory
+that local images resolve against and an optional template whose styles,
+numbering, settings, headers, and footers the output takes, with its body
+replaced and a template class saved as a document. Raw HTML other than the
+line break and formatting elements the Markdown export writes, thematic
+breaks, remote images, and unsafe link targets are dropped with a diagnostic.
+Input failures return `Error::Html`. Python binds the constructors as
+`Document.from_markdown(markdown, base_dir=None, template=None)` and
+`Document.open_markdown(path, template=None)`, each returning the document and
+a tuple of frozen `MarkdownDiagnostic` values. The CLI `convert` command reads
+a `.md` or `.markdown` input as Markdown, writes DOCX by default, takes a
+`--template`, and prints each diagnostic on stderr. WASM gains no Markdown
+entry point.
 
 Native Rust callers can import and export bounded MHTML through
 `Document::from_mhtml_bytes`, `Document::open_mhtml`,

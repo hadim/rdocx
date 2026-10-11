@@ -260,6 +260,88 @@ impl PySvgDiagnostic {
     }
 }
 
+/// One loss or approximation reported by an HTML import.
+#[pyclass(name = "HtmlDiagnostic", frozen, get_all, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyHtmlDiagnostic {
+    pub location: String,
+    pub property: Option<String>,
+    pub message: String,
+}
+
+#[pymethods]
+impl PyHtmlDiagnostic {
+    #[new]
+    #[pyo3(signature = (*, location, message, property = None))]
+    fn new(location: String, message: String, property: Option<String>) -> Self {
+        Self {
+            location,
+            property,
+            message,
+        }
+    }
+}
+
+fn html_diagnostics<'py>(
+    py: Python<'py>,
+    diagnostics: Vec<rdocx::HtmlDiagnostic>,
+) -> PyResult<Bound<'py, PyTuple>> {
+    PyTuple::new(
+        py,
+        diagnostics.into_iter().map(|item| PyHtmlDiagnostic {
+            location: item.location,
+            property: item.property,
+            message: item.message,
+        }),
+    )
+}
+
+/// The converted document followed by the import diagnostics.
+fn html_read_result<'py>(
+    py: Python<'py>,
+    result: rdocx::HtmlReadResult,
+) -> PyResult<Bound<'py, PyTuple>> {
+    let document = Bound::new(py, PyDocument::from_document(result.document))?;
+    let diagnostics = html_diagnostics(py, result.diagnostics)?;
+    PyTuple::new(py, [document.into_any(), diagnostics.into_any()])
+}
+
+/// One loss or approximation reported by a Markdown import.
+#[pyclass(name = "MarkdownDiagnostic", frozen, get_all, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyMarkdownDiagnostic {
+    pub location: String,
+    pub message: String,
+}
+
+#[pymethods]
+impl PyMarkdownDiagnostic {
+    #[new]
+    #[pyo3(signature = (*, location, message))]
+    fn new(location: String, message: String) -> Self {
+        Self { location, message }
+    }
+}
+
+/// The converted document followed by the Markdown import diagnostics.
+fn markdown_read_result<'py>(
+    py: Python<'py>,
+    result: rdocx::MarkdownReadResult,
+) -> PyResult<Bound<'py, PyTuple>> {
+    let document = Bound::new(py, PyDocument::from_document(result.document))?;
+    let diagnostics = PyTuple::new(
+        py,
+        result
+            .diagnostics
+            .into_iter()
+            .map(|item| PyMarkdownDiagnostic {
+                location: item.location,
+                message: item.message,
+            }),
+    )?;
+    PyTuple::new(py, [document.into_any(), diagnostics.into_any()])
+}
+
 #[pyclass(name = "SvgRenderResult", frozen, eq, skip_from_py_object)]
 #[derive(Clone, PartialEq, Eq)]
 pub struct PySvgRenderResult {
@@ -3318,6 +3400,76 @@ impl PyDocument {
             .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
+    /// Create a document from HTML. Returns the document and a tuple of
+    /// `HtmlDiagnostic` values for what was dropped or approximated.
+    #[staticmethod]
+    fn from_html<'py>(html: &str, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let result = py
+            .detach(|| rdocx::Document::from_html(html))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        html_read_result(py, result)
+    }
+
+    /// Create a document from CommonMark with GitHub tables. Local images
+    /// resolve against `base_dir`, and `template` supplies the styles,
+    /// headers and footers. Returns the document and a tuple of
+    /// `MarkdownDiagnostic` values for what was dropped.
+    #[staticmethod]
+    #[pyo3(signature = (markdown, *, base_dir = None, template = None))]
+    fn from_markdown<'py>(
+        markdown: &str,
+        py: Python<'py>,
+        base_dir: Option<PathBuf>,
+        template: Option<PyRef<'_, PyDocument>>,
+    ) -> PyResult<Bound<'py, PyTuple>> {
+        let template = template.as_deref().map(|template| &template.inner);
+        let result = py
+            .detach(|| {
+                rdocx::Document::from_markdown_with_options(
+                    markdown,
+                    rdocx::MarkdownOptions {
+                        base_dir: base_dir.as_deref(),
+                        template,
+                    },
+                )
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        markdown_read_result(py, result)
+    }
+
+    /// Create a document from a UTF-8 Markdown file, as `from_markdown`
+    /// does, with local images resolved against the file's directory.
+    #[staticmethod]
+    #[pyo3(signature = (path, *, template = None))]
+    fn open_markdown<'py>(
+        path: PathBuf,
+        py: Python<'py>,
+        template: Option<PyRef<'_, PyDocument>>,
+    ) -> PyResult<Bound<'py, PyTuple>> {
+        let template = template.as_deref().map(|template| &template.inner);
+        let result = py
+            .detach(|| {
+                rdocx::Document::open_markdown_with_options(
+                    path,
+                    rdocx::MarkdownOptions {
+                        base_dir: None,
+                        template,
+                    },
+                )
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        markdown_read_result(py, result)
+    }
+
+    /// Create a document from a UTF-8 HTML file, as `from_html` does.
+    #[staticmethod]
+    fn open_html(path: PathBuf, py: Python<'_>) -> PyResult<Bound<'_, PyTuple>> {
+        let result = py
+            .detach(|| rdocx::Document::open_html(path))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        html_read_result(py, result)
+    }
+
     #[staticmethod]
     fn from_bytes(bytes: &[u8], py: Python<'_>) -> PyResult<Self> {
         rdocx::Document::from_bytes(bytes)
@@ -5153,6 +5305,59 @@ impl PyDocument {
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         self.bump_edit("Document.add_picture", EditScope::Moved);
         self.story_item_snapshot(py, &location)
+    }
+
+    /// Insert HTML after a direct story item, or at the end of the body.
+    ///
+    /// Links and data URI images are kept. Returns a tuple of
+    /// `HtmlDiagnostic` values for what was dropped or approximated.
+    #[pyo3(signature = (html, *, after = None))]
+    fn insert_html<'py>(
+        &mut self,
+        py: Python<'py>,
+        html: &str,
+        after: Option<PyRef<'_, PyStoryItem>>,
+    ) -> PyResult<Bound<'py, PyTuple>> {
+        let destination = match after.as_deref() {
+            None => rdocx::ContentLocation::end(self.body_story(py)?),
+            Some(item) => {
+                let after = self.native_location(py, item)?;
+                let snapshots = self
+                    .inner
+                    .story_item_snapshots()
+                    .map_err(|error| rdocx_to_pyerr(py, error))?;
+                let direct = |snapshot: &&rdocx::StoryItemSnapshot| {
+                    snapshot.is_direct_child() && snapshot.location().story() == after.story()
+                };
+                if !snapshots
+                    .iter()
+                    .filter(direct)
+                    .any(|snapshot| snapshot.location() == &after)
+                {
+                    return Err(rdocx_to_pyerr(
+                        py,
+                        rdocx::Error::Other(
+                            "HTML is inserted only after a direct child of its story".to_owned(),
+                        ),
+                    ));
+                }
+                // The fragment goes before the next direct child, or at the
+                // end of the story when `after` is the last one.
+                snapshots
+                    .iter()
+                    .filter(direct)
+                    .map(|snapshot| snapshot.location())
+                    .filter(|location| location.index_path()[0] > after.index_path()[0])
+                    .min_by_key(|location| location.index_path()[0])
+                    .cloned()
+                    .unwrap_or_else(|| rdocx::ContentLocation::end(after.story().clone()))
+            }
+        };
+        let result = py
+            .detach(|| self.inner.insert_html_fragment(&destination, html, &[]))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        html_diagnostics(py, result.diagnostics)
     }
 
     #[pyo3(signature = (range, *, author, text, initials = None, date = None))]

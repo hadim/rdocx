@@ -25,6 +25,7 @@ use document::{
     PyRevision, PyRunPosition, PyRunRange, PySection, PyStory, PyStoryItem, PyStoryRunPosition,
     PyStoryRunRange, PyStyle, PySvgDiagnostic, PySvgRenderResult, PyTocRebuildReport,
 };
+use document::{PyHtmlDiagnostic, PyMarkdownDiagnostic};
 use formatting::{PyColorFormat, PyFont, PyParagraphFormat, PyTabStop, PyTabStops};
 use paragraph::{PyParagraph, PyParagraphCollection};
 use run::{PyRun, PyRunCollection};
@@ -379,6 +380,8 @@ fn _rdocx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyComment>()?;
     module.add_class::<PyComparisonDiagnostic>()?;
     module.add_class::<PySvgDiagnostic>()?;
+    module.add_class::<PyHtmlDiagnostic>()?;
+    module.add_class::<PyMarkdownDiagnostic>()?;
     module.add_class::<PySvgRenderResult>()?;
     module.add_class::<PyBoundingBox>()?;
     module.add_class::<PyLayoutFragment>()?;

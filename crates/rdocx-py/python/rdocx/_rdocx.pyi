@@ -44,7 +44,7 @@ __all__ = [
     "Bookmark", "BoundingBox", "Cell", "CellCollection", "CellParagraphCollection", "ColorFormat",
     "Column",
     "Comment", "ComparisonDiagnostic", "ContentFragment", "CoreProperties", "Document", "Font",
-    "HeaderFooter", "HeaderFooterCell", "HeaderFooterRow", "HeaderFooterTable", "HeaderFooterVariant", "Hyperlink", "LayoutBackedFieldUpdateReport", "LayoutFragment", "LayoutPage", "ListLevel", "Paragraph", "ParagraphCollection",
+    "HeaderFooter", "HeaderFooterCell", "HeaderFooterRow", "HeaderFooterTable", "HeaderFooterVariant", "HtmlDiagnostic", "Hyperlink", "LayoutBackedFieldUpdateReport", "LayoutFragment", "LayoutPage", "ListLevel", "MarkdownDiagnostic", "Paragraph", "ParagraphCollection",
     "ParagraphFormat", "Picture", "Revision", "Row", "RowCollection", "Run", "RunCollection", "RunPosition",
     "RunRange", "Section", "Story", "StoryItem", "StoryRunPosition", "StoryRunRange", "Style",
     "SvgDiagnostic", "SvgRenderResult", "Table", "TableCollection", "TabStop", "TabStops",
@@ -161,6 +161,29 @@ class SvgDiagnostic:
     def __new__(cls, *, path: str, message: str) -> SvgDiagnostic: ...
     @property
     def path(self) -> str: ...
+    @property
+    def message(self) -> str: ...
+
+
+@_final
+class HtmlDiagnostic:
+    def __new__(
+        cls, *, location: str, message: str, property: str | None = None
+    ) -> HtmlDiagnostic: ...
+    @property
+    def location(self) -> str: ...
+    @property
+    def message(self) -> str: ...
+    # Last, because the name shadows the builtin decorator in the class body.
+    @property
+    def property(self) -> str | None: ...
+
+
+@_final
+class MarkdownDiagnostic:
+    def __new__(cls, *, location: str, message: str) -> MarkdownDiagnostic: ...
+    @property
+    def location(self) -> str: ...
     @property
     def message(self) -> str: ...
 
@@ -931,6 +954,21 @@ class Document:
         """Open a path or a binary file-like object, or start from the default template."""
     @staticmethod
     def open(path: _Path) -> Document: ...
+    @staticmethod
+    def from_html(html: str) -> tuple[Document, tuple[HtmlDiagnostic, ...]]: ...
+    @staticmethod
+    def open_html(path: _Path) -> tuple[Document, tuple[HtmlDiagnostic, ...]]: ...
+    @staticmethod
+    def from_markdown(
+        markdown: str, *, base_dir: _Path | None = None, template: Document | None = None
+    ) -> tuple[Document, tuple[MarkdownDiagnostic, ...]]: ...
+    @staticmethod
+    def open_markdown(
+        path: _Path, *, template: Document | None = None
+    ) -> tuple[Document, tuple[MarkdownDiagnostic, ...]]: ...
+    def insert_html(
+        self, html: str, *, after: StoryItem | None = None
+    ) -> tuple[HtmlDiagnostic, ...]: ...
     @staticmethod
     def from_bytes(bytes: bytes) -> Document: ...
     def save(self, path: _Path | _IO[bytes]) -> None:

@@ -27,7 +27,7 @@ use crate::table::Cell;
 use crate::{
     BodyItemRef, CellItemRef, CellRef, Document, Error, HyperlinkItemRef, HyperlinkRef, Length,
     ListLevel, ParagraphItemRef, ParagraphRef, Result, RowRef, RunItemRef, RunRef, StoryId,
-    TableRef,
+    TableRef, WordPackageClass,
 };
 use rdocx_oxml::CT_Revision;
 
@@ -57,6 +57,32 @@ pub struct HtmlImageResource<'a> {
     pub bytes: &'a [u8],
     /// Filename used to select the package media extension after byte sniffing.
     pub filename: &'a str,
+}
+
+/// One Markdown construct that a conversion dropped or approximated.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MarkdownDiagnostic {
+    /// `line N` of the Markdown input, or the location in the projected HTML
+    /// for a loss the HTML importer reports.
+    pub location: String,
+    pub message: String,
+}
+
+/// A document created from Markdown, with the conversion diagnostics.
+pub struct MarkdownReadResult {
+    pub document: Document,
+    pub diagnostics: Vec<MarkdownDiagnostic>,
+}
+
+/// Where a Markdown conversion finds its images and its styles.
+#[derive(Clone, Copy, Default)]
+pub struct MarkdownOptions<'a> {
+    /// Directory that relative image paths resolve against. Without one, an
+    /// image that names a local file is dropped with a diagnostic.
+    pub base_dir: Option<&'a Path>,
+    /// Document whose styles, numbering, settings, headers and footers the
+    /// output takes. Its body content is replaced by the Markdown.
+    pub template: Option<&'a Document>,
 }
 
 /// The direct story range inserted by one HTML fragment operation.
@@ -129,6 +155,8 @@ struct EmbeddedHtmlImage {
     drawing_id: Option<u32>,
     width: Length,
     height: Length,
+    /// The `alt` text, kept as the picture's description.
+    description: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -290,13 +318,20 @@ struct ActiveSpan {
 }
 
 fn from_html_with_limits(html: &str, limits: Limits) -> Result<HtmlReadResult> {
-    from_html_with_resources(html, limits, None)
+    from_html_with_resources(html, limits, None, &[], Document::new())
 }
 
+/// Project HTML into `document`, which is a new document or a template whose
+/// body was cleared.
+///
+/// Without an MHTML `projection`, the document keeps its safe links, its data
+/// URI images and the caller's `images`, as an inserted fragment does.
 fn from_html_with_resources(
     html: &str,
     limits: Limits,
     projection: Option<&HtmlProjection>,
+    images: &[HtmlImageResource<'_>],
+    mut document: Document,
 ) -> Result<HtmlReadResult> {
     if html.len() > limits.input_bytes {
         return Err(html_error("input", "HTML input exceeds the 64 MiB limit"));
@@ -311,8 +346,15 @@ fn from_html_with_resources(
         Html::parse_fragment(html)
     };
     validate_dom(&dom, limits)?;
+    let own_projection;
+    let projection = match projection {
+        Some(projection) => projection,
+        None => {
+            own_projection = fragment_projection(&dom, images, limits, true)?;
+            &own_projection
+        }
+    };
 
-    let mut document = Document::new();
     let importer = Importer {
         dom: &dom,
         document: &mut document,
@@ -326,7 +368,7 @@ fn from_html_with_resources(
         runs: 0,
         rows: 0,
         cells: 0,
-        projection,
+        projection: Some(projection),
         embedded_images: HashMap::new(),
     };
     let mut importer = importer;
@@ -361,7 +403,7 @@ pub(crate) fn project_html_fragment(
         Html::parse_fragment(html)
     };
     validate_dom(&dom, limits)?;
-    let projection = fragment_projection(&dom, images, limits)?;
+    let projection = fragment_projection(&dom, images, limits, false)?;
     let mut importer = Importer {
         dom: &dom,
         document,
@@ -392,6 +434,7 @@ fn fragment_projection(
     dom: &Html,
     images: &[HtmlImageResource<'_>],
     limits: Limits,
+    skip_invalid_data_uris: bool,
 ) -> Result<HtmlProjection> {
     if images.len() > MAX_MHTML_PARTS {
         return Err(html_error("images", "HTML image count exceeds the limit"));
@@ -447,44 +490,18 @@ fn fragment_projection(
         {
             continue;
         }
-        let (metadata, encoded) = source[5..].split_once(',').ok_or_else(|| {
-            html_error(
-                element_path(image),
-                "image data URI has no payload separator",
-            )
-        })?;
-        let (content_type, encoding) = metadata.split_once(';').ok_or_else(|| {
-            html_error(element_path(image), "image data URI has no base64 encoding")
-        })?;
-        if !encoding.eq_ignore_ascii_case("base64") {
-            return Err(html_error(
-                element_path(image),
-                "image data URI must use base64 encoding",
-            ));
-        }
-        let bytes = BASE64.decode(encoded).map_err(|_| {
-            html_error(
-                element_path(image),
-                "image data URI has invalid base64 data",
-            )
-        })?;
+        let (bytes, info) = match decode_image_data_uri(image, &source[5..]) {
+            Ok(decoded) => decoded,
+            // A whole-document import keeps the alternate text of an image it
+            // cannot decode, as it does for any other unresolved image.
+            Err(_) if skip_invalid_data_uris => continue,
+            Err(error) => return Err(error),
+        };
         total_bytes = total_bytes
             .checked_add(bytes.len())
             .ok_or_else(|| html_error("images", "image byte count overflowed"))?;
         if total_bytes > limits.input_bytes {
             return Err(html_error("images", "HTML images exceed the 64 MiB limit"));
-        }
-        let info = oxml_media::probe(&bytes).ok_or_else(|| {
-            html_error(
-                element_path(image),
-                "image data URI bytes are unsupported or malformed",
-            )
-        })?;
-        if !content_type.eq_ignore_ascii_case(info.format.content_type()) {
-            return Err(html_error(
-                element_path(image),
-                "image data URI MIME type does not match its bytes",
-            ));
         }
         let filename = format!("inline-{inline_index}.{}", info.format.extension());
         inline_index = inline_index
@@ -518,6 +535,576 @@ fn fragment_projection(
     })
 }
 
+/// The inline HTML a Markdown document keeps: the elements the Markdown export
+/// writes for a line break and for formatting that delimiters cannot spell.
+const MARKDOWN_INLINE_TAGS: [&str; 9] = [
+    "<br>",
+    "<br/>",
+    "<br />",
+    "<em>",
+    "</em>",
+    "<strong>",
+    "</strong>",
+    "<del>",
+    "</del>",
+];
+
+/// A local image a Markdown document names, read for the HTML projection.
+struct MarkdownImage {
+    source: String,
+    bytes: Vec<u8>,
+    filename: String,
+}
+
+/// An image whose alternate text is still being read.
+struct PendingMarkdownImage {
+    /// The `src` and size attributes, or `None` when the image is dropped.
+    attributes: Option<String>,
+    alt: String,
+}
+
+/// Projects CommonMark and GitHub tables into the HTML the importer reads.
+///
+/// Markdown and HTML documents then share one mapping to Word: headings,
+/// lists, tables, links, images, block quotes and preformatted text become
+/// the same paragraphs, numbering and styles. What has no projection is
+/// left out with a diagnostic that names its Markdown line.
+struct MarkdownHtml<'a> {
+    line_starts: Vec<usize>,
+    base_dir: Option<&'a Path>,
+    max_image_width_emu: i64,
+    html: String,
+    diagnostics: Vec<MarkdownDiagnostic>,
+    images: Vec<MarkdownImage>,
+    image_bytes: usize,
+    quote_depth: usize,
+    /// One entry per open list item: whether it has content yet.
+    items: Vec<bool>,
+    /// One entry per open link: whether its anchor was written.
+    links: Vec<bool>,
+    code: Option<String>,
+    image: Option<PendingMarkdownImage>,
+    alignments: Vec<pulldown_cmark::Alignment>,
+    table_head: bool,
+    cell: usize,
+    skip_table: bool,
+    nested_images: usize,
+}
+
+impl<'a> MarkdownHtml<'a> {
+    fn project(
+        markdown: &str,
+        base_dir: Option<&'a Path>,
+        max_image_width_emu: i64,
+    ) -> Result<Self> {
+        use pulldown_cmark::{Options, Parser};
+
+        let mut projection = Self {
+            line_starts: std::iter::once(0)
+                .chain(markdown.match_indices('\n').map(|(index, _)| index + 1))
+                .collect(),
+            base_dir,
+            max_image_width_emu,
+            html: String::new(),
+            diagnostics: Vec::new(),
+            images: Vec::new(),
+            image_bytes: 0,
+            quote_depth: 0,
+            items: Vec::new(),
+            links: Vec::new(),
+            code: None,
+            image: None,
+            alignments: Vec::new(),
+            table_head: false,
+            cell: 0,
+            skip_table: false,
+            nested_images: 0,
+        };
+        let options = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH;
+        for (event, range) in Parser::new_ext(markdown, options).into_offset_iter() {
+            projection.event(event, range.start)?;
+        }
+        Ok(projection)
+    }
+
+    fn diagnostic(&mut self, offset: usize, message: String) -> Result<()> {
+        if self.diagnostics.len() >= Limits::default().diagnostics {
+            return Err(html_error("input", "Markdown diagnostics exceed the limit"));
+        }
+        let line = self.line_starts.partition_point(|start| *start <= offset);
+        self.diagnostics.push(MarkdownDiagnostic {
+            location: format!("line {line}"),
+            message,
+        });
+        Ok(())
+    }
+
+    /// Mark the innermost list item as started, and separate its second and
+    /// later blocks with a line break, since an item is one Word paragraph.
+    fn start_item_block(&mut self) {
+        if let Some(started) = self.items.last_mut() {
+            if *started {
+                self.html.push_str("<br>");
+            }
+            *started = true;
+        }
+    }
+
+    fn text(&mut self, text: &str) {
+        if let Some(started) = self.items.last_mut() {
+            *started = true;
+        }
+        push_html_escaped(&mut self.html, text);
+    }
+
+    fn event(&mut self, event: pulldown_cmark::Event<'_>, offset: usize) -> Result<()> {
+        use pulldown_cmark::{Event, LinkType, Tag, TagEnd};
+
+        if self.skip_table {
+            if matches!(event, Event::End(TagEnd::Table)) {
+                self.skip_table = false;
+            }
+            return Ok(());
+        }
+        if let Some(code) = self.code.as_mut()
+            && let Event::Text(text) = &event
+        {
+            code.push_str(text);
+            return Ok(());
+        }
+        if let Some(image) = self.image.as_mut() {
+            match &event {
+                Event::Text(text) | Event::Code(text) => {
+                    image.alt.push_str(text);
+                    return Ok(());
+                }
+                Event::SoftBreak | Event::HardBreak => {
+                    image.alt.push(' ');
+                    return Ok(());
+                }
+                _ => {}
+            }
+        }
+        let in_item = !self.items.is_empty();
+        match event {
+            Event::Start(tag) => match tag {
+                Tag::Paragraph if in_item => self.start_item_block(),
+                Tag::Paragraph if self.quote_depth > 0 => self.html.push_str("<blockquote>"),
+                Tag::Paragraph => self.html.push_str("<p>"),
+                Tag::Heading { level, .. } if in_item => {
+                    self.diagnostic(
+                        offset,
+                        format!(
+                            "kept a level {} heading inside a list item as item text",
+                            level as usize
+                        ),
+                    )?;
+                    self.start_item_block();
+                }
+                Tag::Heading { level, .. } => {
+                    self.html.push_str(&format!("<h{}>", level as usize));
+                }
+                Tag::BlockQuote(_) => self.quote_depth += 1,
+                Tag::CodeBlock(_) => self.code = Some(String::new()),
+                Tag::HtmlBlock => self.diagnostic(offset, "dropped a raw HTML block".to_owned())?,
+                Tag::List(Some(start)) if start != 1 => {
+                    self.html.push_str(&format!("<ol start=\"{start}\">"));
+                }
+                Tag::List(Some(_)) => self.html.push_str("<ol>"),
+                Tag::List(None) => self.html.push_str("<ul>"),
+                Tag::Item => {
+                    self.html.push_str("<li>");
+                    self.items.push(false);
+                }
+                Tag::Table(_) if in_item => {
+                    self.diagnostic(offset, "dropped a table inside a list item".to_owned())?;
+                    self.skip_table = true;
+                }
+                Tag::Table(alignments) => {
+                    self.alignments = alignments;
+                    self.html.push_str("<table>");
+                }
+                Tag::TableHead => {
+                    self.table_head = true;
+                    self.cell = 0;
+                    self.html.push_str("<tr>");
+                }
+                Tag::TableRow => {
+                    self.cell = 0;
+                    self.html.push_str("<tr>");
+                }
+                Tag::TableCell => {
+                    let element = if self.table_head { "th" } else { "td" };
+                    let alignment = match self.alignments.get(self.cell) {
+                        Some(pulldown_cmark::Alignment::Left) => " style=\"text-align: left\"",
+                        Some(pulldown_cmark::Alignment::Center) => " style=\"text-align: center\"",
+                        Some(pulldown_cmark::Alignment::Right) => " style=\"text-align: right\"",
+                        _ => "",
+                    };
+                    self.html.push_str(&format!("<{element}{alignment}>"));
+                }
+                Tag::Emphasis => self.html.push_str("<em>"),
+                Tag::Strong => self.html.push_str("<strong>"),
+                Tag::Strikethrough => self.html.push_str("<del>"),
+                Tag::Link {
+                    link_type,
+                    dest_url,
+                    ..
+                } => {
+                    let target = if link_type == LinkType::Email {
+                        format!("mailto:{dest_url}")
+                    } else {
+                        dest_url.to_string()
+                    };
+                    if safe_hyperlink(&target, None).is_some() {
+                        self.html.push_str("<a href=\"");
+                        push_html_escaped(&mut self.html, &target);
+                        self.html.push_str("\">");
+                        self.links.push(true);
+                    } else {
+                        self.diagnostic(
+                            offset,
+                            format!("dropped link target `{dest_url}` and kept its text"),
+                        )?;
+                        self.links.push(false);
+                    }
+                }
+                // An image inside alternate text adds only its own text.
+                Tag::Image { .. } if self.image.is_some() => self.nested_images += 1,
+                Tag::Image { dest_url, .. } => {
+                    let attributes = self.image_attributes(&dest_url, offset)?;
+                    self.image = Some(PendingMarkdownImage {
+                        attributes,
+                        alt: String::new(),
+                    });
+                }
+                _ => {}
+            },
+            Event::End(tag) => match tag {
+                TagEnd::Paragraph if in_item => {}
+                TagEnd::Paragraph if self.quote_depth > 0 => self.html.push_str("</blockquote>"),
+                TagEnd::Paragraph => self.html.push_str("</p>"),
+                TagEnd::Heading(_) if in_item => {}
+                TagEnd::Heading(level) => {
+                    self.html.push_str(&format!("</h{}>", level as usize));
+                }
+                TagEnd::BlockQuote(_) => self.quote_depth = self.quote_depth.saturating_sub(1),
+                TagEnd::CodeBlock => {
+                    let code = self.code.take().unwrap_or_default();
+                    let code = code.strip_suffix('\n').unwrap_or(&code);
+                    if in_item {
+                        self.diagnostic(
+                            offset,
+                            "kept a code block inside a list item as line-broken code text"
+                                .to_owned(),
+                        )?;
+                        self.start_item_block();
+                        self.html.push_str("<code>");
+                        for (index, line) in code.split('\n').enumerate() {
+                            if index > 0 {
+                                self.html.push_str("<br>");
+                            }
+                            push_html_escaped(&mut self.html, line);
+                        }
+                        self.html.push_str("</code>");
+                    } else {
+                        self.html.push_str("<pre><code>");
+                        push_html_escaped(&mut self.html, code);
+                        self.html.push_str("</code></pre>");
+                    }
+                }
+                TagEnd::List(true) => self.html.push_str("</ol>"),
+                TagEnd::List(false) => self.html.push_str("</ul>"),
+                TagEnd::Item => {
+                    self.html.push_str("</li>");
+                    self.items.pop();
+                }
+                TagEnd::Table => self.html.push_str("</table>"),
+                TagEnd::TableHead => {
+                    self.table_head = false;
+                    self.html.push_str("</tr>");
+                }
+                TagEnd::TableRow => self.html.push_str("</tr>"),
+                TagEnd::TableCell => {
+                    self.html
+                        .push_str(if self.table_head { "</th>" } else { "</td>" });
+                    self.cell += 1;
+                }
+                TagEnd::Emphasis => self.html.push_str("</em>"),
+                TagEnd::Strong => self.html.push_str("</strong>"),
+                TagEnd::Strikethrough => self.html.push_str("</del>"),
+                TagEnd::Link => {
+                    if self.links.pop() == Some(true) {
+                        self.html.push_str("</a>");
+                    }
+                }
+                TagEnd::Image if self.nested_images > 0 => self.nested_images -= 1,
+                TagEnd::Image => {
+                    if let Some(image) = self.image.take() {
+                        match image.attributes {
+                            Some(attributes) => {
+                                if let Some(started) = self.items.last_mut() {
+                                    *started = true;
+                                }
+                                self.html.push_str("<img ");
+                                self.html.push_str(&attributes);
+                                self.html.push_str(" alt=\"");
+                                push_html_escaped(&mut self.html, &image.alt);
+                                self.html.push_str("\">");
+                            }
+                            None => self.text(&image.alt),
+                        }
+                    }
+                }
+                _ => {}
+            },
+            Event::Text(text) => self.text(&text),
+            Event::Code(text) => {
+                self.html.push_str("<code>");
+                self.text(&text);
+                self.html.push_str("</code>");
+            }
+            Event::SoftBreak => self.html.push('\n'),
+            Event::HardBreak => self.html.push_str("<br>"),
+            Event::Rule => self.diagnostic(offset, "dropped a thematic break".to_owned())?,
+            // The Markdown export writes these where CommonMark delimiters
+            // would not read as meant, so they come back as formatting.
+            Event::InlineHtml(html) if MARKDOWN_INLINE_TAGS.contains(&html.as_ref()) => {
+                self.html.push_str(&html);
+            }
+            Event::InlineHtml(html) => {
+                self.diagnostic(offset, format!("dropped inline raw HTML `{}`", html.trim()))?;
+            }
+            // The text of a raw HTML block, already reported at its start.
+            Event::Html(_) => {}
+            _ => {}
+        }
+        Ok(())
+    }
+
+    /// The `src` and size attributes of an image, reading a local file from
+    /// the base directory, or `None` with a diagnostic when it is dropped.
+    fn image_attributes(&mut self, source: &str, offset: usize) -> Result<Option<String>> {
+        if source
+            .get(..5)
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("data:"))
+        {
+            let mut attributes = String::from("src=\"");
+            push_html_escaped(&mut attributes, source);
+            attributes.push('"');
+            return Ok(Some(attributes));
+        }
+        // A scheme of one letter is a Windows drive, which names a local file.
+        let scheme = source.split_once(':').map(|(scheme, _)| scheme);
+        if scheme.is_some_and(|scheme| {
+            scheme.len() > 1
+                && scheme
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"+-.".contains(&byte))
+        }) {
+            self.diagnostic(
+                offset,
+                format!("dropped remote image `{source}`, which is not fetched, and kept its alternate text"),
+            )?;
+            return Ok(None);
+        }
+        let Some(base_dir) = self.base_dir else {
+            self.diagnostic(
+                offset,
+                format!("dropped local image `{source}` without a base directory and kept its alternate text"),
+            )?;
+            return Ok(None);
+        };
+        if !self.images.iter().any(|image| image.source == source) {
+            let bytes = match self.read_image(&base_dir.join(source)) {
+                Ok(bytes) => bytes,
+                Err(reason) => {
+                    self.diagnostic(
+                        offset,
+                        format!("dropped image `{source}` ({reason}) and kept its alternate text"),
+                    )?;
+                    return Ok(None);
+                }
+            };
+            let filename = Path::new(source)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("image")
+                .to_owned();
+            self.images.push(MarkdownImage {
+                source: source.to_owned(),
+                bytes,
+                filename,
+            });
+        }
+        let image = self
+            .images
+            .iter()
+            .find(|image| image.source == source)
+            .expect("image registered");
+        let mut attributes = String::from("src=\"");
+        push_html_escaped(&mut attributes, source);
+        attributes.push('"');
+        // A picture wider than the text column is scaled down to fit it.
+        if let Some(size) = oxml_media::probe(&image.bytes).and_then(|info| info.native_size(96.0))
+            && size.width_emu > self.max_image_width_emu
+            && size.width_emu > 0
+        {
+            let width = self.max_image_width_emu as f64 / 9_525.0;
+            let height = width * size.height_emu as f64 / size.width_emu as f64;
+            attributes.push_str(&format!(
+                " width=\"{width:.2}\" height=\"{:.2}\"",
+                height.max(1.0)
+            ));
+        }
+        Ok(Some(attributes))
+    }
+
+    /// Read a local image within the shared image budget.
+    fn read_image(&mut self, path: &Path) -> std::result::Result<Vec<u8>, String> {
+        let mut file = File::open(path).map_err(|error| error.to_string())?;
+        let size = file
+            .metadata()
+            .ok()
+            .and_then(|metadata| usize::try_from(metadata.len()).ok())
+            .ok_or_else(|| "its size is not readable".to_owned())?;
+        let remaining = MAX_INPUT_BYTES.saturating_sub(self.image_bytes);
+        if size > remaining {
+            return Err("the images exceed the 64 MiB limit".to_owned());
+        }
+        let bytes = read_bounded(&mut file, size, remaining).map_err(|error| error.to_string())?;
+        if oxml_media::probe(&bytes).is_none() {
+            return Err("unsupported or malformed image".to_owned());
+        }
+        self.image_bytes += bytes.len();
+        Ok(bytes)
+    }
+}
+
+/// Append text with the characters HTML reads as markup escaped.
+fn push_html_escaped(output: &mut String, text: &str) {
+    for character in text.chars() {
+        match character {
+            '&' => output.push_str("&amp;"),
+            '<' => output.push_str("&lt;"),
+            '>' => output.push_str("&gt;"),
+            '"' => output.push_str("&quot;"),
+            character => output.push(character),
+        }
+    }
+}
+
+fn from_markdown_with_limits(
+    markdown: &str,
+    options: MarkdownOptions<'_>,
+    limits: Limits,
+) -> Result<MarkdownReadResult> {
+    if markdown.len() > limits.input_bytes {
+        return Err(html_error(
+            "input",
+            "Markdown input exceeds the 64 MiB limit",
+        ));
+    }
+    let (document, class) = match options.template {
+        Some(template) => {
+            let mut document = template.clone_for_staging();
+            document.document.body.content.clear();
+            let class = document.package_class()?;
+            (document, class)
+        }
+        None => (Document::new(), WordPackageClass::Document),
+    };
+    let text_width = document
+        .document
+        .body
+        .sect_pr
+        .as_ref()
+        .and_then(|section| {
+            let width = section.page_width?.0
+                - section.margin_left.map_or(0, |margin| margin.0)
+                - section.margin_right.map_or(0, |margin| margin.0);
+            (width > 0).then_some(i64::from(width) * 635)
+        })
+        // Letter paper with one-inch margins.
+        .unwrap_or(6 * 914_400 + 457_200);
+    let projection = MarkdownHtml::project(markdown, options.base_dir, text_width)?;
+    let images: Vec<_> = projection
+        .images
+        .iter()
+        .map(|image| HtmlImageResource {
+            source: &image.source,
+            bytes: &image.bytes,
+            filename: &image.filename,
+        })
+        .collect();
+    let result = from_html_with_resources(&projection.html, limits, None, &images, document)?;
+    let mut diagnostics = projection.diagnostics;
+    diagnostics.extend(
+        result
+            .diagnostics
+            .into_iter()
+            .map(|diagnostic| MarkdownDiagnostic {
+                location: diagnostic.location,
+                message: diagnostic.message,
+            }),
+    );
+    // A template's content type would make Word refuse a .docx.
+    let document_class = match class {
+        WordPackageClass::Template => Some(WordPackageClass::Document),
+        WordPackageClass::MacroEnabledTemplate => Some(WordPackageClass::MacroEnabledDocument),
+        WordPackageClass::Document | WordPackageClass::MacroEnabledDocument => None,
+    };
+    let document = match document_class {
+        Some(class) => Document::from_bytes(&result.document.to_bytes_as(class)?)?,
+        None => result.document,
+    };
+    Ok(MarkdownReadResult {
+        document,
+        diagnostics,
+    })
+}
+
+/// Decode the payload of a base64 image data URI and check its declared type.
+fn decode_image_data_uri(
+    image: ElementRef<'_>,
+    payload: &str,
+) -> Result<(Vec<u8>, oxml_media::ImageInfo)> {
+    let (metadata, encoded) = payload.split_once(',').ok_or_else(|| {
+        html_error(
+            element_path(image),
+            "image data URI has no payload separator",
+        )
+    })?;
+    let (content_type, encoding) = metadata
+        .split_once(';')
+        .ok_or_else(|| html_error(element_path(image), "image data URI has no base64 encoding"))?;
+    if !encoding.eq_ignore_ascii_case("base64") {
+        return Err(html_error(
+            element_path(image),
+            "image data URI must use base64 encoding",
+        ));
+    }
+    let bytes = BASE64.decode(encoded).map_err(|_| {
+        html_error(
+            element_path(image),
+            "image data URI has invalid base64 data",
+        )
+    })?;
+    let info = oxml_media::probe(&bytes).ok_or_else(|| {
+        html_error(
+            element_path(image),
+            "image data URI bytes are unsupported or malformed",
+        )
+    })?;
+    if !content_type.eq_ignore_ascii_case(info.format.content_type()) {
+        return Err(html_error(
+            element_path(image),
+            "image data URI MIME type does not match its bytes",
+        ));
+    }
+    Ok((bytes, info))
+}
+
 impl Document {
     pub fn from_html(html: &str) -> Result<HtmlReadResult> {
         from_html_with_limits(html, Limits::default())
@@ -534,6 +1121,65 @@ impl Document {
         let html = std::str::from_utf8(&bytes)
             .map_err(|_| html_error("input", "HTML input is not valid UTF-8"))?;
         Self::from_html(html)
+    }
+
+    /// Create a document from CommonMark with GitHub tables and
+    /// strikethrough.
+    ///
+    /// The Markdown is projected through the HTML importer, so headings,
+    /// lists, tables, links, block quotes and code blocks map to Word as they
+    /// do from HTML. An image naming a local file is dropped with a
+    /// diagnostic, since there is no base directory to read it from.
+    pub fn from_markdown(markdown: &str) -> Result<MarkdownReadResult> {
+        Self::from_markdown_with_options(markdown, MarkdownOptions::default())
+    }
+
+    /// Create a document from Markdown with a base directory for local
+    /// images and an optional template.
+    pub fn from_markdown_with_options(
+        markdown: &str,
+        options: MarkdownOptions<'_>,
+    ) -> Result<MarkdownReadResult> {
+        from_markdown_with_limits(markdown, options, Limits::default())
+    }
+
+    /// Create a document from a UTF-8 Markdown file. Local images resolve
+    /// against the file's directory.
+    pub fn open_markdown<P: AsRef<Path>>(path: P) -> Result<MarkdownReadResult> {
+        Self::open_markdown_with_options(path, MarkdownOptions::default())
+    }
+
+    /// Create a document from a UTF-8 Markdown file with options. Local
+    /// images resolve against the file's directory unless `options` names
+    /// another base directory.
+    pub fn open_markdown_with_options<P: AsRef<Path>>(
+        path: P,
+        options: MarkdownOptions<'_>,
+    ) -> Result<MarkdownReadResult> {
+        let path = path.as_ref();
+        let mut file = File::open(path)?;
+        let size = usize::try_from(file.metadata()?.len())
+            .map_err(|_| html_error("input", "Markdown input size is not representable"))?;
+        if size > MAX_INPUT_BYTES {
+            return Err(html_error(
+                "input",
+                "Markdown input exceeds the 64 MiB limit",
+            ));
+        }
+        let bytes = read_bounded(&mut file, size, MAX_INPUT_BYTES)?;
+        let markdown = std::str::from_utf8(&bytes)
+            .map_err(|_| html_error("input", "Markdown input is not valid UTF-8"))?;
+        let base_dir = options
+            .base_dir
+            .or_else(|| path.parent())
+            .unwrap_or(Path::new("."));
+        Self::from_markdown_with_options(
+            markdown,
+            MarkdownOptions {
+                base_dir: Some(base_dir),
+                ..options
+            },
+        )
     }
 
     pub fn from_mhtml_bytes(bytes: &[u8]) -> Result<MhtmlReadResult> {
@@ -570,17 +1216,21 @@ impl Document {
 
 fn from_mhtml_with_limits(bytes: &[u8], limits: MhtmlLimits) -> Result<MhtmlReadResult> {
     let (html, projection) = parse_mhtml(bytes, limits)?;
-    let parsed =
-        from_html_with_resources(&html, Limits::default(), Some(&projection)).map_err(|error| {
-            match error {
-                Error::Html { location, message } => mhtml_error(
-                    Some("HTML root"),
-                    0,
-                    format!("HTML projection failed at {location}: {message}"),
-                ),
-                other => other,
-            }
-        })?;
+    let parsed = from_html_with_resources(
+        &html,
+        Limits::default(),
+        Some(&projection),
+        &[],
+        Document::new(),
+    )
+    .map_err(|error| match error {
+        Error::Html { location, message } => mhtml_error(
+            Some("HTML root"),
+            0,
+            format!("HTML projection failed at {location}: {message}"),
+        ),
+        other => other,
+    })?;
     Ok(MhtmlReadResult {
         document: parsed.document,
         diagnostics: parsed
@@ -2631,6 +3281,8 @@ impl Importer<'_> {
                     "h5" => Some("Heading5".to_string()),
                     "h6" => Some("Heading6".to_string()),
                     "blockquote" => Some("Quote".to_string()),
+                    // Word opens HTML preformatted text in this style.
+                    "pre" => Some("HTMLPreformatted".to_string()),
                     _ => None,
                 };
                 let model = ParagraphModel {
@@ -3118,13 +3770,19 @@ impl Importer<'_> {
                                 format!("unresolved image resource `{source}`"),
                             ));
                         }
-                        self.diagnostic(
-                            &location,
-                            None,
+                        // A data URI is named by its kind, not its payload.
+                        let message = if source
+                            .get(..5)
+                            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("data:"))
+                        {
+                            "dropped undecodable HTML image data URI and retained alternate text"
+                                .to_string()
+                        } else {
                             format!(
                                 "dropped unresolved HTML image `{source}` and retained alternate text"
-                            ),
-                        )?;
+                            )
+                        };
+                        self.diagnostic(&location, None, message)?;
                         if let Some(alt) = element.attr("alt")
                             && !alt.is_empty()
                         {
@@ -3196,6 +3854,10 @@ impl Importer<'_> {
                             .transpose()?,
                         width,
                         height,
+                        description: element
+                            .attr("alt")
+                            .filter(|alt| !alt.is_empty())
+                            .map(str::to_owned),
                     };
                     pieces.push(InlinePiece::Image(image));
                     return Ok(());
@@ -3354,6 +4016,7 @@ impl Importer<'_> {
             let mut paragraph = Paragraph { inner: &mut output };
             apply_paragraph_style(&mut paragraph, &model.style);
             if let Some(style) = model.paragraph_style {
+                ensure_import_style(self.document, &style);
                 paragraph.set_style(&style);
             }
             if let Some((list_id, level)) = model.numbering
@@ -3363,6 +4026,10 @@ impl Importer<'_> {
             }
             let mut emitted = false;
             let mut pending_space = false;
+            // The link of the last text run, and the style of the text the
+            // pending collapsed space was written in.
+            let mut previous_link: Option<String> = None;
+            let mut space_style: Option<Box<ComputedStyle>> = None;
             for piece in model.pieces {
                 match piece {
                     InlinePiece::Break => {
@@ -3370,18 +4037,22 @@ impl Importer<'_> {
                         paragraph.add_line_break();
                         emitted = true;
                         pending_space = false;
+                        previous_link = None;
                     }
                     InlinePiece::Image(image) => {
                         self.bump_runs()?;
                         let run = paragraph.add_picture(&image.rel_id, image.width, image.height);
-                        if let Some(drawing_id) = image.drawing_id
-                            && let Some(RunContent::Drawing(drawing)) = run.content.last_mut()
+                        if let Some(RunContent::Drawing(drawing)) = run.content.last_mut()
                             && let Some(inline) = drawing.inline.as_mut()
                         {
-                            inline.doc_pr_id = drawing_id;
+                            if let Some(drawing_id) = image.drawing_id {
+                                inline.doc_pr_id = drawing_id;
+                            }
+                            inline.description = image.description;
                         }
                         emitted = true;
                         pending_space = false;
+                        previous_link = None;
                     }
                     InlinePiece::Text(text, style, true) => {
                         let mut lines = text.split('\n').peekable();
@@ -3395,6 +4066,7 @@ impl Importer<'_> {
                                 };
                                 apply_run_style(&mut run, &style);
                                 emitted = true;
+                                previous_link.clone_from(&style.hyperlink);
                             }
                             if lines.peek().is_some() {
                                 self.bump_runs()?;
@@ -3405,6 +4077,25 @@ impl Importer<'_> {
                         pending_space = false;
                     }
                     InlinePiece::Text(text, style, false) => {
+                        // A collapsed space before a link stays with the text
+                        // it was written in, as a browser lays it out, rather
+                        // than becoming the first character of the link.
+                        if pending_space
+                            && emitted
+                            && style.hyperlink.is_some()
+                            && style.hyperlink != previous_link
+                            && let Some(space) = space_style.take()
+                        {
+                            self.bump_runs()?;
+                            let mut run = if let Some(url) = &space.hyperlink {
+                                paragraph.add_hyperlink(" ", &hyperlink_ids[url])
+                            } else {
+                                paragraph.add_run(" ")
+                            };
+                            apply_run_style(&mut run, &space);
+                            pending_space = false;
+                        }
+                        let was_pending = pending_space;
                         let normalized = collapse_text(&text, &mut pending_space, emitted);
                         if !normalized.is_empty() {
                             self.bump_runs()?;
@@ -3415,6 +4106,10 @@ impl Importer<'_> {
                             };
                             apply_run_style(&mut run, &style);
                             emitted = true;
+                            previous_link.clone_from(&style.hyperlink);
+                        }
+                        if pending_space && (!was_pending || !normalized.is_empty()) {
+                            space_style = Some(style);
                         }
                     }
                 }
@@ -3478,6 +4173,51 @@ impl Importer<'_> {
             document,
             diagnostics: self.diagnostics,
         })
+    }
+}
+
+/// Add a paragraph style the import assigns when the document lacks it.
+///
+/// The definition is the one a new Word-compatible document has, so a
+/// template without `Quote` or a heading style still shows the structure.
+/// `HTML Preformatted` is Word's own style for HTML preformatted text.
+fn ensure_import_style(document: &mut Document, style_id: &str) {
+    if document.styles.get_by_id(style_id).is_some() {
+        return;
+    }
+    let style = if style_id == "HTMLPreformatted" {
+        Some(
+            crate::style::StyleBuilder::paragraph("HTMLPreformatted", "HTML Preformatted")
+                .based_on("Normal")
+                .priority(99)
+                .semi_hidden(true)
+                .unhide_when_used(true)
+                .paragraph_properties(rdocx_oxml::properties::CT_PPr {
+                    space_after: Some(Twips(0)),
+                    line_spacing: Some(Twips(240)),
+                    line_rule: Some("auto".to_owned()),
+                    ..Default::default()
+                })
+                .run_properties(rdocx_oxml::properties::CT_RPr {
+                    font_ascii: Some("Courier New".to_owned()),
+                    font_hansi: Some("Courier New".to_owned()),
+                    font_cs: Some("Courier New".to_owned()),
+                    sz: Some(rdocx_oxml::units::HalfPoint(20)),
+                    sz_cs: Some(rdocx_oxml::units::HalfPoint(20)),
+                    ..Default::default()
+                })
+                .build()
+                .0,
+        )
+    } else {
+        rdocx_oxml::styles::CT_Styles::new_default()
+            .styles
+            .into_iter()
+            .chain(crate::style::common_styles())
+            .find(|style| style.style_id == style_id)
+    };
+    if let Some(style) = style {
+        document.styles.styles.push(style);
     }
 }
 

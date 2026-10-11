@@ -601,22 +601,89 @@ fn collect_control_paragraphs(
     }
 }
 
-/// Convert a DOCX file to another format.
+/// Open the document a conversion reads, by the input file's extension.
+///
+/// HTML and Markdown input print their import diagnostics as warnings on
+/// stderr. Returns the document and the default output format for that input.
+fn open_conversion_input(
+    file: &Path,
+    template: Option<&Path>,
+) -> Result<(Document, Option<&'static str>)> {
+    let extension = file
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase);
+    let markdown = matches!(extension.as_deref(), Some("md" | "markdown"));
+    if template.is_some() && !markdown {
+        return Err("--template applies only to Markdown input".into());
+    }
+    match extension.as_deref() {
+        Some("md" | "markdown") => {
+            let template = template.map(Document::open).transpose()?;
+            let result = Document::open_markdown_with_options(
+                file,
+                rdocx::MarkdownOptions {
+                    base_dir: None,
+                    template: template.as_ref(),
+                },
+            )?;
+            print_import_warnings(result.diagnostics.iter().map(|diagnostic| {
+                (
+                    diagnostic.location.as_str(),
+                    None,
+                    diagnostic.message.as_str(),
+                )
+            }));
+            Ok((result.document, Some("docx")))
+        }
+        Some("html" | "htm") => {
+            let result = Document::open_html(file)?;
+            print_import_warnings(result.diagnostics.iter().map(|diagnostic| {
+                (
+                    diagnostic.location.as_str(),
+                    diagnostic.property.as_deref(),
+                    diagnostic.message.as_str(),
+                )
+            }));
+            Ok((result.document, Some("docx")))
+        }
+        _ => Ok((Document::open(file)?, None)),
+    }
+}
+
+/// Print one `Warning:` line on stderr for each import diagnostic.
+fn print_import_warnings<'a>(
+    diagnostics: impl Iterator<Item = (&'a str, Option<&'a str>, &'a str)>,
+) {
+    for (location, property, message) in diagnostics {
+        match property {
+            Some(property) => eprintln!("Warning: {location} ({property}): {message}"),
+            None => eprintln!("Warning: {location}: {message}"),
+        }
+    }
+}
+
+/// Convert a DOCX, HTML or Markdown file to another format.
 #[allow(clippy::too_many_arguments)]
 pub fn convert(
     file: &Path,
-    to: &str,
+    to: Option<&str>,
     output: Option<&Path>,
     force: bool,
+    template: Option<&Path>,
     dpi: u32,
     font_dir: Option<&Path>,
     revision_view: RevisionView,
     image: ImageOptions<'_>,
 ) -> Result<()> {
-    let doc = Document::open(file)?;
+    let (mut doc, default_to) = open_conversion_input(file, template)?;
+    let to = to.or(default_to).ok_or(
+        "--to is required for DOCX input. Supported: docx, pdf, html, md, png, jpeg, tiff",
+    )?;
     let render_options = rdocx::RenderOptions { revision_view };
 
     let default_ext = match to {
+        "docx" => "docx",
         "pdf" => "pdf",
         "html" => "html",
         "md" | "markdown" => "md",
@@ -625,13 +692,13 @@ pub fn convert(
         "tif" | "tiff" => "tiff",
         other => {
             return Err(format!(
-                "Unknown format: {other}. Supported: pdf, html, md, png, jpeg, tiff"
+                "Unknown format: {other}. Supported: docx, pdf, html, md, png, jpeg, tiff"
             )
             .into());
         }
     };
 
-    if revision_view == RevisionView::Tracked && matches!(default_ext, "html" | "md") {
+    if revision_view == RevisionView::Tracked && matches!(default_ext, "docx" | "html" | "md") {
         return Err("--revision-view tracked applies only to PDF and image output".into());
     }
     if font_dir.is_some() && matches!(default_ext, "html" | "md") {
@@ -651,6 +718,10 @@ pub fn convert(
 
     let mut stdout = io::stdout().lock();
     match to {
+        "docx" => {
+            let bytes = doc.to_bytes()?;
+            stage_and_publish(&[(output_path.clone(), bytes)], force)?;
+        }
         "pdf" => {
             let bytes = if fonts.is_empty() {
                 doc.to_pdf_with_options(render_options)?
@@ -3047,9 +3118,10 @@ mod tests {
 
         convert(
             &input,
-            "md",
+            Some("md"),
             None,
             false,
+            None,
             96,
             None,
             RevisionView::Accepted,

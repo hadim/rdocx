@@ -93,8 +93,9 @@ pub use field::{
     TocRebuildReport,
 };
 pub use html::{
-    HtmlDiagnostic, HtmlFragmentInsertResult, HtmlImageResource, HtmlReadResult, MhtmlDiagnostic,
-    MhtmlReadResult, MhtmlWriteResult,
+    HtmlDiagnostic, HtmlFragmentInsertResult, HtmlImageResource, HtmlReadResult,
+    MarkdownDiagnostic, MarkdownOptions, MarkdownReadResult, MhtmlDiagnostic, MhtmlReadResult,
+    MhtmlWriteResult,
 };
 pub use inspection::{StoryText, StoryTextExport, StoryTextItem, ValidationReport};
 pub use math::{

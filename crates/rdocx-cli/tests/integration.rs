@@ -1101,6 +1101,170 @@ fn convert_writes_valid_formats_and_uses_the_shared_default_output() {
     assert!(dimensions.0 > 0 && dimensions.1 > 0);
 }
 
+/// One white pixel, as a PNG data URI.
+const PIXEL_DATA_URI: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWNgYGD4DwABBAEAHnOcQAAAAABJRU5ErkJggg==";
+
+#[test]
+fn convert_creates_a_styled_docx_from_an_html_file() {
+    let temp = TempWorkspace::new("convert-html");
+    let input = temp.path.join("report.html");
+    fs::write(
+        &input,
+        format!(
+            "<h1>Report</h1><h2>Findings</h2><p>See <a href='https://example.test/report'>the report</a>.</p><ul><li>first<ol><li>nested</li></ol></li><li>second</li></ul><table><tr><th>Name</th><th>Value</th></tr><tr><td>a</td><td>1</td></tr></table><p><img src='{PIXEL_DATA_URI}' alt='dot' width='2' height='2'></p><p><script>dropped()</script>end</p>"
+        ),
+    )
+    .unwrap();
+
+    let docx = input.with_extension("docx");
+    let output = cli(&["convert", path_text(&input)]);
+    assert!(output.status.success(), "convert HTML to DOCX failed");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("Written to {}\n", docx.display())
+    );
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "Warning: html/body/p[3]/script[1]: dropped HTML script\n"
+    );
+
+    let document = Document::open(&docx).unwrap();
+    let styles = (0..2)
+        .map(|index| {
+            document
+                .paragraph(index)
+                .unwrap()
+                .style_id()
+                .map(str::to_owned)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        styles,
+        [Some("Heading1".to_owned()), Some("Heading2".to_owned())]
+    );
+    let items = (3..6)
+        .map(|index| {
+            let paragraph = document.paragraph(index).unwrap();
+            (
+                paragraph.text(),
+                paragraph.numbering().map(|(_, level)| level),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        items,
+        [
+            ("first".to_owned(), Some(0)),
+            ("nested".to_owned(), Some(1)),
+            ("second".to_owned(), Some(0)),
+        ]
+    );
+    let numbering = package_part_text(&docx, "/word/numbering.xml");
+    assert!(numbering.contains("w:val=\"bullet\"") && numbering.contains("w:val=\"decimal\""));
+    let table = document.table(0).unwrap();
+    assert_eq!(table.cell(0, 1).unwrap().text(), "Value");
+    assert_eq!(table.cell(1, 0).unwrap().text(), "a");
+    let links = document.links();
+    assert_eq!(links.len(), 1);
+    assert_eq!(links[0].text, "the report");
+    assert_eq!(links[0].url.as_deref(), Some("https://example.test/report"));
+    let images = document.images();
+    assert_eq!(images.len(), 1);
+    assert!(!images[0].is_anchor);
+    assert!(document.image_data(&images[0].embed_id).is_some());
+
+    // DOCX input still names its output format.
+    let output = cli(&["convert", path_text(&docx)]);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("--to is required for DOCX input")
+    );
+    let pdf = temp.path.join("report.pdf");
+    let output = cli(&[
+        "convert",
+        path_text(&input),
+        "--to",
+        "pdf",
+        "-o",
+        path_text(&pdf),
+    ]);
+    assert!(output.status.success(), "convert HTML to PDF failed");
+    assert!(fs::read(pdf).unwrap().starts_with(b"%PDF-"));
+}
+
+#[test]
+fn convert_creates_a_docx_from_markdown_with_a_template() {
+    let temp = TempWorkspace::new("convert-markdown");
+    let template_path = temp.path.join("template.docx");
+    let mut template = fixture_document(&["template body"]);
+    template.set_header("Template header");
+    template.save(&template_path).unwrap();
+    let input = temp.path.join("notes.md");
+    fs::write(
+        &input,
+        format!(
+            "# Notes\n\nSee [the site](https://example.test/).\n\n- one\n  - two\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n![dot]({PIXEL_DATA_URI})\n\n> quoted\n\n<span>raw</span>\n"
+        ),
+    )
+    .unwrap();
+
+    let docx = input.with_extension("docx");
+    let output = cli(&[
+        "convert",
+        path_text(&input),
+        "--template",
+        path_text(&template_path),
+    ]);
+    assert!(output.status.success(), "convert Markdown to DOCX failed");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("Written to {}\n", docx.display())
+    );
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "Warning: line 16: dropped inline raw HTML `<span>`\nWarning: line 16: dropped inline raw HTML `</span>`\n"
+    );
+    let document = Document::open(&docx).unwrap();
+    assert_eq!(document.header_text().as_deref(), Some("Template header"));
+    assert_eq!(document.paragraph(0).unwrap().style_id(), Some("Heading1"));
+    assert_eq!(document.paragraph(1).unwrap().text(), "See the site.");
+    let levels = (2..4)
+        .map(|index| {
+            document
+                .paragraph(index)
+                .unwrap()
+                .numbering()
+                .map(|(_, level)| level)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(levels, [Some(0), Some(1)]);
+    assert_eq!(document.table(0).unwrap().cell(1, 1).unwrap().text(), "2");
+    assert_eq!(
+        document.links()[0].url.as_deref(),
+        Some("https://example.test/")
+    );
+    assert_eq!(document.images().len(), 1);
+    assert_eq!(document.paragraph(5).unwrap().style_id(), Some("Quote"));
+    assert!(!document.text().contains("template body"));
+
+    let output = cli(&[
+        "convert",
+        path_text(&template_path),
+        "--to",
+        "md",
+        "--template",
+        path_text(&template_path),
+    ]);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("--template applies only to Markdown input")
+    );
+}
+
 #[test]
 fn convert_replaces_an_existing_output_only_with_force_and_never_its_input() {
     let temp = TempWorkspace::new("convert-output-policy");
