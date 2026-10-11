@@ -111,7 +111,11 @@ Fresh Word construction has two explicit completeness profiles. The minimal
 profile owns only the main document and styles graph. The Word-compatible
 profile also owns settings, the Office theme, the font table, core properties,
 and application properties with exact content types and internal
-relationships. `Document::new()` selects Word-compatible DOCX. DOCM and DOTM
+relationships. Its settings name compatibility mode 15, as Word writes into
+every document it creates, so Word does not open the file in Compatibility
+Mode and the layout engine applies the mode 15 rules. The minimal profile has
+no settings part and names no mode. Opening a package never adds a mode.
+`Document::new()` selects Word-compatible DOCX. DOCM and DOTM
 declare macro-capable main-part identity without inventing a VBA project. Empty
 core properties omit created and modified timestamps, so equivalent fresh
 constructions remain byte-identical. Fresh application properties stamp the
