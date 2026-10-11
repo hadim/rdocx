@@ -89,3 +89,9 @@ The rolling intake instruction authorizes the full linked issue acceptance.
 ROOT reviewed the source, dependencies, test gate, risk riders and HLD list.
 The stated defaults are adopted. No blocking product question remains.
 Implementation waits for completed dependencies and an exclusive resource wave.
+
+## Rolling intake, PR355
+
+The 2026-10-11 20:23 UTC refresh found [PR355](https://github.com/tensorbee/rdocx/pull/355) at head4005c4e51c3e2ce00d9c14dde1a2163fcaf8c5c1. It fixes Issue344 and joins the existing approved F-X214 parsing and traversal story. The exact contributor patch is7546f000296c4e6fedde1e7d860faea81ed2ebb145f432010b0e33d3d8e3fa4a in /private/tmp/S91-PR355-intake/diff.patch. Reuse its parser and regression work after reconciling the approved depth32 contract, URI ownership, mixed cycles, source retention and authored traversal safety. The donor depth16 limit and reported gates do not replace the approved acceptance or local verification. Read-only contribution assessment is in progress.
+
+There are24 open PRs and38 included open issues. Discussion issues264 and281 remain excluded. No existing PR head changed. This intake adds no duplicate story and marks no implementation complete.
