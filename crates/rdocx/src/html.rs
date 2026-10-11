@@ -3395,6 +3395,10 @@ impl Importer<'_> {
             }
             let mut emitted = false;
             let mut pending_space = false;
+            // The link of the last text run, and the style of the text the
+            // pending collapsed space was written in.
+            let mut previous_link: Option<String> = None;
+            let mut space_style: Option<Box<ComputedStyle>> = None;
             for piece in model.pieces {
                 match piece {
                     InlinePiece::Break => {
@@ -3402,6 +3406,7 @@ impl Importer<'_> {
                         paragraph.add_line_break();
                         emitted = true;
                         pending_space = false;
+                        previous_link = None;
                     }
                     InlinePiece::Image(image) => {
                         self.bump_runs()?;
@@ -3414,6 +3419,7 @@ impl Importer<'_> {
                         }
                         emitted = true;
                         pending_space = false;
+                        previous_link = None;
                     }
                     InlinePiece::Text(text, style, true) => {
                         let mut lines = text.split('\n').peekable();
@@ -3427,6 +3433,7 @@ impl Importer<'_> {
                                 };
                                 apply_run_style(&mut run, &style);
                                 emitted = true;
+                                previous_link.clone_from(&style.hyperlink);
                             }
                             if lines.peek().is_some() {
                                 self.bump_runs()?;
@@ -3437,6 +3444,25 @@ impl Importer<'_> {
                         pending_space = false;
                     }
                     InlinePiece::Text(text, style, false) => {
+                        // A collapsed space before a link stays with the text
+                        // it was written in, as a browser lays it out, rather
+                        // than becoming the first character of the link.
+                        if pending_space
+                            && emitted
+                            && style.hyperlink.is_some()
+                            && style.hyperlink != previous_link
+                            && let Some(space) = space_style.take()
+                        {
+                            self.bump_runs()?;
+                            let mut run = if let Some(url) = &space.hyperlink {
+                                paragraph.add_hyperlink(" ", &hyperlink_ids[url])
+                            } else {
+                                paragraph.add_run(" ")
+                            };
+                            apply_run_style(&mut run, &space);
+                            pending_space = false;
+                        }
+                        let was_pending = pending_space;
                         let normalized = collapse_text(&text, &mut pending_space, emitted);
                         if !normalized.is_empty() {
                             self.bump_runs()?;
@@ -3447,6 +3473,10 @@ impl Importer<'_> {
                             };
                             apply_run_style(&mut run, &style);
                             emitted = true;
+                            previous_link.clone_from(&style.hyperlink);
+                        }
+                        if pending_space && (!was_pending || !normalized.is_empty()) {
+                            space_style = Some(style);
                         }
                     }
                 }

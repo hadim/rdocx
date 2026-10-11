@@ -5237,7 +5237,7 @@ fn html_import_keeps_safe_links_and_data_uri_images() {
         base64::engine::general_purpose::STANDARD.encode(mhtml_pixel_png())
     );
     let parsed = Document::from_html(&format!(
-        "<p><a href='https://example.test/path'>link</a> <img src='{data_uri}' width='2' height='3'><img src='{data_uri}'></p><p><a href='javascript:alert(1)'>unsafe</a><img src='data:image/svg+xml;utf8,&lt;svg/&gt;' alt='vector'></p>"
+        "<p>See <a href='https://example.test/path'>link</a> <img src='{data_uri}' width='2' height='3'><img src='{data_uri}'></p><p><a href='javascript:alert(1)'>unsafe</a><img src='data:image/svg+xml;utf8,&lt;svg/&gt;' alt='vector'></p>"
     ))
     .expect("HTML with links and images");
     assert_eq!(
@@ -5264,6 +5264,7 @@ fn html_import_keeps_safe_links_and_data_uri_images() {
         (images[0].width_emu, images[0].height_emu),
         (19_050, 28_575)
     );
+    assert_eq!(document.paragraph(0).unwrap().text(), "See link");
     assert_eq!(document.paragraph(1).unwrap().text(), "unsafevector");
 
     let bytes = document.to_bytes().unwrap();
