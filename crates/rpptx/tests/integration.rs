@@ -926,6 +926,448 @@ fn html_browser_differential_rejects_geometry_text_and_pixel_perturbations() {
     assert!(!f224_browser_gate_accepts(true, true, 1, perturbed_ssim));
 }
 
+/// A deck with a titled slide holding nested and formatted bullets, a link, a
+/// table, a picture with alt text and notes, a hidden slide, and an untitled
+/// slide.
+fn export_test_deck() -> Presentation {
+    let mut presentation = Presentation::new().unwrap();
+    let layout = |name: &str| {
+        (0..presentation.layout_count())
+            .find(|&index| presentation.layout_name(index) == Some(name))
+            .unwrap()
+    };
+    let (content, blank) = (layout("Title and Content"), layout("Blank"));
+    let bold = {
+        let mut properties = CT_TextCharacterProperties::default();
+        properties.bold = Some(true);
+        properties
+    };
+    let italic = {
+        let mut properties = CT_TextCharacterProperties::default();
+        properties.italic = Some(true);
+        properties
+    };
+
+    for (title, hidden) in [("Quarterly review", false), ("Backup", true)] {
+        let index = presentation.len();
+        presentation.add_slide(content).unwrap();
+        let slide = presentation.slide(index).unwrap();
+        let title_index = slide
+            .shapes()
+            .position(|shape| shape.placeholder_type() == Some("title"))
+            .unwrap();
+        let body_index = slide
+            .shapes()
+            .position(|shape| shape.placeholder_idx() == Some(1))
+            .unwrap();
+        let mut slide = presentation.slide_mut(index).unwrap();
+        slide.set_hidden(hidden);
+        slide
+            .shape_mut(title_index)
+            .unwrap()
+            .set_text(title)
+            .unwrap();
+        let mut body = slide.shape_mut(body_index).unwrap();
+        if hidden {
+            body.set_text("Spare").unwrap();
+            continue;
+        }
+        body.set_text("Revenue ").unwrap();
+        let mut frame = body.text_frame().unwrap();
+        let mut paragraph = frame.paragraph_mut(0).unwrap();
+        paragraph.add_run("rose").set_properties(bold.clone());
+        paragraph.add_run(" by ten percent");
+        let mut north = frame.add_paragraph();
+        north.add_run("North");
+        north.set_level(1);
+        let mut south = frame.add_paragraph();
+        south.add_run("South").set_properties(italic.clone());
+        south.set_level(1);
+        let mut literal = frame.add_paragraph();
+        literal.add_run("2*3 snake_case [x] <b> & a|b");
+        literal.set_level(2);
+        let mut linked = frame.add_paragraph();
+        linked.add_run("See the ");
+        linked.add_run("report");
+        linked.add_run(".");
+        frame.add_paragraph().add_run(" ");
+
+        let mut table = slide
+            .add_table(2, 2, Emu(0), Emu(4_000_000), Emu(4_000_000), Emu(800_000))
+            .unwrap();
+        let mut table = table.table_mut().unwrap();
+        for (row, column, text) in [
+            (0, 0, "Region"),
+            (0, 1, "Total"),
+            (1, 0, "North"),
+            (1, 1, "1|2"),
+        ] {
+            table.cell_mut(row, column).unwrap().set_text(text);
+        }
+        presentation
+            .set_notes_text(index, "Mention the new office.\nThank the team.")
+            .unwrap();
+        presentation
+            .add_picture(
+                index,
+                &valid_one_pixel_png(),
+                "logo.png",
+                Emu(0),
+                Emu(0),
+                None,
+                None,
+            )
+            .unwrap();
+    }
+    let body_id = presentation
+        .slide(0)
+        .unwrap()
+        .shapes()
+        .find(|shape| shape.placeholder_idx() == Some(1))
+        .and_then(|shape| shape.non_visual_id())
+        .unwrap();
+    presentation
+        .set_run_hyperlink(0, body_id, 4, 1, Some("https://example.com/q3?a=(1)"))
+        .unwrap();
+
+    presentation.add_slide(blank).unwrap();
+    presentation
+        .slide_mut(2)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(3_000_000), Emu(500_000))
+        .unwrap()
+        .set_text("1. Not a list")
+        .unwrap();
+
+    // The facade has no alt text setter yet, so the picture gets one in XML.
+    let mut package = open_opc(&presentation.to_bytes().unwrap(), "export deck");
+    let slide_part = "/ppt/slides/slide1.xml";
+    let xml = String::from_utf8(package.get_part(slide_part).unwrap().to_vec()).unwrap();
+    let described = xml.replacen(
+        r#"name="Picture "#,
+        r#"descr="Company logo &amp; brand" name="Picture "#,
+        1,
+    );
+    assert_ne!(described, xml);
+    package.set_part(slide_part, described.into_bytes());
+    let mut bytes = Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    Presentation::from_bytes(bytes.get_ref()).unwrap()
+}
+
+#[test]
+fn markdown_export_writes_one_section_per_slide_in_outline_order() {
+    let presentation = export_test_deck();
+    let slide_one = concat!(
+        "# Quarterly review\n\n",
+        "- Revenue **rose** by ten percent\n",
+        "  - North\n",
+        "  - *South*\n",
+        "    - 2\\*3 snake\\_case \\[x\\] \\<b> \\& a|b\n",
+        "- See the [report](https://example.com/q3?a=\\(1\\)).\n\n",
+        "| Region | Total |\n",
+        "| --- | --- |\n",
+        "| North | 1\\|2 |\n\n",
+        "![Company logo \\& brand]()\n\n",
+    );
+    let notes = "> **Notes**\n>\n> Mention the new office.\n>\n> Thank the team.\n\n";
+    let slide_two = "# Backup\n\n- Spare\n\n";
+    let slide_three = "# Slide 3\n\n- 1\\. Not a list\n";
+
+    assert_eq!(
+        presentation.to_markdown(rpptx::ExportOptions::default()),
+        format!("{slide_one}{slide_two}{slide_three}")
+    );
+    assert_eq!(
+        presentation.to_markdown(rpptx::ExportOptions {
+            notes: true,
+            skip_hidden: true,
+        }),
+        format!("{slide_one}{notes}{slide_three}")
+    );
+    assert_eq!(
+        Presentation::new()
+            .unwrap()
+            .to_markdown(rpptx::ExportOptions::default()),
+        ""
+    );
+}
+
+/// Checks that an HTML export is a document an HTML parser reads without a
+/// parse error and that also parses as well-formed XML.
+#[cfg(feature = "default-template")]
+fn assert_valid_html(html: &str) {
+    let document = scraper::Html::parse_document(html);
+    assert_eq!(
+        document.errors,
+        Vec::<std::borrow::Cow<'static, str>>::new()
+    );
+    let mut reader = quick_xml::Reader::from_str(html);
+    let mut open = Vec::new();
+    loop {
+        match reader.read_event().unwrap() {
+            quick_xml::events::Event::Start(start) => {
+                open.push(String::from_utf8(start.name().as_ref().to_vec()).unwrap());
+            }
+            quick_xml::events::Event::End(end) => {
+                assert_eq!(
+                    open.pop().as_deref(),
+                    Some(std::str::from_utf8(end.name().as_ref()).unwrap())
+                );
+            }
+            quick_xml::events::Event::Empty(empty) => {
+                assert!(
+                    [b"br".as_slice(), b"img", b"meta"].contains(&empty.name().as_ref()),
+                    "{:?} is not a void element",
+                    empty.name()
+                );
+            }
+            quick_xml::events::Event::Eof => break,
+            _ => {}
+        }
+    }
+    assert!(open.is_empty(), "unclosed {open:?}");
+}
+
+#[test]
+#[cfg(feature = "default-template")]
+fn html_export_writes_one_section_per_slide_and_parses_as_html_and_xml() {
+    let mut presentation = export_test_deck();
+    {
+        let index = presentation
+            .slide(0)
+            .unwrap()
+            .shapes()
+            .position(|shape| shape.table().is_some())
+            .unwrap();
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut frame = slide.shape_mut(index).unwrap();
+        let mut table = frame.table_mut().unwrap();
+        table.insert_row(2).unwrap();
+        let mut cell = table.cell_mut(2, 0).unwrap();
+        cell.set_text("Both \"quoted\"");
+        cell.merge_to(2, 1).unwrap();
+    }
+    let slide_one = concat!(
+        "<section id=\"slide-1\">\n",
+        "<h1>Quarterly review</h1>\n",
+        "<ul>\n",
+        "<li>Revenue <strong>rose</strong> by ten percent\n",
+        "<ul>\n",
+        "<li>North</li>\n",
+        "<li><em>South</em>\n",
+        "<ul>\n",
+        "<li>2*3 snake_case [x] &lt;b&gt; &amp; a|b</li>\n",
+        "</ul>\n",
+        "</li>\n",
+        "</ul>\n",
+        "</li>\n",
+        "<li>See the <a href=\"https://example.com/q3?a=(1)\">report</a>.</li>\n",
+        "</ul>\n",
+        "<table>\n",
+        "<thead>\n",
+        "<tr><th>Region</th><th>Total</th></tr>\n",
+        "</thead>\n",
+        "<tbody>\n",
+        "<tr><td>North</td><td>1|2</td></tr>\n",
+        "<tr><td colspan=\"2\">Both &quot;quoted&quot;</td></tr>\n",
+        "</tbody>\n",
+        "</table>\n",
+        "<img src=\"data:image/png;base64,",
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mP4z8AAAAMBAQD3A0FDAAAAAElFTkSuQmCC",
+        "\" alt=\"Company logo &amp; brand\" />\n",
+    );
+    let notes = concat!(
+        "<aside class=\"notes\">\n",
+        "<h2>Notes</h2>\n",
+        "<p>Mention the new office.</p>\n",
+        "<p>Thank the team.</p>\n",
+        "</aside>\n",
+    );
+    let slide_two =
+        "<section id=\"slide-2\">\n<h1>Backup</h1>\n<ul>\n<li>Spare</li>\n</ul>\n</section>\n";
+    let slide_three = concat!(
+        "<section id=\"slide-3\">\n<h1>Slide 3</h1>\n",
+        "<ul>\n<li>1. Not a list</li>\n</ul>\n</section>\n",
+    );
+    let document = |body: String| {
+        format!(
+            "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\" />\n\
+             <title>Presentation</title>\n</head>\n<body>\n{body}</body>\n</html>\n"
+        )
+    };
+
+    let html = presentation.to_html(rpptx::ExportOptions::default());
+    assert_eq!(
+        html,
+        document(format!("{slide_one}</section>\n{slide_two}{slide_three}"))
+    );
+    assert_valid_html(&html);
+    let html = presentation.to_html(rpptx::ExportOptions {
+        notes: true,
+        skip_hidden: true,
+    });
+    assert_eq!(
+        html,
+        document(format!("{slide_one}{notes}</section>\n{slide_three}"))
+    );
+    assert_valid_html(&html);
+
+    // The document title comes from the core properties, escaped.
+    presentation.core_properties_mut().title = Some("Q3 <draft>".to_owned());
+    let html = presentation.to_html(rpptx::ExportOptions::default());
+    assert!(html.contains("<title>Q3 &lt;draft&gt;</title>"), "{html}");
+    assert_valid_html(&html);
+    // The parser does report what the check rejects.
+    assert!(
+        !scraper::Html::parse_document("<p>a</div>")
+            .errors
+            .is_empty()
+    );
+}
+
+/// One slide whose text box holds a paragraph of `(text, run properties)`
+/// runs, the properties given as `a:rPr` attributes, written as the HTML of
+/// its one list item.
+#[cfg(feature = "default-template")]
+fn html_of_runs(runs: &[(&str, &str)]) -> String {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    let mut shape = slide
+        .add_textbox(Emu(0), Emu(0), Emu(3_000_000), Emu(500_000))
+        .unwrap();
+    let mut frame = shape.text_frame().unwrap();
+    let mut paragraph = frame.add_paragraph();
+    for &(text, attributes) in runs {
+        let xml = format!(
+            r#"<a:rPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" {attributes}/>"#
+        );
+        paragraph
+            .add_run(text)
+            .set_properties(CT_TextCharacterProperties::from_xml(xml.as_bytes()).unwrap());
+    }
+    let html = presentation.to_html(rpptx::ExportOptions::default());
+    assert_valid_html(&html);
+    let start = html.find("<li>").unwrap() + "<li>".len();
+    let end = html.rfind("</li>").unwrap();
+    html[start..end].to_owned()
+}
+
+#[test]
+#[cfg(feature = "default-template")]
+fn html_export_writes_run_formatting_as_nested_elements_and_escapes_text() {
+    for (runs, html) in [
+        (
+            &[("a ", ""), ("b", r#"b="1""#), ("c", r#"b="1""#)][..],
+            "a <strong>bc</strong>",
+        ),
+        (
+            &[("both", r#"b="1" i="1""#)],
+            "<strong><em>both</em></strong>",
+        ),
+        (
+            &[
+                ("x", r#"u="sng""#),
+                ("2", r#"baseline="30000""#),
+                ("i", r#"baseline="-25000""#),
+                ("old", r#"strike="sngStrike""#),
+                ("plain", r#"u="none" strike="noStrike" b="0""#),
+            ],
+            "<u>x</u><sup>2</sup><sub>i</sub><s>old</s>plain",
+        ),
+        (
+            &[("it's <tag> \u{85}\"q\"\nnext", "")],
+            "it&#39;s &lt;tag&gt; &quot;q&quot;<br />next",
+        ),
+    ] {
+        assert_eq!(html_of_runs(runs), html, "{runs:?}");
+    }
+}
+
+/// One slide whose text box holds a paragraph of `(text, bold, italic,
+/// strike)` runs, written as Markdown without its heading.
+fn markdown_of_runs(runs: &[(&str, bool, bool, bool)]) -> String {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    let mut shape = slide
+        .add_textbox(Emu(0), Emu(0), Emu(3_000_000), Emu(500_000))
+        .unwrap();
+    let mut frame = shape.text_frame().unwrap();
+    let mut paragraph = frame.add_paragraph();
+    for &(text, bold, italic, strike) in runs {
+        let mut properties = CT_TextCharacterProperties::default();
+        properties.bold = bold.then_some(true);
+        properties.italic = italic.then_some(true);
+        properties.strike = strike.then_some(rpptx::TextStrike::Single);
+        paragraph.add_run(text).set_properties(properties);
+    }
+    let markdown = presentation.to_markdown(rpptx::ExportOptions::default());
+    markdown.strip_prefix("# Slide 1\n\n").unwrap().to_owned()
+}
+
+#[test]
+fn markdown_export_writes_emphasis_and_line_starts_that_commonmark_reads_as_the_slide_means() {
+    const N: bool = false;
+    const Y: bool = true;
+    for (runs, markdown) in [
+        // Whitespace stays outside delimiters, and equal runs share them.
+        (
+            &[("Sales ", N, N, N), ("rose ", Y, N, N), ("today", N, N, N)][..],
+            "- Sales **rose** today\n",
+        ),
+        (
+            &[("Quar", Y, N, N), ("terly", Y, N, N)],
+            "- **Quarterly**\n",
+        ),
+        (
+            &[("Quar", Y, N, N), ("terly", N, N, N)],
+            "- **Quar**terly\n",
+        ),
+        (
+            &[
+                ("Quarterly ", Y, N, N),
+                ("report", Y, Y, N),
+                (" due", N, N, N),
+            ],
+            "- **Quarterly *report*** due\n",
+        ),
+        (
+            &[("bold", Y, N, N), ("italic", N, Y, N)],
+            "- **bold***italic*\n",
+        ),
+        (
+            &[("old ", N, N, Y), ("bold", Y, N, Y), (" new", N, N, N)],
+            "- ~~old **bold**~~ new\n",
+        ),
+        (&[("a", N, N, N), (" ", Y, N, N), ("b", N, N, N)], "- a b\n"),
+        // Inside a word, punctuation would keep delimiters from flanking.
+        (
+            &[("Price", N, N, N), (":", Y, N, N), ("10", N, N, N)],
+            "- Price<strong>:</strong>10\n",
+        ),
+        (
+            &[("*", Y, N, N), ("x", N, N, N)],
+            "- <strong>\\*</strong>x\n",
+        ),
+        // Text that would start a block is escaped.
+        (&[("# Not a heading", N, N, N)], "- \\# Not a heading\n"),
+        (&[("> not a quote", N, N, N)], "- \\> not a quote\n"),
+        (&[("- not nested", N, N, N)], "- \\- not nested\n"),
+        (&[("---", N, N, N)], "- \\---\n"),
+        (&[("2) second", N, N, N)], "- 2\\) second\n"),
+        (&[("#hashtag and 2024.", N, N, N)], "- #hashtag and 2024.\n"),
+        // A line break continues the item, and a blank line would end it.
+        (
+            &[("line one\n- line two\n\nthree", N, N, N)],
+            "- line one  \n  \\- line two  \n  three\n",
+        ),
+    ] {
+        assert_eq!(markdown_of_runs(runs), markdown, "{runs:?}");
+    }
+}
+
 #[test]
 fn embedded_inventory_reports_exact_hashes_relationships_and_signature_state() {
     let mut package = embedded_fixture_package(true);

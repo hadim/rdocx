@@ -4826,6 +4826,60 @@ def test_issue_169_effective_geometry_materializes_missing_partners():
     )
 
 
+def test_issue_352_to_markdown_writes_one_section_per_slide():
+    import rpptx
+
+    prs = rpptx.Presentation()
+    prs.slides.add_slide(prs.slide_layouts[1])
+    prs.slides[0].shapes.title.text = "Roadmap"
+    prs.slides[0].placeholders[1].text_frame.text = "Ship 2*3"
+    prs.slides[0].placeholders[1].text_frame.add_paragraph()
+    prs.slides[0].placeholders[1].text_frame.paragraphs[1].text = "Nested"
+    prs.slides[0].placeholders[1].text_frame.paragraphs[1].level = 1
+    prs.slides[0].shapes.add_table(1, 2, 0, 0, 100_000, 100_000)
+    prs.slides[0].shapes[-1].table.cell(0, 0).text = "A"
+    prs.slides[0].shapes[-1].table.cell(0, 1).text = "B|C"
+    prs.slides[0].notes_text = "Say hello"
+    prs.slides.add_slide(prs.slide_layouts[6])
+    prs.slides[1].hidden = True
+
+    visible = "# Roadmap\n\n- Ship 2\\*3\n  - Nested\n\n| A | B\\|C |\n| --- | --- |\n"
+    assert prs.to_markdown() == visible + "\n# Slide 2\n"
+    assert prs.to_markdown(notes=True, skip_hidden=True) == (
+        visible + "\n> **Notes**\n>\n> Say hello\n"
+    )
+
+
+def test_issue_353_to_html_writes_one_section_per_slide():
+    import xml.etree.ElementTree as ElementTree
+
+    import rpptx
+
+    prs = rpptx.Presentation()
+    prs.slides.add_slide(prs.slide_layouts[1])
+    prs.slides[0].shapes.title.text = "Q&A <live>"
+    prs.slides[0].placeholders[1].text_frame.text = "Ship"
+    prs.slides[0].notes_text = "Say hello"
+    prs.slides[0].shapes.add_picture(io.BytesIO(_tiny_png()), 0, 0)
+    prs.slides.add_slide(prs.slide_layouts[6])
+    prs.slides[1].hidden = True
+
+    html = prs.to_html()
+    section = (
+        '<section id="slide-1">\n<h1>Q&amp;A &lt;live&gt;</h1>\n'
+        "<ul>\n<li>Ship</li>\n</ul>\n"
+        '<img src="data:image/png;base64,'
+    )
+    assert section in html
+    assert '<section id="slide-2">\n<h1>Slide 2</h1>\n</section>\n' in html
+    assert "Say hello" not in html
+    ElementTree.fromstring(html.removeprefix("<!DOCTYPE html>\n"))
+
+    html = prs.to_html(notes=True, skip_hidden=True)
+    assert '<aside class="notes">\n<h2>Notes</h2>\n<p>Say hello</p>\n</aside>\n' in html
+    assert "slide-2" not in html
+
+
 def test_issue_169_shape_click_hyperlink_round_trips_and_python_pptx_reads_it(tmp_path):
     import pptx
     import rpptx

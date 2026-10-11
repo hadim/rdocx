@@ -27,6 +27,8 @@ presentation, notes, handout, PDF, and animation outputs.
   PowerPoint would choose, the height of a shape that fits its text, and the
   largest size that fits, as python-pptx's `fit_text` writes it.
 - Produce PDF, PDF/A, resolved slide frames, notes, handouts, and animations.
+- Export a deck to Markdown or semantic HTML, one section per slide in
+  outline order.
 - Import HTML, ODP, and PDF through explicit facade APIs.
 - Number slides and set footers and dates as PowerPoint's Header and Footer
   dialog does, with slide-owned placeholders that PowerPoint and Google Slides

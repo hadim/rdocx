@@ -52,6 +52,8 @@ rpptx comment add deck.pptx --slide 2 --author Reviewer \
 rpptx comment list reviewed.pptx --json
 rpptx footer deck.pptx --slide-number --footer "ACME" --skip-title -o numbered.pptx
 rpptx convert deck.pptx --to pdf -o deck.pdf
+rpptx convert deck.pptx --to md --notes --skip-hidden -o deck.md
+rpptx convert deck.pptx --to html -o deck.html
 rpptx thumbnail deck.pptx -o thumbnail.png
 rpptx replace deck.pptx --map pairs.json -o filled.pptx --json
 rpptx slide add deck.pptx --layout "Title and Content" --at 2 -o added.pptx
@@ -151,6 +153,20 @@ working and is reported as a `Warning:` line on standard error and in the
 the source layout, master and theme, and `--keep-sections` keeps the source
 sections. Like the comment mutations, it refuses an existing output and
 publishes only a complete presentation.
+
+`convert --to md` writes CommonMark with GitHub pipe tables, one section per
+slide headed by its title. The rest of the slide follows the order `outline`
+prints: paragraphs as list items nested by level with their direct bold,
+italic, strikethrough and external links, tables with the first row as header,
+and pictures as images carrying their alt text. `--notes` adds each slide's
+speaker notes as a block quote, and `--skip-hidden` leaves hidden slides out.
+
+`convert --to html` writes the same content as one HTML document, a section
+per slide with the title as its heading. Lists nest by level, run formatting
+and external links become elements, tables keep merged cells and a styled
+header row, and pictures are embedded as data URIs with their alt text.
+`--notes` adds the speaker notes in an `aside`. The export is semantic, not a
+slide layout, which `convert --to png` renders.
 
 `outline --json` reports each slide's title, its outline items with their
 levels, and its speaker notes. Notes are the plain text of the notes body, with

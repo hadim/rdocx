@@ -65,6 +65,8 @@ with open("review.pdf", "wb") as output:
   reads back the chart type, categories, and series values of any chart, and
   `chart.replace_data(chart_data)` rewrites the data of an existing chart and
   its embedded workbook while keeping the series formatting.
+- Markdown and semantic HTML export, one section per slide, with
+  `to_markdown` and `to_html`, each taking `notes=` and `skip_hidden=`.
 - Speaker-note text plus modern comment authors, threads, replies, thread
   resolution and removal, and ordered comment movement.
 - Master, layout, placeholder, theme, shape, chart, media, and relationship

@@ -196,6 +196,8 @@ def exercise_rpptx_types(path: Path) -> None:
     )
     issues: tuple[ValidationIssue, ...] = presentation.validate()
     issue_lines: list[tuple[str, str]] = [(issue.kind, issue.message) for issue in issues]
+    markdown: str = presentation.to_markdown(notes=True, skip_hidden=False)
+    html: str = presentation.to_html(notes=False, skip_hidden=True)
     pdf_bytes: bytes = presentation.to_pdf()
     slide_png: bytes | None = presentation.render_slide_to_png(0)
     slide_pngs: list[bytes] = presentation.render_all_slides()
