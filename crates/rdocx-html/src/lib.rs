@@ -227,10 +227,36 @@ mod tests {
             html.contains("<strong>one&emsp;two</strong><em><br>three<hr>four</em>"),
             "{html}"
         );
+        // The line break is written outside the emphasis, and the page break
+        // closes it, with blank lines so `---` does not underline a heading.
         let markdown = to_markdown(&input);
-        assert!(
-            markdown.contains("**one\ttwo***  \nthree\n---\nfour*"),
-            "{markdown}"
+        assert_eq!(markdown, "**one\ttwo**  \n*three*\n\n---\n\n*four*\n\n");
+    }
+
+    #[test]
+    fn markdown_links_and_page_breaks_keep_emphasis_readable_by_commonmark() {
+        let document = CT_Document::from_xml(
+            br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:t>See!</w:t></w:r><w:hyperlink r:id="rId1"><w:r><w:rPr><w:b/></w:rPr><w:t>the</w:t></w:r><w:r><w:rPr><w:b/></w:rPr><w:t xml:space="preserve"> report </w:t></w:r><w:r><w:rPr><w:i/></w:rPr><w:t>here</w:t></w:r></w:hyperlink><w:r><w:t>.</w:t></w:r></w:p><w:p><w:r><w:rPr><w:b/></w:rPr><w:t>before</w:t><w:br w:type="page"/><w:t>after</w:t></w:r></w:p></w:body></w:document>"#,
+        )
+        .unwrap();
+        let input = HtmlInput {
+            document,
+            styles: CT_Styles::new_default(),
+            numbering: None,
+            images: HashMap::new(),
+            hyperlink_urls: HashMap::from([(
+                "rId1".to_owned(),
+                "https://example.com/a_(b c|d".to_owned(),
+            )]),
+        };
+
+        // Formatting inside a link nests in the link text, a `!` before it
+        // does not make it an image, and a destination with a space or an
+        // unbalanced parenthesis stays one destination.
+        assert_eq!(
+            to_markdown(&input),
+            "See\\![**the report** *here*](https://example.com/a_\\(b%20c|d).\n\n\
+             **before**\n\n---\n\n**after**\n\n"
         );
     }
 
