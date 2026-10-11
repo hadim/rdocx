@@ -2391,6 +2391,81 @@ impl PyDocument {
         }
     }
 
+    /// Add an editable chart and its embedded workbook in a new paragraph at
+    /// the end of the body, or right after `after`, a direct body item.
+    ///
+    /// `chart_type` is an `XL_CHART_TYPE` member and `chart_data` a
+    /// `CategoryChartData` or `XyChartData`.
+    #[pyo3(signature = (chart_type, width, height, chart_data, *, after=None))]
+    fn add_chart(
+        &mut self,
+        py: Python<'_>,
+        chart_type: &Bound<'_, PyAny>,
+        width: i64,
+        height: i64,
+        chart_data: &Bound<'_, PyAny>,
+        after: Option<PyRef<'_, PyStoryItem>>,
+    ) -> PyResult<PyStoryItem> {
+        let kind = crate::chart::chart_kind(chart_type)?;
+        let data = crate::chart::chart_data(chart_data)?;
+        // The facade appends the chart. A chart placed after an item then
+        // moves to the boundary that follows it, which is checked first.
+        let after_index = match after.as_deref() {
+            Some(item) => {
+                let location = self.native_location(py, item)?;
+                let not_direct =
+                    || PyValueError::new_err("a chart can follow only a direct body item");
+                let index = item.direct_body_index.ok_or_else(not_direct)?;
+                if index >= self.inner.content_count() || self.body_location(py, index)? != location
+                {
+                    return Err(not_direct());
+                }
+                Some(index)
+            }
+            None => None,
+        };
+        py.detach(|| {
+            self.inner
+                .add_chart(
+                    kind,
+                    rdocx::Length::emu(width),
+                    rdocx::Length::emu(height),
+                    &data,
+                )
+                .map(drop)
+        })
+        .map_err(|error| rdocx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        let chart_index = self.inner.content_count() - 1;
+        let index = match after_index {
+            Some(index) if index + 1 < chart_index => {
+                let mut locations = self.body_locations(py, &[chart_index, index + 1])?;
+                let destination = locations.pop().expect("two requested body locations");
+                let source = locations.pop().expect("two requested body locations");
+                self.inner
+                    .move_content(&source, &destination)
+                    .map_err(|error| rdocx_to_pyerr(py, error))?;
+                index + 1
+            }
+            _ => chart_index,
+        };
+        let location = self.body_location(py, index)?;
+        self.story_item_snapshot(py, &location)
+    }
+
+    /// Snapshots of every chart drawn in the main story, in document order.
+    #[getter]
+    fn charts<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let charts = self
+            .inner
+            .charts()
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .into_iter()
+            .map(crate::chart::PyChart::new)
+            .collect::<Vec<_>>();
+        PyTuple::new(py, charts)
+    }
+
     #[pyo3(signature = (
         edited,
         author,

@@ -758,6 +758,17 @@ class Document:
     def story_items(self) -> tuple[StoryItem, ...]: ...
     @property
     def header_footer_variants(self) -> tuple[HeaderFooterVariant, ...]: ...
+    def add_chart(
+        self,
+        chart_type: _XL_CHART_TYPE,
+        width: int,
+        height: int,
+        chart_data: _CategoryChartData | _XyChartData,
+        *,
+        after: StoryItem | None = None,
+    ) -> StoryItem: ...
+    @property
+    def charts(self) -> tuple[Chart, ...]: ...
     def create_section_story(
         self,
         section_index: int,
@@ -1214,3 +1225,29 @@ class CellParagraphCollection:
     @_overload
     def __getitem__(self, key: slice, /) -> list[Paragraph]: ...
     def __iter__(self) -> _Iterator[Paragraph]: ...
+
+
+from .chart.data import CategoryChartData as _CategoryChartData, XyChartData as _XyChartData
+from .enum.chart import XL_CHART_TYPE as _XL_CHART_TYPE
+
+__all__ += ["Chart", "ChartSeries"]
+
+
+@_final
+class Chart:
+    def __new__(cls, *, _private: _Never) -> Chart: ...
+    @property
+    def chart_type(self) -> _XL_CHART_TYPE | None: ...
+    @property
+    def categories(self) -> tuple[str, ...]: ...
+    @property
+    def series(self) -> tuple[ChartSeries, ...]: ...
+
+
+@_final
+class ChartSeries:
+    def __new__(cls, *, _private: _Never) -> ChartSeries: ...
+    @property
+    def name(self) -> str: ...
+    @property
+    def values(self) -> tuple[float, ...]: ...

@@ -12764,6 +12764,24 @@ fn add_chart_caches_and_workbook_share_one_source() {
 }
 
 #[test]
+fn authored_chart_reads_back_its_kind_and_data_after_reopen() {
+    let bytes = presentation_with_authored_chart().to_bytes().unwrap();
+    let presentation = Presentation::from_bytes(&bytes).unwrap();
+    let chart_index = presentation.slide(0).unwrap().shapes().len() - 1;
+    assert_eq!(
+        presentation.chart(0, &[chart_index]).unwrap(),
+        (Some(ChartKind::Bar), f124_chart_data())
+    );
+    for not_a_chart in [&[][..], &[0], &[chart_index + 1]] {
+        assert!(presentation.chart(0, not_a_chart).is_err());
+    }
+    assert!(matches!(
+        presentation.chart(1, &[chart_index]),
+        Err(rpptx::Error::UnknownSlideIndex { index: 1, .. })
+    ));
+}
+
+#[test]
 fn add_chart_rejects_invalid_data_without_mutation() {
     let invalid = [
         ChartData {

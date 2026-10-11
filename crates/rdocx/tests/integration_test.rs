@@ -4022,6 +4022,43 @@ end timeout"#,
 }
 
 #[test]
+fn authored_charts_read_back_in_document_order_after_reopen() {
+    let bar = oxml_chart::ChartData {
+        categories: vec!["North".to_owned(), "South".to_owned()],
+        series: vec![
+            ("Revenue".to_owned(), vec![12.5, 18.0]),
+            ("Cost".to_owned(), vec![8.0, 11.5]),
+        ],
+        number_format: Some("0.0".to_owned()),
+        ..oxml_chart::ChartData::default()
+    };
+    let line = oxml_chart::ChartData {
+        categories: vec!["Q1".to_owned(), "Q2".to_owned(), "Q3".to_owned()],
+        series: vec![("Margin".to_owned(), vec![0.25, 0.5, 0.75])],
+        number_format: None,
+        ..oxml_chart::ChartData::default()
+    };
+    let mut source = Document::new();
+    assert!(source.charts().unwrap().is_empty());
+    for (kind, data) in [
+        (oxml_chart::ChartKind::Bar, &bar),
+        (oxml_chart::ChartKind::Line, &line),
+    ] {
+        source
+            .add_chart(kind, Length::inches(4.0), Length::inches(2.5), data)
+            .unwrap();
+    }
+    let reopened = Document::from_bytes(&source.to_bytes().unwrap()).unwrap();
+    assert_eq!(
+        reopened.charts().unwrap(),
+        [
+            (Some(oxml_chart::ChartKind::Bar), bar),
+            (Some(oxml_chart::ChartKind::Line), line),
+        ]
+    );
+}
+
+#[test]
 fn encoded_drawing_relationship_ids_reopen_extract_and_render() {
     let image = mhtml_pixel_png();
     let mut source = Document::new();

@@ -439,6 +439,16 @@ unchanged. `pop_content` refuses a commented fragment rather than detaching
 anchors from their definitions. Native `Cell::try_set_text` exposes checked
 errors, while its legacy setter leaves the cell unchanged on refusal.
 
+`Document.add_chart(chart_type, width, height, chart_data, after=None)` takes
+the `XL_CHART_TYPE` and chart data objects of `rpptx`, from `rdocx.enum.chart`
+and `rdocx.chart.data`, and adds an inline chart paragraph through the native
+`Document::add_chart`. A checked direct body `StoryItem` as `after` moves the
+new paragraph to the boundary after that item. The returned `StoryItem` names
+the chart paragraph at the new revision. A rejected type, data object, or
+placement leaves package bytes and binding revisions unchanged.
+`Document.charts` returns `Chart` snapshots of the main story's charts in
+document order, read through `Document::charts`.
+
 
 `Document.add_picture` accepts in-memory bytes, a safe filename, optional
 paired EMU dimensions, and an optional checked `StoryItem` placement. Omitted
@@ -613,6 +623,20 @@ Adding to the collection of a shape that is not a group raises `ValueError`
 before any image is read, and so does adding to a group inside an
 `mc:AlternateContent` fallback, which stays read-only. `remove` and `move` on a
 nested collection raise `ValueError` too.
+
+`ShapeCollection.add_chart(chart_type, left, top, width, height, chart_data)`
+appends an editable chart and its embedded workbook to a slide's own shapes
+through the native `Presentation::add_chart` and returns the graphic frame
+captured at the new revision. A group's collection raises `ValueError`.
+`chart_type` is an `XL_CHART_TYPE` member from `rpptx.enum.chart`, limited to
+the seven types the native authoring writes, each with the value python-pptx
+reads back from the written chart. `chart_data` is a `CategoryChartData` or an
+`XyChartData` from `rpptx.chart.data`. Its series share one number format and,
+in an XY chart, one set of x values. `Shape.has_chart` and `Shape.chart` follow
+python-pptx. The `Chart` reads `chart_type`, `categories`, and the `series`
+names and values from the chart part on each access through
+`Presentation::chart`, and a chart type the native authoring cannot write
+reads `None`.
 
 A table `Cell` follows python-pptx for `merge(other_cell)`, `split()`,
 `is_merge_origin`, `is_spanned`, `span_height`, and `span_width`. Merge and

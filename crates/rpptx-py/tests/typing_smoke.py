@@ -433,6 +433,30 @@ def exercise_rpptx_z_order_types(slide: Slide) -> None:
     slide.shapes.move(0, -1)
 
 
+def exercise_rpptx_chart_types(slide: Slide) -> None:
+    from rpptx._rpptx import Chart, ChartSeries
+    from rpptx.chart.data import CategoryChartData, CategorySeriesData, XyChartData, XySeriesData
+    from rpptx.enum.chart import XL_CHART_TYPE
+
+    data = CategoryChartData(number_format="0.0")
+    data.categories = ["North", "South"]
+    added: CategorySeriesData = data.add_series("Revenue", (1.5, 2), number_format=None)
+    values: tuple[float, ...] = added.values
+    xy_data = XyChartData()
+    xy_series: XySeriesData = xy_data.add_series("Up")
+    xy_series.add_data_point(1, 2.5)
+    frame: Shape = slide.shapes.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, 0, 0, Inches(4), Inches(3), data)
+    slide.shapes.add_chart(XL_CHART_TYPE.XY_SCATTER_LINES, 0, 0, Inches(4), Inches(3), xy_data)
+    has_chart: bool = frame.has_chart
+    chart: Chart = frame.chart
+    chart_type: XL_CHART_TYPE | None = chart.chart_type
+    categories: tuple[str, ...] = chart.categories
+    series: tuple[ChartSeries, ...] = chart.series
+    name: str = series[0].name
+    cached: tuple[float, ...] = series[0].values
+    (values, has_chart, chart_type, categories, name, cached)
+
+
 def exercise_rpptx_group_population_types(group: Shape) -> None:
     members: ShapeCollection = group.shapes
     textbox: Shape = members.add_textbox(0, 0, Inches(1), Inches(1))

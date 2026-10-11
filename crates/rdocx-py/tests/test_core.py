@@ -3405,6 +3405,122 @@ def _package_part(document, name):
         return archive.read(name).decode()
 
 
+def test_issue_345_add_chart_writes_bar_and_line_charts_that_read_back_and_render(tmp_path):
+    import shutil
+    import xml.etree.ElementTree as ElementTree
+
+    import rdocx
+    from rdocx import Inches
+    from rdocx.chart.data import CategoryChartData, XyChartData
+    from rdocx.enum.chart import XL_CHART_TYPE
+
+    bar_data = CategoryChartData(number_format="0.0")
+    bar_data.categories = ["North", "South", "West"]
+    bar_data.add_series("Revenue", (12.5, 19, 14.25))
+    bar_data.add_series("Cost", (8, 11.5, 9.75))
+    line_data = CategoryChartData()
+    line_data.categories = ["Q1", "Q2"]
+    line_data.add_series("Margin", [0.25, 0.5])
+
+    document = rdocx.Document()
+    document.add_paragraph("Intro")
+    document.add_paragraph("Outro")
+    blank_pdf = document.to_pdf()
+    assert document.charts == ()
+
+    def body_paragraphs():
+        return [(item.direct_body_index, item.text) for item in document.story_items if item.kind == "paragraph"]
+
+    bar_item = document.add_chart(XL_CHART_TYPE.COLUMN_CLUSTERED, Inches(4), Inches(2.5), bar_data)
+    assert (bar_item.kind, bar_item.direct_body_index) == ("paragraph", 2)
+    intro = next(item for item in document.story_items if item.text == "Intro")
+    line_item = document.add_chart(XL_CHART_TYPE.LINE_MARKERS, Inches(4), Inches(2.5), line_data, after=intro)
+    assert line_item.direct_body_index == 1
+    assert body_paragraphs() == [(0, "Intro"), (1, None), (2, "Outro"), (3, None)]
+    last = next(item for item in document.story_items if item.kind == "paragraph" and item.direct_body_index == 3)
+    xy_data = XyChartData()
+    xy_data.add_series("Up").add_data_point(1, 2)
+    scatter_item = document.add_chart(XL_CHART_TYPE.XY_SCATTER_LINES, Inches(2), Inches(2), xy_data, after=last)
+    assert scatter_item.direct_body_index == 4
+    assert [chart.chart_type for chart in document.charts] == [
+        XL_CHART_TYPE.LINE_MARKERS,
+        XL_CHART_TYPE.COLUMN_CLUSTERED,
+        XL_CHART_TYPE.XY_SCATTER_LINES,
+    ]
+
+    document.add_table(1, 1)
+    cell_item = next(item for item in document.story_items if item.story.kind == "table_cell")
+    drawing_item = next(item for item in document.story_items if item.kind == "drawing")
+    unchanged = document.to_bytes()
+    short = CategoryChartData()
+    short.categories = ["a", "b"]
+    short.add_series("A", [1])
+    for chart_type, data, after, error in (
+        (XL_CHART_TYPE.COLUMN_CLUSTERED, short, None, rdocx.RdocxError),
+        (4, bar_data, None, ValueError),
+        (XL_CHART_TYPE.COLUMN_CLUSTERED, {"categories": ["a"]}, None, TypeError),
+        (XL_CHART_TYPE.PIE, line_data, cell_item, ValueError),
+        (XL_CHART_TYPE.PIE, line_data, drawing_item, ValueError),
+        (XL_CHART_TYPE.PIE, line_data, intro, rdocx.StaleElementError),
+    ):
+        with pytest.raises(error):
+            document.add_chart(chart_type, Inches(1), Inches(1), data, after=after)
+    with pytest.raises(rdocx.RdocxError):
+        document.add_chart(XL_CHART_TYPE.PIE, 0, Inches(1), line_data)
+    assert document.to_bytes() == unchanged
+    document.remove_content(document.find_content_index(document.tables[0]))
+
+    output = tmp_path / "issue-345-charts.docx"
+    document.save(output)
+    reopened = rdocx.Document(output)
+    line_chart, bar_chart, scatter_chart = reopened.charts
+    assert scatter_chart.chart_type == XL_CHART_TYPE.XY_SCATTER_LINES
+    assert scatter_chart.categories == ("1",)
+    assert bar_chart.chart_type == XL_CHART_TYPE.COLUMN_CLUSTERED
+    assert isinstance(bar_chart.chart_type, XL_CHART_TYPE)
+    assert bar_chart.categories == ("North", "South", "West")
+    assert [(series.name, series.values) for series in bar_chart.series] == [
+        ("Revenue", (12.5, 19.0, 14.25)),
+        ("Cost", (8.0, 11.5, 9.75)),
+    ]
+    assert line_chart.chart_type == XL_CHART_TYPE.LINE_MARKERS
+    assert line_chart.categories == ("Q1", "Q2")
+    assert [(series.name, series.values) for series in line_chart.series] == [("Margin", (0.25, 0.5))]
+
+    with zipfile.ZipFile(output) as archive:
+        names = set(archive.namelist())
+        content_types = ElementTree.fromstring(archive.read("[Content_Types].xml"))
+        overrides = {item.get("PartName"): item.get("ContentType") for item in content_types}
+        rels = ElementTree.fromstring(archive.read("word/_rels/document.xml.rels"))
+        chart_rels = {
+            item.get("Id"): posixpath.normpath(posixpath.join("word", item.get("Target"))).lstrip("/")
+            for item in rels
+            if item.get("Type").endswith("/chart")
+        }
+        assert len(chart_rels) == 3 and set(chart_rels.values()) <= names
+        document_xml = archive.read("word/document.xml").decode()
+        assert all(f'r:id="{relationship_id}"' in document_xml for relationship_id in chart_rels)
+        for chart_part in chart_rels.values():
+            assert overrides["/" + chart_part].endswith("drawingml.chart+xml")
+            folder, file_name = posixpath.split(chart_part)
+            workbook_rels = ElementTree.fromstring(archive.read(f"{folder}/_rels/{file_name}.rels"))
+            (workbook,) = (item for item in workbook_rels if item.get("Type").endswith("/package"))
+            workbook_part = posixpath.normpath(posixpath.join(folder, workbook.get("Target"))).lstrip("/")
+            assert workbook_part in names
+            assert overrides["/" + workbook_part].endswith("spreadsheetml.sheet")
+
+    # The native PDF export is the one `rdocx convert --to pdf` writes.
+    pdf = reopened.to_pdf()
+    assert pdf.startswith(b"%PDF") and len(pdf) > len(blank_pdf) + 2_000
+    pdftotext = shutil.which("pdftotext")
+    if pdftotext:
+        (tmp_path / "charts.pdf").write_bytes(pdf)
+        text = subprocess.run(
+            [pdftotext, str(tmp_path / "charts.pdf"), "-"], check=True, capture_output=True, text=True
+        ).stdout
+        assert all(label in text for label in ("Intro", "North", "West", "Revenue", "Cost", "Q1", "Q2"))
+
+
 def test_core_properties_use_python_docx_names_and_round_trip(tmp_path):
     import datetime
 

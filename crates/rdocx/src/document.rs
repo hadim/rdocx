@@ -20284,6 +20284,51 @@ impl Document {
         Ok(Paragraph { inner: paragraph })
     }
 
+    /// Read the chart family and cached data of every chart drawn in the
+    /// main story, in document order.
+    ///
+    /// See [`oxml_chart::read_chart_data`] for what the kind and data hold.
+    /// A chart whose part is missing or external is an error.
+    pub fn charts(&self) -> Result<Vec<(Option<ChartKind>, ChartData)>> {
+        let mut relationship_ids = Vec::new();
+        visit_all_drawings(&self.document.body.content, &mut |drawing| {
+            let id = drawing
+                .inline
+                .as_ref()
+                .and_then(|inline| inline.chart_rel_id.as_ref())
+                .or_else(|| {
+                    drawing
+                        .anchor
+                        .as_ref()
+                        .and_then(|anchor| anchor.chart_rel_id.as_ref())
+                });
+            relationship_ids.extend(id.cloned());
+        });
+        let relationships = self.package.get_part_rels(&self.doc_part_name);
+        relationship_ids
+            .iter()
+            .map(|id| {
+                let relationship = relationships
+                    .and_then(|relationships| relationships.get_by_id(id))
+                    .filter(|relationship| {
+                        relationship.rel_type == rel_types::CHART
+                            && relationship_is_internal(relationship)
+                    })
+                    .ok_or_else(|| {
+                        Error::Other(format!("chart relationship {id} is missing or external"))
+                    })?;
+                let part =
+                    OpcPackage::resolve_rel_target(&self.doc_part_name, &relationship.target);
+                let xml = self
+                    .package
+                    .get_part(&part)
+                    .ok_or_else(|| Error::Other(format!("chart part {part} is missing")))?;
+                oxml_chart::read_chart_data(xml)
+                    .map_err(|error| Error::Other(format!("invalid chart: {error}")))
+            })
+            .collect()
+    }
+
     /// Add an inline image at its native size using 72 DPI when none is declared.
     ///
     /// Returns an error without changing the document when the image dimensions

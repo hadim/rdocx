@@ -4599,6 +4599,66 @@ impl Presentation {
             Box::new(frame),
         ))))
     }
+
+    /// Reads the chart family and cached data of one slide chart.
+    ///
+    /// `shape_path` holds the shape index on the slide, then one child index
+    /// per enclosing group. See [`oxml_chart::read_chart_data`] for what the
+    /// kind and data hold. A shape that is not a chart, or a chart whose part
+    /// is missing or external, is an error.
+    pub fn chart(
+        &self,
+        slide_index: usize,
+        shape_path: &[usize],
+    ) -> Result<(Option<ChartKind>, ChartData)> {
+        let record = self
+            .slides
+            .get(slide_index)
+            .ok_or(Error::UnknownSlideIndex {
+                index: slide_index,
+                slide_count: self.slides.len(),
+            })?;
+        let not_a_chart = || invalid_chart_mutation("read chart", "shape is not a chart");
+        let (first, children) = shape_path.split_first().ok_or_else(not_a_chart)?;
+        let mut shape = record
+            .slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .get(*first)
+            .map(shape_ref)
+            .ok_or_else(not_a_chart)?;
+        for index in children {
+            shape = shape.child(*index).ok_or_else(not_a_chart)?;
+        }
+        let frame = match shape.child {
+            ShapeTreeChild::GraphicFrame(frame) => Some(frame.as_ref()),
+            ShapeTreeChild::AlternateContent(alternate) => alternate.chart_choice(),
+            _ => None,
+        };
+        let relationship_id = frame
+            .and_then(CT_GraphicFrame::chart_relationship_id)
+            .ok_or_else(not_a_chart)?;
+        let relationship = self
+            .package
+            .get_part_rels(&record.part_name)
+            .and_then(|relationships| relationships.get_by_id(relationship_id))
+            .filter(|relationship| {
+                relationship.rel_type == rel_types::CHART && !relationship_is_external(relationship)
+            })
+            .ok_or_else(|| {
+                invalid_chart_mutation(
+                    "read chart",
+                    format!("chart relationship {relationship_id} is missing or external"),
+                )
+            })?;
+        let part = OpcPackage::resolve_rel_target(&record.part_name, &relationship.target);
+        let xml = self.package.get_part(&part).ok_or_else(|| {
+            invalid_chart_mutation("read chart", format!("chart part {part} is missing"))
+        })?;
+        oxml_chart::read_chart_data(xml)
+            .map_err(|error| invalid_chart_mutation("read chart", error.to_string()))
+    }
 }
 
 #[cfg(feature = "render")]

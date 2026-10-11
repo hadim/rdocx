@@ -1,5 +1,6 @@
 //! Python bindings for the rpptx facade.
 
+mod chart;
 mod dml;
 mod layout;
 mod presentation;
@@ -136,5 +137,6 @@ fn _rpptx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     text::register(module)?;
     table::register(module)?;
     layout::register(module)?;
+    chart::register(module)?;
     Ok(())
 }

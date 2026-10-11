@@ -47,6 +47,12 @@ with open("report.pdf", "wb") as output:
   resolved, retargeted, or removed in any story.
 - Paragraph text replacement that keeps paragraph formatting, comments, and
   bookmarks.
+- Editable charts with their embedded workbook through
+  `Document.add_chart(chart_type, width, height, chart_data, after=None)`, at
+  the end of the body or after a direct body item, with python-pptx's
+  `CategoryChartData`, `XyChartData` and `XL_CHART_TYPE` from
+  `rdocx.chart.data` and `rdocx.enum.chart`. `Document.charts` reads back each
+  chart's type, categories, and series values.
 - Counted literal replacement with `Paragraph.replace_text`, `Cell.replace_text`
   and `Document.replace_text_at`, scoped to the selected owner and preserving
   run formatting. `expect` checks the local count before publishing any edit.

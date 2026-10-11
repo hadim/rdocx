@@ -288,6 +288,81 @@ pub fn authored_chart_parts(
     Ok((chart_xml, workbook_bytes))
 }
 
+/// Reads the chart family and cached data of one ChartML part.
+///
+/// The kind is `None` unless the part holds one plot of a shape that
+/// [`authored_chart_parts`] writes, so another bar direction or grouping, a
+/// stacked line or area, or a combination chart reads as `None`. The data
+/// holds the categories of the first series, every series with its name and
+/// cached values, and the number format of the first series when it is not
+/// `General`. Axis titles and the palette are not read.
+pub fn read_chart_data(chart_xml: &[u8]) -> Result<(Option<ChartKind>, ChartData)> {
+    let chart_space = CT_ChartSpace::from_xml(chart_xml)?;
+    let plot_area = &chart_space.chart.plot_area;
+    let kind = match plot_area.plots() {
+        Ok([plot]) => match plot {
+            Plot::Bar {
+                direction: BarDirection::Column,
+                grouping: BarGrouping::Clustered,
+                ..
+            } => Some(ChartKind::Bar),
+            Plot::Line {
+                grouping: Grouping::Standard,
+                ..
+            } => Some(ChartKind::Line),
+            Plot::Pie { .. } => Some(ChartKind::Pie),
+            Plot::Doughnut { .. } => Some(ChartKind::Doughnut),
+            Plot::Area {
+                grouping: Grouping::Standard,
+                ..
+            } => Some(ChartKind::Area),
+            Plot::Scatter {
+                style: ScatterStyle::LineMarker,
+                ..
+            } => Some(ChartKind::Scatter),
+            Plot::Radar {
+                style: RadarStyle::Standard,
+                ..
+            } => Some(ChartKind::Radar),
+            _ => None,
+        },
+        _ => None,
+    };
+    let series = plot_area.series()?;
+    let categories = match series.first().and_then(|first| first.categories.as_ref()) {
+        Some(AxisData::String(labels)) => labels.values.clone(),
+        Some(AxisData::Numeric(numbers)) => numbers
+            .values
+            .iter()
+            .map(|value| value.to_string())
+            .collect(),
+        None => Vec::new(),
+    };
+    let number_format = series
+        .first()
+        .map(|first| first.values.format_code.clone())
+        .filter(|format| format != "General");
+    let series = series
+        .into_iter()
+        .map(|item| {
+            let name = item
+                .name
+                .and_then(|name| name.values.into_iter().next())
+                .unwrap_or_default();
+            (name, item.values.values)
+        })
+        .collect();
+    Ok((
+        kind,
+        ChartData {
+            categories,
+            series,
+            number_format,
+            ..ChartData::default()
+        },
+    ))
+}
+
 fn validate_chart_data(kind: ChartKind, data: &ChartData) -> Result<()> {
     if data.categories.is_empty() {
         return Err(invalid_authoring_value("at least one category is required"));
@@ -11072,7 +11147,8 @@ mod tests {
         ChartKind, DataLabelPosition, DispBlanksAs, Domain, Grouping, NumberFormat, NumericData,
         Orientation, Plot, R_NS, ScatterStyle, Series, StringRef, TickLabelPosition, TickMark,
         authored_chart_parts, capture_event, local_name, matches_local_name, nice_number_scale,
-        render_chart as render_chart_with_theme, render_geometry as render_geometry_with_theme,
+        read_chart_data, render_chart as render_chart_with_theme,
+        render_geometry as render_geometry_with_theme,
     };
 
     const MANIFEST: &str = include_str!("../../../scripts/pptx-corpus-manifest.tsv");
@@ -11209,6 +11285,63 @@ mod tests {
         parsed.format_code = "0.00".to_owned();
         let written = String::from_utf8(parsed.to_xml().unwrap()).unwrap();
         assert!(written.contains("<c:formatCode>0.00</c:formatCode>"));
+    }
+
+    #[test]
+    fn authored_chart_data_reads_back_with_its_kind() {
+        let data = ChartData {
+            categories: vec!["North".to_owned(), "South".to_owned()],
+            series: vec![
+                ("Revenue".to_owned(), vec![12.5, 19.0]),
+                ("Cost".to_owned(), vec![8.0, 11.5]),
+            ],
+            number_format: Some("0.00".to_owned()),
+            category_axis_title: Some("Region".to_owned()),
+            value_axis_title: None,
+            palette: vec![RgbColor::parse("2B6FE3").unwrap()],
+        };
+        let read_data = ChartData {
+            category_axis_title: None,
+            palette: Vec::new(),
+            ..data.clone()
+        };
+        for kind in [
+            ChartKind::Bar,
+            ChartKind::Line,
+            ChartKind::Area,
+            ChartKind::Scatter,
+            ChartKind::Radar,
+        ] {
+            let mut kind_data = data.clone();
+            let mut expected = read_data.clone();
+            if kind == ChartKind::Scatter {
+                kind_data.categories = vec!["1.5".to_owned(), "2".to_owned()];
+                expected.categories = kind_data.categories.clone();
+            }
+            let (chart, _) = authored_chart_parts(kind, &kind_data, "rId1").unwrap();
+            assert_eq!(read_chart_data(&chart).unwrap(), (Some(kind), expected));
+        }
+        for kind in [ChartKind::Pie, ChartKind::Doughnut] {
+            let single = ChartData {
+                series: data.series[..1].to_vec(),
+                number_format: None,
+                ..data.clone()
+            };
+            let (chart, _) = authored_chart_parts(kind, &single, "rId1").unwrap();
+            let (read_kind, read) = read_chart_data(&chart).unwrap();
+            assert_eq!(read_kind, Some(kind));
+            assert_eq!(read.categories, single.categories);
+            assert_eq!(read.series, single.series);
+            assert_eq!(read.number_format, None);
+        }
+
+        let (column, _) = authored_chart_parts(ChartKind::Bar, &data, "rId1").unwrap();
+        let horizontal = String::from_utf8(column)
+            .unwrap()
+            .replace(r#"<c:barDir val="col"/>"#, r#"<c:barDir val="bar"/>"#);
+        let (kind, read) = read_chart_data(horizontal.as_bytes()).unwrap();
+        assert_eq!(kind, None);
+        assert_eq!(read, read_data);
     }
 
     fn render_geometry(chart: &super::CT_Chart, bounds: Rect) -> super::Result<ChartGeometry> {
