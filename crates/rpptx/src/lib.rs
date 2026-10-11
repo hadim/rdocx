@@ -103,7 +103,9 @@ use rpptx_oxml::picture::{CT_Picture, MediaSource as PictureMediaSource, Picture
 use rpptx_oxml::placeholder::PlaceholderKey;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType};
 pub use rpptx_oxml::presentation::Section;
-use rpptx_oxml::presentation::{CT_Presentation, CT_SlideId, custom_show_relationship_ids};
+use rpptx_oxml::presentation::{
+    CT_Presentation, CT_SlideId, CT_SlideMasterId, custom_show_relationship_ids,
+};
 use rpptx_oxml::relmap::{
     relationship_ids, release_hyperlinks, rewrite_exact_rel_ids, rewrite_rel_ids,
 };
@@ -236,6 +238,8 @@ const THEME_OVERRIDE_RELATIONSHIP: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/themeOverride";
 const VML_DRAWING_RELATIONSHIP: &str =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing";
+const TAGS_RELATIONSHIP: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/tags";
 
 /// A result returned by the `rpptx` read facade.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -365,6 +369,12 @@ pub struct SlideImportOptions {
     /// as `(source index, destination index)` pairs. A jump to one of them
     /// is kept and lands on its counterpart.
     pub mapped_slides: Vec<(usize, usize)>,
+    /// Gives each copy its source layout, master and theme, as PowerPoint's
+    /// "Keep source formatting" does, instead of a layout of this
+    /// presentation. An equal layout or master already in this presentation
+    /// is reused, so importing several slides that share a source layout
+    /// adds that layout and its master once. It excludes `layout_index`.
+    pub keep_source_formatting: bool,
 }
 
 /// A non-fatal change made while importing slides.
@@ -2957,15 +2967,24 @@ impl Presentation {
             })
     }
 
-    /// Imports slides of another presentation, using this presentation's theme.
+    /// Imports slides of another presentation.
     ///
     /// The slides at `indexes` are copied in that order to consecutive
     /// positions starting at `options.insert_index`, or appended when that is
     /// `None`. Every copy takes the layout at `options.layout_index` when one
     /// is given, and otherwise the first layout of this presentation named
-    /// like its source slide's layout. The name match takes the first layout
-    /// of that name, so a copy inside one multi-master deck should pass the
-    /// source slide's own layout index.
+    /// like its source slide's layout, so it takes this presentation's theme.
+    /// The name match takes the first layout of that name, so a copy inside
+    /// one multi-master deck should pass the source slide's own layout index.
+    ///
+    /// With `options.keep_source_formatting`, every copy relates to its
+    /// source layout instead. A layout of this presentation equal to it is
+    /// reused, and otherwise the layout is copied and joins an equal master
+    /// of this presentation, or a copy of its source master and theme. Two
+    /// layouts or masters are equal when their bytes and relationship ids are
+    /// equal and their targets are equal by the same rule, a master's layout
+    /// list aside, so the copies of one import, or of an earlier one, are
+    /// reused rather than duplicated.
     ///
     /// Shapes, placeholders, the slide background, speaker notes, SmartArt
     /// graphs, charts with their embedded workbook, style, colour, user-shape
@@ -3006,13 +3025,19 @@ impl Presentation {
                 slide_count: self.slides.len(),
             });
         }
-        if let Some(layout_index) = options.layout_index
-            && layout_index >= self.layouts.len()
-        {
-            return Err(Error::UnknownLayoutIndex {
-                index: layout_index,
-                layout_count: self.layouts.len(),
-            });
+        if let Some(layout_index) = options.layout_index {
+            if options.keep_source_formatting {
+                return Err(invalid_presentation_mutation(
+                    OPERATION,
+                    "a destination layout and keep_source_formatting exclude each other".to_owned(),
+                ));
+            }
+            if layout_index >= self.layouts.len() {
+                return Err(Error::UnknownLayoutIndex {
+                    index: layout_index,
+                    layout_count: self.layouts.len(),
+                });
+            }
         }
         let mut jump_targets = HashMap::new();
         for &(source_index, destination_index) in &options.mapped_slides {
@@ -3048,16 +3073,26 @@ impl Presentation {
                 index,
                 slide_count: source.slides.len(),
             })?;
-            let layout_index = match options.layout_index {
-                Some(layout_index) => layout_index,
-                None => self.import_layout_index(source, index)?,
+            let layout = if options.keep_source_formatting {
+                let layout = source.slide_layout_index(index).ok_or_else(|| {
+                    invalid_presentation_mutation(
+                        OPERATION,
+                        "the source slide's layout is not reached by its masters".to_owned(),
+                    )
+                })?;
+                ImportLayout::Source(source.layouts[layout].part_name.clone())
+            } else {
+                ImportLayout::Destination(match options.layout_index {
+                    Some(layout_index) => layout_index,
+                    None => self.import_layout_index(source, index)?,
+                })
             };
             preflight_slide_import(&source.package, record)?;
             let slide_part = slide_namer.next_part_name("xml");
             copied_targets
                 .entry(record.part_name.clone())
                 .or_insert_with(|| slide_part.clone());
-            copies.push((index, layout_index, slide_part));
+            copies.push((index, layout, slide_part));
         }
         if copies.is_empty() {
             return Ok(SlideImport::default());
@@ -3073,8 +3108,16 @@ impl Presentation {
             staged.add_default_notes_master_in_place()?;
         }
         let mut diagnostics = Vec::new();
-        for (offset, (index, layout_index, slide_part)) in copies.iter().enumerate() {
-            let layout_part = staged.layouts[*layout_index].part_name.clone();
+        let mut adopted = HashMap::new();
+        for (offset, (index, layout, slide_part)) in copies.iter().enumerate() {
+            let layout_part = match layout {
+                ImportLayout::Destination(layout_index) => {
+                    staged.layouts[*layout_index].part_name.clone()
+                }
+                ImportLayout::Source(layout) => {
+                    staged.adopt_source_layout(&source.package, layout, &mut adopted)?
+                }
+            };
             staged.copy_slide_from_in_place(
                 &source.package,
                 source.slides[*index].clone(),
@@ -3511,6 +3554,238 @@ impl Presentation {
             },
         );
         Ok(inserted)
+    }
+
+    /// Returns this presentation's layout equal to the source layout, copying
+    /// the layout, and its master and theme when no equal master exists,
+    /// when none is.
+    ///
+    /// `adopted` maps the source layouts and masters of one import to their
+    /// destination parts. Equality is the conservative
+    /// [`formatting_parts_equal`].
+    fn adopt_source_layout(
+        &mut self,
+        source_package: &OpcPackage,
+        layout: &str,
+        adopted: &mut HashMap<String, String>,
+    ) -> Result<String> {
+        if let Some(existing) = adopted.get(layout) {
+            return Ok(existing.clone());
+        }
+        for record in &self.layouts {
+            if formatting_parts_equal(source_package, layout, &self.package, &record.part_name)? {
+                adopted.insert(layout.to_owned(), record.part_name.clone());
+                return Ok(record.part_name.clone());
+            }
+        }
+        let source_master = related_internal_part(source_package, layout, rel_types::SLIDE_MASTER)?
+            .ok_or_else(|| Error::MalformedPart {
+                part_name: layout.to_owned(),
+                message: "layout has no slide master relationship".to_owned(),
+            })?;
+        let master = self.adopt_source_master(source_package, &source_master, adopted)?;
+
+        let bytes = required_part(source_package, layout)?.to_vec();
+        let copied = CT_SlideLayout::from_xml(&bytes).map_err(|error| Error::MalformedPart {
+            part_name: layout.to_owned(),
+            message: error.to_string(),
+        })?;
+        let part_name = fresh_related_part_name(&self.package, layout);
+        self.package.set_part(&part_name, bytes);
+        self.package
+            .content_types
+            .add_override(&part_name, content_types::SLIDE_LAYOUT);
+        let relationships =
+            self.copy_formatting_relationships(source_package, layout, &part_name, Some(&master))?;
+        self.package.set_part_rels(&part_name, relationships);
+
+        let id = self.next_master_or_layout_id()?;
+        let relationship_id = self.package.get_or_create_part_rels(&master).add(
+            rel_types::SLIDE_LAYOUT,
+            &relative_part_target(&master, &part_name),
+        );
+        let malformed = |error: OxmlError| Error::MalformedPart {
+            part_name: master.clone(),
+            message: error.to_string(),
+        };
+        let master_xml = required_part(&self.package, &master)?;
+        let mut entries = master_layout_ids(master_xml).map_err(malformed)?.entries;
+        entries.push((id, relationship_id));
+        let master_xml = replace_master_layout_ids(master_xml, &entries).map_err(malformed)?;
+        self.package.set_part(&master, master_xml);
+        self.layouts.push(LayoutRecord {
+            part_name: part_name.clone(),
+            layout: copied,
+        });
+        adopted.insert(layout.to_owned(), part_name.clone());
+        Ok(part_name)
+    }
+
+    /// Returns this presentation's master equal to the source master, or a
+    /// copy of it, with a copy of its theme and none of its layouts.
+    fn adopt_source_master(
+        &mut self,
+        source_package: &OpcPackage,
+        master: &str,
+        adopted: &mut HashMap<String, String>,
+    ) -> Result<String> {
+        if let Some(existing) = adopted.get(master) {
+            return Ok(existing.clone());
+        }
+        for part_name in self.master_parts() {
+            if formatting_parts_equal(source_package, master, &self.package, &part_name)? {
+                adopted.insert(master.to_owned(), part_name.clone());
+                return Ok(part_name);
+            }
+        }
+        let malformed = |error: OxmlError| Error::MalformedPart {
+            part_name: master.to_owned(),
+            message: error.to_string(),
+        };
+        let bytes = replace_master_layout_ids(required_part(source_package, master)?, &[])
+            .map_err(malformed)?;
+        CT_SlideMaster::from_xml(&bytes).map_err(malformed)?;
+        let part_name = fresh_related_part_name(&self.package, master);
+        self.package.set_part(&part_name, bytes);
+        self.package
+            .content_types
+            .add_override(&part_name, content_types::SLIDE_MASTER);
+        let relationships =
+            self.copy_formatting_relationships(source_package, master, &part_name, None)?;
+        self.package.set_part_rels(&part_name, relationships);
+        let id = self.next_master_or_layout_id()?;
+        let relationship_id = self
+            .package
+            .get_or_create_part_rels(&self.presentation_part)
+            .add(
+                rel_types::SLIDE_MASTER,
+                &relative_part_target(&self.presentation_part, &part_name),
+            );
+        self.presentation
+            .slide_master_ids
+            .push(CT_SlideMasterId::new(id, relationship_id));
+        adopted.insert(master.to_owned(), part_name.clone());
+        Ok(part_name)
+    }
+
+    /// Copies the relationships of a source layout, or of a source master
+    /// when `master` is `None`, keeping their ids.
+    ///
+    /// A layout relates to `master`. A master drops its layouts, which
+    /// [`Self::adopt_source_layout`] adds one by one, and gets a copy of its
+    /// theme. Images go through the media store, tags and legacy drawings
+    /// are copied, and any other internal relationship is refused.
+    fn copy_formatting_relationships(
+        &mut self,
+        source_package: &OpcPackage,
+        source_part: &str,
+        destination_part: &str,
+        master: Option<&str>,
+    ) -> Result<Relationships> {
+        let mut relationships = Relationships::new();
+        let mut copies = HashMap::new();
+        let source_relationships = source_package
+            .get_part_rels(source_part)
+            .cloned()
+            .unwrap_or_default();
+        for relationship in &source_relationships.items {
+            let target = if relationship_is_external(relationship) {
+                relationship.target.clone()
+            } else {
+                let resolved = OpcPackage::resolve_rel_target(source_part, &relationship.target);
+                let copied = match (relationship.rel_type.as_str(), master) {
+                    (rel_types::SLIDE_LAYOUT, None) => continue,
+                    (rel_types::SLIDE_MASTER, Some(master)) => master.to_owned(),
+                    (rel_types::IMAGE, _) => {
+                        preflight_internal_transfer_image(
+                            source_package,
+                            &resolved,
+                            "import slide",
+                        )?;
+                        let bytes = required_part(source_package, &resolved)?.to_vec();
+                        self.media_store
+                            .insert(&mut self.package, &bytes, &resolved)
+                    }
+                    (rel_type @ (TAGS_RELATIONSHIP | VML_DRAWING_RELATIONSHIP), _)
+                    | (rel_type @ rel_types::THEME, None) => {
+                        preflight_carried_part_graph(
+                            source_package,
+                            &resolved,
+                            rel_type,
+                            &mut HashSet::new(),
+                        )?;
+                        duplicate_part_graph(
+                            source_package,
+                            &mut self.package,
+                            &mut self.media_store,
+                            &resolved,
+                            &mut copies,
+                        )?
+                    }
+                    (rel_type, _) => {
+                        return Err(invalid_presentation_mutation(
+                            "import slide",
+                            format!(
+                                "{source_part} has an internal relationship of type {rel_type}, which is not carried"
+                            ),
+                        ));
+                    }
+                };
+                relative_part_target(destination_part, &copied)
+            };
+            relationships.add_with_id(&relationship.id, &relationship.rel_type, &target);
+            if let Some(inserted) = relationships.items.last_mut() {
+                inserted.target_mode = relationship.target_mode.clone();
+            }
+        }
+        Ok(relationships)
+    }
+
+    /// The master parts that the presentation's master list names.
+    fn master_parts(&self) -> Vec<String> {
+        let relationships = self.package.get_part_rels(&self.presentation_part);
+        self.presentation
+            .slide_master_ids
+            .iter()
+            .filter_map(|master| {
+                relationships
+                    .and_then(|relationships| relationships.get_by_id(&master.relationship_id))
+                    .filter(|relationship| !relationship_is_external(relationship))
+                    .map(|relationship| {
+                        OpcPackage::resolve_rel_target(
+                            &self.presentation_part,
+                            &relationship.target,
+                        )
+                    })
+            })
+            .collect()
+    }
+
+    /// Returns an id above every master and layout id, which share one space
+    /// starting at 2147483648.
+    fn next_master_or_layout_id(&self) -> Result<u32> {
+        let mut highest = 2_147_483_647_u32;
+        for master in &self.presentation.slide_master_ids {
+            highest = highest.max(master.id.unwrap_or_default());
+        }
+        for part_name in self.master_parts() {
+            let ids =
+                master_layout_ids(required_part(&self.package, &part_name)?).map_err(|error| {
+                    Error::MalformedPart {
+                        part_name: part_name.clone(),
+                        message: error.to_string(),
+                    }
+                })?;
+            for (id, _) in ids.entries {
+                highest = highest.max(id);
+            }
+        }
+        highest.checked_add(1).ok_or_else(|| {
+            invalid_presentation_mutation(
+                "import slide",
+                "master and layout ids are exhausted".to_owned(),
+            )
+        })
     }
 
     /// Merges the authors of imported comments and returns the id renames.
@@ -5967,6 +6242,237 @@ struct RelationshipScopeTargets<'a> {
     /// Copies chart, embedded-object and legacy-drawing graphs instead of
     /// sharing their parts.
     copy_part_graphs: bool,
+}
+
+/// The layout one imported slide relates to.
+enum ImportLayout {
+    /// A layout of the destination, by index.
+    Destination(usize),
+    /// The source slide's own layout part, adopted with its master and theme.
+    Source(String),
+}
+
+/// Returns whether a source layout or master equals a destination one, so
+/// that a keep-source-formatting import may reuse it.
+///
+/// Two parts are equal when their bytes are equal and they own the same
+/// relationship ids, with the same types and external targets, and internal
+/// targets equal by this same rule. A master is compared without its
+/// `p:sldLayoutIdLst` and its layout relationships, since a copied master
+/// only lists the layouts imported so far. The rule is deliberately strict.
+/// An equal-looking part saved by another producer, or with other
+/// relationship ids, is not equal and gets copied.
+fn formatting_parts_equal(
+    source_package: &OpcPackage,
+    source_part: &str,
+    destination_package: &OpcPackage,
+    destination_part: &str,
+) -> Result<bool> {
+    fn equal(
+        source_package: &OpcPackage,
+        source_part: &str,
+        destination_package: &OpcPackage,
+        destination_part: &str,
+        visited: &mut HashSet<(String, String)>,
+    ) -> Result<bool> {
+        if !visited.insert((source_part.to_owned(), destination_part.to_owned())) {
+            return Ok(true);
+        }
+        let master = source_package.content_types.content_type_for(source_part)
+            == Some(content_types::SLIDE_MASTER);
+        let (Some(source_bytes), Some(destination_bytes)) = (
+            source_package.get_part(source_part),
+            destination_package.get_part(destination_part),
+        ) else {
+            return Ok(false);
+        };
+        let bytes_equal = if master {
+            let strip = |part: &str, bytes: &[u8]| {
+                replace_master_layout_ids(bytes, &[]).map_err(|error| Error::MalformedPart {
+                    part_name: part.to_owned(),
+                    message: error.to_string(),
+                })
+            };
+            strip(source_part, source_bytes)? == strip(destination_part, destination_bytes)?
+        } else {
+            source_bytes == destination_bytes
+        };
+        if !bytes_equal {
+            return Ok(false);
+        }
+        let relationships = |package: &OpcPackage, part: &str| {
+            let mut items = package
+                .get_part_rels(part)
+                .map(|relationships| relationships.items.clone())
+                .unwrap_or_default();
+            items.retain(|relationship| {
+                !(master && relationship.rel_type == rel_types::SLIDE_LAYOUT)
+            });
+            items.sort_by(|left, right| left.id.cmp(&right.id));
+            items
+        };
+        let source_relationships = relationships(source_package, source_part);
+        let destination_relationships = relationships(destination_package, destination_part);
+        if source_relationships.len() != destination_relationships.len() {
+            return Ok(false);
+        }
+        for (left, right) in source_relationships.iter().zip(&destination_relationships) {
+            if left.id != right.id
+                || left.rel_type != right.rel_type
+                || relationship_is_external(left) != relationship_is_external(right)
+            {
+                return Ok(false);
+            }
+            if relationship_is_external(left) {
+                if left.target != right.target {
+                    return Ok(false);
+                }
+            } else if !equal(
+                source_package,
+                &OpcPackage::resolve_rel_target(source_part, &left.target),
+                destination_package,
+                &OpcPackage::resolve_rel_target(destination_part, &right.target),
+                visited,
+            )? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+    equal(
+        source_package,
+        source_part,
+        destination_package,
+        destination_part,
+        &mut HashSet::new(),
+    )
+}
+
+/// The `p:sldLayoutIdLst` of one slide master.
+struct MasterLayoutIds {
+    /// The byte range of the list, or the empty range after `p:clrMap` where
+    /// a list belongs when the master has none.
+    range: std::ops::Range<usize>,
+    /// The `(id, relationship id)` of each `p:sldLayoutId`.
+    entries: Vec<(u32, String)>,
+}
+
+fn master_layout_ids(xml: &[u8]) -> std::result::Result<MasterLayoutIds, OxmlError> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut list_start = None;
+    let mut list = None;
+    let mut after_color_map = None;
+    let mut entries = Vec::new();
+    loop {
+        let start_offset = reader.buffer_position() as usize;
+        let (is_p, event) = {
+            let (namespace, event) = reader.read_resolved_event_into(&mut buffer)?;
+            (xml_is(&namespace, P_NS), event.into_owned())
+        };
+        let end_offset = reader.buffer_position() as usize;
+        match event {
+            XmlEvent::Start(start) => {
+                depth += 1;
+                if depth == 2 && is_p && start.local_name().as_ref() == b"sldLayoutIdLst" {
+                    list_start = Some(start_offset);
+                }
+            }
+            XmlEvent::Empty(start) => {
+                let local = start.local_name();
+                if depth == 1 && is_p && local.as_ref() == b"sldLayoutIdLst" {
+                    list = Some(start_offset..end_offset);
+                } else if depth == 1 && is_p && local.as_ref() == b"clrMap" {
+                    after_color_map = Some(end_offset);
+                } else if depth == 2
+                    && list_start.is_some()
+                    && is_p
+                    && local.as_ref() == b"sldLayoutId"
+                {
+                    let mut id = None;
+                    let mut relationship_id = None;
+                    for attribute in start.attributes().with_checks(false) {
+                        let attribute = attribute?;
+                        let (namespace, name) = reader.resolver().resolve_attribute(attribute.key);
+                        let value = attribute
+                            .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())?
+                            .into_owned();
+                        if name.as_ref() != b"id" {
+                            continue;
+                        }
+                        if xml_is(&namespace, R_NS) {
+                            relationship_id = Some(value);
+                        } else if matches!(namespace, XmlResolveResult::Unbound) {
+                            id = value.parse::<u32>().ok();
+                        }
+                    }
+                    if let (Some(id), Some(relationship_id)) = (id, relationship_id) {
+                        entries.push((id, relationship_id));
+                    }
+                }
+            }
+            XmlEvent::End(end) => {
+                if depth == 2 && is_p && end.local_name().as_ref() == b"sldLayoutIdLst" {
+                    list = list_start.take().map(|start| start..end_offset);
+                } else if depth == 2 && is_p && end.local_name().as_ref() == b"clrMap" {
+                    after_color_map = Some(end_offset);
+                }
+                depth = depth.saturating_sub(1);
+            }
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let range = match (list, after_color_map) {
+        (Some(range), _) => range,
+        (None, Some(offset)) => offset..offset,
+        (None, None) => return Err(OxmlError::MissingElement("p:clrMap".to_owned())),
+    };
+    Ok(MasterLayoutIds { range, entries })
+}
+
+/// Replaces the layout list of a slide master with `entries`, or removes it
+/// when `entries` is empty.
+fn replace_master_layout_ids(
+    xml: &[u8],
+    entries: &[(u32, String)],
+) -> std::result::Result<Vec<u8>, OxmlError> {
+    let MasterLayoutIds { range, .. } = master_layout_ids(xml)?;
+    let mut replaced = xml[..range.start].to_vec();
+    if !entries.is_empty() {
+        // The root of a master written by PowerPoint binds both prefixes,
+        // and any other root gets them declared on the list itself.
+        let root_start = xml
+            .windows(2)
+            .position(|pair| pair[0] == b'<' && pair[1].is_ascii_alphabetic())
+            .unwrap_or_default();
+        let root_end = xml[root_start..]
+            .iter()
+            .position(|byte| *byte == b'>')
+            .map_or(xml.len(), |end| root_start + end + 1);
+        let root = &xml[root_start..root_end];
+        let mut declarations = String::new();
+        for (prefix, namespace) in [("p", P_NS), ("r", R_NS)] {
+            let declaration = format!(" xmlns:{prefix}=\"{namespace}\"");
+            if !root
+                .windows(declaration.len())
+                .any(|window| window == declaration.as_bytes())
+            {
+                declarations.push_str(&declaration);
+            }
+        }
+        replaced.extend_from_slice(format!("<p:sldLayoutIdLst{declarations}>").as_bytes());
+        for (id, relationship_id) in entries {
+            replaced.extend_from_slice(
+                format!(r#"<p:sldLayoutId id="{id}" r:id="{relationship_id}"/>"#).as_bytes(),
+            );
+        }
+        replaced.extend_from_slice(b"</p:sldLayoutIdLst>");
+    }
+    replaced.extend_from_slice(&xml[range.end..]);
+    Ok(replaced)
 }
 
 /// What a slide import adds to one slide copy.

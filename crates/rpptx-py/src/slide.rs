@@ -606,13 +606,18 @@ impl PySlideCollection {
     /// `Presentation::import_slides`. A jump to another slide is kept when
     /// that slide belongs to this presentation, and otherwise does nothing
     /// in the copy and raises a `UserWarning`.
-    #[pyo3(signature = (slide, layout=None, index=None))]
+    ///
+    /// `keep_source_formatting` gives the copy its source layout, master and
+    /// theme instead, as PowerPoint's "Keep source formatting" does, reusing
+    /// an equal layout or master of this presentation. It excludes `layout`.
+    #[pyo3(signature = (slide, layout=None, index=None, *, keep_source_formatting=false))]
     fn import_slide(
         &self,
         py: Python<'_>,
         slide: &Bound<'_, PyAny>,
         layout: Option<&Bound<'_, PyAny>>,
         index: Option<isize>,
+        keep_source_formatting: bool,
     ) -> PyResult<Py<PySlide>> {
         let len = self.len(py)?;
         let slide = slide.extract::<PyRef<'_, PySlide>>()?;
@@ -649,6 +654,7 @@ impl PySlideCollection {
         let mut options = rpptx::SlideImportOptions {
             layout_index,
             insert_index: Some(inserted),
+            keep_source_formatting,
             ..rpptx::SlideImportOptions::default()
         };
         let (path, diagnostics) = {
@@ -657,8 +663,10 @@ impl PySlideCollection {
                 // Every slide of this presentation is its own counterpart,
                 // so the copy keeps its jumps.
                 let copy = presentation.inner.clone();
-                options.layout_index =
-                    layout_index.or_else(|| copy.slide_layout_index(source_index));
+                if !keep_source_formatting {
+                    options.layout_index =
+                        layout_index.or_else(|| copy.slide_layout_index(source_index));
+                }
                 options.mapped_slides = (0..copy.len()).map(|index| (index, index)).collect();
                 presentation
                     .inner

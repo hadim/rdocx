@@ -3753,6 +3753,45 @@ def test_import_slide_carries_pictures_links_notes_and_background_from_another_d
     assert chart.part.chart_workbook.xlsx_part is not None
 
 
+def test_import_slide_keeps_source_formatting_once_per_source_layout(tmp_path):
+    import rpptx
+
+    def build_source(deck):
+        from pptx.util import Pt
+
+        for text in ["One", "Two"]:
+            slide = deck.slides.add_slide(deck.slide_layouts[5])
+            slide.shapes.title.text = text
+        title = deck.slide_layouts[5].placeholders[0]
+        title.left, title.top, title.width, title.height = Pt(20), Pt(40), Pt(300), Pt(100)
+
+    source = rpptx.Presentation(_python_pptx_deck(tmp_path / "source.pptx", build_source))
+    prs = rpptx.Presentation(_python_pptx_deck(tmp_path / "target.pptx", lambda deck: None))
+    layouts = len(prs.slide_layouts)
+    with pytest.raises(rpptx.RpptxError, match="exclude each other"):
+        prs.slides.import_slide(
+            source.slides[0], layout=prs.slide_layouts[0], keep_source_formatting=True
+        )
+    prs.slides.import_slide(source.slides[0], keep_source_formatting=True)
+    prs.slides.import_slide(source.slides[1], keep_source_formatting=True)
+    prs.slides.import_slide(source.slides[1])
+    first, second, plain = prs.slides
+    assert len(prs.slide_layouts) == layouts + 1
+    assert first.slide_layout == second.slide_layout == prs.slide_layouts[layouts]
+    assert plain.slide_layout == prs.slide_layouts[5]
+    output = tmp_path / "kept.pptx"
+    prs.save(output)
+
+    # Only the layout differs, so it joins this presentation's equal master.
+    pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
+    oracle = pptx.Presentation(output)
+    assert len(oracle.slide_masters) == 1
+    assert len(oracle.slide_masters[0].slide_layouts) == layouts + 1
+    kept_title = oracle.slides[0].slide_layout.placeholders[0]
+    assert (kept_title.left, kept_title.top) == (254000, 508000)
+    assert oracle.slides[2].slide_layout.placeholders[0].left != kept_title.left
+
+
 def test_import_slide_warns_when_it_drops_a_slide_jump(tmp_path):
     import warnings
 

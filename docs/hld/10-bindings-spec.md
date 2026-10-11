@@ -491,7 +491,8 @@ an `IndexError`. A slide of the same presentation is imported from a snapshot
 and keeps its own layout unless `layout` is given. Each slide of the
 presentation maps to itself, so such a copy keeps its slide jumps. Every
 `SlideImportDiagnostic` of the native import, such as a dropped slide jump,
-raises a `UserWarning` after the import is committed.
+raises a `UserWarning` after the import is committed. The keyword-only
+`keep_source_formatting=False` is the native option of that name.
 `SlideCollection.duplicate(slide)` copies a slide of the same presentation,
 with its speaker notes, to the position right after it through the native
 staged `duplicate_slide`, advances the revision once, and returns the new slide

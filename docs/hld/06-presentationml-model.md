@@ -335,6 +335,23 @@ relationship, such as `ppaction://customshow`, are carried unchanged and may
 name a custom show the destination lacks. A caller can rebuild a refused slide
 in the destination deck using supported shape operations.
 
+`options.keep_source_formatting` gives each copy its source layout, master and
+theme, like PowerPoint's "Keep source formatting", and excludes
+`options.layout_index`. A destination layout equal to the source layout is
+reused. Otherwise the layout is copied under a fresh name and joins a
+destination master equal to the source master, or a copy of that master with
+a copy of its theme and only the layouts imported so far. The copied master
+takes a fresh `p:sldMasterId` and each copied layout a fresh `p:sldLayoutId`,
+from the id space they share above 2147483647. Equality is deliberately
+strict. Two parts are equal when their bytes are equal and they own the same
+relationship ids, with the same types and external targets, and internal
+targets equal by the same rule. A master is compared without its
+`p:sldLayoutIdLst` and its layout relationships, so a master copied by an
+earlier import still matches its source. An equal-looking part written by
+another producer or with other relationship ids is copied, never merged. A
+layout or master may relate to images, tags and legacy drawings, a master to
+its theme, and any other internal relationship is refused.
+
 Duplication, transfer and import rewrite each copied notes or diagram part
 with one exact pass over its complete relationship map, including the
 collapsed notes back-relationship. A second

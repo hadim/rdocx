@@ -301,6 +301,9 @@ def exercise_rpptx_types(path: Path) -> None:
     imported: Slide = presentation.slides.import_slide(
         presentation.slides[0], layout=presentation.slide_layouts[0], index=0
     )
+    kept: Slide = presentation.slides.import_slide(
+        presentation.slides[0], keep_source_formatting=True
+    )
     presentation.slides.remove(presentation.slides[0])
     presentation.save(path)
     (

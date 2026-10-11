@@ -16526,6 +16526,207 @@ fn import_slides_keeps_jumps_to_copied_or_mapped_slides_and_drops_the_others() {
     assert_eq!(jump_targets(&package, &parts[3]), [parts[1].clone()]);
 }
 
+/// Resolves one slide of a saved deck through its own layout, master and
+/// theme, as rendering does, and returns the title's bounds and first run.
+fn resolved_title(bytes: &[u8], slide_index: usize) -> (Rect, rpptx_layout::ResolvedRunStyle) {
+    let package = open_opc(bytes, "resolved title");
+    let presentation_part = package.main_document_part().unwrap();
+    let presentation =
+        CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+    let slide_part = saved_slide_parts(&package)[slide_index].clone();
+    let layout_part = related_part(&package, &slide_part, rel_types::SLIDE_LAYOUT);
+    let master_part = related_part(&package, &layout_part, rel_types::SLIDE_MASTER);
+    let theme_part = related_part(&package, &master_part, rel_types::THEME);
+    let slide = CT_Slide::from_xml(package.get_part(&slide_part).unwrap()).unwrap();
+    let layout = CT_SlideLayout::from_xml(package.get_part(&layout_part).unwrap()).unwrap();
+    let master = CT_SlideMaster::from_xml(package.get_part(&master_part).unwrap()).unwrap();
+    let theme = CT_OfficeStyleSheet::from_xml(package.get_part(&theme_part).unwrap()).unwrap();
+    let default_text_style = presentation.default_text_style.unwrap_or_default();
+    let context = ResolveCtx::new(
+        &theme,
+        effective_visual_color_map(&master, &layout, &slide),
+        &master,
+        &layout,
+        &slide,
+        &default_text_style,
+    );
+    let resolved = context.resolve_slide((720.0, 540.0)).unwrap();
+    let title = resolved
+        .shapes
+        .iter()
+        .find(|shape| matches!(&shape.content, ResolvedContent::Text(body) if resolved_text(body) == "Kept"))
+        .expect("the title resolves");
+    let ResolvedContent::Text(body) = &title.content else {
+        unreachable!()
+    };
+    let style = body
+        .paragraphs
+        .iter()
+        .flat_map(|paragraph| &paragraph.runs)
+        .find_map(|run| match run {
+            ResolvedTextRun::Text { style, .. } => Some(style.clone()),
+            _ => None,
+        })
+        .unwrap();
+    (title.bounds, style)
+}
+
+#[test]
+fn import_slides_keeps_source_formatting_with_one_master_per_source_layout() {
+    // A source deck with its own heading font, text colour and title geometry
+    // on the "Title Only" layout.
+    let mut source = Presentation::new().unwrap();
+    for _ in 0..3 {
+        let index = source.len();
+        source.add_slide(5).unwrap();
+        source
+            .slide_mut(index)
+            .unwrap()
+            .shape_mut(0)
+            .unwrap()
+            .set_text("Kept")
+            .unwrap();
+    }
+    let mut package = open_opc(&source.to_bytes().unwrap(), "source formatting");
+    let edit = |package: &mut OpcPackage, part: &str, from: &str, to: &str| {
+        let xml = String::from_utf8(package.get_part(part).unwrap().to_vec()).unwrap();
+        assert!(xml.contains(from), "{part}: {from}");
+        package.set_part(part, xml.replacen(from, to, 1).into_bytes());
+    };
+    edit(
+        &mut package,
+        "/ppt/theme/theme1.xml",
+        r#"<a:majorFont><a:latin typeface="Calibri""#,
+        r#"<a:majorFont><a:latin typeface="Georgia""#,
+    );
+    edit(
+        &mut package,
+        "/ppt/theme/theme1.xml",
+        r#"<a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1>"#,
+        r#"<a:dk1><a:srgbClr val="7F1F1F"/></a:dk1>"#,
+    );
+    let layout_part = related_part(&package, "/ppt/slides/slide1.xml", rel_types::SLIDE_LAYOUT);
+    edit(
+        &mut package,
+        &layout_part,
+        "<p:spPr/>",
+        r#"<p:spPr><a:xfrm><a:off x="254000" y="508000"/><a:ext cx="3810000" cy="1270000"/></a:xfrm></p:spPr>"#,
+    );
+    let source_bytes = package_bytes(package);
+    let source = Presentation::from_bytes(&source_bytes).unwrap();
+    let keep = SlideImportOptions {
+        keep_source_formatting: true,
+        ..SlideImportOptions::default()
+    };
+    let mut destination = Presentation::new().unwrap();
+    destination.add_slide(0).unwrap();
+    let layouts = destination.layout_count();
+
+    assert!(matches!(
+        destination.import_slides(
+            &source,
+            &[0],
+            &SlideImportOptions {
+                layout_index: Some(0),
+                ..keep.clone()
+            }
+        ),
+        Err(Error::InvalidPresentationMutation { .. })
+    ));
+    let import = destination.import_slides(&source, &[0, 1], &keep).unwrap();
+    assert_eq!(import.indexes, [1, 2]);
+    destination.import_slides(&source, &[2], &keep).unwrap();
+    destination
+        .import_slides(&source, &[0], &SlideImportOptions::default())
+        .unwrap();
+
+    assert_eq!(destination.layout_count(), layouts + 1);
+    let bytes = destination.to_bytes().unwrap();
+    let package = saved_valid_package(&destination, "kept source formatting");
+    let masters = |package: &OpcPackage| {
+        package
+            .parts
+            .keys()
+            .filter(|part| part.starts_with("/ppt/slideMasters/"))
+            .count()
+    };
+    assert_eq!(masters(&package), 2);
+    let parts = saved_slide_parts(&package);
+    let kept_layout = related_part(&package, &parts[1], rel_types::SLIDE_LAYOUT);
+    for part in &parts[2..4] {
+        assert_eq!(
+            related_part(&package, part, rel_types::SLIDE_LAYOUT),
+            kept_layout
+        );
+    }
+    let kept_master = related_part(&package, &kept_layout, rel_types::SLIDE_MASTER);
+    let master_xml = String::from_utf8(package.get_part(&kept_master).unwrap().to_vec()).unwrap();
+    let layout_relationship = package
+        .get_part_rels(&kept_master)
+        .unwrap()
+        .get_by_type(rel_types::SLIDE_LAYOUT)
+        .unwrap();
+    assert_eq!(
+        master_xml.matches("<p:sldLayoutId ").count(),
+        1,
+        "{master_xml}"
+    );
+    assert!(master_xml.contains(&format!(r#"r:id="{}""#, layout_relationship.id)));
+    let kept_theme = related_part(&package, &kept_master, rel_types::THEME);
+    assert_ne!(kept_theme, "/ppt/theme/theme1.xml");
+    assert_eq!(
+        package.content_types.content_type_for(&kept_theme),
+        Some(content_types::THEME)
+    );
+    let presentation_part = package.main_document_part().unwrap();
+    let model = CT_Presentation::from_xml(package.get_part(&presentation_part).unwrap()).unwrap();
+    assert_eq!(model.slide_master_ids.len(), 2);
+    let master_id = model.slide_master_ids[1].id.unwrap();
+    let layout_id = master_xml
+        .split("<p:sldLayoutId id=\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').next())
+        .unwrap()
+        .parse::<u32>()
+        .unwrap();
+    assert!(master_id > 2_147_483_648 && layout_id > master_id);
+    assert_eq!(
+        related_part(&package, &parts[4], rel_types::SLIDE_LAYOUT),
+        "/ppt/slideLayouts/slideLayout6.xml",
+        "the default import keeps the destination layout"
+    );
+
+    let (source_bounds, source_style) = resolved_title(&source_bytes, 0);
+    let (kept_bounds, kept_style) = resolved_title(&bytes, 1);
+    let (plain_bounds, plain_style) = resolved_title(&bytes, 4);
+    assert_eq!(kept_style.latin_typeface.as_deref(), Some("Georgia"));
+    assert_eq!(kept_style, source_style);
+    assert_eq!(kept_bounds, source_bounds);
+    assert_eq!(
+        kept_bounds,
+        Rect {
+            x: 20.0,
+            y: 40.0,
+            width: 300.0,
+            height: 100.0
+        }
+    );
+    assert_ne!(plain_style.latin_typeface, kept_style.latin_typeface);
+    assert_ne!(plain_style.fill, kept_style.fill);
+    assert_ne!(plain_bounds, kept_bounds);
+
+    // A source whose formatting this presentation already has adds nothing.
+    let plain = Presentation::new().unwrap();
+    let mut plain_source = plain.clone();
+    plain_source.add_slide(5).unwrap();
+    let mut reused = plain;
+    reused.import_slides(&plain_source, &[0], &keep).unwrap();
+    let package = saved_valid_package(&reused, "reused formatting");
+    assert_eq!(masters(&package), 1);
+    assert_eq!(reused.layout_count(), layouts);
+    assert_eq!(reused.slide_layout_index(0), Some(5));
+}
+
 fn png_header(width: u32, height: u32) -> Vec<u8> {
     let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
     bytes.extend_from_slice(&width.to_be_bytes());
