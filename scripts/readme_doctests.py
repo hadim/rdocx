@@ -393,7 +393,7 @@ ARCHIVE_REMEASUREMENT_DATES = {
 MEASUREMENT_PLATFORM = "macOS 26.6.2, Apple M5 Max, arm64"
 ARCHIVE_COMPRESSION_TOLERANCE_BYTES = 64
 ARCHIVE_MEASUREMENTS = {
-    "oxml-chart": (102_059, 659_431, 6),
+    "oxml-chart": (102_988, 664_457, 6),
     "oxml-cli-support": (8_612, 30_840, 6),
     "oxml-core": (21_795, 104_404, 15),
     "oxml-drawing": (182_040, 1_226_103, 24),
@@ -402,14 +402,14 @@ ARCHIVE_MEASUREMENTS = {
     "oxml-opc": (99_466, 385_350, 12),
     "oxml-pdf": (73_928, 339_612, 14),
     "oxml-sml": (12_509, 49_803, 6),
-    "rdocx": (3_524_430, 50_763_043, 37),
+    "rdocx": (3_525_181, 50_766_319, 37),
     "rdocx-cli": (72_988, 326_487, 8),
     "rdocx-html": (18_558, 72_244, 11),
     "rdocx-layout": (311_019, 1_681_790, 15),
     "rdocx-opc": (3_654, 9_668, 6),
     "rdocx-oxml": (451_820, 2_806_194, 32),
     "rdocx-pdf": (8_115, 26_758, 6),
-    "rpptx": (463_749, 2_402_551, 16),
+    "rpptx": (464_305, 2_405_777, 16),
     "rpptx-chart": (6_647, 21_136, 6),
     "rpptx-cli": (40_886, 179_264, 8),
     "rpptx-layout": (83_284, 483_107, 11),
