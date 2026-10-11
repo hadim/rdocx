@@ -2562,6 +2562,49 @@ def test_header_footer_and_story_text_edit_the_section_stories():
     assert _story_paragraph_texts(reopened, "body") == ["body"]
 
 
+@pytest.mark.parametrize(
+    ("separator", "expected"),
+    [("add_tab", "left\tright"), ("add_break", "left\nright")],
+)
+def test_story_items_keep_run_tabs_and_breaks_in_the_body_header_and_footer(
+    separator, expected
+):
+    docx = pytest.importorskip("docx")
+    import rdocx
+
+    source = docx.Document()
+    section = source.sections[0]
+    for paragraph in (
+        source.add_paragraph(),
+        section.header.paragraphs[0],
+        section.footer.paragraphs[0],
+    ):
+        paragraph.add_run("left")
+        getattr(paragraph.add_run(), separator)()
+        paragraph.add_run("right")
+    buffer = io.BytesIO()
+    source.save(buffer)
+
+    document = rdocx.Document.from_bytes(buffer.getvalue())
+    kinds = ("body", "header", "footer")
+    for kind in kinds:
+        assert _story_paragraph_texts(document, kind) == [expected], kind
+
+    # The new text replaces the tab or the break too, and a tab or a line
+    # feed in it reads back as written.
+    for value in ("new", "a\tb\nc"):
+        for kind in kinds:
+            item = next(
+                item
+                for item in document.story_items
+                if item.story.kind == kind and item.kind == "paragraph"
+            )
+            document.set_story_text(item, value)
+        for kind in kinds:
+            assert _story_paragraph_texts(document, kind) == [value], kind
+        assert document.paragraphs[0].text == value
+
+
 def test_set_story_text_rejects_a_story_that_is_not_in_the_document():
     import rdocx
 
@@ -2637,7 +2680,7 @@ def test_footer_with_text_tab_and_page_fields_is_built_for_one_section():
         "First section.",
         "Second section.",
     ]
-    assert _story_paragraph_texts(document, "footer") == ["ConfidentialPage 1 of 1"]
+    assert _story_paragraph_texts(document, "footer") == ["Confidential\tPage 1 of 1"]
 
     report = document.update_layout_backed_fields()
     assert (report.page_fields, report.num_pages_fields) == (0, 0)
@@ -2801,7 +2844,7 @@ def test_complex_field_nested_snapshots_keep_links_and_read_handles():
     assert all(item.revision == snapshots[0].revision for item in snapshots)
     links = document.hyperlinks
     assert [(link.text, link.url, link.anchor) for link in links] == [
-        ("7yes", "https://example.test/field-owner", None), ("neighbor", None, "neighbor")]
+        ("yes", "https://example.test/field-owner", None), ("neighbor", None, "neighbor")]
     assert links[0].relationship_id == relationship_id
     assert document.hyperlinks == links
     assert document.story_items == snapshots
