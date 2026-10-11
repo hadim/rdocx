@@ -854,3 +854,27 @@ Issues264 and281. All twenty-two PRs remain included. The five new acceptance
 owners F-X214 throughF-X218 are registered in the backlog and sprint plan.
 Their designs and resource/dependency routing precede implementation. Existing
 completed records and the S92 carryovers retain their status.
+
+## Current verification checkpoint, 2026-10-11 18:59UTC
+
+F-X210 has actual fresh paired-wheel installation, both installed diagnostic
+companion controls and four strict typing/stub gates passing. Two fixture
+setup failures remain preserved, with independently reviewed test-only
+corrections and unchanged production wheels. The public conformance selector
+now passes with its unchanged300-second limit after exact consumer build
+warmup. Its native integration qualification is366 passes and8 historical
+ignores. Genuine font paint, joint checklist and remaining scoped gates are due.
+
+F-X206 caller-wrapper repair has clean independent pass72. The actual
+DrawingML suite passes174 with2 historical ignores, the shape reread control
+passes, and scoped check/Clippy pass. The formerly failing Word/PPT
+reading-order/raster control now passes. Chart acceptance still stops at the
+old package hash and requires exact intentional-name attribution before its
+pixel assertions. No expected hash was changed.
+
+F-X207 unused shared opaque-owner omission is resolved by independent pass5
+with29 focused controls passing. Actual inherited Clippy failures remain
+under a separate narrow remediation. Native paint and installed acceptance
+remain due. F-X200 exact source and two-key hash proposals are prepared, with
+its joint checklist gate and reviewed completion lifecycle still outstanding.
+All four stories remain in progress. No final sprint gate is claimed.
