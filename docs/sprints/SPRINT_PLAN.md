@@ -2289,12 +2289,14 @@ requires a separate scope decision. Issue281 remains open for F-184 at S96.
 No spreadsheet implementation or publication is authorized by this intake.
 S90's intake freeze remains its completed delivery boundary.
 
-**Frozen contribution intake**: the user ended rolling S91 intake on
-2026-10-10. The final authenticated inventory is nineteen PRs and twenty-six
-included issues at 15:05:38 UTC, with Issues264 and281 excluded. Stop
-searching for new records and updated heads. Complete all twenty-two stories
-and their existing full acceptance, including the S90 carryovers. Later
-contributions do not expand this sprint.
+**Current contribution intake**: rolling S91 intake is open at the user's
+latest instruction. The 2026-10-11 10:37:49 UTC refresh contains twenty-one
+open PRs and twenty-eight included open issues, excluding discussion Issues264
+and281. No new records or advanced PR heads were found since09:50:39 UTC.
+All included records have acceptance owners in the current resolution map.
+Fold later contributions into their existing owner where applicable, preserving
+complete acceptance and avoiding duplicate work. The earlier2026-10-10 freeze
+is superseded. Bibliography F-X192 and navigation F-283 remain parked in S92.
 
 Reuse each already assessed immutable contribution once, across its mapped
 owners. Retain contributor attribution, linked issues, exact accepted heads
@@ -2303,10 +2305,12 @@ approved designs. An integrated source change still requires its affected
 feature gate and independent review. Final verification and sprint review
 must cover the actual completed integrated result before close.
 
-**Sprint gate**: full pinned Word bibliography and consistent navigation,
-HTML mark inheritance, editable Python table text and signed indentation,
-matching caller-font layout and renders including variable bold/italic,
-content-aware empty-paragraph diagnostics and consistent Python colours.
+**Sprint gate**: complete all twenty-one active contribution-repair stories
+and their included issue and PR acceptance. This includes HTML mark inheritance,
+editable Python table text and signed indentation, matching caller-font layout
+and renders including variable bold/italic, content-aware empty-paragraph
+diagnostics, consistent Python colours and the bounded TOC entry repair.
+Bibliography F-X192 and navigation F-283 retain their full contracts in S92.
 Verify installed bindings, round trips, native rendering controls and declared
 hash deltas. Run the full integrated gate and sprint review once over the
 completed result. Reconcile GitHub records only at verified sprint close.

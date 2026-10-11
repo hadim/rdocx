@@ -714,6 +714,17 @@ Issues264 and281 remain excluded and must remain open at sprint close.
 F-X195 public documentation, rdocx-oxml Clippy and full tests, and
 oxml-py-support full tests passed on the guarded current source. The exact
 Rust1.93.0 check stopped before compilation because rustup could not write
-its normal cache inside the sandbox. An authorized retry is running with
-normal toolchain cache access. Remaining gates, feature integration and
-final sprint verification and review are still required.
+its normal cache inside the sandbox. The authorized retry passed with the
+exact Rust1.93.0 toolchain across all eleven selected crates, all targets and
+all features. The first five-selector PowerPoint Base attempt stopped on fourteen
+compiler errors before any regression ran. The worker was safely restored.
+The independently reviewed minimal error conversions and test import are now
+adopted, with all2714 source guards intact. Corrected Base execution remains
+pending. F-X195 is running the49-entry deterministic hash check. Remaining
+gates, feature integration and final sprint verification and review are still
+required.
+
+The 10:37:49 UTC refresh found no new or closed issues or PRs and no advanced
+PR heads. All twenty-eight included issues and twenty-one PRs remain mapped
+to existing acceptance owners. Intake remains open through final reconciliation.
+Issues264 and281 are the two excluded discussion issues and must remain open.
