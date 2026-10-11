@@ -902,3 +902,20 @@ acceptance. The user approved the pinned CommonMark parser dependency for
 F-X217. All13 pending stories now have approved contracts. Existing completed
 records and running source freezes retain their status. New implementation
 waits for actual prerequisite completion and exclusive resources.
+
+## Font acceptance policy checkpoint, 2026-10-11
+
+Independent F-X210 pass19 identifies a prepared acceptance assumption, not
+a demonstrated production font defect. Caller fonts on the normal Word
+route retain system discovery. Actual diagnosis records a physically painted
+HiraginoSans checkmark mapped toU2713, while the equivalent PPT control
+passes its original exact Noto outline assertion. Normal-host physical-source
+acceptance and separate deterministic native Noto controls remain due.
+The failed sixteen-case run remains failed. Existing installed companion
+and typing passes retain their separately authenticated scope.
+
+F-X206 continues the same admitted ten-row native execution without a
+restart. The Word regression row remains active with no reported failures
+so far. F-X207 whole-feature installed and native paint gates, F-X200 joint
+checkbox and attributed hash acceptance, dependent implementations and the
+final integrated sprint gates remain outstanding. No closure is claimed.
