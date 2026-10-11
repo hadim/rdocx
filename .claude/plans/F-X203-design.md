@@ -626,3 +626,20 @@ replacement are explicit native behavior changes, each attributed in reviewed
 commits and measured deterministic output deltas. Baseline ownership remains
 exclusive. Original Issue306/332/334 acceptance remains required. No new
 product file, module, dependency or public mutation path is required.
+
+### Refreshed PR342 contribution, 2026-10-11
+
+PR342 advanced to `9fd0b8da374b8c641e7ab89c0bd3d76bd2f4519a`.
+The complete immutable update is assessed at
+/private/tmp/S91-PR342-intake/head-9fd0b8da/assessment.md, SHA256
+b88a9794b53cf405c52e60eb71dd900829a29204f9b9ad92ce47433fbae65cdb.
+Reuse the qualified item-local incomplete and deleted field handling once
+within F-X203. Add the contributor native selector
+`set_story_text_replaces_the_text_of_unclosed_and_deleted_fields` to the
+existing local execution inventory. CLI and Python test carriers did not change.
+The approved acceptance and dependencies remain unchanged. Simple-field
+page and column breaks still need deciding controls. F-X211 retains complete
+cross-paragraph field ownership. Preserve every original namespace, source,
+refusal, all-story and installed-consumer acceptance check. Contributor archive
+measurements do not replace locally verified package evidence. No source
+adoption, runtime acceptance or feature completion is asserted by intake.

@@ -2165,7 +2165,7 @@ requirements discussions264 and281.
 
 **Current delivery checkpoint, user replan**: seven of twenty-one active stories
 are completed and integrated, F-X193, F-X194, F-X196, F-X197, F-X198, F-X199
-and F-X212. F-X195, F-X200 and F-X206 are in progress. Eleven stories have
+and F-X212. F-X195, F-X200, F-X206 and F-X213 are in progress. Ten stories have
 approved designs and await implementation. F-X192 and F-283 move to S92,
 with their contracts, dirty worker work, reviews and required evidence retained.
 Their completion is no longer required to close S91. F-X195 still needs its
@@ -2189,6 +2189,11 @@ complete. Correct identified preservation gaps before adoption and prove
 acceptance locally.
 Resume checks at implementation/resume, integration and final close checkpoints.
 Matching issues and PRs share one acceptance owner and implementation.
+The 2026-10-11 09:50:39 UTC refresh found no new records. PR342 advanced
+to `9fd0b8da374b8c641e7ab89c0bd3d76bd2f4519a`. Its updated contribution
+remains assigned to F-X203. Its immutable update has been assessed against
+the existing approved contract, with remaining acceptance controls retained.
+All twenty-eight included issues and twenty-one PRs match this resolution map.
 
 | Included issues | Included PRs | S91 acceptance owners | Resolution work |
 |---|---|---|---|
@@ -2212,7 +2217,6 @@ Matching issues and PRs share one acceptance owner and implementation.
 | [313](https://github.com/tensorbee/rdocx/issues/313) | [319](https://github.com/tensorbee/rdocx/pull/319) | F-X210, consumes F-X195 | Approved metric-compatible fonts and bullet fallbacks, including the approved 3968-byte checkbox subset. |
 | [314](https://github.com/tensorbee/rdocx/issues/314) | Contributions above | All applicable S91 owners | Umbrella checklist, each provider credited once. |
 | [316](https://github.com/tensorbee/rdocx/issues/316), [331](https://github.com/tensorbee/rdocx/issues/331), [337](https://github.com/tensorbee/rdocx/issues/337) | [333](https://github.com/tensorbee/rdocx/pull/333), [336](https://github.com/tensorbee/rdocx/pull/336), [338](https://github.com/tensorbee/rdocx/pull/338) | F-X211, consumes completed providers | Frozen script corpus, safe XML, residual handles and bounded native control/text-box parsing. |
-
 | [340](https://github.com/tensorbee/rdocx/issues/340) | [341](https://github.com/tensorbee/rdocx/pull/341) | F-X213 | Entry-owned and single-paragraph TOC rebuild, retained opaque properties and namespace closure, no extra blank entries. |
 
 PR317 spans several owners and is reconciled once across their accepted

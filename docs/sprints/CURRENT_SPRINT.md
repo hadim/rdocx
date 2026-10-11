@@ -665,3 +665,55 @@ Actual Base, native output and installed acceptance remain required.
 
 Final integrated full verification, sprint review and close preflight have not
 run. S91 is not ready for close.
+
+## Current delivery checkpoint, 2026-10-11 reopened intake
+
+S91 has21 active stories, seven complete, four in progress and ten approved
+pending implementation. F-X213 is claimed to codex in its isolated worker
+work/f-x213-codex at /private/tmp/rdocx-f-x213-codex. Its genuine test-only
+Base controls both reproduced genuine semantic failures. The independently
+reviewed R2 production repair is now adopted in three existing carriers, with
+all other tracked inputs preserved. The first corrected runtime build found
+two Rust type/binding errors, now corrected with explicit type and binding.
+Nine contributor controls passed. The retained namespace control exposed a
+two-to-one preservation failure. Its narrowly guarded retained-source fix is
+applied and independently reviewed. Corrected runtime remains pending. Bibliography and full navigation remain carried to S92. Fresh F-X195 wheels, installed provenance, typing and
+stub checks completed. All104 installed font controls and the native SVG
+eight-owner control passed before equivalent test/lint normalization. Remaining
+scoped gates, output
+hash attribution, packaging and feature integration are still required.
+These results do not mark F-X195 or S91 complete. Final integrated full
+verification and clean sprint review precede close-sprint readiness.
+
+The 2026-10-11 09:33:11 UTC read-only intake found no new or changed issues
+or PRs. The SPRINT_PLAN resolution map exactly covers twenty-eight included
+issues and twenty-one PRs. Issues264 and281 remain excluded. Corrected
+F-X195 scoped Clippy found five test-only clone warnings. They now use borrowed
+slices, and the corrected eleven-crate lint gate passed. F-X213 working review and its HLD
+proposal review are clean. Production runtime and integration remain pending.
+
+F-X195 current SVG module passed26 controls, no failures. Its one ignored
+installed-artifact control has separate prior actual acceptance, retained with
+the reviewed equivalent test normalization. Five current shaping-cache controls
+passed. The no-default-font gate passed131 unit tests and3 documentation tests,
+with no failures or ignores. Both Word and PowerPoint WASM facade checks
+passed, including PowerPoint with rendering enabled. Remaining scoped risk
+gates run serially before integration.
+
+## Latest contribution and verification checkpoint, 2026-10-11
+
+The 09:50:39 UTC read-only refresh found no new issues or PRs. PR342 advanced
+to `9fd0b8da374b8c641e7ab89c0bd3d76bd2f4519a` and remains with F-X203.
+Its immutable update has been assessed without duplicating the existing repair.
+Reuse the qualified incomplete and deleted field handling under F-X203.
+Simple-field break, namespace, source and installed-consumer controls remain
+required. F-X211 retains complete cross-paragraph field ownership.
+All twenty-eight included issues and twenty-one PRs have acceptance owners.
+Issues264 and281 remain excluded and must remain open at sprint close.
+
+F-X195 public documentation, rdocx-oxml Clippy and full tests, and
+oxml-py-support full tests passed on the guarded current source. The exact
+Rust1.93.0 check stopped before compilation because rustup could not write
+its normal cache inside the sandbox. An authorized retry is running with
+normal toolchain cache access. Remaining gates, feature integration and
+final sprint verification and review are still required.
