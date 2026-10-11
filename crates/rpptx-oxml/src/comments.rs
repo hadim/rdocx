@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::Write;
 
 use oxml_core::OxmlError;
@@ -494,6 +495,86 @@ impl CommentList {
 
     pub fn move_comment(&mut self, from: usize, to: usize) -> Result<()> {
         move_item(&mut self.comments, from, to, "comment")
+    }
+
+    /// Rebinds a copy of this list to a copied slide.
+    ///
+    /// Comment and reply ids found in `ids`, and author ids found in
+    /// `author_ids`, take their mapped value. Every anchor names `slide_id`,
+    /// and its drawing monikers take the shape ids of `shape_ids`.
+    pub fn remap_for_copied_slide(
+        &mut self,
+        ids: &HashMap<String, String>,
+        author_ids: &HashMap<String, String>,
+        slide_id: u32,
+        shape_ids: &HashMap<u32, u32>,
+    ) -> Result<()> {
+        fn rename(id: &mut String, map: &HashMap<String, String>) {
+            if let Some(mapped) = map.get(id.as_str()) {
+                id.clone_from(mapped);
+            }
+        }
+        for id in &mut self.original_comment_ids {
+            rename(id, ids);
+        }
+        for comment in &mut self.comments {
+            rename(&mut comment.id, ids);
+            rename(&mut comment.author_id, author_ids);
+            for id in &mut comment.original_reply_ids {
+                rename(id, ids);
+            }
+            for reply in &mut comment.replies {
+                rename(&mut reply.id, ids);
+                rename(&mut reply.author_id, author_ids);
+            }
+            comment.anchor = remap_anchor(&comment.anchor, slide_id, shape_ids)?;
+        }
+        Ok(())
+    }
+}
+
+/// Rewrites the slide id of `pc:sldMk` and the shape ids of drawing monikers.
+fn remap_anchor(anchor: &[u8], slide_id: u32, shape_ids: &HashMap<u32, u32>) -> Result<Vec<u8>> {
+    let remap = |start: &BytesStart<'_>| -> Result<BytesStart<'static>> {
+        let key: &[u8] = match local_name(start.name().as_ref()) {
+            b"sldMk" => b"sldId",
+            b"spMk" | b"grpSpMk" | b"graphicFrameMk" | b"cxnSpMk" | b"picMk" => b"id",
+            _ => return Ok(start.clone().into_owned()),
+        };
+        let mut remapped =
+            BytesStart::new(String::from_utf8_lossy(start.name().as_ref()).into_owned());
+        for attribute in start.attributes() {
+            let attribute = attribute?;
+            if attribute.key.as_ref() != key {
+                remapped.push_attribute(attribute);
+                continue;
+            }
+            let value = if key == b"sldId" {
+                slide_id.to_string()
+            } else {
+                let old = std::str::from_utf8(&attribute.value)
+                    .ok()
+                    .and_then(|value| value.trim().parse::<u32>().ok());
+                match old.and_then(|old| shape_ids.get(&old)) {
+                    Some(new) => new.to_string(),
+                    None => String::from_utf8_lossy(&attribute.value).into_owned(),
+                }
+            };
+            remapped.push_attribute((key, value.as_bytes()));
+        }
+        Ok(remapped)
+    };
+    let mut reader = Reader::from_reader(anchor);
+    let mut writer = Writer::new(Vec::new());
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Eof => return Ok(writer.into_inner()),
+            Event::Start(start) => writer.write_event(Event::Start(remap(&start)?))?,
+            Event::Empty(start) => writer.write_event(Event::Empty(remap(&start)?))?,
+            event => writer.write_event(event)?,
+        }
+        buffer.clear();
     }
 }
 

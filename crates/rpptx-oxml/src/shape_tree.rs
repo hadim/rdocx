@@ -211,6 +211,12 @@ struct ShapeIdOccurrence {
 
 /// Assigns fresh non-visual shape ids and rewrites connector endpoints.
 pub fn rewrite_shape_ids(raw: &[u8]) -> Result<Vec<u8>> {
+    rewrite_shape_ids_mapped(raw).map(|(rewritten, _)| rewritten)
+}
+
+/// Assigns fresh non-visual shape ids like [`rewrite_shape_ids`], and also
+/// returns the old-to-new id map for references outside `raw`.
+pub fn rewrite_shape_ids_mapped(raw: &[u8]) -> Result<(Vec<u8>, HashMap<u32, u32>)> {
     let occurrences = shape_id_occurrences(raw)?;
     let occupied = occurrences
         .iter()
@@ -233,7 +239,7 @@ pub fn rewrite_shape_ids(raw: &[u8]) -> Result<Vec<u8>> {
         next = next.checked_add(1).ok_or_else(shape_ids_exhausted)?;
     }
     if map.is_empty() {
-        return Ok(raw.to_vec());
+        return Ok((raw.to_vec(), map));
     }
 
     let mut rewritten = Vec::with_capacity(raw.len());
@@ -252,7 +258,7 @@ pub fn rewrite_shape_ids(raw: &[u8]) -> Result<Vec<u8>> {
         copied_through = occurrence.range.end;
     }
     rewritten.extend_from_slice(&raw[copied_through..]);
-    Ok(rewritten)
+    Ok((rewritten, map))
 }
 
 fn shape_id_occurrences(raw: &[u8]) -> Result<Vec<ShapeIdOccurrence>> {

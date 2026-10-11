@@ -558,7 +558,15 @@ use the native staged slide operations and invalidate every handle.
 import. `layout` must be a layout of the destination. `index` is an insertion
 position counted from the end when negative, and one outside the collection is
 an `IndexError`. A slide of the same presentation is imported from a snapshot
-and keeps its own layout unless `layout` is given.
+and keeps its own layout unless `layout` is given. Each slide of the
+presentation maps to itself, so such a copy keeps its slide jumps. Every
+`SlideImportDiagnostic` of the native import, such as a dropped slide jump,
+raises a `UserWarning` after the import is committed. The keyword-only
+`keep_source_formatting=False` is the native option of that name.
+`SlideCollection.import_slides(source, slides=None, *, layout=None, index=None,
+keep_source_formatting=False, keep_sections=False)` imports every slide of the
+`source` presentation, or the slides at the indexes `slides`, counted from the
+end when negative, in one native `import_slides` call, and returns the copies.
 `SlideCollection.duplicate(slide)` copies a slide of the same presentation,
 with its speaker notes, to the position right after it through the native
 staged `duplicate_slide`, invalidates every handle, and returns the new slide.

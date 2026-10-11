@@ -3103,7 +3103,7 @@ allowing viewer antialiasing.
 | Connector theme effect suppression | `test_theme_effect_index_zero_drops_the_connector_theme_shadow` |
 | Line ends | `test_line_dash_style_and_ends_write_what_python_pptx_reads` |
 | Preset replacement | `test_auto_shape_type_reads_like_python_pptx_and_replaces_the_preset` |
-| Cross-deck import | `test_import_slide_carries_pictures_links_notes_and_background_from_another_deck` |
+| Cross-deck import | `test_import_slide_carries_pictures_links_notes_and_background_from_another_deck`, `test_import_slide_warns_when_it_drops_a_slide_jump`, `test_import_slide_keeps_source_formatting_once_per_source_layout`, `test_import_slides_merges_a_deck_with_its_notes_and_sections` |
 | Counted slide and frame replacement | `test_try_replace_text_scoped_to_a_slide_or_a_text_frame` |
 
 The rpptx text-property gate `test_text_properties_agree_with_python_pptx_in_both_directions`

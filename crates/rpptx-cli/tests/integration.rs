@@ -1557,6 +1557,92 @@ fn rpptx_replace_is_guarded_counted_and_includes_notes() {
 }
 
 #[test]
+fn slide_import_copies_a_slide_range_to_a_one_based_position() {
+    let temp = TempWorkspace::new("slide-import");
+    let dest = temp.path.join("dest.pptx");
+    let source = temp.path.join("source.pptx");
+    let output = temp.path.join("merged.pptx");
+    write_deck(&dest, &["D1", "D2"]);
+    write_deck(&source, &["S1", "S2", "S3", "S4"]);
+    add_speaker_notes(&source, "Source notes");
+    let (dest, source, output_path) = (
+        dest.to_str().unwrap(),
+        source.to_str().unwrap(),
+        output.to_str().unwrap(),
+    );
+
+    for (args, message) in [
+        (vec!["--at", "0"], "position 0 is out of range for 2 slides"),
+        (vec!["--at", "4"], "position 4 is out of range for 2 slides"),
+        (
+            vec!["--slides", "5"],
+            "slide 5 is out of range for 4 slides",
+        ),
+    ] {
+        let mut command = vec!["slide", "import", dest, source, "-o", output_path];
+        command.extend(&args);
+        let result = cli(&command);
+        assert_eq!(result.status.code(), Some(1), "{args:?} succeeded");
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains(message),
+            "{args:?} reported {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(!output.exists(), "{args:?} created output");
+    }
+
+    let result = cli(&[
+        "slide",
+        "import",
+        dest,
+        source,
+        "--slides",
+        "1,3-4",
+        "--at",
+        "2",
+        "-o",
+        output_path,
+        "--json",
+    ]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let record: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(record["action"], "import");
+    assert_eq!(record["source_slides"], json!([1, 3, 4]));
+    assert_eq!(record["slides"], json!([2, 3, 4]));
+    assert_eq!(record["warnings"], json!([]));
+    let merged = Presentation::open(&output).unwrap();
+    let texts = (0..merged.len())
+        .map(|index| merged.slide(index).unwrap().text())
+        .collect::<Vec<_>>();
+    assert_eq!(texts, ["D1", "S1", "S3", "S4", "D2"]);
+    assert_eq!(
+        merged.slide(1).unwrap().notes_text().as_deref(),
+        Some("Source notes")
+    );
+    assert!(merged.validate().is_empty(), "{:?}", merged.validate());
+
+    let appended = temp.path.join("appended.pptx");
+    let result = cli(&[
+        "slide",
+        "import",
+        dest,
+        source,
+        "--output",
+        appended.to_str().unwrap(),
+    ]);
+    assert!(result.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&result.stdout),
+        format!("import\nWritten to {}\n", appended.display())
+    );
+    assert_eq!(Presentation::open(&appended).unwrap().len(), 6);
+}
+
+#[test]
 fn text_json_anchors_paragraphs_by_typed_shape_paths_with_direct_run_formatting() {
     let temp = TempWorkspace::new("text-json");
     let deck = temp.path.join("structured.pptx");

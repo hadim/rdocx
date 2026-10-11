@@ -1184,6 +1184,101 @@ impl PySlideCollection {
             .capture(smallvec![PathSeg::Slide(index)]);
         Py::new(py, PySlide::new(self.presentation.clone_ref(py), path))
     }
+
+    /// Runs the native import of the slides at `indexes` of `source`, raises
+    /// a `UserWarning` per diagnostic, and returns the copies.
+    ///
+    /// A slide of this presentation is imported from a snapshot. Each slide
+    /// maps to itself, so the copy keeps its jumps, and without `layout` the
+    /// copy keeps its own layout, which is equal to itself.
+    #[allow(clippy::too_many_arguments)]
+    fn import_from(
+        &self,
+        py: Python<'_>,
+        source: Py<PyPresentation>,
+        indexes: Vec<usize>,
+        layout: Option<&Bound<'_, PyAny>>,
+        index: Option<isize>,
+        keep_source_formatting: bool,
+        keep_sections: bool,
+    ) -> PyResult<Vec<Py<PySlide>>> {
+        let len = self.len(py)?;
+        let layout_index = match layout {
+            Some(layout) => {
+                let layout = layout.extract::<PyRef<'_, PySlideLayout>>()?;
+                if !layout.presentation.is(&self.presentation) {
+                    return Err(PyValueError::new_err(
+                        "layout is not a layout of this presentation",
+                    ));
+                }
+                layout.validate(py)?;
+                Some(layout.index)
+            }
+            None => None,
+        };
+        let inserted = match index {
+            None => len,
+            Some(index) => {
+                let normalized = if index < 0 {
+                    len as isize + index
+                } else {
+                    index
+                };
+                if normalized < 0 || normalized > len as isize {
+                    return Err(PyIndexError::new_err("slide index out of range"));
+                }
+                normalized as usize
+            }
+        };
+        let mut options = rpptx::SlideImportOptions {
+            layout_index,
+            insert_index: Some(inserted),
+            keep_source_formatting,
+            keep_sections,
+            ..rpptx::SlideImportOptions::default()
+        };
+        let (paths, diagnostics) = {
+            let mut presentation = self.presentation.borrow_mut(py);
+            let layouts_before = presentation.inner.layout_count();
+            let result = if source.is(&self.presentation) {
+                let copy = presentation.inner.clone();
+                options.keep_source_formatting |= layout_index.is_none();
+                options.mapped_slides = (0..copy.len()).map(|index| (index, index)).collect();
+                presentation.inner.import_slides(&copy, &indexes, &options)
+            } else {
+                let source = source.borrow(py);
+                presentation
+                    .inner
+                    .import_slides(&source.inner, &indexes, &options)
+            };
+            let import = result.map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+            if inserted < len {
+                presentation
+                    .revisions
+                    .invalidate(Scope::Slides, "SlideCollection.import_slides()");
+            }
+            if presentation.inner.layout_count() != layouts_before {
+                presentation
+                    .revisions
+                    .invalidate(Scope::Layouts, "SlideCollection.import_slides()");
+            }
+            let paths = import
+                .indexes
+                .iter()
+                .map(|&index| {
+                    presentation
+                        .revisions
+                        .capture(smallvec![PathSeg::Slide(index)])
+                })
+                .collect::<Vec<_>>();
+            (paths, import.diagnostics)
+        };
+        warn_import_diagnostics(py, &diagnostics)?;
+        paths
+            .into_iter()
+            .map(|path| Py::new(py, PySlide::new(self.presentation.clone_ref(py), path)))
+            .collect()
+    }
 }
 
 #[pymethods]
@@ -1246,73 +1341,79 @@ impl PySlideCollection {
     /// inserted before `index` as by `list.insert`, counted from the end when
     /// negative, or appended when that is `None`. An index outside the
     /// collection raises `IndexError`.
-    #[pyo3(signature = (slide, layout=None, index=None))]
+    ///
+    /// Charts, embedded objects and comments travel with the slide, as by
+    /// `Presentation::import_slides`. A jump to another slide is kept when
+    /// that slide belongs to this presentation, and otherwise does nothing
+    /// in the copy and raises a `UserWarning`.
+    ///
+    /// `keep_source_formatting` gives the copy its source layout, master and
+    /// theme instead, as PowerPoint's "Keep source formatting" does, reusing
+    /// an equal layout or master of this presentation. It excludes `layout`.
+    #[pyo3(signature = (slide, layout=None, index=None, *, keep_source_formatting=false))]
     fn import_slide(
         &self,
         py: Python<'_>,
         slide: &Bound<'_, PyAny>,
         layout: Option<&Bound<'_, PyAny>>,
         index: Option<isize>,
+        keep_source_formatting: bool,
     ) -> PyResult<Py<PySlide>> {
-        let len = self.len(py)?;
         let slide = slide.extract::<PyRef<'_, PySlide>>()?;
         let source_index = slide.validate(py)?;
-        let layout_index = match layout {
-            Some(layout) => {
-                let layout = layout.extract::<PyRef<'_, PySlideLayout>>()?;
-                if !layout.presentation.is(&self.presentation) {
-                    return Err(PyValueError::new_err(
-                        "layout is not a layout of this presentation",
-                    ));
-                }
-                layout.validate(py)?;
-                Some(layout.index)
-            }
-            None => None,
-        };
-        let inserted = match index {
-            None => len,
-            Some(index) => {
-                let normalized = if index < 0 {
-                    len as isize + index
-                } else {
-                    index
-                };
-                if normalized < 0 || normalized > len as isize {
-                    return Err(PyIndexError::new_err("slide index out of range"));
-                }
-                normalized as usize
-            }
-        };
         let source = slide.presentation.clone_ref(py);
         drop(slide);
-        let path = {
-            let mut presentation = self.presentation.borrow_mut(py);
-            let result = if source.is(&self.presentation) {
-                let copy = presentation.inner.clone();
-                let layout_index = layout_index.or_else(|| copy.slide_layout_index(source_index));
-                presentation
-                    .inner
-                    .import_slide(&copy, source_index, layout_index, Some(inserted))
-                    .map(|_| ())
-            } else {
-                let source = source.borrow(py);
-                presentation
-                    .inner
-                    .import_slide(&source.inner, source_index, layout_index, Some(inserted))
-                    .map(|_| ())
-            };
-            result.map_err(|error| crate::rpptx_to_pyerr(py, error))?;
-            if inserted < len {
-                presentation
-                    .revisions
-                    .invalidate(Scope::Slides, "SlideCollection.import_slide()");
-            }
-            presentation
-                .revisions
-                .capture(smallvec![PathSeg::Slide(inserted)])
+        let mut imported = self.import_from(
+            py,
+            source,
+            vec![source_index],
+            layout,
+            index,
+            keep_source_formatting,
+            false,
+        )?;
+        Ok(imported.remove(0))
+    }
+
+    /// Imports every slide of `source`, or the slides at `slides`, in that
+    /// order, and returns the copies.
+    ///
+    /// `slides` holds slide indexes of `source`, counted from the end when
+    /// negative. `layout`, `index` and `keep_source_formatting` act as for
+    /// `import_slide`, and the copies land at consecutive positions.
+    /// `keep_sections` keeps the source sections of the copies as sections
+    /// of this presentation. A jump between two imported slides lands on the
+    /// copy.
+    #[pyo3(signature = (source, slides=None, *, layout=None, index=None, keep_source_formatting=false, keep_sections=false))]
+    #[allow(clippy::too_many_arguments)]
+    fn import_slides(
+        &self,
+        py: Python<'_>,
+        source: &Bound<'_, PyAny>,
+        slides: Option<Vec<isize>>,
+        layout: Option<&Bound<'_, PyAny>>,
+        index: Option<isize>,
+        keep_source_formatting: bool,
+        keep_sections: bool,
+    ) -> PyResult<Vec<Py<PySlide>>> {
+        let source = source.extract::<Py<PyPresentation>>()?;
+        let source_len = source.borrow(py).inner.len();
+        let indexes = match slides {
+            None => (0..source_len).collect(),
+            Some(slides) => slides
+                .into_iter()
+                .map(|slide| normalize_index(slide, source_len, "slide"))
+                .collect::<PyResult<Vec<_>>>()?,
         };
-        Py::new(py, PySlide::new(self.presentation.clone_ref(py), path))
+        self.import_from(
+            py,
+            source,
+            indexes,
+            layout,
+            index,
+            keep_source_formatting,
+            keep_sections,
+        )
     }
 
     /// Removes one slide of this presentation with its notes and owned media.
@@ -1429,6 +1530,24 @@ impl PySlideIterator {
         self.index += 1;
         collection.item(py, index).map(Some)
     }
+}
+
+/// Reports each slide import diagnostic as a `UserWarning`.
+fn warn_import_diagnostics(
+    py: Python<'_>,
+    diagnostics: &[rpptx::SlideImportDiagnostic],
+) -> PyResult<()> {
+    for diagnostic in diagnostics {
+        let message = std::ffi::CString::new(diagnostic.to_string())
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        PyErr::warn(
+            py,
+            &py.get_type::<pyo3::exceptions::PyUserWarning>(),
+            &message,
+            2,
+        )?;
+    }
+    Ok(())
 }
 
 fn sequence_item<T, F>(

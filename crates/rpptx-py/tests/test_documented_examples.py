@@ -4099,10 +4099,6 @@ def test_import_slide_carries_pictures_links_notes_and_background_from_another_d
 
     source = rpptx.Presentation(_python_pptx_deck(tmp_path / "source.pptx", build_source))
     prs = rpptx.Presentation(_python_pptx_deck(tmp_path / "target.pptx", build_target))
-    before = prs.to_bytes()
-    with pytest.raises(rpptx.RpptxError, match="has a chart, which is not carried"):
-        prs.slides.import_slide(source.slides[1])
-    assert prs.to_bytes() == before
     with pytest.raises(ValueError, match="layout is not a layout of this presentation"):
         prs.slides.import_slide(source.slides[0], layout=source.slide_layouts[1])
     with pytest.raises(IndexError):
@@ -4141,6 +4137,126 @@ def test_import_slide_carries_pictures_links_notes_and_background_from_another_d
     blip = slide._element.cSld.bg.xpath(".//a:blip")[0]
     embed = blip.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed")
     assert slide.part.related_part(embed).blob == blue
+
+    charts = rpptx.Presentation(_python_pptx_deck(tmp_path / "charts.pptx", build_target))
+    charts.slides.import_slide(source.slides[1])
+    charts.save(tmp_path / "charts-imported.pptx")
+    chart = next(
+        shape.chart
+        for shape in pptx.Presentation(tmp_path / "charts-imported.pptx").slides[1].shapes
+        if shape.has_chart
+    )
+    assert list(chart.plots[0].categories) == ["a", "b"]
+    assert chart.part.chart_workbook.xlsx_part is not None
+
+
+def test_import_slide_keeps_source_formatting_once_per_source_layout(tmp_path):
+    import rpptx
+
+    def build_source(deck):
+        from pptx.util import Pt
+
+        for text in ["One", "Two"]:
+            slide = deck.slides.add_slide(deck.slide_layouts[5])
+            slide.shapes.title.text = text
+        title = deck.slide_layouts[5].placeholders[0]
+        title.left, title.top, title.width, title.height = Pt(20), Pt(40), Pt(300), Pt(100)
+
+    source = rpptx.Presentation(_python_pptx_deck(tmp_path / "source.pptx", build_source))
+    prs = rpptx.Presentation(_python_pptx_deck(tmp_path / "target.pptx", lambda deck: None))
+    layouts = len(prs.slide_layouts)
+    with pytest.raises(rpptx.RpptxError, match="exclude each other"):
+        prs.slides.import_slide(
+            source.slides[0], layout=prs.slide_layouts[0], keep_source_formatting=True
+        )
+    prs.slides.import_slide(source.slides[0], keep_source_formatting=True)
+    prs.slides.import_slide(source.slides[1], keep_source_formatting=True)
+    prs.slides.import_slide(source.slides[1])
+    first, second, plain = prs.slides
+    assert len(prs.slide_layouts) == layouts + 1
+    assert first.slide_layout == second.slide_layout == prs.slide_layouts[layouts]
+    assert plain.slide_layout == prs.slide_layouts[5]
+    output = tmp_path / "kept.pptx"
+    prs.save(output)
+
+    # Only the layout differs, so it joins this presentation's equal master.
+    pptx = pytest.importorskip("pptx", reason="python-pptx is the differential oracle")
+    oracle = pptx.Presentation(output)
+    assert len(oracle.slide_masters) == 1
+    assert len(oracle.slide_masters[0].slide_layouts) == layouts + 1
+    kept_title = oracle.slides[0].slide_layout.placeholders[0]
+    assert (kept_title.left, kept_title.top) == (254000, 508000)
+    assert oracle.slides[2].slide_layout.placeholders[0].left != kept_title.left
+
+
+def test_import_slides_merges_a_deck_with_its_notes_and_sections(tmp_path):
+    import rpptx
+
+    def build_source(deck):
+        from pptx.oxml import parse_xml
+        from pptx.util import Inches
+
+        for text in ["B1", "B2", "B3"]:
+            slide = deck.slides.add_slide(deck.slide_layouts[6])
+            slide.shapes.add_textbox(Inches(1), Inches(1), Inches(3), Inches(1)).text_frame.text = text
+            slide.notes_slide.notes_text_frame.text = f"Notes {text}"
+        ids = [slide.slide_id for slide in deck.slides]
+        deck.part._element.append(parse_xml(
+            '<p:extLst xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">'
+            '<p:ext uri="{521415D9-36F7-43E2-AB2F-B90AF26B5E84}">'
+            '<p14:sectionLst xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main">'
+            '<p14:section name="Intro" id="{AAAAAAAA-0000-4000-8000-000000000001}">'
+            f'<p14:sldIdLst><p14:sldId id="{ids[0]}"/></p14:sldIdLst></p14:section>'
+            '<p14:section name="Body" id="{AAAAAAAA-0000-4000-8000-000000000002}">'
+            f'<p14:sldIdLst><p14:sldId id="{ids[1]}"/><p14:sldId id="{ids[2]}"/></p14:sldIdLst>'
+            '</p14:section></p14:sectionLst></p:ext></p:extLst>'
+        ))
+
+    def build_target(deck):
+        from pptx.util import Inches
+
+        slide = deck.slides.add_slide(deck.slide_layouts[6])
+        slide.shapes.add_textbox(Inches(1), Inches(1), Inches(3), Inches(1)).text_frame.text = "A1"
+
+    source = rpptx.Presentation(_python_pptx_deck(tmp_path / "source.pptx", build_source))
+    prs = rpptx.Presentation(_python_pptx_deck(tmp_path / "target.pptx", build_target))
+    copies = prs.slides.import_slides(source, keep_sections=True)
+    assert [slide.notes_text for slide in copies] == ["Notes B1", "Notes B2", "Notes B3"]
+    picked = prs.slides.import_slides(source, [-1, 0], index=1)
+    assert [slide.shapes[0].text for slide in picked] == ["B3", "B1"]
+    assert [slide.shapes[0].text for slide in prs.slides] == ["A1", "B3", "B1", "B1", "B2", "B3"]
+    with pytest.raises(IndexError):
+        prs.slides.import_slides(source, [3])
+    output = tmp_path / "merged.pptx"
+    prs.save(output)
+    presentation_xml = _package_parts(output.read_bytes())["ppt/presentation.xml"].decode()
+    names = re.findall(r'<p14:section [^>]*name="([^"]*)"', presentation_xml)
+    assert names == ["Default Section", "Intro", "Body"]
+
+
+def test_import_slide_warns_when_it_drops_a_slide_jump(tmp_path):
+    import warnings
+
+    import rpptx
+
+    def build_source(deck):
+        from pptx.util import Inches
+
+        first = deck.slides.add_slide(deck.slide_layouts[6])
+        second = deck.slides.add_slide(deck.slide_layouts[6])
+        box = first.shapes.add_textbox(Inches(1), Inches(1), Inches(3), Inches(1))
+        box.text_frame.text = "Next"
+        box.click_action.target_slide = second
+
+    source = rpptx.Presentation(_python_pptx_deck(tmp_path / "jump.pptx", build_source))
+    prs = rpptx.Presentation(_python_pptx_deck(tmp_path / "target.pptx", lambda deck: None))
+    with pytest.warns(UserWarning, match="now does nothing"):
+        copy = prs.slides.import_slide(source.slides[0])
+    assert copy.shapes[0].click_action.target_slide is None
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        again = source.slides.import_slide(source.slides[0])
+    assert again.shapes[0].click_action.target_slide == source.slides[1]
 
 
 
