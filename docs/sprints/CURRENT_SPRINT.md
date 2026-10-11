@@ -919,3 +919,21 @@ restart. The Word regression row remains active with no reported failures
 so far. F-X207 whole-feature installed and native paint gates, F-X200 joint
 checkbox and attributed hash acceptance, dependent implementations and the
 final integrated sprint gates remain outstanding. No closure is claimed.
+
+## Genuine font acceptance and temporary cleanup checkpoint, 2026-10-11
+
+The reviewed F-X210 correction now actually passes all16 normal-route
+physical-source cases, eight Word and eight PowerPoint. Original glyph
+outlines, reachable painted CIDs, unused-resource negatives, source stability
+and installed wheel identities are qualified. ROOT independently authenticated
+all2909 source records, all19 installed package members, both exact logs,
+sixteen output records and fresh process-group absence. Receipt
+ffbdad6407afa2787d9346e7ca06f9b05b315e5dc98fde0c0456ff0f1ad19967
+retains the result without replacing the original failed run. The additional
+deterministic native Noto control and joint checkbox gate remain due.
+
+Nine obsolete build-cache directories were removed from temporary storage.
+They held13669691861 logical bytes. Available disk increased from about459GiB
+to464GiB. Active worktrees, current build targets, retained package/review
+evidence, licensed font inputs and carried bibliography captures remain.
+The current native build is running once for both pending paint gates.
