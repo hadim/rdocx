@@ -96,3 +96,7 @@ The rolling intake instruction authorizes the full linked issue acceptance.
 ROOT reviewed the source, dependencies, test gate, risk riders and HLD list.
 The stated defaults are adopted. No blocking product question remains.
 Implementation waits for completed dependencies and an exclusive resource wave.
+
+## Contributor PR356 intake, 2026-10-11
+
+[PR356](https://github.com/tensorbee/rdocx/pull/356) at head e82a2c0c0492517d918c48ee0bde93d291e1b369 joins existing approved F-X215 for Issues 345 and 346, charts creation and data replacement. Its exact captured patch is a15fdd633c8ab55446a7e63cf6c50036f9ed172701a6c044fb649c1c0d75837b at /private/tmp/S91-PR356-intake/diff.patch. Read-only contribution assessment is complete at /private/tmp/S91-PR356-intake/assessment.md, SHA eb542fe436252ded0f2ab12e999abf5723ae1f73429279af166b25f09f6b9a56. Reuse chart projection/data checks and creation/replacement tests. Reconcile workbook and raw ChartML preservation, shared chart ownership, qualified relationship lookup and prepared binding publication. Localize types into the approved existing carriers. Native Office and full local acceptance remain due. Reuse qualifying contributor code and tests within the original approved acceptance and existing carriers. Contributor test claims, archive measurements, omitted acceptance and new product files do not replace local verification or grant additional structural approval. Implementation retains its dependency and exclusive source boundaries.

@@ -103,3 +103,7 @@ The rolling intake instruction authorizes the full linked issue acceptance.
 ROOT reviewed the source, dependencies, test gate, risk riders and HLD list.
 The stated defaults are adopted. No blocking product question remains.
 Implementation waits for completed dependencies and an exclusive resource wave.
+
+## Contributor PR358 intake, 2026-10-11
+
+[PR358](https://github.com/tensorbee/rdocx/pull/358) at head 649fa8ed6be75624ea5c1c82433c5a02c935fa89 joins existing approved F-X218 for Issues 352 and 353, semantic Markdown and HTML export. Its exact captured patch is dcf904ae0f6001e4ebfdbe83f28421394604e5fb4b62f728715efc0314dbbb45 at /private/tmp/S91-PR358-intake/diff.patch. Read-only contribution assessment is complete at /private/tmp/S91-PR358-intake/assessment.md, SHA 6fd0fb900c70ad64a58d099166d5937741ccb26f2fd0e55f1c5815c36334a346. Reuse source-order traversal, escaping and inline semantic-output tests. Complete inherited bullet/run semantics, usable Markdown images, safe embedded/adjacent assets, internal links and diagnostics. Use the approved existing exporter carriers and retain full source-authority and validator acceptance. Reuse qualifying contributor code and tests within the original approved acceptance and existing carriers. Contributor test claims, archive measurements, omitted acceptance and new product files do not replace local verification or grant additional structural approval. Implementation retains its dependency and exclusive source boundaries.
