@@ -38237,6 +38237,69 @@ fn settings_part_text(bytes: &[u8]) -> String {
     String::from_utf8(package.get_part("/word/settings.xml").unwrap().to_vec()).unwrap()
 }
 
+#[test]
+fn new_documents_name_compatibility_mode_15_so_word_does_not_open_them_in_compatibility_mode() {
+    const COMPAT: &str = r#"<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat>"#;
+    let mut created = vec![Document::new()];
+    for class in [
+        WordPackageClass::Document,
+        WordPackageClass::MacroEnabledDocument,
+        WordPackageClass::Template,
+        WordPackageClass::MacroEnabledTemplate,
+    ] {
+        created.push(Document::new_with_profile(
+            WordCreationProfile::WordCompatible(class),
+        ));
+    }
+    created.push(Document::from_html("<p>Hello</p>").unwrap().document);
+    for mut document in created {
+        document.add_paragraph("Hello");
+        let settings = settings_part_text(&document.to_bytes().unwrap());
+        assert!(settings.contains(COMPAT), "{settings}");
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.compatibility_settings().len(), 1);
+        assert_eq!(reopened.settings_diagnostics(), &[]);
+    }
+
+    // Settings authored on a new document keep the compat group in schema
+    // order, and a caller's own mode replaces the default rather than
+    // adding a second one.
+    let mut document = Document::new();
+    document.set_document_variable("Client", "Acme").unwrap();
+    document.set_default_tab_stop(Twips(720)).unwrap();
+    let settings = settings_part_text(&document.to_bytes().unwrap());
+    let tab = settings.find("<w:defaultTabStop").unwrap();
+    let compat = settings.find(COMPAT).unwrap();
+    let variables = settings.find("<w:docVars>").unwrap();
+    assert!(tab < compat && compat < variables, "{settings}");
+    document
+        .set_compatibility_setting(
+            "compatibilityMode",
+            "http://schemas.microsoft.com/office/word",
+            "14",
+        )
+        .unwrap();
+    assert_eq!(document.compatibility_settings().len(), 1);
+    assert_eq!(document.compatibility_settings()[0].value, "14");
+
+    // The minimal profile keeps its two-part package and gains no settings part.
+    let mut minimal =
+        Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+    assert!(minimal.compatibility_settings().is_empty());
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(minimal.to_bytes().unwrap()))
+            .unwrap();
+    assert!(package.get_part("/word/settings.xml").is_none());
+
+    // An opened legacy document that names no compatibility mode stays as it was.
+    let legacy =
+        format!(r#"<w:settings xmlns:w="{W_NS}"><w:defaultTabStop w:val="720"/></w:settings>"#);
+    let mut opened = settings_document(&legacy);
+    assert!(opened.compatibility_settings().is_empty());
+    opened.add_paragraph("Edited");
+    assert_eq!(settings_part_text(&opened.to_bytes().unwrap()), legacy);
+}
+
 /// F-265, complete run property and inline authoring.
 #[test]
 fn comparison_tracks_paragraph_properties_with_revision_identities() {
@@ -44255,7 +44318,14 @@ mod tab_stop_regressions {
                 &["T", "I12"],
             ),
         ];
-        let document_2010 = document(&paragraphs);
+        // A new document names mode 15, so the legacy case drops it.
+        let mut document_2010 = document(&paragraphs);
+        document_2010
+            .remove_compatibility_setting(
+                "compatibilityMode",
+                "http://schemas.microsoft.com/office/word",
+            )
+            .unwrap();
         assert_at(run(&document_2010, "M12").1, 590.0, "Word 2010");
         assert_at(run(&document_2010, "I12").1, 540.0, "Word 2010 indented");
         let mut document_2013 = document(&paragraphs);
@@ -50365,6 +50435,13 @@ fn identical_text_boxes_keep_distinct_physical_owners_across_pages_and_inline_co
 // Exact replay of generator SHA-256 0335394fffe04039c4b194bd74546f80808f211ddf505a1d3405c877e32fb1d2.
 fn f279_continuous_oracle(case: &str) -> Document {
     let mut d = Document::new();
+    // Word measured these packages without a compatibility mode, so the
+    // oracle input drops the mode 15 a new document names.
+    d.remove_compatibility_setting(
+        "compatibilityMode",
+        "http://schemas.microsoft.com/office/word",
+    )
+    .unwrap();
     d.set_update_fields_on_open(Some(false)).unwrap();
     let body = StoryId::body();
     f279_oracle_append(
