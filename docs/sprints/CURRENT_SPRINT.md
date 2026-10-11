@@ -7,8 +7,7 @@ and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
 S91 now contains twenty-six active stories, eight completed, one integrated
-and reviewed, four running, eight approved pending implementation and five
-new stories awaiting design approval. Rolling contribution intake is reopened at the user's latest instruction.
+and reviewed, four running, thirteen approved pending implementation. Rolling contribution intake is reopened at the user's latest instruction.
 
 ## Spec references
 
@@ -895,3 +894,11 @@ acceptance has a new failed symbol fallback result. The physically painted
 Noto checkmark assertion failed and is under read-only diagnosis. It is not
 a sixteen-case pass. Both installed companions and four typing gates remain
 their separately authenticated passing results.
+
+## New intake designs approved, 2026-10-11
+
+F-X214 throughF-X218 have approved canonical plans and full linked-issue
+acceptance. The user approved the pinned CommonMark parser dependency for
+F-X217. All13 pending stories now have approved contracts. Existing completed
+records and running source freezes retain their status. New implementation
+waits for actual prerequisite completion and exclusive resources.

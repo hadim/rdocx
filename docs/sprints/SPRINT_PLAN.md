@@ -2999,3 +2999,24 @@ providers and contributor slices once. Twenty-six active stories now comprise
 eight completed, one integrated and reviewed, four running, eight approved
 pending and five registered for design. No new implementation starts before
 approved contracts and completion of its actual prerequisites.
+
+## New intake wave admission, 2026-10-11
+
+All five new issue designs are approved. The user approved the exact
+pulldown-cmark0.13.4 parser dependency for F-X217. ROOT adopted the explicit
+depth32 policy for F-X214, existing supported chart-data scope for F-X215,
+transactional graph/section/default import options for F-X216, canonical
+CommonMark round-trip/template policy for F-X217 and semantic export/resource
+options for F-X218. No draft blocks these plans.
+
+| Wave | Story | Prerequisite and resource boundary |
+|------|-------|------------------------------------|
+| 16 | F-X214 | No feature dependency, shape-tree/layout/renderer carriers wait for the F-X206 and F-X207 source checkpoint |
+| 17 | F-X215 | Completed F-X197 and F-X206, charts/Word/PPT shared authoring carriers exclusive |
+| 18 | F-X216 | Completed F-X206 and F-X215, graph import/PPT/CLI carriers exclusive |
+| 19 | F-X217 | Completed F-X200 and F-X203, Word import/outbound/binding/CLI carriers exclusive |
+| 20 | F-X218 | Completed F-X205 and F-X206, PPT semantic export/binding/CLI carriers exclusive |
+
+Hash baseline remains ROOT-exclusive. Ordinary implementation never runs
+concurrently in a shared source, test, manifest or HLD owner. Final full
+verification and review cover the integrated26-story result.
