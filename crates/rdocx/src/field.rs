@@ -2226,6 +2226,7 @@ impl Document {
                 )
             })
             .collect::<Vec<_>>();
+        let provisional_paragraphs = toc_paragraph_insertions(&provisional_xml)?;
         let mut placeholders = Vec::new();
         let mut edits = Vec::new();
         let mut entry_count = 0usize;
@@ -2249,6 +2250,17 @@ impl Document {
                 &mut placeholders,
             )?;
             entry_count += toc_sources.len();
+            if let Some(mut merged) = entry_boundary_toc_edits(
+                &provisional_xml,
+                span,
+                &provisional_paragraphs,
+                &generated,
+                &toc_entry_styles,
+                &end_bookmark_starts[toc_index],
+            ) {
+                edits.append(&mut merged);
+                continue;
+            }
             edits.push(FieldSourceEdit {
                 start: span.result_start,
                 end: span.result_end,
@@ -8658,6 +8670,7 @@ fn heading_style_level(document: &Document, style_id: &str) -> Option<u8> {
 
 #[derive(Debug)]
 struct TocParagraphInsertion {
+    start_tag_end: usize,
     content_start: usize,
     content_end: usize,
 }
@@ -8777,6 +8790,7 @@ fn toc_paragraph_insertions(xml: &[u8]) -> Result<Vec<TocParagraphInsertion>> {
                 let paragraph = if is_typed_paragraph {
                     let index = paragraphs.len();
                     paragraphs.push(TocParagraphInsertion {
+                        start_tag_end: after,
                         content_start: after,
                         content_end: after,
                     });
@@ -8809,6 +8823,7 @@ fn toc_paragraph_insertions(xml: &[u8]) -> Result<Vec<TocParagraphInsertion>> {
                 let typed_block_owner = classify_typed_block_owner(word, local, &elements);
                 if typed_block_owner == Some(TypedBlockOwner::Paragraph) {
                     paragraphs.push(TocParagraphInsertion {
+                        start_tag_end: before,
                         content_start: before,
                         content_end: before,
                     });
@@ -9125,6 +9140,145 @@ fn dynamic_toc_replacement(
         replacement.extend_from_slice(&xml[start..end]);
     }
     Ok(replacement)
+}
+
+/// Edits that keep the field begin in the first rebuilt entry and the end in
+/// the last one when the source TOC already wrote them that way.
+///
+/// Word and Google Docs put the field begin in the first entry paragraph and
+/// the end in the last one. The generic replacement would leave both markers
+/// in empty paragraphs of their own. Here the first entry takes over the
+/// begin paragraph, whose properties it replaces, and the last entry takes
+/// over the end paragraph. A boundary paragraph counts as an entry when it
+/// has a TOC entry style and a run in the field result. Any other boundary
+/// paragraph, or one ending a section, keeps the generic layout. A single generated entry takes over the begin
+/// paragraph only, so the result still spans two paragraphs, and an empty
+/// rebuild keeps the generic layout. `None` means the generic replacement
+/// applies.
+fn entry_boundary_toc_edits(
+    xml: &[u8],
+    span: &DynamicTocSpan,
+    paragraphs: &[TocParagraphInsertion],
+    generated: &[u8],
+    entry_styles: &BTreeMap<u8, TocEntryStyle>,
+    end_boundary_bookmark_starts: &[u8],
+) -> Option<Vec<FieldSourceEdit>> {
+    const PARAGRAPH_END: &[u8] = b"</w:p>";
+    const PROPERTIES_END: &[u8] = b"</w:pPr>";
+    if span.start_paragraph_name != "w:p"
+        || !span.separator_wrapper_names.is_empty()
+        || !span.end_wrapper_prefixes.is_empty()
+        || !end_boundary_bookmark_starts.is_empty()
+        || span.begin_paragraph == span.end_paragraph
+    {
+        return None;
+    }
+    let begin = paragraphs.get(span.begin_paragraph)?;
+    let end = paragraphs.get(span.end_paragraph)?;
+    // Generated entries escape their text, so `</w:p>` only closes an entry.
+    let mut entries = Vec::new();
+    let mut entry_start = 0;
+    for offset in byte_match_offsets(generated, PARAGRAPH_END) {
+        let entry_end = offset + PARAGRAPH_END.len();
+        entries.push(&generated[entry_start..entry_end]);
+        entry_start = entry_end;
+    }
+    if entry_start != generated.len() || entries.is_empty() {
+        return None;
+    }
+    let is_entry = |properties: &[u8], content: &[u8]| {
+        let (style, _) = toc_fragment_scan(properties);
+        find_bytes(properties, b"sectPr").is_none()
+            && style.is_some_and(|style| {
+                entry_styles
+                    .values()
+                    .any(|entry_style| entry_style.style_id == style)
+            })
+            && toc_fragment_scan(content).1
+    };
+    let end_opening = xml.get(span.end_paragraph_start..span.end_paragraph_content_start)?;
+    let merge_begin = begin.content_start == span.begin_run_start
+        && is_entry(
+            xml.get(begin.start_tag_end..begin.content_start)?,
+            xml.get(span.result_start..begin.content_end)?,
+        );
+    let merge_end = (entries.len() > 1 || !merge_begin)
+        && (end_opening.starts_with(b"<w:p>") || end_opening.starts_with(b"<w:p "))
+        && !toc_fragment_scan(xml.get(span.end_run_end..end.content_end)?).1
+        && is_entry(
+            xml.get(end.start_tag_end..end.content_start)?,
+            xml.get(end.content_start..span.result_end)?,
+        );
+    if !merge_begin && !merge_end {
+        return None;
+    }
+    let mut edits = Vec::new();
+    let mut replacement = Vec::new();
+    let last = entries.len() - 1;
+    for (index, entry) in entries.iter().enumerate() {
+        let properties_end = find_bytes(entry, PROPERTIES_END)? + PROPERTIES_END.len();
+        let mut entry_start = 0;
+        if index == 0 && merge_begin {
+            edits.push(FieldSourceEdit {
+                start: begin.start_tag_end,
+                end: begin.content_start,
+                replacement: entry[b"<w:p>".len()..properties_end].to_vec(),
+            });
+            entry_start = properties_end;
+        } else if index == 0 {
+            replacement.extend_from_slice(PARAGRAPH_END);
+        }
+        let entry_end = if index == last && merge_end {
+            entry.len() - PARAGRAPH_END.len()
+        } else {
+            entry.len()
+        };
+        replacement.extend_from_slice(&entry[entry_start..entry_end]);
+    }
+    if !merge_end {
+        replacement.extend_from_slice(end_opening);
+    }
+    edits.push(FieldSourceEdit {
+        start: span.result_start,
+        end: span.result_end,
+        replacement,
+    });
+    Some(edits)
+}
+
+/// The `w:pStyle` value and whether a `w:r` run occurs in a fragment of
+/// paragraph XML.
+fn toc_fragment_scan(fragment: &[u8]) -> (Option<String>, bool) {
+    let mut reader = quick_xml::Reader::from_reader(fragment);
+    reader.config_mut().check_end_names = false;
+    let mut buffer = Vec::new();
+    let mut style = None;
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(element) | Event::Empty(element)) => match element.name().as_ref() {
+                b"w:r" => return (style, true),
+                b"w:pStyle" if style.is_none() => {
+                    style = element
+                        .try_get_attribute("w:val")
+                        .ok()
+                        .flatten()
+                        .and_then(|value| {
+                            value
+                                .decoded_and_normalized_value(
+                                    XmlVersion::Implicit1_0,
+                                    element.decoder(),
+                                )
+                                .ok()
+                        })
+                        .map(|value| value.into_owned());
+                }
+                _ => {}
+            },
+            Ok(Event::Eof) | Err(_) => return (style, false),
+            Ok(_) => {}
+        }
+        buffer.clear();
+    }
 }
 
 fn relocate_end_boundary_bookmark_starts(

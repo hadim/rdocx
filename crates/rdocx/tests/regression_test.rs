@@ -12461,6 +12461,152 @@ fn toc_rebuild_handles_the_largest_outline_level_without_panicking() {
     assert!(!document_xml(&mut document).contains("old"));
 }
 
+/// A TOC laid out as Word and Google Docs write it: the field begin in the
+/// first entry paragraph and the end in the last one, followed by one
+/// Heading1 paragraph per heading.
+fn entry_boundary_toc_body(entries: &[&str], headings: &[&str]) -> String {
+    let last = entries.len() - 1;
+    let mut body = String::new();
+    for (index, entry) in entries.iter().enumerate() {
+        body.push_str(r#"<w:p><w:pPr><w:pStyle w:val="TOC1"/></w:pPr>"#);
+        if index == 0 {
+            body.push_str(r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-3" \h \z \u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>"#);
+        }
+        body.push_str(&format!("<w:r><w:t>{entry}</w:t></w:r>"));
+        if index == last {
+            body.push_str(r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#);
+        }
+        body.push_str("</w:p>");
+    }
+    for heading in headings {
+        body.push_str(&format!(
+            r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>{heading}</w:t></w:r></w:p>"#
+        ));
+    }
+    body
+}
+
+fn body_paragraph_xml(xml: &str) -> Vec<&str> {
+    let body = &xml[xml.find("<w:body>").unwrap()..];
+    body.split_inclusive("</w:p>")
+        .filter(|paragraph| paragraph.ends_with("</w:p>"))
+        .collect()
+}
+
+fn toc_paragraph_xml(xml: &str) -> Vec<&str> {
+    body_paragraph_xml(xml)
+        .into_iter()
+        .filter(|paragraph| paragraph.contains(r#"<w:pStyle w:val="TOC"#))
+        .collect()
+}
+
+#[test]
+fn toc_rebuild_keeps_the_field_markers_in_the_first_and_last_entries() {
+    let body = entry_boundary_toc_body(&["One", "Two", "Three"], &["One", "Two", "Three"]);
+    let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+    let before = body_paragraph_xml(&document_xml(&mut document)).len();
+
+    for _ in 0..2 {
+        assert_eq!(document.rebuild_toc().unwrap().entry_count, 3);
+        let xml = document_xml(&mut document);
+        assert_eq!(body_paragraph_xml(&xml).len(), before, "{xml}");
+        let entries = toc_entry_signatures(&xml)
+            .into_iter()
+            .map(|(display, ..)| display)
+            .collect::<Vec<_>>();
+        assert_eq!(entries, ["One\t1", "Two\t1", "Three\t1"], "{xml}");
+        let toc = toc_paragraph_xml(&xml);
+        assert_eq!(toc.len(), 3, "{xml}");
+        assert!(toc[0].contains(r#"w:fldCharType="begin""#), "{xml}");
+        assert!(toc[0].contains(r#"w:fldCharType="separate""#), "{xml}");
+        assert!(toc[2].contains(r#"w:fldCharType="end""#), "{xml}");
+        assert_eq!(xml.matches(r#"w:fldCharType="begin""#).count(), 1, "{xml}");
+        assert_eq!(xml.matches(r#"w:fldCharType="end""#).count(), 1, "{xml}");
+    }
+}
+
+#[test]
+fn toc_rebuild_moves_entry_boundary_markers_to_the_new_first_and_last_entries() {
+    for (old_entries, headings) in [
+        (&["Stale"][..], &["Alpha", "Beta", "Gamma"][..]),
+        (&["A", "B", "C", "D"][..], &["Alpha", "Beta"][..]),
+    ] {
+        let mut old = vec!["Old first"];
+        old.extend_from_slice(old_entries);
+        let body = entry_boundary_toc_body(&old, headings);
+        let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+
+        assert_eq!(document.rebuild_toc().unwrap().entry_count, headings.len());
+        let xml = document_xml(&mut document);
+        assert_eq!(body_paragraph_xml(&xml).len(), 2 * headings.len(), "{xml}");
+        let toc = toc_paragraph_xml(&xml);
+        assert_eq!(toc.len(), headings.len(), "{xml}");
+        assert!(toc[0].contains(r#"w:fldCharType="begin""#), "{xml}");
+        assert!(
+            toc[toc.len() - 1].contains(r#"w:fldCharType="end""#),
+            "{xml}"
+        );
+        for (entry, heading) in toc_entry_signatures(&xml).iter().zip(headings) {
+            assert_eq!(entry.0, format!("{heading}\t1"), "{xml}");
+        }
+    }
+}
+
+#[test]
+fn toc_rebuild_of_entry_boundary_markers_keeps_a_result_paragraph_boundary() {
+    // One heading cannot hold both markers: the result must still span two
+    // paragraphs, so the end keeps a paragraph of its own.
+    let body = entry_boundary_toc_body(&["Old one", "Old two"], &["Only"]);
+    let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+    for _ in 0..2 {
+        assert_eq!(document.rebuild_toc().unwrap().entry_count, 1);
+        let xml = document_xml(&mut document);
+        let toc = toc_paragraph_xml(&xml);
+        assert_eq!(body_paragraph_xml(&xml).len(), 3, "{xml}");
+        assert_eq!(toc.len(), 2, "{xml}");
+        assert!(toc[0].contains(r#"w:fldCharType="begin""#), "{xml}");
+        assert!(toc[0].contains("Only"), "{xml}");
+        assert!(toc[1].contains(r#"w:fldCharType="end""#), "{xml}");
+    }
+
+    // No heading keeps the begin and end paragraphs, emptied of entries.
+    let body = entry_boundary_toc_body(&["Old one", "Old two", "Old three"], &[]);
+    let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+    assert_eq!(document.rebuild_toc().unwrap().entry_count, 0);
+    let xml = document_xml(&mut document);
+    let toc = toc_paragraph_xml(&xml);
+    assert_eq!(body_paragraph_xml(&xml).len(), 2, "{xml}");
+    assert!(!xml.contains("Old"), "{xml}");
+    assert!(toc[0].contains(r#"w:fldCharType="begin""#), "{xml}");
+    assert!(toc[1].contains(r#"w:fldCharType="end""#), "{xml}");
+}
+
+#[test]
+fn toc_rebuild_keeps_field_markers_that_own_their_paragraphs() {
+    let body = r#"
+        <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \o "1-1" \h</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="TOC1"/></w:pPr><w:r><w:t>old</w:t></w:r></w:p>
+        <w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>First</w:t></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Second</w:t></w:r></w:p>
+    "#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+
+    assert_eq!(document.rebuild_toc().unwrap().entry_count, 2);
+    let xml = document_xml(&mut document);
+    let paragraphs = body_paragraph_xml(&xml);
+    assert_eq!(paragraphs.len(), 6, "{xml}");
+    assert!(
+        paragraphs[0].contains(r#"w:fldCharType="separate""#),
+        "{xml}"
+    );
+    assert!(!paragraphs[0].contains("<w:pStyle"), "{xml}");
+    assert!(paragraphs[1].contains("First"), "{xml}");
+    assert!(paragraphs[2].contains("Second"), "{xml}");
+    assert!(paragraphs[3].contains(r#"w:fldCharType="end""#), "{xml}");
+    assert!(!paragraphs[3].contains("<w:pStyle"), "{xml}");
+}
+
 #[test]
 fn toc_rebuild_discovers_the_accepted_revision_projection() {
     let body = r#"

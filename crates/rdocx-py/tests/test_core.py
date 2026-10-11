@@ -1855,6 +1855,46 @@ def test_rebuild_toc_accepts_identity_attributes_on_the_field_runs():
         assert identity in saved
 
 
+
+def test_rebuild_toc_keeps_the_field_markers_in_the_first_and_last_entries():
+    import rdocx
+
+    # Word and Google Docs write the field begin in the first entry paragraph
+    # and the end in the last one: a rebuild keeps them there.
+    def entry(text, first=False, last=False):
+        begin = (
+            '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+            '<w:r><w:instrText xml:space="preserve"> TOC \\o "1-3" \\h \\z \\u </w:instrText></w:r>'
+            '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+            if first
+            else ""
+        )
+        end = '<w:r><w:fldChar w:fldCharType="end"/></w:r>' if last else ""
+        return (
+            f'<w:p><w:pPr><w:pStyle w:val="TOC1"/></w:pPr>{begin}'
+            f"<w:r><w:t>{text}</w:t></w:r>{end}</w:p>"
+        )
+
+    headings = ("One", "Two", "Three")
+    body = entry("One", first=True) + entry("Two") + entry("Three", last=True)
+    body += "".join(
+        f'<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>{heading}</w:t></w:r></w:p>'
+        for heading in headings
+    )
+    source = rdocx.Document()
+    source.add_paragraph("placeholder")
+    document = _replace_document_body(source, body)
+    before = len(document.paragraphs)
+
+    assert document.rebuild_toc().entry_count == 3
+    assert len(document.paragraphs) == before
+    toc = [
+        paragraph.text
+        for paragraph in document.paragraphs
+        if (paragraph.style or "").startswith("TOC")
+    ]
+    assert toc == ["One\t1", "Two\t1", "Three\t1"]
+
 def test_update_page_fields_writes_layout_page_numbers():
     import rdocx
 
