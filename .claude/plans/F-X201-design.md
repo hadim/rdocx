@@ -307,3 +307,7 @@ prove failure preserves bytes and tokens. Absent reads still must not create
 parts, and owner/lifetime and rich story acceptance remain mandatory. The
 contributed multi-call insertion and new story module are not authorized by
 this intake. Contributor tests and HLD changes are proposals, not local proof.
+
+## PR343 contribution reuse
+
+Reuse PR343's assessed native story image allocation and content-type lookup only after reconciliation with the actual checked physical owner and one staged publication. The exact donor head is c6a78f683f327be8d7674af509874f74945080f3, with immutable assessment at /private/tmp/S91-PR343-intake/assessment.md. Related-story rich picture authoring remains the existing acceptance, including header, footer, notes and admitted cells or text boxes. Donor tests embed media relationships without inserting or painting a drawing. Actual owner-scoped drawings, saved/reopened media, stale/foreign/malformed refusals, aliases and native render controls remain required. Run picture binding integration belongs to F-X202 and consumes this ownership work once.

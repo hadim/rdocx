@@ -485,3 +485,7 @@ evidence, not geometry fidelity or passing repository replacement/rendering.
 Ordinary pairing success, both edited copies, logical count1, actual native
 reopen and complete no-op/refusal/source-preservation gates still must pass
 on the implementation. No tracked binary fixture or new source file is added.
+
+## PR343 contribution reuse
+
+PR343 at c6a78f683f327be8d7674af509874f74945080f3 contributes native story image helpers, owned by F-X201. Compose their checked media allocation with this story's actual Run picture insertion on one candidate. Do not call a separately committing embedding helper followed by an insertion that may fail on a stale, foreign or unsupported run. Preserve no-orphan refusal, physical picture occurrence identity, body-only legacy collection semantics, source aliases and saved/reopened drawing relationships. Header, footer, note and admitted cell/text-box controls must exercise the installed binding and actual drawing or render output. The donor contains no Python implementation, and relationship-only tests provide no visible-picture acceptance. Reuse the assessed patch once and retain the full existing contract.

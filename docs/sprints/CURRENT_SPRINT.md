@@ -69,7 +69,7 @@ The wave plan is recorded in S91-run.json after design and conflict analysis.
 
 The user reopened issue and PR intake after parking bibliography and navigation
 at S92. The current read-only GitHub inventory contains thirty open issues and
-twenty-one open PRs. Excluding Issues264 and281 leaves twenty-eight included
+twenty-two open PRs. Excluding Issues264 and281 leaves twenty-eight included
 issues. New Issues339 and340 have matching PR342 andPR341 respectively.
 Assess each full immutable contribution once and bind it to an acceptance owner.
 Issue339 andPR342 extend the existing all-story text contract in F-X203.
@@ -728,3 +728,34 @@ The 10:37:49 UTC refresh found no new or closed issues or PRs and no advanced
 PR heads. All twenty-eight included issues and twenty-one PRs remain mapped
 to existing acceptance owners. Intake remains open through final reconciliation.
 Issues264 and281 are the two excluded discussion issues and must remain open.
+
+## Current hash and publication checkpoint, 2026-10-11
+
+The F-X19549-entry measurement completed with three differences against its
+worker baseline. All49 actual entries exactly match the already accepted
+canonical sprint baseline and the independently reviewed F-X212 accessibility
+outputs. Independent hash-delta pass96 is clean. This is a stale worker baseline
+input, with no new F-X195 output delta or baseline reason. The original exit1
+remains recorded. Synchronization and a true check rerun remain pending.
+
+The supply-chain check passed. README validation stopped before its public
+consumer body because two script date constants lag their README rows. The
+verified22-package publication dry run is live. Retain its archives before
+reconciling actual package measurements, README rows and validation constants.
+No feature completion or integration is claimed from these partial gates.
+
+## PR343 intake checkpoint, 2026-10-11 10:56:28 UTC
+
+New [PR343](https://github.com/tensorbee/rdocx/pull/343), head
+`c6a78f683f327be8d7674af509874f74945080f3`, extends the existing related-story
+picture requirements. Its complete immutable patch and exact base/head files
+are assessed under /private/tmp/S91-PR343-intake. Native checked story-media
+ownership belongs to F-X201. Atomic Run picture insertion and physical-picture
+identity belong to F-X202. No new F-ID or duplicate implementation is added.
+The donor has no Python implementation and does not prove visible drawings.
+Keep installed owner/refusal, saved media/drawing, note and render acceptance.
+
+The resolution map now covers all twenty-two open PRs and twenty-eight included
+open issues. Issues264 and281 remain excluded discussion issues. Story totals
+remain seven complete, four in progress and ten pending. PR343 source has not
+been adopted and no contributor test is credited as local acceptance.

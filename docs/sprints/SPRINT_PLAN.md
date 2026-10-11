@@ -2180,7 +2180,7 @@ sprint review and verified sprint close remain outstanding.
 PRs join S91, except [Issue264](https://github.com/tensorbee/rdocx/issues/264)
 and [Issue281](https://github.com/tensorbee/rdocx/issues/281). Keep those two
 requirements discussions open. The fresh inventory contains thirty open issues
-and twenty-one PRs, twenty-eight included issues after exclusions. The previous
+and twenty-two PRs, twenty-eight included issues after exclusions. The previous
 nineteen PRs and twenty-six included issues retain their existing owners below.
 Issue339 andPR342 extend F-X203 all-story text acceptance. Issue340 andPR341
 are assigned to approved F-X213, a bounded TOC rebuild repair separate from
@@ -2193,7 +2193,7 @@ The 2026-10-11 09:50:39 UTC refresh found no new records. PR342 advanced
 to `9fd0b8da374b8c641e7ab89c0bd3d76bd2f4519a`. Its updated contribution
 remains assigned to F-X203. Its immutable update has been assessed against
 the existing approved contract, with remaining acceptance controls retained.
-All twenty-eight included issues and twenty-one PRs match this resolution map.
+All twenty-eight included issues and twenty-two PRs match this resolution map.
 
 | Included issues | Included PRs | S91 acceptance owners | Resolution work |
 |---|---|---|---|
@@ -2205,8 +2205,8 @@ All twenty-eight included issues and twenty-one PRs match this resolution map.
 | [301](https://github.com/tensorbee/rdocx/issues/301) | [317](https://github.com/tensorbee/rdocx/pull/317) | F-X198, F-X202 | Atomic refusal complete. Synchronized alternate-copy editing remains. |
 | No linked issue | [302](https://github.com/tensorbee/rdocx/pull/302) | F-X199 | Qualified empty cell margins, completed. |
 | [303](https://github.com/tensorbee/rdocx/issues/303), [321](https://github.com/tensorbee/rdocx/issues/321) | [320](https://github.com/tensorbee/rdocx/pull/320), [336](https://github.com/tensorbee/rdocx/pull/336) | F-X200, consumes F-X197 | Word formatting, lists and native shared numbering counters. |
-| [304](https://github.com/tensorbee/rdocx/issues/304) | [328](https://github.com/tensorbee/rdocx/pull/328) | F-X201 | Section stories and page authoring. |
-| [305](https://github.com/tensorbee/rdocx/issues/305) | [322](https://github.com/tensorbee/rdocx/pull/322) | F-X202, consumes F-X194 and F-X198 | Word tables, pictures, internal links and alternate-copy synchronization. |
+| [304](https://github.com/tensorbee/rdocx/issues/304) | [328](https://github.com/tensorbee/rdocx/pull/328), [343](https://github.com/tensorbee/rdocx/pull/343) | F-X201 | Section stories and page authoring, including checked related-story picture media ownership. |
+| [305](https://github.com/tensorbee/rdocx/issues/305) | [322](https://github.com/tensorbee/rdocx/pull/322), [343](https://github.com/tensorbee/rdocx/pull/343) | F-X202, consumes F-X194 and F-X198 | Word tables, pictures, internal links and alternate-copy synchronization, with atomic related-story Run picture insertion. |
 | [306](https://github.com/tensorbee/rdocx/issues/306), [332](https://github.com/tensorbee/rdocx/issues/332), [334](https://github.com/tensorbee/rdocx/issues/334), [339](https://github.com/tensorbee/rdocx/issues/339) | [325](https://github.com/tensorbee/rdocx/pull/325), [342](https://github.com/tensorbee/rdocx/pull/342) | F-X203 | Document operations, validation, Markdown emphasis and list/table boundaries, fresh Word-compatible settings, qualified all-story tabs/breaks and atomic visible control replacement. |
 | [307](https://github.com/tensorbee/rdocx/issues/307) | [330](https://github.com/tensorbee/rdocx/pull/330) | F-X204 | Shared CLI editing commands after their API providers. |
 | [308](https://github.com/tensorbee/rdocx/issues/308) | [318](https://github.com/tensorbee/rdocx/pull/318) | F-X205, consumes F-X194 and F-X197 | PowerPoint text, fill, properties, media and export parity. |
@@ -2218,6 +2218,17 @@ All twenty-eight included issues and twenty-one PRs match this resolution map.
 | [314](https://github.com/tensorbee/rdocx/issues/314) | Contributions above | All applicable S91 owners | Umbrella checklist, each provider credited once. |
 | [316](https://github.com/tensorbee/rdocx/issues/316), [331](https://github.com/tensorbee/rdocx/issues/331), [337](https://github.com/tensorbee/rdocx/issues/337) | [333](https://github.com/tensorbee/rdocx/pull/333), [336](https://github.com/tensorbee/rdocx/pull/336), [338](https://github.com/tensorbee/rdocx/pull/338) | F-X211, consumes completed providers | Frozen script corpus, safe XML, residual handles and bounded native control/text-box parsing. |
 | [340](https://github.com/tensorbee/rdocx/issues/340) | [341](https://github.com/tensorbee/rdocx/pull/341) | F-X213 | Entry-owned and single-paragraph TOC rebuild, retained opaque properties and namespace closure, no extra blank entries. |
+
+PR343 entered at `c6a78f683f327be8d7674af509874f74945080f3`, based directly
+on main `733ce6f7b2b816c5760692abf5c99d68b29ae897`. Its full immutable
+contribution is assessed at /private/tmp/S91-PR343-intake/assessment.md.
+Reuse checked native story-media allocation and lookup under F-X201, then
+compose actual Run picture insertion under F-X202. Its tests cover embedded
+relationships, not drawing insertion or rendering. Preserve current owner
+identity and validate stale, foreign and unsupported runs before one staged
+allocation and insertion, with no orphan media after refusal. Required note,
+cell, text-box, namespace, saved drawing and native render controls remain.
+Do not transplant contributor archive measurements or count shared work twice.
 
 PR317 spans several owners and is reconciled once across their accepted
 slices. PR326 and PR335 share group-transform changes, adopted once in F-X206.
@@ -2290,9 +2301,9 @@ No spreadsheet implementation or publication is authorized by this intake.
 S90's intake freeze remains its completed delivery boundary.
 
 **Current contribution intake**: rolling S91 intake is open at the user's
-latest instruction. The 2026-10-11 10:37:49 UTC refresh contains twenty-one
+latest instruction. The 2026-10-11 10:56:28 UTC refresh contains twenty-two
 open PRs and twenty-eight included open issues, excluding discussion Issues264
-and281. No new records or advanced PR heads were found since09:50:39 UTC.
+and281. New PR343 joins F-X201 and F-X202 without a duplicate story.
 All included records have acceptance owners in the current resolution map.
 Fold later contributions into their existing owner where applicable, preserving
 complete acceptance and avoiding duplicate work. The earlier2026-10-10 freeze
