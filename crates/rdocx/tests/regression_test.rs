@@ -397788,6 +397788,16 @@ mod embed_image_in_story_relates_the_image_from_the_story_part {
             document.image_data_for_story(&footer, &in_footer).unwrap(),
             PNG
         );
+        let (content_type, part) = document
+            .image_content_type_for_story(&header, &in_header)
+            .unwrap();
+        assert_eq!(content_type, "image/png");
+        assert!(
+            part.starts_with("/word/media/image") && part.ends_with(".png"),
+            "{part}"
+        );
+        // The header's relationship is not the body's.
+        assert!(document.image_data(&in_header).is_none());
 
         let bytes = document.to_bytes().unwrap();
         let header_images = image_relationships(&bytes, header.part_name());
