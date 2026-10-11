@@ -772,4 +772,9 @@ HLD14 contract before adopting contributor changes.
 | F-X211 | Complete Python script compatibility and safe XML access | S91 | L | pending |
 | F-X212 | Align native accessibility with visible paragraph content | S91 | M | done |
 | F-X213 | Preserve TOC entry boundary paragraphs during rebuild | S91 | M | in-progress |
+| F-X214 | Bound recursive PowerPoint parsing and traversal | S91 | L | pending |
+| F-X215 | Create charts in Python and replace existing chart data | S91 | L | pending |
+| F-X216 | Import complete slides and merge decks with source formatting | S91 | L | pending |
+| F-X217 | Import HTML and Markdown through public Word surfaces | S91 | L | pending |
+| F-X218 | Export presentations as semantic HTML and Markdown | S91 | L | pending |
 <!-- AUTOGEN:backlog-MX END -->

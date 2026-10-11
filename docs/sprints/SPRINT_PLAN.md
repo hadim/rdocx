@@ -2977,3 +2977,25 @@ Eight stories are completed, one is integrated and reviewed, four are
 running, and eight approved stories await their prerequisite checkpoints.
 GitHub reconciliation follows the sprint-close workflow. Issues264 and281
 remain excluded and open.
+
+## S91 rolling intake, 2026-10-11 18:56UTC
+
+Authoritative GitHub refresh /private/tmp/S91-intake-refresh-20261011T185631Z
+contains40 open issues and22 open PRs. New Issues344 through353 enter S91.
+Issues264 and281 remain excluded and open, including the changed discussion281.
+No existing PR head changed. The included total is38 issues and22 PRs.
+
+| Issues | Acceptance owner | Required resolution |
+|--------|------------------|---------------------|
+| 344 | F-X214 | Bound recursive PowerPoint parsing and traversal |
+| 345 and346 | F-X215 | Create charts in Python and replace existing chart data |
+| 347,348 and349 | F-X216 | Import complete slides and merge decks with source formatting |
+| 350 and351 | F-X217 | Import HTML and Markdown through public Word surfaces |
+| 352 and353 | F-X218 | Export presentations as semantic HTML and Markdown |
+
+All original acceptance owners remain. This intake adds five stories, not
+duplicate implementations in the existing Python or CLI stories. Reuse native
+providers and contributor slices once. Twenty-six active stories now comprise
+eight completed, one integrated and reviewed, four running, eight approved
+pending and five registered for design. No new implementation starts before
+approved contracts and completion of its actual prerequisites.

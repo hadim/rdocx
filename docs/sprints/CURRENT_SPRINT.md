@@ -6,8 +6,9 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 now contains twenty-one active stories, eight completed, one integrated
-and reviewed, four running and eight approved pending implementation. Rolling contribution intake is reopened at the user's latest instruction.
+S91 now contains twenty-six active stories, eight completed, one integrated
+and reviewed, four running, eight approved pending implementation and five
+new stories awaiting design approval. Rolling contribution intake is reopened at the user's latest instruction.
 
 ## Spec references
 
@@ -44,6 +45,11 @@ and reviewed, four running and eight approved pending implementation. Rolling co
 | F-X211 | Complete Python script compatibility and safe XML access | L | pending | - |
 | F-X212 | Align native accessibility with visible paragraph content | M | done | - |
 | F-X213 | Preserve TOC entry boundary paragraphs during rebuild | M | in-progress | codex |
+| F-X214 | Bound recursive PowerPoint parsing and traversal | L | pending | - |
+| F-X215 | Create charts in Python and replace existing chart data | L | pending | - |
+| F-X216 | Import complete slides and merge decks with source formatting | L | pending | - |
+| F-X217 | Import HTML and Markdown through public Word surfaces | L | pending | - |
+| F-X218 | Export presentations as semantic HTML and Markdown | L | pending | - |
 
 ## Carried to S92, user scope decision
 
@@ -839,3 +845,12 @@ retry, with no conformance acceptance claimed.
 Only completed prerequisites unlock the remaining stories. Full integrated
 verification, clean sprint review and close preflight remain required.
 Issues264 and281 remain excluded and open. S91 is not ready for close.
+
+## Rolling intake, 2026-10-11 18:56UTC
+
+The actual refresh found ten new Issues344 through353 and no new or changed
+PR heads. Forty open issues include thirty-eight in scope after excluding
+Issues264 and281. All twenty-two PRs remain included. The five new acceptance
+owners F-X214 throughF-X218 are registered in the backlog and sprint plan.
+Their designs and resource/dependency routing precede implementation. Existing
+completed records and the S92 carryovers retain their status.

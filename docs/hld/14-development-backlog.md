@@ -7551,3 +7551,43 @@ Reuse the contributor source and tests once, correcting preservation gaps.
 Native and installed Python regressions, repeated save/reopen, deterministic
 layout and attributed hash checks must pass. This bounded repair remains S91
 while the complete F-283 navigation contract stays parked at S92.
+
+### F-X214, Bound recursive PowerPoint parsing and traversal
+
+**Size**: L
+**Depends on**: none
+**Test gate**: regression
+
+Resolve Issues344 captured at2026-10-11 18:56UTC. One shared nesting limit covers group, AlternateContent and timing cycles. Parse each subtree once with linear work. CLI and Python return a named checked error past the limit without abort. Parsed and authored trees at the limit extract text and render safely, including layout and renderer walkers. Release tests prove each cycle at and beyond the limit, and at-limit open, extract and render complete in well under one second.
+
+### F-X215, Create charts in Python and replace existing chart data
+
+**Size**: L
+**Depends on**: F-X197, F-X206
+**Test gate**: regression
+
+Resolve Issues345 and346 captured at2026-10-11 18:56UTC. Expose supported native chart creation in both Python families with typed CategoryChartData and XyChartData-compatible objects. Read existing chart type, categories and series. Replace caches, formulas and the embedded workbook as one checked transaction, preserving surviving series formatting and applying native new-series defaults. Tests cover bar and line creation, fewer and more series, more categories, package validation, save/reopen and both cache and workbook values. Word and PowerPoint open without repair. PowerPoint Edit Data and actual render show the replacement.
+
+### F-X216, Import complete slides and merge decks with source formatting
+
+**Size**: L
+**Depends on**: F-X206, F-X215
+**Test gate**: regression
+
+Resolve Issues347,348 and349 captured at2026-10-11 18:56UTC. Import chart graphs including workbooks and style/colour parts, embedded objects and preview images, comments with merged authors and mapped slide jumps. Unmapped jumps are dropped with diagnostics. Unsupported relationships refuse without mutation. Optional keep-source-formatting copies and deduplicates source layouts, masters and themes while default destination-theme behavior remains. Rust and Python append all or selected slides and optionally retain sections. CLI range and insertion options write a new output file. Corpus merge checks cover count, order, notes, media reuse, package validity, source font/colour/geometry parity and repair-free native open.
+
+### F-X217, Import HTML and Markdown through public Word surfaces
+
+**Size**: L
+**Depends on**: F-X200, F-X203
+**Test gate**: regression
+
+Resolve Issues350 and351 captured at2026-10-11 18:56UTC. Expose existing HTML creation, file import and paragraph-relative insertion in Python, and HTML-to-DOCX CLI with diagnostics and stubs. Implement CommonMark plus GitHub tables creation in Rust, Python and CLI with headings, body paragraphs, emphasis, strong, code, strikethrough, nested numbering, tables, hyperlinks, inline pictures, quotes and code-block styles. Optional template import retains styles, headers and footers. Dropped constructs produce diagnostics. Per-construct and supported Markdown-to-DOCX-to-Markdown controls, HTML structure/styles in installed Python and CLI, and repair-free Word open are mandatory.
+
+### F-X218, Export presentations as semantic HTML and Markdown
+
+**Size**: L
+**Depends on**: F-X205, F-X206
+**Test gate**: regression
+
+Resolve Issues352 and353 captured at2026-10-11 18:56UTC. Rust, Python and CLI export one title-headed section per slide in existing outline reading order. Preserve paragraph levels and emphasis, links, semantic tables, picture alt text and embedded or adjacent image assets. Include notes and skip hidden slides when requested. Markdown uses nested lists and pipe tables. HTML uses semantic sections and tables and validates as HTML. Corpus expected-output comparisons cover every construct and option. This is semantic text export, with no pixel-exact promise.
