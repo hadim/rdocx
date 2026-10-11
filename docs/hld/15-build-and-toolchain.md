@@ -54,8 +54,10 @@ database through layout. The public facade exposes
 `Document::to_pdf_deterministic()`, and deterministic SVG page export. All
 three reuse the separate cached bundled-font-only layout. The PDF facade passes
 that layout directly to
-`oxml_pdf::render_to_pdf`, which gives the golden-PNG gate deterministic PDF
-input without changing the normal PDF API. Existing constructors and rendering
+`oxml_pdf::render_to_pdf_checked`, which gives the golden-PNG gate
+deterministic PDF input and refuses failed selected-font preparation before
+output. The legacy vector operation retains its signature and returns no
+partial bytes on preparation failure. Existing constructors and rendering
 methods still load system fonts for library users.
 
 The hash harness, golden-PNG gate and SSIM harness use the deterministic path.
@@ -215,6 +217,51 @@ checks, rustdoc with warnings denied, dependency policy, patched workspace
 publish dry runs, the 10 MiB archive ceiling, and the unchanged 49-entry hash
 harness. Microsoft Word 16.104 build 16.104.25121423 is an ignored no-repair
 oracle only.
+
+Independent installed style paint requires the full104 Word and PowerPoint
+method matrix and the separately executed eight-owner SVG artifact gate.
+PNG and SVG use independently decoded original/static physical contours
+painted by qualified resvg0.48.1, usvg0.48.1 and tiny-skia0.12.0 controls.
+Quadratic and equivalent cubic representations each meet the unchanged0.99
+threshold with source-derived placement, scale and ROI. Wrong-style, origin
+and geometry controls remain below0.99. A shared raster backend comparison
+cannot expose common backend defects.
+
+PDF uses original/static font-text paint under pinned Poppler26.01.0. Variable
+PDF subset glyphs reachable through actual font resources and text operators
+match source-derived first-use glyph mappings, contours, bounds and advances
+exactly. Original-font per-owner ROIs meet0.99, wrong-weight and wrong-origin
+negatives remain below0.99, and drawing commands, repeats and pixels outside
+those ROIs remain exact. Equivalent quadratic point encodings need not be
+bit-identical under the pinned PDF rasterizer. This qualification permits no
+original-font substitution, fitted tolerance or product canonicalization.
+Non-PDF exact default, instance, axes, owner and geometry controls remain.
+
+The SVG artifact gate is an explicitly selected ignored library test whose
+installed wheel and authenticated artifacts are external prerequisites. It
+requires one actual passed test, zero ignored outcomes and all eight owners
+against both quadratic and cubic controls. Ordinary library ignores earn no
+acceptance credit. Python acceptance never launches Cargo.
+
+Variable-font style controls pin `hb-subset`14.4.0 and authenticate licensed
+source bytes, tool identity and independent static400/700 outputs. Actual
+advances, outlines and painted geometry are distinct checks. Synthetic controls
+use independently specified stroke and shear geometry, without substituting
+producer metadata for painting. The existing Thin CJK13.2.1 generation contract
+remains separate. Original static no-input deterministic outputs stay exact,
+and actual intentional variable or synthesis deltas require independent
+attribution before the exclusive hash baseline moves. Font licensing and the
+packaged font inventory remain unchanged.
+
+The SVG raster oracle independently shapes each selected static script and
+weight with pinned HarfBuzz14.4.0. Only a unique textLength with
+spacingAndGlyphs whose target equals that independent natural advance within
+half a six-decimal serialization unit qualifies for identity-only removal
+from the oracle copy. The raw product SVG and raw raster comparison remain
+retained. Nonidentity, unknown, nonfinite and nonpositive adjustments refuse
+normalization. This isolates the pinned usvg cluster-width adjustment
+limitation without changing product geometry, the0.99 paint threshold or
+weight400-versus700 discrimination. It establishes no general browser result.
 
 ## Feature flags
 
@@ -971,6 +1018,18 @@ infrastructure rather than production logic.
 The single advisory exception, an unmaintained transitive font dependency,
 carries its exit route in a comment. Keep that discipline: an ignore without a
 stated exit route is a permanent ignore.
+
+The private native Word SVG renderer uses the already pinned workspace
+`ttf-parser` edge for selected TTC face extraction and instance-aware ink
+bounds. Both installed Python bindings use the existing `oxml-layout` edge for
+strict caller font loading. Word selected-page raster rendering uses the
+existing `oxml-pdf` edge to paint its one configured layout. Only existing
+package dependency-list edges change. Package identities, versions and
+checksums remain unchanged, with no public reexport or host-directory WASM API.
+These source changes retain Rust1.93, no-default layout and both WASM graphs,
+including the Presentation render profile, as completion gates. Actual changed
+crate archives require source/member correspondence, the unchanged compression
+tolerance and10MiB ceiling, and verified patched publication dry runs.
 
 New dependencies are added only with a named consumer. The workspace already
 minimises feature sets deliberately, and the comments in the root manifest

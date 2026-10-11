@@ -1,6 +1,6 @@
 # F-X195, Honor caller fonts and variable styles across render paths
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: L
 **Depends on**: none
@@ -27,6 +27,7 @@ Bold names. This plan resolves Issues 296 and 297 as one selection contract.
 - `docs/hld/14-development-backlog.md`, "F-X195, Honor caller fonts and variable styles across render paths".
 - `docs/hld/08-rendering-spec.md`, "The PDF backend", "The rasteriser", "The SVG backend", "Slide text layout as data" and "Performance".
 - `docs/hld/10-bindings-spec.md`, "Python API shape", "Native Word facade stability", "Native PowerPoint text layout", "WASM" and "CLIs".
+- `docs/hld/03-architecture.md`, "The dependency rule".
 - `docs/hld/15-build-and-toolchain.md`, "Deterministic rendering", "Packaging" and "Dependency policy".
 
 ## Approach
@@ -158,8 +159,19 @@ presented as an actual static Bold or Italic font. Genuine variable instances
 carry their actual selected weight and slant identity. Preserve Unicode
 mapping, shaping clusters, static fonts, coverage fallback and font licensing.
 
-Use existing source and test modules. Add no dependency, crate, feature flag
-or tracked binary fixture. Existing `harfrust` 0.12, `ttf-parser` 0.25 and
+Use existing source and test modules. The existing rdocx crate adds only the
+already pinned workspace ttf-parser dependency for private SVG selected-face
+extraction and instance-aware ink bounds. No package, version or checksum
+change is permitted. Cargo.lock may record only this existing dependency edge
+in rdocx. The two installed Python binding consumers also use the existing
+pinned oxml-layout workspace dependency for strict FontFile::from_dir
+loading. Promote the existing Word dev edge to a normal dependency and add
+the PowerPoint normal edge. Cargo.lock may record only those existing binding
+package dependency-list edges, with no package, version or checksum change.
+Word PyDocument.render_pages also uses the existing pinned oxml-pdf workspace
+edge to paint one configured native layout bundle, with no new native API.
+Cargo.lock may record only this existing rdocx-py dependency-list edge.
+Add no other dependency, crate, feature flag or tracked binary fixture. Existing `harfrust` 0.12, `ttf-parser` 0.25 and
 `subsetter` 0.2.6 provide the required APIs. The latter already enables
 `variable-fonts` by default. Neither WASM wrapper gains a host-directory API.
 
@@ -244,6 +256,59 @@ runtime evidence instead of linking PyO3 extension-module Rust test binaries.
 Run the scoped feature gate and the applicable riders below. Full workspace
 verification remains the integrated sprint gate.
 
+### Qualified independent paint oracles
+
+Keep the full104 installed matrix and0.99 positive threshold. PNG and
+searchable SVG style controls use independently decoded original/static
+physical glyph contours painted by the reviewed standalone resvg0.48.1,
+usvg0.48.1 and tiny-skia0.12.0 reference. Preserve quadratic outlines and
+independently equivalent cubic controls, source-derived absolute placement,
+ROI, notes preview scale,12degree baseline shear and1/24em round stroke.
+No product outline, shaper, subsetter, image registration or pixel-fit input
+is an oracle. Retain all style, origin, wrong-geometry and shear negatives
+below0.99. Both quadratic and cubic paint must meet0.99 independently.
+
+PDF retains independent original/static font-text paint under the same pinned
+Poppler26.01.0 at0.99. Do not substitute shared-backend PNG paint for this PDF
+proof. Reference resvg and product share a raster backend, so this pipeline
+comparison cannot detect a common backend defect. Original mixed failures
+and the finite24-owner diagnostic remain retained. They do not satisfy fresh
+full104 acceptance or the separate mandatory eight-owner native SVG gate.
+
+Use existing Python test entrypoints and an embedded reviewable standalone
+renderer source. Runtime takes explicit hash-bound compiler qualification,
+renderer binary and pinned Poppler paths from the admission environment.
+No tracked private temporary path, new dependency, module or test file is
+required. ROOT authenticates compiler, isolated transitive artifact closure,
+source and binary before use. Tests never compile or invoke Cargo. Fresh
+paired debug wheels, installed-source provenance and exact current-source
+collection are required before the new full104 installed stage. All current variable-font default, selected-instance source, axes, owner,
+advance, exact geometry and exact repeat controls remain. PNG, SVG and layout
+comparisons retain their existing semantics. Variable PDF versus independently
+instanced original/static font paint uses source-derived per-owner ROI at0.99,
+with wrong-weight and wrong-origin negatives below0.99. Every embedded used
+subset glyph must match independently decoded original/static source contours,
+bounds and advances exactly. PDF drawing commands and all pixels outside the
+source-derived ROIs remain exact. This qualifies equivalent quadratic point
+encodings that the pinned rasterizer paints differently, as established by
+bidirectional raw-glyph counterfactuals. No original font substitution,
+canonicalization, fitted pixel tolerance or threshold change is permitted.
+
+### Mandatory installed SVG artifact gate
+
+The installed style matrix must pass its actual104 named cases before the
+separate native SVG artifact gate. Execute the existing inline
+`svg::tests::fx195_installed_svg_styles_paint_authenticated_independent_contours`
+test explicitly with `--exact --ignored --nocapture`. Require one actual
+passed test and all eight authenticated SVG owners against their independent
+paint controls at the unchanged0.99 threshold. The test is declared ignored
+for ordinary library runs because its wheel and installed artifacts are
+external prerequisites. An ordinary ignore is not acceptance or a waiver.
+ROOT admits actual installed terminal, paired wheel/source equivalence,
+whole current source bytes/sizes and platform modes, plus immutable artifact
+hashes before this serial exclusive Cargo stage. No Python fallback launches
+Cargo. Existing full native and publication riders remain required.
+
 ## HLD impact
 
 - `docs/hld/08-rendering-spec.md`
@@ -257,7 +322,7 @@ verification remains the integrated sprint gate.
 - Python and WASM graph, `docs/hld/10-bindings-spec.md`: installed runtime and typing tests and `cargo check --target wasm32-unknown-unknown -p rdocx-wasm -p rpptx-wasm`, including the rpptx rendering profile. Workspace tests exclude both PyO3 binding crates.
 - Font controls and assets, `docs/hld/15-build-and-toolchain.md`: verify licenses, source hashes and unchanged packaged font inventory.
 - External oracle comparison, `.claude/skills/differential-testing.md`: pin hb-subset 14.4.0 and exact control inputs. Record limitations of geometry comparisons and do not use production output as its own oracle.
-- Dependency graph, `docs/hld/03-architecture.md`: preserve format-neutral layering. No dependency change is planned. Check MSRV with the pinned toolchain and existing supply-chain gates.
+- Dependency graph, `docs/hld/03-architecture.md`: preserve format-neutral layering. Only the pinned rdocx to ttf-parser edge, the two installed binding to oxml-layout edges and the rdocx-py to oxml-pdf configured render_pages edge are permitted, including their existing lockfile dependency-list entries. Read the architecture dependency rule and verify unchanged package versions, checksums and inventory. Check MSRV with the pinned toolchain and existing supply-chain gates.
 - No-default-features, `docs/hld/15-build-and-toolchain.md`: run `cargo test -p oxml-layout --no-default-features`.
 
 No new trait, generic parameter, crate, module, file or feature flag is
@@ -277,17 +342,17 @@ intentional rendering delta belongs in this feature's labeled behavior commit.
 
 ## Implementation checklist
 
-- [ ] Centralize validation and deterministic directory loading in existing files.
-- [ ] Apply lexical directory-first and explicit-last precedence.
-- [ ] Thread caller fonts through Word and PowerPoint common layout preparation.
-- [ ] Extend every affected CLI and installed Python runtime and typing surface.
-- [ ] Carry owned variation and synthesis identity through font output.
-- [ ] Apply coordinates consistently to metrics, shaping, PDF, PNG and SVG.
-- [ ] Implement and independently verify synthetic geometry and ink extents.
-- [ ] Preserve static faces, fallback, licenses and original no-input behavior.
-- [ ] Run entrypoint, font-control, packaging, MSRV and WASM riders.
-- [ ] Review and declare actual harness deltas.
-- [ ] Update the listed HLD sections.
+- [x] Centralize validation and deterministic directory loading in existing files.
+- [x] Apply lexical directory-first and explicit-last precedence.
+- [x] Thread caller fonts through Word and PowerPoint common layout preparation.
+- [x] Extend every affected CLI and installed Python runtime and typing surface.
+- [x] Carry owned variation and synthesis identity through font output.
+- [x] Apply coordinates consistently to metrics, shaping, PDF, PNG and SVG.
+- [x] Implement and independently verify synthetic geometry and ink extents.
+- [x] Preserve static faces, fallback, licenses and original no-input behavior.
+- [x] Run entrypoint, font-control, packaging, MSRV and WASM riders.
+- [x] Review and declare actual harness deltas.
+- [x] Update the listed HLD sections.
 
 ## Open questions
 
@@ -295,7 +360,7 @@ None. The sprint invocation authorizes the complete Issues 296 and 297
 contract. The plan preserves original omission behavior, adopts lexical
 directory-first and explicit-last loading, retains default CJK regular
 coordinates, declares the required pre-1.0 output-identity source break and
-introduces no dependency. Synthetic constants are deliberate choices gated
+permits only the scoped existing workspace edges stated in Approach. Synthetic constants are deliberate choices gated
 on independent controls.
 
 ## Contributor intake, PR315

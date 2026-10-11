@@ -5436,3 +5436,1410 @@ def test_powerpoint_cell_colour_view_obeys_the_existing_cell_text_generation():
     actual = reopened.slides[0].shapes[0].table.cell(0, 0).text_frame.paragraphs[0].runs[0]
     assert actual.text == "second"
     assert str(actual.font.color.rgb) == "123456"
+
+
+def _fx195_checksum(data):
+    padded = data + b'\x00' * (-len(data) % 4)
+    return sum(struct.unpack('>' + str(len(padded) // 4) + 'I', padded)) & 4294967295
+
+def _fx195_renamed_font(source, family):
+    data = bytearray(source)
+    count = struct.unpack_from('>H', data, 4)[0]
+    tables = {}
+    for i in range(count):
+        entry = 12 + 16 * i
+        tag = bytes(data[entry:entry + 4])
+        offset, length = struct.unpack_from('>II', data, entry + 8)
+        assert offset + length <= len(data)
+        tables[tag] = (entry, offset, length)
+    _, off, length = tables[b'name']
+    table = data[off:off + length]
+    _, records, storage = struct.unpack_from('>HHH', table, 0)
+    changes = 0
+    for i in range(records):
+        platform, encoding, language, ident, size, offset = struct.unpack_from('>HHHHHH', table, 6 + 12 * i)
+        start = storage + offset
+        assert start + size <= len(table)
+        if platform not in (0, 1, 3):
+            continue
+        codec = 'mac_roman' if platform == 1 else 'utf-16-be'
+        value = bytes(table[start:start + size]).decode(codec)
+        edited = value.replace('Carlito', family).replace('Caladea', family)
+        if edited != value:
+            encoded = edited.encode(codec)
+            assert len(encoded) == size
+            table[start:start + size] = encoded
+            changes += 1
+    assert changes > 0
+    data[off:off + length] = table
+    _, head, headlen = tables[b'head']
+    assert headlen >= 12
+    data[head + 8:head + 12] = b'\x00' * 4
+    for tag, (entry, offset, length) in tables.items():
+        struct.pack_into('>I', data, entry + 4, _fx195_checksum(bytes(data[offset:offset + length])))
+    struct.pack_into('>I', data, head + 8, 2981146554 - _fx195_checksum(bytes(data)) & 4294967295)
+    assert _fx195_checksum(bytes(data)) == 2981146554
+    for tag, (entry, offset, length) in tables.items():
+        if tag not in (b'name', b'head'):
+            assert data[offset:offset + length] == source[offset:offset + length]
+    assert family.encode('utf-16-be') in table
+    return bytes(data)
+
+def _fx195_font_inputs():
+    from pathlib import Path
+    directory = Path(__file__).resolve().parents[2] / 'oxml-layout' / 'fonts'
+    family = 'FX195CX'
+    first = _fx195_renamed_font((directory / 'Carlito-Regular.ttf').read_bytes(), family)
+    second = _fx195_renamed_font((directory / 'Caladea-Regular.ttf').read_bytes(), family)
+    assert first != second
+    return (family, first, second)
+
+def _fx195_presentation(family):
+    import rpptx as module
+    import xml.etree.ElementTree as ET
+    name = family
+    obj = module.Presentation()
+    slide = obj.slides.add_slide(obj.slide_layouts[6])
+    shape = slide.shapes.add_textbox(914400, 914400, 5486400, 914400)
+    shape.text = 'WWWW iiiii caller FX195 controlled geometry'
+    run = obj.slides[0].shapes[0].text_frame.paragraphs[0].runs[0]
+    run.font.name = name
+    obj.slides[0].shapes[0].text_frame.paragraphs[0].runs[0].font.size = 20 * 12700
+    obj.slides[0].notes_text = 'FX195 NOTES caller controlled geometry'
+    raw = obj.to_bytes()
+    parts = {}
+    with zipfile.ZipFile(io.BytesIO(raw)) as z:
+        parts = {n: z.read(n) for n in z.namelist()}
+    notes = [n for n in parts if re.fullmatch('ppt/notesSlides/notesSlide\\d+\\.xml', n)]
+    assert len(notes) == 1
+    ns = '{http://schemas.openxmlformats.org/drawingml/2006/main}'
+    root = ET.fromstring(parts[notes[0]])
+    edited = 0
+    for r in root.iter(ns + 'r'):
+        text = r.find(ns + 't')
+        if text is None or 'FX195 NOTES' not in (text.text or ''):
+            continue
+        prop = r.find(ns + 'rPr')
+        if prop is None:
+            prop = ET.Element(ns + 'rPr')
+            r.insert(0, prop)
+        latin = prop.find(ns + 'latin')
+        if latin is None:
+            latin = ET.SubElement(prop, ns + 'latin')
+        latin.set('typeface', name)
+        edited += 1
+    assert edited == 1
+    parts[notes[0]] = ET.tostring(root, encoding='utf-8', xml_declaration=True)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w') as z:
+        for n, b in parts.items():
+            z.writestr(n, b)
+    obj = module.Presentation.from_bytes(buf.getvalue())
+    assert 'FX195 NOTES' in obj.slides[0].notes_text
+    assert name.encode() in parts[notes[0]]
+    assert obj.slides[0].shapes[0].text_frame.paragraphs[0].runs[0].font.name == name
+    return obj
+
+@pytest.mark.parametrize('method', ['to_pdf', 'render_slide_to_png', 'render_all_slides', 'text_layout', 'to_notes_pdf', 'render_all_notes'])
+def test_fx195_installed_ppt_caller_selection_and_ordered_inputs(method, tmp_path):
+    family, first, second = _fx195_font_inputs()
+    presentation = _fx195_presentation(family)
+    before = presentation.to_bytes()
+
+    def invoke(kwargs):
+        if method == 'render_slide_to_png':
+            return presentation.render_slide_to_png(0, dpi=72, **kwargs)
+        if method == 'render_all_slides':
+            return presentation.render_all_slides(dpi=72, **kwargs)
+        if method == 'render_all_notes':
+            return presentation.render_all_notes(dpi=72, **kwargs)
+        return getattr(presentation, method)(**kwargs)
+    first_args, second_args = ({'fonts': [(family, first)]}, {'fonts': [(family, second)]})
+    reference, alternative = (invoke(first_args), invoke(second_args))
+    assert reference != alternative, f'{method} must use actual physical caller face in slide/notes paint or metrics'
+    if method in ('to_pdf', 'to_notes_pdf'):
+        assert b'FX195CX' in reference and reference.startswith(b'%PDF')
+    if method == 'text_layout':
+        assert reference and reference[0].lines
+        assert reference[0].lines[0].bounds.width != alternative[0].lines[0].bounds.width
+    first_dir, second_dir, empty = (tmp_path / 'first', tmp_path / 'second', tmp_path / 'empty')
+    for directory in (first_dir, second_dir, empty):
+        directory.mkdir()
+    (first_dir / (family + '.ttf')).write_bytes(first)
+    (second_dir / (family + '.ttf')).write_bytes(second)
+    assert invoke({'font_dir': first_dir}) == reference
+    assert invoke({'font_dirs': [second_dir, first_dir]}) == reference
+    assert invoke({'font_dirs': [first_dir, second_dir]}) == alternative
+    assert invoke({'font_dirs': [second_dir], **first_args}) == reference
+    assert invoke(first_args) == reference
+    ordinary = invoke({})
+    assert invoke({'fonts': []}) == ordinary
+    assert invoke({'font_dir': empty}) == ordinary
+    assert invoke({'fonts': [], 'font_dirs': [empty]}) == ordinary
+    assert invoke({'font_dirs': []}) == ordinary
+    assert invoke({'font_dir': empty}) == ordinary
+    with pytest.raises(ValueError, match='font_dir.*font_dirs'):
+        invoke({'font_dir': first_dir, 'font_dirs': []})
+    with pytest.raises(TypeError, match='font_dirs'):
+        invoke({'font_dirs': str(first_dir)})
+    with pytest.raises(FileNotFoundError, match='font directory.*missing'):
+        invoke({'font_dirs': [tmp_path / 'missing']})
+    with pytest.raises(NotADirectoryError, match='font directory'):
+        invoke({'font_dirs': [first_dir / (family + '.ttf')]})
+    bad = tmp_path / 'bad'
+    bad.mkdir()
+    (bad / 'broken.ttf').write_bytes(b'not a supported font')
+    with pytest.raises(Exception, match='font file.*broken.ttf'):
+        invoke({'font_dirs': [bad]})
+    denied = tmp_path / 'denied'
+    denied.mkdir()
+    denied.chmod(0)
+    try:
+        from rpptx import RpptxError
+        with pytest.raises((PermissionError, RpptxError), match=re.escape(str(denied))) as failure:
+            invoke({'font_dirs': [denied]})
+        assert 'permission denied' in str(failure.value).lower()
+    finally:
+        denied.chmod(448)
+    assert presentation.to_bytes() == before
+
+def _fx195_four_i_ink_width(source, points):
+    tables = {}
+    for offset in range(12, 12 + struct.unpack_from('>H', source, 4)[0] * 16, 16):
+        tables[source[offset:offset + 4]] = struct.unpack_from('>II', source, offset + 8)
+    cmap, _ = tables[b'cmap']
+    glyph = None
+    for record in range(struct.unpack_from('>H', source, cmap + 2)[0]):
+        platform, encoding, relative = struct.unpack_from('>HHI', source, cmap + 4 + 8 * record)
+        subtable = cmap + relative
+        if platform not in (0, 3) or struct.unpack_from('>H', source, subtable)[0] != 4:
+            continue
+        segments = struct.unpack_from('>H', source, subtable + 6)[0] // 2
+        for segment in range(segments):
+            end = struct.unpack_from('>H', source, subtable + 14 + 2 * segment)[0]
+            start = struct.unpack_from('>H', source, subtable + 16 + 2 * segments + 2 * segment)[0]
+            if start <= ord('i') <= end:
+                delta = struct.unpack_from('>h', source, subtable + 16 + 4 * segments + 2 * segment)[0]
+                range_at = subtable + 16 + 6 * segments + 2 * segment
+                relative = struct.unpack_from('>H', source, range_at)[0]
+                glyph = ord('i') if relative == 0 else struct.unpack_from('>H', source, range_at + relative + 2 * (ord('i') - start))[0]
+                glyph = (glyph + delta) % 65536
+                break
+        if glyph is not None:
+            break
+    assert glyph is not None and glyph > 0
+    head, _ = tables[b'head']
+    units = struct.unpack_from('>H', source, head + 18)[0]
+    hhea, _ = tables[b'hhea']
+    metrics = struct.unpack_from('>H', source, hhea + 34)[0]
+    hmtx, _ = tables[b'hmtx']
+    advance = struct.unpack_from('>H', source, hmtx + 4 * min(glyph, metrics - 1))[0]
+    loca, _ = tables[b'loca']
+    if struct.unpack_from('>h', source, head + 50)[0] == 0:
+        glyph_offset = struct.unpack_from('>H', source, loca + 2 * glyph)[0] * 2
+    else:
+        glyph_offset = struct.unpack_from('>I', source, loca + 4 * glyph)[0]
+    glyf, _ = tables[b'glyf']
+    x_min = struct.unpack_from('>h', source, glyf + glyph_offset + 2)[0]
+    x_max = struct.unpack_from('>h', source, glyf + glyph_offset + 6)[0]
+    assert x_max > x_min and units > 0
+    return (3 * advance + x_max - x_min) * points / units
+
+def _fx195_painted_width(png):
+    from PIL import Image
+    image = Image.open(io.BytesIO(png)).convert('RGB')
+    mask = image.convert('L').point(lambda value: 255 if value < 200 else 0)
+    bounds = mask.getbbox()
+    assert bounds is not None, 'caller text must actually paint'
+    return bounds[2] - bounds[0]
+
+def _fx195_collection(first, second):
+    collection = bytearray(b'ttcf\x00\x01\x00\x00\x00\x00\x00\x02' + b'\x00' * 8)
+    for index, source in enumerate((first, second)):
+        offset = len(collection)
+        struct.pack_into('>I', collection, 12 + 4 * index, offset)
+        face = bytearray(source)
+        count = struct.unpack_from('>H', face, 4)[0]
+        for table in range(count):
+            at = 12 + table * 16 + 8
+            original = struct.unpack_from('>I', face, at)[0]
+            struct.pack_into('>I', face, at, original + offset)
+        collection.extend(face)
+        collection.extend(b'\x00' * (-len(collection) % 4))
+    return bytes(collection)
+
+def test_fx195_ppt_caller_png_matches_independent_font_ink_and_collection(tmp_path):
+    from pathlib import Path
+    from rpptx import Presentation
+    family, first, second = _fx195_font_inputs()
+    presentation = Presentation()
+    presentation.slides.add_slide(presentation.slide_layouts[6])
+    presentation.slides[0].shapes.add_textbox(914400, 914400, 5486400, 914400).text = 'iiii'
+    presentation.slides[0].shapes[0].text_frame.paragraphs[0].runs[0].font.name = family
+    presentation.slides[0].shapes[0].text_frame.paragraphs[0].runs[0].font.size = 36 * 12700
+    before = presentation.to_bytes()
+    paintings = []
+    for source in (first, second):
+        png = presentation.render_slide_to_png(0, dpi=72, fonts=[(family, source)])
+        assert abs(_fx195_painted_width(png) - _fx195_four_i_ink_width(source, 36)) <= 2, 'selected physical font must paint the independent metric width'
+        paintings.append(png)
+    assert paintings[0] != paintings[1]
+    ordinary = (Path(__file__).resolve().parents[2] / 'oxml-layout' / 'fonts' / 'Carlito-Regular.ttf').read_bytes()
+    directory = tmp_path / 'collection'
+    directory.mkdir()
+    (directory / 'filename-alias.ttc').write_bytes(_fx195_collection(ordinary, second))
+    assert presentation.render_slide_to_png(0, dpi=72, font_dirs=[directory]) == paintings[1]
+    assert presentation.to_bytes() == before
+
+
+
+
+def _fx195_variable_svg_geometry(svg, weight, variable):
+    import xml.etree.ElementTree as ET
+    tree = ET.fromstring(svg)
+    for node in tree.iter():
+        if not node.tag.endswith('}text'):
+            continue
+        assert 'stroke' not in node.attrib and 'transform' not in node.attrib
+        style = node.attrib.pop('style', None)
+        if variable:
+            assert style is not None and style.startswith('font-synthesis:none;font-variation-settings:')
+            selectors = dict((tag,float(value)) for tag,value in re.findall(r"'([A-Za-z0-9]{4})' ([-+0-9.]+)",style))
+            assert selectors.get('wght') == weight
+            assert set(selectors) <= {'wght','wdth'}
+            if 'wdth' in selectors: assert selectors['wdth'] == 100
+        else:
+            assert style is None
+    # Font definitions are representation differences. Actual and independent
+    # static source bytes are authenticated separately before this comparison.
+    # Keep every other element, attribute, text, position and child order.
+    for parent in tree.iter():
+        for child in list(parent):
+            if child.tag.endswith('}style'):
+                assert child.text and '@font-face{' in child.text
+                parent.remove(child)
+    return ET.tostring(tree,encoding='unicode')
+
+
+def _fx195_save_variable_svg_artifact(actual, expected, weight, directory):
+    import base64
+    import hashlib
+    import json
+    import os
+    from pathlib import Path
+    import xml.etree.ElementTree as ET
+    authority = json.loads((Path(os.environ['F_X195_VARIABLE_ORACLES'])/'receipt.json').read_text())
+    row = next(row for row in authority['controls'] if row['script']=='Thai' and row['weight']==weight)
+    node = next(node for node in ET.fromstring(actual).iter() if node.tag.endswith('}text') and ''.join(node.itertext())==row['text'])
+    family = node.get('font-family')
+    assert "'wght' " + str(weight) in node.get('style',''), 'selected coordinates must be emitted on this real owner'
+    sources = re.findall(r"@font-face\{font-family:'([^']+)';src:url\('data:[^;]+;base64,([^']+)'\)",actual)
+    font = next(base64.b64decode(value) for name,value in sources if name==family)
+    assert hashlib.sha256(font).hexdigest()==row['source_sha256']
+    expected_sources = re.findall(r"@font-face\{font-family:'([^']+)';src:url\('data:[^;]+;base64,([^']+)'\)",expected)
+    assert len(expected_sources)==1
+    assert hashlib.sha256(base64.b64decode(expected_sources[0][1])).hexdigest()==row['output_sha256']
+    a,e=directory/'variable-installed.svg',directory/'variable-independent-static.svg'
+    a.write_text(actual); e.write_text(expected)
+    root=ET.fromstring(actual)
+    dimensions=[float(root.get(key).removesuffix('pt')) for key in ('width','height')]
+    assert dimensions==[round(value) for value in dimensions], '72dpi companion requires integer page dimensions'
+    artifact={'case':'variable-'+str(weight),'svg':str(a),'svgSHA':hashlib.sha256(a.read_bytes()).hexdigest(),'expectedSVG':str(e),'expectedSVGSHA':hashlib.sha256(e.read_bytes()).hexdigest(),'fontFamily':family,'fontSHA':row['source_sha256'],'fontIndex':0,'oracleFont':row['output'],'oracleFontSHA':row['output_sha256'],'width':int(dimensions[0]),'height':int(dimensions[1]),'threshold':.99,'selector':"'wght' "+str(weight)}
+    # The emitted SVG remains unchanged. The serial native stage qualifies its
+    # selected-instance font resolver separately because usvg ignores CSS axes.
+    (directory/'variable-installed-svg-artifact.json').write_text(json.dumps(artifact,indent=2)+'\n')
+# Candidate additions for each existing installed test carrier, not a new module.
+# Root must bind the supplied retained-oracle directory and source receipts.
+
+def _fx195_style_oracles():
+    import hashlib
+    import json
+    from pathlib import Path
+    import os
+    directory = Path(os.environ['F_X195_VARIABLE_ORACLES'])
+    receipt = json.loads((directory / 'receipt.json').read_text())
+    assert receipt['tools']['hb-shape'] == 'hb-shape (HarfBuzz) 14.4.0'
+    rows = [row for row in receipt['controls'] if row['script'] == 'Thai']
+    assert {row['weight'] for row in rows} == {400, 700}
+    selected = {}
+    for row in rows:
+        variable = Path(row['source']).read_bytes()
+        static = Path(row['output']).read_bytes()
+        assert hashlib.sha256(variable).hexdigest() == row['source_sha256']
+        assert hashlib.sha256(static).hexdigest() == row['output_sha256']
+        assert row['source_instance_positioning_matches_static'] is True
+        assert row['source_static_svg_path_topology_matches'] is True
+        assert row['source_static_svg_path_max_coordinate_delta_font_units'] <= 0.008
+        assert sum(glyph['ax'] for glyph in row['shape']) > 0
+        selected[row['weight']] = variable, static, row['text']
+    assert selected[400][0] == selected[700][0]
+    assert selected[400][1] != selected[700][1]
+    return selected
+
+
+def _fx195_style_observation(value, method, directory, label):
+    # Full pixel canvases are compared, not registered/cropped masks that could
+    # hide changed advances, page origins, selected page order or clipping.
+    import subprocess
+    from PIL import Image
+    if method in ('to_pdf', 'to_notes_pdf'):
+        source = directory / (label + '.pdf')
+        source.write_bytes(value)
+        target = directory / label
+        result = subprocess.run(
+            [_fx195_pinned_poppler(), '-r', '72', '-png', str(source), str(target)],
+            capture_output=True, timeout=120, check=False,
+        )
+        assert result.returncode == 0, result.stderr.decode(errors='replace')
+        images = sorted(directory.glob(label + '-*.png'), key=lambda p: int(p.stem.rsplit('-', 1)[1]))
+        assert images
+        return [(image.size, image.tobytes()) for path in images for image in [Image.open(path).convert('RGBA')]]
+    if method in ('render_page_to_png', 'render_slide_to_png'):
+        image = Image.open(io.BytesIO(value)).convert('RGBA')
+        assert image.convert('RGB').convert('L').getextrema()[0] < 200
+        return image.size, image.tobytes()
+    if method in ('render_all_pages', 'render_pages', 'render_all_slides', 'render_all_notes'):
+        assert value
+        return [_fx195_style_observation(png, 'render_page_to_png', directory, label) for png in value]
+    if method == 'render_page_to_svg':
+        # This is positioning/searchable-text evidence, not installed SVG paint.
+        # Raw caller font data can differ between the independently instanced
+        # static reference and variable source. Preserve every geometry/style
+        # attribute while ignoring only the actual embedded font data URI.
+        assert 'data:font/' in value
+        return re.sub(r'data:font/[^;]+;base64,[A-Za-z0-9+/=]+', 'FONT_BYTES', value)
+    if method in ('layout', 'layout_page'):
+        return value
+    assert method == 'text_layout'
+    assert value and value[0].lines
+    return [(line.bounds.x, line.bounds.y, line.bounds.width, line.bounds.height) for item in value for line in item.lines]
+
+
+def _fx195_variable_pdf_reachable_proof(pdf, owners, row, source):
+    # Existing qualified raw PDF syntax, no new PDF-reader dependency.
+    # Each reachable shown CID is tied to its scoped Tf font and expected HB
+    # source glyph at independently declared OOXML placement.
+    import math
+    import hashlib
+    import zlib
+    objects = {}
+    for match in re.finditer(rb'(?m)(\d+)\s+0\s+obj\b(.*?)\bendobj\b',pdf,re.S):
+        oid,body=int(match[1]),match[2]
+        stream=re.search(rb'\bstream\r?\n(.*?)\r?\nendstream\b',body,re.S)
+        header=body[:stream.start()] if stream else body
+        data=stream[1] if stream else None
+        if data is not None and b'/FlateDecode' in header:data=zlib.decompress(data)
+        assert oid not in objects;objects[oid]=(header,data)
+    pages=[oid for oid,(header,_) in objects.items() if re.search(rb'/Type\s*/Page\b',header)]
+    assert len(pages)==1
+    identity=(1.,0.,0.,1.,0.,0.)
+    def compose(a,b):
+        return (a[0]*b[0]+a[2]*b[1],a[1]*b[0]+a[3]*b[1],a[0]*b[2]+a[2]*b[3],a[1]*b[2]+a[3]*b[3],a[0]*b[4]+a[2]*b[5]+a[4],a[1]*b[4]+a[3]*b[5]+a[5])
+    def dictionary_after(header,key):
+        found=re.search(rb'/'+key+rb'\s*(\d+\s+0\s+R|<<)',header)
+        if found is None:return None
+        if found[1]!=b'<<':return objects[int(found[1].split()[0])][0]
+        start=found.end()-2;depth=0
+        for token in re.finditer(rb'<<|>>',header[start:]):
+            depth+=1 if token[0]==b'<<' else -1
+            if depth==0:return header[start:start+token.end()]
+        raise AssertionError('unclosed resource dictionary')
+    def resources(oid,inherited=b''):
+        header=objects[oid][0];own=dictionary_after(header,b'Resources')
+        if own is not None:return own
+        parent=re.search(rb'/Parent\s+(\d+)\s+0\s+R',header)
+        return resources(int(parent[1]),inherited) if parent else inherited
+    def literal(token):
+        if token.startswith(b'<'):
+            return bytes.fromhex(token[1:-1].decode())
+        assert token.startswith(b'(') and token.endswith(b')')
+        data=token[1:-1];out=bytearray();i=0
+        escapes={ord('n'):10,ord('r'):13,ord('t'):9,ord('b'):8,ord('f'):12}
+        while i<len(data):
+            value=data[i];i+=1
+            if value==92:
+                assert i<len(data);value=data[i];i+=1
+                if 48<=value<=55:
+                    digits=bytes([value])
+                    while i<len(data) and len(digits)<3 and 48<=data[i]<=55:digits+=bytes([data[i]]);i+=1
+                    value=int(digits,8)
+                else:value=escapes.get(value,value)
+            out.append(value)
+        return bytes(out)
+    glyph_ids=list(dict.fromkeys(g['g'] for g in row['shape']))
+    cid_map={gid:i+1 for i,gid in enumerate(glyph_ids)}
+    expected_records={gid:_fx195_source_glyph(source,'',glyph_index=gid) for gid in glyph_ids}
+    points=24;upem=row['units_per_em'];expected={};pen=0
+    for owner in owners:expected[owner['owner']]=[]
+    for shaped in row['shape']:
+        for owner in owners:
+            factor=points*owner['scale']/upem
+            expected[owner['owner']].append({'cid':cid_map[shaped['g']],'sourceGID':shaped['g'],'x':owner['origin'][0]+(pen+shaped['dx'])*factor,'y':owner['origin'][1]-shaped['dy']*factor})
+        pen+=shaped['ax']
+    assert pen==row['total_x_advance']
+    seen={name:[] for name in expected};font_cache={};reachable=[]
+    def font_data(oid):
+        if oid in font_cache:return font_cache[oid]
+        font=objects[oid][0]
+        descendant=re.search(rb'/DescendantFonts\s*\[\s*(\d+)\s+0\s+R\s*\]',font);assert descendant
+        cid=objects[int(descendant[1])][0];assert re.search(rb'/CIDToGIDMap\s*/Identity\b',cid)
+        descriptor=re.search(rb'/FontDescriptor\s+(\d+)\s+0\s+R',cid);assert descriptor
+        stream_ref=re.search(rb'/FontFile2\s+(\d+)\s+0\s+R',objects[int(descriptor[1])][0]);assert stream_ref
+        sfnt=objects[int(stream_ref[1])][1];assert sfnt is not None
+        width_match=re.search(rb'/W\s*\[\s*1\s*\[([^]]+)\]\s*\]',cid);assert width_match
+        widths=[float(v) for v in width_match[1].split()];assert len(widths)==len(glyph_ids)
+        tables={sfnt[o:o+4]:struct.unpack_from('>II',sfnt,o+8) for o in range(12,12+16*struct.unpack_from('>H',sfnt,4)[0],16)}
+        assert struct.unpack_from('>H',sfnt,tables[b'maxp'][0]+4)[0]==len(glyph_ids)+1
+        for subset_gid,gid in enumerate(glyph_ids,1):
+            actual=_fx195_source_glyph(sfnt,'',glyph_index=subset_gid);reference=expected_records[gid]
+            assert actual['upem']==reference['upem']==upem==1000
+            assert actual['advance']==reference['advance']==widths[subset_gid-1]
+            assert actual['bounds']==reference['bounds'] and actual['instruction_bytes']==reference['instruction_bytes']==0
+            path=lambda record:[_fx195_source_path_commands(c,lambda point:point[:2]) for c in record['contours']]
+            assert path(actual)==path(reference)
+        font_cache[oid]=(sfnt,widths);return font_cache[oid]
+    tokens=re.compile(rb'\((?:\\.|[^\\)])*\)|<[0-9A-Fa-f\s]*>|/[^\s<>\[\](){}%]+|[-+]?(?:\d+\.\d*|\.\d+|\d+)|[A-Za-z][A-Za-z0-9*\'\"]*|[\[\]]')
+    def execute(oid,ctx,res,path):
+        assert len(path)<16 and oid not in path
+        data=objects[oid][1];assert data is not None
+        reachable.append((oid,data));ctx=dict(ctx);stack=[];args=[];in_text=False;cursor=0.
+        for token in tokens.findall(data):
+            if token[:1] in b'/([<' or re.fullmatch(rb'[-+]?(?:\d+\.\d*|\.\d+|\d+)',token) or token==b']':args.append(token);continue
+            op=token
+            if op==b'q':stack.append(dict(ctx))
+            elif op==b'Q':assert stack;ctx=stack.pop()
+            elif op==b'cm':assert len(args)==6;ctx['ctm']=compose(ctx['ctm'],tuple(float(v) for v in args))
+            elif op==b'BT':in_text=True;ctx['tm']=identity;cursor=0.
+            elif op==b'ET':in_text=False
+            elif op==b'Tf':
+                assert len(args)==2;ctx['size']=float(args[1]);ctx['font']=args[0]
+            elif op==b'Tm':assert len(args)==6;ctx['tm']=tuple(float(v) for v in args);cursor=0.
+            elif op in (b'Td',b'TD'):
+                assert len(args)==2;ctx['tm']=compose(ctx['tm'],(1.,0.,0.,1.,float(args[0]),float(args[1])));cursor=0.
+            elif op==b'T*':assert ctx.get('size')!=points, 'unqualified selected line-break positioning'
+            elif op in (b'Tj',b'TJ') and in_text and ctx.get('size')==points:
+                fonts=dictionary_after(res,b'Font');assert fonts is not None
+                found=re.search(re.escape(ctx['font'])+rb'\s+(\d+)\s+0\s+R',fonts);assert found
+                font_oid=int(found[1]);sfnt,widths=font_data(font_oid)
+                for value in args:
+                    if value in (b'[',b']'):continue
+                    if not value.startswith((b'(',b'<')):
+                        cursor-=float(value)*points/1000;continue
+                    encoded=literal(value);assert len(encoded)%2==0
+                    for cid in struct.unpack('>'+str(len(encoded)//2)+'H',encoded):
+                        assert 1<=cid<=len(widths)
+                        local=compose(ctx['ctm'],ctx['tm']);canvas=compose((1.,0.,0.,-1.,0.,float(ctx['pageHeight'])),local)
+                        x=canvas[0]*cursor+canvas[4];y=canvas[1]*cursor+canvas[5]
+                        assert all(math.isfinite(v) for v in (x,y))
+                        matches=[]
+                        for owner in owners:
+                            consumed=len(seen[owner['owner']]);sequence=expected[owner['owner']]
+                            if consumed==len(sequence):continue
+                            target=sequence[consumed]
+                            if abs(x-target['x'])<=.00005 and abs(y-target['y'])<=.00005 and cid==target['cid']:
+                                assert abs(canvas[0]-owner['scale'])<=.00001 and abs(canvas[1])<=.00001 and abs(canvas[2])<=.00001 and abs(canvas[3]+owner['scale'])<=.00001
+                                matches.append(owner['owner'])
+                        assert len(matches)==1, ('reachable CID must match exactly one independent source owner',cid,x,y)
+                        seen[matches[0]].append({'cid':cid,'fontObject':font_oid,'fontSHA':hashlib.sha256(sfnt).hexdigest(),'position':(x,y)})
+                        cursor+=widths[cid-1]*points/1000
+            elif op==b'Do':
+                assert len(args)==1;xobjects=dictionary_after(res,b'XObject');assert xobjects is not None
+                found=re.search(re.escape(args[0])+rb'\s+(\d+)\s+0\s+R',xobjects);assert found
+                child=int(found[1]);header=objects[child][0]
+                if re.search(rb'/Subtype\s*/Form\b',header):
+                    state=dict(ctx);matrix=re.search(rb'/Matrix\s*\[([^]]+)\]',header)
+                    if matrix:state['ctm']=compose(state['ctm'],tuple(float(v) for v in matrix[1].split()))
+                    execute(child,state,resources(child,res),path+(oid,))
+                else:assert re.search(rb'/Subtype\s*/Image\b',header)
+            args=[]
+        assert not stack and not in_text
+    page=pages[0];header=objects[page][0]
+    box=re.search(rb'/MediaBox\s*\[([^]]+)\]',header);assert box
+    box=tuple(float(v) for v in box[1].split());assert box[:2]==(0.,0.)
+    content=re.search(rb'/Contents\s*(\d+\s+0\s+R|\[[^]]+\])',header);assert content
+    refs=[int(v) for v in re.findall(rb'(\d+)\s+0\s+R',content[1])];assert len(refs)==1
+    execute(refs[0],{'ctm':identity,'size':None,'tm':identity,'pageHeight':box[3]},resources(page),())
+    assert all(len(seen[name])==len(row['shape']) for name in expected), 'all and only source owners must paint the complete HB glyph sequence'
+    return {'size':box[2:],'seen':seen,'reachableStreams':reachable,'fontPayloads':font_cache}
+
+
+def _fx195_variable_pdf_source_equivalence(actual_pdf, static_pdf, wrong_pdf, weight, parts, directory, notes):
+    # Per-owner paint is qualified only after exact source/Tf/CID/geometry proof.
+    import hashlib
+    import json
+    import math
+    import os
+    from pathlib import Path
+    from PIL import Image
+    authority=json.loads((Path(os.environ['F_X195_VARIABLE_ORACLES'])/'receipt.json').read_text())
+    row=next(r for r in authority['controls'] if r['script']=='Thai' and r['weight']==weight)
+    source=Path(row['output']).read_bytes()
+    assert hashlib.sha256(source).hexdigest()==row['output_sha256']
+    glyph_ids=list(dict.fromkeys(g['g'] for g in row['shape']))
+    images = [_fx195_pdf_style_images(pdf,directory,label) for pdf,label in [(actual_pdf,'variable-qualified'),(static_pdf,'static-qualified'),(wrong_pdf,'wrong-qualified')]]
+    assert all(len(pages)==1 for pages in images)
+    actual,expected,wrong = [pages[0] for pages in images]
+    assert actual.size==expected.size==wrong.size
+    source_case={'case':'variable-weight','expected':source,'files':[source],'axis':None,'text':row['text']}
+    fixture=io.BytesIO()
+    with zipfile.ZipFile(fixture,'w') as package:
+        for name,data in parts.items():package.writestr(name,data)
+    anchors=_fx195_style_fixture_owners(fixture.getvalue(),source_case,actual.size,notes,points=24)
+    actual_proof=_fx195_variable_pdf_reachable_proof(actual_pdf,anchors,row,source)
+    static_proof=_fx195_variable_pdf_reachable_proof(static_pdf,anchors,row,source)
+    assert actual_proof['size']==static_proof['size']==actual.size
+    assert actual_proof['reachableStreams']==static_proof['reachableStreams'], 'all reachable drawing commands must stay exact'
+    records = {gid:_fx195_source_glyph(source,'',glyph_index=gid) for gid in glyph_ids}
+    extrema=[]; pen=0
+    for shaped in row['shape']:
+        record=records[shaped['g']]; x0,y0,x1,y1=record['bounds']
+        extrema.extend([(pen+shaped['dx']+x0,shaped['dy']+y0),(pen+shaped['dx']+x1,shaped['dy']+y1)])
+        pen+=shaped['ax']
+    assert pen==row['total_x_advance']
+    rois=[]; observations=[]
+    for anchor in anchors:
+        x,y=anchor['origin'];factor=24*anchor['scale']/row['units_per_em']
+        roi=(math.floor(x+min(v[0] for v in extrema)*factor)-2,math.floor(y-max(v[1] for v in extrema)*factor)-2,math.ceil(x+max(v[0] for v in extrema)*factor)+2,math.ceil(y-min(v[1] for v in extrema)*factor)+2)
+        assert 0<=roi[0]<roi[2]<=actual.width and 0<=roi[1]<roi[3]<=actual.height
+        score=_fx195_mask_ssim(actual,expected,roi)
+        weight_score=_fx195_mask_ssim(actual,wrong,roi)
+        displaced=Image.new(expected.mode,expected.size,'white')
+        displaced.paste(expected,(3,0))
+        geometry_score=_fx195_mask_ssim(actual,displaced,roi)
+        assert score>=.99, (anchor,score)
+        assert weight_score<.99 and geometry_score<.99, (anchor,weight_score,geometry_score)
+        rois.append(roi); observations.append({'owner':anchor.get('owner'),'roi':roi,'positive':score,'wrongWeight':weight_score,'wrongOrigin':geometry_score})
+    # No global white-page score. All pixels outside independent source bounds
+    # remain exactly equal, retaining clipping and unrelated owner evidence.
+    outside_actual=actual.copy();outside_expected=expected.copy()
+    from PIL import ImageDraw
+    for image in (outside_actual,outside_expected):
+        draw=ImageDraw.Draw(image)
+        for x0,y0,x1,y1 in rois:draw.rectangle((x0,y0,x1-1,y1-1),fill='white')
+    assert outside_actual.tobytes()==outside_expected.tobytes()
+    (directory/'variable-pdf-source-equivalence.json').write_text(json.dumps({'weight':weight,'originalStaticSHA':row['output_sha256'],'subsetGeometryAndAdvanceExact':True,'owners':observations,'outsideSourceROIsExact':True},indent=2)+'\n')
+
+
+@pytest.mark.parametrize('weight', [400, 700])
+@pytest.mark.parametrize('method', ['to_pdf', 'render_slide_to_png', 'render_all_slides', 'text_layout', 'to_notes_pdf', 'render_all_notes'])
+def test_fx195_installed_ppt_variable_instances_match_independent_static(method, weight, tmp_path):
+    # _fx195_presentation creates a genuine notes part. Set the actual slide
+    # and physical notes runs to the same source text/style before measuring.
+    import xml.etree.ElementTree as ET
+    variable, static, text = _fx195_style_oracles()[weight]
+    family = 'FX195CallerThai'
+    presentation = _fx195_presentation(family)
+    with zipfile.ZipFile(io.BytesIO(presentation.to_bytes())) as package:
+        parts = {name: package.read(name) for name in package.namelist()}
+    ns = '{http://schemas.openxmlformats.org/drawingml/2006/main}'
+    counts = {'slide': 0, 'notes': 0}
+    for name in list(parts):
+        kind = 'slide' if re.fullmatch(r'ppt/slides/slide\d+\.xml', name) else 'notes' if re.fullmatch(r'ppt/notesSlides/notesSlide\d+\.xml', name) else None
+        if kind is None:
+            continue
+        root = ET.fromstring(parts[name])
+        for run in root.iter(ns + 'r'):
+            properties = run.find(ns + 'rPr')
+            latin = properties.find(ns + 'latin') if properties is not None else None
+            if latin is None or latin.get('typeface') != family:
+                continue
+            properties.set('b', '1' if weight == 700 else '0')
+            properties.set('sz', '2400')
+            run.find(ns + 't').text = text
+            counts[kind] += 1
+        parts[name] = ET.tostring(root, encoding='utf-8', xml_declaration=True)
+    assert counts == {'slide': 1, 'notes': 1}, 'both real caller font owners must exist'
+    package = io.BytesIO()
+    with zipfile.ZipFile(package, 'w') as z:
+        for name, data in parts.items():
+            z.writestr(name, data)
+    import rpptx
+    presentation = rpptx.Presentation.from_bytes(package.getvalue())
+    before = presentation.to_bytes()
+
+    def invoke(data):
+        kwargs = {'fonts': [(family, data)]}
+        if method == 'render_slide_to_png':
+            return presentation.render_slide_to_png(0, dpi=72, **kwargs)
+        if method == 'render_all_slides':
+            return presentation.render_all_slides(dpi=72, **kwargs)
+        if method == 'render_all_notes':
+            return presentation.render_all_notes(dpi=72, **kwargs)
+        return getattr(presentation, method)(**kwargs)
+
+    static_output, actual_output = invoke(static), invoke(variable)
+    expected = _fx195_style_observation(static_output, method, tmp_path, 'static')
+    actual = _fx195_style_observation(actual_output, method, tmp_path, 'variable')
+    wrong_output = invoke(_fx195_style_oracles()[1100 - weight][1])
+    if method in ('to_pdf', 'to_notes_pdf'):
+        _fx195_variable_pdf_source_equivalence(actual_output,static_output,wrong_output,weight,parts,tmp_path,notes=method=='to_notes_pdf')
+    else:
+        assert actual == expected
+    assert _fx195_style_observation(invoke(variable), method, tmp_path, 'repeat') == actual
+    wrong_weight = _fx195_style_observation(wrong_output, method, tmp_path, 'wrong-weight')
+    assert actual != wrong_weight, 'each selected entrypoint must distinguish wrong physical coordinates'
+    assert presentation.to_bytes() == before
+
+# Append to the existing installed carriers only. No production code.
+
+_FX195_STYLE_CASES = ('genuine-italic', 'ital-axis', 'slnt-axis', 'synthetic-bold', 'synthetic-italic', 'synthetic-combined')
+
+
+def _fx195_style_case(case):
+    import hashlib
+    import json
+    import os
+    from pathlib import Path
+    font_dir = Path(__file__).resolve().parents[2] / 'oxml-layout' / 'fonts'
+    if case == 'genuine-italic':
+        regular = (font_dir / 'Carlito-Regular.ttf').read_bytes()
+        italic = (font_dir / 'Carlito-Italic.ttf').read_bytes()
+        # The runtime admission binds both bundled source hashes and LICENSE-Carlito.
+        guards = json.loads(Path(os.environ['F_X195_STYLE_FONT_GUARDS']).read_text())
+        for name, data in [('Carlito-Regular.ttf', regular), ('Carlito-Italic.ttf', italic)]:
+            assert hashlib.sha256(data).hexdigest() == guards[name]
+        assert regular != italic
+        return {'case': case, 'family': 'FX195StyleCaller', 'text': 'iiii', 'files': [regular, italic], 'ordinary': [regular], 'expected': italic, 'bold': False, 'italic': True, 'axis': None, 'synthesis': False}
+    axis_dir = Path(os.environ['F_X195_AXIS_ORACLES'])
+    receipt = json.loads((axis_dir / 'receipt.json').read_text())
+    key = 'ital' if case == 'ital-axis' else 'slnt' if case == 'slnt-axis' else 'none'
+    control = next(row for row in receipt['controls'] if row['axis'] == key)
+    data = (axis_dir / (key + '.ttf')).read_bytes()
+    assert hashlib.sha256(data).hexdigest() == control['input_sha256']
+    # Authenticated complete R18 tuple protocol, including phantom points.
+    directory = {data[o:o+4]: struct.unpack_from('>II', data, o+8) for o in range(12,12+16*struct.unpack_from('>H',data,4)[0],16)}
+    if key != 'none':
+        gv = directory[b'gvar'][0]
+        assert struct.unpack_from('>III',data,gv+20) == (0,0,29)
+        assert struct.unpack_from('>HHHH',data,gv+32) == (1,10,19,0xA000)
+        assert data[gv+42:gv+44] == b'\x00\x47'
+        assert list(struct.unpack_from('>8h',data,gv+44)) == [0,0,140,140,0,0,0,0]
+        assert data[gv+60] == 0x87
+    else:
+        assert b'fvar' not in directory and b'gvar' not in directory
+    assert control['exit_code'] == 0
+    measured = json.loads(control['stdout'])
+    assert measured == [{'g': 1, 'cl': 0, 'dx': 0, 'dy': 0, 'ax': 600, 'ay': 0}]
+    if key != 'none':
+        static = (axis_dir / (key + '-static.ttf')).read_bytes()
+        assert hashlib.sha256(static).hexdigest() == control['static']['sha256']
+        assert control['static']['glyph1_points'] == [[50, 0], [450, 0], [590, 700], [190, 700]]
+        assert control['static']['fvar_absent'] is True
+    return {'case': case, 'family': 'FX195StyleCaller', 'text': 'A', 'files': [data], 'ordinary': [data], 'expected': None, 'bold': case in ('synthetic-bold', 'synthetic-combined'), 'italic': case != 'synthetic-bold', 'axis': key if key != 'none' else None, 'synthesis': key == 'none'}
+
+
+def _fx195_i_advance(source, points):
+    tables = {}
+    for offset in range(12, 12 + struct.unpack_from('>H', source, 4)[0] * 16, 16):
+        tables[source[offset:offset + 4]] = struct.unpack_from('>II', source, offset + 8)
+    cmap, _ = tables[b'cmap']
+    glyph = None
+    for record in range(struct.unpack_from('>H', source, cmap + 2)[0]):
+        platform, encoding, relative = struct.unpack_from('>HHI', source, cmap + 4 + 8 * record)
+        subtable = cmap + relative
+        if platform not in (0, 3) or struct.unpack_from('>H', source, subtable)[0] != 4:
+            continue
+        segments = struct.unpack_from('>H', source, subtable + 6)[0] // 2
+        for segment in range(segments):
+            end = struct.unpack_from('>H', source, subtable + 14 + 2 * segment)[0]
+            start = struct.unpack_from('>H', source, subtable + 16 + 2 * segments + 2 * segment)[0]
+            if start <= ord('i') <= end:
+                delta = struct.unpack_from('>h', source, subtable + 16 + 4 * segments + 2 * segment)[0]
+                range_at = subtable + 16 + 6 * segments + 2 * segment
+                relative = struct.unpack_from('>H', source, range_at)[0]
+                glyph = ord('i') if relative == 0 else struct.unpack_from('>H', source, range_at + relative + 2 * (ord('i') - start))[0]
+                glyph = (glyph + delta) % 65536
+                break
+        if glyph is not None:
+            break
+    assert glyph is not None and glyph > 0
+    head, _ = tables[b'head']
+    units = struct.unpack_from('>H', source, head + 18)[0]
+    hhea, _ = tables[b'hhea']
+    metrics = struct.unpack_from('>H', source, hhea + 34)[0]
+    hmtx, _ = tables[b'hmtx']
+    advance = struct.unpack_from('>H', source, hmtx + 4 * min(glyph, metrics - 1))[0]
+    loca, _ = tables[b'loca']
+    if struct.unpack_from('>h', source, head + 50)[0] == 0:
+        glyph_offset = struct.unpack_from('>H', source, loca + 2 * glyph)[0] * 2
+    else:
+        glyph_offset = struct.unpack_from('>I', source, loca + 4 * glyph)[0]
+    glyf, _ = tables[b'glyf']
+    x_min = struct.unpack_from('>h', source, glyf + glyph_offset + 2)[0]
+    x_max = struct.unpack_from('>h', source, glyf + glyph_offset + 6)[0]
+    assert x_max > x_min and units > 0
+    return advance * points / units
+
+
+def _fx195_pdf_style_anchors(pdf, page_size, case, expected_preview_scale=None):
+    # Parse reachable content only. Compose PDF q/Q and cm, text matrices and
+    # Form XObject matrices before converting bottom-up PDF to canvas points.
+    # No actual bitmap bounds, registration or first-match selection is used.
+    import math
+    import zlib
+    objects = {}
+    for match in re.finditer(rb'(?m)(\d+)\s+0\s+obj\b(.*?)\bendobj\b', pdf, re.S):
+        oid, body = int(match[1]), match[2]
+        stream = re.search(rb'\bstream\r?\n(.*?)\r?\nendstream\b', body, re.S)
+        header = body[:stream.start()] if stream else body
+        data = stream[1] if stream else None
+        if data is not None and b'/FlateDecode' in header:
+            data = zlib.decompress(data)
+        assert oid not in objects
+        objects[oid] = (header, data)
+    pages = [oid for oid,(header,_) in objects.items() if re.search(rb'/Type\s*/Page\b',header)]
+    assert len(pages) == 1, 'single physical page fixture is required'
+    identity = (1.,0.,0.,1.,0.,0.)
+    def compose(a,b):
+        return (a[0]*b[0]+a[2]*b[1], a[1]*b[0]+a[3]*b[1], a[0]*b[2]+a[2]*b[3], a[1]*b[2]+a[3]*b[3], a[0]*b[4]+a[2]*b[5]+a[4], a[1]*b[4]+a[3]*b[5]+a[5])
+    def dictionary_after(header,key):
+        found = re.search(rb'/'+key+rb'\s*(\d+\s+0\s+R|<<)',header)
+        if found is None: return None
+        value=found[1]
+        if value != b'<<': return objects[int(value.split()[0])][0]
+        start=found.end()-2; depth=0
+        for token in re.finditer(rb'<<|>>',header[start:]):
+            depth += 1 if token[0]==b'<<' else -1
+            if depth==0: return header[start:start+token.end()]
+        raise AssertionError('unclosed actual PDF resource dictionary')
+    def resources(oid, inherited=b''):
+        header=objects[oid][0]
+        own=dictionary_after(header,b'Resources')
+        if own is not None: return own
+        parent=re.search(rb'/Parent\s+(\d+)\s+0\s+R',header)
+        return resources(int(parent[1]),inherited) if parent else inherited
+    tokens=re.compile(rb'\((?:\\.|[^\\)])*\)|<[0-9A-Fa-f\s]*>|/[^\s<>\[\](){}%]+|[-+]?(?:\d+\.\d*|\.\d+|\d+)|[A-Za-z][A-Za-z0-9*\'\"]*|[\[\]]')
+    anchors=[]
+    def execute(oid,ctx,res,path):
+        assert len(path)<16 and oid not in path, 'cyclic or unsupported deep form fixture'
+        header,data=objects[oid]
+        assert data is not None
+        ctx=dict(ctx); ctx['history']=list(ctx['history']); stack=[]; args=[]; in_text=False; captured=False
+        for token in tokens.findall(data):
+            if token[:1] in b'/([<' or re.fullmatch(rb'[-+]?(?:\d+\.\d*|\.\d+|\d+)',token) or token==b']':
+                args.append(token); continue
+            op=token
+            if op==b'q': stack.append(dict(ctx,history=list(ctx['history'])))
+            elif op==b'Q': assert stack; ctx=stack.pop()
+            elif op==b'cm':
+                assert len(args)==6
+                matrix=tuple(float(v) for v in args)
+                assert all(math.isfinite(v) for v in matrix)
+                ctx['ctm']=compose(ctx['ctm'],matrix);ctx['history'].append(matrix)
+            elif op==b'BT': in_text=True;captured=False;ctx['tm']=identity
+            elif op==b'ET': in_text=False
+            elif op==b'Tf': assert len(args)==2;ctx['size']=float(args[1])
+            elif op==b'Tm': assert len(args)==6;ctx['tm']=tuple(float(v) for v in args)
+            elif op in (b'Td',b'TD',b'T*'):
+                assert ctx.get('size')!=48, 'fixture text positioning needs a separately qualified adapter'
+            elif op in (b'Tj',b'TJ') and in_text and ctx.get('size')==48 and not captured:
+                assert args, '48pt owner must actually show text'
+                captured=True; tm=ctx['tm']
+                assert tm[:4]==(1.,0.,0.,-1.), 'nominal fixture requires upright local text matrix'
+                placement=ctx['ctm']
+                if case['synthesis'] and case['italic']:
+                    style=(1.,0.,-math.tan(math.radians(12)),1.,tm[5]*math.tan(math.radians(12)),0.)
+                    assert ctx['history'] and all(abs(a-b)<=.00002 for a,b in zip(ctx['history'][-1],style)), 'actual synthetic shear must equal independent style policy'
+                    placement=identity
+                    for matrix in ctx['history'][:-1]: placement=compose(placement,matrix)
+                canvas=compose((1.,0.,0.,-1.,0.,float(page_size[1])),placement)
+                assert abs(canvas[1])<.00001 and abs(canvas[2])<.00001 and canvas[0]>0 and abs(canvas[0]-canvas[3])<.00001, 'source fixture requires uniform nonrotated external placement'
+                origin=(canvas[0]*tm[4]+canvas[2]*tm[5]+canvas[4],canvas[1]*tm[4]+canvas[3]*tm[5]+canvas[5])
+                assert all(math.isfinite(v) for v in origin)
+                anchors.append({'origin':origin,'scale':canvas[0],'matrix':canvas,'path':path+(oid,)})
+            elif op==b'Do':
+                assert len(args)==1 and args[0].startswith(b'/')
+                xobjects=dictionary_after(res,b'XObject')
+                assert xobjects is not None
+                target=re.search(re.escape(args[0])+rb'\s+(\d+)\s+0\s+R',xobjects)
+                assert target is not None
+                child=int(target[1]);child_header=objects[child][0]
+                if re.search(rb'/Subtype\s*/Form\b',child_header):
+                    state=dict(ctx,history=list(ctx['history']))
+                    matrix=re.search(rb'/Matrix\s*\[([^]]+)\]',child_header)
+                    if matrix:
+                        transform=tuple(float(v) for v in matrix[1].split());assert len(transform)==6
+                        state['ctm']=compose(state['ctm'],transform);state['history'].append(transform)
+                    execute(child,state,resources(child,res),path+(oid,))
+                else:
+                    assert re.search(rb'/Subtype\s*/Image\b',child_header), 'unknown XObject fixture'
+            args=[]
+        assert not stack and not in_text
+    header=objects[pages[0]][0]
+    content=re.search(rb'/Contents\s*(\d+\s+0\s+R|\[[^]]+\])',header)
+    assert content is not None
+    refs=[int(v) for v in re.findall(rb'(\d+)\s+0\s+R',content[1])]
+    assert refs
+    # This producer uses one content stream. Independent resources and forms
+    # are supported, while multiple streams need state carried across streams.
+    assert len(refs)==1, 'multiple content-stream fixture needs qualified continuous state'
+    execute(refs[0],{'ctm':identity,'history':[],'size':None,'tm':identity},resources(pages[0]),())
+    if expected_preview_scale is None:
+        assert len(anchors)==1 and abs(anchors[0]['scale']-1)<.00001
+        anchors[0]['owner']='body'
+    else:
+        assert len(anchors)==2, 'real notes body and real slide preview must both paint'
+        body=[a for a in anchors if abs(a['scale']-1)<.00001]
+        preview=[a for a in anchors if abs(a['scale']-expected_preview_scale)<.00001]
+        assert len(body)==len(preview)==1 and body[0] is not preview[0]
+        assert 0<expected_preview_scale<1
+        body[0]['owner']='notes-body';preview[0]['owner']='slide-preview'
+    return anchors
+
+
+def _fx195_notes_preview_scale(parts):
+    import xml.etree.ElementTree as ET
+    p='{http://schemas.openxmlformats.org/presentationml/2006/main}'
+    a='{http://schemas.openxmlformats.org/drawingml/2006/main}'
+    presentation=ET.fromstring(parts['ppt/presentation.xml'])
+    size=presentation.find(p+'sldSz');assert size is not None
+    slide_width,slide_height=float(size.get('cx')),float(size.get('cy'))
+    groups=[]
+    for names in (r'ppt/notesSlides/notesSlide\d+\.xml',r'ppt/notesMasters/notesMaster\d+\.xml'):
+        found=[]
+        for name,data in parts.items():
+            if not re.fullmatch(names,name):continue
+            for shape in ET.fromstring(data).iter(p+'sp'):
+                ph=shape.find(p+'nvSpPr/'+p+'nvPr/'+p+'ph')
+                if ph is None or ph.get('type')!='sldImg':continue
+                ext=shape.find(p+'spPr/'+a+'xfrm/'+a+'ext')
+                if ext is not None:found.append((float(ext.get('cx')),float(ext.get('cy'))))
+        if found:groups=found;break
+    assert len(groups)==1, 'one actual source-established preview rectangle is required'
+    return min(groups[0][0]/slide_width,groups[0][1]/slide_height)
+
+
+def _fx195_pinned_poppler():
+    # Both actual product PDF and independently authored reference use this binary.
+    import hashlib
+    import subprocess
+    import os
+    from pathlib import Path
+    executable = Path(os.environ['F_X195_POPPLER'])
+    assert executable.is_file() and hashlib.sha256(executable.read_bytes()).hexdigest() == 'd813ee83025433b811b5b7e982dc061751a1ea6cf03773107c398d2a597b70d9'
+    version = subprocess.run([str(executable), '-v'], capture_output=True, timeout=10, check=False)
+    assert version.returncode == 0 and version.stderr.startswith(b'pdftoppm version 26.01.0\n')
+    return str(executable)
+
+
+def _fx195_independent_style_paint(case, page_size, origin, font_scale=1., *, negative=None):
+    # Independently authored PDF from original/static physical font bytes.
+    # No product writer, shaper, subsetter, image registration or mask-derived ROI.
+    import math
+    import os
+    import subprocess
+    import tempfile
+    from pathlib import Path
+    from PIL import Image
+    source = case['expected'] if case['case'] == 'genuine-italic' else case['files'][0]
+    if case['axis']:
+        source = (Path(os.environ['F_X195_AXIS_ORACLES']) / (case['axis']+'-static.ttf')).read_bytes()
+    bold = case['bold']
+    shear = math.tan(math.radians(12)) if case['synthesis'] and case['italic'] else 0.
+    if negative == 'style':
+        if case['case'] == 'genuine-italic':
+            source = case['ordinary'][0]
+        elif case['axis']:
+            source = case['files'][0]
+        else:
+            bold, shear = False, 0.
+    points = 48 * font_scale
+    x, y = origin
+    if negative == 'origin':
+        x += 3.
+    if negative == 'shear':
+        assert case['synthesis'] and case['italic']
+        shear = math.tan(math.radians(6))
+    def u16(offset):
+        return struct.unpack_from('>H', source, offset)[0]
+    tables = {source[o:o+4]:struct.unpack_from('>II',source,o+8) for o in range(12,12+16*u16(4),16)}
+    cmap = tables[b'cmap'][0]
+    char = ord(case['text'][0])
+    glyph = None
+    for record in range(u16(cmap+2)):
+        platform, encoding, relative = struct.unpack_from('>HHI',source,cmap+4+record*8)
+        sub = cmap+relative
+        if platform not in (0,3) or u16(sub) != 4:
+            continue
+        count = u16(sub+6)//2
+        for segment in range(count):
+            end,start = u16(sub+14+2*segment),u16(sub+16+2*count+2*segment)
+            if start <= char <= end:
+                delta = struct.unpack_from('>h',source,sub+16+4*count+2*segment)[0]
+                at = sub+16+6*count+2*segment
+                offset = u16(at)
+                raw = char if offset == 0 else u16(at+offset+2*(char-start))
+                glyph = (raw+delta)%65536
+                break
+        if glyph is not None:
+            break
+    assert glyph is not None and glyph > 0
+    upem = u16(tables[b'head'][0]+18)
+    metric_count = u16(tables[b'hhea'][0]+34)
+    advance = u16(tables[b'hmtx'][0]+4*min(glyph,metric_count-1))*points/upem
+    long_loca = struct.unpack_from('>h',source,tables[b'head'][0]+50)[0] == 1
+    glyph_offset = struct.unpack_from('>I' if long_loca else '>H',source,tables[b'loca'][0]+glyph*(4 if long_loca else 2))[0]
+    if not long_loca:
+        glyph_offset *= 2
+    bounds = struct.unpack_from('>hhhh',source,tables[b'glyf'][0]+glyph_offset+2)
+    radius = points/48 if bold else 0.
+    corners = [(gx*points/upem+shear*gy*points/upem,gy*points/upem) for gx in (bounds[0],bounds[2]) for gy in (bounds[1],bounds[3])]
+    left = math.floor(x+min(px for px,py in corners)-radius*(1+abs(shear)))-3
+    right = math.ceil(x+(len(case['text'])-1)*advance+max(px for px,py in corners)+radius*(1+abs(shear)))+3
+    top = math.floor(y-max(py for px,py in corners)-radius)-3
+    bottom = math.ceil(y-min(py for px,py in corners)+radius)+3
+    assert 0 <= left < right <= page_size[0] and 0 <= top < bottom <= page_size[1]
+    content = f'q\n1 0 0 -1 0 {page_size[1]} cm\n0 0 0 rg\n'
+    if shear:
+        content += f'1 0 {-shear} 1 {shear*y} 0 cm\n'
+    if bold:
+        content += f'0 0 0 RG\n{points/24} w\n1 J\n1 j\n2 Tr\n'
+    encoded = (glyph.to_bytes(2,'big')*len(case['text'])).hex()
+    content += f'BT\n/F0 {points} Tf\n1 0 0 -1 {x} {y} Tm\n<{encoded}> Tj\nET\nQ\n'
+    raw = content.encode('ascii')
+    width = advance*1000/points
+    box = ' '.join(str(v*1000/upem) for v in struct.unpack_from('>hhhh',source,tables[b'head'][0]+36))
+    objects = [
+        b'<< /Type /Catalog /Pages 2 0 R >>',
+        b'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+        f'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {page_size[0]} {page_size[1]}] /Resources << /Font << /F0 5 0 R >> >> /Contents 4 0 R >>'.encode(),
+        f'<< /Length {len(raw)} >>\nstream\n'.encode()+raw+b'endstream',
+        b'<< /Type /Font /Subtype /Type0 /BaseFont /IndependentSource /Encoding /Identity-H /DescendantFonts [6 0 R] >>',
+        f'<< /Type /Font /Subtype /CIDFontType2 /BaseFont /IndependentSource /CIDSystemInfo << /Registry (Adobe) /Ordering (Identity) /Supplement 0 >> /FontDescriptor 7 0 R /CIDToGIDMap /Identity /DW {width} /W [{glyph} [{width}]] >>'.encode(),
+        f'<< /Type /FontDescriptor /FontName /IndependentSource /Flags 4 /FontBBox [{box}] /ItalicAngle 0 /Ascent 800 /Descent -200 /CapHeight 700 /StemV 80 /FontFile2 8 0 R >>'.encode(),
+        f'<< /Length {len(source)} /Length1 {len(source)} >>\nstream\n'.encode()+source+b'\nendstream',
+    ]
+    pdf, offsets = b'%PDF-1.7\n', []
+    for index,obj in enumerate(objects,1):
+        offsets.append(len(pdf))
+        pdf += f'{index} 0 obj\n'.encode()+obj+b'\nendobj\n'
+    xref = len(pdf)
+    pdf += f'xref\n0 {len(objects)+1}\n0000000000 65535 f \n'.encode()
+    pdf += b''.join(f'{offset:010} 00000 n \n'.encode() for offset in offsets)
+    pdf += f'trailer\n<< /Size {len(objects)+1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n'.encode()
+    with tempfile.TemporaryDirectory(prefix='fx195-independent-vector-') as temp:
+        path = Path(temp)/'source.pdf'
+        path.write_bytes(pdf)
+        version = subprocess.run([_fx195_pinned_poppler(),'-v'],capture_output=True,timeout=10,check=False)
+        assert version.returncode == 0 and b'pdftoppm version 26.01.0' in version.stderr, 'qualified Poppler26.01.0 is required'
+        result = subprocess.run([_fx195_pinned_poppler(),'-r','72','-png',str(path),str(Path(temp)/'source')],capture_output=True,timeout=120,check=False)
+        assert result.returncode == 0, result.stderr.decode(errors='replace')
+        image = Image.open(Path(temp)/'source-1.png').convert('RGBA')
+        image.load()
+    return image,(left,top,right,bottom),len(case['text'])*advance
+
+
+
+
+def _fx195_mask_ssim(actual, expected, roi):
+    # The ROI comes from independent source bounds and the emitted text anchor,
+    # never from image registration or an actual-mask bounding box.
+    a = list(actual.convert('L').crop(roi).getdata())
+    b = list(expected.convert('L').crop(roi).getdata())
+    assert len(a) == len(b) and len(a) > 1
+    assert min(a) < 200 and min(b) < 200
+    ma,mb = sum(a)/len(a),sum(b)/len(b)
+    va = sum((v-ma)**2 for v in a)/(len(a)-1)
+    vb = sum((v-mb)**2 for v in b)/(len(b)-1)
+    cov = sum((x-ma)*(y-mb) for x,y in zip(a,b))/(len(a)-1)
+    return ((2*ma*mb+2.55**2)*(2*cov+7.65**2))/((ma*ma+mb*mb+2.55**2)*(va+vb+7.65**2))
+
+
+def _fx195_pdf_style_images(pdf, directory, label):
+    import subprocess
+    from PIL import Image
+    path = directory / (label+'.pdf')
+    path.write_bytes(pdf)
+    result = subprocess.run([_fx195_pinned_poppler(),'-r','72','-png',str(path),str(directory/label)], capture_output=True, timeout=120, check=False)
+    assert result.returncode == 0, result.stderr.decode(errors='replace')
+    files = sorted(directory.glob(label+'-*.png'), key=lambda p:int(p.stem.rsplit('-',1)[1]))
+    assert len(files) == 1, 'single actual styled owner fixture must produce one physical page'
+    return [Image.open(path).convert('RGBA') for path in files]
+
+
+def _fx195_svg_style_artifact(svg, case, expected, cubic, roi, origin, advance, directory):
+    import base64
+    import hashlib
+    import json
+    import xml.etree.ElementTree as ET
+    import os
+    from pathlib import Path
+    tree = ET.fromstring(svg)
+    texts = [node for node in tree.iter() if node.tag.endswith('}text') and ''.join(node.itertext()) == case['text']]
+    assert len(texts) == 1
+    node = texts[0]
+    xs = [float(x) for x in node.get('x','').split()]
+    assert xs and abs(xs[0]-origin[0]) <= 0.000001
+    assert abs(float(node.get('y'))-origin[1]) <= 0.000001
+    if len(xs) > 1:
+        step = advance / len(case['text'])
+        assert len(xs) == len(case['text'])
+        assert all(abs(value-(origin[0]+i*step)) <= 0.000001 for i,value in enumerate(xs))
+    else:
+        assert len(case['text']) == 1
+    assert node.get('textLength') is None, 'these nominal scalar fixtures need no identity textLength oracle workaround'
+    family = node.get('font-family')
+    matches = re.findall(r"@font-face\{font-family:'([^']+)';src:url\('data:[^;]+;base64,([^']+)'\)", svg)
+    source = [base64.b64decode(value) for name,value in matches if name == family]
+    assert len(source) == 1 and source[0] in case['files'], 'actual embedded font must be the physical requested source'
+    svg_path = directory/(case['case']+'-installed.svg')
+    expected_path = directory/(case['case']+'-independent.png')
+    svg_path.write_text(svg)
+    expected.save(expected_path)
+    assert cubic.size == expected.size
+    cubic_path = directory/(case['case']+'-independent-cubic.png')
+    cubic.save(cubic_path)
+    static_path = str(Path(os.environ['F_X195_AXIS_ORACLES']) / (case['axis']+'-static.ttf')) if case['axis'] else None
+    static_sha = hashlib.sha256(Path(static_path).read_bytes()).hexdigest() if static_path else None
+    artifact = {'oracleFont':static_path,'oracleFontSHA':static_sha,'case':case['case'],'svg':str(svg_path),'svgSHA':hashlib.sha256(svg_path.read_bytes()).hexdigest(),'expected':str(expected_path),'expectedSHA':hashlib.sha256(expected_path.read_bytes()).hexdigest(),'expectedQuadratic':str(expected_path),'expectedQuadraticSHA':hashlib.sha256(expected_path.read_bytes()).hexdigest(),'expectedCubic':str(cubic_path),'expectedCubicSHA':hashlib.sha256(cubic_path.read_bytes()).hexdigest(),'fontFamily':family,'fontSHA':hashlib.sha256(source[0]).hexdigest(),'fontIndex':0,'roi':list(roi),'origin':list(origin),'advance':advance,'width':expected.width,'height':expected.height,'axis':case['axis'],'smallStaticControl':case['axis'] is not None,'threshold':0.99}
+    # Serial ROOT native companion receives this immutable receipt after the
+    # installed stage. There is deliberately no Cargo fallback here.
+    receipt = directory/(case['case']+'-installed-svg-artifact.json')
+    receipt.write_text(json.dumps(artifact,indent=2)+'\n')
+
+
+_FX195_REFERENCE_RENDERER_SOURCE = 'use std::{env, fs};\nuse resvg::{usvg, tiny_skia};\n\nfn count_paths(group: &usvg::Group) -> Result<usize, String> {\n    let mut count = 0;\n    for node in group.children() {\n        match node {\n            usvg::Node::Group(child) => count += count_paths(child)?,\n            usvg::Node::Path(_) => count += 1,\n            usvg::Node::Text(_) | usvg::Node::Image(_) => {\n                return Err("reference must contain paths only".into());\n            }\n        }\n    }\n    Ok(count)\n}\n\nfn main() -> Result<(), String> {\n    let args: Vec<String> = env::args().collect();\n    if args.len() != 3 { return Err("renderer INPUT.svg OUTPUT.png".into()); }\n    let bytes = fs::read(&args[1]).map_err(|e| e.to_string())?;\n    if bytes.len() > 1_000_000 { return Err("reference SVG exceeds admitted bound".into()); }\n    let options = usvg::Options::default(); // Empty font database, no system-font load.\n    let tree = usvg::Tree::from_data(&bytes, &options).map_err(|e| e.to_string())?;\n    let paths = count_paths(tree.root())?;\n    if paths == 0 || paths > 16 { return Err("unexpected path-only owner count".into()); }\n    let size = tree.size().to_int_size();\n    let mut image = tiny_skia::Pixmap::new(size.width(), size.height())\n        .ok_or_else(|| "invalid physical canvas".to_owned())?;\n    image.fill(tiny_skia::Color::WHITE);\n    resvg::render(&tree, tiny_skia::Transform::identity(), &mut image.as_mut());\n    image.save_png(&args[2]).map_err(|e| e.to_string())?;\n    println!("paths={paths} width={} height={} font_database=empty", size.width(), size.height());\n    Ok(())\n}\n'
+
+def _fx195_source_glyph(source,char, *, glyph_index=None):
+ import struct,hashlib
+ def u16(at):return struct.unpack_from('>H',source,at)[0]
+ tables={source[o:o+4]:struct.unpack_from('>II',source,o+8) for o in range(12,12+16*u16(4),16)}
+ assert source[:4]==b'\x00\x01\x00\x00'
+ assert all(o+n<=len(source) for o,n in tables.values())
+ g=glyph_index
+ if g is None:
+  cmap=tables[b'cmap'][0];g=None
+  for i in range(u16(cmap+2)):
+   platform,encoding,rel=struct.unpack_from('>HHI',source,cmap+4+8*i);at=cmap+rel
+   if platform not in (0,3) or u16(at)!=4:continue
+   count=u16(at+6)//2
+   for j in range(count):
+    hi=u16(at+14+2*j);lo=u16(at+16+2*count+2*j)
+    if lo<=ord(char)<=hi:
+     delta=struct.unpack_from('>h',source,at+16+4*count+2*j)[0];r=at+16+6*count+2*j;off=u16(r)
+     if off==0:g=(ord(char)+delta)%65536
+     else:
+      raw=u16(r+off+2*(ord(char)-lo));g=(raw+delta)%65536 if raw else 0
+     break
+   if g is not None:break
+ assert g and g<u16(tables[b'maxp'][0]+4)
+ head=tables[b'head'][0];upem=u16(head+18);long=struct.unpack_from('>h',source,head+50)[0];assert long in (0,1)
+ def loc(k):return struct.unpack_from('>I' if long else '>H',source,tables[b'loca'][0]+k*(4 if long else 2))[0]*(1 if long else 2)
+ def decode(index,depth=0):
+  assert depth<8
+  first,last=loc(index),loc(index+1);assert 0<=first<last<=tables[b'glyf'][1]
+  raw=source[tables[b'glyf'][0]+first:tables[b'glyf'][0]+last];n=struct.unpack_from('>h',raw)[0];bounds=struct.unpack_from('>hhhh',raw,2)
+  if n<0:
+   at=10;contours=[];components=[]
+   while True:
+    flags,child=struct.unpack_from('>HH',raw,at);at+=4
+    assert flags&2,'bounded composite requires explicit XY offsets, not point attachment'
+    args=struct.unpack_from('>hh' if flags&1 else '>bb',raw,at);at+=4 if flags&1 else 2
+    xx,xy,yx,yy=1.,0.,0.,1.
+    if flags&8:xx=yy=struct.unpack_from('>h',raw,at)[0]/16384;at+=2
+    elif flags&64:xx,yy=[v/16384 for v in struct.unpack_from('>hh',raw,at)];at+=4
+    elif flags&128:xx,xy,yx,yy=[v/16384 for v in struct.unpack_from('>hhhh',raw,at)];at+=8
+    assert not flags&4,'ROUND_XY_TO_GRID offset rule requires separate qualification'
+    assert not flags&2048 or (xx,xy,yx,yy)==(1.,0.,0.,1.),'scaled offset requires separate qualification'
+    child_contours,_,_,_=decode(child,depth+1)
+    contours.extend([[(xx*x+xy*y+args[0],yx*x+yy*y+args[1],on) for x,y,on in contour] for contour in child_contours])
+    components.append({'glyph':child,'flags':flags,'offset':args,'matrix':[xx,xy,yx,yy]})
+    if not flags&32:break
+   instructions=struct.unpack_from('>H',raw,at)[0] if flags&256 else 0
+   if flags&256:at+=2+instructions
+   assert at<=len(raw)
+   return contours,bounds,instructions,raw
+  assert n>0
+  ends=list(struct.unpack_from('>'+str(n)+'H',raw,10));assert ends==sorted(set(ends))
+  at=10+2*n;instructions=struct.unpack_from('>H',raw,at)[0];at+=2+instructions;flags=[]
+  while len(flags)<ends[-1]+1:
+   f=raw[at];at+=1;flags.append(f)
+   if f&8:repeat=raw[at];at+=1;flags.extend([f]*repeat)
+  assert len(flags)==ends[-1]+1 and not any(f&128 for f in flags)
+  coords=[]
+  for short,same in [(2,16),(4,32)]:
+   vals=[];v=0
+   for f in flags:
+    if f&short:
+     d=raw[at];at+=1;v+=d if f&same else -d
+    elif not f&same:v+=struct.unpack_from('>h',raw,at)[0];at+=2
+    vals.append(v)
+   coords.append(vals)
+  assert at<=len(raw)
+  points=[(x,y,bool(f&1)) for x,y,f in zip(*coords,flags)];contours=[];start=0
+  for end in ends:contours.append(points[start:end+1]);start=end+1
+  return contours,bounds,instructions,raw
+ contours,bounds,instructions,raw=decode(g)
+ metric_count=u16(tables[b'hhea'][0]+34);advance=u16(tables[b'hmtx'][0]+4*min(g,metric_count-1))
+ return {'source_sha256':hashlib.sha256(source).hexdigest(),'glyph':g,'upem':upem,'advance':advance,'bounds':bounds,'instruction_bytes':instructions,'glyph_bytes_sha256':hashlib.sha256(raw).hexdigest(),'contours':contours}
+
+
+def _fx195_source_path_commands(points,transform,cubic=False):
+ mid=lambda a,b:((a[0]+b[0])/2,(a[1]+b[1])/2,True)
+ if points[0][2]:start=points[0];seq=points[1:]
+ elif points[-1][2]:start=points[-1];seq=points[:-1]
+ else:start=mid(points[-1],points[0]);seq=points[:]
+ seq=seq+[start];current=start;result=[]
+ def values(*pts):return ' '.join(f'{v:.12f}' for p in pts for v in transform(p))
+ result.append('M '+values(start));i=0
+ while i<len(seq):
+  p=seq[i]
+  if p[2]:result.append('L '+values(p));current=p;i+=1
+  else:
+   nxt=seq[i+1];end=nxt if nxt[2] else mid(p,nxt)
+   if cubic:
+    a=(current[0]+2*(p[0]-current[0])/3,current[1]+2*(p[1]-current[1])/3);b=(end[0]+2*(p[0]-end[0])/3,end[1]+2*(p[1]-end[1])/3)
+    result.append('C '+values(a,b,end))
+   else:result.append('Q '+values(p,end))
+   current=end;i+=2 if nxt[2] else 1
+ result.append('Z');return ' '.join(result)
+
+
+
+def _fx195_independent_path_paint(case, page_size, origin, font_scale=1., *, negative=None, cubic=False):
+    # Authored original/static source contours, no production contour/shaper/decoder.
+    import hashlib, json, math, os, subprocess, tempfile
+    import xml.etree.ElementTree as ET
+    from pathlib import Path
+    from PIL import Image
+    source = case['expected'] if case['case'] == 'genuine-italic' else case['files'][0]
+    if case['axis']:
+        source = (Path(os.environ['F_X195_AXIS_ORACLES']) / (case['axis']+'-static.ttf')).read_bytes()
+    bold = case['bold']
+    shear = math.tan(math.radians(12)) if case['synthesis'] and case['italic'] else 0.
+    if negative == 'style':
+        if case['case'] == 'genuine-italic': source = case['ordinary'][0]
+        elif case['axis']: source = case['files'][0]
+        else: bold, shear = False, 0.
+    points = 48 * font_scale
+    record = _fx195_source_glyph(source, case['text'][0])
+    assert len(set(case['text'])) == 1
+    factor = points / record['upem']
+    # Preserve the independently read metric and physical unit-conversion order.
+    advance = record['advance'] * points / record['upem']
+    x,y = origin
+    if negative == 'origin': x += 3.
+    if negative == 'shear':
+        assert case['synthesis'] and case['italic']
+        shear = math.tan(math.radians(6))
+    radius = points/48 if bold else 0.
+    bounds = record['bounds']
+    corners = [(gx*factor+shear*gy*factor,gy*factor) for gx in (bounds[0],bounds[2]) for gy in (bounds[1],bounds[3])]
+    roi = (math.floor(x+min(px for px,py in corners)-radius*(1+abs(shear)))-3,
+           math.floor(y-max(py for px,py in corners)-radius)-3,
+           math.ceil(x+(len(case['text'])-1)*advance+max(px for px,py in corners)+radius*(1+abs(shear)))+3,
+           math.ceil(y-min(py for px,py in corners)+radius)+3)
+    assert 0 <= roi[0] < roi[2] <= page_size[0] and 0 <= roi[1] < roi[3] <= page_size[1]
+    ns = 'http://www.w3.org/2000/svg'
+    ET.register_namespace('', ns)
+    tree = ET.Element('{'+ns+'}svg', {'width':str(page_size[0]),'height':str(page_size[1]),'viewBox':f'0 0 {page_size[0]} {page_size[1]}'})
+    for index in range(len(case['text'])):
+        data = ' '.join(_fx195_source_path_commands(contour, lambda p:(x+index*advance+p[0]*factor,y-p[1]*factor),cubic) for contour in record['contours'])
+        attrs = {'d':data,'fill':'#000000','fill-rule':'nonzero'}
+        if bold: attrs.update({'stroke':'#000000','stroke-width':f'{points/24:.12f}','stroke-linecap':'round','stroke-linejoin':'round','paint-order':'fill stroke'})
+        if shear: attrs['transform'] = f'matrix(1 0 {-shear:.12f} 1 {shear*y:.12f} 0)'
+        ET.SubElement(tree,'{'+ns+'}path',attrs)
+    raw = ET.tostring(tree,encoding='utf-8',xml_declaration=True)
+    assert all(node.tag=='{'+ns+'}path' for node in tree)
+    assert not any(token in raw for token in [b'<text',b'<image',b'<use',b'<defs',b'font',b'href',b'url(',b'<filter'])
+    qualification_path = Path(os.environ['F_X195_PATH_REFERENCE_QUALIFICATION'])
+    assert hashlib.sha256(qualification_path.read_bytes()).hexdigest() == os.environ['F_X195_PATH_REFERENCE_QUALIFICATION_SHA']
+    q = json.loads(qualification_path.read_text())
+    assert q['actual_compiler_exit'] == 0 and q['actual_transitive_abi_qualified'] is True
+    assert q['renderer_source_sha256'] == hashlib.sha256(_FX195_REFERENCE_RENDERER_SOURCE.encode()).hexdigest()
+    assert q['rustc_verbose_version'].startswith('rustc 1.97.1 ') and 'host: aarch64-apple-darwin\n' in q['rustc_verbose_version']
+    assert q['actual_transitive_versions'] == {'resvg':'0.48.1','usvg':'0.48.1','tiny-skia':'0.12.0'}
+    compile_receipt = Path(q['actualCompileReceipt'])
+    assert hashlib.sha256(compile_receipt.read_bytes()).hexdigest() == q['actualCompileReceiptSHA']
+    compiled = json.loads(compile_receipt.read_text())
+    assert compiled['actualExit'] == 0 and compiled['guardsBefore'] is True and compiled['guardsAfter'] is True
+    painter = Path(q['renderer_binary'])
+    assert hashlib.sha256(painter.read_bytes()).hexdigest() == q['renderer_binary_sha256'] == compiled['binarySHA']
+    assert hashlib.sha256(Path(q['qualified_resvg_rlib']).read_bytes()).hexdigest() == q['qualified_resvg_rlib_sha256']
+    with tempfile.TemporaryDirectory(prefix='fx195-original-path-') as temp:
+        input_path,output_path = Path(temp)/'original.svg',Path(temp)/'original.png'
+        input_path.write_bytes(raw)
+        result = subprocess.run([str(painter),str(input_path),str(output_path)],capture_output=True,timeout=120,check=False)
+        assert result.returncode == 0, result.stderr.decode(errors='replace')
+        image = Image.open(output_path).convert('RGBA')
+        image.load()
+    record.update({'source_sha256':hashlib.sha256(source).hexdigest(),'svg_sha256':hashlib.sha256(raw).hexdigest(),
+                   'origin':list(origin),'scale':font_scale,'roi':list(roi),'negative':negative,'cubic':cubic,
+                   'qualification':str(qualification_path),'qualificationSHA':os.environ['F_X195_PATH_REFERENCE_QUALIFICATION_SHA'],
+                   'rendererSHA':q['renderer_binary_sha256'],'stdout':result.stdout.decode(),'actualExit':result.returncode})
+    return image,roi,len(case['text'])*advance,record
+
+
+def _fx195_style_fixture_owners(before, case, page_size, notes=False, points=48):
+    # Bounded fixture placement from original OOXML and original physical metrics.
+    import os, math, struct, zipfile, io
+    import xml.etree.ElementTree as ET
+    from pathlib import Path
+    source = case['expected'] if case['case']=='genuine-italic' else case['files'][0]
+    if case['axis']: source = (Path(os.environ['F_X195_AXIS_ORACLES'])/(case['axis']+'-static.ttf')).read_bytes()
+    tables = {source[o:o+4]:struct.unpack_from('>II',source,o+8) for o in range(12,12+16*struct.unpack_from('>H',source,4)[0],16)}
+    upem = struct.unpack_from('>H',source,tables[b'head'][0]+18)[0]
+    with zipfile.ZipFile(io.BytesIO(before)) as z: parts = {name:z.read(name) for name in z.namelist()}
+    if 'word/document.xml' in parts:
+        w='{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+        tree=ET.fromstring(parts['word/document.xml']);section=tree.find('.//'+w+'sectPr');assert section is not None
+        margin=section.find(w+'pgMar');size=section.find(w+'pgSz');assert margin is not None and size is not None
+        assert tuple(round(int(size.get(w+key))/20) for key in ['w','h']) == tuple(page_size)
+        assert ''.join(n.text or '' for n in tree.iter(w+'t')) == case['text']
+        os2=tables[b'OS/2'][0];flags=struct.unpack_from('>H',source,os2+62)[0]
+        ascent=struct.unpack_from('>h',source,os2+68)[0] if flags&128 else struct.unpack_from('>H',source,os2+74)[0]
+        return [{'owner':'body','origin':(int(margin.get(w+'left'))/20,int(margin.get(w+'top'))/20+points*ascent/upem),'scale':1.}]
+    p='{http://schemas.openxmlformats.org/presentationml/2006/main}';a='{http://schemas.openxmlformats.org/drawingml/2006/main}'
+    slide_names=[name for name in parts if re.fullmatch(r'ppt/slides/slide\d+\.xml',name)];assert len(slide_names)==1
+    slide=ET.fromstring(parts[slide_names[0]]);shapes=[shape for shape in slide.iter(p+'sp') if ''.join(n.text or '' for n in shape.iter(a+'t'))==case['text']];assert len(shapes)==1
+    presentation=ET.fromstring(parts['ppt/presentation.xml']);size=presentation.find(p+'sldSz');assert size is not None
+    slide_size=tuple(float(size.get(key))/12700 for key in ['cx','cy'])
+    asc,desc=struct.unpack_from('>hh',source,tables[b'hhea'][0]+4);height=points*1.2;descent=-desc*points/upem
+    baseline=max(height*min(asc/(asc-desc),.75),height-descent)
+    def bounds(shape):
+        xf=shape.find(p+'spPr/'+a+'xfrm');assert xf is not None and xf.get('rot','0')=='0' and xf.get('flipH','0') in ('0','false') and xf.get('flipV','0') in ('0','false')
+        off,ext=xf.find(a+'off'),xf.find(a+'ext');assert off is not None and ext is not None
+        return tuple(float(off.get(key))/12700 for key in ['x','y'])+tuple(float(ext.get(key))/12700 for key in ['cx','cy'])
+    def origin(shape):
+        x,y,_,_=bounds(shape);bp=shape.find(p+'txBody/'+a+'bodyPr');assert bp is not None
+        assert bp.get('anchor','t')=='t' and bp.get('vert','horz')=='horz'
+        return x+float(bp.get('lIns','91440'))/12700,y+float(bp.get('tIns','45720'))/12700+baseline
+    body={'owner':'body','origin':origin(shapes[0]),'scale':1.}
+    if not notes:
+        assert tuple(round(v) for v in slide_size)==tuple(page_size)
+        return [body]
+    notes_names=[name for name in parts if re.fullmatch(r'ppt/notesSlides/notesSlide\d+\.xml',name)];masters=[name for name in parts if re.fullmatch(r'ppt/notesMasters/notesMaster\d+\.xml',name)];assert len(notes_names)==len(masters)==1
+    note=ET.fromstring(parts[notes_names[0]]);master=ET.fromstring(parts[masters[0]])
+    def kind(shape):
+        ph=shape.find(p+'nvSpPr/'+p+'nvPr/'+p+'ph');return ph.get('type') if ph is not None else None
+    note_shapes=[shape for shape in note.iter(p+'sp') if ''.join(n.text or '' for n in shape.iter(a+'t'))==case['text']];assert len(note_shapes)==1 and kind(note_shapes[0])=='body'
+    nshape=note_shapes[0]
+    if nshape.find(p+'spPr/'+a+'xfrm') is None:
+        owned=[shape for shape in master.iter(p+'sp') if kind(shape)=='body'];assert len(owned)==1
+        # Position is inherited, bodyPr insets remain from the current source owner.
+        inherited=ET.fromstring(ET.tostring(nshape));sppr=inherited.find(p+'spPr');assert sppr is not None
+        sppr.append(ET.fromstring(ET.tostring(owned[0].find(p+'spPr/'+a+'xfrm'))));nshape=inherited
+    notes_size=presentation.find(p+'notesSz');assert notes_size is not None and tuple(round(float(notes_size.get(key))/12700) for key in ['cx','cy'])==tuple(page_size)
+    images=[shape for shape in note.iter(p+'sp') if kind(shape)=='sldImg' and shape.find(p+'spPr/'+a+'xfrm') is not None]
+    if not images:images=[shape for shape in master.iter(p+'sp') if kind(shape)=='sldImg']
+    assert len(images)==1
+    x,y,width,height=bounds(images[0]);scale=min(width/slide_size[0],height/slide_size[1])
+    preview_origin=(x+(width-slide_size[0]*scale)/2+body['origin'][0]*scale,y+(height-slide_size[1]*scale)/2+body['origin'][1]*scale)
+    return [{'owner':'notes-body','origin':origin(nshape),'scale':1.},{'owner':'slide-preview','origin':preview_origin,'scale':scale}]
+
+
+def _fx195_assert_installed_style(case, method, invoke, companion_pdf, companion_png, before, source_bytes, directory, expected_preview_scale=None):
+    from PIL import Image
+    import hashlib,json
+    pdf = companion_pdf()
+    pdf_image = _fx195_pdf_style_images(pdf,directory,'position-reference')[0]
+    actual_owners = _fx195_pdf_style_anchors(pdf,pdf_image.size,case,expected_preview_scale)
+    owners = _fx195_style_fixture_owners(before,case,pdf_image.size,expected_preview_scale is not None)
+    assert len(actual_owners)==len(owners)
+    for owner in owners:
+        actual = [item for item in actual_owners if item['owner']==owner['owner']]
+        assert len(actual)==1
+        assert abs(actual[0]['scale']-owner['scale']) <= .00001
+        assert all(abs(x-y)<=.00002 for x,y in zip(actual[0]['origin'],owner['origin'])), 'actual anchor must match independently declared fixture placement'
+    controls=[]
+    for owner in owners:
+        pdf_expected,roi,advance = _fx195_independent_style_paint(case,pdf_image.size,owner['origin'],owner['scale'])
+        assert _fx195_mask_ssim(pdf_image,pdf_expected,roi) >= .99, f"PDF {owner['owner']} must paint independently measured original font-text"
+        expected,path_roi,path_advance,proof = _fx195_independent_path_paint(case,pdf_image.size,owner['origin'],owner['scale'])
+        cubic,cubic_roi,cubic_advance,cubic_proof = _fx195_independent_path_paint(case,pdf_image.size,owner['origin'],owner['scale'],cubic=True)
+        assert path_roi==cubic_roi==roi and path_advance==cubic_advance==advance
+        controls.append((owner,pdf_expected,expected,cubic,roi,advance))
+        (directory/(owner['owner']+'-independent-source-paths.json')).write_text(json.dumps({'quadratic':proof,'cubic':cubic_proof},indent=2)+'\n')
+    (directory/'style-position-owners.json').write_text(json.dumps({
+        'case':case['case'],'method':method,'pdfSHA':hashlib.sha256(pdf).hexdigest(),'physicalPageSize':list(pdf_image.size),
+        'owners':owners,'actualOwners':actual_owners,'independentPointSize':48,'expectedPreviewScale':expected_preview_scale,
+        'sourceFixtureSHA':hashlib.sha256(before).hexdigest(),'originalPhysicalFontSHAs':[hashlib.sha256(data).hexdigest() for data in case['files']],
+        'threshold':.99,'adapter':'original OOXML fixture and physical metrics, independently checked reachable PDF owner matrices',
+    },indent=2)+'\n')
+    png_image = Image.open(io.BytesIO(companion_png())).convert('RGBA')
+    for owner,pdf_expected,expected,cubic,roi,advance in controls:
+        assert png_image.size==expected.size==cubic.size
+        assert _fx195_mask_ssim(png_image,expected,roi)>=.99, f"PNG quadratic {owner['owner']}"
+        assert _fx195_mask_ssim(png_image,cubic,roi)>=.99, f"PNG cubic {owner['owner']}"
+    owner,pdf_expected,expected,cubic,roi,advance = next(control for control in controls if control[0]['owner']!='slide-preview')
+    origin=owner['origin'];value=invoke();is_pdf=method in ('to_pdf','to_notes_pdf')
+    if is_pdf: images=_fx195_pdf_style_images(value,directory,'actual-method')
+    elif method in ('render_page_to_png','render_slide_to_png'):images=[Image.open(io.BytesIO(value)).convert('RGBA')]
+    elif method in ('render_all_pages','render_pages','render_all_slides','render_all_notes'):
+        assert len(value)==1;images=[Image.open(io.BytesIO(value[0])).convert('RGBA')]
+    elif method=='render_page_to_svg':
+        _fx195_svg_style_artifact(value,case,expected,cubic,roi,origin,advance,directory);images=[]
+    elif method=='text_layout':
+        assert len(value)==1 and len(value[0].lines)==1
+        assert abs(value[0].lines[0].bounds.width-advance)<=.00001;images=[]
+    elif method=='layout':
+        assert len(value)==1 and value[0].body_index==0 and value[0].physical_page==1
+        assert value[0].bounds.x>=0 and value[0].bounds.height>=33.6;images=[]
+    else:
+        assert method=='layout_page' and value is not None
+        assert value.page_number==1 and value.width==expected.width and value.height==expected.height;images=[]
+    for image in images:
+        for owner,pdf_expected,expected,cubic,roi,advance in controls:
+            assert image.size==expected.size
+            if is_pdf: assert _fx195_mask_ssim(image,pdf_expected,roi)>=.99, f"selected PDF {owner['owner']}"
+            else:
+                assert _fx195_mask_ssim(image,expected,roi)>=.99, f"selected PNG quadratic {owner['owner']}"
+                assert _fx195_mask_ssim(image,cubic,roi)>=.99, f"selected PNG cubic {owner['owner']}"
+    assert _fx195_style_observation(invoke(),method,directory,'repeat')==_fx195_style_observation(value,method,directory,'first')
+    assert source_bytes()==before
+    for owner,pdf_expected,expected,cubic,roi,advance in controls:
+        wrong = dict(case,expected=case['ordinary'][0]) if case['case']=='genuine-italic' else dict(case,axis=None,bold=False,italic=False,synthesis=True)
+        wrong_pdf,_,_ = _fx195_independent_style_paint(wrong,expected.size,owner['origin'],owner['scale'])
+        wrong_path,_,_,_ = _fx195_independent_path_paint(wrong,expected.size,owner['origin'],owner['scale'])
+        assert _fx195_mask_ssim(wrong_pdf,pdf_expected,roi)<.99, f"independent PDF wrong geometry {owner['owner']}"
+        assert _fx195_mask_ssim(wrong_path,expected,roi)<.99, f"independent path wrong geometry {owner['owner']}"
+        for negative in ('style','origin')+(('shear',) if case['synthesis'] and case['italic'] else ()):
+            wrong_pdf,_,_ = _fx195_independent_style_paint(case,expected.size,owner['origin'],owner['scale'],negative=negative)
+            wrong_path,_,_,_ = _fx195_independent_path_paint(case,expected.size,owner['origin'],owner['scale'],negative=negative)
+            assert _fx195_mask_ssim(wrong_pdf,pdf_expected,roi)<.99, f"independent PDF {negative} discriminator {owner['owner']}"
+            assert _fx195_mask_ssim(wrong_path,expected,roi)<.99, f"independent path {negative} discriminator {owner['owner']}"
+
+
+
+@pytest.mark.parametrize('style_case', _FX195_STYLE_CASES)
+@pytest.mark.parametrize('method', ['to_pdf','render_slide_to_png','render_all_slides','text_layout','to_notes_pdf','render_all_notes'])
+def test_fx195_installed_ppt_styles_match_independent_paint(method, style_case, tmp_path):
+    import xml.etree.ElementTree as ET
+    import rpptx
+    case = _fx195_style_case(style_case)
+    presentation = _fx195_presentation(case['family'])
+    with zipfile.ZipFile(io.BytesIO(presentation.to_bytes())) as package:
+        parts = {name:package.read(name) for name in package.namelist()}
+    ns = '{http://schemas.openxmlformats.org/drawingml/2006/main}'
+    counts = {'slide':0,'notes':0}
+    for name in list(parts):
+        kind = 'slide' if re.fullmatch(r'ppt/slides/slide\d+\.xml',name) else 'notes' if re.fullmatch(r'ppt/notesSlides/notesSlide\d+\.xml',name) else None
+        if kind is None: continue
+        tree = ET.fromstring(parts[name])
+        for run in tree.iter(ns+'r'):
+            prop = run.find(ns+'rPr')
+            latin = prop.find(ns+'latin') if prop is not None else None
+            if latin is None or latin.get('typeface') != case['family']: continue
+            prop.set('sz','4800')
+            prop.set('b','1' if case['bold'] else '0')
+            prop.set('i','1' if case['italic'] else '0')
+            run.find(ns+'t').text = case['text']
+            counts[kind]+=1
+        parts[name]=ET.tostring(tree,encoding='utf-8',xml_declaration=True)
+    assert counts == {'slide':1,'notes':1}
+    output = io.BytesIO()
+    with zipfile.ZipFile(output,'w') as z:
+        for name,data in parts.items(): z.writestr(name,data)
+    presentation = rpptx.Presentation.from_bytes(output.getvalue())
+    before = presentation.to_bytes()
+    kwargs = {'fonts':[(case['family'],data) for data in case['files']]}
+    notes = method in ('to_notes_pdf','render_all_notes')
+    preview_scale = _fx195_notes_preview_scale(parts) if notes else None
+    def invoke():
+        if method == 'render_slide_to_png': return presentation.render_slide_to_png(0,dpi=72,**kwargs)
+        if method == 'render_all_slides': return presentation.render_all_slides(dpi=72,**kwargs)
+        if method == 'render_all_notes': return presentation.render_all_notes(dpi=72,**kwargs)
+        return getattr(presentation,method)(**kwargs)
+    pdf = lambda:presentation.to_notes_pdf(**kwargs) if notes else presentation.to_pdf(**kwargs)
+    png = lambda:presentation.render_all_notes(dpi=72,**kwargs)[0] if notes else presentation.render_slide_to_png(0,dpi=72,**kwargs)
+    _fx195_assert_installed_style(case,method,invoke,pdf,png,before,presentation.to_bytes,tmp_path,preview_scale)

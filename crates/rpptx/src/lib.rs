@@ -1106,7 +1106,114 @@ impl Presentation {
     /// Resolves and lays out the current presentation with deterministic fonts.
     #[cfg(feature = "render")]
     pub fn render_deterministic(&self) -> Result<(RenderInput, LayoutResult)> {
-        assemble_render_input(&self.staged_package(false)?)
+        assemble_render_input(&self.staged_package(false)?, &[])
+    }
+
+    /// Resolve and lay out caller fonts over deterministic bundled fallback.
+    #[cfg(feature = "render")]
+    pub fn render_deterministic_with_fonts(
+        &self,
+        font_files: &[(&str, &[u8])],
+    ) -> Result<(RenderInput, LayoutResult)> {
+        assemble_render_input(&self.staged_package(false)?, &caller_font_files(font_files))
+    }
+
+    /// Render caller-selected fonts to a checked deterministic PDF.
+    #[cfg(feature = "render")]
+    pub fn to_pdf_deterministic_with_fonts(&self, font_files: &[(&str, &[u8])]) -> Result<Vec<u8>> {
+        let (_, layout) = self.render_deterministic_with_fonts(font_files)?;
+        Ok(oxml_pdf::render_to_pdf_checked(&layout)?)
+    }
+
+    /// Render caller-selected fonts to the requested archival profile.
+    #[cfg(feature = "render")]
+    pub fn to_pdfa_deterministic_with_fonts(
+        &self,
+        profile: oxml_pdf::PdfConformance,
+        font_files: &[(&str, &[u8])],
+    ) -> Result<Vec<u8>> {
+        let (_, layout) = self.render_deterministic_with_fonts(font_files)?;
+        Ok(oxml_pdf::render_to_pdf_with_options(
+            &layout,
+            oxml_pdf::PdfOptions::new(profile),
+        )?)
+    }
+
+    /// Rasterize one slide from the caller-selected bundle.
+    #[cfg(feature = "render")]
+    pub fn slide_png_deterministic_with_fonts(
+        &self,
+        slide_index: usize,
+        dpi: f64,
+        font_files: &[(&str, &[u8])],
+    ) -> Result<Option<Vec<u8>>> {
+        let (_, layout) = self.render_deterministic_with_fonts(font_files)?;
+        render_export_png(&layout, slide_index, dpi)
+    }
+
+    /// Rasterize all slides from one caller-selected bundle.
+    #[cfg(feature = "render")]
+    pub fn slide_pngs_deterministic_with_fonts(
+        &self,
+        dpi: f64,
+        font_files: &[(&str, &[u8])],
+    ) -> Result<Vec<Vec<u8>>> {
+        let (_, layout) = self.render_deterministic_with_fonts(font_files)?;
+        render_export_pngs(&layout, dpi)
+    }
+
+    /// Render caller-selected speaker notes to checked PDF.
+    #[cfg(feature = "render")]
+    pub fn to_notes_pdf_deterministic_with_fonts(
+        &self,
+        font_files: &[(&str, &[u8])],
+    ) -> Result<Vec<u8>> {
+        let layout =
+            render_notes_pages(&self.staged_package(false)?, &caller_font_files(font_files))?;
+        Ok(oxml_pdf::render_to_pdf_checked(&layout)?)
+    }
+
+    /// Rasterize caller-selected speaker notes from one prepared manager.
+    #[cfg(feature = "render")]
+    pub fn notes_page_pngs_deterministic_with_fonts(
+        &self,
+        dpi: f64,
+        font_files: &[(&str, &[u8])],
+    ) -> Result<Vec<Vec<u8>>> {
+        let layout =
+            render_notes_pages(&self.staged_package(false)?, &caller_font_files(font_files))?;
+        render_export_pngs(&layout, dpi)
+    }
+
+    /// Render caller-selected handout pages to checked PDF.
+    #[cfg(feature = "render")]
+    pub fn to_handout_pdf_deterministic_with_fonts(
+        &self,
+        arrangement: HandoutLayout,
+        font_files: &[(&str, &[u8])],
+    ) -> Result<Vec<u8>> {
+        let layout = render_handout_pages(
+            &self.staged_package(false)?,
+            arrangement,
+            &caller_font_files(font_files),
+        )?;
+        Ok(oxml_pdf::render_to_pdf_checked(&layout)?)
+    }
+
+    /// Rasterize caller-selected handout pages from one prepared manager.
+    #[cfg(feature = "render")]
+    pub fn handout_page_pngs_deterministic_with_fonts(
+        &self,
+        arrangement: HandoutLayout,
+        dpi: f64,
+        font_files: &[(&str, &[u8])],
+    ) -> Result<Vec<Vec<u8>>> {
+        let layout = render_handout_pages(
+            &self.staged_package(false)?,
+            arrangement,
+            &caller_font_files(font_files),
+        )?;
+        render_export_pngs(&layout, dpi)
     }
 
     /// Evaluates and renders one slide at an explicit slide-local timestamp.
@@ -1120,8 +1227,14 @@ impl Presentation {
         position: TimelinePosition,
         outgoing_slide_index: Option<usize>,
     ) -> Result<DeterministicTimelineFrame> {
-        self.render_timeline_deterministic_inner(slide_index, position, outgoing_slide_index, None)
-            .map(|(frame, _)| frame)
+        self.render_timeline_deterministic_inner(
+            slide_index,
+            position,
+            outgoing_slide_index,
+            None,
+            &[],
+        )
+        .map(|(frame, _)| frame)
     }
 
     /// Evaluates one deterministic page and synchronized media playback state.
@@ -1138,8 +1251,28 @@ impl Presentation {
             position,
             outgoing_slide_index,
             Some(fallback_policy),
+            &[],
         )?;
         Ok(DeterministicMediaTimelineFrame { frame, media })
+    }
+
+    /// Render a timeline sample with caller-selected fonts and bundled fallback.
+    #[cfg(feature = "render")]
+    pub fn render_timeline_deterministic_with_fonts(
+        &self,
+        slide_index: usize,
+        position: TimelinePosition,
+        outgoing_slide_index: Option<usize>,
+        font_files: &[(&str, &[u8])],
+    ) -> Result<DeterministicTimelineFrame> {
+        self.render_timeline_deterministic_inner(
+            slide_index,
+            position,
+            outgoing_slide_index,
+            None,
+            &caller_font_files(font_files),
+        )
+        .map(|(frame, _)| frame)
     }
 
     #[cfg(feature = "render")]
@@ -1149,9 +1282,10 @@ impl Presentation {
         position: TimelinePosition,
         outgoing_slide_index: Option<usize>,
         fallback_policy: Option<MediaFallbackPolicy>,
+        font_files: &[oxml_layout::FontFile],
     ) -> Result<(DeterministicTimelineFrame, Vec<EvaluatedMediaState>)> {
         let package = self.staged_package(false)?;
-        let mut assembly = prepare_render_context(&package, fallback_policy.is_some())?;
+        let mut assembly = prepare_render_context(&package, fallback_policy.is_some(), font_files)?;
         render_prepared_timeline_request(
             &mut assembly,
             TimelineRequest {
@@ -1169,7 +1303,7 @@ impl Presentation {
     #[cfg(feature = "render")]
     pub fn to_pdf_deterministic(&self) -> Result<Vec<u8>> {
         let (_, layout) = self.render_deterministic()?;
-        Ok(oxml_pdf::render_to_pdf(&layout))
+        Ok(oxml_pdf::render_to_pdf_checked(&layout)?)
     }
 
     /// Renders one deterministic slide PNG at `dpi` by zero-based index.
@@ -1197,13 +1331,23 @@ impl Presentation {
     /// rendered layout and `0.95` asks whether the text fits a narrower frame.
     #[cfg(feature = "render")]
     pub fn text_layout_deterministic(&self, width_factor: f64) -> Result<Vec<TextFrameLayout>> {
+        self.text_layout_deterministic_with_fonts(width_factor, &[])
+    }
+
+    /// Measure text with the same caller configuration as PDF and previews.
+    #[cfg(feature = "render")]
+    pub fn text_layout_deterministic_with_fonts(
+        &self,
+        width_factor: f64,
+        font_files: &[(&str, &[u8])],
+    ) -> Result<Vec<TextFrameLayout>> {
         if !width_factor.is_finite() || width_factor <= 0.0 {
             return Err(render_failure(format!(
                 "text layout width factor must be finite and positive, found {width_factor}"
             )));
         }
         let package = self.staged_package(false)?;
-        let mut assembly = prepare_render_context(&package, false)?;
+        let mut assembly = prepare_render_context(&package, false, &caller_font_files(font_files))?;
         let mut frames = Vec::new();
         for (slide_index, ((prepared, slide), directions)) in assembly
             .slides
@@ -1301,15 +1445,15 @@ impl Presentation {
     #[cfg(feature = "render")]
     pub fn to_notes_pdf_deterministic(&self) -> Result<Vec<u8>> {
         let package = self.staged_package(false)?;
-        let layout = render_notes_pages(&package)?;
-        Ok(oxml_pdf::render_to_pdf(&layout))
+        let layout = render_notes_pages(&package, &[])?;
+        Ok(oxml_pdf::render_to_pdf_checked(&layout)?)
     }
 
     /// Renders one deterministic PNG per speaker-notes page at `dpi`.
     #[cfg(feature = "render")]
     pub fn notes_page_pngs_deterministic(&self, dpi: f64) -> Result<Vec<Vec<u8>>> {
         let package = self.staged_package(false)?;
-        let layout = render_notes_pages(&package)?;
+        let layout = render_notes_pages(&package, &[])?;
         render_export_pngs(&layout, dpi)
     }
 
@@ -1317,8 +1461,8 @@ impl Presentation {
     #[cfg(feature = "render")]
     pub fn to_handout_pdf_deterministic(&self, layout: HandoutLayout) -> Result<Vec<u8>> {
         let package = self.staged_package(false)?;
-        let layout = render_handout_pages(&package, layout)?;
-        Ok(oxml_pdf::render_to_pdf(&layout))
+        let layout = render_handout_pages(&package, layout, &[])?;
+        Ok(oxml_pdf::render_to_pdf_checked(&layout)?)
     }
 
     /// Renders one deterministic PNG per audience-handout page at `dpi`.
@@ -1329,7 +1473,7 @@ impl Presentation {
         dpi: f64,
     ) -> Result<Vec<Vec<u8>>> {
         let package = self.staged_package(false)?;
-        let layout = render_handout_pages(&package, layout)?;
+        let layout = render_handout_pages(&package, layout, &[])?;
         render_export_pngs(&layout, dpi)
     }
 
@@ -9957,8 +10101,22 @@ fn replace_text_in_run_segment(runs: &mut [TextRun], placeholder: &str, value: &
 }
 
 #[cfg(feature = "render")]
-fn assemble_render_input(package: &OpcPackage) -> Result<(RenderInput, LayoutResult)> {
-    let assembly = prepare_render_context(package, false)?;
+fn caller_font_files(font_files: &[(&str, &[u8])]) -> Vec<oxml_layout::FontFile> {
+    font_files
+        .iter()
+        .map(|(family, data)| oxml_layout::FontFile {
+            family: (*family).to_owned(),
+            data: data.to_vec(),
+        })
+        .collect()
+}
+
+#[cfg(feature = "render")]
+fn assemble_render_input(
+    package: &OpcPackage,
+    font_files: &[oxml_layout::FontFile],
+) -> Result<(RenderInput, LayoutResult)> {
+    let assembly = prepare_render_context(package, false, font_files)?;
     Ok((assembly.input, assembly.layout))
 }
 
@@ -10018,8 +10176,11 @@ fn validate_export_png_pages(pages: &[std::sync::Arc<PageFrame>], dpi: f64) -> R
 }
 
 #[cfg(feature = "render")]
-fn render_notes_pages(package: &OpcPackage) -> Result<LayoutResult> {
-    let mut assembly = prepare_render_context(package, false)?;
+fn render_notes_pages(
+    package: &OpcPackage,
+    font_files: &[oxml_layout::FontFile],
+) -> Result<LayoutResult> {
+    let mut assembly = prepare_render_context(package, false, font_files)?;
     if assembly.slides.is_empty() {
         return Ok(LayoutResult::new(
             Vec::new(),
@@ -10223,8 +10384,9 @@ fn copy_export_relationship_scope(
 fn render_handout_pages(
     package: &OpcPackage,
     handout_layout: HandoutLayout,
+    font_files: &[oxml_layout::FontFile],
 ) -> Result<LayoutResult> {
-    let mut assembly = prepare_render_context(package, false)?;
+    let mut assembly = prepare_render_context(package, false, font_files)?;
     if assembly.slides.is_empty() {
         return Ok(LayoutResult::new(
             Vec::new(),
@@ -11087,6 +11249,7 @@ fn max_resolved_sample_retention_count() -> usize {
 fn prepare_render_context(
     package: &OpcPackage,
     collect_media_diagnostics: bool,
+    font_files: &[oxml_layout::FontFile],
 ) -> Result<PreparedRenderAssembly> {
     #[cfg(test)]
     PREPARED_RENDER_ASSEMBLY_COUNT.with(|count| count.set(count.get() + 1));
@@ -11117,6 +11280,7 @@ fn prepare_render_context(
     PREPARED_FONT_MANAGER_COUNT.with(|count| count.set(count.get() + 1));
     let mut font_manager = FontManager::new_deterministic()
         .map_err(|error| render_failure(format!("deterministic fonts: {error}")))?;
+    font_manager.load_additional_fonts(font_files);
     let mut resolved_slides = Vec::with_capacity(presentation.slide_ids.len());
     let mut text_directions = Vec::with_capacity(presentation.slide_ids.len());
     let mut prepared_slides = Vec::with_capacity(presentation.slide_ids.len());
@@ -11262,7 +11426,7 @@ fn prepare_render_context(
     let input = RenderInput {
         slides: resolved_slides,
         media,
-        fonts: Vec::new(),
+        fonts: font_files.to_vec(),
         metadata: None,
     };
     #[cfg(test)]
@@ -12200,6 +12364,283 @@ mod write_tests {
     use rpptx_oxml::placeholder::PhType;
 
     use super::*;
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn fx195_native_caller_font_bundle_reaches_slide_notes_handout_and_fit() {
+        let bytes = include_bytes!("../../oxml-layout/fonts/LiberationMono-Regular.ttf");
+        let inputs = [("FX195 native caller", bytes.as_slice())];
+        let mut presentation = Presentation::new().unwrap();
+        presentation.add_slide(6).unwrap();
+        {
+            let mut slide = presentation.slide_mut(0).unwrap();
+            let mut shape = slide
+                .add_textbox(Emu(100_000), Emu(100_000), Emu(3_000_000), Emu(800_000))
+                .unwrap();
+            shape.set_text("iiiiWWWW").unwrap();
+            let mut frame = shape.text_frame().unwrap();
+            frame
+                .paragraph_mut(0)
+                .unwrap()
+                .run_mut(0)
+                .unwrap()
+                .set_font(Some(TextFont::new(inputs[0].0).unwrap()));
+        }
+        presentation.set_notes_text(0, "caller notes").unwrap();
+        {
+            let notes = presentation.slides[0].notes.as_mut().unwrap();
+            let body = first_notes_body_mut(&mut notes.notes.common_slide_data.shape_tree.children)
+                .unwrap();
+            let paragraph = body.paragraph_mut(0).unwrap();
+            let TextRun::Run(run) = &mut paragraph.runs[0] else {
+                panic!("notes fixture must contain a typed run")
+            };
+            run.properties
+                .get_or_insert_with(CT_TextCharacterProperties::default)
+                .latin = Some(TextFont::new(inputs[0].0).unwrap());
+        }
+        // The default presentation has no handout master. Author a real part
+        // and both required relationships before exercising handout painting.
+        let mut fixture_package = presentation.staged_package(false).unwrap();
+        let theme_part = render_exact_related_part(
+            &fixture_package,
+            presentation.notes_master_part.as_deref().unwrap(),
+            rel_types::THEME,
+            content_types::THEME,
+        )
+        .unwrap();
+        let handout_part = "/ppt/handoutMasters/fx195HandoutMaster.xml";
+        let handout_xml = format!(
+            r#"<p:handoutMaster xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr><p:sp><p:nvSpPr><p:cNvPr id="2" name="FX195 caller handout text"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="100000" y="100000"/><a:ext cx="5000000" cy="800000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr sz="2000"><a:latin typeface="{}"/></a:rPr><a:t>FX195HANDOUTiiiiWWWW</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld><p:clrMap accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" bg1="lt1" bg2="lt2" folHlink="folHlink" hlink="hlink" tx1="dk1" tx2="dk2"/></p:handoutMaster>"#,
+            inputs[0].0
+        );
+        CT_HandoutMaster::from_xml(handout_xml.as_bytes()).unwrap();
+        fixture_package.set_part(handout_part, handout_xml.into_bytes());
+        fixture_package
+            .content_types
+            .add_override(handout_part, content_types::HANDOUT_MASTER);
+        fixture_package
+            .get_or_create_part_rels(handout_part)
+            .add_with_id("fx195Theme", rel_types::THEME, &theme_part);
+        fixture_package
+            .get_or_create_part_rels(&presentation.presentation_part)
+            .add_with_id("fx195Handout", rel_types::HANDOUT_MASTER, handout_part);
+        let presentation_xml = String::from_utf8(
+            fixture_package
+                .get_part(&presentation.presentation_part)
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert_eq!(presentation_xml.matches("<p:sldIdLst>").count(), 1);
+        let presentation_xml = presentation_xml.replacen(
+            "<p:sldIdLst>",
+            r#"<p:handoutMasterIdLst><p:handoutMasterId r:id="fx195Handout"/></p:handoutMasterIdLst><p:sldIdLst>"#,
+            1,
+        );
+        fixture_package.set_part(
+            &presentation.presentation_part,
+            presentation_xml.into_bytes(),
+        );
+        assert_eq!(
+            render_exact_related_part(
+                &fixture_package,
+                &presentation.presentation_part,
+                rel_types::HANDOUT_MASTER,
+                content_types::HANDOUT_MASTER,
+            )
+            .unwrap(),
+            handout_part
+        );
+        let mut fixture_bytes = std::io::Cursor::new(Vec::new());
+        fixture_package.write_to(&mut fixture_bytes).unwrap();
+        presentation = Presentation::from_bytes(fixture_bytes.get_ref()).unwrap();
+        assert_eq!(
+            presentation.handout_master_part.as_deref(),
+            Some(handout_part)
+        );
+        assert!(presentation.handout_master.is_some());
+        let before = presentation.to_bytes().unwrap();
+        let (input, layout) = presentation
+            .render_deterministic_with_fonts(&inputs)
+            .unwrap();
+        assert_eq!(input.fonts[0].data.as_slice(), bytes.as_slice());
+        assert!(
+            layout
+                .fonts
+                .iter()
+                .any(|font| font.data.as_ref() == bytes.as_slice() && font.face_index == 0)
+        );
+        let baseline = presentation.render_deterministic().unwrap().1;
+        assert_ne!(
+            format!("{:?}", baseline.pages),
+            format!("{:?}", layout.pages),
+            "caller glyph metrics must actually differ"
+        );
+        assert_eq!(
+            presentation
+                .to_pdf_deterministic_with_fonts(&inputs)
+                .unwrap(),
+            oxml_pdf::render_to_pdf_checked(&layout).unwrap()
+        );
+        assert_eq!(
+            presentation
+                .slide_png_deterministic_with_fonts(0, 72.0, &inputs)
+                .unwrap(),
+            render_export_png(&layout, 0, 72.0).unwrap()
+        );
+        assert_eq!(
+            presentation
+                .slide_pngs_deterministic_with_fonts(72.0, &inputs)
+                .unwrap(),
+            render_export_pngs(&layout, 72.0).unwrap()
+        );
+        assert!(
+            presentation
+                .slide_png_deterministic_with_fonts(1, 72.0, &inputs)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            presentation
+                .slide_png_deterministic_with_fonts(0, f64::NAN, &inputs)
+                .is_err()
+        );
+        let profile = oxml_pdf::PdfConformance::PdfA2b;
+        assert_eq!(
+            presentation
+                .to_pdfa_deterministic_with_fonts(profile, &inputs)
+                .unwrap(),
+            oxml_pdf::render_to_pdf_with_options(&layout, oxml_pdf::PdfOptions::new(profile))
+                .unwrap()
+        );
+        let configured = caller_font_files(&inputs);
+        let package = presentation.staged_package(false).unwrap();
+        let notes = render_notes_pages(&package, &configured).unwrap();
+        let handout = render_handout_pages(&package, HandoutLayout::Six, &configured).unwrap();
+        let mut painted_handout_runs = 0;
+        for page in &handout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                let (text, font_id, glyph_ids) = match element {
+                    PositionedElement::Text(run) => {
+                        (run.text.as_str(), run.font_id, run.glyph_ids.as_slice())
+                    }
+                    PositionedElement::MultilingualText(run) => (
+                        run.logical_text.as_str(),
+                        run.font_id,
+                        run.glyph_ids.as_slice(),
+                    ),
+                    _ => return,
+                };
+                if text.contains("FX195HANDOUT") {
+                    assert!(!glyph_ids.is_empty(), "handout text must paint real glyphs");
+                    let font = handout
+                        .fonts
+                        .iter()
+                        .find(|font| font.id == font_id)
+                        .unwrap();
+                    assert_eq!(font.data.as_ref(), bytes.as_slice());
+                    assert_eq!(font.face_index, 0);
+                    painted_handout_runs += 1;
+                }
+            });
+        }
+        assert!(
+            painted_handout_runs > 0,
+            "handout master caller text must contribute, not just a thumbnail"
+        );
+        for consumer in [&notes, &handout] {
+            assert!(
+                consumer
+                    .fonts
+                    .iter()
+                    .any(|font| font.data.as_ref() == bytes.as_slice() && font.face_index == 0)
+            );
+        }
+        let position = TimelinePosition {
+            elapsed_ms: u64::MAX,
+            click_count: u32::MAX,
+        };
+        let configured_frame = presentation
+            .render_timeline_deterministic_with_fonts(0, position, None, &inputs)
+            .unwrap();
+        let ordinary_frame = presentation
+            .render_timeline_deterministic(0, position, None)
+            .unwrap();
+        assert_ne!(
+            format!("{:?}", configured_frame.page.elements),
+            format!("{:?}", ordinary_frame.page.elements)
+        );
+        assert_eq!(
+            presentation
+                .to_notes_pdf_deterministic_with_fonts(&inputs)
+                .unwrap(),
+            oxml_pdf::render_to_pdf_checked(&notes).unwrap()
+        );
+        assert_eq!(
+            presentation
+                .notes_page_pngs_deterministic_with_fonts(72.0, &inputs)
+                .unwrap(),
+            render_export_pngs(&notes, 72.0).unwrap()
+        );
+        assert_eq!(
+            presentation
+                .to_handout_pdf_deterministic_with_fonts(HandoutLayout::Six, &inputs)
+                .unwrap(),
+            oxml_pdf::render_to_pdf_checked(&handout).unwrap()
+        );
+        assert_eq!(
+            presentation
+                .handout_page_pngs_deterministic_with_fonts(HandoutLayout::Six, 72.0, &inputs)
+                .unwrap(),
+            render_export_pngs(&handout, 72.0).unwrap()
+        );
+        assert_ne!(
+            format!(
+                "{:?}",
+                presentation
+                    .text_layout_deterministic_with_fonts(1.0, &inputs)
+                    .unwrap()
+            ),
+            format!("{:?}", presentation.text_layout_deterministic(1.0).unwrap())
+        );
+        assert!(
+            presentation
+                .text_layout_deterministic_with_fonts(f64::NAN, &inputs)
+                .is_err()
+        );
+        assert_eq!(
+            presentation.to_pdf_deterministic_with_fonts(&[]).unwrap(),
+            presentation.to_pdf_deterministic().unwrap()
+        );
+        let segments = [AnimationSegment {
+            slide_index: 0,
+            duration_ms: 1000,
+            click_count: 0,
+            transition: AnimationTransition::None,
+        }];
+        let export_options = AnimationExportOptions {
+            frame_rate: 1,
+            width_px: 160,
+            height_px: 90,
+            format: AnimationFormat::Gif {
+                loop_behavior: GifLoopBehavior::Once,
+            },
+            media_fallback: MediaFallbackPolicy::PosterFrame,
+        };
+        let configured_animation = presentation
+            .export_animation_deterministic_with_fonts(&segments, export_options, &inputs)
+            .unwrap();
+        let ordinary_animation = presentation
+            .export_animation_deterministic(&segments, export_options)
+            .unwrap();
+        assert_eq!(
+            configured_animation.frame_timestamps_ms,
+            ordinary_animation.frame_timestamps_ms
+        );
+        assert_ne!(configured_animation.bytes, ordinary_animation.bytes);
+        assert_eq!(presentation.to_bytes().unwrap(), before);
+    }
 
     #[cfg(feature = "render")]
     fn render_bound_png_header(width: u32, height: u32) -> Vec<u8> {

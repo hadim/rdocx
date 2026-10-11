@@ -562,3 +562,15 @@ def colour_formats() -> None:
     font.color.rgb = None
     font.color.theme_color = MSO_THEME_COLOR.ACCENT_1
     font.color.brightness = 0.25
+
+
+def fx195_caller_font_render_signatures(presentation: Presentation, directory: Path) -> None:
+    fonts: list[tuple[str, bytes]] = [("caller", b"font")]
+    dirs: list[str | Path] = [directory, str(directory)]
+    assert_type(presentation.to_pdf(fonts=fonts, font_dirs=dirs), bytes)
+    assert_type(presentation.render_slide_to_png(0, fonts=fonts, font_dirs=dirs), bytes | None)
+    assert_type(presentation.render_all_slides(fonts=fonts, font_dirs=dirs), list[bytes])
+    assert_type(presentation.text_layout(fonts=fonts, font_dirs=dirs), tuple[TextFrameLayout, ...])
+    assert_type(presentation.to_notes_pdf(fonts=fonts, font_dirs=dirs), bytes)
+    assert_type(presentation.render_all_notes(fonts=fonts, font_dirs=dirs), list[bytes])
+    assert_type(presentation.to_pdf(font_dir=directory), bytes)

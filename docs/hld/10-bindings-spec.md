@@ -2411,18 +2411,30 @@ keyword-only `render_pages` arguments, keeps zero-based page indices, releases
 the GIL for rendering, returns `list[bytes]` for PNG or JPEG, and returns one
 `bytes` value for TIFF.
 
-Python `Document.to_pdf(*, fonts=None, font_dir=None, revision_view="accepted")`
-uses `Document::to_pdf_with_options` when no fonts are supplied. With `fonts`,
-a sequence of `(family, bytes)` pairs, or `font_dir`, a directory whose `.ttf`,
-`.otf`, and `.ttc` files
-`Document::load_fonts_from_dir` labels by file name, it calls
-`Document::to_pdf_with_fonts_and_options` with the given fonts first, as
-`rdocx convert --font-dir` does. That call lays out with the caller fonts only,
-so a family they do not provide, even through the automatic label aliases and
-metric-compatible names, raises `LayoutError`. The native loader reads a
-missing directory as an empty one, so the binding raises `FileNotFoundError`
-for a missing `font_dir` and `NotADirectoryError` for a file, before any
-layout. SVG and raster output take no caller fonts.
+Python Word `to_pdf`, `render_page_to_png`, `render_page_to_svg`,
+`render_all_pages`, `render_pages`, `layout` and `layout_page` accept
+keyword-only `fonts=None`, `font_dir=None` and `font_dirs=None`. Fonts are
+ordered `(family, bytes)` pairs. Singular and plural directory inputs are
+mutually exclusive. A scalar string or bytes value is not a plural sequence.
+Directories load in caller order, supported files in lexical path order,
+then explicit bytes load last. Later same-rank additional faces win. Embedded family
+identity and filename aliases remain available. Caller faces override embedded
+and fallback faces, and empty loaded inputs use the ordinary omission route.
+
+Python copies bytes and path inputs before releasing the GIL. Metadata,
+strict file loading and native layout or rendering run detached. Missing and
+non-directory paths raise their existing I/O exceptions with the path. Other
+strict loader refusals retain the public layout/domain error and exact failing
+path. Invalid inputs do not produce output or mutate source. Normal Word
+caller rendering keeps normal fallback, while deterministic entrypoints keep
+bundled fallback. Existing caller-only native layout methods remain isolated.
+
+Configured `render_pages` constructs one owned layout. Omitted page selection
+uses that bundle's actual page count. Explicit selections retain order and
+refuse duplicates, empty selections and out-of-range indices. PNG and JPEG return lists of bytes,
+TIFF returns one multi-page byte stream. DPI, quality, transparency and revision
+selection preserve the existing raster contracts. Measurement results remain
+immutable, with no binding-private renderer or public invocation counter.
 
 Native Word SVG adds `SvgDiagnostic`, `SvgRenderResult`, and four additive
 `Document` methods. `render_page_to_svg` and
@@ -2435,6 +2447,12 @@ layout method, releases the GIL, and returns a frozen `SvgRenderResult` with the
 SVG text and a tuple of frozen `SvgDiagnostic` values, or `None` beyond the
 last page. WASM, CLI, Presentation, and public `oxml-pdf` APIs do not gain SVG
 methods or values.
+
+`FontData` carries selected variation coordinates and synthetic style flags
+in addition to source bytes and face index. External pre-1.0 struct literals
+must include those fields. Checked PDF output refuses failed selected-font
+preparation before allocating partial output, and native Result consumers
+propagate the existing error. Valid output and legacy vector signatures remain.
 
 Native renderers obtain the complete positioned output through
 `Document::layout` and `Document::layout_with_options`. Accepted calls return a
@@ -2654,6 +2672,14 @@ These additions are native Rust APIs only. Python, WASM, and CLI surfaces add
 no notes or handout methods and continue to preserve the underlying parts. No
 new public surface is added to `rpptx-layout`, `rpptx-render`, or the OXML
 crates. The additive facade API is reviewed through the pre-1.0 release gate.
+
+PowerPoint Python `to_pdf`, `render_slide_to_png`, `render_all_slides`,
+`text_layout`, `to_notes_pdf` and `render_all_notes` accept the same three
+keyword-only caller-font inputs and ordered strict loader contract. Native
+caller-font counterparts retain existing arguments and result forms. Common
+preparation supplies selected caller instances to slide, notes, handout,
+timeline and fit measurement paths. Deterministic fallback remains bundled.
+Neither WASM wrapper adds a host-directory input.
 
 ## Native PowerPoint text layout
 
@@ -3080,6 +3106,14 @@ The job has no npm publication, registry authentication, token, OIDC, release,
 or tag authority.
 
 ## CLIs
+
+`--font-dir` configures Word layout, conversion and image rendering, and
+PowerPoint conversion, rendering and thumbnails. The shared strict loader
+retains lexical file order and embedded identity with filename aliases.
+Deterministic CLI fallback remains bundled. PDF, PNG, JPEG and TIFF consume the
+selected layout instances. Unsupported output formats refuse a supplied font
+directory before publication. Missing or invalid inputs preserve staging and
+existing destination limits.
 
 `rpptx-cli` extends the seven-command `rdocx-cli` surface with `inspect`,
 `text`, `convert`, `diff`, `replace`, `validate`, `render`, `thumbnail`,

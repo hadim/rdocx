@@ -19,7 +19,9 @@ pub struct LayoutResult { pages: Vec<Arc<PageFrame>>, fonts: Vec<FontData>,
                           diagnostics: Vec<Diagnostic>,
                           structure: Option<DocumentStructure> }
 pub struct FontData { id: FontId, family: String, data: Arc<[u8]>,
-                      face_index: u32, bold: bool, italic: bool }
+                      face_index: u32, bold: bool, italic: bool,
+                      variations: Vec<([u8; 4], f32)>,
+                      synthetic_bold: bool, synthetic_italic: bool }
 pub struct PageFrame { page_number: usize, width: f64, height: f64,
                        elements: Vec<PositionedElement>, background: Option<Paint> }
 pub struct SourceNodeId(NonZeroU32)
@@ -277,6 +279,29 @@ logo 200 times.
 
 ## The PDF backend
 
+Each owned font ID identifies exact source bytes, a selected collection face,
+variation coordinates and synthesis policy. Matching static style faces take
+priority. Variable bold selects weight700 within the declared limits. Regular
+preserves the declared default, including Thin CJK defaults. Genuine italic
+faces precede usable ital or slnt axes. Metrics, advances, shaping and backend
+outlines consume the same selected instance. These additional `FontData`
+fields require external pre-1.0 struct literals to name the instance metadata.
+
+`render_to_pdf_checked` prepares every contributing selected font before the
+writer allocates output. A missing font or failed selected instance returns
+`MissingEmbeddedFont`, without a partial PDF or a default-instance substitute.
+Unused loaded fonts do not cause refusal. The legacy byte-vector
+`render_to_pdf` signature remains and returns an empty vector on preparation
+failure. Archival preflight adds its profile restrictions and shares the
+prepared map. Normal output does not acquire archival paint restrictions.
+Variable subsetting instances the selected outlines and records matching
+widths and Unicode mappings while keeping font names truthful.
+
+Synthetic bold paints centered fill and stroke at1/24em with round joins and
+caps. Synthetic italic applies a12-degree shear about the run baseline.
+Synthetic painting preserves shaped advances and expands only the private ink
+bounds. PDF text matrices and scoped paint operators implement these shapes.
+
 **One global CTM instead of a per-element flip.** Emit `q 1 0 0 -1 0 H cm` once
 at the top of the content stream, then write everything in top-left, y-down
 coordinates so group transforms compose naturally.
@@ -408,6 +433,11 @@ unchanged group content above it. Resolved colour alpha is part of the shadow.
 Group opacity applies once to the shadow and content together. PDF group
 effects remain unsupported.
 
+Raster glyph outlines apply the selected face coordinates before painting.
+Stroke construction operates in point-space geometry, with the same synthesis
+width, round joins and caps and baseline shear as PDF. Independent outline and
+analytic rectangle controls distinguish paint geometry from advance metrics.
+
 ## The SVG backend
 
 The private `rdocx` SVG backend consumes one zero-based page from an immutable
@@ -427,11 +457,23 @@ reviewed `http`, `https`, and `mailto` schemes only. XML-invalid text or
 attribute scalars are diagnosed and cannot enter the document.
 
 Text remains searchable `<text>`. Each used layout `FontId` receives one stable
-synthetic family backed by its exact embedded bytes. Scalar positions use
-cumulative shaped advances when scalar and glyph counts agree. Complex shaping
-retains the Unicode text, constrains total advance, and emits one positioning
-approximation diagnostic. Missing fonts and TTC face selection are diagnosed
-at exact first use while deterministic definitions remain ordered.
+synthetic family backed by its exact selected font bytes. A selected TTC face
+is extracted as a bounded standalone SFNT with checked table spans and
+checksums. Invalid faces are diagnosed without parser arithmetic overflow.
+Scalar positions use cumulative shaped advances only when scalar and glyph
+counts agree and every supplied glyph matches that scalar's nominal selected
+cmap glyph. Complex shaping retains Unicode text, constrains total advance,
+and emits one positioning approximation diagnostic. Embedded definitions and
+text explicitly freeze the selected physical face's registered defaults for
+`wght`, `wdth`, `ital`, `slnt` and `opsz`, then overlay selected coordinates
+once. Other explicit selected axes remain. These declarations prevent CSS
+weight, width, style and optical sizing from changing the selected instance,
+including a default weight100 face with no nondefault coordinates. Static
+faces retain their original declarations, and layout font bytes and stored
+coordinates remain unchanged. Synthetic bold uses explicit stroke and
+synthetic italic uses baseline-relative geometry, preserving full
+precision for their paint constants. Missing fonts are diagnosed at exact
+first use while deterministic definitions remain ordered.
 
 Solid and gradient paint share the backend-neutral stop normalization rule.
 Tile paint remains diagnosed because its carrier has no media bytes. Outer
@@ -1171,12 +1213,14 @@ share the normal result. The normal path also retains one synchronized
 `rdocx-layout::Engine` after mutation invalidates that completed result. The
 deterministic renderers use their own bundle. Tracked layouts remain uncached
 and use the normal engine with a distinct revision-view paragraph identity.
-Caller-supplied font layouts construct an isolated engine, remain uncached, and
-cannot observe bundled or system fonts. Caller-font access returns an owned
-bundle. `to_pdf_with_fonts` instead lays out uncached in a fresh normal-font
-engine with the caller fonts loaded over it, so a family the caller does not
-supply resolves as `to_pdf` resolves it, from system fonts when the
-`system-fonts` feature is enabled and then from the bundled fonts. The separate
+Caller-only native font layouts construct an isolated engine, remain
+uncached, and cannot observe bundled or system fonts. Caller-font access
+returns an owned bundle. Normal Word additional-font layout and output use
+`layout_with_additional_fonts_and_options` in a fresh normal-font engine.
+Caller fonts override embedded and fallback faces. A family the caller does
+not supply resolves as `to_pdf` resolves it, from system fonts when the
+`system-fonts` feature is enabled and then from bundled fonts. PDF, PNG, SVG
+and selected raster pages consume that exact owned bundle. The separate
 bundled-fallback caller-font mode retains one reusable deterministic-base
 engine. Caller faces have highest priority, missing families
 resolve from bundled faces, and system fonts remain unavailable. Its owned
@@ -1185,11 +1229,16 @@ bundle. Every PDF and raster path borrows its `LayoutResult` field from the same
 bundle that owns the exact font data and Word source map. Cloning a completed
 result shares each immutable page frame and font byte buffer.
 
-The Python `Document.layout()` method always reads the bundled-font-only
-snapshot. It returns immutable main-body fragments with their zero-based body
+Without selected caller fonts, Python `Document.layout()` reads the
+bundled-font-only snapshot. Nonempty caller inputs use the normal additional
+font bundle. Empty sequences and valid empty directories retain each
+entrypoint's omission path after all supplied paths are validated. It returns immutable main-body fragments with their zero-based body
 index, one-based physical and displayed page numbers, and point-space bounds.
-`Document.layout_page()` uses the same deterministic cache and returns immutable
-page number and size metadata for one zero-based page index. Neither method
+`Document.layout_page()` uses the same font-selection rule. Omitted caller
+inputs, empty sequences and valid directories with no selected font retain
+the bundled deterministic cache after path validation. Nonempty selected fonts
+use a fresh normal additional-font bundle. It returns immutable page number
+and size metadata for one zero-based page index. Neither method
 exposes positioned renderer elements or permits mutation through a layout
 result.
 
@@ -1244,6 +1293,19 @@ provenance without repeating whole-parent shaping for every break opportunity. R
 coverage misses, coverage fallbacks, and per-paragraph font traces also have
 explicit bounds. Loading a different additional font set rebuilds face
 identity and clears all dependent memo state.
+
+One bounded ordered trace carries legacy resolution events and successful
+nonempty final text contributions. A contribution retains the original
+requested family and exact selected instance. Word paragraph, table and story
+caches and PowerPoint text reuse replay this owned context, not a historical
+font-ID-to-request map. Constructor-owned faces retain their existing tie
+priority. Within the additional tier, later equal-ranked faces win after CSS
+style, weight and stretch ranking. Ordinary legacy trace APIs retain their
+selected-ID projection. Nested capture and replay validate owner, generation and selected
+instances before publication. Probe-only and empty shaping do not contribute.
+Owned string capacity is charged to cache budgets and overflow bypasses
+admission. Rich Word paths which cannot satisfy cache safety remain uncached.
+
 
 Caller font labels that differ from their embedded family names create
 label-derived aliases to the exact loaded faces. Native callers can also set

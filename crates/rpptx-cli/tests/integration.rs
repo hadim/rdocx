@@ -2093,3 +2093,249 @@ fn comment_mutations_fail_without_creating_output() {
     assert!(String::from_utf8_lossy(&result.stderr).contains("output already exists"));
     assert_eq!(fs::read(&output).unwrap(), b"keep me");
 }
+
+#[test]
+fn fx195_font_directory_validation_precedes_publication() {
+    let workspace = TempWorkspace::new("fx195-font-dir");
+    let input = workspace.path.join("input.pptx");
+    write_deck(&input, &["caller directory atomicity"]);
+    let original = fs::read(&input).unwrap();
+    let fonts = workspace.path.join("fonts");
+    fs::create_dir(&fonts).unwrap();
+    fs::write(fonts.join("bad.ttf"), b"not a font").unwrap();
+    let output = workspace.path.join("out.png");
+    for bad in [fonts.clone(), workspace.path.join("missing"), input.clone()] {
+        for mode in ["convert", "render"] {
+            fs::write(&output, b"sentinel").unwrap();
+            let result = cli(&[
+                mode,
+                input.to_str().unwrap(),
+                "--font-dir",
+                bad.to_str().unwrap(),
+                if mode == "convert" {
+                    "--to"
+                } else {
+                    "--format"
+                },
+                "png",
+                "--output",
+                output.to_str().unwrap(),
+                "--force",
+            ]);
+            assert!(
+                !result.status.success(),
+                "{mode} accepted invalid font input"
+            );
+            assert!(
+                String::from_utf8_lossy(&result.stderr).contains("font"),
+                "font validation, not argument parsing: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            assert_eq!(fs::read(&output).unwrap(), b"sentinel");
+            assert_eq!(fs::read(&input).unwrap(), original);
+        }
+    }
+    fs::remove_file(fonts.join("bad.ttf")).unwrap();
+    fs::write(
+        fonts.join("Carlito.ttf"),
+        include_bytes!("../../oxml-layout/fonts/Carlito-Regular.ttf"),
+    )
+    .unwrap();
+    let result = cli(&[
+        "convert",
+        input.to_str().unwrap(),
+        "--font-dir",
+        fonts.to_str().unwrap(),
+        "--to",
+        "png",
+        "--output",
+        output.to_str().unwrap(),
+        "--force",
+    ]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(fs::read(&output).unwrap().starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert_eq!(fs::read(&input).unwrap(), original);
+}
+
+fn fx195_caller_only_monospace() -> Vec<u8> {
+    let mut bytes = include_bytes!("../../oxml-layout/fonts/LiberationMono-Regular.ttf").to_vec();
+    for (from, to) in [
+        (b"Liberation Mono".to_vec(), b"FX195CallerOnly".to_vec()),
+        (
+            "Liberation Mono"
+                .encode_utf16()
+                .flat_map(u16::to_be_bytes)
+                .collect(),
+            "FX195CallerOnly"
+                .encode_utf16()
+                .flat_map(u16::to_be_bytes)
+                .collect(),
+        ),
+    ] {
+        assert_eq!(from.len(), to.len());
+        let mut count = 0;
+        let mut position = 0;
+        while let Some(relative) = bytes[position..]
+            .windows(from.len())
+            .position(|value| value == from)
+        {
+            let offset = position + relative;
+            bytes[offset..offset + from.len()].copy_from_slice(&to);
+            position = offset + from.len();
+            count += 1;
+        }
+        assert!(count > 0);
+    }
+    assert!(
+        oxml_layout::bundled_fonts::bundled_font_data()
+            .iter()
+            .all(|(name, data)| *name != "FX195CallerOnly" && *data != bytes)
+    );
+    bytes
+}
+
+#[test]
+fn fx195_every_ppt_cli_entrypoint_uses_caller_only_face() {
+    let workspace = TempWorkspace::new("fx195-caller-matrix");
+    let input = workspace.path.join("caller.pptx");
+    let fonts = workspace.path.join("fonts");
+    fs::create_dir(&fonts).unwrap();
+    let bytes = fx195_caller_only_monospace();
+    fs::write(fonts.join("FilenameAlias.ttf"), &bytes).unwrap();
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide
+            .add_textbox(Emu(100_000), Emu(100_000), Emu(3_000_000), Emu(800_000))
+            .unwrap();
+        shape.set_text("iiiiWWWW caller matrix").unwrap();
+        shape
+            .text_frame()
+            .unwrap()
+            .paragraph_mut(0)
+            .unwrap()
+            .run_mut(0)
+            .unwrap()
+            .set_font(Some(rpptx::TextFont::new("FX195CallerOnly").unwrap()));
+    }
+    presentation.save(&input).unwrap();
+    let before = fs::read(&input).unwrap();
+    let refs = [("FilenameAlias", bytes.as_slice())];
+    let layout = presentation
+        .render_deterministic_with_fonts(&refs)
+        .unwrap()
+        .1;
+    assert!(
+        layout
+            .fonts
+            .iter()
+            .any(|font| font.data.as_ref() == bytes.as_slice() && font.face_index == 0)
+    );
+    let ordinary = presentation.render_deterministic().unwrap().1;
+    assert_ne!(
+        format!("{:?}", ordinary.pages),
+        format!("{:?}", layout.pages)
+    );
+    for format in ["pdf", "png", "jpeg", "tiff"] {
+        let out = workspace.path.join(format!("converted.{format}"));
+        let converted = cli(&[
+            "convert",
+            input.to_str().unwrap(),
+            "--to",
+            format,
+            "--font-dir",
+            fonts.to_str().unwrap(),
+            "--dpi",
+            "72",
+            "--output",
+            out.to_str().unwrap(),
+        ]);
+        assert!(
+            converted.status.success(),
+            "{}",
+            String::from_utf8_lossy(&converted.stderr)
+        );
+        let expected = if format == "pdf" {
+            oxml_pdf::render_to_pdf_checked(&layout).unwrap()
+        } else {
+            let raster_format = match format {
+                "png" => oxml_pdf::RasterFormat::Png {
+                    transparent_background: false,
+                },
+                "jpeg" => oxml_pdf::RasterFormat::Jpeg { quality: 90 },
+                _ => oxml_pdf::RasterFormat::Tiff,
+            };
+            match oxml_pdf::render_pages(
+                &layout,
+                &[0],
+                oxml_pdf::RasterOptions {
+                    dpi: 72.0,
+                    format: raster_format,
+                },
+            )
+            .unwrap()
+            {
+                oxml_pdf::RasterOutput::SeparatePages(mut pages) => pages.remove(0),
+                oxml_pdf::RasterOutput::MultiPageTiff(data) => data,
+            }
+        };
+        assert_eq!(
+            fs::read(&out).unwrap(),
+            expected,
+            "{format} selected caller paint"
+        );
+        if format != "pdf" {
+            let directory = workspace.path.join(format!("render-{format}"));
+            let rendered = cli(&[
+                "render",
+                input.to_str().unwrap(),
+                "--format",
+                format,
+                "--font-dir",
+                fonts.to_str().unwrap(),
+                "--dpi",
+                "72",
+                "--slide",
+                "1",
+                "--output",
+                directory.to_str().unwrap(),
+            ]);
+            assert!(
+                rendered.status.success(),
+                "{}",
+                String::from_utf8_lossy(&rendered.stderr)
+            );
+            let filename = match format {
+                "tiff" => "caller.tiff",
+                "jpeg" => "caller_slide1.jpg",
+                _ => "caller_slide1.png",
+            };
+            assert_eq!(fs::read(directory.join(filename)).unwrap(), expected);
+        }
+    }
+    let thumbnail = workspace.path.join("thumb.png");
+    let result = cli(&[
+        "thumbnail",
+        input.to_str().unwrap(),
+        "--font-dir",
+        fonts.to_str().unwrap(),
+        "--output",
+        thumbnail.to_str().unwrap(),
+    ]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let dpi = (320.0 - 1e-9) * 72.0 / layout.pages[0].width;
+    assert_eq!(
+        fs::read(&thumbnail).unwrap(),
+        oxml_pdf::render_page_to_png(&layout, 0, dpi).unwrap()
+    );
+    assert_eq!(fs::read(&input).unwrap(), before);
+}

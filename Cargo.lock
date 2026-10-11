@@ -1489,6 +1489,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "thiserror",
+ "ttf-parser",
  "zip",
 ]
 
@@ -1555,6 +1556,7 @@ name = "rdocx-py"
 version = "0.16.0"
 dependencies = [
  "oxml-layout",
+ "oxml-pdf",
  "oxml-py-support",
  "pyo3",
  "rdocx",
@@ -1760,6 +1762,7 @@ dependencies = [
 name = "rpptx-py"
 version = "0.14.0"
 dependencies = [
+ "oxml-layout",
  "oxml-py-support",
  "pyo3",
  "rpptx",

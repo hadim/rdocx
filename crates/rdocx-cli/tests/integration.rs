@@ -4866,3 +4866,252 @@ fn whole_story_outputs_validate_without_comment_orphans() {
     let result = cli(&["validate", path_text(&refused)]);
     assert!(!result.status.success());
 }
+
+#[test]
+fn fx195_font_directory_validation_precedes_publication() {
+    let workspace = TempWorkspace::new("fx195-font-dir");
+    let input = workspace.path.join("input.docx");
+    let mut document = Document::new();
+    document.add_paragraph("caller directory atomicity");
+    document.save(&input).unwrap();
+    let original = fs::read(&input).unwrap();
+    let fonts = workspace.path.join("fonts");
+    fs::create_dir(&fonts).unwrap();
+    fs::write(fonts.join("bad.ttf"), b"not a font").unwrap();
+    let output = workspace.path.join("out.png");
+    for bad in [fonts.clone(), workspace.path.join("missing"), input.clone()] {
+        for mode in ["convert", "render"] {
+            fs::write(&output, b"sentinel").unwrap();
+            let result = cli(&[
+                mode,
+                input.to_str().unwrap(),
+                "--font-dir",
+                bad.to_str().unwrap(),
+                if mode == "convert" {
+                    "--to"
+                } else {
+                    "--format"
+                },
+                "png",
+                if mode == "render" {
+                    "--output-dir"
+                } else {
+                    "--output"
+                },
+                output.to_str().unwrap(),
+                "--force",
+            ]);
+            assert!(
+                !result.status.success(),
+                "{mode} accepted invalid font input"
+            );
+            assert!(
+                String::from_utf8_lossy(&result.stderr).contains("font"),
+                "font validation, not argument parsing: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            assert_eq!(fs::read(&output).unwrap(), b"sentinel");
+            assert_eq!(fs::read(&input).unwrap(), original);
+        }
+    }
+    fs::remove_file(fonts.join("bad.ttf")).unwrap();
+    fs::write(
+        fonts.join("Carlito.ttf"),
+        include_bytes!("../../oxml-layout/fonts/Carlito-Regular.ttf"),
+    )
+    .unwrap();
+    let result = cli(&[
+        "convert",
+        input.to_str().unwrap(),
+        "--font-dir",
+        fonts.to_str().unwrap(),
+        "--to",
+        "png",
+        "--output",
+        output.to_str().unwrap(),
+        "--force",
+    ]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(fs::read(&output).unwrap().starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert_eq!(fs::read(&input).unwrap(), original);
+}
+
+fn fx195_caller_only_monospace() -> Vec<u8> {
+    let mut bytes = include_bytes!("../../oxml-layout/fonts/LiberationMono-Regular.ttf").to_vec();
+    for (from, to) in [
+        (b"Liberation Mono".to_vec(), b"FX195CallerOnly".to_vec()),
+        (
+            "Liberation Mono"
+                .encode_utf16()
+                .flat_map(u16::to_be_bytes)
+                .collect(),
+            "FX195CallerOnly"
+                .encode_utf16()
+                .flat_map(u16::to_be_bytes)
+                .collect(),
+        ),
+    ] {
+        assert_eq!(from.len(), to.len());
+        let mut count = 0;
+        let mut position = 0;
+        while let Some(relative) = bytes[position..]
+            .windows(from.len())
+            .position(|value| value == from)
+        {
+            let offset = position + relative;
+            bytes[offset..offset + from.len()].copy_from_slice(&to);
+            position = offset + from.len();
+            count += 1;
+        }
+        assert!(count > 0);
+    }
+    assert!(
+        oxml_layout::bundled_fonts::bundled_font_data()
+            .iter()
+            .all(|(name, data)| *name != "FX195CallerOnly" && *data != bytes)
+    );
+    bytes
+}
+
+#[test]
+fn fx195_every_word_cli_entrypoint_uses_caller_only_face() {
+    let workspace = TempWorkspace::new("fx195-caller-matrix");
+    let input = workspace.path.join("caller.docx");
+    let fonts = workspace.path.join("fonts");
+    fs::create_dir(&fonts).unwrap();
+    let bytes = fx195_caller_only_monospace();
+    fs::write(fonts.join("FilenameAlias.ttf"), &bytes).unwrap();
+    let mut document = Document::new();
+    document
+        .add_paragraph("")
+        .add_run("iiiiWWWW caller matrix")
+        .font("FX195CallerOnly");
+    document.save(&input).unwrap();
+    let before = fs::read(&input).unwrap();
+    let refs = [("FilenameAlias", bytes.as_slice())];
+    let layout = document
+        .layout_with_fonts_and_bundled_fallback(&refs)
+        .unwrap();
+    assert!(
+        layout
+            .layout
+            .fonts
+            .iter()
+            .any(|font| font.data.as_ref() == bytes.as_slice() && font.face_index == 0)
+    );
+    let ordinary = document.layout_deterministic().unwrap();
+    assert_ne!(
+        format!("{:?}", ordinary.layout.pages),
+        format!("{:?}", layout.layout.pages)
+    );
+    let listed = cli(&[
+        "layout",
+        input.to_str().unwrap(),
+        "--font-dir",
+        fonts.to_str().unwrap(),
+        "--json",
+    ]);
+    assert_success(&listed, "caller layout");
+    let without = cli(&["layout", input.to_str().unwrap(), "--json"]);
+    assert_success(&without, "ordinary layout");
+    assert_ne!(
+        listed.stdout, without.stdout,
+        "layout must measure the caller face"
+    );
+    for format in ["pdf", "png", "jpeg", "tiff"] {
+        let out = workspace.path.join(format!("converted.{format}"));
+        let converted = cli(&[
+            "convert",
+            input.to_str().unwrap(),
+            "--to",
+            format,
+            "--font-dir",
+            fonts.to_str().unwrap(),
+            "--dpi",
+            "72",
+            "--output",
+            out.to_str().unwrap(),
+        ]);
+        assert_success(&converted, format);
+        let expected = if format == "pdf" {
+            oxml_pdf::render_to_pdf_checked(&layout.layout).unwrap()
+        } else {
+            let raster_format = match format {
+                "png" => oxml_pdf::RasterFormat::Png {
+                    transparent_background: false,
+                },
+                "jpeg" => oxml_pdf::RasterFormat::Jpeg { quality: 90 },
+                _ => oxml_pdf::RasterFormat::Tiff,
+            };
+            match oxml_pdf::render_pages(
+                &layout.layout,
+                &[0],
+                oxml_pdf::RasterOptions {
+                    dpi: 72.0,
+                    format: raster_format,
+                },
+            )
+            .unwrap()
+            {
+                oxml_pdf::RasterOutput::SeparatePages(mut pages) => pages.remove(0),
+                oxml_pdf::RasterOutput::MultiPageTiff(data) => data,
+            }
+        };
+        assert_eq!(
+            fs::read(&out).unwrap(),
+            expected,
+            "{format} selected caller paint"
+        );
+        if format != "pdf" {
+            let directory = workspace.path.join(format!("render-{format}"));
+            let rendered = cli(&[
+                "render",
+                input.to_str().unwrap(),
+                "--format",
+                format,
+                "--font-dir",
+                fonts.to_str().unwrap(),
+                "--dpi",
+                "72",
+                "--pages",
+                "1",
+                "--output-dir",
+                directory.to_str().unwrap(),
+            ]);
+            assert_success(&rendered, "caller render");
+            let filename = match format {
+                "tiff" => "caller.tiff",
+                "jpeg" => "caller_page1.jpg",
+                _ => "caller_page1.png",
+            };
+            assert_eq!(fs::read(directory.join(filename)).unwrap(), expected);
+        }
+    }
+    let unsupported = workspace.path.join("no.html");
+    let refused = cli(&[
+        "convert",
+        input.to_str().unwrap(),
+        "--to",
+        "html",
+        "--font-dir",
+        fonts.to_str().unwrap(),
+        "--output",
+        unsupported.to_str().unwrap(),
+    ]);
+    assert!(!refused.status.success());
+    assert!(!unsupported.exists());
+    let repeated = cli(&[
+        "layout",
+        input.to_str().unwrap(),
+        "--font-dir",
+        fonts.to_str().unwrap(),
+        "--json",
+    ]);
+    assert_success(&repeated, "repeated layout");
+    assert_eq!(repeated.stdout, listed.stdout);
+    assert_eq!(fs::read(&input).unwrap(), before);
+}

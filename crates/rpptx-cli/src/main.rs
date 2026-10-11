@@ -36,6 +36,9 @@ enum Command {
     /// Convert a presentation to deterministic PDF or image output
     Convert {
         file: PathBuf,
+        /// Directory containing caller font files (.ttf/.otf/.ttc)
+        #[arg(long)]
+        font_dir: Option<PathBuf>,
         #[arg(long, short = 't')]
         to: String,
         #[arg(long, short = 'o')]
@@ -75,6 +78,9 @@ enum Command {
     /// Render selected slides to deterministic image files
     Render {
         file: PathBuf,
+        /// Directory containing caller font files (.ttf/.otf/.ttc)
+        #[arg(long)]
+        font_dir: Option<PathBuf>,
         #[arg(long, short = 'o')]
         output: Option<PathBuf>,
         /// Replace existing slide images, but never the input file
@@ -97,6 +103,9 @@ enum Command {
     /// Render slide one as a proportional 320-pixel-wide PNG
     Thumbnail {
         file: PathBuf,
+        /// Directory containing caller font files (.ttf/.otf/.ttc)
+        #[arg(long)]
+        font_dir: Option<PathBuf>,
         #[arg(long, short = 'o')]
         output: Option<PathBuf>,
         /// Replace an existing output file, but never the input file
@@ -230,6 +239,7 @@ fn run_cli() {
         Command::Text { file, json, notes } => commands::text(&file, json, notes),
         Command::Convert {
             file,
+            font_dir,
             to,
             output,
             force,
@@ -244,6 +254,7 @@ fn run_cli() {
             force,
             dpi,
             commands::ImageOptions {
+                font_dir: font_dir.as_deref(),
                 slides: slides.as_deref(),
                 quality,
                 transparent,
@@ -260,6 +271,7 @@ fn run_cli() {
         Command::Validate { .. } => unreachable!("validate is dispatched above"),
         Command::Render {
             file,
+            font_dir,
             output,
             force,
             dpi,
@@ -274,6 +286,7 @@ fn run_cli() {
             dpi,
             &format,
             commands::ImageOptions {
+                font_dir: font_dir.as_deref(),
                 slides: slide.as_deref(),
                 quality,
                 transparent,
@@ -281,9 +294,10 @@ fn run_cli() {
         ),
         Command::Thumbnail {
             file,
+            font_dir,
             output,
             force,
-        } => commands::thumbnail(&file, output.as_deref(), force),
+        } => commands::thumbnail(&file, output.as_deref(), force, font_dir.as_deref()),
         Command::Outline { file, json, notes } => commands::outline(&file, json, notes),
         Command::Comment { command } => match command {
             CommentCommand::List { file, json } => commands::comment_list(&file, json),

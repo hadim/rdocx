@@ -22,6 +22,7 @@ const MAX_LCS_CELLS: usize = 1_000_000;
 const THUMBNAIL_WIDTH: f64 = 320.0;
 
 pub struct ImageOptions<'a> {
+    pub font_dir: Option<&'a Path>,
     pub slides: Option<&'a str>,
     pub quality: u8,
     pub transparent: bool,
@@ -360,6 +361,15 @@ pub fn convert(
 ) -> Result<()> {
     validate_dpi(dpi)?;
     let presentation = Presentation::open(file)?;
+    let fonts = image
+        .font_dir
+        .map(oxml_layout::FontFile::from_dir)
+        .transpose()?
+        .unwrap_or_default();
+    let font_refs = fonts
+        .iter()
+        .map(|font| (font.family.as_str(), font.data.as_slice()))
+        .collect::<Vec<_>>();
     let image_format = parse_image_format(format, image.quality, image.transparent);
     let extension = match (format, image_format.as_ref()) {
         ("pdf", _) => "pdf",
@@ -380,7 +390,10 @@ pub fn convert(
     match format {
         "pdf" => {
             stage_and_publish(
-                &[(output.clone(), presentation.to_pdf_deterministic()?)],
+                &[(
+                    output.clone(),
+                    presentation.to_pdf_deterministic_with_fonts(&font_refs)?,
+                )],
                 force,
             )?;
             writeln!(stdout, "Written to {}", output.display())?;
@@ -389,7 +402,7 @@ pub fn convert(
             if presentation.is_empty() {
                 return Err("cannot convert a presentation with no slides to an image".into());
             }
-            let (_, layout) = presentation.render_deterministic()?;
+            let (_, layout) = presentation.render_deterministic_with_fonts(&font_refs)?;
             if layout.pages.len() != presentation.len() {
                 return Err(format!(
                     "rendered {} image pages for {} slides",
@@ -586,11 +599,20 @@ pub fn render(
 ) -> Result<()> {
     validate_dpi(dpi)?;
     let presentation = Presentation::open(file)?;
+    let fonts = image
+        .font_dir
+        .map(oxml_layout::FontFile::from_dir)
+        .transpose()?
+        .unwrap_or_default();
+    let font_refs = fonts
+        .iter()
+        .map(|font| (font.family.as_str(), font.data.as_slice()))
+        .collect::<Vec<_>>();
     let (format, extension) = parse_image_format(format, image.quality, image.transparent)?;
     let selected = selected_zero_based_slides(presentation.len(), image.slides)?;
     let output = output.unwrap_or_else(|| Path::new("."));
     let stem = file.file_stem().unwrap_or_default().to_string_lossy();
-    let (_, layout) = presentation.render_deterministic()?;
+    let (_, layout) = presentation.render_deterministic_with_fonts(&font_refs)?;
     for index in &selected {
         let page = layout
             .pages
@@ -639,7 +661,20 @@ pub fn render(
     Ok(())
 }
 
-pub fn thumbnail(file: &Path, output: Option<&Path>, force: bool) -> Result<()> {
+pub fn thumbnail(
+    file: &Path,
+    output: Option<&Path>,
+    force: bool,
+    font_dir: Option<&Path>,
+) -> Result<()> {
+    let fonts = font_dir
+        .map(oxml_layout::FontFile::from_dir)
+        .transpose()?
+        .unwrap_or_default();
+    let font_refs = fonts
+        .iter()
+        .map(|font| (font.family.as_str(), font.data.as_slice()))
+        .collect::<Vec<_>>();
     let presentation = Presentation::open(file)?;
     if presentation.is_empty() {
         return Err("cannot thumbnail a presentation with no slides".into());
@@ -648,7 +683,7 @@ pub fn thumbnail(file: &Path, output: Option<&Path>, force: bool) -> Result<()> 
         .map(Path::to_path_buf)
         .unwrap_or_else(|| default_output_path(file, "png"));
     ensure_output_paths_allowed(std::slice::from_ref(&output), file, force)?;
-    let (_, layout) = presentation.render_deterministic()?;
+    let (_, layout) = presentation.render_deterministic_with_fonts(&font_refs)?;
     let page = layout
         .pages
         .first()

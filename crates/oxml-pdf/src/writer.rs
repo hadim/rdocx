@@ -10,6 +10,7 @@ use oxml_layout::{
 use pdf_writer::types::{
     ActionType, AnnotationFlags, AnnotationType, CidFontType, ColorSpaceOperand, FontFlags,
     FunctionShadingType, LineCapStyle, LineJoinStyle, OutputIntentSubtype, SystemInfo,
+    TextRenderingMode,
 };
 use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 
@@ -417,14 +418,17 @@ fn accessibility_xmp(title: &str) -> Vec<u8> {
 
 /// Write a complete PDF document from layout results.
 pub(crate) fn write_pdf(layout: &LayoutResult) -> Vec<u8> {
-    write_pdf_impl(layout, None)
+    let Ok(prepared_fonts) = font::prepare_fonts(layout) else {
+        return Vec::new();
+    };
+    write_pdf_impl(layout, None, prepared_fonts)
 }
 
-pub(crate) fn write_archival_pdf(layout: &LayoutResult, profile: PdfConformance) -> Vec<u8> {
-    write_pdf_impl(layout, Some(profile))
-}
-
-fn write_pdf_impl(layout: &LayoutResult, profile: Option<PdfConformance>) -> Vec<u8> {
+pub(crate) fn write_pdf_impl(
+    layout: &LayoutResult,
+    profile: Option<PdfConformance>,
+    prepared_fonts: BTreeMap<FontId, PreparedFont>,
+) -> Vec<u8> {
     let mut pdf = Pdf::new();
     if profile.is_some() {
         pdf.set_file_id((
@@ -451,27 +455,12 @@ fn write_pdf_impl(layout: &LayoutResult, profile: Option<PdfConformance>) -> Vec
     let content_ids: Vec<Ref> = layout.pages.iter().map(|_| alloc()).collect();
 
     // ── Font preparation ─────────────────────────────────────────────
-    let mut glyph_usage = font::collect_glyph_usage(layout);
-    // Ordered by font ID. Both maps are iterated to write the font objects and
-    // the page /Font dictionaries, so a hashed order wrote the same document
-    // differently on every run.
-    let mut prepared_fonts: BTreeMap<FontId, PreparedFont> = BTreeMap::new();
-    let mut font_refs: BTreeMap<FontId, (Ref, Ref, Ref, Ref, Ref)> = BTreeMap::new(); // type0, cid, descriptor, stream, cmap
-
-    for fd in &layout.fonts {
-        if let Some(usage) = glyph_usage.get_mut(&fd.id)
-            && let Some(prepared) = font::prepare_font(fd, usage)
-        {
-            let type0_ref = alloc();
-            let cid_ref = alloc();
-            let descriptor_ref = alloc();
-            let stream_ref = alloc();
-            let cmap_ref = alloc();
-            font_refs.insert(
-                fd.id,
-                (type0_ref, cid_ref, descriptor_ref, stream_ref, cmap_ref),
-            );
-            prepared_fonts.insert(fd.id, prepared);
+    // Preparation and failure checking completed before allocating output.
+    // Preserve successful layout font order for stable existing PDF object IDs.
+    let mut font_refs: BTreeMap<FontId, (Ref, Ref, Ref, Ref, Ref)> = BTreeMap::new();
+    for source in &layout.fonts {
+        if prepared_fonts.contains_key(&source.id) {
+            font_refs.insert(source.id, (alloc(), alloc(), alloc(), alloc(), alloc()));
         }
     }
 
@@ -642,11 +631,29 @@ fn write_pdf_impl(layout: &LayoutResult, profile: Option<PdfConformance>) -> Vec
     for (font_id, prepared) in &prepared_fonts {
         let (type0_ref, cid_ref, descriptor_ref, stream_ref, cmap_ref) = font_refs[font_id];
 
-        let base_name = sanitize_font_name(
+        let source_face = font::instanced_face(&prepared.font_data)
+            .expect("contributing font was prepared before PDF allocation");
+        let mut base_name = sanitize_font_name(
             &prepared.font_data.family,
-            prepared.font_data.bold,
-            prepared.font_data.italic,
+            source_face.is_bold(),
+            source_face.is_italic(),
         );
+        for (tag, value) in &prepared.font_data.variations {
+            base_name.push('-');
+            base_name.extend(
+                tag.iter()
+                    .copied()
+                    .filter(u8::is_ascii_alphanumeric)
+                    .map(char::from),
+            );
+            base_name.push_str(&value.to_string().replace('-', "m").replace('.', "p"));
+        }
+        if prepared.font_data.synthetic_bold {
+            base_name.push_str("-SyntheticBold");
+        }
+        if prepared.font_data.synthetic_italic {
+            base_name.push_str("-SyntheticItalic");
+        }
 
         // Type0 font (composite font)
         let mut type0 = pdf.type0_font(type0_ref);
@@ -698,7 +705,12 @@ fn write_pdf_impl(layout: &LayoutResult, profile: Option<PdfConformance>) -> Vec
             desc.name(Name(base_name.as_bytes()));
 
             let mut flags = FontFlags::empty();
-            if prepared.font_data.italic {
+            if source_face.is_italic()
+                || prepared.font_data.synthetic_italic
+                || prepared.font_data.variations.iter().any(|(tag, value)| {
+                    (*tag == *b"ital" && *value != 0.0) || (*tag == *b"slnt" && *value != 0.0)
+                })
+            {
                 flags |= FontFlags::ITALIC;
             }
             // Most text fonts are not fixed pitch and not symbolic
@@ -1324,6 +1336,13 @@ fn emit_elements(
                     );
                     apply_alpha(content, run.color.a, state.alpha_states);
 
+                    apply_text_synthesis(
+                        content,
+                        &prepared.font_data,
+                        run.font_size,
+                        run.color,
+                        run.origin.y,
+                    );
                     content.begin_text();
                     content.set_font(Name(font_name.as_bytes()), run.font_size as f32);
 
@@ -1397,6 +1416,13 @@ fn emit_elements(
                         run.color.b as f32,
                     );
                     apply_alpha(content, run.color.a, state.alpha_states);
+                    apply_text_synthesis(
+                        content,
+                        &prepared.font_data,
+                        run.font_size,
+                        run.color,
+                        run.origin.y,
+                    );
                     content.begin_text();
                     content.set_font(Name(font_name.as_bytes()), run.font_size as f32);
                     emit_multilingual_glyphs(
@@ -1810,6 +1836,35 @@ fn inverse_transform(transform: Transform) -> Option<Transform> {
 }
 
 /// Emit a rich run at its shaped per-glyph positions.
+fn apply_text_synthesis(
+    content: &mut Content,
+    font: &oxml_layout::FontData,
+    size: f64,
+    color: Color,
+    baseline_y: f64,
+) {
+    if font.synthetic_italic {
+        // Transform the complete painted run, including the centered stroke.
+        // The text matrix stays upright and preserves all advance/offset math.
+        let shear = 0.212_556_56;
+        content.transform([
+            1.0,
+            0.0,
+            -shear,
+            1.0,
+            (baseline_y * f64::from(shear)) as f32,
+            0.0,
+        ]);
+    }
+    if font.synthetic_bold {
+        content.set_stroke_rgb(color.r as f32, color.g as f32, color.b as f32);
+        content.set_line_width((size / 24.0) as f32);
+        content.set_line_cap(LineCapStyle::RoundCap);
+        content.set_line_join(LineJoinStyle::RoundJoin);
+        content.set_text_rendering_mode(TextRenderingMode::FillStroke);
+    }
+}
+
 fn emit_multilingual_glyphs(
     content: &mut Content,
     run: &oxml_layout::output::MultilingualGlyphRun,
@@ -2129,6 +2184,9 @@ mod tests {
                 face_index: 0,
                 bold: false,
                 italic: false,
+                variations: vec![],
+                synthetic_bold: false,
+                synthetic_italic: false,
             },
             subset_bytes: Vec::new(),
             remapper,
@@ -2872,16 +2930,50 @@ mod tests {
             note_reference_source: None,
             tab_aligned: None,
         });
-        let pdf = tagged_pdf(
-            vec![PositionedElement::MarkedContent {
-                structure: Some(paragraph),
-                children: vec![text],
-            }],
+        let mut layout = LayoutResult::new(
             vec![
+                page_with(vec![PositionedElement::MarkedContent {
+                    structure: Some(paragraph),
+                    children: vec![text],
+                }])
+                .into(),
+            ],
+            Vec::new(),
+            None,
+            Vec::new(),
+        );
+        layout.structure = Some(DocumentStructure {
+            root: StructureId::new(1).unwrap(),
+            nodes: vec![
                 structure_node(1, StructureRole::Document, vec![paragraph]),
                 structure_node(2, StructureRole::Paragraph, Vec::new()),
             ],
+        });
+        assert!(matches!(
+            crate::render_to_pdf_checked(&layout),
+            Err(crate::PdfError::MissingEmbeddedFont { font_id: 1 })
+        ));
+        let font_bytes = include_bytes!("../../oxml-layout/fonts/Carlito-Regular.ttf");
+        let face = ttf_parser::Face::parse(font_bytes, 0).expect("valid licensed Carlito fixture");
+        assert!(
+            face.number_of_glyphs() > 0,
+            "glyph zero must exist as .notdef"
         );
+        layout.fonts.push(FontData {
+            id: FontId(1),
+            family: "Carlito".to_owned(),
+            data: Arc::from(font_bytes.as_slice()),
+            face_index: 0,
+            bold: false,
+            italic: false,
+            variations: Vec::new(),
+            synthetic_bold: false,
+            synthetic_italic: false,
+        });
+        let bytes =
+            crate::render_to_pdf_checked(&layout).expect("valid font must isolate .notdef tagging");
+        assert!(bytes.starts_with(b"%PDF"));
+        let pdf = String::from_utf8_lossy(&bytes);
 
         assert!(pdf.contains("/StructTreeRoot"), "{pdf}");
         assert!(!pdf.contains("pdfuaid:part"), "{pdf}");
@@ -2981,6 +3073,9 @@ mod tests {
                 face_index: 0,
                 bold: false,
                 italic: false,
+                variations: vec![],
+                synthetic_bold: false,
+                synthetic_italic: false,
             }],
             None,
             Vec::new(),
@@ -3582,6 +3677,9 @@ mod tests {
                 face_index: 0,
                 bold: false,
                 italic: false,
+                variations: vec![],
+                synthetic_bold: false,
+                synthetic_italic: false,
             },
             subset_bytes: Vec::new(),
             remapper,

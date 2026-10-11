@@ -39,6 +39,9 @@ enum Command {
     Layout {
         /// Path to the DOCX file
         file: PathBuf,
+        /// Directory of caller fonts used before bundled fallback
+        #[arg(long)]
+        font_dir: Option<PathBuf>,
         /// Output point-space body fragments as schema-1 JSON
         #[arg(long)]
         json: bool,
@@ -59,7 +62,7 @@ enum Command {
         /// DPI for image rendering (default: 150)
         #[arg(long, default_value = "150")]
         dpi: u32,
-        /// Directory containing font files (.ttf/.otf) to use for PDF rendering
+        /// Directory containing caller font files (.ttf/.otf/.ttc)
         #[arg(long)]
         font_dir: Option<PathBuf>,
         /// Revision view for PDF and image output
@@ -122,6 +125,9 @@ enum Command {
     Render {
         /// Path to the DOCX file
         file: PathBuf,
+        /// Directory of caller fonts used before bundled fallback
+        #[arg(long)]
+        font_dir: Option<PathBuf>,
         /// Output directory (defaults to current directory)
         #[arg(long, short = 'o')]
         output_dir: Option<PathBuf>,
@@ -469,7 +475,11 @@ fn run_cli() {
     let result = match cli.command {
         Command::Inspect { file, json } => commands::inspect(&file, json),
         Command::Text { file, json } => commands::text(&file, json),
-        Command::Layout { file, json } => commands::layout(&file, json),
+        Command::Layout {
+            file,
+            json,
+            font_dir,
+        } => commands::layout(&file, json, font_dir.as_deref()),
         Command::Convert {
             file,
             to,
@@ -512,6 +522,7 @@ fn run_cli() {
         Command::Validate { .. } => unreachable!(),
         Command::Render {
             file,
+            font_dir,
             output_dir,
             force,
             dpi,
@@ -527,6 +538,7 @@ fn run_cli() {
             force,
             dpi,
             commands::RenderOptions {
+                font_dir: font_dir.as_deref(),
                 page,
                 pages: pages.as_deref(),
                 format: &format,

@@ -1,9 +1,10 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 
 use oxml_layout::{
-    Align, Color, FieldKind, FontManager, GlyphRun, InlineItem, LayoutError, LayoutLine,
-    LineBreakParams, LineItem, LineSpacing, MultilingualGlyphRun, Paint, Point, PositionedElement,
-    Rect, TextSegment, Underline, break_multilingual_into_lines,
+    Align, Color, FieldKind, FontManager, FontTraceEvent, GlyphRun, InlineItem, LayoutError,
+    LayoutLine, LineBreakParams, LineItem, LineSpacing, MultilingualGlyphRun, Paint, Point,
+    PositionedElement, Rect, TextSegment, Underline, break_multilingual_into_lines,
 };
 use rpptx_layout::{
     ParagraphAlignment, ResolvedAutofit, ResolvedBullet, ResolvedBulletSize, ResolvedParagraph,
@@ -31,7 +32,67 @@ struct NumberingState {
 
 #[derive(Default)]
 struct ShapingCache {
-    entries: Vec<(String, ResolvedRunStyle, TextSegment)>,
+    entries: Vec<(String, ResolvedRunStyle, TextSegment, Vec<FontTraceEvent>)>,
+    bytes: usize,
+}
+
+const NATIVE_SHAPING_CACHE_MAX_BYTES: usize = 16 * 1024 * 1024;
+const NATIVE_SHAPING_CACHE_MAX_ENTRIES: usize = 4_096;
+
+fn shaping_cache_entry_bytes(
+    text: &str,
+    style: &ResolvedRunStyle,
+    segment: &TextSegment,
+    events: &Vec<FontTraceEvent>,
+) -> usize {
+    let strings = [
+        &style.latin_typeface,
+        &style.east_asian_typeface,
+        &style.complex_script_typeface,
+        &style.symbol_typeface,
+        &style.hyperlink_url,
+        &segment.hyperlink_url,
+    ];
+    let mut bytes = text.len().saturating_add(segment.text.capacity());
+    for string in strings {
+        bytes = bytes.saturating_add(string.as_ref().map_or(0, String::capacity));
+    }
+    bytes = bytes
+        .saturating_add(
+            segment
+                .glyph_ids
+                .capacity()
+                .saturating_mul(std::mem::size_of::<u16>()),
+        )
+        .saturating_add(
+            segment
+                .advances
+                .capacity()
+                .saturating_mul(std::mem::size_of::<f64>()),
+        )
+        .saturating_add(
+            events
+                .capacity()
+                .saturating_mul(std::mem::size_of::<FontTraceEvent>()),
+        );
+    if let Some(Paint::Linear { stops, .. } | Paint::Radial { stops, .. }) = &style.fill {
+        bytes = bytes.saturating_add(
+            stops
+                .capacity()
+                .saturating_mul(std::mem::size_of::<oxml_layout::GradientStop>()),
+        );
+    }
+    for event in events {
+        if let FontTraceEvent::Contribution(contribution) = event {
+            bytes = bytes.saturating_add(
+                contribution
+                    .requested_family
+                    .as_ref()
+                    .map_or(0, String::capacity),
+            );
+        }
+    }
+    bytes
 }
 
 impl ShapingCache {
@@ -41,16 +102,83 @@ impl ShapingCache {
         text: &str,
         style: &ResolvedRunStyle,
     ) -> Result<TextSegment, LayoutError> {
-        if let Some((_, _, segment)) = self
+        if let Some((_, _, segment, contributions)) = self
             .entries
             .iter()
-            .find(|(cached_text, cached_style, _)| cached_text == text && cached_style == style)
+            .find(|(cached_text, cached_style, _, _)| cached_text == text && cached_style == style)
+            && font_manager
+                .validate_font_trace_events(contributions)
+                .is_ok()
         {
+            let ids = contributions
+                .iter()
+                .filter_map(|event| match event {
+                    FontTraceEvent::Resolution(id) => Some(*id),
+                    FontTraceEvent::Contribution(_) => None,
+                })
+                .collect::<Vec<_>>();
+            font_manager.replay_layout_font_trace(&ids);
             return Ok(segment.clone());
         }
-        let segment = shape_run(font_manager, text, style)?;
-        self.entries
-            .push((text.to_owned(), style.clone(), segment.clone()));
+        if text.is_empty() {
+            return shape_run(font_manager, text, style);
+        }
+        let Some(scope) = font_manager.begin_font_contribution_scope() else {
+            return shape_run(font_manager, text, style);
+        };
+        let result = shape_run(font_manager, text, style);
+        if let Ok(segment) = &result {
+            font_manager.record_font_contribution(
+                segment.font_id,
+                typeface_for_text(style, &segment.text),
+                &segment.text,
+            )?;
+        }
+        let captured = font_manager.finish_font_contribution_scope(scope)?;
+        let segment = result?;
+        if let Some(contributions) = captured {
+            let entry_bytes = shaping_cache_entry_bytes(text, style, &segment, &contributions);
+            let vector_bytes =
+                self.entries
+                    .len()
+                    .saturating_add(1)
+                    .saturating_mul(std::mem::size_of::<(
+                        String,
+                        ResolvedRunStyle,
+                        TextSegment,
+                        Vec<FontTraceEvent>,
+                    )>());
+            if self.entries.len() < NATIVE_SHAPING_CACHE_MAX_ENTRIES
+                && self
+                    .bytes
+                    .saturating_add(entry_bytes)
+                    .saturating_add(vector_bytes)
+                    <= NATIVE_SHAPING_CACHE_MAX_BYTES
+            {
+                self.entries.reserve_exact(1);
+                let actual_vector_bytes =
+                    self.entries.capacity().saturating_mul(std::mem::size_of::<(
+                        String,
+                        ResolvedRunStyle,
+                        TextSegment,
+                        Vec<FontTraceEvent>,
+                    )>());
+                if self
+                    .bytes
+                    .saturating_add(entry_bytes)
+                    .saturating_add(actual_vector_bytes)
+                    <= NATIVE_SHAPING_CACHE_MAX_BYTES
+                {
+                    self.entries.push((
+                        text.to_owned(),
+                        style.clone(),
+                        segment.clone(),
+                        contributions,
+                    ));
+                    self.bytes = self.bytes.saturating_add(entry_bytes);
+                }
+            }
+        }
         Ok(segment)
     }
 }
@@ -127,7 +255,24 @@ pub(super) fn inline_items(
     font_manager: &mut FontManager,
     paragraph: &ResolvedParagraph,
 ) -> Result<Vec<InlineItem>, LayoutError> {
-    inline_items_cached(font_manager, &mut ShapingCache::default(), paragraph, 1)
+    let mut contexts = HashMap::new();
+    let items = inline_items_cached(
+        font_manager,
+        &mut ShapingCache::default(),
+        paragraph,
+        1,
+        &mut contexts,
+    )?;
+    for (index, item) in items.iter().enumerate() {
+        if let InlineItem::Text(segment) = item {
+            font_manager.record_font_contribution(
+                segment.font_id,
+                contexts.get(&index).and_then(|family| family.as_deref()),
+                &segment.text,
+            )?;
+        }
+    }
+    Ok(items)
 }
 
 fn inline_items_cached(
@@ -135,9 +280,13 @@ fn inline_items_cached(
     shaping_cache: &mut ShapingCache,
     paragraph: &ResolvedParagraph,
     page_number: usize,
+    contexts: &mut HashMap<usize, Option<String>>,
 ) -> Result<Vec<InlineItem>, LayoutError> {
     let mut items = Vec::with_capacity(paragraph.runs.len());
+    let mut requested_context_bytes = 0usize;
+    let mut requested_context_entries = 0usize;
     for run in &paragraph.runs {
+        let item_start = items.len();
         match run {
             ResolvedTextRun::Text { text, style } => {
                 push_displayed_text(&mut items, text, |line| {
@@ -166,6 +315,24 @@ fn inline_items_cached(
                 })?;
             }
             ResolvedTextRun::Break => items.push(InlineItem::LineBreak),
+        }
+        let style = match run {
+            ResolvedTextRun::Text { style, .. } | ResolvedTextRun::Field { style, .. } => {
+                Some(style)
+            }
+            ResolvedTextRun::Break => None,
+        };
+        if let Some(style) = style {
+            for (index, item) in items.iter().enumerate().skip(item_start) {
+                if let InlineItem::Text(segment) = item {
+                    let family = font_manager.copy_font_request_context(
+                        typeface_for_text(style, &segment.text),
+                        &mut requested_context_bytes,
+                        &mut requested_context_entries,
+                    );
+                    contexts.insert(index, family);
+                }
+            }
         }
     }
     Ok(items)
@@ -531,8 +698,9 @@ fn shape_paragraphs(
                 .copied()
                 .unwrap_or(oxml_layout::TextDirection::Auto);
             let marker = numbering.marker(font_manager, &mut shaping_cache, paragraph)?;
-            let legacy_items =
-                inline_items_cached(font_manager, &mut shaping_cache, paragraph, page_number)?;
+            let mut contexts = HashMap::new();
+            let legacy_items = inline_items_cached(font_manager, &mut shaping_cache,
+                paragraph, page_number, &mut contexts)?;
             let uses_rich_text = base_direction != oxml_layout::TextDirection::Auto
                 || legacy_items.iter().any(|item| {
                     matches!(item, InlineItem::Text(segment) if needs_multilingual_layout(&segment.text))
@@ -542,8 +710,15 @@ fn shape_paragraphs(
                     font_manager,
                     legacy_items,
                     base_direction,
+                    &contexts,
                 )?
             } else {
+                for (index, item) in legacy_items.iter().enumerate() {
+                    if let InlineItem::Text(segment) = item {
+                        font_manager.record_font_contribution(segment.font_id,
+                            contexts.get(&index).and_then(|family| family.as_deref()), &segment.text)?;
+                    }
+                }
                 legacy_items
             };
             let has_visible_text = items.iter().any(|item| match item {
@@ -559,6 +734,13 @@ fn shape_paragraphs(
                 )?));
             }
             if let Some(marker) = marker.filter(|_| has_visible_text) {
+                let explicit = match paragraph.bullet.as_ref() {
+                    Some(ResolvedBullet::Character { font, .. })
+                    | Some(ResolvedBullet::AutoNumber { font, .. }) => font.as_deref(),
+                    None => None,
+                };
+                let requested = explicit.or_else(|| typeface_for_text(first_run_style(paragraph), &marker.text));
+                font_manager.record_font_contribution(marker.font_id, requested, &marker.text)?;
                 items.insert(0, InlineItem::Marker(marker));
             }
             Ok((items, base_direction))
@@ -570,6 +752,7 @@ fn shape_multilingual_items_preserving_controls(
     font_manager: &mut FontManager,
     legacy_items: Vec<InlineItem>,
     base_direction: oxml_layout::TextDirection,
+    contexts: &HashMap<usize, Option<String>>,
 ) -> Result<Vec<InlineItem>, LayoutError> {
     let styled = legacy_items
         .iter()
@@ -584,7 +767,8 @@ fn shape_multilingual_items_preserving_controls(
         false,
     )?);
     let mut items = Vec::new();
-    for item in legacy_items {
+    for (index, item) in legacy_items.into_iter().enumerate() {
+        let requested = contexts.get(&index).and_then(|family| family.as_deref());
         let InlineItem::Text(segment) = item else {
             items.push(item);
             continue;
@@ -605,6 +789,7 @@ fn shape_multilingual_items_preserving_controls(
                         "multilingual paragraph shaping crossed a styled text boundary".to_owned(),
                     )
                 })?;
+            font_manager.record_font_contribution(span.base().font_id, requested, span.text())?;
             items.push(InlineItem::MultilingualText(span));
         }
     }
@@ -3405,6 +3590,334 @@ mod tests {
 
         assert_close(runs[0].font_size, 6.25);
         assert_close(runs[1].font_size, 12.5);
+    }
+
+    #[test]
+    fn fx195_shaping_cache_multilingual_probe_is_not_a_contribution() {
+        let paragraph = ResolvedParagraph {
+            runs: vec![ResolvedTextRun::Text {
+                text: "कार्यालय".into(),
+                style: ResolvedRunStyle {
+                    latin_typeface: Some("Carlito".into()),
+                    complex_script_typeface: Some("Carlito".into()),
+                    font_size: Some(20.0),
+                    ..Default::default()
+                },
+            }],
+            ..Default::default()
+        };
+        let mut fonts = FontManager::new_deterministic().unwrap();
+        let primary = fonts.resolve_font(Some("Carlito"), false, false).unwrap();
+        let mut cache = ShapingCache::default();
+        let mut captures = Vec::new();
+        for _ in 0..2 {
+            fonts.begin_layout();
+            fonts.begin_paragraph_font_trace();
+            let mut contexts = HashMap::new();
+            let provisional =
+                inline_items_cached(&mut fonts, &mut cache, &paragraph, 1, &mut contexts).unwrap();
+            let accepted = shape_multilingual_items_preserving_controls(
+                &mut fonts,
+                provisional,
+                oxml_layout::TextDirection::LeftToRight,
+                &contexts,
+            )
+            .unwrap();
+            let events = fonts.finish_paragraph_font_events().unwrap();
+            let contributions = events
+                .iter()
+                .filter_map(|event| match event {
+                    FontTraceEvent::Contribution(contribution) => Some(contribution),
+                    FontTraceEvent::Resolution(_) => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(!contributions.is_empty());
+            assert!(
+                events
+                    .iter()
+                    .any(|event| matches!(event, FontTraceEvent::Resolution(id) if *id == primary))
+            );
+            assert!(
+                contributions
+                    .iter()
+                    .all(|contribution| contribution.font_id != primary)
+            );
+            assert!(contributions.iter().all(|contribution| contribution.requested_family.as_deref() == Some("Carlito")));
+            let faces = fonts
+                .current_layout_fonts()
+                .iter()
+                .map(|id| {
+                    let face = fonts.font_data(*id).unwrap();
+                    (
+                        face.id,
+                        face.family,
+                        face.face_index,
+                        face.data.to_vec(),
+                        face.variations,
+                        face.synthetic_bold,
+                        face.synthetic_italic,
+                    )
+                })
+                .collect::<Vec<_>>();
+            captures.push((format!("{accepted:?}"), faces, events));
+        }
+        assert_eq!(
+            captures[0], captures[1],
+            "full font order, bytes, glyph IDs and actual requests"
+        );
+        assert_eq!(cache.entries.len(), 1);
+    }
+
+    #[test]
+    fn fx195_shaping_cache_final_field_and_marker_requests() {
+        let paragraph = ResolvedParagraph {
+            bullet: Some(ResolvedBullet::Character {
+                character: "*".into(),
+                font: Some("MarkerRequested".into()),
+                color: None,
+                size: None,
+            }),
+            runs: vec![ResolvedTextRun::Field {
+                text: "42".into(),
+                field_type: Some("slidenum".into()),
+                style: ResolvedRunStyle {
+                    latin_typeface: Some("FieldRequested".into()),
+                    font_size: Some(12.0),
+                    ..Default::default()
+                },
+            }],
+            ..Default::default()
+        };
+        let body = ResolvedTextBody {
+            paragraphs: vec![paragraph],
+            ..text_body(TextInsets::default())
+        };
+        let mut fonts = FontManager::new_deterministic().unwrap();
+        fonts.begin_paragraph_font_trace();
+        let stacked = stack_text(&mut fonts, test_content_box(200.0), &body).unwrap();
+        assert!(!glyph_runs(&stacked.elements).is_empty());
+        let contributions = fonts.finish_paragraph_font_contributions().unwrap();
+        for requested in ["FieldRequested", "MarkerRequested"] {
+            assert!(
+                contributions
+                    .iter()
+                    .any(|entry| entry.requested_family.as_deref() == Some(requested))
+            );
+        }
+        assert_eq!(
+            contributions.len(),
+            2,
+            "only final field and visible marker"
+        );
+    }
+
+    #[test]
+    fn fx195_shaping_cache_empty_and_oversized_payloads_bypass_storage() {
+        let mut fonts = FontManager::new_deterministic().unwrap();
+        let mut cache = ShapingCache::default();
+        cache
+            .shape(&mut fonts, "", &ResolvedRunStyle::default())
+            .unwrap();
+        assert!(cache.entries.is_empty());
+        let style = ResolvedRunStyle {
+            hyperlink_url: Some("x".repeat(NATIVE_SHAPING_CACHE_MAX_BYTES + 1)),
+            ..Default::default()
+        };
+        let result = cache.shape(&mut fonts, "A", &style).unwrap();
+        assert!(!result.glyph_ids.is_empty());
+        assert!(cache.entries.is_empty());
+        assert_eq!(cache.bytes, 0);
+    }
+
+    #[test]
+    fn fx195_shaping_cache_replays_contributing_font_identity() {
+        let mut traces = Vec::new();
+        let mut mismatches = Vec::new();
+        for requested in ["Aptos", "Calibri", "Aptos Display"] {
+            let mut fonts = FontManager::new_deterministic().unwrap();
+            let style = ResolvedRunStyle {
+                font_size: Some(20.0),
+                latin_typeface: Some(requested.to_owned()),
+                ..ResolvedRunStyle::default()
+            };
+            let mut cache = ShapingCache::default();
+            fonts.begin_paragraph_font_trace();
+            let first = cache
+                .shape(&mut fonts, "same contributing text", &style)
+                .unwrap();
+            let cold = fonts.finish_paragraph_font_trace().unwrap();
+            assert!(!cold.is_empty());
+            fonts.begin_paragraph_font_trace();
+            let second = cache
+                .shape(&mut fonts, "same contributing text", &style)
+                .unwrap();
+            let warm = fonts.finish_paragraph_font_trace().unwrap();
+            assert_eq!(first.glyph_ids, second.glyph_ids);
+            assert_eq!(first.advances, second.advances);
+            if cold != warm {
+                mismatches.push(format!("{requested}: missing exact warm events"));
+            }
+            let face = fonts.font_data(first.font_id).unwrap();
+            traces.push(((face.family, face.face_index, face.data.to_vec()), cold));
+        }
+        assert_eq!(traces[0].0, traces[1].0, "same actual fallback bytes");
+        assert_eq!(traces[0].0, traces[2].0, "same actual fallback bytes");
+        // The legacy trace exposes FontId only. Original request distinctions
+        // belong to the new request-aware carrier, not this compatible API.
+        assert!(mismatches.is_empty(), "{mismatches:?}");
+    }
+
+    #[test]
+    fn fx195_shaping_cache_cross_request_warm_contributions() {
+        for order in [
+            ["Aptos", "Calibri", "Aptos Display"],
+            ["Aptos Display", "Calibri", "Aptos"],
+        ] {
+            let mut fonts = FontManager::new_deterministic().unwrap();
+            let mut cache = ShapingCache::default();
+            let mut captures = Vec::new();
+            let mut physical_captures = Vec::new();
+            for requested in order.into_iter().chain(order) {
+                let paragraph = ResolvedParagraph {
+                    runs: vec![ResolvedTextRun::Text {
+                        text: "same contributing text".into(),
+                        style: ResolvedRunStyle {
+                            latin_typeface: Some(requested.into()),
+                            font_size: Some(20.0),
+                            ..Default::default()
+                        },
+                    }],
+                    ..Default::default()
+                };
+                fonts.begin_layout();
+                fonts.begin_paragraph_font_trace();
+                let mut contexts = HashMap::new();
+                let provisional =
+                    inline_items_cached(&mut fonts, &mut cache, &paragraph, 1, &mut contexts)
+                        .unwrap();
+                let accepted = shape_multilingual_items_preserving_controls(
+                    &mut fonts,
+                    provisional,
+                    oxml_layout::TextDirection::LeftToRight,
+                    &contexts,
+                )
+                .unwrap();
+                let events = fonts.finish_paragraph_font_events().unwrap();
+                let contributions = events
+                    .iter()
+                    .filter_map(|event| match event {
+                        FontTraceEvent::Contribution(c) => Some(c.clone()),
+                        FontTraceEvent::Resolution(_) => None,
+                    })
+                    .collect::<Vec<_>>();
+                assert!(!contributions.is_empty());
+                assert!(
+                    contributions
+                        .iter()
+                        .all(|c| c.requested_family.as_deref() == Some(requested))
+                );
+                let faces = fonts
+                    .current_layout_fonts()
+                    .iter()
+                    .map(|id| {
+                        let font = fonts.font_data(*id).unwrap();
+                        (
+                            font.id,
+                            font.family,
+                            font.face_index,
+                            font.data.to_vec(),
+                            font.bold,
+                            font.italic,
+                            font.variations,
+                            font.synthetic_bold,
+                            font.synthetic_italic,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let physical_face = |font: oxml_layout::FontData| {
+                    (
+                        font.family,
+                        font.face_index,
+                        font.data.to_vec(),
+                        font.bold,
+                        font.italic,
+                        font.variations,
+                        font.synthetic_bold,
+                        font.synthetic_italic,
+                    )
+                };
+                let inventory_ids = fonts.current_layout_fonts();
+                let physical_faces = inventory_ids
+                    .iter()
+                    .map(|id| physical_face(fonts.font_data(*id).unwrap()))
+                    .collect::<Vec<_>>();
+                assert!(!accepted.is_empty());
+                let normalized = accepted
+                    .iter()
+                    .map(|item| {
+                        let InlineItem::MultilingualText(segment) = item else {
+                            panic!("controlled text must retain final multilingual spans");
+                        };
+                        let actual_id = segment.font_id();
+                        let inventory_index = inventory_ids
+                            .iter()
+                            .position(|id| *id == actual_id)
+                            .expect("every actual span font belongs to the selected inventory");
+                        assert_eq!(
+                            physical_face(fonts.font_data(actual_id).unwrap()),
+                            physical_faces[inventory_index],
+                            "actual span font resolves to its selected physical face"
+                        );
+                        assert!(contributions.iter().any(|c| c.font_id == actual_id));
+                        let mut base = segment.base().clone();
+                        base.font_id = oxml_layout::FontId(inventory_index as u32);
+                        InlineItem::MultilingualText(
+                            oxml_layout::MultilingualTextSegment::new(
+                                base,
+                                segment.logical_index(),
+                                segment.language().map(str::to_owned),
+                                segment.script(),
+                                segment.direction(),
+                                segment.bidi_level(),
+                                segment.x_advances().to_vec(),
+                                segment.y_advances().to_vec(),
+                                segment.x_offsets().to_vec(),
+                                segment.y_offsets().to_vec(),
+                                segment.clusters().to_vec(),
+                                segment.break_after(),
+                            )
+                            .expect("only transient font identity changes in the cloned span"),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                physical_captures.push((format!("{normalized:?}"), physical_faces));
+                let identity = (format!("{accepted:?}"), faces, contributions);
+                if captures.len() >= 3 {
+                    assert_eq!(
+                        cache.entries.len(),
+                        3,
+                        "revisited requests reuse the same cache"
+                    );
+                    assert_eq!(
+                        identity,
+                        captures[captures.len() - 3],
+                        "exact warm span glyphs, inventory and request"
+                    );
+                }
+                captures.push(identity);
+            }
+            for (index, capture) in captures[1..3].iter().enumerate() {
+                assert_eq!(
+                    physical_captures[0],
+                    physical_captures[index + 1],
+                    "same final glyph geometry and ordered physical fallback inventory"
+                );
+                assert_ne!(
+                    captures[0].2, capture.2,
+                    "original requests cannot collapse"
+                );
+            }
+        }
     }
 
     #[test]

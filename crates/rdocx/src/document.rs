@@ -28583,7 +28583,7 @@ impl Document {
     /// Render the document to PDF bytes with the selected revision view.
     pub fn to_pdf_with_options(&self, options: RenderOptions) -> Result<Vec<u8>> {
         let layout = self.layout_with_options(options)?;
-        Ok(oxml_pdf::render_to_pdf(&layout.layout))
+        Ok(oxml_pdf::render_to_pdf_checked(&layout.layout)?)
     }
 
     /// Render the document to PDF bytes using bundled fonts without system
@@ -28607,7 +28607,44 @@ impl Document {
     /// Render the selected revision view to deterministic PDF bytes.
     pub fn to_pdf_deterministic_with_options(&self, options: RenderOptions) -> Result<Vec<u8>> {
         let layout = self.layout_for_options(options, true)?;
-        Ok(oxml_pdf::render_to_pdf(&layout.layout))
+        Ok(oxml_pdf::render_to_pdf_checked(&layout.layout)?)
+    }
+
+    /// Lay out caller fonts over the normal system and bundled fallback policy.
+    /// The returned bundle owns the exact face instances used by every renderer.
+    pub fn layout_with_additional_fonts_and_options(
+        &self,
+        font_files: &[(&str, &[u8])],
+        options: RenderOptions,
+    ) -> Result<rdocx_layout::WordLayoutResult> {
+        let input = self.build_layout_input_with_fonts(font_files, options);
+        #[cfg(test)]
+        record_layout_invocation();
+        Ok(rdocx_layout::layout_document_with_provenance(&input)?)
+    }
+
+    /// Render caller fonts using the bundled fallback policy and selected revision view.
+    pub fn to_pdf_with_fonts_deterministic_and_options(
+        &self,
+        font_files: &[(&str, &[u8])],
+        options: RenderOptions,
+    ) -> Result<Vec<u8>> {
+        let layout =
+            self.layout_with_fonts_and_bundled_fallback_and_options(font_files, options)?;
+        Ok(oxml_pdf::render_to_pdf_checked(&layout.layout)?)
+    }
+
+    /// Render caller fonts to the selected archival profile using bundled fallback.
+    pub fn to_pdfa_with_fonts_deterministic(
+        &self,
+        font_files: &[(&str, &[u8])],
+        profile: oxml_pdf::PdfConformance,
+    ) -> Result<Vec<u8>> {
+        let layout = self.layout_with_fonts_and_bundled_fallback(font_files)?;
+        Ok(oxml_pdf::render_to_pdf_with_options(
+            &layout.layout,
+            oxml_pdf::PdfOptions::new(profile),
+        )?)
     }
 
     /// Render the document to PDF bytes with user-provided font files.
@@ -28636,11 +28673,8 @@ impl Document {
         font_files: &[(&str, &[u8])],
         options: RenderOptions,
     ) -> Result<Vec<u8>> {
-        let input = self.build_layout_input_with_fonts(font_files, options);
-        #[cfg(test)]
-        record_layout_invocation();
-        let layout = rdocx_layout::layout_document_with_provenance(&input)?;
-        Ok(oxml_pdf::render_to_pdf(&layout.layout))
+        let layout = self.layout_with_additional_fonts_and_options(font_files, options)?;
+        Ok(oxml_pdf::render_to_pdf_checked(&layout.layout)?)
     }
 
     /// Save the document as a PDF file.
@@ -28883,6 +28917,60 @@ impl Document {
         options: RenderOptions,
     ) -> Result<Vec<Vec<u8>>> {
         let layout = self.layout_with_options(options)?;
+        Ok(oxml_pdf::render_all_pages(&layout.layout, dpi))
+    }
+
+    /// Render caller-selected normal fonts to one zero-based PNG page.
+    pub fn render_page_to_png_with_fonts_and_options(
+        &self,
+        page_index: usize,
+        dpi: f64,
+        font_files: &[(&str, &[u8])],
+        options: RenderOptions,
+    ) -> Result<Option<Vec<u8>>> {
+        let layout = self.layout_with_additional_fonts_and_options(font_files, options)?;
+        Ok(oxml_pdf::render_page_to_png(
+            &layout.layout,
+            page_index,
+            dpi,
+        ))
+    }
+
+    /// Render caller-selected normal fonts to one searchable SVG page.
+    pub fn render_page_to_svg_with_fonts_and_options(
+        &self,
+        page_index: usize,
+        font_files: &[(&str, &[u8])],
+        options: RenderOptions,
+    ) -> Result<Option<crate::SvgRenderResult>> {
+        let layout = self.layout_with_additional_fonts_and_options(font_files, options)?;
+        Ok(crate::svg::render_page(&layout.layout, page_index))
+    }
+
+    /// Render selected pages from one caller-selected normal-font bundle.
+    pub fn render_pages_with_fonts_and_options(
+        &self,
+        page_indices: &[usize],
+        raster_options: oxml_pdf::RasterOptions,
+        font_files: &[(&str, &[u8])],
+        options: RenderOptions,
+    ) -> Result<oxml_pdf::RasterOutput> {
+        let layout = self.layout_with_additional_fonts_and_options(font_files, options)?;
+        Ok(oxml_pdf::render_pages(
+            &layout.layout,
+            page_indices,
+            raster_options,
+        )?)
+    }
+
+    /// Render every PNG page from one caller-selected normal-font bundle.
+    pub fn render_all_pages_with_fonts_and_options(
+        &self,
+        dpi: f64,
+        font_files: &[(&str, &[u8])],
+        options: RenderOptions,
+    ) -> Result<Vec<Vec<u8>>> {
+        let layout = self.layout_with_additional_fonts_and_options(font_files, options)?;
         Ok(oxml_pdf::render_all_pages(&layout.layout, dpi))
     }
 
@@ -33886,6 +33974,235 @@ mod tests {
     }
 
     #[test]
+    fn fx195_native_selected_pages_and_revision_options_keep_caller_bundle() {
+        let (family, bytes) = caller_only_font();
+        let mut document = Document::new();
+        document
+            .add_paragraph("caller first")
+            .add_run("iiiiWWWW")
+            .font(family);
+        let revision_xml = format!(
+            r#"<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:pPr><w:pageBreakBefore/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="{family}" w:hAnsi="{family}"/></w:rPr><w:t>WWWWiiii</w:t></w:r><w:ins w:id="195" w:author="Caller control"><w:r><w:rPr><w:rFonts w:ascii="{family}" w:hAnsi="{family}"/></w:rPr><w:t>INSERTED</w:t></w:r></w:ins><w:del w:id="196" w:author="Caller control"><w:r><w:rPr><w:rFonts w:ascii="{family}" w:hAnsi="{family}"/></w:rPr><w:delText>DELETED</w:delText></w:r></w:del></w:p>"#
+        );
+        let revised = CT_P::from_xml_fragment(revision_xml.as_bytes()).unwrap();
+        assert_eq!(revised.revisions.len(), 2, "both revisions must be typed");
+        assert_eq!(
+            revised.revisions[0].2.kind(),
+            rdocx_oxml::revision::RevisionKind::Insertion
+        );
+        assert_eq!(
+            revised.revisions[1].2.kind(),
+            rdocx_oxml::revision::RevisionKind::Deletion
+        );
+        assert_eq!(revised.accepted_text(), "WWWWiiiiINSERTED");
+        document
+            .document
+            .body
+            .content
+            .push(BodyContent::Paragraph(revised));
+        let source_before = document.document.to_xml().unwrap();
+        let source_xml = std::str::from_utf8(&source_before).unwrap();
+        assert!(source_xml.contains("<w:ins ") && source_xml.contains("<w:del "));
+        assert!(source_xml.contains("INSERTED") && source_xml.contains("DELETED"));
+        let before = document.to_bytes().unwrap();
+        let inputs = [(family, bytes.as_slice())];
+        let mut rendered_views = Vec::new();
+        for options in [
+            RenderOptions::default(),
+            RenderOptions {
+                revision_view: rdocx_layout::RevisionView::Tracked,
+            },
+        ] {
+            reset_layout_invocations();
+            let layout = document
+                .layout_with_additional_fonts_and_options(&inputs, options)
+                .unwrap();
+            assert_eq!(layout_invocations(), 1);
+            assert_eq!(layout.revision_view, options.revision_view);
+            assert_eq!(layout.layout.pages.len(), 2);
+            assert!(
+                layout
+                    .layout
+                    .fonts
+                    .iter()
+                    .any(|font| font.data.as_ref() == bytes.as_slice())
+            );
+            let tracked = options.revision_view == rdocx_layout::RevisionView::Tracked;
+            let mut visible_text = String::new();
+            oxml_layout::walk(&layout.layout.pages[1].elements, &mut |element, _| {
+                if let oxml_layout::PositionedElement::Text(run) = element {
+                    visible_text.push_str(&run.text);
+                    let selected = layout
+                        .layout
+                        .fonts
+                        .iter()
+                        .find(|font| font.id == run.font_id)
+                        .unwrap();
+                    assert_eq!(selected.data.as_ref(), bytes.as_slice());
+                    assert_eq!(selected.face_index, 0);
+                    assert_eq!(selected.family, family);
+                }
+            });
+            assert_eq!(
+                visible_text,
+                if tracked {
+                    "WWWWiiiiINSERTEDDELETED"
+                } else {
+                    "WWWWiiiiINSERTED"
+                },
+                "revision selection must affect actual shaped content"
+            );
+            let mut raster_results = Vec::new();
+            for format in [
+                oxml_pdf::RasterFormat::Png {
+                    transparent_background: false,
+                },
+                oxml_pdf::RasterFormat::Jpeg { quality: 80 },
+                oxml_pdf::RasterFormat::Tiff,
+            ] {
+                let raster = oxml_pdf::RasterOptions { dpi: 72.0, format };
+                reset_layout_invocations();
+                let rendered = document
+                    .render_pages_with_fonts_and_options(&[1], raster, &inputs, options)
+                    .unwrap();
+                assert_eq!(
+                    rendered,
+                    oxml_pdf::render_pages(&layout.layout, &[1], raster).unwrap()
+                );
+                assert_eq!(layout_invocations(), 1);
+                raster_results.push(rendered);
+                assert!(
+                    document
+                        .render_pages_with_fonts_and_options(&[2], raster, &inputs, options)
+                        .is_err()
+                );
+            }
+            let png = document
+                .render_page_to_png_with_fonts_and_options(1, 72.0, &inputs, options)
+                .unwrap();
+            assert_eq!(png, oxml_pdf::render_page_to_png(&layout.layout, 1, 72.0));
+            let svg = document
+                .render_page_to_svg_with_fonts_and_options(1, &inputs, options)
+                .unwrap();
+            assert_eq!(svg, crate::svg::render_page(&layout.layout, 1));
+            let svg_text = &svg.as_ref().unwrap().svg;
+            assert!(svg_text.contains("INSERTED"));
+            assert_eq!(svg_text.contains("DELETED"), tracked);
+            assert!(
+                document
+                    .render_page_to_svg_with_fonts_and_options(2, &inputs, options)
+                    .unwrap()
+                    .is_none()
+            );
+            let bundled = document
+                .layout_with_fonts_and_bundled_fallback_and_options(&inputs, options)
+                .unwrap();
+            let pdf = document
+                .to_pdf_with_fonts_deterministic_and_options(&inputs, options)
+                .unwrap();
+            assert_eq!(
+                pdf,
+                oxml_pdf::render_to_pdf_checked(&bundled.layout).unwrap()
+            );
+            rendered_views.push((pdf, png, svg, raster_results));
+            assert_eq!(document.document.to_xml().unwrap(), source_before);
+            assert_eq!(document.to_bytes().unwrap(), before);
+        }
+        assert_ne!(
+            rendered_views[0].0, rendered_views[1].0,
+            "PDF revision view"
+        );
+        assert_ne!(
+            rendered_views[0].1, rendered_views[1].1,
+            "PNG revision view"
+        );
+        assert_ne!(
+            rendered_views[0].2, rendered_views[1].2,
+            "SVG revision view"
+        );
+        for (accepted, tracked) in rendered_views[0].3.iter().zip(&rendered_views[1].3) {
+            assert_ne!(
+                accepted, tracked,
+                "each selected raster format honors revisions"
+            );
+        }
+        let bundled = document
+            .layout_with_fonts_and_bundled_fallback(&inputs)
+            .unwrap();
+        let profile = oxml_pdf::PdfConformance::PdfA2b;
+        assert_eq!(
+            document
+                .to_pdfa_with_fonts_deterministic(&inputs, profile)
+                .unwrap(),
+            oxml_pdf::render_to_pdf_with_options(
+                &bundled.layout,
+                oxml_pdf::PdfOptions::new(profile)
+            )
+            .unwrap()
+        );
+        let first = document.to_pdf_with_fonts(&inputs).unwrap();
+        assert_eq!(document.to_pdf_with_fonts(&inputs).unwrap(), first);
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+
+    #[test]
+    fn fx195_additional_caller_fonts_share_native_output_bundle() {
+        let (family, bytes) = caller_only_font();
+        let mut document = Document::new();
+        document.add_paragraph("caller geometry");
+        document
+            .paragraph_mut(0)
+            .unwrap()
+            .run_mut(0)
+            .expect("caller geometry fixture has a run")
+            .set_font(family);
+        let inputs = [(family, bytes.as_slice())];
+        let options = RenderOptions::default();
+        let layout = document
+            .layout_with_additional_fonts_and_options(&inputs, options)
+            .unwrap();
+        assert!(layout.layout.fonts.iter().any(|font| font.family == family
+            && font.data.as_ref() == bytes.as_slice()
+            && font.face_index == 0));
+        let before = document.to_bytes().unwrap();
+        assert_eq!(
+            document
+                .to_pdf_with_fonts_and_options(&inputs, options)
+                .unwrap(),
+            oxml_pdf::render_to_pdf_checked(&layout.layout).unwrap()
+        );
+        assert_eq!(
+            document
+                .render_page_to_png_with_fonts_and_options(0, 72.0, &inputs, options)
+                .unwrap(),
+            oxml_pdf::render_page_to_png(&layout.layout, 0, 72.0)
+        );
+        assert_eq!(
+            document
+                .render_all_pages_with_fonts_and_options(72.0, &inputs, options)
+                .unwrap(),
+            oxml_pdf::render_all_pages(&layout.layout, 72.0)
+        );
+        assert_eq!(
+            document
+                .render_page_to_svg_with_fonts_and_options(0, &inputs, options)
+                .unwrap(),
+            crate::svg::render_page(&layout.layout, 0)
+        );
+        assert!(
+            document
+                .render_page_to_png_with_fonts_and_options(usize::MAX, 72.0, &inputs, options)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+        assert_eq!(
+            document.to_pdf_with_fonts(&[]).unwrap(),
+            document.to_pdf().unwrap()
+        );
+    }
+
+    #[test]
     fn body_items_preserve_paragraph_table_control_and_raw_order() {
         let mut doc = Document::new();
         doc.add_paragraph("first");
@@ -36643,10 +36960,37 @@ mod tests {
 
         let word_pdf = word.to_pdf_deterministic().expect("render Word PDF");
         assert_eq!(extracted_logical_lines("word", &word_pdf), expected_word);
-        // Recorded from the pre-F-X092 writer with the pinned Poppler build.
+        // Requested bold variable CJK selects weight 700 instead of the default Thin face.
+        // Paired source-bound captures isolate the instance advance and outline change.
         assert_eq!(
             rendered_pdf_page_sha("word", &word_pdf),
-            "7d800158f0b87c9596f524c4bfc91fbfa53e949b2113d573a8fc0ce3a28f332c"
+            "6b0dd949e017453379f25dde824d2d0dadd108afc3ce99a1c09dc81045960c16"
+        );
+
+        // The all-regular control retains the same three-run segmentation and default face.
+        let mut regular = Document::new();
+        for index in 0..120 {
+            let mut paragraph = regular.add_paragraph("");
+            paragraph.add_run(&format!("FX092-WORD-{index:03} alpha "));
+            paragraph.add_run("中文 ");
+            paragraph.add_run("beta gamma");
+        }
+        let regular_pdf = regular
+            .to_pdf_deterministic()
+            .expect("render regular Word PDF");
+        assert_eq!(
+            extracted_logical_lines("word-regular", &regular_pdf),
+            expected_word
+        );
+        assert_eq!(
+            regular
+                .to_pdf_deterministic()
+                .expect("repeat regular Word PDF"),
+            regular_pdf
+        );
+        assert_eq!(
+            rendered_pdf_page_sha("word-regular", &regular_pdf),
+            "f902ee1e9e2198ea4ebe172004d8e7f0e69ecf45d98c63fa02bbd93564e64a0b"
         );
 
         let presentation_pdf = presentation

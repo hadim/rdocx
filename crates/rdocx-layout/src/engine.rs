@@ -45,14 +45,15 @@ use crate::table;
 use crate::{WordBodyLayoutFragment, WordSourcePath, WordStory};
 use oxml_layout::{
     Color, Diagnostic, DocumentMetadata, DocumentStructure, FieldKind, FieldSource, FontId,
-    FontManager, GlyphRun, GroupElement, InlineItem, LayoutError, LayoutResult, LineItem, NoteRef,
-    NoteStream, PageFrame, Point, PositionedElement, Rect, Result, ShapedText, SourceNodeId,
-    SourceSpan, StructureId, StructureNode, StructureRole, TextDirection, TextSegment, Transform,
-    Underline, break_into_lines, break_multilingual_into_lines,
+    FontManager, FontTraceEvent, GlyphRun, GroupElement, InlineItem, LayoutError, LayoutResult,
+    LineItem, NoteRef, NoteStream, PageFrame, Point, PositionedElement, Rect, Result, ShapedText,
+    SourceNodeId, SourceSpan, StructureId, StructureNode, StructureRole, TextDirection,
+    TextSegment, Transform, Underline, break_into_lines, break_multilingual_into_lines,
 };
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct WordMultilingualStyle {
+    requested_family: Option<String>,
     language: Option<String>,
     language_east_asia: Option<String>,
     language_bidi: Option<String>,
@@ -2870,7 +2871,7 @@ struct ParagraphCacheEntry {
     key: ParagraphCacheKey,
     block: Arc<ParagraphBlock>,
     diagnostics: Vec<Diagnostic>,
-    font_trace: Vec<FontId>,
+    font_trace: Vec<FontTraceEvent>,
     reflow_direction: TextDirection,
     bytes: usize,
 }
@@ -2891,7 +2892,7 @@ struct TableCacheEntry {
     block: Arc<table::TableBlock>,
     semantics: TableSemantics,
     diagnostics: Vec<Diagnostic>,
-    font_trace: Vec<FontId>,
+    font_trace: Vec<FontTraceEvent>,
     bytes: usize,
 }
 
@@ -2925,7 +2926,7 @@ struct HeaderFooterCacheEntry {
     key: HeaderFooterCacheKey,
     content: HeaderFooterVariantContent,
     diagnostics: Vec<Diagnostic>,
-    font_trace: Vec<FontId>,
+    font_trace: Vec<FontTraceEvent>,
     bytes: usize,
 }
 
@@ -3824,24 +3825,30 @@ impl Engine {
             .copied()
             .collect::<std::collections::HashSet<_>>();
         self.paragraph_cache.retain(|entry| {
-            entry
-                .font_trace
-                .iter()
-                .all(|font_id| current_fonts.contains(font_id))
+            entry.font_trace.iter().all(|event| {
+                current_fonts.contains(match event {
+                    FontTraceEvent::Resolution(id) => id,
+                    FontTraceEvent::Contribution(contribution) => &contribution.font_id,
+                })
+            })
         });
         self.paragraph_cache_bytes = self.paragraph_cache.iter().map(|entry| entry.bytes).sum();
         self.table_cache.retain(|entry| {
-            entry
-                .font_trace
-                .iter()
-                .all(|font_id| current_fonts.contains(font_id))
+            entry.font_trace.iter().all(|event| {
+                current_fonts.contains(match event {
+                    FontTraceEvent::Resolution(id) => id,
+                    FontTraceEvent::Contribution(contribution) => &contribution.font_id,
+                })
+            })
         });
         self.table_cache_bytes = self.table_cache.iter().map(|entry| entry.bytes).sum();
         self.header_footer_cache.retain(|entry| {
-            entry
-                .font_trace
-                .iter()
-                .all(|font_id| current_fonts.contains(font_id))
+            entry.font_trace.iter().all(|event| {
+                current_fonts.contains(match event {
+                    FontTraceEvent::Resolution(id) => id,
+                    FontTraceEvent::Contribution(contribution) => &contribution.font_id,
+                })
+            })
         });
         self.header_footer_cache_bytes = self
             .header_footer_cache
@@ -5121,7 +5128,7 @@ impl Engine {
         {
             diagnostics.extend(entry.diagnostics.iter().cloned());
             self.font_manager
-                .replay_layout_font_trace(&entry.font_trace);
+                .replay_font_trace_events(&entry.font_trace)?;
             self.paragraph_cache_hits += 1;
             return Ok(SharedLayoutBlock::Paragraph {
                 block: Arc::clone(&entry.block),
@@ -5148,7 +5155,7 @@ impl Engine {
             Some(CACHE_SOURCE_NODE),
             doc_grid,
         );
-        let font_trace = self.font_manager.finish_paragraph_font_trace();
+        let font_trace = self.font_manager.finish_paragraph_font_events();
         let (mut block, reflow_direction) = block_result?;
         self.paragraph_cache_builds += 1;
 
@@ -5158,7 +5165,7 @@ impl Engine {
                 paragraph,
                 &block,
                 &cached_diagnostics,
-                font_trace.len(),
+                font_contribution_trace_bytes(&font_trace),
             );
             let block = Arc::new(block);
             self.stage_paragraph_cache_entry(ParagraphCacheEntry {
@@ -5246,7 +5253,7 @@ impl Engine {
         {
             diagnostics.extend(entry.diagnostics.iter().cloned());
             self.font_manager
-                .replay_layout_font_trace(&entry.font_trace);
+                .replay_font_trace_events(&entry.font_trace)?;
             self.table_cache_hits += 1;
             return Ok(SharedLayoutBlock::Table {
                 block: Arc::clone(&entry.block),
@@ -5278,7 +5285,7 @@ impl Engine {
             path,
             doc_grid,
         );
-        let font_trace = self.font_manager.finish_paragraph_font_trace();
+        let font_trace = self.font_manager.finish_paragraph_font_events();
         let (mut block, semantics) = block_result?;
         self.table_cache_builds += 1;
 
@@ -5297,7 +5304,7 @@ impl Engine {
                 &block,
                 &semantics,
                 &cached_diagnostics,
-                font_trace.len(),
+                font_contribution_trace_bytes(&font_trace),
             );
             let block = Arc::new(block);
             self.stage_table_cache_entry(TableCacheEntry {
@@ -6014,12 +6021,29 @@ fn canonicalize_table_sources(block: &mut table::TableBlock) -> Result<()> {
     Ok(())
 }
 
+fn font_contribution_trace_bytes(trace: &Vec<FontTraceEvent>) -> usize {
+    trace.iter().fold(
+        trace
+            .capacity()
+            .saturating_mul(std::mem::size_of::<FontTraceEvent>()),
+        |total, event| {
+            total.saturating_add(match event {
+                FontTraceEvent::Resolution(_) => 0,
+                FontTraceEvent::Contribution(contribution) => contribution
+                    .requested_family
+                    .as_ref()
+                    .map_or(0, String::capacity),
+            })
+        },
+    )
+}
+
 fn table_cache_entry_bytes(
     key: &TableCacheKey,
     block: &table::TableBlock,
     semantics: &TableSemantics,
     diagnostics: &[Diagnostic],
-    font_trace_len: usize,
+    font_trace_bytes: usize,
 ) -> usize {
     let diagnostic_bytes = diagnostics
         .len()
@@ -6035,7 +6059,7 @@ fn table_cache_entry_bytes(
         .saturating_add(table_block_retained_bytes(block))
         .saturating_add(table_semantics_retained_bytes(semantics))
         .saturating_add(2 * std::mem::size_of::<usize>())
-        .saturating_add(font_trace_len.saturating_mul(std::mem::size_of::<FontId>()))
+        .saturating_add(font_trace_bytes)
         .saturating_add(diagnostic_bytes)
 }
 
@@ -7081,7 +7105,7 @@ fn header_footer_cache_entry_bytes(
     key: &HeaderFooterCacheKey,
     content: &HeaderFooterVariantContent,
     diagnostics: &Vec<Diagnostic>,
-    font_trace: &Vec<FontId>,
+    font_trace: &Vec<FontTraceEvent>,
 ) -> usize {
     let block_bytes = key
         .part
@@ -7282,18 +7306,14 @@ fn header_footer_cache_entry_bytes(
         .saturating_add(direction_bytes)
         .saturating_add(watermark_bytes)
         .saturating_add(diagnostic_bytes)
-        .saturating_add(
-            font_trace
-                .capacity()
-                .saturating_mul(std::mem::size_of::<FontId>()),
-        )
+        .saturating_add(font_contribution_trace_bytes(font_trace))
 }
 
 fn paragraph_cache_entry_bytes(
     paragraph: &CT_P,
     block: &ParagraphBlock,
     diagnostics: &[Diagnostic],
-    font_trace_len: usize,
+    font_trace_bytes: usize,
 ) -> usize {
     fn option_string_bytes(value: &Option<String>) -> usize {
         value.as_ref().map_or(0, String::capacity)
@@ -7512,7 +7532,7 @@ fn paragraph_cache_entry_bytes(
         })
         .saturating_add(block.heading_text.as_ref().map_or(0, String::capacity))
         .saturating_add(block.borders.as_ref().map_or(0, border_bytes))
-        .saturating_add(font_trace_len * std::mem::size_of::<FontId>())
+        .saturating_add(font_trace_bytes)
         .saturating_add(diagnostic_bytes)
 }
 
@@ -8752,6 +8772,8 @@ fn layout_paragraph_with_source_and_table(
     // Convert runs to inline items
     let mut inline_items = Vec::new();
     let mut multilingual_styles = HashMap::<usize, WordMultilingualStyle>::new();
+    let mut requested_context_bytes = 0usize;
+    let mut requested_context_entries = 0usize;
 
     if let Some(source_node) = source_node {
         for name in para
@@ -8812,6 +8834,17 @@ fn layout_paragraph_with_source_and_table(
                     .map(|c| Color::from_hex(c))
                     .unwrap_or(Color::BLACK);
 
+                multilingual_styles.insert(
+                    inline_items.len(),
+                    WordMultilingualStyle {
+                        requested_family: fm.copy_font_request_context(
+                            marker_font_family,
+                            &mut requested_context_bytes,
+                            &mut requested_context_entries,
+                        ),
+                        ..Default::default()
+                    },
+                );
                 inline_items.push(InlineItem::Marker(TextSegment {
                     text: marker.marker_text,
                     direction: TextDirection::Auto,
@@ -9098,6 +9131,7 @@ fn layout_paragraph_with_source_and_table(
         let font_id = fm.resolve_font_for_text(font_family.as_deref(), bold, italic, &run_text)?;
         let metrics = fm.metrics(font_id, font_size)?;
 
+        let run_inline_start = inline_items.len();
         let content_char_starts = projected_content_char_starts(run);
         for (content_index, content) in run.content.iter().enumerate() {
             let content_char_start = projected_run_start + content_char_starts[content_index];
@@ -9212,6 +9246,11 @@ fn layout_paragraph_with_source_and_table(
                     multilingual_styles.insert(
                         item_index,
                         WordMultilingualStyle {
+                            requested_family: fm.copy_font_request_context(
+                                font_family.as_deref(),
+                                &mut requested_context_bytes,
+                                &mut requested_context_entries,
+                            ),
                             language: effective_rpr.language.clone(),
                             language_east_asia: effective_rpr.language_east_asia.clone(),
                             language_bidi: effective_rpr.language_bidi.clone(),
@@ -9537,6 +9576,11 @@ fn layout_paragraph_with_source_and_table(
                                 multilingual_styles.insert(
                                     item_index,
                                     WordMultilingualStyle {
+                                        requested_family: fm.copy_font_request_context(
+                                            segment_font_family.as_deref(),
+                                            &mut requested_context_bytes,
+                                            &mut requested_context_entries,
+                                        ),
                                         language: segment_rpr.language.clone(),
                                         language_east_asia: segment_rpr.language_east_asia.clone(),
                                         language_bidi: segment_rpr.language_bidi.clone(),
@@ -9657,6 +9701,17 @@ fn layout_paragraph_with_source_and_table(
                         fm.resolve_font_for_text(Some(font.as_str()), bold, italic, &text)?;
                     let symbol_metrics = fm.metrics(symbol_font_id, font_size)?;
                     let shaped = fm.shape_text(symbol_font_id, &text, font_size)?;
+                    multilingual_styles.insert(
+                        inline_items.len(),
+                        WordMultilingualStyle {
+                            requested_family: fm.copy_font_request_context(
+                                Some(font),
+                                &mut requested_context_bytes,
+                                &mut requested_context_entries,
+                            ),
+                            ..Default::default()
+                        },
+                    );
                     inline_items.push(InlineItem::Text(TextSegment {
                         text,
                         direction: TextDirection::Auto,
@@ -9733,6 +9788,18 @@ fn layout_paragraph_with_source_and_table(
                 },
                 RunContent::CommentReference { .. } => {}
             }
+        }
+        for index in run_inline_start..inline_items.len() {
+            multilingual_styles
+                .entry(index)
+                .or_insert_with(|| WordMultilingualStyle {
+                    requested_family: fm.copy_font_request_context(
+                        font_family.as_deref(),
+                        &mut requested_context_bytes,
+                        &mut requested_context_entries,
+                    ),
+                    ..Default::default()
+                });
         }
     }
 
@@ -9892,6 +9959,20 @@ fn layout_paragraph_with_source_and_table(
             !line_params.wrap,
             uses_exact_word_baseline,
         )?;
+    } else {
+        for (index, item) in inline_items.iter().enumerate() {
+            let requested = multilingual_styles
+                .get(&index)
+                .and_then(|style| style.requested_family.as_deref());
+            match item {
+                InlineItem::Text(segment)
+                | InlineItem::Marker(segment)
+                | InlineItem::HyphenatedText { segment, .. } => {
+                    fm.record_font_contribution(segment.font_id, requested, &segment.text)?;
+                }
+                _ => {}
+            }
+        }
     }
     let mut lines = if uses_multilingual_layout {
         break_multilingual_into_lines(&inline_items, &line_params, fm, layout_direction)?
@@ -11659,7 +11740,7 @@ fn layout_header_footer_variant(
             sources,
         )?;
         diagnostics.extend(cached_diagnostics);
-        engine.font_manager.replay_layout_font_trace(&font_trace);
+        engine.font_manager.replay_font_trace_events(&font_trace)?;
         engine.header_footer_cache_hits += 1;
         return Ok(content);
     }
@@ -11681,7 +11762,7 @@ fn layout_header_footer_variant(
         width,
         geometry,
     );
-    let font_trace = engine.font_manager.finish_paragraph_font_trace();
+    let font_trace = engine.font_manager.finish_paragraph_font_events();
     let mut content = content_result?;
     engine.header_footer_cache_builds += 1;
     let cached_diagnostics = diagnostics[diagnostics_start..].to_vec();
@@ -12420,6 +12501,13 @@ fn push_east_asian_layout_text(
                 children,
             },
         });
+        fm.record_font_contribution(base.font_id, base.font_family, text)?;
+        if open_shaped.is_some() {
+            fm.record_font_contribution(base.font_id, base.font_family, open)?;
+        }
+        if close_shaped.is_some() {
+            fm.record_font_contribution(base.font_id, base.font_family, close)?;
+        }
         return Ok(true);
     }
 
@@ -12472,6 +12560,7 @@ fn push_east_asian_layout_text(
             children,
         },
     });
+    fm.record_font_contribution(base.font_id, base.font_family, text)?;
     Ok(true)
 }
 
@@ -12676,6 +12765,13 @@ fn push_emphasis_marked_text(
             x += advance;
         }
 
+        fm.record_font_contribution(base.font_id, base.font_family, chunk)?;
+        if characters
+            .iter()
+            .any(|character| !character.is_whitespace())
+        {
+            fm.record_font_contribution(mark_font, base.font_family, &mark_text)?;
+        }
         inline_items.push(InlineItem::Group {
             width: shaped.width,
             height: group_ascent + group_descent,
@@ -12759,6 +12855,7 @@ fn measure_annotation_line(
         let font_id = fm.resolve_font_for_text(family.as_deref(), bold, italic, &text)?;
         let shaped = fm.shape_text(font_id, &text, font_size)?;
         let metrics = fm.metrics(font_id, font_size)?;
+        fm.record_font_contribution(font_id, family.as_deref(), &text)?;
         if line.runs.is_empty() {
             line.primary_font_size = font_size;
         }
@@ -13206,7 +13303,22 @@ fn shape_word_multilingual_items(
     )?);
     let mut items = Vec::with_capacity(legacy_items.len());
     for (index, mut item) in legacy_items.into_iter().enumerate() {
+        let requested = styles
+            .get(&index)
+            .and_then(|style| style.requested_family.as_deref());
         let Some(segment) = multilingual_candidate(&item) else {
+            match &item {
+                InlineItem::Text(segment)
+                | InlineItem::Marker(segment)
+                | InlineItem::HyphenatedText { segment, .. } => {
+                    font_manager.record_font_contribution(
+                        segment.font_id,
+                        requested,
+                        &segment.text,
+                    )?;
+                }
+                _ => {}
+            }
             if exact_word_baseline {
                 match &mut item {
                     InlineItem::Text(segment)
@@ -13238,6 +13350,7 @@ fn shape_word_multilingual_items(
                 })?;
             let spacing = styles.get(&index).map_or(0.0, |style| style.spacing);
             let span = apply_word_multilingual_spacing(span, spacing, exact_word_baseline)?;
+            font_manager.record_font_contribution(span.base().font_id, requested, span.text())?;
             if let InlineItem::HyphenatedText { language, .. } = &item
                 && !needs_word_multilingual_layout(span.text())
             {
@@ -20618,7 +20731,7 @@ mod tests {
                 &paragraph,
                 &template.block,
                 &template.diagnostics,
-                template.font_trace.len(),
+                font_contribution_trace_bytes(&template.font_trace),
             );
             bounded.publish_paragraph_cache_entry(ParagraphCacheEntry {
                 fingerprint: paragraph_fingerprint(&paragraph),
@@ -21380,6 +21493,468 @@ mod tests {
             clear_sources(&mut Arc::make_mut(page).elements);
         }
         assert_eq!(format!("{ordinary:?}"), format!("{sourced:?}"));
+    }
+
+    #[test]
+    fn fx195_cache_trace_retains_distinct_requests_sharing_one_fallback() {
+        let capture = |requested: &str| {
+            let mut input = make_input_with_text("same contributing text");
+            let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[0] else {
+                panic!("expected paragraph");
+            };
+            paragraph.runs[0].properties = Some(rdocx_oxml::properties::CT_RPr {
+                font_ascii: Some(requested.to_owned()),
+                font_hansi: Some(requested.to_owned()),
+                ..Default::default()
+            });
+            let mut engine = Engine::new_deterministic().unwrap();
+            let cold = engine.layout(&input).unwrap();
+            let cold_trace = engine
+                .paragraph_cache
+                .front()
+                .expect("ordinary paragraph is cacheable")
+                .font_trace
+                .iter()
+                .filter_map(|event| match event {
+                    FontTraceEvent::Contribution(contribution) => Some(contribution.clone()),
+                    FontTraceEvent::Resolution(_) => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(!cold_trace.is_empty());
+            let warm = engine.layout(&input).unwrap();
+            let warm_trace = engine
+                .paragraph_cache
+                .front()
+                .unwrap()
+                .font_trace
+                .iter()
+                .filter_map(|event| match event {
+                    FontTraceEvent::Contribution(contribution) => Some(contribution.clone()),
+                    FontTraceEvent::Resolution(_) => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(warm_trace, cold_trace, "warm replay preserves exact events");
+            assert_layout_results_equal(&warm, &cold);
+            let faces = cold
+                .fonts
+                .iter()
+                .map(|font| {
+                    (
+                        font.id,
+                        font.family.clone(),
+                        font.face_index,
+                        font.data.to_vec(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            (faces, cold_trace)
+        };
+        let aptos = capture("Aptos");
+        let calibri = capture("Calibri");
+        let display = capture("Aptos Display");
+        assert_eq!(aptos.0, calibri.0, "same actual face and original bytes");
+        assert_eq!(aptos.0, display.0, "same actual face and original bytes");
+        assert_ne!(
+            aptos.1, calibri.1,
+            "actual face identity cannot replace original requests"
+        );
+        assert_ne!(
+            aptos.1, display.1,
+            "Aptos Display must not collapse into Aptos"
+        );
+    }
+
+    #[test]
+    fn fx195_cache_trace_shared_engine_preserves_cross_request_warm_identity() {
+        for order in [
+            ["Aptos", "Calibri", "Aptos Display"],
+            ["Aptos Display", "Calibri", "Aptos"],
+        ] {
+            // All requests remain active. Inactive request-specific FontIds are
+            // intentionally pruned by the established successful-layout policy.
+            let mut input = make_input_with_text("");
+            input.document.body.content.clear();
+            for requested in order {
+                let mut paragraph = CT_P::new();
+                paragraph.add_run("same contributing text");
+                paragraph.runs[0].properties = Some(rdocx_oxml::properties::CT_RPr {
+                    font_ascii: Some(requested.into()),
+                    font_hansi: Some(requested.into()),
+                    ..Default::default()
+                });
+                input.document.body.add_paragraph(paragraph);
+            }
+            let mut engine = Engine::new_deterministic().unwrap();
+            let capture = |engine: &Engine| {
+                order
+                    .iter()
+                    .enumerate()
+                    .map(|(index, requested)| {
+                        let BodyContent::Paragraph(paragraph) = &input.document.body.content[index]
+                        else {
+                            panic!("ordinary Latin paragraph");
+                        };
+                        let entries = engine
+                            .paragraph_cache
+                            .iter()
+                            .filter(|entry| entry.key.paragraph == *paragraph)
+                            .collect::<Vec<_>>();
+                        assert_eq!(
+                            entries.len(),
+                            1,
+                            "one actual cache entry per original request"
+                        );
+                        let events = entries[0].font_trace.clone();
+                        let contributions = events
+                            .iter()
+                            .filter_map(|event| match event {
+                                FontTraceEvent::Contribution(c) => Some(c.clone()),
+                                FontTraceEvent::Resolution(_) => None,
+                            })
+                            .collect::<Vec<_>>();
+                        assert!(
+                            !contributions.is_empty(),
+                            "request must actually contribute glyphs"
+                        );
+                        assert!(
+                            contributions
+                                .iter()
+                                .all(|c| c.requested_family.as_deref() == Some(*requested))
+                        );
+                        let actual_faces = contributions
+                            .iter()
+                            .map(|contribution| {
+                                let font =
+                                    engine.font_manager.font_data(contribution.font_id).unwrap();
+                                // Physical face equality does not require transient IDs
+                                // for distinct original request keys to be equal.
+                                (
+                                    font.family,
+                                    font.face_index,
+                                    font.data,
+                                    font.bold,
+                                    font.italic,
+                                    font.variations,
+                                    font.synthetic_bold,
+                                    font.synthetic_italic,
+                                )
+                            })
+                            .collect::<Vec<_>>();
+                        (events, contributions, actual_faces)
+                    })
+                    .collect::<Vec<_>>()
+            };
+            let cold = engine.layout(&input).unwrap();
+            assert_eq!(engine.paragraph_cache_counts(), (0, 3));
+            assert_eq!(engine.paragraph_cache.len(), 3);
+            assert!(engine.font_manager.every_loaded_font_is_current());
+            let cold_trace = capture(&engine);
+            assert_eq!(cold_trace.len(), 3);
+            for request in &cold_trace[1..] {
+                assert_eq!(
+                    cold_trace[0].2, request.2,
+                    "same actual fallback bytes, face, axes and synthesis"
+                );
+                assert_ne!(
+                    cold_trace[0].1, request.1,
+                    "original contribution requests must not collapse"
+                );
+            }
+            // Both revisits use the same manager/cache, with all three actual
+            // contributing requests, exact event carriers and full inventory.
+            for revisit in 1..=2 {
+                let before = engine.paragraph_cache_counts();
+                let warm = engine.layout(&input).unwrap();
+                assert_eq!(
+                    engine.paragraph_cache_counts(),
+                    (before.0 + 3, before.1),
+                    "all three requests must genuinely hit cache"
+                );
+                assert_eq!(engine.paragraph_cache_counts(), (revisit * 3, 3));
+                assert_eq!(engine.paragraph_cache.len(), 3);
+                assert!(engine.font_manager.every_loaded_font_is_current());
+                assert_layout_results_equal(&warm, &cold);
+                assert_eq!(
+                    capture(&engine),
+                    cold_trace,
+                    "exact ordered events, internal IDs and original request per paragraph"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fx195_cache_trace_multilingual_probe_is_not_a_contribution() {
+        let mut input = make_input_with_text("कार्यालय");
+        let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[0] else {
+            panic!("paragraph");
+        };
+        paragraph.runs[0].properties = Some(rdocx_oxml::properties::CT_RPr {
+            font_ascii: Some("Carlito".into()),
+            font_hansi: Some("Carlito".into()),
+            font_cs: Some("Carlito".into()),
+            ..Default::default()
+        });
+        let paragraph = match &input.document.body.content[0] {
+            BodyContent::Paragraph(paragraph) => paragraph,
+            _ => unreachable!(),
+        };
+        let mut fm = FontManager::new_deterministic().unwrap();
+        let primary = fm.resolve_font(Some("Carlito"), false, false).unwrap();
+        fm.begin_layout();
+        fm.begin_paragraph_font_trace();
+        let block = layout_paragraph(
+            paragraph,
+            468.0,
+            &input.styles,
+            &input,
+            &MediaRegistry::new(&input.images),
+            &mut fm,
+            &mut NumberingState::new(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        let events = fm.finish_paragraph_font_events().unwrap();
+        let contributions = events
+            .iter()
+            .filter_map(|event| match event {
+                FontTraceEvent::Contribution(contribution) => Some(contribution),
+                FontTraceEvent::Resolution(_) => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            !contributions.is_empty(),
+            "actual native final shaping happened"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|event| matches!(event, FontTraceEvent::Resolution(id) if *id == primary))
+        );
+        assert!(
+            contributions
+                .iter()
+                .all(|contribution| contribution.font_id != primary)
+        );
+        assert!(
+            contributions
+                .iter()
+                .all(|contribution| contribution.requested_family.as_deref() == Some("Carlito"))
+        );
+        let faces = |fm: &FontManager| {
+            fm.current_layout_fonts()
+                .iter()
+                .map(|id| {
+                    let font = fm.font_data(*id).unwrap();
+                    (
+                        font.id,
+                        font.family,
+                        font.face_index,
+                        font.data.to_vec(),
+                        font.variations,
+                        font.synthetic_bold,
+                        font.synthetic_italic,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let cold_faces = faces(&fm);
+        fm.begin_layout();
+        fm.begin_paragraph_font_trace();
+        fm.replay_font_trace_events(&events).unwrap();
+        assert_eq!(
+            faces(&fm),
+            cold_faces,
+            "ordered shared carrier replay retains exact FontData inventory"
+        );
+        assert_eq!(fm.finish_paragraph_font_events().unwrap(), events);
+        assert_eq!(
+            paragraph_cache_entry_bytes(
+                paragraph,
+                &block,
+                &[],
+                font_contribution_trace_bytes(&events)
+            ),
+            usize::MAX
+        );
+        let mut engine = Engine::new_deterministic().unwrap();
+        let cold = engine.layout(&input).unwrap();
+        let warm = engine.layout(&input).unwrap();
+        assert_layout_results_equal(&cold, &warm);
+        assert!(
+            engine.paragraph_cache.is_empty(),
+            "existing rich cache refusal remains selected"
+        );
+        assert_eq!(
+            engine.paragraph_cache_counts(),
+            (0, 2),
+            "recomputed output equality is not a cache-hit claim"
+        );
+    }
+
+    #[test]
+    fn fx195_cache_trace_owned_requests_cover_paragraph_table_and_headers() {
+        let mut input = cacheable_header_footer_input("body");
+        let request = |paragraph: &mut CT_P, family: &str| {
+            for run in &mut paragraph.runs {
+                run.properties = Some(rdocx_oxml::properties::CT_RPr {
+                    font_ascii: Some(family.into()),
+                    font_hansi: Some(family.into()),
+                    ..Default::default()
+                });
+            }
+        };
+        for content in &mut input.document.body.content {
+            if let BodyContent::Paragraph(paragraph) = content {
+                request(paragraph, "Body Requested");
+            }
+        }
+        for part in input.headers.values_mut() {
+            for paragraph in &mut part.paragraphs {
+                request(paragraph, "Header Requested");
+            }
+        }
+        for part in input.footers.values_mut() {
+            for paragraph in &mut part.paragraphs {
+                request(paragraph, "Footer Requested");
+            }
+        }
+        let mut paragraph = CT_P::new();
+        paragraph.add_run("cell");
+        request(&mut paragraph, "Cell Requested");
+        let mut cell = CT_Tc::new();
+        cell.content = vec![CellContent::Paragraph(paragraph)];
+        let mut row = CT_Row::new();
+        row.cells.push(cell);
+        let mut table = CT_Tbl::new();
+        table.rows.push(row);
+        input.document.body.content.push(BodyContent::Table(table));
+        let mut engine = Engine::new_deterministic().unwrap();
+        let cold = engine.layout(&input).unwrap();
+        let families = |events: &Vec<FontTraceEvent>| {
+            events
+                .iter()
+                .filter_map(|event| match event {
+                    FontTraceEvent::Contribution(contribution) => {
+                        contribution.requested_family.clone()
+                    }
+                    FontTraceEvent::Resolution(_) => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            engine
+                .paragraph_cache
+                .iter()
+                .any(|entry| families(&entry.font_trace).contains(&"Body Requested".into()))
+        );
+        assert!(
+            engine
+                .table_cache
+                .iter()
+                .any(|entry| families(&entry.font_trace).contains(&"Cell Requested".into()))
+        );
+        assert!(
+            engine
+                .header_footer_cache
+                .iter()
+                .any(|entry| families(&entry.font_trace).contains(&"Header Requested".into()))
+        );
+        assert!(
+            engine
+                .header_footer_cache
+                .iter()
+                .any(|entry| families(&entry.font_trace).contains(&"Footer Requested".into()))
+        );
+        let warm = engine.layout(&input).unwrap();
+        assert_layout_results_equal(&cold, &warm);
+        assert!(engine.paragraph_cache_hits > 0);
+        assert!(engine.table_cache_hits > 0);
+        assert!(engine.header_footer_cache_hits > 0);
+    }
+
+    #[test]
+    fn fx195_cache_trace_footprint_counts_full_owned_capacities() {
+        let mut family = String::with_capacity(4_096);
+        family.push('A');
+        let mut events = Vec::with_capacity(8);
+        events.push(FontTraceEvent::Contribution(
+            oxml_layout::FontContribution {
+                font_id: FontId(0),
+                requested_family: Some(family),
+            },
+        ));
+        assert_eq!(
+            font_contribution_trace_bytes(&events),
+            events.capacity() * std::mem::size_of::<FontTraceEvent>() + 4_096
+        );
+        let input = make_input_with_text("x");
+        let mut engine = Engine::new_deterministic().unwrap();
+        engine.layout(&input).unwrap();
+        let block = engine.paragraph_cache.front().unwrap().block.as_ref();
+        let BodyContent::Paragraph(paragraph) = &input.document.body.content[0] else {
+            unreachable!()
+        };
+        let baseline = paragraph_cache_entry_bytes(paragraph, block, &[], 0);
+        assert_eq!(
+            paragraph_cache_entry_bytes(
+                paragraph,
+                block,
+                &[],
+                font_contribution_trace_bytes(&events)
+            ),
+            baseline.saturating_add(font_contribution_trace_bytes(&events))
+        );
+        drop(events);
+    }
+
+    #[test]
+    fn fx195_cache_trace_final_symbol_marker_field_and_ruby_requests() {
+        let mut input = make_input_with_text("");
+        input.document = CT_Document::from_xml(br#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Body Requested" w:hAnsi="Body Requested"/></w:rPr><w:t>item</w:t></w:r><w:r><w:sym w:font="Symbol Requested" w:char="0041"/></w:r><w:fldSimple w:instr="FOO"><w:r><w:rPr><w:rFonts w:ascii="Field Requested" w:hAnsi="Field Requested"/></w:rPr><w:t>field</w:t></w:r></w:fldSimple><w:ruby><w:rubyPr/><w:rt><w:r><w:rPr><w:rFonts w:ascii="Ruby Requested" w:hAnsi="Ruby Requested"/></w:rPr><w:t>ruby</w:t></w:r></w:rt><w:rubyBase><w:r><w:rPr><w:rFonts w:ascii="Base Requested" w:hAnsi="Base Requested"/></w:rPr><w:t>base</w:t></w:r></w:rubyBase></w:ruby></w:p></w:body></w:document>"#).unwrap();
+        input.numbering = Some(rdocx_oxml::numbering::CT_Numbering::from_xml(br#"<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:rPr><w:rFonts w:ascii="Marker Requested" w:hAnsi="Marker Requested"/></w:rPr></w:lvl></w:abstractNum><w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num></w:numbering>"#).unwrap());
+        let BodyContent::Paragraph(paragraph) = &input.document.body.content[0] else {
+            unreachable!()
+        };
+        assert_eq!(paragraph.rubies.len(), 1, "genuine typed ruby owner");
+        assert!(
+            paragraph
+                .runs
+                .iter()
+                .flat_map(|run| &run.content)
+                .any(|content| matches!(content, RunContent::Symbol { .. }))
+        );
+        let mut fm = FontManager::new_deterministic().unwrap();
+        fm.begin_layout();
+        fm.begin_paragraph_font_trace();
+        let block = layout_paragraph(
+            paragraph,
+            468.0,
+            &input.styles,
+            &input,
+            &MediaRegistry::new(&input.images),
+            &mut fm,
+            &mut NumberingState::new(),
+            &mut Vec::new(),
+        )
+        .unwrap();
+        assert!(!block.lines.is_empty(), "actual native final layout");
+        let contributions = fm.finish_paragraph_font_contributions().unwrap();
+        for expected in [
+            "Body Requested",
+            "Marker Requested",
+            "Symbol Requested",
+            "Field Requested",
+            "Base Requested",
+            "Ruby Requested",
+        ] {
+            assert!(
+                contributions
+                    .iter()
+                    .any(|record| record.requested_family.as_deref() == Some(expected)),
+                "missing final contribution for {expected}"
+            );
+        }
     }
 
     #[test]

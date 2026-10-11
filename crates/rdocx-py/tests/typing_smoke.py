@@ -389,3 +389,17 @@ def colour_formats() -> None:
     font.color.rgb = RGBColor(1, 2, 3)
     font.color.rgb = None
     font.color.theme_color = MSO_THEME_COLOR.ACCENT_1
+
+
+def fx195_caller_font_render_signatures(document: Document, directory: Path) -> None:
+    from rdocx import SvgRenderResult
+    fonts: list[tuple[str, bytes]] = [("caller", b"font")]
+    dirs: list[str | Path] = [directory, str(directory)]
+    assert_type(document.to_pdf(fonts=fonts, font_dirs=dirs), bytes)
+    assert_type(document.render_page_to_png(0, fonts=fonts, font_dirs=dirs), bytes | None)
+    assert_type(document.render_page_to_svg(0, fonts=fonts, font_dirs=dirs), SvgRenderResult | None)
+    assert_type(document.render_all_pages(fonts=fonts, font_dirs=dirs), list[bytes])
+    assert_type(document.render_pages(pages=None, fonts=fonts, font_dirs=dirs), list[bytes] | bytes)
+    assert_type(document.layout(fonts=fonts, font_dirs=dirs), tuple[LayoutFragment, ...])
+    assert_type(document.layout_page(0, fonts=fonts, font_dirs=dirs), LayoutPage | None)
+    assert_type(document.to_pdf(font_dir=directory), bytes)

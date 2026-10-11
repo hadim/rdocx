@@ -38,6 +38,7 @@ rdocx-oxml = { workspace = true }
 rdocx-layout = { workspace = true, default-features = false }
 rdocx-html = { workspace = true }
 thiserror = { workspace = true }
+ttf-parser = { workspace = true }
 regex = { workspace = true }
 serde_json = { workspace = true }
 scraper = { workspace = true }
