@@ -488,7 +488,10 @@ use the native staged slide operations and advance the revision once.
 import. `layout` must be a layout of the destination. `index` is an insertion
 position counted from the end when negative, and one outside the collection is
 an `IndexError`. A slide of the same presentation is imported from a snapshot
-and keeps its own layout unless `layout` is given.
+and keeps its own layout unless `layout` is given. Each slide of the
+presentation maps to itself, so such a copy keeps its slide jumps. Every
+`SlideImportDiagnostic` of the native import, such as a dropped slide jump,
+raises a `UserWarning` after the import is committed.
 `SlideCollection.duplicate(slide)` copies a slide of the same presentation,
 with its speaker notes, to the position right after it through the native
 staged `duplicate_slide`, advances the revision once, and returns the new slide

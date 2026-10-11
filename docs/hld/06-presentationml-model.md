@@ -300,21 +300,40 @@ the normal `MediaStore`. Notes are copied to a new part whose slide
 relationship points back to the duplicate. Custom-show membership is not
 copied.
 
-`import_slide(source, index, layout_index, insert_index)` copies one slide of
-another presentation through the same staged graph copy, like PowerPoint's
-reuse with the destination theme. The copy relates to the given destination
-layout, or else to the first destination layout named like the source slide's
-layout, and an unnamed or unmatched layout is refused. Notes relate to the
-destination notes master, which the bundled template supplies when the
-destination has none. Images, audio and video reuse equal destination media
-parts, SmartArt graphs are copied as by the bounded transfer, and external
-relationships such as hyperlinks keep their targets. A preflight refuses
-comments, charts, embedded objects, jumps to another source slide from the
-slide or its notes, and every other internal relationship type before anything
-is staged, so a refused import leaves the destination unchanged. Actions that
-name no relationship, such as `ppaction://customshow`, are carried unchanged
-and may name a custom show the destination lacks. A caller can rebuild a
-refused slide in the destination deck using supported shape operations.
+`import_slides(source, indexes, options)` copies slides of another
+presentation through the same staged graph copy, like PowerPoint's reuse with
+the destination theme, to consecutive positions from `options.insert_index`.
+`import_slide(source, index, layout_index, insert_index)` imports one slide
+and drops the diagnostics. Each copy relates to the given destination layout,
+or else to the first destination layout named like its source slide's layout,
+and an unnamed or unmatched layout is refused. Notes relate to the destination
+notes master, which the bundled template supplies when the destination has
+none. Images, audio and video reuse equal destination media parts, SmartArt
+graphs are copied as by the bounded transfer, and external relationships such
+as hyperlinks keep their targets.
+
+Charts, embedded objects and legacy drawings are copied part by part under
+fresh names, with their relationship ids kept so the copied bytes need no
+rewrite. A chart may bring its embedded workbook or object, style, colour,
+user-shape and theme-override parts, and every copied part may relate to
+images, which go through the media store. Modern comments are rewritten from
+the comment model into a new part. A source author equal to a destination
+author in name, initials, user id and provider id becomes that author, and
+any other source author joins the destination list. Comment, reply and author
+ids the destination already uses take fresh sequential ids, and anchors name
+the new slide id and the renumbered shape ids.
+
+A jump to a slide, from the slide or its notes, is kept when its target is
+copied by the same call or is listed in `options.mapped_slides` with its
+destination counterpart. Any other jump is released as when its target slide
+is removed, a `ppaction://noaction` with an empty relationship id, and comes
+back as a `SlideImportDiagnostic`. A preflight refuses legacy comments,
+controls and every other internal relationship type, on the slide, its notes
+or a copied part, before anything is staged, and names the relationship type,
+so a refused import leaves the destination unchanged. Actions that name no
+relationship, such as `ppaction://customshow`, are carried unchanged and may
+name a custom show the destination lacks. A caller can rebuild a refused slide
+in the destination deck using supported shape operations.
 
 Duplication, transfer and import rewrite each copied notes or diagram part
 with one exact pass over its complete relationship map, including the

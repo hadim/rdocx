@@ -3702,10 +3702,6 @@ def test_import_slide_carries_pictures_links_notes_and_background_from_another_d
 
     source = rpptx.Presentation(_python_pptx_deck(tmp_path / "source.pptx", build_source))
     prs = rpptx.Presentation(_python_pptx_deck(tmp_path / "target.pptx", build_target))
-    before = prs.to_bytes()
-    with pytest.raises(rpptx.RpptxError, match="has a chart, which is not carried"):
-        prs.slides.import_slide(source.slides[1])
-    assert prs.to_bytes() == before
     with pytest.raises(ValueError, match="layout is not a layout of this presentation"):
         prs.slides.import_slide(source.slides[0], layout=source.slide_layouts[1])
     with pytest.raises(IndexError):
@@ -3744,6 +3740,42 @@ def test_import_slide_carries_pictures_links_notes_and_background_from_another_d
     blip = slide._element.cSld.bg.xpath(".//a:blip")[0]
     embed = blip.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed")
     assert slide.part.related_part(embed).blob == blue
+
+    charts = rpptx.Presentation(_python_pptx_deck(tmp_path / "charts.pptx", build_target))
+    charts.slides.import_slide(source.slides[1])
+    charts.save(tmp_path / "charts-imported.pptx")
+    chart = next(
+        shape.chart
+        for shape in pptx.Presentation(tmp_path / "charts-imported.pptx").slides[1].shapes
+        if shape.has_chart
+    )
+    assert list(chart.plots[0].categories) == ["a", "b"]
+    assert chart.part.chart_workbook.xlsx_part is not None
+
+
+def test_import_slide_warns_when_it_drops_a_slide_jump(tmp_path):
+    import warnings
+
+    import rpptx
+
+    def build_source(deck):
+        from pptx.util import Inches
+
+        first = deck.slides.add_slide(deck.slide_layouts[6])
+        second = deck.slides.add_slide(deck.slide_layouts[6])
+        box = first.shapes.add_textbox(Inches(1), Inches(1), Inches(3), Inches(1))
+        box.text_frame.text = "Next"
+        box.click_action.target_slide = second
+
+    source = rpptx.Presentation(_python_pptx_deck(tmp_path / "jump.pptx", build_source))
+    prs = rpptx.Presentation(_python_pptx_deck(tmp_path / "target.pptx", lambda deck: None))
+    with pytest.warns(UserWarning, match="now does nothing"):
+        copy = prs.slides.import_slide(source.slides[0])
+    assert copy.shapes[0].click_action.target_slide is None
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        again = source.slides.import_slide(source.slides[0])
+    assert again.shapes[0].click_action.target_slide == source.slides[1]
 
 
 

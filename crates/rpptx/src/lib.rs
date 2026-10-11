@@ -109,6 +109,7 @@ use rpptx_oxml::relmap::{
 };
 use rpptx_oxml::shape_tree::{
     CT_GroupShape, CT_Shape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild, rewrite_shape_ids,
+    rewrite_shape_ids_mapped,
 };
 #[cfg(feature = "render")]
 use rpptx_oxml::slide_parts::CT_CommonSlideData;
@@ -223,6 +224,18 @@ pub struct TextFrameLayout {
 const DEFAULT_POWERPOINT_AUTHORS_PART: &str = "/ppt/authors.xml";
 const DEFAULT_POWERPOINT_COMMENTS_PART: &str = "/ppt/comments/comment1.xml";
 const MAX_SMARTART_TRANSFER_DIAGRAM_PARTS: usize = 128;
+const CHART_EX_RELATIONSHIP: &str =
+    "http://schemas.microsoft.com/office/2014/relationships/chartEx";
+const CHART_STYLE_RELATIONSHIP: &str =
+    "http://schemas.microsoft.com/office/2011/relationships/chartStyle";
+const CHART_COLOR_STYLE_RELATIONSHIP: &str =
+    "http://schemas.microsoft.com/office/2011/relationships/chartColorStyle";
+const CHART_USER_SHAPES_RELATIONSHIP: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chartUserShapes";
+const THEME_OVERRIDE_RELATIONSHIP: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/themeOverride";
+const VML_DRAWING_RELATIONSHIP: &str =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/vmlDrawing";
 
 /// A result returned by the `rpptx` read facade.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -337,6 +350,58 @@ pub struct PictureImage<'a> {
     pub part_name: String,
     pub content_type: String,
     pub bytes: &'a [u8],
+}
+
+/// Options of [`Presentation::import_slides`].
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SlideImportOptions {
+    /// The destination layout of every copy. `None` takes, for each slide,
+    /// the first layout of this presentation named like the source slide's
+    /// layout.
+    pub layout_index: Option<usize>,
+    /// The destination index of the first copy. `None` appends.
+    pub insert_index: Option<usize>,
+    /// Source slides that already have a counterpart in this presentation,
+    /// as `(source index, destination index)` pairs. A jump to one of them
+    /// is kept and lands on its counterpart.
+    pub mapped_slides: Vec<(usize, usize)>,
+}
+
+/// A non-fatal change made while importing slides.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SlideImportDiagnostic {
+    /// A hyperlink of the source part `part` jumped to the source slide part
+    /// `target`, which the import does not map to a slide of this
+    /// presentation. The copied hyperlink does nothing.
+    DroppedSlideJump {
+        source_index: usize,
+        part: String,
+        target: String,
+    },
+}
+
+impl std::fmt::Display for SlideImportDiagnostic {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DroppedSlideJump {
+                source_index,
+                part,
+                target,
+            } => write!(
+                formatter,
+                "source slide {source_index}: a hyperlink of {part} jumps to {target}, which is not imported, so it now does nothing"
+            ),
+        }
+    }
+}
+
+/// The outcome of [`Presentation::import_slides`].
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SlideImport {
+    /// The destination index of each copy, in the order of the source
+    /// indexes.
+    pub indexes: Vec<usize>,
+    pub diagnostics: Vec<SlideImportDiagnostic>,
 }
 
 /// An error opening, resolving, or serialising a presentation package.
@@ -2160,6 +2225,24 @@ impl Presentation {
         &self.comment_authors.authors
     }
 
+    /// Relates the default authors part to the presentation when it has none.
+    fn ensure_comment_authors_part(&mut self) -> Result<()> {
+        if self.comment_authors_part.is_some() {
+            return Ok(());
+        }
+        if self.package.contains_part(DEFAULT_POWERPOINT_AUTHORS_PART) {
+            return Err(Error::CollaborationPartCollision {
+                part_name: DEFAULT_POWERPOINT_AUTHORS_PART.to_owned(),
+            });
+        }
+        self.comment_authors_part = Some(DEFAULT_POWERPOINT_AUTHORS_PART.to_owned());
+        let target = relative_part_target(&self.presentation_part, DEFAULT_POWERPOINT_AUTHORS_PART);
+        self.package
+            .get_or_create_part_rels(&self.presentation_part)
+            .add(rel_types::POWERPOINT_AUTHORS, &target);
+        Ok(())
+    }
+
     /// Adds a caller-identified modern comment author atomically.
     pub fn add_comment_author(&mut self, author: CommentAuthor) -> Result<()> {
         if self
@@ -2174,23 +2257,7 @@ impl Presentation {
             ));
         }
         let mut staged = self.clone();
-        if staged.comment_authors_part.is_none() {
-            if staged
-                .package
-                .contains_part(DEFAULT_POWERPOINT_AUTHORS_PART)
-            {
-                return Err(Error::CollaborationPartCollision {
-                    part_name: DEFAULT_POWERPOINT_AUTHORS_PART.to_owned(),
-                });
-            }
-            staged.comment_authors_part = Some(DEFAULT_POWERPOINT_AUTHORS_PART.to_owned());
-            let target =
-                relative_part_target(&staged.presentation_part, DEFAULT_POWERPOINT_AUTHORS_PART);
-            staged
-                .package
-                .get_or_create_part_rels(&staged.presentation_part)
-                .add(rel_types::POWERPOINT_AUTHORS, &target);
-        }
+        staged.ensure_comment_authors_part()?;
         staged.comment_authors.authors.push(author);
         staged.comment_authors_dirty = true;
         self.commit_candidate(staged)
@@ -2846,6 +2913,7 @@ impl Presentation {
             inserted,
             "transfer SmartArt slide",
             Some(&destination_layout),
+            None,
         )?;
         self.commit_candidate(staged)?;
         self.slides
@@ -2859,21 +2927,10 @@ impl Presentation {
 
     /// Imports one slide of another presentation, using this presentation's theme.
     ///
-    /// The copy takes the layout at `layout_index` when one is given, and
-    /// otherwise the first layout of this presentation named like the source
-    /// slide's layout. It is inserted at `insert_index`, or appended when that
-    /// is `None`. Shapes, placeholders, the slide background, speaker notes and
-    /// SmartArt graphs are copied, and every relationship attribute is rebound
-    /// to the new relationship scope. Pictures, audio and video reuse equal
-    /// media parts of this presentation. External relationships such as
-    /// hyperlinks keep their targets. A slide with comments, a chart, an
-    /// embedded object, a jump to another slide, or any other internal
-    /// relationship type is rejected without mutation. A notes jump to another
-    /// slide is rejected too. Jumps that name no relationship, such as a
-    /// `ppaction://customshow` action, are carried unchanged and may name a
-    /// custom show this presentation lacks. The name match takes the first
-    /// layout of that name, so a copy inside one multi-master deck should pass
-    /// the source slide's own layout index.
+    /// This is [`Presentation::import_slides`] for one slide, with the layout
+    /// at `layout_index` and the insertion index `insert_index`. It returns
+    /// the copy and drops the diagnostics, so a caller that needs to know
+    /// which slide jumps were dropped calls `import_slides`.
     pub fn import_slide(
         &mut self,
         source: &Presentation,
@@ -2881,69 +2938,186 @@ impl Presentation {
         layout_index: Option<usize>,
         insert_index: Option<usize>,
     ) -> Result<SlideRef<'_>> {
-        const OPERATION: &str = "import slide";
-        let record = source.slides.get(index).ok_or(Error::UnknownSlideIndex {
-            index,
-            slide_count: source.slides.len(),
-        })?;
-        let inserted = insert_index.unwrap_or(self.slides.len());
-        if inserted > self.slides.len() {
-            return Err(Error::UnknownSlideIndex {
-                index: inserted,
-                slide_count: self.slides.len(),
-            });
-        }
-        let layout_index = match layout_index {
-            Some(layout_index) if layout_index >= self.layouts.len() => {
-                return Err(Error::UnknownLayoutIndex {
-                    index: layout_index,
-                    layout_count: self.layouts.len(),
-                });
-            }
-            Some(layout_index) => layout_index,
-            None => {
-                let name = source
-                    .slide_layout_index(index)
-                    .and_then(|layout| source.layout_name(layout))
-                    .ok_or_else(|| {
-                        invalid_presentation_mutation(
-                            OPERATION,
-                            "the source slide's layout has no name, pass the destination layout"
-                                .to_owned(),
-                        )
-                    })?;
-                (0..self.layouts.len())
-                    .find(|&layout| self.layout_name(layout) == Some(name))
-                    .ok_or_else(|| {
-                        invalid_presentation_mutation(
-                            OPERATION,
-                            format!(
-                                "this presentation has no layout named {name:?}, pass the destination layout"
-                            ),
-                        )
-                    })?
-            }
-        };
-        let layout_part = self.layouts[layout_index].part_name.clone();
-        preflight_slide_import(&source.package, record)?;
-        let mut staged = self.clone();
-        if record.notes.is_some() && staged.notes_master.is_none() {
-            staged.add_default_notes_master_in_place()?;
-        }
-        staged.copy_slide_from_in_place(
-            &source.package,
-            record.clone(),
-            inserted,
-            OPERATION,
-            Some(&layout_part),
+        let import = self.import_slides(
+            source,
+            &[index],
+            &SlideImportOptions {
+                layout_index,
+                insert_index,
+                ..SlideImportOptions::default()
+            },
         )?;
-        self.commit_candidate(staged)?;
+        let inserted = import.indexes[0];
         self.slides
             .get(inserted)
             .map(slide_ref)
             .ok_or(Error::UnknownSlideIndex {
                 index: inserted,
                 slide_count: self.slides.len(),
+            })
+    }
+
+    /// Imports slides of another presentation, using this presentation's theme.
+    ///
+    /// The slides at `indexes` are copied in that order to consecutive
+    /// positions starting at `options.insert_index`, or appended when that is
+    /// `None`. Every copy takes the layout at `options.layout_index` when one
+    /// is given, and otherwise the first layout of this presentation named
+    /// like its source slide's layout. The name match takes the first layout
+    /// of that name, so a copy inside one multi-master deck should pass the
+    /// source slide's own layout index.
+    ///
+    /// Shapes, placeholders, the slide background, speaker notes, SmartArt
+    /// graphs, charts with their embedded workbook, style, colour, user-shape
+    /// and theme-override parts, embedded objects with their preview image and
+    /// legacy drawing, and modern comments are copied, and every relationship
+    /// attribute is rebound to the new relationship scope. Pictures, audio and
+    /// video reuse equal media parts of this presentation. External
+    /// relationships such as hyperlinks keep their targets.
+    ///
+    /// Comment authors join this presentation's author list. A source author
+    /// equal to one of this presentation's authors in name, initials, user id
+    /// and provider id is replaced by it. Comment, reply and author ids that
+    /// this presentation already uses are replaced by fresh sequential ids,
+    /// and comment anchors follow the copied slide and its renumbered shapes.
+    ///
+    /// A jump to a slide, from the slide or its notes, is kept when its target
+    /// is copied by this call, where the first copy of a repeated index wins,
+    /// or is listed in `options.mapped_slides`. Any other jump is turned into
+    /// a hyperlink that does nothing, and is reported as a diagnostic. Jumps
+    /// that name no relationship, such as a `ppaction://customshow` action,
+    /// are carried unchanged and may name a custom show this presentation
+    /// lacks.
+    ///
+    /// Legacy comments, controls and any other internal relationship type,
+    /// on the slide, its notes or a copied part, are rejected without
+    /// mutation, and the error names the relationship type.
+    pub fn import_slides(
+        &mut self,
+        source: &Presentation,
+        indexes: &[usize],
+        options: &SlideImportOptions,
+    ) -> Result<SlideImport> {
+        const OPERATION: &str = "import slide";
+        let inserted = options.insert_index.unwrap_or(self.slides.len());
+        if inserted > self.slides.len() {
+            return Err(Error::UnknownSlideIndex {
+                index: inserted,
+                slide_count: self.slides.len(),
+            });
+        }
+        if let Some(layout_index) = options.layout_index
+            && layout_index >= self.layouts.len()
+        {
+            return Err(Error::UnknownLayoutIndex {
+                index: layout_index,
+                layout_count: self.layouts.len(),
+            });
+        }
+        let mut jump_targets = HashMap::new();
+        for &(source_index, destination_index) in &options.mapped_slides {
+            let source_record =
+                source
+                    .slides
+                    .get(source_index)
+                    .ok_or(Error::UnknownSlideIndex {
+                        index: source_index,
+                        slide_count: source.slides.len(),
+                    })?;
+            let destination_record =
+                self.slides
+                    .get(destination_index)
+                    .ok_or(Error::UnknownSlideIndex {
+                        index: destination_index,
+                        slide_count: self.slides.len(),
+                    })?;
+            jump_targets.insert(
+                source_record.part_name.clone(),
+                destination_record.part_name.clone(),
+            );
+        }
+        let mut slide_namer = MediaNamer::scan(
+            "/ppt/slides",
+            "slide",
+            self.package.parts.keys().map(String::as_str),
+        );
+        let mut copies = Vec::with_capacity(indexes.len());
+        let mut copied_targets = HashMap::new();
+        for &index in indexes {
+            let record = source.slides.get(index).ok_or(Error::UnknownSlideIndex {
+                index,
+                slide_count: source.slides.len(),
+            })?;
+            let layout_index = match options.layout_index {
+                Some(layout_index) => layout_index,
+                None => self.import_layout_index(source, index)?,
+            };
+            preflight_slide_import(&source.package, record)?;
+            let slide_part = slide_namer.next_part_name("xml");
+            copied_targets
+                .entry(record.part_name.clone())
+                .or_insert_with(|| slide_part.clone());
+            copies.push((index, layout_index, slide_part));
+        }
+        if copies.is_empty() {
+            return Ok(SlideImport::default());
+        }
+        jump_targets.extend(copied_targets);
+
+        let mut staged = self.clone();
+        if copies
+            .iter()
+            .any(|(index, _, _)| source.slides[*index].notes.is_some())
+            && staged.notes_master.is_none()
+        {
+            staged.add_default_notes_master_in_place()?;
+        }
+        let mut diagnostics = Vec::new();
+        for (offset, (index, layout_index, slide_part)) in copies.iter().enumerate() {
+            let layout_part = staged.layouts[*layout_index].part_name.clone();
+            staged.copy_slide_from_in_place(
+                &source.package,
+                source.slides[*index].clone(),
+                inserted + offset,
+                OPERATION,
+                Some(&layout_part),
+                Some(SlideImportContext {
+                    source,
+                    source_index: *index,
+                    slide_part,
+                    jump_targets: &jump_targets,
+                    diagnostics: &mut diagnostics,
+                }),
+            )?;
+        }
+        self.commit_candidate(staged)?;
+        Ok(SlideImport {
+            indexes: (inserted..inserted + copies.len()).collect(),
+            diagnostics,
+        })
+    }
+
+    /// Returns the first layout named like the layout of `source` slide `index`.
+    fn import_layout_index(&self, source: &Presentation, index: usize) -> Result<usize> {
+        const OPERATION: &str = "import slide";
+        let name = source
+            .slide_layout_index(index)
+            .and_then(|layout| source.layout_name(layout))
+            .ok_or_else(|| {
+                invalid_presentation_mutation(
+                    OPERATION,
+                    "the source slide's layout has no name, pass the destination layout".to_owned(),
+                )
+            })?;
+        (0..self.layouts.len())
+            .find(|&layout| self.layout_name(layout) == Some(name))
+            .ok_or_else(|| {
+                invalid_presentation_mutation(
+                    OPERATION,
+                    format!(
+                        "this presentation has no layout named {name:?}, pass the destination layout"
+                    ),
+                )
             })
     }
 
@@ -3058,9 +3232,22 @@ impl Presentation {
     fn duplicate_slide_in_place(&mut self, index: usize) -> Result<usize> {
         let source_package = self.package.clone();
         let source = self.slides[index].clone();
-        self.copy_slide_from_in_place(&source_package, source, index + 1, "duplicate slide", None)
+        self.copy_slide_from_in_place(
+            &source_package,
+            source,
+            index + 1,
+            "duplicate slide",
+            None,
+            None,
+        )
     }
 
+    /// Copies one slide record, with its notes, into this presentation.
+    ///
+    /// `import` is `None` for a copy whose relationship targets already live
+    /// in this package or are bounded by the caller's preflight. An import
+    /// also copies charts, embedded objects and comments, and maps or drops
+    /// slide jumps.
     fn copy_slide_from_in_place(
         &mut self,
         source_package: &OpcPackage,
@@ -3068,20 +3255,24 @@ impl Presentation {
         inserted: usize,
         operation: &'static str,
         layout_target: Option<&str>,
+        mut import: Option<SlideImportContext<'_>>,
     ) -> Result<usize> {
-        if source.comments.is_some() {
+        if source.comments.is_some() && import.is_none() {
             return Err(Error::InvalidPresentationMutation {
                 operation,
                 message: "slides with modern comments require caller-supplied fresh comment ids"
                     .to_owned(),
             });
         }
-        let slide_part = MediaNamer::scan(
-            "/ppt/slides",
-            "slide",
-            self.package.parts.keys().map(String::as_str),
-        )
-        .next_part_name("xml");
+        let slide_part = match &import {
+            Some(import) => import.slide_part.to_owned(),
+            None => MediaNamer::scan(
+                "/ppt/slides",
+                "slide",
+                self.package.parts.keys().map(String::as_str),
+            )
+            .next_part_name("xml"),
+        };
         let id = self
             .presentation
             .slide_ids
@@ -3092,6 +3283,7 @@ impl Presentation {
             .max(255)
             .checked_add(1)
             .ok_or(Error::SlideIdExhausted)?;
+        let slide_map = import.as_ref().map(|import| import.jump_targets);
 
         let notes_part = source.notes.as_ref().map(|_| {
             MediaNamer::scan(
@@ -3102,10 +3294,26 @@ impl Presentation {
             .next_part_name("xml")
         });
         let notes = if let (Some(source_notes), Some(notes_part)) = (&source.notes, &notes_part) {
+            let xml = source_notes
+                .notes
+                .to_xml()
+                .map_err(|error| Error::MalformedPart {
+                    part_name: source_notes.part_name.clone(),
+                    message: error.to_string(),
+                })?;
             let source_relationships = source_package
                 .get_part_rels(&source_notes.part_name)
                 .cloned()
                 .unwrap_or_default();
+            let (xml, source_relationships) = match import.as_mut() {
+                Some(import) => import.release_unmapped_jumps(
+                    &source_notes.part_name,
+                    Some(&source.part_name),
+                    xml,
+                    source_relationships,
+                )?,
+                None => (xml, source_relationships),
+            };
             let (mut relationships, mut relationship_map) = duplicate_relationship_scope(
                 source_package,
                 &mut self.package,
@@ -3115,32 +3323,36 @@ impl Presentation {
                 &source_relationships,
                 RelationshipScopeTargets {
                     slide: Some(&slide_part),
+                    slide_map,
                     notes: None,
+                    comments: None,
                     layout: None,
                     notes_master: self.notes_master_part.as_deref(),
+                    copy_part_graphs: false,
                 },
             )?;
-            relationships
-                .items
-                .retain(|relationship| relationship.rel_type != rel_types::SLIDE);
-            let back_relationship_id = relationships.add(
-                rel_types::SLIDE,
-                &relative_part_target(notes_part, &slide_part),
-            );
-            for relationship in source_relationships
+            // The relationships back to the copied slide, and any external
+            // one, collapse into one internal back relationship.
+            let back_target = relative_part_target(notes_part, &slide_part);
+            let back_ids = relationships
                 .items
                 .iter()
-                .filter(|relationship| relationship.rel_type == rel_types::SLIDE)
-            {
-                relationship_map.insert(relationship.id.clone(), back_relationship_id.clone());
+                .filter(|relationship| {
+                    relationship.rel_type == rel_types::SLIDE
+                        && (relationship.target == back_target
+                            || relationship_is_external(relationship))
+                })
+                .map(|relationship| relationship.id.clone())
+                .collect::<HashSet<_>>();
+            relationships
+                .items
+                .retain(|relationship| !back_ids.contains(&relationship.id));
+            let back_relationship_id = relationships.add(rel_types::SLIDE, &back_target);
+            for mapped in relationship_map.values_mut() {
+                if back_ids.contains(mapped) {
+                    mapped.clone_from(&back_relationship_id);
+                }
             }
-            let xml = source_notes
-                .notes
-                .to_xml()
-                .map_err(|error| Error::MalformedPart {
-                    part_name: source_notes.part_name.clone(),
-                    message: error.to_string(),
-                })?;
             // One exact pass over the complete map: a second pass would
             // re-map ids the first one had just produced.
             let xml = rewrite_exact_rel_ids(&xml, &relationship_map).map_err(|error| {
@@ -3172,10 +3384,38 @@ impl Presentation {
             None
         };
 
+        let comments_part = source
+            .comments
+            .as_ref()
+            .filter(|_| import.is_some())
+            .map(|_| {
+                MediaNamer::scan(
+                    "/ppt/comments",
+                    "comment",
+                    self.package.parts.keys().map(String::as_str),
+                )
+                .next_part_name("xml")
+            });
+        let slide_xml = source
+            .slide
+            .to_xml()
+            .map_err(|error| Error::MalformedPart {
+                part_name: source.part_name.clone(),
+                message: error.to_string(),
+            })?;
         let source_relationships = source_package
             .get_part_rels(&source.part_name)
             .cloned()
             .unwrap_or_default();
+        let (slide_xml, source_relationships) = match import.as_mut() {
+            Some(import) => import.release_unmapped_jumps(
+                &source.part_name,
+                None,
+                slide_xml,
+                source_relationships,
+            )?,
+            None => (slide_xml, source_relationships),
+        };
         let (slide_relationships, relationship_map) = duplicate_relationship_scope(
             source_package,
             &mut self.package,
@@ -3185,32 +3425,56 @@ impl Presentation {
             &source_relationships,
             RelationshipScopeTargets {
                 slide: None,
+                slide_map,
                 notes: notes_part.as_deref(),
+                comments: comments_part.as_deref(),
                 layout: layout_target,
                 notes_master: None,
+                copy_part_graphs: import.is_some(),
             },
         )?;
-        let slide_xml = source
-            .slide
-            .to_xml()
-            .map_err(|error| Error::MalformedPart {
-                part_name: source.part_name.clone(),
-                message: error.to_string(),
-            })?;
         let slide_xml = rewrite_rel_ids(&slide_xml, &relationship_map).map_err(|error| {
             Error::MalformedPart {
                 part_name: source.part_name.clone(),
                 message: error.to_string(),
             }
         })?;
-        let slide_xml = rewrite_shape_ids(&slide_xml).map_err(|error| Error::MalformedPart {
-            part_name: source.part_name.clone(),
-            message: error.to_string(),
-        })?;
+        let (slide_xml, shape_ids) =
+            rewrite_shape_ids_mapped(&slide_xml).map_err(|error| Error::MalformedPart {
+                part_name: source.part_name.clone(),
+                message: error.to_string(),
+            })?;
         let slide = CT_Slide::from_xml(&slide_xml).map_err(|error| Error::MalformedPart {
             part_name: slide_part.clone(),
             message: error.to_string(),
         })?;
+        let comments = match (&import, &source.comments, comments_part) {
+            (Some(import), Some(source_comments), Some(part_name)) => {
+                let mut comments = source_comments.comments.clone();
+                let (ids, author_ids) =
+                    self.merge_imported_comment_identities(import.source, &comments)?;
+                let malformed = |error: OxmlError| Error::MalformedPart {
+                    part_name: source_comments.part_name.clone(),
+                    message: error.to_string(),
+                };
+                comments
+                    .remap_for_copied_slide(&ids, &author_ids, id, &shape_ids)
+                    .map_err(malformed)?;
+                // The part is written now so that the next copy of this call
+                // names its comment part after it.
+                self.package
+                    .set_part(&part_name, comments.to_xml().map_err(malformed)?);
+                self.package
+                    .content_types
+                    .add_override(&part_name, content_types::POWERPOINT_COMMENTS);
+                Some(CommentRecord {
+                    part_name,
+                    comments,
+                    dirty: true,
+                })
+            }
+            _ => None,
+        };
 
         let mut presentation_relationships = self
             .package
@@ -3243,10 +3507,102 @@ impl Presentation {
                 part_name: slide_part,
                 slide,
                 notes,
-                comments: source.comments.clone(),
+                comments,
             },
         );
         Ok(inserted)
+    }
+
+    /// Merges the authors of imported comments and returns the id renames.
+    ///
+    /// The first map renames comment and reply ids this presentation already
+    /// uses, the second renames author ids.
+    fn merge_imported_comment_identities(
+        &mut self,
+        source: &Presentation,
+        comments: &CommentList,
+    ) -> Result<(HashMap<String, String>, HashMap<String, String>)> {
+        let mut used = self
+            .comment_authors
+            .authors
+            .iter()
+            .map(|author| author.id.to_ascii_uppercase())
+            .collect::<HashSet<_>>();
+        for record in &self.slides {
+            for comment in record
+                .comments
+                .iter()
+                .flat_map(|comments| &comments.comments.comments)
+            {
+                used.insert(comment.id.to_ascii_uppercase());
+                used.extend(
+                    comment
+                        .replies()
+                        .iter()
+                        .map(|reply| reply.id.to_ascii_uppercase()),
+                );
+            }
+        }
+        let fresh_id = |used: &mut HashSet<String>| {
+            let id = (1_u64..)
+                .map(|index| format!("{{00000000-0000-4000-8000-{index:012X}}}"))
+                .find(|id| !used.contains(id))
+                .expect("a finite set of used ids leaves a sequential id free");
+            used.insert(id.clone());
+            id
+        };
+
+        let mut author_ids = HashMap::new();
+        let referenced = comments.comments.iter().flat_map(|comment| {
+            std::iter::once(&comment.author_id)
+                .chain(comment.replies().iter().map(|reply| &reply.author_id))
+        });
+        for author_id in referenced {
+            if author_ids.contains_key(author_id) {
+                continue;
+            }
+            let Some(author) = source
+                .comment_authors
+                .authors
+                .iter()
+                .find(|author| &author.id == author_id)
+            else {
+                continue;
+            };
+            if let Some(existing) = self.comment_authors.authors.iter().find(|existing| {
+                existing.name == author.name
+                    && existing.initials == author.initials
+                    && existing.user_id == author.user_id
+                    && existing.provider_id == author.provider_id
+            }) {
+                author_ids.insert(author_id.clone(), existing.id.clone());
+                continue;
+            }
+            let mut copy = author.clone();
+            if used.contains(&author.id.to_ascii_uppercase()) {
+                copy.id = fresh_id(&mut used);
+            } else {
+                used.insert(author.id.to_ascii_uppercase());
+            }
+            author_ids.insert(author_id.clone(), copy.id.clone());
+            self.ensure_comment_authors_part()?;
+            self.comment_authors.authors.push(copy);
+            self.comment_authors_dirty = true;
+        }
+
+        let mut ids = HashMap::new();
+        for comment in &comments.comments {
+            for id in
+                std::iter::once(&comment.id).chain(comment.replies().iter().map(|reply| &reply.id))
+            {
+                if used.contains(&id.to_ascii_uppercase()) {
+                    ids.insert(id.clone(), fresh_id(&mut used));
+                } else {
+                    used.insert(id.to_ascii_uppercase());
+                }
+            }
+        }
+        Ok((ids, author_ids))
     }
 
     /// Synthesizes a new slide from one layout selected by zero-based index.
@@ -5601,9 +5957,86 @@ fn add_media_relationships(
 
 struct RelationshipScopeTargets<'a> {
     slide: Option<&'a str>,
+    /// Source slide parts and the destination slides their jumps land on,
+    /// consulted before `slide`.
+    slide_map: Option<&'a HashMap<String, String>>,
     notes: Option<&'a str>,
+    comments: Option<&'a str>,
     layout: Option<&'a str>,
     notes_master: Option<&'a str>,
+    /// Copies chart, embedded-object and legacy-drawing graphs instead of
+    /// sharing their parts.
+    copy_part_graphs: bool,
+}
+
+/// What a slide import adds to one slide copy.
+struct SlideImportContext<'a> {
+    source: &'a Presentation,
+    source_index: usize,
+    slide_part: &'a str,
+    jump_targets: &'a HashMap<String, String>,
+    diagnostics: &'a mut Vec<SlideImportDiagnostic>,
+}
+
+impl SlideImportContext<'_> {
+    /// Turns every jump of `part` to a slide outside `jump_targets` into a
+    /// hyperlink that does nothing, and drops the relationships only those
+    /// hyperlinks named. A jump to `back_target`, the slide of a notes part,
+    /// is kept.
+    fn release_unmapped_jumps(
+        &mut self,
+        part: &str,
+        back_target: Option<&str>,
+        xml: Vec<u8>,
+        mut relationships: Relationships,
+    ) -> Result<(Vec<u8>, Relationships)> {
+        let mut released = HashSet::new();
+        for relationship in &relationships.items {
+            if relationship.rel_type != rel_types::SLIDE || relationship_is_external(relationship) {
+                continue;
+            }
+            let target = OpcPackage::resolve_rel_target(part, &relationship.target);
+            if Some(target.as_str()) == back_target || self.jump_targets.contains_key(&target) {
+                continue;
+            }
+            released.insert(relationship.id.clone());
+            self.diagnostics
+                .push(SlideImportDiagnostic::DroppedSlideJump {
+                    source_index: self.source_index,
+                    part: part.to_owned(),
+                    target,
+                });
+        }
+        if released.is_empty() {
+            return Ok((xml, relationships));
+        }
+        let malformed = |error: OxmlError| Error::MalformedPart {
+            part_name: part.to_owned(),
+            message: error.to_string(),
+        };
+        let released_xml = release_hyperlinks(&xml, &released).map_err(malformed)?;
+        let before: HashSet<String> = relationship_ids(&xml)
+            .map_err(malformed)?
+            .into_iter()
+            .collect();
+        let after: HashSet<String> = relationship_ids(&released_xml)
+            .map_err(malformed)?
+            .into_iter()
+            .collect();
+        if let Some(id) = released.iter().find(|id| after.contains(*id)) {
+            return Err(invalid_presentation_mutation(
+                "import slide",
+                format!(
+                    "{part} names the slide relationship {id} outside a hyperlink, which is not carried"
+                ),
+            ));
+        }
+        relationships.items.retain(|relationship| {
+            !((released.contains(&relationship.id) || before.contains(&relationship.id))
+                && !after.contains(&relationship.id))
+        });
+        Ok((released_xml, relationships))
+    }
 }
 
 fn preflight_cross_presentation_transfer(
@@ -5721,13 +6154,6 @@ fn preflight_cross_presentation_transfer(
 }
 
 fn preflight_slide_import(source_package: &OpcPackage, source: &SlideRecord) -> Result<()> {
-    const OPERATION: &str = "import slide";
-    if source.comments.is_some() {
-        return Err(invalid_presentation_mutation(
-            OPERATION,
-            "the slide has comments, which are not carried".to_owned(),
-        ));
-    }
     let mut smartart_frames = Vec::new();
     collect_smartart_frames(
         &source.slide.common_slide_data.shape_tree.children,
@@ -5742,9 +6168,18 @@ fn preflight_slide_import(source_package: &OpcPackage, source: &SlideRecord) -> 
             )?;
         }
     }
-    preflight_import_scope(source_package, &source.part_name, None)?;
+    let comments_part = source
+        .comments
+        .as_ref()
+        .map(|comments| comments.part_name.as_str());
+    preflight_import_scope(source_package, &source.part_name, None, comments_part)?;
     if let Some(notes) = &source.notes {
-        preflight_import_scope(source_package, &notes.part_name, Some(&source.part_name))?;
+        preflight_import_scope(
+            source_package,
+            &notes.part_name,
+            Some(&source.part_name),
+            None,
+        )?;
     }
     Ok(())
 }
@@ -5752,15 +6187,17 @@ fn preflight_slide_import(source_package: &OpcPackage, source: &SlideRecord) -> 
 /// Accepts the internal relationships a slide import rebinds or copies.
 ///
 /// A slide scope, whose `notes_of` is `None`, may relate to its layout, its
-/// notes, images, audio, video and SmartArt graphs. A notes scope may relate to
-/// its notes master, the slide named by `notes_of`, images, audio and video. The
-/// copy rebinds every notes slide relationship to the imported slide, so one
-/// that targets another slide is a jump and is refused. External relationships
-/// are always carried.
+/// notes, its modern comments part `comments_part`, images, audio, video,
+/// SmartArt graphs, charts, embedded objects and legacy drawings. A notes
+/// scope may relate to its notes master, images, audio and video. Both may
+/// relate to slides, the notes back to the slide named by `notes_of`, and
+/// every other slide relationship is a jump that the copy maps or releases.
+/// External relationships are always carried.
 fn preflight_import_scope(
     source_package: &OpcPackage,
     part: &str,
     notes_of: Option<&str>,
+    comments_part: Option<&str>,
 ) -> Result<()> {
     let slide = notes_of.is_none();
     const OPERATION: &str = "import slide";
@@ -5769,6 +6206,7 @@ fn preflight_import_scope(
         .cloned()
         .unwrap_or_default();
     let mut visited_diagram_parts = HashSet::new();
+    let mut visited_parts = HashSet::new();
     for relationship in &relationships.items {
         if relationship_is_external(relationship) {
             continue;
@@ -5778,7 +6216,25 @@ fn preflight_import_scope(
         match rel_type {
             rel_types::SLIDE_LAYOUT | rel_types::NOTES_SLIDE if slide => {}
             rel_types::NOTES_MASTER if !slide => {}
-            rel_types::SLIDE if notes_of == Some(resolved.as_str()) => {}
+            rel_types::SLIDE => {}
+            rel_types::POWERPOINT_COMMENTS if slide && comments_part == Some(&resolved) => {
+                // The copy is written from the comment model, so the part
+                // may own external relationships only.
+                if let Some(owned) = source_package.get_part_rels(&resolved).and_then(|owned| {
+                    owned
+                        .items
+                        .iter()
+                        .find(|owned| !relationship_is_external(owned))
+                }) {
+                    return Err(invalid_presentation_mutation(
+                        OPERATION,
+                        format!(
+                            "{resolved} has an internal relationship of type {}, which is not carried",
+                            owned.rel_type
+                        ),
+                    ));
+                }
+            }
             rel_types::IMAGE => {
                 preflight_internal_transfer_image(source_package, &resolved, OPERATION)?;
             }
@@ -5793,22 +6249,89 @@ fn preflight_import_scope(
                     OPERATION,
                 )?;
             }
+            _ if slide && is_carried_part_graph_relationship(rel_type) => {
+                preflight_carried_part_graph(
+                    source_package,
+                    &resolved,
+                    rel_type,
+                    &mut visited_parts,
+                )?;
+            }
             _ => {
-                let what = match rel_type {
-                    rel_types::CHART => "a chart".to_owned(),
-                    rel_types::OLE_OBJECT | rel_types::STRICT_OLE_OBJECT | rel_types::PACKAGE => {
-                        "an embedded object".to_owned()
-                    }
-                    rel_types::COMMENTS | rel_types::POWERPOINT_COMMENTS => "comments".to_owned(),
-                    rel_types::SLIDE => {
-                        "a hyperlink that jumps to another slide of the source presentation"
-                            .to_owned()
-                    }
-                    _ => format!("an internal relationship of type {rel_type}"),
-                };
                 return Err(invalid_presentation_mutation(
                     OPERATION,
-                    format!("{part} has {what}, which is not carried"),
+                    format!(
+                        "{part} has an internal relationship of type {rel_type}, which is not carried"
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Returns whether a slide import copies the part graph behind a slide
+/// relationship of this type, rather than rebinding or sharing it.
+fn is_carried_part_graph_relationship(relationship_type: &str) -> bool {
+    matches!(
+        relationship_type,
+        rel_types::CHART
+            | CHART_EX_RELATIONSHIP
+            | rel_types::OLE_OBJECT
+            | rel_types::STRICT_OLE_OBJECT
+            | rel_types::PACKAGE
+            | VML_DRAWING_RELATIONSHIP
+    )
+}
+
+/// Accepts one part of a chart, embedded-object, legacy-drawing or comments
+/// graph and, through it, the parts it relates to.
+///
+/// A chart may relate to its embedded workbook or object, its style, colour,
+/// user-shape and theme-override parts. Every part may relate to images that
+/// own no relationships, and to external targets. Anything else is refused.
+fn preflight_carried_part_graph(
+    source_package: &OpcPackage,
+    part: &str,
+    relationship_type: &str,
+    visited: &mut HashSet<String>,
+) -> Result<()> {
+    const OPERATION: &str = "import slide";
+    if !visited.insert(part.to_owned()) {
+        return Ok(());
+    }
+    required_part(source_package, part)?;
+    let chart = matches!(relationship_type, rel_types::CHART | CHART_EX_RELATIONSHIP);
+    let relationships = source_package
+        .get_part_rels(part)
+        .cloned()
+        .unwrap_or_default();
+    for relationship in &relationships.items {
+        if relationship_is_external(relationship) {
+            continue;
+        }
+        let resolved = OpcPackage::resolve_rel_target(part, &relationship.target);
+        match relationship.rel_type.as_str() {
+            rel_types::IMAGE => {
+                preflight_internal_transfer_image(source_package, &resolved, OPERATION)?;
+            }
+            rel_type @ (rel_types::PACKAGE
+            | rel_types::OLE_OBJECT
+            | rel_types::STRICT_OLE_OBJECT
+            | CHART_STYLE_RELATIONSHIP
+            | CHART_COLOR_STYLE_RELATIONSHIP
+            | CHART_USER_SHAPES_RELATIONSHIP
+            | THEME_OVERRIDE_RELATIONSHIP)
+                if chart =>
+            {
+                preflight_carried_part_graph(source_package, &resolved, rel_type, visited)?;
+            }
+            rel_type => {
+                return Err(invalid_presentation_mutation(
+                    OPERATION,
+                    format!(
+                        "{part} has an internal relationship of type {rel_type}, which is not carried"
+                    ),
                 ));
             }
         }
@@ -5894,17 +6417,29 @@ fn duplicate_relationship_scope(
     let mut destination = Relationships::new();
     let mut relationship_map = HashMap::new();
     let mut diagram_copies = HashMap::new();
+    let mut part_copies = HashMap::new();
     for relationship in &source_relationships.items {
         let target = if relationship_is_external(relationship) {
             relationship.target.clone()
         } else {
             let resolved = match relationship.rel_type.as_str() {
-                rel_types::SLIDE => targets.slide.map(str::to_owned).unwrap_or_else(|| {
-                    OpcPackage::resolve_rel_target(source_part, &relationship.target)
-                }),
+                rel_types::SLIDE => {
+                    let resolved =
+                        OpcPackage::resolve_rel_target(source_part, &relationship.target);
+                    targets
+                        .slide_map
+                        .and_then(|slide_map| slide_map.get(&resolved).cloned())
+                        .or_else(|| targets.slide.map(str::to_owned))
+                        .unwrap_or(resolved)
+                }
                 rel_types::NOTES_SLIDE => targets.notes.map(str::to_owned).unwrap_or_else(|| {
                     OpcPackage::resolve_rel_target(source_part, &relationship.target)
                 }),
+                rel_types::POWERPOINT_COMMENTS => {
+                    targets.comments.map(str::to_owned).unwrap_or_else(|| {
+                        OpcPackage::resolve_rel_target(source_part, &relationship.target)
+                    })
+                }
                 rel_types::SLIDE_LAYOUT => targets.layout.map(str::to_owned).unwrap_or_else(|| {
                     OpcPackage::resolve_rel_target(source_part, &relationship.target)
                 }),
@@ -5942,6 +6477,16 @@ fn duplicate_relationship_scope(
                     media_store,
                     &resolved,
                     &mut diagram_copies,
+                )?
+            } else if targets.copy_part_graphs
+                && is_carried_part_graph_relationship(&relationship.rel_type)
+            {
+                duplicate_part_graph(
+                    source_package,
+                    destination_package,
+                    media_store,
+                    &resolved,
+                    &mut part_copies,
                 )?
             } else {
                 resolved
@@ -6063,6 +6608,72 @@ fn duplicate_diagram_part_graph(
         }
     })?;
     destination_package.set_part(&destination_part, rewritten);
+    if !destination_relationships.items.is_empty() {
+        destination_package
+            .part_rels
+            .insert(destination_part.clone(), destination_relationships);
+    }
+    Ok(destination_part)
+}
+
+/// Copies one part and the parts it relates to, under fresh names.
+///
+/// Relationship ids are kept, so the copied bytes need no rewrite. Images go
+/// through the media store and reuse equal media. A part reached twice is
+/// copied once. The graph was bounded by `preflight_carried_part_graph`.
+fn duplicate_part_graph(
+    source_package: &OpcPackage,
+    destination_package: &mut OpcPackage,
+    media_store: &mut MediaStore,
+    source_part: &str,
+    copies: &mut HashMap<String, String>,
+) -> Result<String> {
+    if let Some(existing) = copies.get(source_part) {
+        return Ok(existing.clone());
+    }
+    let bytes = required_part(source_package, source_part)?.to_vec();
+    let destination_part = fresh_related_part_name(destination_package, source_part);
+    copies.insert(source_part.to_owned(), destination_part.clone());
+    destination_package.set_part(&destination_part, bytes);
+    if let Some(content_type) = source_package.content_types.content_type_for(source_part)
+        && destination_package
+            .content_types
+            .content_type_for(&destination_part)
+            != Some(content_type)
+    {
+        destination_package
+            .content_types
+            .add_override(&destination_part, content_type);
+    }
+    let source_relationships = source_package
+        .get_part_rels(source_part)
+        .cloned()
+        .unwrap_or_default();
+    let mut destination_relationships = Relationships::new();
+    for relationship in &source_relationships.items {
+        let target = if relationship_is_external(relationship) {
+            relationship.target.clone()
+        } else {
+            let resolved = OpcPackage::resolve_rel_target(source_part, &relationship.target);
+            let copied = if relationship.rel_type == rel_types::IMAGE {
+                let bytes = required_part(source_package, &resolved)?.to_vec();
+                media_store.insert(destination_package, &bytes, &resolved)
+            } else {
+                duplicate_part_graph(
+                    source_package,
+                    destination_package,
+                    media_store,
+                    &resolved,
+                    copies,
+                )?
+            };
+            relative_part_target(&destination_part, &copied)
+        };
+        destination_relationships.add_with_id(&relationship.id, &relationship.rel_type, &target);
+        if let Some(inserted) = destination_relationships.items.last_mut() {
+            inserted.target_mode = relationship.target_mode.clone();
+        }
+    }
     if !destination_relationships.items.is_empty() {
         destination_package
             .part_rels

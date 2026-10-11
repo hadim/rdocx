@@ -601,6 +601,11 @@ impl PySlideCollection {
     /// inserted before `index` as by `list.insert`, counted from the end when
     /// negative, or appended when that is `None`. An index outside the
     /// collection raises `IndexError`.
+    ///
+    /// Charts, embedded objects and comments travel with the slide, as by
+    /// `Presentation::import_slides`. A jump to another slide is kept when
+    /// that slide belongs to this presentation, and otherwise does nothing
+    /// in the copy and raises a `UserWarning`.
     #[pyo3(signature = (slide, layout=None, index=None))]
     fn import_slide(
         &self,
@@ -641,28 +646,37 @@ impl PySlideCollection {
         };
         let source = slide.presentation.clone_ref(py);
         drop(slide);
-        let path = {
+        let mut options = rpptx::SlideImportOptions {
+            layout_index,
+            insert_index: Some(inserted),
+            ..rpptx::SlideImportOptions::default()
+        };
+        let (path, diagnostics) = {
             let mut presentation = self.presentation.borrow_mut(py);
             let result = if source.is(&self.presentation) {
+                // Every slide of this presentation is its own counterpart,
+                // so the copy keeps its jumps.
                 let copy = presentation.inner.clone();
-                let layout_index = layout_index.or_else(|| copy.slide_layout_index(source_index));
+                options.layout_index =
+                    layout_index.or_else(|| copy.slide_layout_index(source_index));
+                options.mapped_slides = (0..copy.len()).map(|index| (index, index)).collect();
                 presentation
                     .inner
-                    .import_slide(&copy, source_index, layout_index, Some(inserted))
-                    .map(|_| ())
+                    .import_slides(&copy, &[source_index], &options)
             } else {
                 let source = source.borrow(py);
                 presentation
                     .inner
-                    .import_slide(&source.inner, source_index, layout_index, Some(inserted))
-                    .map(|_| ())
+                    .import_slides(&source.inner, &[source_index], &options)
             };
-            result.map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+            let import = result.map_err(|error| crate::rpptx_to_pyerr(py, error))?;
             presentation.revisions.bump();
-            presentation
+            let path = presentation
                 .revisions
-                .capture(smallvec![PathSeg::Slide(inserted)])
+                .capture(smallvec![PathSeg::Slide(inserted)]);
+            (path, import.diagnostics)
         };
+        warn_import_diagnostics(py, &diagnostics)?;
         Py::new(py, PySlide::new(self.presentation.clone_ref(py), path))
     }
 
@@ -774,6 +788,24 @@ impl PySlideIterator {
         self.index += 1;
         collection.item(py, index).map(Some)
     }
+}
+
+/// Reports each slide import diagnostic as a `UserWarning`.
+fn warn_import_diagnostics(
+    py: Python<'_>,
+    diagnostics: &[rpptx::SlideImportDiagnostic],
+) -> PyResult<()> {
+    for diagnostic in diagnostics {
+        let message = std::ffi::CString::new(diagnostic.to_string())
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        PyErr::warn(
+            py,
+            &py.get_type::<pyo3::exceptions::PyUserWarning>(),
+            &message,
+            2,
+        )?;
+    }
+    Ok(())
 }
 
 fn sequence_item<T, F>(
