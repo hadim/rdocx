@@ -25,7 +25,7 @@ and ten approved pending implementation. Rolling contribution intake is reopened
 |------|-------|------|--------|-------|
 | F-X193 | Preserve semantic mark highlights through nested HTML runs | S | done | - |
 | F-X194 | Complete Python table text and indentation APIs | M | done | - |
-| F-X195 | Honor caller fonts and variable styles across render paths | L | in-progress | codex |
+| F-X195 | Honor caller fonts and variable styles across render paths | L | done | - |
 | F-X196 | Validate visible paragraph content without false empty warnings | S | done | - |
 | F-X197 | Unify Python colour inputs and font colour formats | L | done | - |
 | F-X198 | Preserve alternate text-box copies during scoped replacement | M | done | - |
@@ -759,3 +759,25 @@ The resolution map now covers all twenty-two open PRs and twenty-eight included
 open issues. Issues264 and281 remain excluded discussion issues. Story totals
 remain seven complete, four in progress and ten pending. PR343 source has not
 been adopted and no contributor test is credited as local acceptance.
+
+## F-X195 prerequisite completion checkpoint, 2026-10-11
+
+F-X195 is completed through the formal dependency-prefix route. Its validated
+worker source229bba9c and handoff tipbc38d1d9 are integrated locally as989950b8.
+All317 relevant source records retain the exact tested bytes, sizes and modes.
+The eight semantic carrier conflicts preserve completed table, colour and
+visibility contracts. Independent integration pass99 reports zero defects and
+zero smells. Canonical focused native6 and installed typing/provenance5 commands
+passed. All49 output hashes match the unchanged accepted baseline. Nine fresh
+integrated archive measurements pass, with every non-VCS member matching its
+reviewed worker carrier and current canonical VCS metadata authenticated.
+The original network-only measurement failure is retained separately.
+
+S91 now has21 active stories, eight completed, three running and ten pending.
+F-X195 scoped acceptance includes current full104 installed font controls,
+caller19 across13 routes, mandatory eight-owner SVG controls and the declared
+risk riders. Ignored historical controls retain their explicit qualifications.
+Full integrated sprint verification and clean sprint review remain required.
+The 12:22:15 UTC intake refresh has22 open PRs and28 included issues, with no
+new records or changed heads. Issues264 and281 remain excluded and open.
+Bibliography and the deferred authoring carryovers remain atS92.
