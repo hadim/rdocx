@@ -1013,10 +1013,24 @@ F-X207's fresh PPT wheel fd32173caf00be5dd6b4bd47b257e563c37f2c5af001659b7da1394
 The 21:57:40 UTC intake refresh is unchanged at38 included issues and28 PRs, with no advanced heads. Receipt: /private/tmp/S91-intake-refresh-20261011T215739Z/receipt.json. Issues264 and281 remain excluded.
 
 
-## Parallel gate continuation, 2026-10-11 22:10 UTC
+## Parallel gate continuation, 2026-10-11 22:07 UTC
 
-The sprint state remains8 completed,1 reviewed,4 running and13 approved active stories, with10 carryovers. F-X207 passed all eight remaining scoped riders, including49 unchanged hashes, and both package inventories. Its first verified dry run needed registry access. The online retry detected a stale Cargo package cache despite a successful child result. Exact stale outputs were retained and narrowly removed. Current-source verified package retries are running, without replaying green riders. Native paint and the9823EMU allocation difference remain unresolved.
+The sprint state remains8 completed,1 reviewed,4 running and13 approved active stories, with10 carryovers. F-X207 passed all eight remaining scoped riders, including49 unchanged hashes, and both package inventories. Its first verified dry run needed registry access. The online retry wrapper selected an older cargo-package archive rather than the actual publish archive under target/package/tmp-crate. That artifact-attribution mistake is corrected. Actual current-source publish archives are being retained and qualified, without replaying green riders. The failed wrappers remain failed. Native paint and the9823EMU allocation difference remain unresolved.
 
 F-X210 passed141 no-default unit tests,3 doc tests, both WASM checks, license and three inventory controls, plus seven package inventories. Its hash gate reports12 changes confined to Georgia samples contract, proposal and report. Actual PDFs identify the approved Gelasio fallback. Independent delta review remains due and the baseline is unchanged. Seven verified package dry runs continue with registry access after offline resolution failed.
 
 F-X206 review84 approves three targeted layout corrections and an assertion-message-only gradient diagnostic. Their four original failed selectors are running. The145 earlier layout passes are retained. Review85 separately admits the bounded archive namespace inverse for attribution through a current authenticated OPC artifact graph. Both original archive expectations remain unchanged. No feature completion or final integrated verification is claimed by these partial results.
+
+
+R32 focused execution stopped at compilation because its new test referenced quick_xml without a direct dependency. No named test ran. A correction will use the existing paragraph serialization API, retaining the deciding assertions and adding no dependency. Review84 is superseded for that compilation assumption. The production correction remains subject to actual focused acceptance.
+
+
+## Targeted acceptance update, 2026-10-11 22:12 UTC
+
+Latest intake /private/tmp/S91-intake-refresh-20261011T221200Z/receipt.json remains unchanged at38 included issues and28 open PRs. Issues264 and281 remain excluded.
+
+F-X206 now passes the three corrected original layout controls. R34 receiptea36371253f30b669863463b82a5a35efbdf21c7a927673bd1d82f2239aa4fe6 retains the fourth genuine failure: unsupported rotWithShape=0 gradient resolves phClr before reaching its unsupported boundary. The diagnostic preserves every assertion. The two remaining whole oxml/render scopes are unrun. Compiler failures R32 and R33 remain failed and ran no tests. Current source d7e9dd6e484df18fd08da7f3d376feb120adb5cd04e7cb1dcd19a49a1c89e690 is guarded and all process groups exited naturally.
+
+F-X207's actual renderer and facade publish archives are independently authenticated against current source, with8 and16 members. Render proof7e19a5e6 and facade receipte9f750b7 retain genuine verification and dry-run abort. Review44 approves the exact two measurement rows and constants plus a separate stable-origin HLD clarification. Post-edit measurements and policy are running. Review45 admits bounded source paint diagnostics without accepting native parity or the9823EMU allocation difference.
+
+F-X210 review25 independently attributes its twelve changed hashes to the approved Georgia mapping. Old and new PDFs retain identical extracted text, page counts5,6,5 and page sizes. First-page visual inspection finds no clipping or overlap in the changed samples. The remaining thirty-seven hashes match. Baseline action, seven package archives, policy and completion remain separate requirements.
