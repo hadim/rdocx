@@ -18903,6 +18903,26 @@ impl Document {
             .ok_or_else(|| Error::Other(format!("image relationship target {target} is missing")))
     }
 
+    /// The content type and part name of an image, through a checked
+    /// story-local relationship.
+    pub fn image_content_type_for_story(
+        &self,
+        story: &StoryId,
+        relationship_id: &str,
+    ) -> Result<(String, String)> {
+        let target = self.validate_internal_relationship_for_story(
+            story,
+            relationship_id,
+            rel_types::IMAGE,
+        )?;
+        let content_type = self
+            .package
+            .content_types
+            .content_type_for(&target)
+            .ok_or_else(|| Error::Other(format!("image part {target} has no content type")))?;
+        Ok((content_type.to_owned(), target))
+    }
+
     /// Replace a picture through a checked story-local relationship.
     pub fn replace_image_for_story(
         &mut self,
