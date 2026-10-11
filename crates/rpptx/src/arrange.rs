@@ -10,6 +10,7 @@ use std::ops::Range;
 
 use oxml_drawing::xfrm::{CT_Point2D, CT_PositiveSize2D, CT_Transform2D};
 use rpptx_oxml::connector::{CT_Connection, CT_ConnectionShape};
+use rpptx_oxml::namespace::MAX_NESTING;
 use rpptx_oxml::shape_tree::{CT_GroupShape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild};
 
 use crate::{
@@ -330,6 +331,17 @@ impl ShapesMut<'_> {
         let mut members = Members::at(tree, &group_path)
             .ok_or_else(|| invalid_shape_mutation(OPERATION, "the collection is not a group"))?;
         let sorted = sorted_indices(OPERATION, indices, members.children().len())?;
+        let deepest = sorted
+            .iter()
+            .map(|index| nesting_depth(&members.children()[*index]))
+            .max()
+            .unwrap_or(0);
+        if group_path.len() + 1 + deepest > MAX_NESTING {
+            return Err(invalid_shape_mutation(
+                OPERATION,
+                format!("group nesting exceeds {MAX_NESTING} levels"),
+            ));
+        }
         for index in &sorted {
             let child = &members.children()[*index];
             if shape_placeholder(child).is_some() {
@@ -1016,5 +1028,44 @@ mod tests {
         );
         assert_eq!(placed.rotation, Angle(80 * 60_000));
         assert!(placed.flip_horizontal && !placed.flip_vertical);
+    }
+}
+
+/// How many group and alternate content levels `child` adds, counted as
+/// the parser counts them at open, so that a deck grouped here reopens.
+fn nesting_depth(child: &ShapeTreeChild) -> usize {
+    match child {
+        ShapeTreeChild::GroupShape(group) => {
+            1 + group.children.iter().map(nesting_depth).max().unwrap_or(0)
+        }
+        ShapeTreeChild::AlternateContent(alternate) => raw_nesting_depth(alternate.raw_xml()),
+        _ => 0,
+    }
+}
+
+/// The deepest `grpSp` and `AlternateContent` nesting in a captured subtree.
+fn raw_nesting_depth(xml: &[u8]) -> usize {
+    use quick_xml::events::Event;
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut open = Vec::new();
+    let (mut depth, mut deepest) = (0usize, 0usize);
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(start)) => {
+                let counts = matches!(start.local_name().as_ref(), b"grpSp" | b"AlternateContent");
+                depth += usize::from(counts);
+                deepest = deepest.max(depth);
+                open.push(counts);
+            }
+            Ok(Event::Empty(start)) => {
+                let counts = matches!(start.local_name().as_ref(), b"grpSp" | b"AlternateContent");
+                deepest = deepest.max(depth + usize::from(counts));
+            }
+            Ok(Event::End(_)) => depth -= usize::from(open.pop().unwrap_or(false)),
+            Ok(Event::Eof) | Err(_) => return deepest,
+            Ok(_) => {}
+        }
+        buffer.clear();
     }
 }

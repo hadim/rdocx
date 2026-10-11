@@ -4317,6 +4317,52 @@ mod nesting_limits_reject_deep_slides {
         let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
         assert!(reopened.slide(0).unwrap().text().contains("deepest"));
     }
+
+    #[test]
+    fn grouping_refuses_to_push_a_group_past_the_limit() {
+        for (levels, refused) in [(MAX_NESTING, true), (MAX_NESTING - 1, false)] {
+            let mut presentation = Presentation::new().expect("open bundled template");
+            presentation.add_slide(6).expect("add blank slide");
+            let mut path = Vec::new();
+            for _ in 0..levels {
+                presentation
+                    .shapes_mut(0, &path)
+                    .unwrap()
+                    .add_group_shape()
+                    .unwrap();
+                path.push(0);
+            }
+            presentation
+                .shapes_mut(0, &path)
+                .unwrap()
+                .add_textbox(Emu(914_400), Emu(914_400), Emu(3_657_600), Emu(914_400))
+                .unwrap();
+            presentation
+                .shapes_mut(0, &[])
+                .unwrap()
+                .add_textbox(Emu(0), Emu(0), Emu(914_400), Emu(914_400))
+                .unwrap();
+            let before = presentation.to_bytes().unwrap();
+            let result = presentation
+                .shapes_mut(0, &[])
+                .unwrap()
+                .group(&[0, 1])
+                .map(|_| ());
+            if refused {
+                let error = result.expect_err("grouping past the limit is refused");
+                assert!(
+                    error
+                        .to_string()
+                        .contains(&format!("group nesting exceeds {MAX_NESTING} levels")),
+                    "{error}"
+                );
+                assert_eq!(presentation.to_bytes().unwrap(), before);
+            } else {
+                result.unwrap();
+                Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
+            }
+        }
+    }
 }
 
 fn normalize_smartart_oracle_png(path: &Path, width: u32, height: u32, index: usize) -> Vec<u8> {
