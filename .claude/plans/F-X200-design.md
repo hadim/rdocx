@@ -212,6 +212,25 @@ changes require measured declared deltas and separate labelled commits before
 any exclusive baseline update. The risk discussion above identifies those
 possible changes. No baseline movement or implementation is approved by this draft.
 
+### Measured namespace closure delta
+
+The actual current49-entry harness differs in exactly two document XML entries.
+Source-aware save/reopen retains a self-contained Word namespace on raw border
+and tab owners. feature_showcase changes
+ada34bba6c97288dce7f60a96b32f2d20c3ea2254f6f82e08c660a39ecfc3b54
+to9d3418ef8ef11cbcd64acb40b6f2d54648f985050138181bfb32531c8eecf48f,
+with three pBdr and four tabs declarations. report changes
+bc7d4995931e61ff1fc1c0f004349e64b483428b8c0a5b652a47c46ccb50915e
+to8df95515887d2b7c7f5604db9c99f5cf2dcbce6a2ea2e202799adf6885c68ec4,
+with one pBdr declaration. Independent pass62 reconstructs both old parts
+exactly by removing those eight declarations and proves expanded XML tree
+equality. All remaining47 entries, including PDF and image output, match.
+There is no measured numbering delta. Retain actual imported namespace closure
+rather than strip raw bindings without a parent scope. These precise two XML
+changes are the declared expected delta. A labelled source attribution commit,
+exclusive two-entry baseline update and actual current hash retry remain required
+before scoped acceptance. The failed original receipt remains unchanged.
+
 ## Implementation checklist
 
 - [ ] Resolve technical contracts and actual native gaps against prerequisites.
