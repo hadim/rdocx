@@ -8547,8 +8547,60 @@ fn update_complex_field_results(results: &mut Vec<bool>, marker: Option<ComplexF
     }
 }
 
+/// Return whether text at this point is visible: no open complex field is
+/// still in its instruction part, and a field item is inside its own field.
 fn complex_field_text_visible(item: &StoryItemSpan, results: &[bool]) -> bool {
-    !item.complex_field || (!results.is_empty() && results.iter().all(|result| *result))
+    (!item.complex_field || !results.is_empty()) && results.iter().all(|result| *result)
+}
+
+/// Return whether a field character at `position` opens, separates or closes
+/// a field that hides text of this item. A field item tracks the markers of
+/// its own field. Any other item tracks every marker of its own story, so a
+/// field's instruction part stays out of its text as in `Paragraph::text`.
+fn story_field_marker_tracked(
+    item: &StoryItemSpan,
+    position: usize,
+    nested_owner_depth: usize,
+) -> bool {
+    if item.complex_field {
+        item.full.start <= position && position < item.full.end
+    } else {
+        nested_owner_depth == 0
+    }
+}
+
+/// The text a visible run `w:br` or `w:cr` adds, as the typed model reads it.
+/// A run outside any field reads either as a line feed. Inside a field
+/// result, a page or column break reads as a form feed or vertical tab and
+/// a carriage return reads as nothing, as in a field's cached result.
+fn story_break_text(
+    reader: &NsReader<&[u8]>,
+    element: &BytesStart<'_>,
+    in_field_result: bool,
+) -> Result<Option<char>> {
+    if element.local_name().as_ref() == b"cr" {
+        return Ok((!in_field_result).then_some('\n'));
+    }
+    if !in_field_result {
+        return Ok(Some('\n'));
+    }
+    for attribute in element.attributes() {
+        let attribute = attribute
+            .map_err(|error| Error::Other(format!("break attribute scan failed: {error}")))?;
+        let (namespace, local_name) = reader.resolver().resolve_attribute(attribute.key);
+        if !word_element(&namespace) || local_name.as_ref() != b"type" {
+            continue;
+        }
+        let value = attribute
+            .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+            .map_err(|error| Error::Other(format!("break type decode failed: {error}")))?;
+        return Ok(Some(match value.as_ref() {
+            "page" => '\u{000c}',
+            "column" => '\u{000b}',
+            _ => '\n',
+        }));
+    }
+    Ok(Some('\n'))
 }
 
 fn accepted_story_text_visible(stack: &[XmlElementFrame]) -> bool {
@@ -10297,9 +10349,7 @@ fn story_item_text(xml: &[u8], item: &StoryItemSpan) -> Result<Option<String>> {
                         )?
                     };
                 if !opaque
-                    && item.complex_field
-                    && item.full.start <= before
-                    && before < item.full.end
+                    && story_field_marker_tracked(item, before, nested_owner_depth)
                     && is_word_namespace
                     && local_name == b"fldChar"
                 {
@@ -10320,20 +10370,19 @@ fn story_item_text(xml: &[u8], item: &StoryItemSpan) -> Result<Option<String>> {
                     && accepted_story_text_visible(&element_stack)
                     && nested_owner_depth == 0
                     && is_word_namespace
-                    && local_name == b"t"
                 {
-                    in_text += 1;
-                    found = true;
-                } else if !opaque
-                    && complex_field_text_visible(item, &complex_results)
-                    && accepted_story_text_visible(&element_stack)
-                    && nested_owner_depth == 0
-                    && is_word_namespace
-                    && local_name == b"tab"
-                    && story_run_child(&element_stack)
-                {
-                    text.push('\t');
-                    found = true;
+                    if local_name == b"t" {
+                        in_text += 1;
+                        found = true;
+                    } else if let Some(character) = story_run_character(
+                        &reader,
+                        &element,
+                        &element_stack,
+                        !complex_results.is_empty(),
+                    )? {
+                        text.push(character);
+                        found = true;
+                    }
                 }
                 let inherited = element_stack
                     .last()
@@ -10373,9 +10422,7 @@ fn story_item_text(xml: &[u8], item: &StoryItemSpan) -> Result<Option<String>> {
                     after,
                 )?;
                 if !opaque
-                    && item.complex_field
-                    && item.full.start <= before
-                    && before < item.full.end
+                    && story_field_marker_tracked(item, before, nested_owner_depth)
                     && is_word_namespace
                     && local_name.as_ref() == b"fldChar"
                 {
@@ -10388,19 +10435,18 @@ fn story_item_text(xml: &[u8], item: &StoryItemSpan) -> Result<Option<String>> {
                     && accepted_story_text_visible(&element_stack)
                     && nested_owner_depth == 0
                     && is_word_namespace
-                    && local_name.as_ref() == b"t"
                 {
-                    found = true;
-                } else if !opaque
-                    && complex_field_text_visible(item, &complex_results)
-                    && accepted_story_text_visible(&element_stack)
-                    && nested_owner_depth == 0
-                    && is_word_namespace
-                    && local_name.as_ref() == b"tab"
-                    && story_run_child(&element_stack)
-                {
-                    text.push('\t');
-                    found = true;
+                    if local_name.as_ref() == b"t" {
+                        found = true;
+                    } else if let Some(character) = story_run_character(
+                        &reader,
+                        &element,
+                        &element_stack,
+                        !complex_results.is_empty(),
+                    )? {
+                        text.push(character);
+                        found = true;
+                    }
                 }
             }
             Event::End(element) => {
@@ -10468,6 +10514,24 @@ fn story_run_child(stack: &[XmlElementFrame]) -> bool {
     stack
         .last()
         .is_some_and(|frame| !frame.opaque && frame.is_word && frame.local_name == b"r")
+}
+
+/// The text a visible Word element adds when it is run content other than
+/// `w:t`: a tab for `w:tab`, and a break for `w:br` or `w:cr`.
+fn story_run_character(
+    reader: &NsReader<&[u8]>,
+    element: &BytesStart<'_>,
+    stack: &[XmlElementFrame],
+    in_field_result: bool,
+) -> Result<Option<char>> {
+    if !story_run_child(stack) {
+        return Ok(None);
+    }
+    match element.local_name().as_ref() {
+        b"tab" => Ok(Some('\t')),
+        b"br" | b"cr" => story_break_text(reader, element, in_field_result),
+        _ => Ok(None),
+    }
 }
 
 fn story_text_start(element: &BytesStart<'_>, preserve_space: bool) -> Result<Vec<u8>> {
@@ -10557,7 +10621,11 @@ fn replace_story_item_text(source: &[u8], item: &StoryItemSpan, value: &str) -> 
     let mut root_is_empty = false;
     let mut first_text_start = None;
     let mut first_empty_text = None;
+    let mut first_text_markup = None;
     let mut found_text = false;
+    // Visible run tabs and breaks, which the new text replaces as well.
+    let mut removed_ranges: Vec<Range<usize>> = Vec::new();
+    let mut removed_start = None;
     let mut element_stack: Vec<XmlElementFrame> = Vec::new();
     let mut nested_owner_depth = 0usize;
     let mut complex_results = Vec::new();
@@ -10616,17 +10684,15 @@ fn replace_story_item_text(source: &[u8], item: &StoryItemSpan, value: &str) -> 
                         )?
                     };
                 if !opaque
-                    && item.complex_field
-                    && item.full.start <= before
-                    && before < item.full.end
+                    && story_field_marker_tracked(item, before, nested_owner_depth)
                     && is_word_namespace
                     && local_name == b"fldChar"
                 {
                     let marker = complex_field_marker(&reader, &element)?;
-                    if marker == Some(ComplexFieldMarker::Separate) && complex_results.len() == 1 {
+                    let outer = item.complex_field && complex_results.len() == 1;
+                    if outer && marker == Some(ComplexFieldMarker::Separate) {
                         outer_complex_separator_found = true;
-                    } else if marker == Some(ComplexFieldMarker::End) && complex_results.len() == 1
-                    {
+                    } else if outer && marker == Some(ComplexFieldMarker::End) {
                         complex_end_marker_start = Some(before);
                         complex_insertion_word_prefixes = element_stack
                             .last()
@@ -10651,14 +10717,24 @@ fn replace_story_item_text(source: &[u8], item: &StoryItemSpan, value: &str) -> 
                     if first_text_start.is_none() && first_empty_text.is_none() {
                         first_text_start = Some((
                             before..after,
-                            story_text_start(
-                                &element,
-                                value.starts_with(' ') || value.ends_with(' '),
-                            )?,
+                            story_text_start(&element, story_text_preserves_space(value))?,
                         ));
+                        first_text_markup = Some(story_text_markup_tags(
+                            &element,
+                            story_text_preserves_space(value),
+                        )?);
                     }
                     text_ranges.push(after..after);
                     text_depth += 1;
+                } else if !opaque
+                    && complex_field_text_visible(item, &complex_results)
+                    && accepted_story_text_visible(&element_stack)
+                    && nested_owner_depth == 0
+                    && is_word_namespace
+                    && story_run_child(&element_stack)
+                    && matches!(local_name.as_slice(), b"tab" | b"br" | b"cr")
+                {
+                    removed_start = Some((element_stack.len(), before));
                 }
                 let inherited = element_stack
                     .last()
@@ -10710,17 +10786,15 @@ fn replace_story_item_text(source: &[u8], item: &StoryItemSpan, value: &str) -> 
                     after,
                 )?;
                 if !opaque
-                    && item.complex_field
-                    && item.full.start <= before
-                    && before < item.full.end
+                    && story_field_marker_tracked(item, before, nested_owner_depth)
                     && is_word_namespace
                     && local_name.as_ref() == b"fldChar"
                 {
                     let marker = complex_field_marker(&reader, &element)?;
-                    if marker == Some(ComplexFieldMarker::Separate) && complex_results.len() == 1 {
+                    let outer = item.complex_field && complex_results.len() == 1;
+                    if outer && marker == Some(ComplexFieldMarker::Separate) {
                         outer_complex_separator_found = true;
-                    } else if marker == Some(ComplexFieldMarker::End) && complex_results.len() == 1
-                    {
+                    } else if outer && marker == Some(ComplexFieldMarker::End) {
                         complex_end_marker_start = Some(before);
                         complex_insertion_word_prefixes = element_stack
                             .last()
@@ -10735,19 +10809,33 @@ fn replace_story_item_text(source: &[u8], item: &StoryItemSpan, value: &str) -> 
                 {
                     found_text = true;
                     if first_text_start.is_none() && first_empty_text.is_none() {
-                        let preserve_space = value.starts_with(' ') || value.ends_with(' ');
-                        let mut replacement = story_text_start(&element, preserve_space)?;
-                        replacement.extend_from_slice(quick_xml::escape::escape(value).as_bytes());
-                        replacement.extend_from_slice(b"</");
-                        replacement.extend_from_slice(element.name().as_ref());
-                        replacement.push(b'>');
+                        let markup =
+                            story_text_markup_tags(&element, story_text_preserves_space(value))?;
+                        let mut replacement = markup.open.clone();
+                        replacement.extend_from_slice(&story_text_content(value, &markup));
+                        replacement.extend_from_slice(&markup.close);
                         first_empty_text = Some((before..after, replacement));
                     }
+                } else if !opaque
+                    && complex_field_text_visible(item, &complex_results)
+                    && accepted_story_text_visible(&element_stack)
+                    && nested_owner_depth == 0
+                    && is_word_namespace
+                    && story_run_child(&element_stack)
+                    && matches!(local_name.as_ref(), b"tab" | b"br" | b"cr")
+                {
+                    removed_ranges.push(before..after);
                 }
             }
             Event::End(element) => {
                 let opaque = element_stack.pop().is_some_and(|frame| frame.opaque);
                 let depth = element_stack.len();
+                if let Some((start_depth, start)) = removed_start
+                    && start_depth == depth
+                {
+                    removed_ranges.push(start..after);
+                    removed_start = None;
+                }
                 if !opaque
                     && complex_field_text_visible(item, &complex_results)
                     && nested_owner_depth == 0
@@ -10783,9 +10871,15 @@ fn replace_story_item_text(source: &[u8], item: &StoryItemSpan, value: &str) -> 
         buffer.clear();
     }
 
-    let escaped = quick_xml::escape::escape(value).into_owned();
     let mut updated = source.to_vec();
+    let space = if story_text_preserves_space(value) {
+        " xml:space=\"preserve\""
+    } else {
+        ""
+    };
     if !found_text {
+        // Each insertion lies after every removed tab or break, so removing
+        // them afterwards from the end keeps the insertion in place.
         if item.complex_field {
             let insert_at = complex_end_marker_start.ok_or_else(|| {
                 Error::Other("complex story field has no closing marker".to_owned())
@@ -10817,11 +10911,6 @@ fn replace_story_item_text(source: &[u8], item: &StoryItemSpan, value: &str) -> 
                         "",
                     )
                 };
-            let space = if value.starts_with(' ') || value.ends_with(' ') {
-                " xml:space=\"preserve\""
-            } else {
-                ""
-            };
             let separator = if outer_complex_separator_found {
                 String::new()
             } else {
@@ -10830,61 +10919,155 @@ fn replace_story_item_text(source: &[u8], item: &StoryItemSpan, value: &str) -> 
                      {attribute_prefix}:fldCharType=\"separate\"/>"
                 )
             };
-            let replacement =
-                format!("{separator}<{prefix}t{declaration}{space}>{escaped}</{prefix}t>");
-            updated.splice(insert_at..insert_at, replacement.bytes());
-            return Ok(updated);
-        }
-        if item.kind != StoryItemKind::Paragraph {
-            return Err(StoryError::NotTextBearing { kind: item.kind }.into());
-        }
-        let prefix = root_prefix.unwrap_or_else(|| "w".to_owned());
-        let prefix = if prefix.is_empty() {
-            String::new()
+            let markup = StoryTextMarkup::new(&prefix, &declaration, space);
+            let mut replacement = separator.into_bytes();
+            replacement.extend_from_slice(&markup.open);
+            replacement.extend_from_slice(&story_text_content(value, &markup));
+            replacement.extend_from_slice(&markup.close);
+            updated.splice(insert_at..insert_at, replacement);
         } else {
-            format!("{prefix}:")
-        };
-        let space = if value.starts_with(' ') || value.ends_with(' ') {
-            " xml:space=\"preserve\""
-        } else {
-            ""
-        };
-        let run = format!("<{prefix}r><{prefix}t{space}>{escaped}</{prefix}t></{prefix}r>");
-        if let Some(end) = root_end {
-            updated.splice(end..end, run.bytes());
-        } else if root_is_empty {
-            let slash = item.full.end.checked_sub(2).ok_or_else(|| {
-                Error::Other("self-closing paragraph story item is truncated".to_owned())
-            })?;
-            if source.get(slash..item.full.end) != Some(b"/>".as_slice()) {
+            if item.kind != StoryItemKind::Paragraph {
+                return Err(StoryError::NotTextBearing { kind: item.kind }.into());
+            }
+            let prefix = root_prefix.unwrap_or_else(|| "w".to_owned());
+            let prefix = if prefix.is_empty() {
+                String::new()
+            } else {
+                format!("{prefix}:")
+            };
+            let markup = StoryTextMarkup::new(&prefix, "", space);
+            let mut run = format!("<{prefix}r>").into_bytes();
+            run.extend_from_slice(&markup.open);
+            run.extend_from_slice(&story_text_content(value, &markup));
+            run.extend_from_slice(&markup.close);
+            run.extend_from_slice(format!("</{prefix}r>").as_bytes());
+            if let Some(end) = root_end {
+                updated.splice(end..end, run);
+            } else if root_is_empty {
+                let slash = item.full.end.checked_sub(2).ok_or_else(|| {
+                    Error::Other("self-closing paragraph story item is truncated".to_owned())
+                })?;
+                if source.get(slash..item.full.end) != Some(b"/>".as_slice()) {
+                    return Err(Error::Other(
+                        "self-closing paragraph story item has no closing slash".to_owned(),
+                    ));
+                }
+                let mut replacement = b">".to_vec();
+                replacement.extend_from_slice(&run);
+                replacement.extend_from_slice(format!("</{prefix}p>").as_bytes());
+                updated.splice(slash..item.full.end, replacement);
+            } else {
                 return Err(Error::Other(
-                    "self-closing paragraph story item has no closing slash".to_owned(),
+                    "paragraph story item has no closing element".to_owned(),
                 ));
             }
-            let replacement = format!(">{run}</{prefix}p>");
-            updated.splice(slash..item.full.end, replacement.bytes());
-        } else {
-            return Err(Error::Other(
-                "paragraph story item has no closing element".to_owned(),
-            ));
+        }
+        for range in removed_ranges.into_iter().rev() {
+            updated.splice(range, []);
         }
     } else {
-        for (ordinal, range) in text_ranges.iter().enumerate().rev() {
-            let replacement = if ordinal == 0 && first_empty_text.is_none() {
-                escaped.as_bytes()
-            } else {
-                b""
+        let mut edits: Vec<(Range<usize>, Vec<u8>)> = removed_ranges
+            .into_iter()
+            .map(|range| (range, Vec::new()))
+            .collect();
+        for (ordinal, range) in text_ranges.into_iter().enumerate() {
+            let replacement = match &first_text_markup {
+                Some(markup) if ordinal == 0 && first_empty_text.is_none() => {
+                    story_text_content(value, markup)
+                }
+                _ => Vec::new(),
             };
-            updated.splice(range.clone(), replacement.iter().copied());
+            edits.push((range, replacement));
         }
-        if let Some((range, replacement)) = first_text_start {
-            updated.splice(range, replacement);
-        }
-        if let Some((range, replacement)) = first_empty_text {
+        edits.extend(first_text_start);
+        edits.extend(first_empty_text);
+        // The start tag of the first text ends where its empty text range
+        // begins, so equal starts sort the empty range first and apply last.
+        edits.sort_by_key(|(range, _)| (range.start, range.end));
+        for (range, replacement) in edits.into_iter().rev() {
             updated.splice(range, replacement);
         }
     }
     Ok(updated)
+}
+
+/// The tags that write new story text into a run: the text element's start
+/// and end tags, and the tab and break elements a tab or line feed becomes.
+struct StoryTextMarkup {
+    open: Vec<u8>,
+    close: Vec<u8>,
+    tab: Vec<u8>,
+    br: Vec<u8>,
+}
+
+impl StoryTextMarkup {
+    fn new(prefix: &str, declaration: &str, space: &str) -> Self {
+        Self {
+            open: format!("<{prefix}t{declaration}{space}>").into_bytes(),
+            close: format!("</{prefix}t>").into_bytes(),
+            tab: format!("<{prefix}tab{declaration}/>").into_bytes(),
+            br: format!("<{prefix}br{declaration}/>").into_bytes(),
+        }
+    }
+}
+
+/// Build the markup for new text written into an existing `w:t`, keeping its
+/// attributes and namespace declarations for any further text element.
+fn story_text_markup_tags(
+    element: &BytesStart<'_>,
+    preserve_space: bool,
+) -> Result<StoryTextMarkup> {
+    let name = element.name();
+    let name = std::str::from_utf8(name.as_ref())
+        .map_err(|error| Error::Other(format!("story text name is not UTF-8: {error}")))?;
+    let prefix = name.strip_suffix('t').unwrap_or_default();
+    let mut declarations = String::new();
+    for attribute in element.attributes() {
+        let attribute = attribute
+            .map_err(|error| Error::Other(format!("story text attribute scan failed: {error}")))?;
+        let key = attribute.key.as_ref();
+        if key == b"xmlns" || key.starts_with(b"xmlns:") {
+            declarations.push(' ');
+            declarations.push_str(&String::from_utf8_lossy(key));
+            declarations.push_str("=\"");
+            declarations.push_str(&String::from_utf8_lossy(&attribute.value));
+            declarations.push('"');
+        }
+    }
+    let mut markup = StoryTextMarkup::new(prefix, &declarations, "");
+    markup.open = story_text_start(element, preserve_space)?;
+    markup.close = format!("</{name}>").into_bytes();
+    Ok(markup)
+}
+
+/// Escape new story text, writing a tab as `w:tab` and a line feed or a
+/// carriage return as `w:br` between text elements, as `Paragraph::set_text`
+/// does.
+fn story_text_content(value: &str, markup: &StoryTextMarkup) -> Vec<u8> {
+    let mut content = Vec::with_capacity(value.len());
+    let mut separators = value
+        .chars()
+        .filter(|character| matches!(character, '\t' | '\n' | '\r'));
+    for (index, segment) in value.split(['\t', '\n', '\r']).enumerate() {
+        if index > 0 {
+            content.extend_from_slice(&markup.close);
+            if separators.next() == Some('\t') {
+                content.extend_from_slice(&markup.tab);
+            } else {
+                content.extend_from_slice(&markup.br);
+            }
+            content.extend_from_slice(&markup.open);
+        }
+        content.extend_from_slice(quick_xml::escape::escape(segment).as_bytes());
+    }
+    content
+}
+
+/// Return whether any text element of new story text must keep its spaces.
+fn story_text_preserves_space(value: &str) -> bool {
+    value
+        .split(['\t', '\n', '\r'])
+        .any(|segment| segment.starts_with(' ') || segment.ends_with(' '))
 }
 
 fn hyperlink_has_visible_content(source: &[u8], range: Range<usize>) -> Result<bool> {

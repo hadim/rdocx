@@ -7129,7 +7129,7 @@ fn complex_field_cached_snapshot_namespace_and_literal_text_matrix() {
         ("", ""),
         (
             r#"<w:r><w:t>A&amp;&lt;</w:t></w:r><w:r><w:t><![CDATA[B>]]></w:t><w:tab/><w:br/><w:cr/><w:t>C</w:t></w:r>"#,
-            "A&<B>\tC",
+            "A&<B>\t\nC",
         ),
         (
             r#"<w:r><w:t xml:space="preserve"> 7 </w:t></w:r><w:r><w:t>8</w:t></w:r>"#,
@@ -7207,8 +7207,11 @@ fn complex_field_cached_snapshot_nested_instructions_and_hyperlink_ancestors() {
             .iter()
             .map(|(_, link)| link.text.as_str())
             .collect::<Vec<_>>(),
-        ["7yes", "neighbor"]
+        ["yes", "neighbor"]
     );
+    // The instruction part of the IF field, the nested PAGE result included,
+    // stays out of the link text, as in the typed paragraph model.
+    assert_eq!(document.links()[0].text, "yes");
     assert_eq!(links[0].1.url.as_deref(), Some("https://own.example/"));
 }
 
@@ -397740,14 +397743,17 @@ fn bibliography_apa_gurmukhi_gujarati_odia_1096_recovered_cache_is_preserved_wit
     assert_eq!(reopened.to_bytes().unwrap(), bytes);
 }
 
-/// #339: a `w:tab` in a run reads as a tab in every story item, as it does in
-/// `Paragraph::text`, rather than joining the text on either side.
-mod story_text_keeps_run_tabs {
+/// #339: run tabs and breaks read in every story item as they do in
+/// `Paragraph::text`, a field's instruction part stays out of the text, and
+/// `set_story_text` replaces the tabs and breaks along with the text.
+mod story_text_reads_run_tabs_and_breaks {
     use rdocx::{Document, StoryItemKind, StoryKind};
 
-    /// Write "left", a tab run, and "right" in the body, the default header,
-    /// and the default footer.
-    fn document_with_tabs() -> Document {
+    use super::{document_with_content_controls, document_xml, wrap_word_body};
+
+    /// Write "left", the runs `between`, and "right" in the body, the default
+    /// header, and the default footer.
+    fn document_with_runs(between: &str) -> Document {
         let mut document = Document::new();
         document.add_paragraph("left");
         document.set_header("left");
@@ -397772,7 +397778,7 @@ mod story_text_keeps_run_tabs {
             assert_eq!(xml.matches(">left</w:t></w:r>").count(), 1, "{part}");
             let xml = xml.replace(
                 ">left</w:t></w:r>",
-                ">left</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>right</w:t></w:r>",
+                &format!(">left</w:t></w:r>{between}<w:r><w:t>right</w:t></w:r>"),
             );
             package.set_part(&part, xml.into_bytes());
         }
@@ -397781,12 +397787,9 @@ mod story_text_keeps_run_tabs {
         Document::from_bytes(bytes.get_ref()).unwrap()
     }
 
-    #[test]
-    fn story_items_of_the_body_header_and_footer_keep_a_run_tab() {
-        let document = document_with_tabs();
-        assert_eq!(document.paragraphs()[0].text(), "left\tright");
-
-        let texts = document
+    /// The kind and text of every paragraph item, in story order.
+    fn paragraph_texts(document: &Document) -> Vec<(StoryKind, Option<String>)> {
+        document
             .story_item_snapshots()
             .unwrap()
             .into_iter()
@@ -397797,23 +397800,179 @@ mod story_text_keeps_run_tabs {
                     item.text().map(str::to_owned),
                 )
             })
-            .collect::<Vec<_>>();
-        let expected = Some("left\tright".to_owned());
+            .collect()
+    }
+
+    #[test]
+    fn story_items_of_the_body_header_and_footer_keep_run_tabs_and_breaks() {
+        for (between, expected) in [
+            ("<w:r><w:tab/></w:r>", "left\tright"),
+            ("<w:r><w:br/></w:r>", "left\nright"),
+            (r#"<w:r><w:br w:type="page"/></w:r>"#, "left\nright"),
+            ("<w:r><w:cr/></w:r>", "left\nright"),
+        ] {
+            let document = document_with_runs(between);
+            assert_eq!(document.paragraphs()[0].text(), expected, "{between}");
+            let expected = Some(expected.to_owned());
+            assert_eq!(
+                paragraph_texts(&document),
+                [
+                    (StoryKind::Body, expected.clone()),
+                    (StoryKind::Header, expected.clone()),
+                    (StoryKind::Footer, expected.clone()),
+                ],
+                "{between}"
+            );
+            for story in document.stories().unwrap() {
+                for item in document.story_items(&story).unwrap() {
+                    if item.kind() == StoryItemKind::Paragraph {
+                        assert_eq!(item.text().unwrap(), expected, "{story:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    fn field(instruction: &str, result: &str) -> String {
+        format!(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>{instruction}<w:r><w:fldChar w:fldCharType="separate"/></w:r>{result}<w:r><w:fldChar w:fldCharType="end"/></w:r>"#
+        )
+    }
+
+    /// Every body paragraph reads the same as a story item as through
+    /// `Paragraph::text`, with the instruction part of a field left out and
+    /// the breaks of a field result read as its cached result reads them.
+    #[test]
+    fn story_item_text_matches_paragraph_text_around_fields_and_breaks() {
+        let instruction = r#"<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>"#;
+        let seven = "<w:r><w:t>7</w:t></w:r>";
+        let nested = format!(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> IF </w:instrText></w:r>{}<w:r><w:instrText> = 7 yes no </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>yes</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+            field(instruction, seven)
+        );
+        let cases = [
+            (
+                r#"<w:r><w:t>a</w:t><w:br/><w:t>b</w:t><w:br w:type="page"/><w:t>c</w:t><w:br w:type="column"/><w:t>d</w:t><w:cr/><w:t>e</w:t></w:r>"#.to_owned(),
+                "a\nb\nc\nd\ne",
+            ),
+            (
+                format!(
+                    "<w:r><w:t>x</w:t></w:r>{}",
+                    field(
+                        r#"<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText><w:tab/></w:r>"#,
+                        seven
+                    )
+                ),
+                "x7",
+            ),
+            (
+                field(
+                    r#"<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText><w:t>X</w:t></w:r>"#,
+                    seven,
+                ),
+                "7",
+            ),
+            (
+                field(
+                    instruction,
+                    r#"<w:r><w:t>A</w:t><w:tab/><w:br/><w:br w:type="page"/><w:br w:type="column"/><w:cr/><w:t>B</w:t></w:r>"#,
+                ),
+                "A\t\n\u{000c}\u{000b}B",
+            ),
+            (nested, "yes"),
+        ];
+        let body = cases
+            .iter()
+            .map(|(content, _)| format!("<w:p>{content}</w:p>"))
+            .collect::<String>();
+        let document = document_with_content_controls(&wrap_word_body(&body));
+
+        let paragraphs = document.paragraphs();
+        let texts = paragraph_texts(&document);
+        assert_eq!(texts.len(), cases.len());
+        for (index, (_, expected)) in cases.iter().enumerate() {
+            assert_eq!(paragraphs[index].text(), *expected, "paragraph {index}");
+            assert_eq!(
+                texts[index],
+                (StoryKind::Body, Some((*expected).to_owned())),
+                "story item {index}"
+            );
+        }
+    }
+
+    #[test]
+    fn set_story_text_replaces_visible_tabs_and_breaks_only() {
+        let mut document = document_with_runs("<w:r><w:tab/><w:br/><w:cr/></w:r>");
+        for item in document.story_item_snapshots().unwrap() {
+            if item.location().item_kind() == StoryItemKind::Paragraph {
+                document.set_story_text(item.location(), "new").unwrap();
+            }
+        }
+        let expected = Some("new".to_owned());
         assert_eq!(
-            texts,
+            paragraph_texts(&document),
             [
                 (StoryKind::Body, expected.clone()),
                 (StoryKind::Header, expected.clone()),
-                (StoryKind::Footer, expected.clone()),
+                (StoryKind::Footer, expected),
             ]
         );
+        assert_eq!(document.paragraphs()[0].text(), "new");
 
-        for story in document.stories().unwrap() {
-            for item in document.story_items(&story).unwrap() {
-                if item.kind() == StoryItemKind::Paragraph {
-                    assert_eq!(item.text().unwrap(), expected, "{story:?}");
+        // A tab stop, a deleted tab and a tab in a field's instruction part
+        // are not visible text, so they stay. The visible tab goes.
+        let body = format!(
+            r#"<w:p><w:pPr><w:tabs><w:tab w:val="left" w:pos="100"/></w:tabs></w:pPr><w:r><w:t>left</w:t></w:r><w:del w:id="1" w:author="A"><w:r><w:tab/></w:r></w:del><w:r><w:tab/><w:t>right</w:t></w:r>{}</w:p>"#,
+            field(
+                r#"<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText><w:tab/></w:r>"#,
+                "<w:r><w:t>7</w:t></w:r>"
+            )
+        );
+        let mut document = document_with_content_controls(&wrap_word_body(&body));
+        assert_eq!(document.paragraphs()[0].text(), "left\tright7");
+        assert_eq!(document_xml(&mut document).matches("<w:tab/>").count(), 3);
+        let item = document.story_item_snapshots().unwrap().remove(0);
+        document.set_story_text(item.location(), "new").unwrap();
+        assert_eq!(document.paragraphs()[0].text(), "new");
+        let xml = document_xml(&mut document);
+        assert_eq!(xml.matches("<w:tab/>").count(), 2, "{xml}");
+        assert!(
+            xml.contains(r#"<w:tab w:val="left" w:pos="100"/>"#),
+            "{xml}"
+        );
+        assert!(xml.contains("<w:r><w:tab/></w:r></w:del>"), "{xml}");
+        assert!(xml.contains("</w:instrText><w:tab/>"), "{xml}");
+    }
+
+    /// New text with a tab or a line break writes `w:tab` and `w:br`, as
+    /// `Paragraph::set_text` does, and reads back the same.
+    #[test]
+    fn set_story_text_writes_tabs_and_breaks_as_run_content() {
+        for value in ["a\tb\nc", " a \t b ", "\tx\n"] {
+            let mut document = document_with_runs("<w:r><w:tab/></w:r>");
+            let mut empty = Document::new();
+            empty.add_paragraph("");
+            for item in document.story_item_snapshots().unwrap() {
+                if item.location().item_kind() == StoryItemKind::Paragraph {
+                    document.set_story_text(item.location(), value).unwrap();
                 }
             }
+            let item = empty.story_item_snapshots().unwrap().remove(0);
+            empty.set_story_text(item.location(), value).unwrap();
+
+            let expected = Some(value.to_owned());
+            assert!(
+                paragraph_texts(&document)
+                    .iter()
+                    .all(|(_, text)| *text == expected),
+                "{value:?}: {:?}",
+                paragraph_texts(&document)
+            );
+            assert_eq!(document.paragraphs()[0].text(), value);
+            assert_eq!(empty.paragraphs()[0].text(), value);
+            assert_eq!(paragraph_texts(&empty)[0].1, expected);
+            let xml = document_xml(&mut document);
+            assert!(!xml.contains('\t'), "{xml}");
         }
     }
 }
