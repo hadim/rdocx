@@ -2194,7 +2194,7 @@ to `9fd0b8da374b8c641e7ab89c0bd3d76bd2f4519a`. Its updated contribution
 remains assigned to F-X203. Its immutable update has been assessed against
 the existing approved contract, with remaining acceptance controls retained.
 All twenty-eight included issues and twenty-two PRs match this resolution map.
-The 2026-10-11 17:06 UTC refresh found no additions or changed PR heads.
+The 2026-10-11 17:27 UTC refresh found no additions or changed PR heads.
 
 | Included issues | Included PRs | S91 acceptance owners | Resolution work |
 |---|---|---|---|
@@ -2962,3 +2962,18 @@ Its portable comparator and APA key authority remain technical barriers.
 Five stories are completed and integrated, four are in progress and thirteen
 remain approved. Final integrated verification, sprint review and close
 preflight remain outstanding. The sprint is not ready for close.
+
+## S91 TOC repair integration checkpoint, 2026-10-11
+
+F-X213 is scoped-verified and integrated at4b5eb59b. Issue340 andPR341
+acceptance passes for entry-owned TOC rebuild, opaque properties, namespace
+closure, repeated rebuild and save/reopen. Independent integration pass17
+is clean. Native and installed controls, typing, bothWASM, unchanged49
+hashes, policy, verified22 archives, docs and README consumers pass.
+The worker handoff is consumed. Its branch and scoped evidence remain
+available. Final integrated sprint verification, review and delivery ledgers
+remain due, so this feature is reviewed rather than counted completed.
+Eight stories are completed, one is integrated and reviewed, four are
+running, and eight approved stories await their prerequisite checkpoints.
+GitHub reconciliation follows the sprint-close workflow. Issues264 and281
+remain excluded and open.

@@ -82,7 +82,7 @@ checkpoints. Final closure requires complete issue acceptance and explicit
 integrated or superseded PR resolution. Keep Issues264 and281 open.
 Read-only intake is retained at /private/tmp/S91-intake-reopened-20261011.
 Earlier frozen-intake paragraphs are historical and superseded by this decision.
-The 2026-10-11 17:06 UTC refresh found no new records or changed PR heads.
+The 2026-10-11 17:27 UTC refresh found no new records or changed PR heads.
 All current records retain the acceptance owners in SPRINT_PLAN.md.
 
 PR302 entered the rolling intake at immutable head
@@ -795,3 +795,18 @@ the current owners until explicit source handover. Cargo, package and baseline
 work remain serialized by the integrator. No formal dependency is changed.
 After this claim S91 has eight completed stories, four in progress and nine
 pending. Full sprint verification and clean sprint review remain due.
+
+## S91 TOC repair integration checkpoint, 2026-10-11
+
+F-X213 is scoped-verified and integrated at4b5eb59b. Issue340 andPR341
+acceptance passes for entry-owned TOC rebuild, opaque properties, namespace
+closure, repeated rebuild and save/reopen. Independent integration pass17
+is clean. Native and installed controls, typing, bothWASM, unchanged49
+hashes, policy, verified22 archives, docs and README consumers pass.
+The worker handoff is consumed. Its branch and scoped evidence remain
+available. Final integrated sprint verification, review and delivery ledgers
+remain due, so this feature is reviewed rather than counted completed.
+Eight stories are completed, one is integrated and reviewed, four are
+running, and eight approved stories await their prerequisite checkpoints.
+GitHub reconciliation follows the sprint-close workflow. Issues264 and281
+remain excluded and open.
