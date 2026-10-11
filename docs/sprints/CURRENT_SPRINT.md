@@ -6,8 +6,8 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 now contains twenty-one active stories, seven completed, three in progress
-and eleven approved pending implementation. Rolling contribution intake is reopened at the user's latest instruction.
+S91 now contains twenty-one active stories, seven completed, four in progress
+and ten approved pending implementation. Rolling contribution intake is reopened at the user's latest instruction.
 
 ## Spec references
 
@@ -43,7 +43,7 @@ and eleven approved pending implementation. Rolling contribution intake is reope
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | pending | - |
 | F-X211 | Complete Python script compatibility and safe XML access | L | pending | - |
 | F-X212 | Align native accessibility with visible paragraph content | M | done | - |
-| F-X213 | Preserve TOC entry boundary paragraphs during rebuild | M | pending | - |
+| F-X213 | Preserve TOC entry boundary paragraphs during rebuild | M | in-progress | codex |
 
 ## Carried to S92, user scope decision
 
