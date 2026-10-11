@@ -25,6 +25,7 @@ use crate::namespace::{
     non_visual_drawing_id, non_visual_drawing_name, root_attributes, self_contained_attributes,
     set_non_visual_drawing_name,
 };
+use crate::namespace::{MAX_NESTING, nesting_error, nesting_exceeds};
 use crate::picture::CT_Picture;
 use crate::placeholder::{ApplicationProperties, CT_Placeholder, parse_application_properties};
 
@@ -378,9 +379,11 @@ impl CT_AlternateContent {
     }
 
     fn from_fragment(xml: &[u8], inherited: &[(String, String)]) -> Result<Self> {
+        reject_deep_shape_nesting(xml)?;
         let mut reader = Reader::from_reader(xml);
         let mut buffer = Vec::new();
         loop {
+            let position = reader.buffer_position() as usize;
             match reader.read_event_into(&mut buffer)? {
                 Event::Start(start) => {
                     let namespaces =
@@ -390,7 +393,7 @@ impl CT_AlternateContent {
                     {
                         return Err(unexpected(&start));
                     }
-                    return Self::from_reader(&mut reader, &namespaces, xml);
+                    return Self::from_reader(&mut reader, &namespaces, xml, position);
                 }
                 Event::Empty(start) => {
                     let namespaces =
@@ -415,10 +418,14 @@ impl CT_AlternateContent {
         }
     }
 
+    /// Parses the alternate content whose start tag, beginning at `start` in
+    /// `source`, `reader` has just read. `reader` reads `source` from its
+    /// first byte, and the element's bytes there are kept as its raw XML.
     fn from_reader(
         reader: &mut Reader<&[u8]>,
         namespaces: &NamespaceBindings,
-        raw_xml: &[u8],
+        source: &[u8],
+        start: usize,
     ) -> Result<Self> {
         let mut chart_choice = None;
         let mut selected_fallback = None;
@@ -431,18 +438,22 @@ impl CT_AlternateContent {
                         && child_namespaces.element_uri(child.name().as_ref()) == Some(MC_NS);
                     let is_choice = local_name(child.name().as_ref()) == b"Choice"
                         && child_namespaces.element_uri(child.name().as_ref()) == Some(MC_NS);
-                    let raw = capture_element(reader, &child)?;
-                    if is_choice && chart_choice.is_none() {
-                        chart_choice = parse_chart_choice(&raw, &child_namespaces.entries())?;
-                    } else if is_fallback {
+                    if is_fallback {
                         if selected_fallback.is_some() {
                             return Err(duplicate_fallback());
                         }
-                        selected_fallback = Some(parse_compatibility_members(
-                            &raw,
-                            &child_namespaces.entries(),
+                        selected_fallback = Some(parse_compatibility_reader(
+                            reader,
+                            source,
+                            &child_namespaces,
                             b"Fallback",
                         )?);
+                        buffer.clear();
+                        continue;
+                    }
+                    let raw = capture_element(reader, &child)?;
+                    if is_choice && chart_choice.is_none() {
+                        chart_choice = parse_chart_choice(&raw, &child_namespaces.entries())?;
                     }
                 }
                 Event::Empty(child) => {
@@ -458,7 +469,7 @@ impl CT_AlternateContent {
                 }
                 Event::End(end) if local_name(end.name().as_ref()) == b"AlternateContent" => {
                     return Ok(Self {
-                        raw_xml: raw_xml.to_vec(),
+                        raw_xml: source[start..reader.buffer_position() as usize].to_vec(),
                         chart_choice,
                         selected_fallback,
                     });
@@ -1813,6 +1824,7 @@ impl CT_GroupShape {
 }
 
 fn parse_group(xml: &[u8], inherited: &[(String, String)], kind: GroupKind) -> Result<ParsedGroup> {
+    reject_deep_shape_nesting(xml)?;
     let mut reader = Reader::from_reader(xml);
     let mut buffer = Vec::new();
     loop {
@@ -1825,7 +1837,7 @@ fn parse_group(xml: &[u8], inherited: &[(String, String)], kind: GroupKind) -> R
                     return Err(unexpected(&start));
                 }
                 namespaces.reject_writer_conflicts(FIXED_SHAPE_TREE_PREFIXES)?;
-                return parse_group_children(&mut reader, &start, &namespaces, kind);
+                return parse_group_children(&mut reader, xml, &start, &namespaces, kind);
             }
             Event::Empty(start) => {
                 let namespaces = NamespaceBindings::from_entries(inherited).with_start(&start)?;
@@ -1846,8 +1858,13 @@ fn parse_group(xml: &[u8], inherited: &[(String, String)], kind: GroupKind) -> R
     }
 }
 
+/// Parses the members of a group whose start tag `reader` has just read.
+///
+/// `reader` reads `source` from its first byte, so that a nested group or
+/// alternate content member is parsed in place and kept as its source bytes.
 fn parse_group_children(
     reader: &mut Reader<&[u8]>,
+    source: &[u8],
     start: &BytesStart<'_>,
     namespaces: &NamespaceBindings,
     kind: GroupKind,
@@ -1860,11 +1877,25 @@ fn parse_group_children(
     let mut state = 0usize;
     let mut buffer = Vec::new();
     loop {
+        let position = reader.buffer_position() as usize;
         match reader.read_event_into(&mut buffer)? {
             Event::Start(child) => {
                 let child_namespaces = namespaces.with_start(&child)?;
                 let name = local_name(child.name().as_ref()).to_vec();
                 let uri = child_namespaces.element_uri(child.name().as_ref());
+                if state == 2
+                    && parse_nested_member(
+                        reader,
+                        source,
+                        position,
+                        &child,
+                        &child_namespaces,
+                        &mut children,
+                    )?
+                {
+                    buffer.clear();
+                    continue;
+                }
                 let raw = capture_element(reader, &child)?;
                 capture_group_child(
                     &name,
@@ -1963,71 +1994,37 @@ fn capture_group_child(
     Ok(())
 }
 
-fn parse_compatibility_members(
-    xml: &[u8],
-    inherited: &[(String, String)],
-    expected_name: &[u8],
-) -> Result<Vec<ShapeTreeChild>> {
-    let mut reader = Reader::from_reader(xml);
-    let mut buffer = Vec::new();
-    loop {
-        match reader.read_event_into(&mut buffer)? {
-            Event::Start(start) => {
-                let namespaces = NamespaceBindings::from_entries(inherited).with_start(&start)?;
-                if local_name(start.name().as_ref()) != expected_name
-                    || namespaces.element_uri(start.name().as_ref()) != Some(MC_NS)
-                {
-                    return Err(unexpected(&start));
-                }
-                return parse_compatibility_reader(&mut reader, &namespaces, expected_name);
-            }
-            Event::Empty(start) => {
-                let namespaces = NamespaceBindings::from_entries(inherited).with_start(&start)?;
-                if local_name(start.name().as_ref()) != expected_name
-                    || namespaces.element_uri(start.name().as_ref()) != Some(MC_NS)
-                {
-                    return Err(unexpected(&start));
-                }
-                return Ok(Vec::new());
-            }
-            Event::Eof => {
-                return Err(OxmlError::MissingElement(format!(
-                    "mc:{}",
-                    String::from_utf8_lossy(expected_name)
-                )));
-            }
-            _ => {}
-        }
-        buffer.clear();
-    }
-}
-
+/// Parses the members of the `mc:Fallback` whose start tag `reader` has just
+/// read, nested ones in place as [`parse_group_children`] does.
 fn parse_compatibility_reader(
     reader: &mut Reader<&[u8]>,
+    source: &[u8],
     namespaces: &NamespaceBindings,
     expected_name: &[u8],
 ) -> Result<Vec<ShapeTreeChild>> {
     let mut children = Vec::new();
     let mut buffer = Vec::new();
     loop {
+        let position = reader.buffer_position() as usize;
         match reader.read_event_into(&mut buffer)? {
             Event::Start(child) => {
                 let child_namespaces = namespaces.with_start(&child)?;
-                let name = local_name(child.name().as_ref()).to_vec();
-                let uri = child_namespaces.element_uri(child.name().as_ref());
-                let raw = capture_element(reader, &child)?;
-                if let Some(child) = parse_shape_tree_child(&name, uri, &raw, &child_namespaces)? {
-                    children.push(child);
+                if !parse_nested_member(
+                    reader,
+                    source,
+                    position,
+                    &child,
+                    &child_namespaces,
+                    &mut children,
+                )? {
+                    let raw = capture_element(reader, &child)?;
+                    push_typed_member(&mut children, &child, &raw, &child_namespaces)?;
                 }
             }
             Event::Empty(child) => {
                 let child_namespaces = namespaces.with_start(&child)?;
-                let name = local_name(child.name().as_ref()).to_vec();
-                let uri = child_namespaces.element_uri(child.name().as_ref());
                 let raw = capture_empty_element(&child)?;
-                if let Some(child) = parse_shape_tree_child(&name, uri, &raw, &child_namespaces)? {
-                    children.push(child);
-                }
+                push_typed_member(&mut children, &child, &raw, &child_namespaces)?;
             }
             Event::End(end) if local_name(end.name().as_ref()) == expected_name => {
                 return Ok(children);
@@ -2042,6 +2039,79 @@ fn parse_compatibility_reader(
         }
         buffer.clear();
     }
+}
+
+/// Appends the typed member that `raw`, a captured child with start tag
+/// `start`, holds, if any.
+fn push_typed_member(
+    children: &mut Vec<ShapeTreeChild>,
+    start: &BytesStart<'_>,
+    raw: &[u8],
+    namespaces: &NamespaceBindings,
+) -> Result<()> {
+    let name = local_name(start.name().as_ref()).to_vec();
+    let uri = namespaces.element_uri(start.name().as_ref());
+    if let Some(child) = parse_shape_tree_child(&name, uri, raw, namespaces)? {
+        children.push(child);
+    }
+    Ok(())
+}
+
+/// Parses a `p:grpSp` or `mc:AlternateContent` member whose start tag,
+/// beginning at `position` in `source`, `reader` has just read, and appends
+/// it to `children`. Returns `false`, reading nothing, for any other member.
+///
+/// Each nested level is read once, in place, rather than captured and parsed
+/// again, which made the work grow with the square of the depth.
+fn parse_nested_member(
+    reader: &mut Reader<&[u8]>,
+    source: &[u8],
+    position: usize,
+    start: &BytesStart<'_>,
+    namespaces: &NamespaceBindings,
+    children: &mut Vec<ShapeTreeChild>,
+) -> Result<bool> {
+    let name = start.name();
+    match (
+        namespaces.element_uri(name.as_ref()),
+        local_name(name.as_ref()),
+    ) {
+        (Some(P_NS), b"grpSp") => {
+            namespaces.reject_writer_conflicts(FIXED_SHAPE_TREE_PREFIXES)?;
+            let parsed =
+                parse_group_children(reader, source, start, namespaces, GroupKind::GroupShape)?;
+            push_group(children, parsed);
+        }
+        (Some(MC_NS), b"AlternateContent") => {
+            let alternate = CT_AlternateContent::from_reader(reader, namespaces, source, position)?;
+            push_alternate_content(children, alternate);
+        }
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+// A `ShapeTreeChild` is large, so these build one outside the frames of the
+// recursive parsers, which would otherwise hold it on every nested level.
+fn push_group(children: &mut Vec<ShapeTreeChild>, parsed: ParsedGroup) {
+    children.push(ShapeTreeChild::GroupShape(Box::new(
+        CT_GroupShape::from_parsed(parsed),
+    )));
+}
+
+fn push_alternate_content(children: &mut Vec<ShapeTreeChild>, alternate: CT_AlternateContent) {
+    children.push(ShapeTreeChild::AlternateContent(Box::new(alternate)));
+}
+
+/// Rejects a shape tree, group or alternate content fragment whose groups
+/// and alternate content nest deeper than [`MAX_NESTING`], without
+/// recursing. The parsers and every walker of the parsed tree recurse once
+/// per level.
+fn reject_deep_shape_nesting(xml: &[u8]) -> Result<()> {
+    if nesting_exceeds(xml, &[b"grpSp", b"AlternateContent"], MAX_NESTING) {
+        return Err(nesting_error("group and alternate content"));
+    }
+    Ok(())
 }
 
 fn parse_shape_tree_child(

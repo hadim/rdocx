@@ -4050,6 +4050,228 @@ print(
     }
 }
 
+/// Issue 344: groups, alternate content and time nodes nested without bound
+/// used to overflow the stack at open, and parsing them took time growing
+/// with the square of their depth.
+mod nesting_limits_reject_deep_slides {
+    use super::*;
+    use rpptx_oxml::namespace::MAX_NESTING;
+
+    const MC_NS: &str = "http://schemas.openxmlformats.org/markup-compatibility/2006";
+
+    fn text_box(id: usize, text: &str) -> String {
+        format!(
+            r#"<p:sp><p:nvSpPr><p:cNvPr id="{id}" name="Text {id}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="914400" y="914400"/><a:ext cx="3657600" cy="914400"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>{text}</a:t></a:r></a:p></p:txBody></p:sp>"#
+        )
+    }
+
+    fn group_start(id: usize) -> String {
+        format!(
+            r#"<p:grpSp><p:nvGrpSpPr><p:cNvPr id="{id}" name="Group {id}"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="12192000" cy="6858000"/><a:chOff x="0" y="0"/><a:chExt cx="12192000" cy="6858000"/></a:xfrm></p:grpSpPr>"#
+        )
+    }
+
+    /// `depth` levels of shape tree nesting around a text box, each level a
+    /// group, or an alternate content fallback when `alternate(level)`.
+    fn nested_shapes(depth: usize, alternate: impl Fn(usize) -> bool) -> String {
+        let mut starts = String::new();
+        let mut ends = Vec::new();
+        for level in 0..depth {
+            if alternate(level) {
+                starts.push_str(&format!(
+                    r#"<mc:AlternateContent xmlns:mc="{MC_NS}"><mc:Fallback>"#
+                ));
+                ends.push("</mc:Fallback></mc:AlternateContent>");
+            } else {
+                starts.push_str(&group_start(100 + level));
+                ends.push("</p:grpSp>");
+            }
+        }
+        ends.reverse();
+        format!("{starts}{}{}", text_box(10, "deepest"), ends.concat())
+    }
+
+    /// `depth` levels of `p:par/p:cTn/p:childTnLst`, or of `p:subTnLst`
+    /// when `sub_lists`, under the root time node.
+    fn nested_time_nodes(depth: usize, sub_lists: bool) -> String {
+        let list = if sub_lists { "subTnLst" } else { "childTnLst" };
+        let mut xml =
+            r#"<p:timing><p:tnLst><p:par><p:cTn id="1" dur="indefinite" nodeType="tmRoot">"#
+                .to_owned();
+        for level in 0..depth {
+            xml.push_str(&format!(
+                r#"<p:{list}><p:par><p:cTn id="{}" fill="hold">"#,
+                level + 2
+            ));
+        }
+        for _ in 0..depth {
+            xml.push_str(&format!("</p:cTn></p:par></p:{list}>"));
+        }
+        xml.push_str("</p:cTn></p:par></p:tnLst></p:timing>");
+        xml
+    }
+
+    /// A one-slide deck whose shape tree ends with `shapes` and whose slide
+    /// holds `timing`.
+    fn deck(shapes: &str, timing: &str) -> Vec<u8> {
+        let mut presentation = Presentation::new().expect("open bundled template");
+        presentation.add_slide(6).expect("add blank slide");
+        let bytes = presentation.to_bytes().unwrap();
+        let mut package = open_opc(&bytes, "nesting fixture");
+        let xml = String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec())
+            .unwrap()
+            .replacen("</p:spTree>", &format!("{shapes}</p:spTree>"), 1);
+        let after = if xml.contains("</p:clrMapOvr>") {
+            "</p:clrMapOvr>"
+        } else {
+            "</p:cSld>"
+        };
+        let xml = xml.replacen(after, &format!("{after}{timing}"), 1);
+        package.set_part("/ppt/slides/slide1.xml", xml.into_bytes());
+        package_bytes(package)
+    }
+
+    fn open_error(bytes: &[u8]) -> String {
+        match Presentation::from_bytes(bytes) {
+            Ok(_) => panic!("the deck opened"),
+            Err(error) => error.to_string(),
+        }
+    }
+
+    #[test]
+    fn groups_nested_past_the_limit_fail_to_open() {
+        for depth in [MAX_NESTING + 1, 100_000] {
+            let error = open_error(&deck(&nested_shapes(depth, |_| false), ""));
+            assert!(
+                error.contains(&format!(
+                    "group and alternate content nesting exceeds {MAX_NESTING} levels"
+                )),
+                "{depth}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn alternate_content_nested_past_the_limit_fails_to_open() {
+        for depth in [MAX_NESTING + 1, 100_000] {
+            for shapes in [
+                nested_shapes(depth, |_| true),
+                nested_shapes(depth, |level| level % 2 == 1),
+            ] {
+                let error = open_error(&deck(&shapes, ""));
+                assert!(
+                    error.contains(&format!(
+                        "group and alternate content nesting exceeds {MAX_NESTING} levels"
+                    )),
+                    "{depth}: {error}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn time_nodes_nested_past_the_limit_fail_to_open() {
+        for depth in [MAX_NESTING + 1, 100_000] {
+            for sub_lists in [false, true] {
+                let error = open_error(&deck("", &nested_time_nodes(depth, sub_lists)));
+                assert!(
+                    error.contains(&format!("time node nesting exceeds {MAX_NESTING} levels")),
+                    "{depth}: {error}"
+                );
+            }
+        }
+    }
+
+    /// Every walker of the parsed tree, in the layout and render crates too,
+    /// handles a slide at the limit on the 2 MB stack of a test thread.
+    #[test]
+    fn slides_nested_at_the_limit_open_extract_text_render_and_save() {
+        let decks = [
+            ("groups", deck(&nested_shapes(MAX_NESTING, |_| false), "")),
+            (
+                "alternate content",
+                deck(&nested_shapes(MAX_NESTING, |_| true), ""),
+            ),
+            (
+                "groups and alternate content",
+                deck(&nested_shapes(MAX_NESTING, |level| level % 2 == 1), ""),
+            ),
+            (
+                "time nodes",
+                deck(
+                    &text_box(10, "deepest"),
+                    &nested_time_nodes(MAX_NESTING, false),
+                ),
+            ),
+        ];
+        for (name, bytes) in decks {
+            let presentation = Presentation::from_bytes(&bytes).unwrap();
+            assert!(
+                presentation.slide(0).unwrap().text().contains("deepest"),
+                "{name}"
+            );
+            #[cfg(feature = "render")]
+            {
+                presentation.to_pdf_deterministic().unwrap();
+                presentation
+                    .render_timeline_deterministic(0, TimelinePosition::default(), None)
+                    .unwrap();
+            }
+            let saved = presentation.to_bytes().unwrap();
+            let reopened = Presentation::from_bytes(&saved).unwrap();
+            assert!(
+                reopened.slide(0).unwrap().text().contains("deepest"),
+                "{name}"
+            );
+            assert_eq!(reopened.to_bytes().unwrap(), saved, "{name}");
+        }
+    }
+
+    #[test]
+    fn groups_authored_to_the_limit_render_save_and_reopen() {
+        let mut presentation = Presentation::new().expect("open bundled template");
+        presentation.add_slide(6).expect("add blank slide");
+        let mut path = Vec::new();
+        for _ in 0..MAX_NESTING {
+            presentation
+                .shapes_mut(0, &path)
+                .unwrap()
+                .add_group_shape()
+                .unwrap();
+            path.push(0);
+        }
+        let error = presentation
+            .shapes_mut(0, &path)
+            .unwrap()
+            .add_group_shape()
+            .err()
+            .expect("a group past the limit is refused");
+        assert!(
+            error
+                .to_string()
+                .contains(&format!("group nesting exceeds {MAX_NESTING} levels")),
+            "{error}"
+        );
+        presentation
+            .shapes_mut(0, &path)
+            .unwrap()
+            .add_textbox(Emu(914_400), Emu(914_400), Emu(3_657_600), Emu(914_400))
+            .unwrap()
+            .set_text("deepest")
+            .unwrap();
+        assert!(presentation.slide(0).unwrap().text().contains("deepest"));
+        #[cfg(feature = "render")]
+        {
+            presentation.to_pdf_deterministic().unwrap();
+            presentation
+                .render_timeline_deterministic(0, TimelinePosition::default(), None)
+                .unwrap();
+        }
+        let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
+        assert!(reopened.slide(0).unwrap().text().contains("deepest"));
+    }
+}
+
 fn normalize_smartart_oracle_png(path: &Path, width: u32, height: u32, index: usize) -> Vec<u8> {
     let output = std::env::temp_dir().join(format!(
         "rpptx-f220-normalized-{}-{index}.png",

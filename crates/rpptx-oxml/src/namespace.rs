@@ -23,6 +23,60 @@ pub const MC_NS: &str = "http://schemas.openxmlformats.org/markup-compatibility/
 pub(crate) const FIXED_MODEL_PREFIXES: &[&str] = &["p", "a", "r"];
 pub(crate) const FIXED_SHAPE_TREE_PREFIXES: &[&str] = &["p", "a", "r", "mc"];
 
+/// Deepest nesting the readers accept for the recursive structures of a
+/// slide: groups and alternate content in a shape tree, and time node lists
+/// in `p:timing`.
+///
+/// PowerPoint nests these a handful of levels deep. The parsers, the
+/// serialisers and the walkers of the layout and render crates recurse once
+/// per level, so a bound far above anything a producer writes keeps every
+/// one of them within the stack. At this depth a debug build opens, renders
+/// and saves a slide in about 1.7 MB of stack, little more than a flat
+/// slide needs, which fits the 2 MB default of spawned Rust threads. At 32
+/// levels it took close to 2 MB.
+pub const MAX_NESTING: usize = 16;
+
+/// Whether elements named in `locals` nest more than `limit` deep along any
+/// path in `xml`, found without recursing.
+///
+/// An element counts whatever its namespace, which can only over-count.
+/// Malformed XML counts up to the error, so the parser still reports it.
+pub(crate) fn nesting_exceeds(xml: &[u8], locals: &[&[u8]], limit: usize) -> bool {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut open_counts = Vec::new();
+    let mut depth = 0usize;
+    loop {
+        match reader.read_event_into(&mut buffer) {
+            Ok(Event::Start(start)) => {
+                let name = start.name();
+                let local = name.as_ref().rsplit(|byte| *byte == b':').next();
+                let counts = locals.iter().any(|candidate| local == Some(*candidate));
+                if counts {
+                    depth += 1;
+                    if depth > limit {
+                        return true;
+                    }
+                }
+                open_counts.push(counts);
+            }
+            Ok(Event::End(_)) => {
+                if open_counts.pop() == Some(true) {
+                    depth -= 1;
+                }
+            }
+            Ok(Event::Eof) | Err(_) => return false,
+            Ok(_) => {}
+        }
+        buffer.clear();
+    }
+}
+
+/// The error for XML that [`nesting_exceeds`] rejects.
+pub(crate) fn nesting_error(what: &str) -> OxmlError {
+    OxmlError::InvalidValue(format!("{what} nesting exceeds {MAX_NESTING} levels"))
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct NamespaceBindings {
     default: Option<String>,
