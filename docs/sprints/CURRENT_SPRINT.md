@@ -937,3 +937,19 @@ They held13669691861 logical bytes. Available disk increased from about459GiB
 to464GiB. Active worktrees, current build targets, retained package/review
 evidence, licensed font inputs and carried bibliography captures remain.
 The current native build is running once for both pending paint gates.
+
+## Rolling intake and remaining gate checkpoint, 2026-10-11 19:33UTC
+
+The actual GitHub refresh is unchanged from18:56UTC. There are38 included
+open issues and22 open pull requests, with no new records, changed issue
+bodies or changed PR heads. Discussion issues264 and281 remain excluded.
+
+The admitted F-X206 Word regression run reports a failure in
+fragment_import_preserves_unmodeled_xml_and_reopens. The same execution
+continues unchanged until its complete diagnostics and terminal result.
+This row is not passing evidence. The joint checkbox generator also exposed
+a setup error, omitting the required empty text argument. Its exact wheel
+installation and full package provenance passed, but no fixture pair or
+paint acceptance is credited. Independent lifecycle pass14 records the
+external fixture and per-command artifact guard corrections. Existing
+actual font acceptance remains valid within its separately recorded scope.
