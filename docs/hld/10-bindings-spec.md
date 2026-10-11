@@ -1395,8 +1395,13 @@ read. The importer supports source-ordered paragraphs, runs, nested lists, and
 spanned tables plus the bounded inline and embedded CSS subset. It keeps safe
 hyperlinks and base64 data URI images, as a fragment insertion does, and keeps
 the alternate text of an image it cannot decode. It does not fetch external
-resources. Python, WASM, and CLI surfaces gain no HTML import entry point and
-retain their existing methods and error contracts.
+resources. Python binds both constructors as `Document.from_html` and
+`Document.open_html`, each returning the document and a tuple of frozen
+`HtmlDiagnostic` values, and binds fragment insertion as
+`Document.insert_html(html, after=None)`, which inserts after a direct story
+item or at the end of the body and returns the diagnostics. The CLI `convert`
+command reads a `.html` or `.htm` input as HTML, writes DOCX by default, and
+prints each diagnostic on stderr. WASM gains no HTML import entry point.
 
 Native Rust callers can also insert rich HTML into an existing Word story with
 `Document::insert_html_fragment(&ContentLocation, &str,
@@ -1407,8 +1412,9 @@ body, cell, header, and footer destinations supported by the story API. Its
 child range, and ordered `HtmlDiagnostic` values. Links and images are scoped
 to the physical destination part. Unsupported or unresolved markup is
 diagnosed, while invalid locations, malformed resources, bound failures, and
-package failures leave the document unchanged. This surface remains native
-Rust only.
+package failures leave the document unchanged. Python reaches it through
+`Document.insert_html` without image resources, so only data URI images
+resolve there.
 
 Native Rust callers can import and export bounded MHTML through
 `Document::from_mhtml_bytes`, `Document::open_mhtml`,

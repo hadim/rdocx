@@ -553,6 +553,92 @@ def _body_images(data):
         ]
 
 
+def _report_html():
+    import base64
+
+    image = base64.b64encode(_one_pixel_png()).decode()
+    return (
+        "<h1>Report</h1><h2>Findings</h2>"
+        "<p>See <a href='https://example.test/report'>the report</a>.</p>"
+        "<ul><li>first<ol><li>nested</li></ol></li><li>second</li></ul>"
+        "<table><tr><th>Name</th><th>Value</th></tr><tr><td>a</td><td>1</td></tr></table>"
+        f"<p><img src='data:image/png;base64,{image}' alt='dot' width='2' height='2'></p>"
+        "<p><script>dropped()</script>end</p>"
+    )
+
+
+def _assert_report_document(document, diagnostics):
+    import rdocx
+
+    assert [diagnostic.message for diagnostic in diagnostics] == ["dropped HTML script"]
+    assert all(isinstance(diagnostic, rdocx.HtmlDiagnostic) for diagnostic in diagnostics)
+    paragraphs = document.paragraphs
+    assert [(paragraph.text, paragraph.style) for paragraph in paragraphs[:2]] == [
+        ("Report", "Heading1"),
+        ("Findings", "Heading2"),
+    ]
+    assert paragraphs[2].text == "See the report."
+    items = [(paragraph.text, paragraph.numbering) for paragraph in paragraphs[3:6]]
+    assert [text for text, _ in items] == ["first", "nested", "second"]
+    assert [numbering[1] for _, numbering in items] == [0, 1, 0]
+    numbering = zipfile.ZipFile(io.BytesIO(document.to_bytes())).read("word/numbering.xml")
+    assert b'w:val="bullet"' in numbering and b'w:val="decimal"' in numbering
+    table = document.tables[0]
+    assert [[cell.text for cell in row.cells] for row in table.rows] == [
+        ["Name", "Value"],
+        ["a", "1"],
+    ]
+    assert [(link.text, link.url) for link in document.hyperlinks] == [
+        ("the report", "https://example.test/report")
+    ]
+    data = document.to_bytes()
+    assert _body_images(data) == [_one_pixel_png()]
+    assert b"<wp:inline" in _document_xml(rdocx.Document.from_bytes(data))
+
+
+def test_issue_350_html_creates_a_styled_document(tmp_path):
+    import rdocx
+
+    document, diagnostics = rdocx.Document.from_html(_report_html())
+    _assert_report_document(document, diagnostics)
+
+    path = tmp_path / "report.html"
+    path.write_text(_report_html(), encoding="utf-8")
+    document, diagnostics = rdocx.Document.open_html(path)
+    _assert_report_document(document, diagnostics)
+    assert diagnostics[0] == rdocx.HtmlDiagnostic(
+        location=diagnostics[0].location, message="dropped HTML script"
+    )
+
+    with pytest.raises(rdocx.RdocxError):
+        rdocx.Document.open_html(tmp_path / "missing.html")
+
+
+def test_issue_350_insert_html_after_a_story_item():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("first")
+    document.add_paragraph("last")
+    first = next(item for item in document.story_items if item.text == "first")
+    diagnostics = document.insert_html(
+        "<p>middle <a href='https://example.test/'>link</a></p><iframe>x</iframe>", after=first
+    )
+    assert [diagnostic.message for diagnostic in diagnostics] == ["dropped HTML iframe content"]
+    assert document.insert_html("<h2>tail</h2>") == ()
+    assert [paragraph.text for paragraph in document.paragraphs] == [
+        "first",
+        "middle link",
+        "last",
+        "tail",
+    ]
+    assert document.paragraphs[3].style == "Heading2"
+    assert [link.url for link in document.hyperlinks] == ["https://example.test/"]
+
+    with pytest.raises(rdocx.StaleElementError):
+        document.insert_html("<p>stale</p>", after=first)
+
+
 @pytest.mark.parametrize(
     ("caption", "size"),
     [
@@ -4138,3 +4224,4 @@ def test_whole_story_comment_refusals_preserve_bytes_and_revision(kind):
             getattr(document, f"set_{kind}")(text)
         assert document.to_bytes() == before
         assert held.text == "main retained"
+

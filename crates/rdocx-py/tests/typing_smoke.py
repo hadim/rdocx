@@ -15,6 +15,7 @@ from rdocx import (
     Document,
     Font,
     HeaderFooterVariant,
+    HtmlDiagnostic,
     Hyperlink,
     Inches,
     Length,
@@ -55,6 +56,13 @@ def exercise_rdocx_types(path: Path) -> None:
     assert_type(document.remove_content(1000), bool)
     opened: Document = Document.open(path)
     loaded: Document = Document.from_bytes(b"")
+    html_document, html_diagnostics = Document.from_html("<p>typed</p>")
+    assert_type(html_document, Document)
+    assert_type(html_diagnostics, tuple[HtmlDiagnostic, ...])
+    opened_html: tuple[Document, tuple[HtmlDiagnostic, ...]] = Document.open_html(path)
+    html_inserted = html_document.insert_html("<p>x</p>", after=None)
+    assert_type(html_inserted, tuple[HtmlDiagnostic, ...])
+    assert_type(html_inserted[0].property, str | None)
     paragraph: Paragraph = document.add_paragraph("typed")
     run: Run = paragraph.add_run(" run")
     paragraph.text = None

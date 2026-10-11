@@ -12,6 +12,7 @@ use pyo3::types::{PyAny, PyType};
 
 use oxml_py_support::StaleElementError;
 
+use document::PyHtmlDiagnostic;
 use document::{
     PyBookmark, PyBoundingBox, PyComment, PyComparisonDiagnostic, PyContentFragment,
     PyCoreProperties, PyDocument, PyHeaderFooterVariant, PyHyperlink,
@@ -125,6 +126,7 @@ fn _rdocx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyComment>()?;
     module.add_class::<PyComparisonDiagnostic>()?;
     module.add_class::<PySvgDiagnostic>()?;
+    module.add_class::<PyHtmlDiagnostic>()?;
     module.add_class::<PySvgRenderResult>()?;
     module.add_class::<PyBoundingBox>()?;
     module.add_class::<PyLayoutFragment>()?;

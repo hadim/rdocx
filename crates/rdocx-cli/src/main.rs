@@ -43,13 +43,17 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
-    /// Convert DOCX to another format (pdf, html, md, png, jpeg, tiff)
+    /// Convert DOCX to another format (docx, pdf, html, md, png, jpeg, tiff)
+    ///
+    /// An input file named `.html` or `.htm` is read as HTML instead, and is
+    /// converted to DOCX unless `--to` names another format. What the HTML
+    /// import drops or approximates is printed as warnings on stderr.
     Convert {
-        /// Path to the DOCX file
+        /// Path to the DOCX or HTML file
         file: PathBuf,
-        /// Output format: pdf, html, md, png, jpeg, tiff
+        /// Output format: docx, pdf, html, md, png, jpeg, tiff (required for DOCX input)
         #[arg(long, short = 't')]
-        to: String,
+        to: Option<String>,
         /// Output file path (defaults to input with new extension)
         #[arg(long, short = 'o')]
         output: Option<PathBuf>,
@@ -483,7 +487,7 @@ fn run_cli() {
             transparent,
         } => commands::convert(
             &file,
-            &to,
+            to.as_deref(),
             output.as_deref(),
             force,
             dpi,

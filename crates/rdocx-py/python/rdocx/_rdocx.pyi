@@ -19,7 +19,7 @@ _Margins = tuple[
 __all__ = [
     "Bookmark", "BoundingBox", "Cell", "CellCollection", "CellParagraphCollection",
     "Comment", "ComparisonDiagnostic", "ContentFragment", "CoreProperties", "Document", "Font",
-    "HeaderFooterVariant", "Hyperlink", "LayoutBackedFieldUpdateReport", "LayoutFragment", "LayoutPage", "ListLevel", "Paragraph", "ParagraphCollection",
+    "HeaderFooterVariant", "HtmlDiagnostic", "Hyperlink", "LayoutBackedFieldUpdateReport", "LayoutFragment", "LayoutPage", "ListLevel", "Paragraph", "ParagraphCollection",
     "ParagraphFormat", "Revision", "Row", "RowCollection", "Run", "RunCollection", "RunPosition",
     "RunRange", "Section", "Story", "StoryItem", "StoryRunPosition", "StoryRunRange", "Style",
     "SvgDiagnostic", "SvgRenderResult", "Table", "TableCollection", "TocRebuildReport",
@@ -128,6 +128,20 @@ class SvgDiagnostic:
     def path(self) -> str: ...
     @property
     def message(self) -> str: ...
+
+
+@_final
+class HtmlDiagnostic:
+    def __new__(
+        cls, *, location: str, message: str, property: str | None = None
+    ) -> HtmlDiagnostic: ...
+    @property
+    def location(self) -> str: ...
+    @property
+    def message(self) -> str: ...
+    # Last, because the name shadows the builtin decorator in the class body.
+    @property
+    def property(self) -> str | None: ...
 
 
 @_final
@@ -594,6 +608,13 @@ class Document:
     def __new__(cls, path: _Path | None = None) -> Document: ...
     @staticmethod
     def open(path: _Path) -> Document: ...
+    @staticmethod
+    def from_html(html: str) -> tuple[Document, tuple[HtmlDiagnostic, ...]]: ...
+    @staticmethod
+    def open_html(path: _Path) -> tuple[Document, tuple[HtmlDiagnostic, ...]]: ...
+    def insert_html(
+        self, html: str, *, after: StoryItem | None = None
+    ) -> tuple[HtmlDiagnostic, ...]: ...
     @staticmethod
     def from_bytes(bytes: bytes) -> Document: ...
     def save(self, path: _Path) -> None: ...
