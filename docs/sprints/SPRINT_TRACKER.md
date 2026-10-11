@@ -904,3 +904,37 @@ implementation or acceptance is claimed by this intake.
 | F-X212 | S91 | M | 2 | not recorded | 2026-10-10 | Scoped prerequisite completion, qualified native/CLI visibility and field caches, clean independent reviews, OXML647/Word521/regression2331/doc2/CLI3+68 and qualified365 integration coverage, integrated focused9 and observed49 match, reviewed3-key delta, verified3 affected packages and policy141 with2 publication-dependent skips. Full sprint gate remains due |
 
 | F-X197 | S91 | L | 4 | not recorded | 2026-10-10 | Scoped prerequisite completion, shared RGB validation/live colour/theme/brightness, installed652 and typing/stubs, actual Word354 R14 reuse and fresh PPT583, native4/support7/WASM, unchanged49 and verified22 packages, policy141 with2 publication-dependent skips, clean reviews. Integrated seven-command prefix passed with ROOT authentication. Full sprint gate remains due |
+
+## S91 scope reduction, user decision
+
+The user parks bibliography F-X192 and navigation F-283 at S92 and keeps all
+frozen issue and PR repairs in S91. Twenty active stories remain, seven done,
+three in progress and ten approved pending. Nineteen PRs and twenty-six
+included issues retain their existing acceptance owners. Issues264 and281
+remain excluded and open. No new contribution intake is authorized.
+Preserve the dirty F-X192 worker branch, worktree and required evidence.
+No completion, velocity, issue closure or release is recorded by this replan.
+The earlier S91 carryover destination and rolling-intake instructions above
+are historical and superseded by this decision and the existing intake freeze.
+S92 is the planned next sprint and is not opened by this scope change.
+
+## S91 rolling intake reopened, latest user decision
+
+The user reopened issue and PR intake while retaining F-X192 and F-283 at
+S92. The authenticated inventory has thirty open issues and twenty-one PRs,
+with twenty-eight included issues after264 and281 are excluded. New339/342
+story-text work extends existing F-X203. New340/341 TOC topology repair is
+being designed separately from the parked full navigation contract. Assess
+immutable source once before adoption, and reconcile later arrivals through
+final close. No completion or contribution closure is recorded by intake.
+The prior freeze instructions are superseded by this explicit user decision.
+
+### S91 new contribution ownership, 2026-10-11
+
+The reopened inventory contains28 included issues and21 PRs. New
+Issue339/PR342 extend F-X203. New Issue340/PR341 form approved F-X213,
+a bounded TOC repair separate from parked F-283. S91 has21 active stories,
+seven complete, three running and eleven approved pending implementation.
+Full immutable source has been assessed, with preservation gaps recorded
+for correction and local acceptance. No new contribution is marked complete.
+Issues264 and281 remain excluded and open.

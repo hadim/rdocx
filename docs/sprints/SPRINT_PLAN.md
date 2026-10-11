@@ -2132,16 +2132,15 @@ is not full catalogue parity. F-X189 depends on completed revised F-282 and
 F-X191, not the carried S91 stories. Final integrated verification, sprint
 review, package checks and exact-SHA publication approval remain required.
 
-#### Sprint S91, S90 carryovers and contribution repairs
+#### Sprint S91, Contribution repairs
 
-**Goal**: finish the bibliography catalogue and numbering-aware navigation
-carried from S90, then resolve the new HTML, Python authoring, rendering and
-CLI validation reports before the template and form programme resumes.
+**Goal**: finish completed stories and all included issue/PR repairs. The user
+parks the separate S90 bibliography and navigation carryovers at S92. Rolling
+intake includes twenty-eight issues and twenty-one PRs, excluding only the
+requirements discussions264 and281.
 
 | F-ID | Title | Size |
 |------|-------|------|
-| F-X192 | Complete the remaining Word bibliography catalogue | L |
-| F-283 | Complete numbering-aware navigation fields | L |
 | F-X193 | Preserve semantic mark highlights through nested HTML runs | S |
 | F-X194 | Complete Python table text and indentation APIs | M |
 | F-X195 | Honor caller fonts and variable styles across render paths | L |
@@ -2162,28 +2161,34 @@ CLI validation reports before the template and form programme resumes.
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | L |
 | F-X211 | Complete Python script compatibility and safe XML access | L |
 | F-X212 | Align native accessibility with visible paragraph content | M |
+| F-X213 | Preserve TOC entry boundary paragraphs during rebuild | M |
 
-**Current delivery checkpoint, 2026-10-10**: seven of twenty-two active stories
+**Current delivery checkpoint, user replan**: seven of twenty-one active stories
 are completed and integrated, F-X193, F-X194, F-X196, F-X197, F-X198, F-X199
-and F-X212. F-X192, F-X195, F-X200 and F-X206 are in progress. Eleven stories
-have approved designs and await implementation.
-F-X192 needs the remaining catalogue runtime acceptance and native Word
-controls. F-X195 needs its remaining runtime gates and provider wiring.
+and F-X212. F-X195, F-X200 and F-X206 are in progress. Eleven stories have
+approved designs and await implementation. F-X192 and F-283 move to S92,
+with their contracts, dirty worker work, reviews and required evidence retained.
+Their completion is no longer required to close S91. F-X195 still needs its
+remaining runtime gates and provider wiring.
 F-X197 completes the scoped dependency prefix with reviewed live colours,
 installed Python coverage, native checks, unchanged rendering hashes,
 verified packaging and policy acceptance.
 No design question remains outstanding. Final integrated verification,
 sprint review and verified sprint close remain outstanding.
 
-**Resolution scope frozen by the user, 2026-10-10**: resolve the included
-issues and PRs below, except
-[Issue264](https://github.com/tensorbee/rdocx/issues/264) and
-[Issue281](https://github.com/tensorbee/rdocx/issues/281). Keep those two open as
-requirements discussions. At 2026-10-10 15:05:38 UTC, the final intake inventory
-contains nineteen open PRs and twenty-eight open issues, including the two
-exclusions. All twenty-six included issues and nineteen PRs map below.
-Stop checking for new issues, PRs or changed heads. Later arrivals are outside
-S91. Assessment is not completion.
+**Rolling resolution scope reopened by the user**: all current open issues and
+PRs join S91, except [Issue264](https://github.com/tensorbee/rdocx/issues/264)
+and [Issue281](https://github.com/tensorbee/rdocx/issues/281). Keep those two
+requirements discussions open. The fresh inventory contains thirty open issues
+and twenty-one PRs, twenty-eight included issues after exclusions. The previous
+nineteen PRs and twenty-six included issues retain their existing owners below.
+Issue339 andPR342 extend F-X203 all-story text acceptance. Issue340 andPR341
+are assigned to approved F-X213, a bounded TOC rebuild repair separate from
+the parked full F-283 contract. Immutable source and review assessment is
+complete. Correct identified preservation gaps before adoption and prove
+acceptance locally.
+Resume checks at implementation/resume, integration and final close checkpoints.
+Matching issues and PRs share one acceptance owner and implementation.
 
 | Included issues | Included PRs | S91 acceptance owners | Resolution work |
 |---|---|---|---|
@@ -2197,7 +2202,7 @@ S91. Assessment is not completion.
 | [303](https://github.com/tensorbee/rdocx/issues/303), [321](https://github.com/tensorbee/rdocx/issues/321) | [320](https://github.com/tensorbee/rdocx/pull/320), [336](https://github.com/tensorbee/rdocx/pull/336) | F-X200, consumes F-X197 | Word formatting, lists and native shared numbering counters. |
 | [304](https://github.com/tensorbee/rdocx/issues/304) | [328](https://github.com/tensorbee/rdocx/pull/328) | F-X201 | Section stories and page authoring. |
 | [305](https://github.com/tensorbee/rdocx/issues/305) | [322](https://github.com/tensorbee/rdocx/pull/322) | F-X202, consumes F-X194 and F-X198 | Word tables, pictures, internal links and alternate-copy synchronization. |
-| [306](https://github.com/tensorbee/rdocx/issues/306), [332](https://github.com/tensorbee/rdocx/issues/332), [334](https://github.com/tensorbee/rdocx/issues/334) | [325](https://github.com/tensorbee/rdocx/pull/325) | F-X203 | Document operations, validation, Markdown emphasis and list/table boundaries, fresh Word-compatible settings. |
+| [306](https://github.com/tensorbee/rdocx/issues/306), [332](https://github.com/tensorbee/rdocx/issues/332), [334](https://github.com/tensorbee/rdocx/issues/334), [339](https://github.com/tensorbee/rdocx/issues/339) | [325](https://github.com/tensorbee/rdocx/pull/325), [342](https://github.com/tensorbee/rdocx/pull/342) | F-X203 | Document operations, validation, Markdown emphasis and list/table boundaries, fresh Word-compatible settings, qualified all-story tabs/breaks and atomic visible control replacement. |
 | [307](https://github.com/tensorbee/rdocx/issues/307) | [330](https://github.com/tensorbee/rdocx/pull/330) | F-X204 | Shared CLI editing commands after their API providers. |
 | [308](https://github.com/tensorbee/rdocx/issues/308) | [318](https://github.com/tensorbee/rdocx/pull/318) | F-X205, consumes F-X194 and F-X197 | PowerPoint text, fill, properties, media and export parity. |
 | [309](https://github.com/tensorbee/rdocx/issues/309), [323](https://github.com/tensorbee/rdocx/issues/323) | [326](https://github.com/tensorbee/rdocx/pull/326), [335](https://github.com/tensorbee/rdocx/pull/335), [317](https://github.com/tensorbee/rdocx/pull/317) | F-X206 | Shape authoring, live handles, group transforms and diagnosed member-local render recovery. |
@@ -2207,6 +2212,8 @@ S91. Assessment is not completion.
 | [313](https://github.com/tensorbee/rdocx/issues/313) | [319](https://github.com/tensorbee/rdocx/pull/319) | F-X210, consumes F-X195 | Approved metric-compatible fonts and bullet fallbacks, including the approved 3968-byte checkbox subset. |
 | [314](https://github.com/tensorbee/rdocx/issues/314) | Contributions above | All applicable S91 owners | Umbrella checklist, each provider credited once. |
 | [316](https://github.com/tensorbee/rdocx/issues/316), [331](https://github.com/tensorbee/rdocx/issues/331), [337](https://github.com/tensorbee/rdocx/issues/337) | [333](https://github.com/tensorbee/rdocx/pull/333), [336](https://github.com/tensorbee/rdocx/pull/336), [338](https://github.com/tensorbee/rdocx/pull/338) | F-X211, consumes completed providers | Frozen script corpus, safe XML, residual handles and bounded native control/text-box parsing. |
+
+| [340](https://github.com/tensorbee/rdocx/issues/340) | [341](https://github.com/tensorbee/rdocx/pull/341) | F-X213 | Entry-owned and single-paragraph TOC rebuild, retained opaque properties and namespace closure, no extra blank entries. |
 
 PR317 spans several owners and is reconciled once across their accepted
 slices. PR326 and PR335 share group-transform changes, adopted once in F-X206.
@@ -2224,22 +2231,25 @@ Its proposed64-control and512-element revision limits do not supersede the
 approved contract by intake. Relative REF changes must be reconciled with
 F-X200 and F-283 once, retaining numbering and navigation ownership.
 
-F-X192 and F-283 additionally complete the bibliography and numbering-aware
-navigation work carried from S90. Their full contracts remain in S91.
+F-X192 and F-283 move to S92 at the user's instruction. Their full contracts
+and existing work are preserved. F-X200 remains in S91 and provides the
+authoritative numbering prerequisite for later F-283 work.
 
 **Approved execution order**: wave 1 is complete. Wave 2 is F-X194, F-X212 and the disjoint core-font phase of F-X195.
 CLI and binding wiring waits for existing file owners. Wave 3 is F-X197,
-wave 4 completes F-X195 wiring, wave 5 F-X210, wave 6 F-X206 and F-X192,
+wave 4 completes F-X195 wiring, wave 5 F-X210, wave 6 F-X206,
 wave 7 F-X200 and F-X207, wave 8 F-X201 and F-X208, wave 9 F-X203,
-wave 10 F-X205, wave 11 F-X202 and F-X209, wave 12 F-283, wave 13 F-X204,
-and wave 14 F-X211. F-X192 retains its approved portable bibliography evidence
-barrier. Parallel members require completed dependencies and disjoint file
+wave 10 F-X205, wave 11 F-X202 and F-X209, wave 12 is deferred with F-283, wave 13 F-X204,
+and wave 14 F-X211. Independent wave 15 is F-X213 after completed F-279.
+Its field.rs, regression_test.rs and test_core.py leases serialize against
+F-X200 and F-X206 edits and integration. It may prepare in a separate worker
+while F-X195 owns Cargo and the shared installed environment. F-X192's bibliography evidence barrier applies in S92. Parallel members require completed dependencies and disjoint file
 leases. Cargo and hash-baseline changes remain serialized.
 
 The following paragraphs retain historical intake checkpoints. This current
 coverage table and execution order supersede their older inventory counts,
 PR draft descriptions and preliminary sequencing. Keep delivery status current
-within the frozen inventory. Close an issue only after its full acceptance is proved
+within the current rolling inventory. Close an issue only after its full acceptance is proved
 at verified sprint close. Reconcile unmerged contributor PRs explicitly as
 integrated or superseded against actual delivery evidence.
 
@@ -2405,14 +2415,17 @@ consumer wiring still required. Full bibliography acceptance remains F-X192.
 S91 remains six completed, three in progress and thirteen approved stories.
 Final integrated verification, sprint review and closure remain pending.
 
-#### Sprint S92, Templates, controls, and forms
+#### Sprint S92, Bibliography and navigation carryovers, templates and forms
 
-**Goal**: freeze the container-wide template grammar, create and bind content
-controls, and expose legacy and modern forms plus safe mail-merge package
-state through public APIs.
+**Goal**: resume the parked F-X192 bibliography and F-283 navigation contracts
+after S91. Preserve the existing template, control and form programme for
+capacity review when S92 opens. This scheduling decision opens no new sprint
+and changes no acceptance contract.
 
 | F-ID | Title | Size |
 |------|-------|------|
+| F-X192 | Complete the remaining Word bibliography catalogue | L |
+| F-283 | Complete numbering-aware navigation fields | L |
 | F-X178 | Clearable direct run formatting setters | S |
 | F-284 | Stable container-wide template grammar | L |
 | F-285 | Content control creation and lifecycle | L |
@@ -2427,7 +2440,9 @@ eligible planning target is S92. It remains pending and requires a separate
 scope decision before implementation, preserving the exclusion in S90 and
 the inserted S91.
 
-S91 completes the carried bibliography and navigation work before this sprint.
+F-X192 resumes its retained unfinished worker branch and native evidence.
+F-283 consumes completed S91 F-X200 numbering without duplicate work.
+These two stories are parked, not completed. Issues264 and281 remain open.
 
 F-284 builds on S89 fragment transactions. F-285 establishes the control
 lifecycle before F-286 and F-287 add typed values and bindings. F-288 uses the
@@ -2800,7 +2815,7 @@ Future breadth must preserve the properties that distinguish this workspace:
 - Offline operation by default, with network access isolated behind explicit
   adapters.
 
-S91 semantic prerequisite: complete F-X200 before F-283. The authenticated
+Cross-sprint semantic prerequisite: complete F-X200 in S91 before F-283 in S92. The authenticated
 Word numbering controls require an explicitly reviewed revision to the old
 independent-numId contract. Navigation consumes that final authoritative
 result once, preserving source identity and proving its own field switches.

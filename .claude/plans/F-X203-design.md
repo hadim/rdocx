@@ -589,3 +589,40 @@ Issue334 may change multiple freshly authored samples. No blanket49-entry
 unchanged claim applies to these fixes. Preserve all unrelated outputs,
 derive actual package inventories/archive rows and retain root's exclusive
 baseline lease. No new file, module, dependency or test binary is required.
+
+## Issue339 and PR342 all-story text amendment
+
+Resolve [Issue339](https://github.com/tensorbee/rdocx/issues/339) once with
+[PR342](https://github.com/tensorbee/rdocx/pull/342), immutable head
+d3dc522510e1250da441ba360601619a29d40103. Complete source assessment is
+/private/tmp/S91-PR342-intake/assessment.md, SHA256
+46b51f8abec9e4b70e067e75da116a7367dd726e1309957a70d593c760fed6c2.
+Reuse qualified direct-run tab/br/cr reads, same-paragraph nested field
+visibility and staged visible-control replacement from reviewed source hunks.
+Do not replace whole document carriers or copy archive measurement tuples.
+
+All native, CLI plain/JSON and installed Python text views agree with the
+accepted Paragraph projection across body, headers/footers, notes/comments,
+text boxes, tables and admitted controls. Retain paragraph tab stops and
+opaque branches. Cover simple/complex field page/column breaks, start/end
+control spellings, nested IF/PAGE instructions and accepted deleted/moveFrom
+visibility. F-X201 owns physical story lifecycle. F-X212 owns accepted typed
+cache visibility. F-X211 owns the complete cross-paragraph field graph. This
+patch alone does not establish that graph. Reconcile their evidence once.
+
+Add controls in existing test carriers for ancestor aliases/default namespace,
+local rebinding, foreign same-name elements and type attributes, unknown
+attributes/children/entity spellings, repeat/no-op and save/reopen. Replacement
+serializes real owned tab/br controls and preserves hidden or instruction
+controls. Empty-source insertion retains actual namespace closure. Stale,
+invalid or malformed locations refuse atomically with exact source/package
+equality. Reproduce public Base before implementation, then execute the
+contributor's five native selectors, CLI and Python selectors plus uncovered
+controls. Run current installed provenance, typing and applicable risk gates.
+
+HLD03/04/10/12/14 updates describe shared accepted text ownership and source
+retention. Tab/break output, nested instruction suppression and visible-control
+replacement are explicit native behavior changes, each attributed in reviewed
+commits and measured deterministic output deltas. Baseline ownership remains
+exclusive. Original Issue306/332/334 acceptance remains required. No new
+product file, module, dependency or public mutation path is required.

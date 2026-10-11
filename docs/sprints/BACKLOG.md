@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 222 | 203 | 4 | 11 |
-| **Total** | **547** | **477** | **4** | **62** |
+| X, Cross-cutting | 223 | 203 | 4 | 12 |
+| **Total** | **548** | **477** | **4** | **63** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -507,7 +507,7 @@ regenerated, never hand-edited.
 | F-280 | Captions, sequences, and complete cross-references | S90 | M | done |
 | F-281 | Indexes and tables of figures and authorities | S90 | L | done |
 | F-282 | Citations and bibliography authoring | S90 | L | done |
-| F-283 | Complete numbering-aware navigation fields | S91 | L | pending |
+| F-283 | Complete numbering-aware navigation fields | S92 | L | pending |
 | F-284 | Stable container-wide template grammar | S92 | L | pending |
 | F-285 | Content control creation and lifecycle | S92 | L | pending |
 | F-286 | Rich, repeating, and typed content controls | S92 | L | pending |
@@ -748,7 +748,7 @@ HLD14 contract before adopting contributor changes.
 | F-X187 | Scoped paragraph and cell text replacement | S90 | M | done |
 | F-X188 | Preserve comment ownership when replacing or removing whole stories | S90 | L | done |
 | F-X190 | Preserve cached text in multi-run complex field story snapshots | S90 | M | done |
-| F-X192 | Complete the remaining Word bibliography catalogue | S91 | L | in-progress |
+| F-X192 | Complete the remaining Word bibliography catalogue | S92 | L | in-progress |
 | F-X191 | Ignore namespace declarations in numbering reader completeness | S90 | S | done |
 | F-X189 | Prepare Word 0.16.0 and PowerPoint 0.14.0 families | S90 | L | done |
 | F-X193 | Preserve semantic mark highlights through nested HTML runs | S91 | S | done |
@@ -771,4 +771,5 @@ HLD14 contract before adopting contributor changes.
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | S91 | L | pending |
 | F-X211 | Complete Python script compatibility and safe XML access | S91 | L | pending |
 | F-X212 | Align native accessibility with visible paragraph content | S91 | M | done |
+| F-X213 | Preserve TOC entry boundary paragraphs during rebuild | S91 | M | pending |
 <!-- AUTOGEN:backlog-MX END -->

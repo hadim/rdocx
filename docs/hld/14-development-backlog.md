@@ -6954,6 +6954,15 @@ authored WordCompatible profiles exactly one compatibilityMode15 setting,
 while preserving Minimal and imported settings. Separate reviewed behavior
 commits and measured output deltas cover both native provider corrections.
 
+Also resolve [Issue339](https://github.com/tensorbee/rdocx/issues/339) with
+[PR342](https://github.com/tensorbee/rdocx/pull/342), keeping qualified run
+tabs/breaks and accepted field visibility consistent across all native, CLI
+and Python story text views. Staged replacement edits visible owned controls
+without changing tab stops, instructions, hidden owners or opaque source.
+Namespace aliases/defaults/rebinding, simple/complex field break parity,
+all-story ownership, repeat/reopen and late atomic refusal are required.
+Complete cross-paragraph field graphs remain coordinated with F-X211.
+
 **Depends on**: F-X196, F-X201, F-X212.
 **Test gate**: regression. Reproduce each missing operation or reported defect
 through the installed public API on the claimed Base before implementation.
@@ -7516,3 +7525,24 @@ expected hash or rewrite immutable cross-viewer acceptance evidence.
 
 This refresh has eight open PRs and23 open issues, with all scope linked to
 existing owners. Issues264 and281 remain excluded.
+
+### F-X213, Preserve TOC entry boundary paragraphs during rebuild
+
+**Size**: M
+**Depends on**: F-279
+**Test gate**: regression
+
+Resolve Issue340 and assess PR341 at immutable15e799e891cfab6a65d988f621e5081bfc27c1a6.
+When a TOC begin/separator occupies its first entry and its end occupies its
+last entry, rebuild keeps those markers in the actual first and last rebuilt
+entries without adding empty entry paragraphs. Support a single-paragraph
+TOC, changed entry counts and zero-entry rebuild followed by another rebuild.
+Retain existing marker-only boundary behavior, source instruction, field
+identity, paragraph properties, namespace closures and unrelated opaque XML.
+Apply namespace URI ownership, preserve unknown paragraph attributes/children
+verbatim, and remove started/ended style nodes as complete owned elements.
+A rejected unsupported boundary publishes no package or handle change.
+Reuse the contributor source and tests once, correcting preservation gaps.
+Native and installed Python regressions, repeated save/reopen, deterministic
+layout and attributed hash checks must pass. This bounded repair remains S91
+while the complete F-283 navigation contract stays parked at S92.

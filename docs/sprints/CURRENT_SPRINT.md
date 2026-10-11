@@ -2,13 +2,12 @@
 
 **Milestone**: M24 and X, modern DOCX authoring and contribution repairs.
 
-**Goal**: finish S90's bibliography catalogue and numbering-aware navigation
-carryovers and resolve the new HTML, Python authoring, rendering, validation
-and alternate text-box ownership reports before templates and forms at S92.
-Issues264 and281 remain excluded. The expanded scope contains twenty-two active
-stories. The original nine-story estimate of 23 to 29 developer-days no longer
-covers the sprint. Estimate the twelve new large stories and the added medium accessibility story during detailed design
-and complete the frozen contribution scope.
+**Goal**: resolve the included HTML, Python authoring, rendering, validation
+and alternate text-box ownership issues and PRs, retaining completed stories.
+Issues264 and281 remain excluded and open. The user moved the separate S90
+bibliography and navigation carryovers, F-X192 and F-283, to S92.
+S91 now contains twenty-one active stories, seven completed, three in progress
+and eleven approved pending implementation. Rolling contribution intake is reopened at the user's latest instruction.
 
 ## Spec references
 
@@ -18,14 +17,12 @@ and complete the frozen contribution scope.
 - `docs/hld/08-rendering-spec.md`, PDF backend, rasteriser, shape text, tables and Word bookmark field pagination, for fonts and shared metrics.
 - `docs/hld/10-bindings-spec.md`, Python API shape and invalidation, for table, colour and render parity.
 - `docs/hld/12-testing-strategy.md`, binding tests and checked Word scoped literal replacement, for installed public regressions and atomic failures.
-- `docs/hld/14-development-backlog.md`, F-X192 through F-X212 and F-283, for exact acceptance and test gates.
+- `docs/hld/14-development-backlog.md`, F-X193 through F-X213, for exact acceptance and test gates.
 
 ## The wave
 
 | F-ID | Title | Size | Status | Owner |
 |------|-------|------|--------|-------|
-| F-X192 | Complete the remaining Word bibliography catalogue | L | in-progress | codex |
-| F-283 | Complete numbering-aware navigation fields | L | pending | - |
 | F-X193 | Preserve semantic mark highlights through nested HTML runs | S | done | - |
 | F-X194 | Complete Python table text and indentation APIs | M | done | - |
 | F-X195 | Honor caller fonts and variable styles across render paths | L | in-progress | codex |
@@ -46,6 +43,18 @@ and complete the frozen contribution scope.
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | pending | - |
 | F-X211 | Complete Python script compatibility and safe XML access | L | pending | - |
 | F-X212 | Align native accessibility with visible paragraph content | M | done | - |
+| F-X213 | Preserve TOC entry boundary paragraphs during rebuild | M | pending | - |
+
+## Carried to S92, user scope decision
+
+F-X192 retains its approved bibliography contract, unfinished worker branch
+`work/f-x192-codex`, dirty worktree `/private/tmp/rdocx-f-x192-codex`, reviews
+and required native evidence. Native year-omission controls have completed
+style selection and F9/save, but ordinary reopen and acceptance remain pending.
+F-283 retains its approved navigation contract and dependency on F-X200.
+Neither story is completed or part of S91 close acceptance. S92 is planned,
+not opened. The existing S92 template and form programme remains planned.
+All nineteen frozen PRs and twenty-six included issues remain in S91.
 
 ## Sequencing note
 
@@ -56,16 +65,23 @@ navigation retain their full deferred contracts and saved native evidence.
 Reuse assessed contributor slices before implementing uncovered acceptance.
 The wave plan is recorded in S91-run.json after design and conflict analysis.
 
-## Contribution scope frozen
+## Rolling contribution intake reopened
 
-The user froze S91 intake on 2026-10-10 after the authenticated 15:05:38 UTC
-inventory. Complete the existing twenty-two stories, nineteen PRs and
-twenty-six included issues. Issues264 and281 remain excluded and open.
-Stop searching for new issues, PRs or updated contribution heads. Later
-arrivals do not join S91. Reuse the already assessed immutable contributor
-changes once, against each approved story's complete acceptance criteria.
-The resolution map in SPRINT_PLAN.md and retained intake receipts define
-this scope. The following paragraphs retain historical intake checkpoints.
+The user reopened issue and PR intake after parking bibliography and navigation
+at S92. The current read-only GitHub inventory contains thirty open issues and
+twenty-one open PRs. Excluding Issues264 and281 leaves twenty-eight included
+issues. New Issues339 and340 have matching PR342 andPR341 respectively.
+Assess each full immutable contribution once and bind it to an acceptance owner.
+Issue339 andPR342 extend the existing all-story text contract in F-X203.
+Issue340 andPR341 have an approved bounded TOC repair, F-X213, separate
+from parked F-283. Full immutable contributions have been assessed. Neither
+contributor patch is accepted as runtime evidence or adopted wholesale.
+The prior twenty-six issues and nineteen PRs remain included. New arrivals and
+advanced heads are reconciled at implementation, integration and final close
+checkpoints. Final closure requires complete issue acceptance and explicit
+integrated or superseded PR resolution. Keep Issues264 and281 open.
+Read-only intake is retained at /private/tmp/S91-intake-reopened-20261011.
+Earlier frozen-intake paragraphs are historical and superseded by this decision.
 
 PR302 entered the rolling intake at immutable head
 `30e4a93df7549990c5838da9c95866d19f1247b0`, adding independent F-X199.
@@ -147,7 +163,7 @@ entrypoints. Other conflicting stories retain their approved later waves.
 
 ## Definition of done for this sprint
 
-- Full pinned Word bibliography catalogue and numbering-aware navigation pass their approved gates without guessed locale or cache fallbacks.
+- F-X192 and F-283 are carried to S92 with their full contracts and retained work. They do not gate S91 close.
 - PR294 semantic highlights survive nested runs and save/reopen without sibling or ordinary CSS background leakage.
 - Issues295 and300 provide editable Python table text frames and signed, removable Word table indentation.
 - Issues296 and297 provide consistent caller-font measurement and output, including actual variable bold/italic glyphs or verified synthetic fallback.
@@ -557,3 +573,95 @@ logs and source guards, including canonical F-X212 baseline49 confirmation.
 All49 canonical accepted entries match. Final integrated sprint verification,
 sprint review and close remain due. Scope remains frozen at22 stories,
 19 PRs and26 included issues, with264/281 excluded.
+
+## Current delivery checkpoint, 2026-10-11
+
+Seven stories remain complete and integrated. F-X195, F-X200 and F-X206
+are in progress. Ten approved stories await implementation. F-X192 and
+F-283 are carried to S92 under the latest user scope decision. No
+design approval is outstanding, and contribution intake remains frozen.
+
+F-X195's current native Word library passed531 tests with8 documented ignores.
+The PowerPoint library passed86 with4 documented ignores. The Word CLI child
+passed73 with no failures or ignores. Its failed output-parsing wrapper is
+retained separately from the independently qualified raw results. The next
+PowerPoint CLI run passed34 and failed1 because its required pinned corpus
+was absent from the worker. All50 existing corpus decks now match the pinned
+manifest and can be read through the existing corpus environment option.
+The failed run remains recorded. The corpus-admitted rerun passed all35
+PowerPoint CLI tests with no ignores. The full Word regression suite then
+passed2331 tests with7 documented ignores and no failures. Both Word
+documentation tests passed, but their wrapper rejected rustdoc's compile-only
+name suffix. The failed wrapper remains recorded separately. Strict source-bound
+qualification now matches exactly the two compile-only source identities.
+The PowerPoint documentation target completed with zero examples, receiving
+no product or example coverage credit. The source-bound native composition
+retains every failed wrapper separately. Reviewed scoped integration checks
+finished with361 ordinary tests passed,3 failed and8 documented ignores.
+Two failures invoke LibreOffice conversions, which abort in the sandbox.
+The identical ODT conversion succeeds outside it with an isolated profile.
+The public consumer reported an external-command timeout. Its nested Cargo
+inherits the shared build target, but lock interaction remains unproved. The failed run and cleanup remain recorded. Reviewed focused
+retry then passed the actual ODT child with1 passed and no failures or ignores.
+Its strict wrapper rejected interleaved LibreOffice console output. Separate
+source-bound qualification retains that actual ODT pass and the failed wrapper.
+The next reviewed continuation passed both original remaining retries, public
+authoring conformance and theme/font resolution, plus both pinned Word controls.
+Its second pinned control exited0 with1 passed, but another interleaved
+LibreOffice message failed the plain-line wrapper. All seven owned process
+groups are reaped and absent. The failed receipt is retained. Source-bound
+qualification now confirms that actual pinned pass while preserving its failed
+wrapper. The next continuation rebuilt the current PowerPoint integration
+binary and passed293 tests with26 documented ignores and no failures.
+Both pinned Poppler versions and source guards passed. The remaining scoped
+run stopped at a Clippy failure in font-trace byte accounting. Its unchanged
+source and terminal process cleanup are recorded. The lint correction requires a fresh scoped Clippy pass. The reviewed SVG regression compiled and reproduced the default-instance
+defect. Its reviewed production fix and equivalent Clippy byte-accounting
+correction are now adopted. The exact regression rerun passed1 with no failures or ignores.
+Second independent whole-feature review is clean. The first review found one defect:
+searchable SVG can select weight400 for a retained variable-font default100.
+The reviewed correction resolves that source finding. Fresh installed104,
+eight-owner SVG and remaining scoped verification are required. Remaining
+feature gates and completion remain due.
+
+F-X192's four new Khmer, Lao, Nepali and Manipuri dense grammar tests have
+been adopted after clean independent review. The thirteen-command Base queue
+passed independent static review. Its pending successor retains all thirteen
+commands and appends only the Manipuri refusal control. These fourteen
+commands have not executed. Three additional full17 historical matrices
+and their bounded comparison primitive are now adopted after clean independent
+review, retaining51 original native expectations. The next queue preserves
+the fourteen earlier controls and adds four tests, total18. None has run.
+The eleven-way prospective formatter composition
+also passed independent review without production adoption.
+Three generated pagination controls now have actual pinned Word F9 and
+byte-identical ordinary reopen results. The original source identities and
+instructions survive. Each saved pagination marker disappears, while paragraph
+properties change. The Sinhala control also changes127 scalar-aligned rich
+properties. These bounded observations preserve the original historical
+expectations and do not establish full catalogue or arbitrary-context parity.
+A reviewed full17 Sinhala context control now has actual pinned Word F9
+and byte-identical ordinary reopen evidence. All17 entries survive. K15
+reproduces the same127 font-property changes as the compact control, so
+restoring historical source and rich context did not explain the typography
+difference. Historical expectations are unchanged. A second native control explicitly
+sets the Bibliography complex-script font to Arial Unicode MS. That property
+survives F9 and byte-identical ordinary reopen, but all17 entries retain the
+same text and formatting as the unmodified control. Twenty-one revision-ID
+metadata changes remain recorded separately. Independent evidence review is
+clean. This does not establish physical font selection or catalogue acceptance.
+Catalogue, rich-run, save/reopen and native authority acceptance remain due.
+F-X200's full188-case installed queue and F-X206's nineteen-carrier composition
+are reviewed preparations, not completed runtime acceptance. Independent
+whole-feature review found that EPUB numbering omits table-style list items
+in F-X200. The proposed fix passed independent review and its twelve-context regression
+is adopted without production changes. Actual Base execution is queued.
+F-X206 review records five
+missing or defective surfaces. Four have existing unadopted fixes, while
+selected placeholder picture replacement needs the remaining implementation.
+Independent proposal review found that generated picture conversion drops
+rectangle geometry in saved XML. Separate correction is underway.
+Actual Base, native output and installed acceptance remain required.
+
+Final integrated full verification, sprint review and close preflight have not
+run. S91 is not ready for close.
