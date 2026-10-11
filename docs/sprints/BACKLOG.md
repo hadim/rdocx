@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 211 | 192 | 5 | 10 |
-| **Total** | **523** | **453** | **5** | **61** |
+| X, Cross-cutting | 223 | 204 | 6 | 9 |
+| **Total** | **548** | **478** | **6** | **60** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -765,7 +765,7 @@ HLD14 contract before adopting contributor changes.
 | F-X204 | Complete shared CLI one-shot editing commands | S91 | L | pending |
 | F-X205 | Complete Python PowerPoint text fill and export parity | S91 | L | pending |
 | F-X206 | Complete PowerPoint shape authoring and live handles | S91 | L | in-progress |
-| F-X207 | Persist PowerPoint autofit and implement fit_text | S91 | L | pending |
+| F-X207 | Persist PowerPoint autofit and implement fit_text | S91 | L | in-progress |
 | F-X208 | Author PowerPoint footer fields themes and transitions | S91 | L | pending |
 | F-X209 | Edit PowerPoint masters layouts and themes | S91 | L | pending |
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | S91 | L | in-progress |
