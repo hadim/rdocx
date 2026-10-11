@@ -1,6 +1,6 @@
 # F-X213, Preserve TOC entry boundary paragraphs during rebuild
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: M
 **Depends on**: F-279
@@ -56,6 +56,22 @@ original instructions, unrelated producer parts and current update_fields
 policies. Preserve F-X200 numbering and F-X206 causal publication when composing
 later owners. Do not adopt parked F-X192 source or expand F-283 scope.
 
+## Read-only namespace inventory compatibility
+
+For an unchanged main CT_Document with no modeled relationship mask candidates,
+inventory qualified relationships from the exact retained main XML. A repeated
+save and ordinary reopen preserve the complete main-part bytes and package
+member payloads. This supersedes only F-X186's historical initial read-only save
+failure qualification for retained table, cell and ambiguous paragraph namespace
+owners. It does not broaden comment placement or mutable owner admission.
+Dirty/add/move paths still require the existing unique namespace replay proof.
+Named ownership failures preserve all source members, comment metadata and
+identifiers atomically. Rich anchor queries still require unique canonical
+namespace replay and retain their named refusal for ambiguous producer owners.
+The qualified raw-source literal guard proves unchanged SOURCE anchoring
+independently without promising that richer query will accept the package. Ambiguous mutation outcomes require actual focused
+qualification, never an inferred result from successful read-only serialization.
+
 ## Rejected alternatives
 
 - Reopen full F-283 navigation in S91. The user explicitly parked that contract.
@@ -106,12 +122,12 @@ own labelled behavior commit. Baseline changes remain ROOT-exclusive.
 
 ## Implementation checklist
 
-- [ ] Claim isolated worktree after dependency and approved-plan checks.
-- [ ] Reproduce three-entry and single-paragraph Base failures.
-- [ ] Reuse exact contribution once and correct all preservation gaps.
-- [ ] Execute focused native, installed, deterministic and risk gates.
-- [ ] Obtain clean independent microscope and scoped verify.
-- [ ] Update listed HLD and prepare structured integration handoff.
+- [x] Claim isolated worktree after dependency and approved-plan checks.
+- [x] Reproduce three-entry and single-paragraph Base failures.
+- [x] Reuse exact contribution once and correct all preservation gaps.
+- [x] Execute focused native, installed, deterministic and risk gates.
+- [x] Obtain clean independent microscope and scoped verify.
+- [x] Update listed HLD and prepare structured integration handoff.
 
 ## Open questions
 

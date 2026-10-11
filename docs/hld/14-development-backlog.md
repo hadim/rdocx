@@ -7541,7 +7541,12 @@ Retain existing marker-only boundary behavior, source instruction, field
 identity, paragraph properties, namespace closures and unrelated opaque XML.
 Apply namespace URI ownership, preserve unknown paragraph attributes/children
 verbatim, and remove started/ended style nodes as complete owned elements.
-A rejected unsupported boundary publishes no package or handle change.
+One-to-many expansion retains paragraph-local namespace closure on the moved
+end run and every suffix sibling. Multi-paragraph empty rebuild removes all
+obsolete entry styles while retaining protected owner properties, then accepts
+a later positive rebuild. Duplicate or malformed owned properties refuse
+without mutation. A rejected unsupported boundary publishes no package or
+handle change.
 Reuse the contributor source and tests once, correcting preservation gaps.
 Native and installed Python regressions, repeated save/reopen, deterministic
 layout and attributed hash checks must pass. This bounded repair remains S91

@@ -2077,6 +2077,11 @@ The inserted field therefore uses the same rebuild and pagination path as a
 producer-authored dynamic TOC after headings change. The generated right tab
 uses the section text width, falling back to the Letter default when the width
 is absent, non-positive, or outside the supported twip range.
+When field boundaries occupy TOC entries, rebuild places begin and separator
+in the first generated entry and end in the last, without adding blank entry
+paragraphs. One entry owns both boundaries. Zero entries retain balanced
+markers without obsolete entry styles and permit a later positive rebuild.
+Distinct marker-only boundary paragraphs retain their existing layout policy.
 Table-of-contents rebuild creates its provisional PAGEREF fields before
 calling the deterministic bundled-font layout. The existing post-pagination
 pass remains the only page-target authority. Rebuild reads those displayed

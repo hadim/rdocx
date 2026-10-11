@@ -13838,6 +13838,16 @@ impl Document {
         &self,
         modeled_relationships: &[String],
     ) -> Result<Vec<String>> {
+        // Without modeled candidates there is nothing to mask. An unchanged
+        // typed story can inventory its exact retained source, including opaque
+        // property-root attributes that canonical serialization cannot replay.
+        // Dirty stories and modeled relationships still need the checked mask.
+        if modeled_relationships.is_empty()
+            && let Some(source) = self.package.get_part(&self.doc_part_name)
+            && CT_Document::from_xml(source).ok().as_ref() == Some(&self.document)
+        {
+            return xml_relationship_ids_in_order(source);
+        }
         let nested_namespace_owners = self
             .package
             .get_part(&self.doc_part_name)

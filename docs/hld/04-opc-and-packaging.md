@@ -1734,6 +1734,22 @@ slots exactly as they do in the typed paragraph parser. A direct simple field
 advances a modeled run boundary only when its parsed instruction is nonempty.
 Hyperlink revisions and direct runs sharing one outer coordinate receive
 distinct nested ordinals.
+An unchanged main document with no modeled relationship mask candidates
+inventories qualified relationships from retained source XML. Read-only saves
+preserve complete original main-part bytes, including ambiguous local namespace
+owners. Dirty comment edits and owner relocation retain strict unique namespace
+replay and atomic refusal without source or thread metadata publication.
+Rich comment anchor queries retain the unique replay requirement. Exact
+raw-source literal range evidence does not imply rich query admission.
+Entry-owned TOC boundary paragraphs retain their original root attributes and
+opaque property payload. Generated entry styles and tabs overlay only their
+qualified owned source elements in schema order. Started style elements are
+removed as complete elements. Namespace aliases and default bindings identify
+Word owners by URI, while foreign and rebound lookalikes remain opaque. End
+runs and suffix siblings close their inherited namespaces when moved from a
+removed paragraph root. Duplicate or malformed owned properties refuse before
+publication. Unsafe boundary overlays retain the existing safe generic layout,
+with a named atomic refusal for an unsupported single-paragraph boundary.
 Generated entry paragraphs replace only the recorded range. The instruction
 runs, matching field markers, neighbouring raw XML, relationships, and every
 other package part remain outside the edit set. The provisional package and

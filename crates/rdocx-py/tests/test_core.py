@@ -1855,6 +1855,46 @@ def test_rebuild_toc_accepts_identity_attributes_on_the_field_runs():
         assert identity in saved
 
 
+def test_rebuild_toc_keeps_the_field_markers_in_the_first_and_last_entries():
+    import rdocx
+
+    # Word and Google Docs write the field begin in the first entry paragraph
+    # and the end in the last one: a rebuild keeps them there.
+    def entry(text, first=False, last=False):
+        begin = (
+            '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+            '<w:r><w:instrText xml:space="preserve"> TOC \\o "1-3" \\h \\z \\u </w:instrText></w:r>'
+            '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+            if first
+            else ""
+        )
+        end = '<w:r><w:fldChar w:fldCharType="end"/></w:r>' if last else ""
+        return (
+            f'<w:p><w:pPr><w:pStyle w:val="TOC1"/></w:pPr>{begin}'
+            f"<w:r><w:t>{text}</w:t></w:r>{end}</w:p>"
+        )
+
+    headings = ("One", "Two", "Three")
+    body = entry("One", first=True) + entry("Two") + entry("Three", last=True)
+    body += "".join(
+        f'<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>{heading}</w:t></w:r></w:p>'
+        for heading in headings
+    )
+    source = rdocx.Document()
+    source.add_paragraph("placeholder")
+    document = _replace_document_body(source, body)
+    before = len(document.paragraphs)
+
+    assert document.rebuild_toc().entry_count == 3
+    assert len(document.paragraphs) == before
+    toc = [
+        paragraph.text
+        for paragraph in document.paragraphs
+        if (paragraph.style or "").startswith("TOC")
+    ]
+    assert toc == ["One\t1", "Two\t1", "Three\t1"]
+
+
 def test_update_page_fields_writes_layout_page_numbers():
     import rdocx
 
@@ -4165,3 +4205,33 @@ def test_scoped_alternate_text_box_refusal_is_rdocxerror_without_mutation():
     assert document.to_bytes() == before
     reopened = rdocx.Document.from_bytes(before)
     assert _story_paragraph_texts(reopened, "text_box") == ["box NEEDLE"]
+
+
+def test_rebuild_toc_single_entry_preserves_opaque_properties_and_reopens():
+    import rdocx
+
+    body = (
+        '<w:p xmlns:f="urn:producer" w:rsidR="00ABCDEF">'
+        "<w:pPr f:keep='&#65;'><w:pStyle w:val=\"TOC1\"></w:pStyle>"
+        "<f:payload data='&#66;'/></w:pPr>"
+        '<w:r><w:fldChar w:fldCharType="begin"/></w:r>'
+        '<w:r><w:instrText xml:space="preserve"> TOC \\o "1-3" \\h </w:instrText></w:r>'
+        '<w:r><w:fldChar w:fldCharType="separate"/></w:r>'
+        '<w:r><w:t>Old entry</w:t></w:r>'
+        '<w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>'
+        '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Only</w:t></w:r></w:p>'
+    )
+    source = rdocx.Document()
+    source.add_paragraph("placeholder")
+    document = _replace_document_body(source, body)
+    for _ in range(2):
+        assert document.rebuild_toc().entry_count == 1
+        assert len(document.paragraphs) == 2
+        assert document.paragraphs[0].text == "Only\t1"
+        saved = _document_xml(document)
+        assert b"f:keep='&#65;'" in saved
+        assert b"<f:payload data='&#66;'/>" in saved
+        assert saved.count(b'w:fldCharType="begin"') == 1
+        assert saved.count(b'w:fldCharType="end"') == 1
+        document = rdocx.Document.from_bytes(document.to_bytes())
+        assert _document_xml(document) == saved

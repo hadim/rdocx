@@ -12461,6 +12461,371 @@ fn toc_rebuild_handles_the_largest_outline_level_without_panicking() {
     assert!(!document_xml(&mut document).contains("old"));
 }
 
+/// A TOC laid out as Word and Google Docs write it: the field begin in the
+/// first entry paragraph and the end in the last one, followed by one
+/// Heading1 paragraph per heading.
+fn entry_boundary_toc_body(entries: &[&str], headings: &[&str]) -> String {
+    let entries = entries
+        .iter()
+        .map(|entry| ("TOC1", *entry))
+        .collect::<Vec<_>>();
+    styled_entry_boundary_toc_body(&entries, headings)
+}
+
+/// [`entry_boundary_toc_body`] with an explicit style for each old entry.
+fn styled_entry_boundary_toc_body(entries: &[(&str, &str)], headings: &[&str]) -> String {
+    let last = entries.len() - 1;
+    let mut body = String::new();
+    for (index, (style, entry)) in entries.iter().enumerate() {
+        body.push_str(&format!(
+            r#"<w:p><w:pPr><w:pStyle w:val="{style}"/></w:pPr>"#
+        ));
+        if index == 0 {
+            body.push_str(r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-3" \h \z \u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>"#);
+        }
+        body.push_str(&format!("<w:r><w:t>{entry}</w:t></w:r>"));
+        if index == last {
+            body.push_str(r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#);
+        }
+        body.push_str("</w:p>");
+    }
+    for heading in headings {
+        body.push_str(&format!(
+            r#"<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>{heading}</w:t></w:r></w:p>"#
+        ));
+    }
+    body
+}
+
+fn body_paragraph_xml(xml: &str) -> Vec<&str> {
+    let body = &xml[xml.find("<w:body>").unwrap()..];
+    body.split_inclusive("</w:p>")
+        .filter(|paragraph| paragraph.ends_with("</w:p>"))
+        .collect()
+}
+
+fn toc_paragraph_xml(xml: &str) -> Vec<&str> {
+    body_paragraph_xml(xml)
+        .into_iter()
+        .filter(|paragraph| {
+            // These body slices omit the document root's canonical binding.
+            // Local declarations remain authoritative, including foreign shadows.
+            let paragraph = paragraph.strip_prefix("<w:body>").unwrap_or(paragraph);
+            let scoped = format!(
+                r#"<root xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">{paragraph}</root>"#
+            );
+            let mut reader = quick_xml::NsReader::from_str(&scoped);
+            loop {
+                let (namespace, event) = reader.read_resolved_event().unwrap();
+                match event {
+                    quick_xml::events::Event::Start(element)
+                    | quick_xml::events::Event::Empty(element)
+                        if namespace == quick_xml::name::ResolveResult::Bound(
+                            quick_xml::name::Namespace(b"http://schemas.openxmlformats.org/wordprocessingml/2006/main"),
+                        ) && element.local_name().as_ref() == b"pStyle" =>
+                    {
+                        for attribute in element.attributes() {
+                            let attribute = attribute.unwrap();
+                            let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
+                            if namespace == quick_xml::name::ResolveResult::Bound(
+                                quick_xml::name::Namespace(b"http://schemas.openxmlformats.org/wordprocessingml/2006/main"),
+                            ) && local.as_ref() == b"val"
+                                && attribute.decoded_and_normalized_value(
+                                    quick_xml::XmlVersion::Implicit1_0, reader.decoder(),
+                                ).unwrap().starts_with("TOC")
+                            {
+                                return true;
+                            }
+                        }
+                    }
+                    quick_xml::events::Event::Eof => return false,
+                    _ => {}
+                }
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn toc_rebuild_keeps_the_field_markers_in_the_first_and_last_entries() {
+    let body = entry_boundary_toc_body(&["One", "Two", "Three"], &["One", "Two", "Three"]);
+    let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+    let before = body_paragraph_xml(&document_xml(&mut document)).len();
+
+    for _ in 0..2 {
+        assert_eq!(document.rebuild_toc().unwrap().entry_count, 3);
+        let xml = document_xml(&mut document);
+        assert_eq!(body_paragraph_xml(&xml).len(), before, "{xml}");
+        let entries = toc_entry_signatures(&xml)
+            .into_iter()
+            .map(|(display, ..)| display)
+            .collect::<Vec<_>>();
+        assert_eq!(entries, ["One\t1", "Two\t1", "Three\t1"], "{xml}");
+        let toc = toc_paragraph_xml(&xml);
+        assert_eq!(toc.len(), 3, "{xml}");
+        assert!(toc[0].contains(r#"w:fldCharType="begin""#), "{xml}");
+        assert!(toc[0].contains(r#"w:fldCharType="separate""#), "{xml}");
+        assert!(toc[2].contains(r#"w:fldCharType="end""#), "{xml}");
+        assert_eq!(xml.matches(r#"w:fldCharType="begin""#).count(), 1, "{xml}");
+        assert_eq!(xml.matches(r#"w:fldCharType="end""#).count(), 1, "{xml}");
+    }
+}
+
+#[test]
+fn toc_rebuild_moves_entry_boundary_markers_to_the_new_first_and_last_entries() {
+    for (old_entries, headings) in [
+        (&["Stale"][..], &["Alpha", "Beta", "Gamma"][..]),
+        (&["A", "B", "C", "D"][..], &["Alpha", "Beta"][..]),
+    ] {
+        let mut old = vec!["Old first"];
+        old.extend_from_slice(old_entries);
+        let body = entry_boundary_toc_body(&old, headings);
+        let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+
+        assert_eq!(document.rebuild_toc().unwrap().entry_count, headings.len());
+        let xml = document_xml(&mut document);
+        assert_eq!(body_paragraph_xml(&xml).len(), 2 * headings.len(), "{xml}");
+        let toc = toc_paragraph_xml(&xml);
+        assert_eq!(toc.len(), headings.len(), "{xml}");
+        assert!(toc[0].contains(r#"w:fldCharType="begin""#), "{xml}");
+        assert!(
+            toc[toc.len() - 1].contains(r#"w:fldCharType="end""#),
+            "{xml}"
+        );
+        for (entry, heading) in toc_entry_signatures(&xml).iter().zip(headings) {
+            assert_eq!(entry.0, format!("{heading}\t1"), "{xml}");
+        }
+    }
+}
+
+#[test]
+fn toc_rebuild_puts_both_markers_in_a_single_entry() {
+    // Word writes a one-entry TOC as one paragraph holding the begin, the
+    // entry and the end. Rebuilding two old entries into one does the same.
+    let body = entry_boundary_toc_body(&["Old one", "Old two"], &["Only"]);
+    let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+    for _ in 0..2 {
+        assert_eq!(document.rebuild_toc().unwrap().entry_count, 1);
+        let xml = document_xml(&mut document);
+        assert_eq!(body_paragraph_xml(&xml).len(), 2, "{xml}");
+        let toc = toc_paragraph_xml(&xml);
+        assert_eq!(toc.len(), 1, "{xml}");
+        assert!(toc[0].contains(r#"w:fldCharType="begin""#), "{xml}");
+        assert!(toc[0].contains("Only"), "{xml}");
+        assert!(toc[0].contains(r#"w:fldCharType="end""#), "{xml}");
+        assert!(!xml.contains("Old"), "{xml}");
+    }
+}
+
+#[test]
+fn toc_rebuild_accepts_a_single_paragraph_toc() {
+    for headings in [&["Only"][..], &["Alpha", "Beta", "Gamma"][..]] {
+        let body = entry_boundary_toc_body(&["Old entry"], headings);
+        let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+        for _ in 0..2 {
+            assert_eq!(document.rebuild_toc().unwrap().entry_count, headings.len());
+            let xml = document_xml(&mut document);
+            assert!(!xml.contains("Old entry"), "{xml}");
+            assert_eq!(body_paragraph_xml(&xml).len(), 2 * headings.len(), "{xml}");
+            let toc = toc_paragraph_xml(&xml);
+            assert_eq!(toc.len(), headings.len(), "{xml}");
+            assert!(toc[0].contains(r#"w:fldCharType="begin""#), "{xml}");
+            assert!(
+                toc[toc.len() - 1].contains(r#"w:fldCharType="end""#),
+                "{xml}"
+            );
+            for (entry, heading) in toc_entry_signatures(&xml).iter().zip(headings) {
+                assert_eq!(entry.0, format!("{heading}\t1"), "{xml}");
+            }
+        }
+    }
+
+    // No heading keeps both markers in the paragraph, without the entry
+    // style, and the emptied TOC can be rebuilt again.
+    let body = entry_boundary_toc_body(&["Old entry"], &[]);
+    let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+    for _ in 0..2 {
+        assert_eq!(document.rebuild_toc().unwrap().entry_count, 0);
+        let xml = document_xml(&mut document);
+        let paragraphs = body_paragraph_xml(&xml);
+        assert_eq!(paragraphs.len(), 1, "{xml}");
+        assert!(paragraphs[0].contains(r#"w:fldCharType="begin""#), "{xml}");
+        assert!(paragraphs[0].contains(r#"w:fldCharType="end""#), "{xml}");
+        assert!(!paragraphs[0].contains("<w:pStyle"), "{xml}");
+        assert!(!xml.contains("Old entry"), "{xml}");
+    }
+
+    // A single paragraph that is no entry is still refused.
+    let body = r#"
+        <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \o "1-1"</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>No table of contents entries found.</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Heading</w:t></w:r></w:p>
+    "#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let error = document.rebuild_toc().unwrap_err();
+    assert!(
+        error.to_string().contains("must span paragraph boundaries"),
+        "{error}"
+    );
+}
+
+#[test]
+fn toc_rebuild_of_entry_boundary_markers_keeps_an_empty_rebuild_generic() {
+    // No heading keeps the begin and end paragraphs, emptied of entries.
+    let body = entry_boundary_toc_body(&["Old one", "Old two", "Old three"], &[]);
+    let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+    assert_eq!(document.rebuild_toc().unwrap().entry_count, 0);
+    let xml = document_xml(&mut document);
+    let paragraphs = body_paragraph_xml(&xml);
+    assert!(toc_paragraph_xml(&xml).is_empty(), "{xml}");
+    assert_eq!(body_paragraph_xml(&xml).len(), 2, "{xml}");
+    assert!(!xml.contains("Old"), "{xml}");
+    assert!(paragraphs[0].contains(r#"w:fldCharType="begin""#), "{xml}");
+    assert!(paragraphs[1].contains(r#"w:fldCharType="end""#), "{xml}");
+}
+
+#[test]
+fn toc_rebuild_recognizes_entry_boundary_markers_at_any_old_level() {
+    // The old boundary entries use levels the rebuilt TOC no longer has.
+    for old in [
+        [("TOC1", "One"), ("TOC1", "Two"), ("TOC2", "Two A")],
+        [("TOC2", "Zero"), ("TOC1", "One"), ("TOC1", "Two")],
+    ] {
+        let body = styled_entry_boundary_toc_body(&old, &["Alpha", "Beta", "Gamma"]);
+        let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+
+        assert_eq!(document.rebuild_toc().unwrap().entry_count, 3);
+        let xml = document_xml(&mut document);
+        assert_eq!(body_paragraph_xml(&xml).len(), 6, "{xml}");
+        let toc = toc_paragraph_xml(&xml);
+        assert_eq!(toc.len(), 3, "{xml}");
+        assert!(toc.iter().all(|entry| entry.contains("TOC1")), "{xml}");
+        assert!(toc[0].contains(r#"w:fldCharType="begin""#), "{xml}");
+        assert!(toc[2].contains(r#"w:fldCharType="end""#), "{xml}");
+    }
+}
+
+#[test]
+fn toc_rebuild_keeps_the_word_layout_of_a_toc_content_control() {
+    // Word wraps the TOC in a content control under a TOC heading, puts the
+    // begin in the first entry, links each entry, and writes the end in an
+    // unstyled paragraph of its own.
+    let entry = |anchor: &str, title: &str| {
+        format!(
+            r#"<w:hyperlink w:anchor="{anchor}" w:history="1"><w:r><w:rPr><w:rStyle w:val="Hyperlink"/><w:noProof/></w:rPr><w:t>{title}</w:t></w:r><w:r><w:rPr><w:noProof/><w:webHidden/></w:rPr><w:tab/></w:r><w:r><w:rPr><w:noProof/><w:webHidden/></w:rPr><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:rPr><w:noProof/><w:webHidden/></w:rPr><w:instrText xml:space="preserve"> PAGEREF {anchor} \h </w:instrText></w:r><w:r><w:rPr><w:noProof/><w:webHidden/></w:rPr></w:r><w:r><w:rPr><w:noProof/><w:webHidden/></w:rPr><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:noProof/><w:webHidden/></w:rPr><w:t>1</w:t></w:r><w:r><w:rPr><w:noProof/><w:webHidden/></w:rPr><w:fldChar w:fldCharType="end"/></w:r></w:hyperlink>"#
+        )
+    };
+    let body = format!(
+        r#"
+        <w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="Table of Contents"/><w:docPartUnique/></w:docPartObj></w:sdtPr><w:sdtContent>
+        <w:p><w:pPr><w:pStyle w:val="TOCHeading"/></w:pPr><w:r><w:t>Contents</w:t></w:r></w:p>
+        <w:p w:rsidR="00A1B2C3"><w:pPr><w:pStyle w:val="TOC1"/><w:tabs><w:tab w:val="right" w:leader="dot" w:pos="9350"/></w:tabs><w:rPr><w:noProof/></w:rPr></w:pPr><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-3" \h \z \u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>{first}</w:p>
+        <w:p><w:pPr><w:pStyle w:val="TOC1"/><w:tabs><w:tab w:val="right" w:leader="dot" w:pos="9350"/></w:tabs><w:rPr><w:noProof/></w:rPr></w:pPr>{second}</w:p>
+        <w:p><w:r><w:rPr><w:b/><w:bCs/><w:noProof/></w:rPr><w:fldChar w:fldCharType="end"/></w:r></w:p>
+        </w:sdtContent></w:sdt>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:bookmarkStart w:id="1" w:name="_Toc1"/><w:r><w:t>Alpha</w:t></w:r><w:bookmarkEnd w:id="1"/></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:bookmarkStart w:id="2" w:name="_Toc2"/><w:r><w:t>Beta</w:t></w:r><w:bookmarkEnd w:id="2"/></w:p>
+        "#,
+        first = entry("_Toc1", "Old alpha"),
+        second = entry("_Toc2", "Old beta"),
+    );
+    let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+    let before = body_paragraph_xml(&document_xml(&mut document)).len();
+
+    for _ in 0..2 {
+        assert_eq!(document.rebuild_toc().unwrap().entry_count, 2);
+        let xml = document_xml(&mut document);
+        let paragraphs = body_paragraph_xml(&xml);
+        assert_eq!(paragraphs.len(), before, "{xml}");
+        assert!(!xml.contains("Old "), "{xml}");
+        assert!(paragraphs[0].contains("TOCHeading"), "{xml}");
+        assert!(paragraphs[1].contains(r#"w:rsidR="00A1B2C3""#), "{xml}");
+        assert!(paragraphs[1].contains(r#"w:fldCharType="begin""#), "{xml}");
+        assert!(paragraphs[1].contains("Alpha"), "{xml}");
+        assert!(paragraphs[2].contains("Beta"), "{xml}");
+        assert!(paragraphs[3].contains(r#"w:fldCharType="end""#), "{xml}");
+        assert!(!paragraphs[3].contains("<w:pStyle"), "{xml}");
+        assert_eq!(
+            xml.matches(r#"<w:pStyle w:val="TOC1"/>"#).count(),
+            2,
+            "{xml}"
+        );
+        assert_eq!(xml.matches("PAGEREF _Toc").count(), 2, "{xml}");
+    }
+}
+
+#[test]
+fn toc_rebuild_keeps_the_generic_layout_around_unreplaceable_boundaries() {
+    // A run after the end marker keeps the end paragraph, and its text.
+    let body = r#"
+        <w:p><w:pPr><w:pStyle w:val="TOC1"/></w:pPr><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-3" </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>Old one</w:t></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="TOC1"/></w:pPr><w:r><w:t>Old two</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:t>After the field</w:t></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>One</w:t></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Two</w:t></w:r></w:p>
+    "#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+    assert_eq!(document.rebuild_toc().unwrap().entry_count, 2);
+    let xml = document_xml(&mut document);
+    let paragraphs = body_paragraph_xml(&xml);
+    assert_eq!(paragraphs.len(), 5, "{xml}");
+    assert!(paragraphs[0].contains(r#"w:fldCharType="begin""#), "{xml}");
+    assert!(paragraphs[0].contains("One"), "{xml}");
+    assert!(paragraphs[2].contains(r#"w:fldCharType="end""#), "{xml}");
+    assert!(paragraphs[2].contains("After the field"), "{xml}");
+    assert!(!xml.contains("Old "), "{xml}");
+
+    // Numbering or a tracked change in the boundary properties keeps them.
+    for properties in [
+        r#"<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>"#,
+        r#"<w:rPr><w:ins w:id="7" w:author="Ada"/></w:rPr>"#,
+        r#"<w:pPrChange w:id="8" w:author="Ada"><w:pPr/></w:pPrChange>"#,
+    ] {
+        let body = format!(
+            r#"
+            <w:p><w:pPr><w:pStyle w:val="TOC1"/>{properties}</w:pPr><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-3" </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>Old one</w:t></w:r></w:p>
+            <w:p><w:pPr><w:pStyle w:val="TOC1"/>{properties}</w:pPr><w:r><w:t>Old two</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+            <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>One</w:t></w:r></w:p>
+            "#
+        );
+        let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+        assert_eq!(document.rebuild_toc().unwrap().entry_count, 1);
+        let xml = document_xml(&mut document);
+        let paragraphs = body_paragraph_xml(&xml);
+        assert_eq!(paragraphs.len(), 4, "{properties}: {xml}");
+        assert!(!paragraphs[0].contains("One"), "{properties}: {xml}");
+        assert!(paragraphs[1].contains("One"), "{properties}: {xml}");
+        assert!(
+            paragraphs[2].contains(r#"w:fldCharType="end""#),
+            "{properties}: {xml}"
+        );
+    }
+}
+
+#[test]
+fn toc_rebuild_keeps_field_markers_that_own_their_paragraphs() {
+    let body = r#"
+        <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \o "1-1" \h</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="TOC1"/></w:pPr><w:r><w:t>old</w:t></w:r></w:p>
+        <w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>First</w:t></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Second</w:t></w:r></w:p>
+    "#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+
+    assert_eq!(document.rebuild_toc().unwrap().entry_count, 2);
+    let xml = document_xml(&mut document);
+    let paragraphs = body_paragraph_xml(&xml);
+    assert_eq!(paragraphs.len(), 6, "{xml}");
+    assert!(
+        paragraphs[0].contains(r#"w:fldCharType="separate""#),
+        "{xml}"
+    );
+    assert!(!paragraphs[0].contains("<w:pStyle"), "{xml}");
+    assert!(paragraphs[1].contains("First"), "{xml}");
+    assert!(paragraphs[2].contains("Second"), "{xml}");
+    assert!(paragraphs[3].contains(r#"w:fldCharType="end""#), "{xml}");
+    assert!(!paragraphs[3].contains("<w:pStyle"), "{xml}");
+}
+
 #[test]
 fn toc_rebuild_discovers_the_accepted_revision_projection() {
     let body = r#"
@@ -59474,10 +59839,21 @@ fn comment_moves_to_literal_text_keep_zero_width_and_namespace_semantics() {
         let start = main.find("<w:p>").unwrap();
         let end = start + main[start..].find("</w:p>").unwrap() + "</w:p>".len();
         let xml = wrap_word_body(&format!("{}{target}", &main[start..end]));
-        package.set_part("/word/document.xml", xml.into_bytes());
+        package.set_part("/word/document.xml", xml.as_bytes().to_vec());
         let mut bytes = std::io::Cursor::new(Vec::new());
         package.write_to(&mut bytes).unwrap();
-        (Document::from_bytes(bytes.get_ref()).unwrap(), id)
+        (Document::from_bytes(bytes.get_ref()).unwrap(), id, xml)
+    };
+    let members = |bytes: &[u8]| {
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut output = std::collections::BTreeMap::new();
+        for index in 0..archive.len() {
+            let mut member = archive.by_index(index).unwrap();
+            let mut bytes = Vec::new();
+            std::io::Read::read_to_end(&mut member, &mut bytes).unwrap();
+            assert!(output.insert(member.name().to_owned(), bytes).is_none());
+        }
+        output
     };
     let mut failures = Vec::new();
     for (name, target, anchor, expected, alias) in [
@@ -59577,7 +59953,7 @@ fn comment_moves_to_literal_text_keep_zero_width_and_namespace_semantics() {
             name,
             "table-local-alias" | "cell-local-shadow" | "paragraph-local-alias"
         ) {
-            let (mut document, id) = imported(target);
+            let (mut document, id, _) = imported(target);
             let before = document.to_bytes().unwrap();
             let error = document.move_comment_to_text(id, anchor, 0).unwrap_err();
             assert!(
@@ -59649,8 +60025,8 @@ fn comment_moves_to_literal_text_keep_zero_width_and_namespace_semantics() {
             .unwrap();
         assert_eq!(next, id + 1, "{name}");
     }
-    // Exact Base proof shows these fail their initial save even before an edit.
-    // The checked source guard refuses earlier, without publishing a mutation.
+    // F-X213 admits exact unchanged-source saves with no modeled relationship
+    // mask. Dirty comment publication retains the strict namespace replay guard.
     for (target, owner) in [
         (
             r#"<w:tbl xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:tblPr/><w:tblGrid><w:gridCol w:w="2400"/></w:tblGrid><w:tr><w:tc><w:tcPr/><w:p><w:r><w:t>A</w:t></w:r><q:fldSimple q:instr=" PAGE "><q:r><q:t>7</q:t></q:r></q:fldSimple><w:r><w:t>B</w:t></w:r></w:p></w:tc></w:tr></w:tbl>"#,
@@ -59661,16 +60037,18 @@ fn comment_moves_to_literal_text_keep_zero_width_and_namespace_semantics() {
             "tc",
         ),
     ] {
-        let mut document = document_with_content_controls(&wrap_word_body(&format!(
-            "<w:p><w:r><w:t>SOURCE</w:t></w:r></w:p>{target}"
-        )));
-        let error = document.to_bytes().unwrap_err().to_string();
-        assert!(
-            error.contains(&format!(
-                "cannot identify retained `{owner}` nested namespace owner"
-            )),
-            "{error}"
+        let original_xml =
+            wrap_word_body(&format!("<w:p><w:r><w:t>SOURCE</w:t></w:r></w:p>{target}"));
+        let mut document = document_with_content_controls(&original_xml);
+        let saved = document.to_bytes().unwrap();
+        let original_members = members(&saved);
+        assert_eq!(
+            original_members["word/document.xml"],
+            original_xml.as_bytes()
         );
+        assert_eq!(members(&document.to_bytes().unwrap()), original_members);
+        document = Document::from_bytes(&saved).unwrap();
+        assert_eq!(members(&document.to_bytes().unwrap()), original_members);
         let snapshot = |document: &Document| {
             document
                 .story_items(&f254_story(document, rdocx::StoryKind::Body))
@@ -59681,16 +60059,19 @@ fn comment_moves_to_literal_text_keep_zero_width_and_namespace_semantics() {
         };
         let before = snapshot(&document);
         assert!(document.comments().is_empty());
-        assert_eq!(
-            document
-                .add_comment_on_text("SOURCE", 0, "Ada", None, "Kept", None)
-                .unwrap_err()
-                .to_string(),
-            error
+        let error = document
+            .add_comment_on_text("SOURCE", 0, "Ada", None, "Kept", None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(&format!(
+                "cannot identify retained `{owner}` nested namespace owner"
+            )),
+            "{error}"
         );
         assert_eq!(snapshot(&document), before);
         assert!(document.comments().is_empty());
-        assert_eq!(document.to_bytes().unwrap_err().to_string(), error);
+        assert_eq!(members(&document.to_bytes().unwrap()), original_members);
     }
     // These two sources are saveable on exact Base. A move beside their raw
     // field must preserve its local namespace, while crossing it must refuse.
@@ -59725,10 +60106,23 @@ fn comment_moves_to_literal_text_keep_zero_width_and_namespace_semantics() {
         );
     }
     let repeated = r#"<w:p xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:r><w:t>A</w:t></w:r><q:fldSimple q:instr=" PAGE "><q:r><q:t>7</q:t></q:r></q:fldSimple><w:r><w:t>B</w:t></w:r></w:p>"#;
-    let (mut ambiguous, id) = imported(&format!("{repeated}{repeated}"));
-    // Existing strict replay already refuses this indistinguishable imported
-    // owner pair on save. Move must preserve that refusal and its source state.
-    let original_error = ambiguous.to_bytes().unwrap_err().to_string();
+    let (mut ambiguous, id, original_xml) = imported(&format!("{repeated}{repeated}"));
+    // Read-only save preserves the ambiguous producer owners literally.
+    // Moving a comment must still prove unique namespace ownership.
+    let saved = ambiguous.to_bytes().unwrap();
+    let original_members = members(&saved);
+    assert_eq!(
+        original_members["word/document.xml"],
+        original_xml.as_bytes()
+    );
+    assert_eq!(members(&ambiguous.to_bytes().unwrap()), original_members);
+    ambiguous = Document::from_bytes(&saved).unwrap();
+    assert_eq!(members(&ambiguous.to_bytes().unwrap()), original_members);
+    let original_comments = ambiguous
+        .comments()
+        .iter()
+        .map(|comment| (comment.id(), comment.text()))
+        .collect::<Vec<_>>();
     let snapshot = |document: &Document| {
         document
             .story_items(&f254_story(document, rdocx::StoryKind::Body))
@@ -59738,12 +60132,47 @@ fn comment_moves_to_literal_text_keep_zero_width_and_namespace_semantics() {
             .collect::<Vec<_>>()
     };
     let before = snapshot(&ambiguous);
-    let error = ambiguous.move_comment_to_text(id, "A", 0).unwrap_err();
-    assert_eq!(error.to_string(), original_error);
-    assert_eq!(snapshot(&ambiguous), before);
+    let query_error = ambiguous.comment_anchor_text(id).unwrap_err().to_string();
     assert_eq!(
-        ambiguous.to_bytes().unwrap_err().to_string(),
-        original_error
+        query_error,
+        "cannot identify retained `p` nested namespace owner after mutation"
+    );
+    assert_eq!(
+        CT_P::comment_range_text_from_source(&original_members["word/document.xml"], id)
+            .unwrap()
+            .as_deref(),
+        Some("SOURCE")
+    );
+    let error = ambiguous.move_comment_to_text(id, "A", 0).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("cannot identify retained `p` nested namespace owner")
+            || error
+                .to_string()
+                .contains("comment move has ambiguous retained namespace owner"),
+        "{error}"
+    );
+    assert_eq!(snapshot(&ambiguous), before);
+    assert_eq!(members(&ambiguous.to_bytes().unwrap()), original_members);
+    assert_eq!(
+        ambiguous
+            .comments()
+            .iter()
+            .map(|comment| (comment.id(), comment.text()))
+            .collect::<Vec<_>>(),
+        original_comments
+    );
+    assert_eq!(
+        ambiguous.comment_anchor_text(id).unwrap_err().to_string(),
+        query_error
+    );
+    let after_members = members(&ambiguous.to_bytes().unwrap());
+    assert_eq!(
+        CT_P::comment_range_text_from_source(&after_members["word/document.xml"], id)
+            .unwrap()
+            .as_deref(),
+        Some("SOURCE")
     );
     for (target, anchor, shown) in [
         (
@@ -398075,4 +398504,585 @@ fn scoped_cell_inside_alternate_text_box_refuses_without_mutation() {
             .contains("alternate text-box")
     );
     assert_eq!(document.to_bytes().unwrap(), bytes);
+}
+
+#[test]
+fn toc_entry_boundaries_preserve_opaque_properties_and_namespace_closure() {
+    let body = entry_boundary_toc_body(&["Old first", "Old last"], &["Only"])
+        .replacen(
+            "<w:p>",
+            "<w:p xmlns:f=\"urn:first\" w:rsidR=\"00ABCDEF\">",
+            1,
+        )
+        .replacen(
+            "<w:pPr>",
+            "<w:pPr f:keep='&#65;'><f:before data='&#66;'/>",
+            1,
+        )
+        .replacen(
+            "</w:pPr>",
+            "<f:after><![CDATA[ opaque ]]></f:after></w:pPr>",
+            1,
+        );
+    // Only namespace declarations on the removed end paragraph. Its end run
+    // and opaque trailing sibling depend on that scope and must move together.
+    let needle = "<w:p><w:pPr><w:pStyle w:val=\"TOC1\"/></w:pPr><w:r><w:t>Old last";
+    let body = body.replace(needle, "<w:p xmlns:z=\"urn:end\"><w:pPr><w:pStyle w:val=\"TOC1\"/></w:pPr><w:r><w:t>Old last")
+        .replace("<w:fldChar w:fldCharType=\"end\"/></w:r>", "<w:fldChar w:fldCharType=\"end\"/><z:inside value='&#67;'/></w:r><z:after value='&#68;'/>");
+    let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+    for _ in 0..2 {
+        assert_eq!(document.rebuild_toc().unwrap().entry_count, 1);
+        let xml = document_xml(&mut document);
+        assert_eq!(body_paragraph_xml(&xml).len(), 2, "{xml}");
+        for exact in [
+            "f:keep='&#65;'",
+            "<f:before data='&#66;'/>",
+            "<f:after><![CDATA[ opaque ]]></f:after>",
+            "<z:inside value='&#67;'/>",
+            "value='&#68;'",
+            "w:rsidR=\"00ABCDEF\"",
+        ] {
+            assert!(xml.contains(exact), "missing {exact}: {xml}");
+        }
+        assert!(xml.contains("xmlns:z=\"urn:end\""), "{xml}");
+        let mut reader = quick_xml::reader::NsReader::from_reader(xml.as_bytes());
+        let mut buffer = Vec::new();
+        let mut retained = 0;
+        loop {
+            let (namespace, event) = reader.read_resolved_event_into(&mut buffer).unwrap();
+            match event {
+                quick_xml::events::Event::Start(element)
+                | quick_xml::events::Event::Empty(element)
+                    if matches!(element.name().as_ref(), b"z:inside" | b"z:after") =>
+                {
+                    assert!(
+                        matches!(namespace, quick_xml::name::ResolveResult::Bound(uri) if uri.as_ref() == b"urn:end")
+                    );
+                    retained += 1;
+                }
+                quick_xml::events::Event::Eof => break,
+                _ => {}
+            }
+            buffer.clear();
+        }
+        assert_eq!(retained, 2);
+
+        rdocx_oxml::document::CT_Document::from_xml(xml.as_bytes()).unwrap();
+        let saved = document.to_bytes().unwrap();
+        document = Document::from_bytes(&saved).unwrap();
+        let reopened = document_xml(&mut document);
+        assert_eq!(xml, reopened);
+    }
+}
+
+#[test]
+fn toc_entry_boundaries_remove_complete_started_styles() {
+    let body = entry_boundary_toc_body(&["Old entry"], &[]).replace(
+        "<w:pStyle w:val=\"TOC1\"/>",
+        "<w:pStyle w:val=\"TOC1\"></w:pStyle>",
+    );
+    let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+    for _ in 0..2 {
+        assert_eq!(document.rebuild_toc().unwrap().entry_count, 0);
+        let xml = document_xml(&mut document);
+        assert!(!xml.contains("pStyle"), "{xml}");
+        assert_eq!(xml.matches("w:fldCharType=\"begin\"").count(), 1);
+        assert_eq!(xml.matches("w:fldCharType=\"end\"").count(), 1);
+        rdocx_oxml::document::CT_Document::from_xml(xml.as_bytes()).unwrap();
+        document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    }
+    document.add_paragraph("Now visible").set_style("Heading1");
+    assert_eq!(document.rebuild_toc().unwrap().entry_count, 1);
+    let xml = document_xml(&mut document);
+    assert!(xml.contains("Now visible"));
+    assert_eq!(xml.matches("w:fldCharType=\"begin\"").count(), 1);
+    assert_eq!(xml.matches("w:fldCharType=\"end\"").count(), 1);
+}
+
+#[test]
+fn toc_entry_boundaries_qualify_aliases_and_adjacent_fields() {
+    for default_namespace in [false, true] {
+        let body = entry_boundary_toc_body(&["Old one", "Old two"], &["Only"]);
+        let xml = wrap_word_body(&body);
+        let xml = if default_namespace {
+            xml.replace("<w:", "<").replace("</w:", "</").replace(
+                "<document ",
+                "<document xmlns=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" ",
+            )
+        } else {
+            xml.replace("<w:", "<q:")
+                .replace("</w:", "</q:")
+                .replace(" w:", " q:")
+                .replace("xmlns:w=", "xmlns:q=")
+        };
+        let mut document = document_with_field_parts(&xml, None, None);
+        for _ in 0..2 {
+            assert_eq!(document.rebuild_toc().unwrap().entry_count, 1);
+            let output = document_xml(&mut document);
+            assert!(!output.contains("Old one"), "{output}");
+            assert!(!output.contains("Old two"), "{output}");
+            let mut reader = quick_xml::NsReader::from_str(&output);
+            loop {
+                let (namespace, event) = reader.read_resolved_event().unwrap();
+                assert!(
+                    !matches!(namespace, quick_xml::name::ResolveResult::Unknown(_)),
+                    "{output}"
+                );
+                match event {
+                    quick_xml::events::Event::Start(element)
+                    | quick_xml::events::Event::Empty(element) => {
+                        for attribute in element.attributes() {
+                            let (namespace, _) =
+                                reader.resolver().resolve_attribute(attribute.unwrap().key);
+                            assert!(
+                                !matches!(namespace, quick_xml::name::ResolveResult::Unknown(_)),
+                                "{output}"
+                            );
+                        }
+                    }
+                    quick_xml::events::Event::Eof => break,
+                    _ => {}
+                }
+            }
+            rdocx_oxml::document::CT_Document::from_xml(output.as_bytes()).unwrap();
+            document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        }
+    }
+    let body = entry_boundary_toc_body(&["Old entry"], &["Only"])
+        .replace("<w:", "<q:").replace("</w:", "</q:").replace(" w:", " q:")
+        .replacen("<q:p>", "<q:p xmlns:q=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" xmlns:w=\"urn:foreign\">", 1)
+        .replacen("</q:pPr>", "<w:numPr data='&#65;'/><w:pStyle w:val=\"foreign\"/></q:pPr>", 1);
+    let xml = wrap_word_body(&body).replace(
+        "<w:document ",
+        "<w:document xmlns:q=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" ",
+    );
+    let mut rebound = document_with_field_parts(&xml, None, None);
+    assert_eq!(rebound.rebuild_toc().unwrap().entry_count, 1);
+    let output = document_xml(&mut rebound);
+    assert!(
+        output.contains("<w:numPr data='&#65;'/>") && output.contains("w:val=\"foreign\""),
+        "{output}"
+    );
+    Document::from_bytes(&rebound.to_bytes().unwrap()).unwrap();
+    let body = entry_boundary_toc_body(&["Old A"], &["Alpha"])
+        + &entry_boundary_toc_body(&["Old B"], &["Beta"]);
+    let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+    for _ in 0..2 {
+        assert_eq!(document.rebuild_toc().unwrap().entry_count, 4);
+        let xml = document_xml(&mut document);
+        assert_eq!(xml.matches("w:fldCharType=\"begin\"").count(), 2);
+        assert_eq!(xml.matches("w:fldCharType=\"end\"").count(), 2);
+        assert_eq!(xml.matches(" TOC ").count(), 2);
+        assert!(!xml.contains("Old A"));
+        assert!(!xml.contains("Old B"));
+        document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    }
+}
+
+#[test]
+fn toc_entry_boundaries_refuse_duplicate_properties_without_mutation() {
+    let body = entry_boundary_toc_body(&["Old entry"], &["Only"]).replace(
+        "<w:pStyle w:val=\"TOC1\"/>",
+        "<w:pStyle w:val=\"TOC1\"/><w:pStyle w:val=\"TOC2\"/>",
+    );
+    let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+    let before = document.to_bytes().unwrap();
+    let error = document.rebuild_toc().unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("duplicate owned TOC paragraph property"),
+        "{error}"
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn toc_single_entry_expansion_closes_paragraph_local_namespaces() {
+    const WORD: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+    for default_namespace in [false, true] {
+        let prefix = if default_namespace { "" } else { "q:" };
+        let attribute = if default_namespace { "w:" } else { "q:" };
+        let declaration = if default_namespace {
+            format!("xmlns=\"{WORD}\"")
+        } else {
+            format!("xmlns:q=\"{WORD}\"")
+        };
+        let body = format!(
+            r#"<{prefix}p {declaration} xmlns:z="urn:local-end" xmlns:f="urn:local-properties" {attribute}rsidR="00ABCDEF"><{prefix}pPr f:keep='&#65;'><{prefix}pStyle {attribute}val="TOC1"/><f:property data='&#66;'/></{prefix}pPr><{prefix}r><{prefix}fldChar {attribute}fldCharType="begin"/></{prefix}r><{prefix}r><{prefix}instrText xml:space="preserve"> TOC \o "1-3" \h </{prefix}instrText></{prefix}r><{prefix}r><{prefix}fldChar {attribute}fldCharType="separate"/></{prefix}r><{prefix}r><{prefix}t>Old only</{prefix}t></{prefix}r><{prefix}r data-end='&#67;'><{prefix}fldChar {attribute}fldCharType="end"/><z:inside data='&#68;'><z:child><![CDATA[ exact body ]]></z:child></z:inside></{prefix}r><z:suffix data='&#69;'/></{prefix}p><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Alpha</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Beta</w:t></w:r></w:p><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Gamma</w:t></w:r></w:p>"#
+        );
+        let xml = wrap_word_body(&body)
+            .replace("<w:document ", "<w:document xmlns:z=\"urn:outer-shadow\" ");
+        let mut document = document_with_field_parts(&xml, None, None);
+        for _ in 0..2 {
+            assert_eq!(document.rebuild_toc().unwrap().entry_count, 3);
+            let output = document_xml(&mut document);
+            assert!(!output.contains("Old only"), "{output}");
+            for exact in [
+                "f:keep='&#65;'",
+                "<f:property data='&#66;'/>",
+                "data-end='&#67;'",
+                "<z:inside data='&#68;'><z:child><![CDATA[ exact body ]]></z:child></z:inside>",
+                "data='&#69;'",
+            ] {
+                assert!(output.contains(exact), "missing {exact}: {output}");
+            }
+            assert_eq!(output.matches("00ABCDEF").count(), 1, "{output}");
+            let mut reader = quick_xml::reader::NsReader::from_reader(output.as_bytes());
+            let mut buffer = Vec::new();
+            let mut ends = 0;
+            let mut foreign = 0;
+            let mut paragraphs = 0;
+            loop {
+                let (namespace, event) = reader.read_resolved_event_into(&mut buffer).unwrap();
+                match event {
+                    quick_xml::events::Event::Start(element)
+                    | quick_xml::events::Event::Empty(element) => {
+                        let name = element.name();
+                        let local = name.local_name();
+                        if local.as_ref() == b"p"
+                            && matches!(namespace, quick_xml::name::ResolveResult::Bound(uri) if uri.as_ref() == WORD.as_bytes())
+                        {
+                            paragraphs += 1;
+                        }
+                        if local.as_ref() == b"fldChar" {
+                            for attribute in element.attributes() {
+                                let attribute = attribute.unwrap();
+                                if attribute.key.local_name().as_ref() == b"fldCharType"
+                                    && attribute.value.as_ref() == b"end"
+                                {
+                                    assert!(
+                                        matches!(namespace, quick_xml::name::ResolveResult::Bound(uri) if uri.as_ref() == WORD.as_bytes())
+                                    );
+                                    ends += 1;
+                                }
+                            }
+                        }
+                        if matches!(name.as_ref(), b"z:inside" | b"z:child" | b"z:suffix") {
+                            assert!(
+                                matches!(namespace, quick_xml::name::ResolveResult::Bound(uri) if uri.as_ref() == b"urn:local-end")
+                            );
+                            foreign += 1;
+                        }
+                    }
+                    quick_xml::events::Event::Eof => break,
+                    _ => {}
+                }
+                buffer.clear();
+            }
+            assert_eq!(paragraphs, 6);
+            assert_eq!(ends, 1);
+            assert_eq!(foreign, 3);
+            document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+            assert_eq!(document_xml(&mut document), output);
+        }
+    }
+}
+
+#[test]
+fn toc_empty_entry_boundaries_remove_styles_and_allow_later_positive_rebuild() {
+    for old in [&["Old one"][..], &["Old one", "Old two", "Old three"][..]] {
+        let body = entry_boundary_toc_body(old, &[])
+            .replace("<w:p>", "<w:p xmlns:f=\"urn:empty-boundary\">")
+            .replace("<w:pPr>", "<w:pPr f:keep='&#65;'>")
+            .replace(
+                "<w:pStyle w:val=\"TOC1\"/>",
+                "<w:pStyle w:val=\"TOC1\"></w:pStyle><f:retained data='&#66;'/>",
+            );
+        let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+        let expected_roots = if old.len() == 1 { 1 } else { 2 };
+        for _ in 0..2 {
+            assert_eq!(document.rebuild_toc().unwrap().entry_count, 0);
+            let output = document_xml(&mut document);
+            assert!(!output.contains("pStyle"), "{output}");
+            assert!(!output.contains("Old "), "{output}");
+            assert_eq!(body_paragraph_xml(&output).len(), expected_roots);
+            assert_eq!(output.matches("f:keep='&#65;'").count(), expected_roots);
+            assert_eq!(
+                output.matches("<f:retained data='&#66;'/>").count(),
+                expected_roots
+            );
+            assert_eq!(output.matches("w:fldCharType=\"begin\"").count(), 1);
+            assert_eq!(output.matches("w:fldCharType=\"separate\"").count(), 1);
+            assert_eq!(output.matches("w:fldCharType=\"end\"").count(), 1);
+            assert_eq!(output.matches("f:keep='&#65;'").count(), expected_roots);
+            assert_eq!(
+                output.matches("<f:retained data='&#66;'/>").count(),
+                expected_roots
+            );
+            document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+            assert_eq!(document_xml(&mut document), output);
+        }
+        // Add only a heading to the saved source part, retaining every other
+        // package part and exact protected boundary particle as the next input.
+        let source = document.to_bytes().unwrap();
+        let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(source)).unwrap();
+        let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+        let xml = xml.replace("</w:body>", "<w:p><w:pPr><w:pStyle w:val=\"Heading1\"/></w:pPr><w:r><w:t>New heading</w:t></w:r></w:p></w:body>");
+        package.set_part("/word/document.xml", xml.into_bytes());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        document = Document::from_bytes(bytes.get_ref()).unwrap();
+        for _ in 0..2 {
+            assert_eq!(document.rebuild_toc().unwrap().entry_count, 1);
+            let output = document_xml(&mut document);
+            assert_eq!(
+                toc_entry_signatures(&output)
+                    .into_iter()
+                    .filter(|entry| entry.0 == "New heading\t1")
+                    .count(),
+                1
+            );
+            assert_eq!(output.matches("w:fldCharType=\"begin\"").count(), 1);
+            assert_eq!(output.matches("w:fldCharType=\"end\"").count(), 1);
+            document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+            assert_eq!(document_xml(&mut document), output);
+        }
+    }
+}
+
+#[test]
+fn toc_entry_boundaries_keep_opaque_tab_stops_in_generic_topology() {
+    for stop in [
+        r#"<w:tab w:val="right" w:pos="100" w:producer='&#65;'/>"#,
+        r#"<w:tab w:val="right" w:pos="100"><!--producer token--></w:tab>"#,
+        r#"<w:tab w:val="right" w:pos="100"><?producer keep?></w:tab>"#,
+        r#"<w:tab w:val="right" w:pos="100"><![CDATA[ opaque ]]></w:tab>"#,
+        r#"<w:tab w:val="right" w:pos="100"> opaque &#65; </w:tab>"#,
+        r#"<w:tab w:val="right" w:pos="100">&#65;</w:tab>"#,
+    ] {
+        let tabs = format!("<w:tabs>{stop}</w:tabs>");
+        let body = entry_boundary_toc_body(&["Old first", "Old last"], &["Alpha", "Beta"])
+            .replacen("</w:pPr>", &format!("{tabs}</w:pPr>"), 2);
+        let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+        for _ in 0..2 {
+            assert_eq!(document.rebuild_toc().unwrap().entry_count, 2);
+            let xml = document_xml(&mut document);
+            let paragraphs = body_paragraph_xml(&xml);
+            assert_eq!(paragraphs.len(), 6, "{stop}: {xml}");
+            assert!(paragraphs[0].contains(&tabs), "{xml}");
+            assert!(paragraphs[0].contains(r#"w:fldCharType="begin""#), "{xml}");
+            assert!(paragraphs[3].contains(&tabs), "{xml}");
+            assert!(paragraphs[3].contains(r#"w:fldCharType="end""#), "{xml}");
+            assert_eq!(xml.matches(stop).count(), 2, "{xml}");
+            assert!(
+                !xml.contains("Old first") && !xml.contains("Old last"),
+                "{xml}"
+            );
+            let saved = document.to_bytes().unwrap();
+            document = Document::from_bytes(&saved).unwrap();
+            assert_eq!(document_xml(&mut document), xml);
+        }
+
+        // An unsafe single-paragraph overlay keeps the existing named atomic
+        // refusal instead of discarding the stop's opaque source.
+        let body = entry_boundary_toc_body(&["Old single"], &["Alpha"]).replacen(
+            "</w:pPr>",
+            &format!("{tabs}</w:pPr>"),
+            1,
+        );
+        let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+        let before = document.to_bytes().unwrap();
+        for _ in 0..2 {
+            let error = document.rebuild_toc().unwrap_err();
+            assert!(
+                error.to_string().contains("must span paragraph boundaries"),
+                "{error}"
+            );
+            assert_eq!(document.to_bytes().unwrap(), before);
+        }
+        document = Document::from_bytes(&before).unwrap();
+        assert!(document_xml(&mut document).contains(stop));
+        assert!(document.rebuild_toc().is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+}
+
+#[test]
+fn toc_entry_boundaries_still_overlay_standard_tab_stops() {
+    // The helper must count expanded Word style facts, not attribute order,
+    // local declaration spelling or foreign lookalikes.
+    for (style, count) in [
+        (
+            r#"<q:pStyle xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" q:val="TOC1"/>"#,
+            1,
+        ),
+        (r#"<w:pStyle xmlns:w="urn:foreign" w:val="TOC1"/>"#, 0),
+        (r#"<w:pStyle xmlns:q="urn:foreign" q:val="TOC1"/>"#, 0),
+    ] {
+        let xml = wrap_word_body(&format!("<w:p><w:pPr>{style}</w:pPr></w:p>"));
+        assert_eq!(toc_paragraph_xml(&xml).len(), count);
+    }
+    for stop in [
+        r#"<w:tab w:val="right" w:leader="dot" w:pos="100"/>"#,
+        r#"<w:tab w:val="right" w:leader="dot" w:pos="100"></w:tab>"#,
+        r#"<w:tab xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val="right" w:leader="dot" w:pos="100"/>"#,
+    ] {
+        for style in [
+            r#"<w:pStyle w:val="TOC1"/>"#,
+            r#"<w:pStyle xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:val="TOC1"/>"#,
+        ] {
+            for entries in [&["Old single"][..], &["Old first", "Old last"][..]] {
+                let body = entry_boundary_toc_body(entries, &["Alpha", "Beta"]).replacen(
+                    "</w:pPr>",
+                    &format!("<w:tabs>{stop}</w:tabs></w:pPr>"),
+                    entries.len(),
+                );
+                let body = body.replace(r#"<w:pStyle w:val="TOC1"/>"#, style);
+                let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+                for _ in 0..2 {
+                    assert_eq!(document.rebuild_toc().unwrap().entry_count, 2);
+                    let xml = document_xml(&mut document);
+                    assert_eq!(body_paragraph_xml(&xml).len(), 4, "{xml}");
+                    let toc = toc_paragraph_xml(&xml);
+                    assert_eq!(toc.len(), 2);
+                    assert!(toc[0].contains(r#"w:fldCharType="begin""#), "{xml}");
+                    assert!(toc[1].contains(r#"w:fldCharType="end""#), "{xml}");
+                    assert!(!xml.contains(stop), "old stop was not overlaid: {xml}");
+                    assert!(
+                        toc.iter().all(|paragraph| paragraph.contains("<w:tabs>")),
+                        "{xml}"
+                    );
+                    let saved = document.to_bytes().unwrap();
+                    document = Document::from_bytes(&saved).unwrap();
+                    assert_eq!(document_xml(&mut document), xml);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn toc_entry_collapse_keeps_opaque_end_property_body_tokens() {
+    for payload in [
+        "<!--end producer token-->",
+        "<?producer end?>",
+        "<![CDATA[ end opaque ]]>",
+        " end opaque &#65; ",
+        "&#65;",
+    ] {
+        let body = entry_boundary_toc_body(&["Old first", "Old last"], &["Only"]);
+        let last = body.find("<w:r><w:t>Old last").unwrap();
+        let property_end = body[..last].rfind("</w:pPr>").unwrap();
+        let mut body = body;
+        body.insert_str(property_end, payload);
+        let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+        for _ in 0..2 {
+            assert_eq!(document.rebuild_toc().unwrap().entry_count, 1);
+            let xml = document_xml(&mut document);
+            let paragraphs = body_paragraph_xml(&xml);
+            // The protected end root remains separate from the generated entry.
+            assert_eq!(paragraphs.len(), 3, "{payload}: {xml}");
+            assert!(paragraphs[0].contains("Only"), "{xml}");
+            assert!(paragraphs[0].contains(r#"w:fldCharType="begin""#), "{xml}");
+            assert!(paragraphs[1].contains(payload), "{xml}");
+            assert!(paragraphs[1].contains(r#"w:fldCharType="end""#), "{xml}");
+            assert_eq!(xml.matches(payload).count(), 1, "{xml}");
+            assert!(
+                !xml.contains("Old first") && !xml.contains("Old last"),
+                "{xml}"
+            );
+            rdocx_oxml::document::CT_Document::from_xml(xml.as_bytes()).unwrap();
+            let saved = document.to_bytes().unwrap();
+            document = Document::from_bytes(&saved).unwrap();
+            assert_eq!(document_xml(&mut document), xml);
+        }
+    }
+}
+
+#[test]
+fn toc_entry_collapse_ignores_ordinary_property_indentation() {
+    let body = entry_boundary_toc_body(&["Old first", "Old last"], &["Only"])
+        .replace("</w:pPr>", " \t\r\n</w:pPr>");
+    let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+    for _ in 0..2 {
+        assert_eq!(document.rebuild_toc().unwrap().entry_count, 1);
+        let xml = document_xml(&mut document);
+        let paragraphs = body_paragraph_xml(&xml);
+        assert_eq!(paragraphs.len(), 2, "{xml}");
+        assert!(paragraphs[0].contains("Only"), "{xml}");
+        assert!(paragraphs[0].contains(r#"w:fldCharType="begin""#), "{xml}");
+        assert!(paragraphs[0].contains(r#"w:fldCharType="end""#), "{xml}");
+        let saved = document.to_bytes().unwrap();
+        document = Document::from_bytes(&saved).unwrap();
+        assert_eq!(document_xml(&mut document), xml);
+    }
+}
+
+#[test]
+fn toc_entry_collapse_preserves_property_owner_attributes_and_namespaces() {
+    for properties in [
+        r#"<w:pPr w:producer='&#65;'><w:pStyle w:val="TOC1"/></w:pPr>"#,
+        r#"<w:pPr><w:pStyle w:val="TOC1" w:producer='&#65;'/></w:pPr>"#,
+        r#"<w:pPr><w:pStyle w:val="TOC1"/><w:tabs w:producer='&#65;'><w:tab w:val="right" w:pos="100"/></w:tabs></w:pPr>"#,
+        r#"<w:pPr><w:pStyle w:val="TOC1"/><w:tabs><w:tab w:val="right" w:pos="100" w:producer='&#65;'/></w:tabs></w:pPr>"#,
+        r#"<w:pPr xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><q:pStyle q:val="TOC1" q:producer='&#65;'/></w:pPr>"#,
+        r#"<w:pPr><w:pStyle xmlns:f="urn:style" w:val="TOC1"/></w:pPr>"#,
+        r#"<w:pPr><w:pStyle w:val="TOC1"/><w:tabs xmlns:f="urn:tabs"><w:tab w:val="right" w:pos="100"/></w:tabs></w:pPr>"#,
+        r#"<w:pPr><w:pStyle w:val="TOC1"/><w:tabs><w:tab xmlns:f="urn:stop" w:val="right" w:pos="100"/></w:tabs></w:pPr>"#,
+        r#"<w:pPr><w:pStyle w:val="TOC1"/><w:spacing w:after="123" w:producer='&#65;'/></w:pPr>"#,
+        r#"<w:pPr><w:pStyle w:val="TOC1"/><w:keepNext/></w:pPr>"#,
+    ] {
+        let mut body = entry_boundary_toc_body(&["Old first", "Old last"], &["Only"]);
+        let last = body.find("<w:r><w:t>Old last").unwrap();
+        let start = body[..last].rfind("<w:pPr>").unwrap();
+        body.replace_range(start..last, properties);
+        let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+        for _ in 0..2 {
+            assert_eq!(document.rebuild_toc().unwrap().entry_count, 1);
+            let xml = document_xml(&mut document);
+            let paragraphs = body_paragraph_xml(&xml);
+            assert_eq!(paragraphs.len(), 3, "{properties}: {xml}");
+            assert!(paragraphs[0].contains("Only"), "{xml}");
+            assert!(paragraphs[1].contains(properties), "{xml}");
+            assert!(paragraphs[1].contains(r#"w:fldCharType="end""#), "{xml}");
+            let saved = document.to_bytes().unwrap();
+            document = Document::from_bytes(&saved).unwrap();
+            assert_eq!(document_xml(&mut document), xml);
+        }
+    }
+}
+
+#[test]
+fn toc_entry_overlay_refuses_to_clear_opaque_style_and_stop_owners() {
+    for properties in [
+        r#"<w:pPr><w:pStyle w:val="TOC1" w:producer='&#65;'/></w:pPr>"#,
+        r#"<w:pPr><w:pStyle w:val="TOC1"><!--style token--></w:pStyle></w:pPr>"#,
+        r#"<w:pPr><w:pStyle xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" q:val="TOC1" q:producer='&#65;'/></w:pPr>"#,
+        r#"<w:pPr><w:pStyle w:val="TOC1"/><w:tabs><w:tab xmlns:f="urn:stop" w:val="right" w:pos="100"/></w:tabs></w:pPr>"#,
+    ] {
+        for headings in [&["Only"][..], &[][..]] {
+            let body = entry_boundary_toc_body(&["Old single"], headings).replacen(
+                "<w:pPr><w:pStyle w:val=\"TOC1\"/></w:pPr>",
+                properties,
+                1,
+            );
+            let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+            let before = document.to_bytes().unwrap();
+            for _ in 0..2 {
+                let error = document.rebuild_toc().unwrap_err();
+                assert!(
+                    error.to_string().contains("must span paragraph boundaries"),
+                    "{error}"
+                );
+                assert_eq!(document.to_bytes().unwrap(), before);
+            }
+            document = Document::from_bytes(&before).unwrap();
+            assert!(document_xml(&mut document).contains(properties));
+            assert!(document.rebuild_toc().is_err());
+            assert_eq!(document.to_bytes().unwrap(), before);
+        }
+        let body = entry_boundary_toc_body(&["Old first", "Old last"], &["Alpha", "Beta"])
+            .replace("<w:pPr><w:pStyle w:val=\"TOC1\"/></w:pPr>", properties);
+        let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+        for _ in 0..2 {
+            assert_eq!(document.rebuild_toc().unwrap().entry_count, 2);
+            let xml = document_xml(&mut document);
+            assert_eq!(body_paragraph_xml(&xml).len(), 6, "{xml}");
+            assert_eq!(xml.matches(properties).count(), 2, "{xml}");
+            let saved = document.to_bytes().unwrap();
+            document = Document::from_bytes(&saved).unwrap();
+            assert_eq!(document_xml(&mut document), xml);
+        }
+    }
 }

@@ -2114,6 +2114,7 @@ impl Document {
         diagnostics.extend(toc_default_style_diagnostics(&candidate.styles));
         let (toc_entry_styles, retained_style_defects) =
             ensure_toc_entry_styles(&mut candidate, &sources)?;
+        let entry_style_ids = toc_entry_style_ids(&candidate.styles, &toc_entry_styles);
         diagnostics.extend(retained_style_defects);
         candidate.flush_to_package()?;
         let rebuilt_toc_spans = toc_spans
@@ -2226,6 +2227,7 @@ impl Document {
                 )
             })
             .collect::<Vec<_>>();
+        let provisional_paragraphs = toc_paragraph_insertions(&provisional_xml)?;
         let mut placeholders = Vec::new();
         let mut edits = Vec::new();
         let mut entry_count = 0usize;
@@ -2249,6 +2251,22 @@ impl Document {
                 &mut placeholders,
             )?;
             entry_count += toc_sources.len();
+            if let Some(mut merged) = entry_boundary_toc_edits(
+                &provisional_xml,
+                span,
+                &provisional_paragraphs,
+                &generated,
+                &entry_style_ids,
+                &end_bookmark_starts[toc_index],
+            )? {
+                edits.append(&mut merged);
+                continue;
+            }
+            if span.begin_paragraph == span.end_paragraph {
+                return Err(Error::Other(
+                    "table of contents result must span paragraph boundaries".to_owned(),
+                ));
+            }
             edits.push(FieldSourceEdit {
                 start: span.result_start,
                 end: span.result_end,
@@ -7095,11 +7113,6 @@ fn update_dynamic_field_stack(
             let separator_paragraph = field.separator_paragraph.ok_or_else(|| {
                 Error::Other("table of contents field is missing its separator".to_owned())
             })?;
-            if separator_paragraph == paragraph && generated == DynamicOwnerPolicy::Toc {
-                return Err(Error::Other(
-                    "table of contents result must span paragraph boundaries".to_owned(),
-                ));
-            }
             if separator_paragraph != field.begin_paragraph {
                 return Err(Error::Other(
                     "table of contents instruction crosses a paragraph boundary".to_owned(),
@@ -8658,6 +8671,12 @@ fn heading_style_level(document: &Document, style_id: &str) -> Option<u8> {
 
 #[derive(Debug)]
 struct TocParagraphInsertion {
+    start: usize,
+    end: usize,
+    name: String,
+    namespaces: BTreeMap<String, String>,
+    has_non_namespace_attributes: bool,
+    start_tag_end: usize,
     content_start: usize,
     content_end: usize,
 }
@@ -8707,7 +8726,7 @@ fn insert_toc_bookmarks_xml(
             let start_insertion = insertions.entry(fragment_start).or_default();
             start_insertion.extend_from_slice(
                 format!(
-                    "<w:bookmarkStart w:id=\"{}\" w:name=\"{}\"/>",
+                    "<w:bookmarkStart w:id=\"{}\" w:name=\"{}\" xmlns:w=\"{W_NS}\"/>",
                     bookmark.id,
                     xml_escape_attribute(&bookmark.name)
                 )
@@ -8717,8 +8736,13 @@ fn insert_toc_bookmarks_xml(
 
         let end_insertion = insertions.entry(content_end).or_default();
         if let Some(bookmark) = bookmark {
-            end_insertion
-                .extend_from_slice(format!("<w:bookmarkEnd w:id=\"{}\"/>", bookmark.id).as_bytes());
+            end_insertion.extend_from_slice(
+                format!(
+                    "<w:bookmarkEnd w:id=\"{}\" xmlns:w=\"{W_NS}\"/>",
+                    bookmark.id
+                )
+                .as_bytes(),
+            );
         }
     }
     let mut repair_ends = BTreeMap::<usize, Vec<i32>>::new();
@@ -8734,7 +8758,9 @@ fn insert_toc_bookmarks_xml(
     for (position, ids) in repair_ends {
         let insertion = insertions.entry(position).or_default();
         for id in ids.into_iter().rev() {
-            insertion.extend_from_slice(format!("<w:bookmarkEnd w:id=\"{id}\"/>").as_bytes());
+            insertion.extend_from_slice(
+                format!("<w:bookmarkEnd w:id=\"{id}\" xmlns:w=\"{W_NS}\"/>").as_bytes(),
+            );
         }
     }
     let mut output = xml.to_vec();
@@ -8777,6 +8803,17 @@ fn toc_paragraph_insertions(xml: &[u8]) -> Result<Vec<TocParagraphInsertion>> {
                 let paragraph = if is_typed_paragraph {
                     let index = paragraphs.len();
                     paragraphs.push(TocParagraphInsertion {
+                        start: before,
+                        end: after,
+                        name: String::from_utf8_lossy(element.name().as_ref()).into_owned(),
+                        namespaces: namespace_bindings.clone(),
+                        has_non_namespace_attributes: element.attributes().any(|attribute| {
+                            attribute.is_ok_and(|attribute| {
+                                attribute.key.as_ref() != b"xmlns"
+                                    && !attribute.key.as_ref().starts_with(b"xmlns:")
+                            })
+                        }),
+                        start_tag_end: after,
                         content_start: after,
                         content_end: after,
                     });
@@ -8809,6 +8846,12 @@ fn toc_paragraph_insertions(xml: &[u8]) -> Result<Vec<TocParagraphInsertion>> {
                 let typed_block_owner = classify_typed_block_owner(word, local, &elements);
                 if typed_block_owner == Some(TypedBlockOwner::Paragraph) {
                     paragraphs.push(TocParagraphInsertion {
+                        start: before,
+                        end: after,
+                        name: String::from_utf8_lossy(element.name().as_ref()).into_owned(),
+                        namespaces: BTreeMap::new(),
+                        has_non_namespace_attributes: false,
+                        start_tag_end: before,
                         content_start: before,
                         content_end: before,
                     });
@@ -8843,6 +8886,7 @@ fn toc_paragraph_insertions(xml: &[u8]) -> Result<Vec<TocParagraphInsertion>> {
                     && let Some(paragraph) = closed.paragraph
                 {
                     paragraphs[paragraph].content_end = before;
+                    paragraphs[paragraph].end = after;
                 }
             }
             Event::Eof => break,
@@ -9057,7 +9101,7 @@ fn end_boundary_bookmark_starts(
     {
         output.extend_from_slice(
             format!(
-                "<w:bookmarkStart w:id=\"{}\" w:name=\"{}\"/>",
+                "<w:bookmarkStart w:id=\"{}\" w:name=\"{}\" xmlns:w=\"{W_NS}\"/>",
                 repair.id,
                 xml_escape_attribute(&repair.name)
             )
@@ -9079,7 +9123,7 @@ fn end_boundary_bookmark_starts(
     {
         output.extend_from_slice(
             format!(
-                "<w:bookmarkStart w:id=\"{}\" w:name=\"{}\"/>",
+                "<w:bookmarkStart w:id=\"{}\" w:name=\"{}\" xmlns:w=\"{W_NS}\"/>",
                 bookmark.id,
                 xml_escape_attribute(&bookmark.name)
             )
@@ -9125,6 +9169,823 @@ fn dynamic_toc_replacement(
         replacement.extend_from_slice(&xml[start..end]);
     }
     Ok(replacement)
+}
+
+/// Reuse eligible entry paragraph roots while replacing only owned entry facts.
+fn entry_boundary_toc_edits(
+    xml: &[u8],
+    span: &DynamicTocSpan,
+    paragraphs: &[TocParagraphInsertion],
+    generated: &[u8],
+    entry_style_ids: &BTreeSet<String>,
+    end_boundary_bookmark_starts: &[u8],
+) -> Result<Option<Vec<FieldSourceEdit>>> {
+    if !span.separator_wrapper_names.is_empty()
+        || !span.end_wrapper_prefixes.is_empty()
+        || !end_boundary_bookmark_starts.is_empty()
+    {
+        return Ok(None);
+    }
+    let begin = &paragraphs[span.begin_paragraph];
+    let end = &paragraphs[span.end_paragraph];
+    let single = span.begin_paragraph == span.end_paragraph;
+    let begin_properties = &xml[begin.start_tag_end..begin.content_start];
+    let end_properties = &xml[end.start_tag_end..end.content_start];
+    let begin_scan = toc_fragment_scan(begin_properties, &begin.namespaces)?;
+    let end_scan = toc_fragment_scan(end_properties, &end.namespaces)?;
+    let begin_content = toc_fragment_scan(
+        &xml[span.result_start..if single {
+            span.result_end
+        } else {
+            begin.content_end
+        }],
+        &begin.namespaces,
+    )?;
+    let after_end = toc_fragment_scan(&xml[span.end_run_end..end.content_end], &end.namespaces)?;
+    let is_entry = |scan: &TocFragmentScan, has_run: bool| {
+        !scan.blocks_replacement
+            && has_run
+            && scan
+                .style
+                .as_ref()
+                .is_some_and(|(id, _)| entry_style_ids.contains(id))
+    };
+    let merge_begin = begin.content_start == span.begin_run_start
+        && (is_entry(&begin_scan, begin_content.has_run)
+            || (single && !begin_content.has_run && !begin_scan.blocks_replacement));
+    let merge_end = !after_end.has_run
+        && is_entry(
+            &end_scan,
+            toc_fragment_scan(&xml[end.content_start..span.result_end], &end.namespaces)?.has_run,
+        );
+    let mut entries = Vec::new();
+    let mut offset = 0;
+    for close in byte_match_offsets(generated, b"</w:p>") {
+        let next = close + b"</w:p>".len();
+        entries.push(&generated[offset..next]);
+        offset = next;
+    }
+    if offset != generated.len() {
+        return Ok(None);
+    }
+    if single && (!merge_begin || after_end.has_run) {
+        return Ok(None);
+    }
+    if !single && !merge_begin && !merge_end {
+        return Ok(None);
+    }
+    if entries.is_empty() {
+        let mut edits = Vec::new();
+        if merge_begin {
+            edits.push(FieldSourceEdit {
+                start: begin.start_tag_end,
+                end: begin.content_start,
+                replacement: toc_overlay_entry_properties(begin_properties, &begin_scan, None)?,
+            });
+        }
+        let replacement = if single {
+            Vec::new()
+        } else {
+            // Zero entries retain the balanced two-root topology. Remove only
+            // the entry style on an eligible owner, preserving its other facts.
+            let mut replacement = format!("</{}>", begin.name).into_bytes();
+            replacement.extend_from_slice(&xml[end.start..end.start_tag_end]);
+            if merge_end {
+                replacement.extend_from_slice(&toc_overlay_entry_properties(
+                    end_properties,
+                    &end_scan,
+                    None,
+                )?);
+            } else {
+                replacement.extend_from_slice(end_properties);
+            }
+            replacement
+        };
+        edits.push(FieldSourceEdit {
+            start: span.result_start,
+            end: span.result_end,
+            replacement,
+        });
+        return Ok(Some(edits));
+    }
+    // Combining two roots cannot silently discard identity or foreign attributes
+    // on the removed end root. Keep that root in the generic topology instead.
+    let keep_end_root = entries.len() == 1
+        && merge_begin
+        && merge_end
+        && !single
+        && (end.has_non_namespace_attributes || end_scan.has_opaque_properties);
+    let merge_end = merge_end && !keep_end_root;
+    let generated_bindings = BTreeMap::from([("w".to_owned(), W_NS.to_owned())]);
+    let mut edits = Vec::new();
+    let mut replacement = Vec::new();
+    if !merge_begin {
+        replacement.extend_from_slice(format!("</{}>", begin.name).as_bytes());
+    }
+    for (index, entry) in entries.iter().enumerate() {
+        let properties_end = find_bytes(entry, b"</w:pPr>").ok_or_else(|| {
+            Error::Other("generated TOC entry has no paragraph properties".to_owned())
+        })? + b"</w:pPr>".len();
+        let generated_properties = &entry[b"<w:p>".len()..properties_end];
+        let first_reused = index == 0 && merge_begin;
+        let last_reused = !single && index + 1 == entries.len() && merge_end;
+        if first_reused {
+            edits.push(FieldSourceEdit {
+                start: begin.start_tag_end,
+                end: begin.content_start,
+                replacement: toc_overlay_entry_properties(
+                    begin_properties,
+                    &begin_scan,
+                    Some(generated_properties),
+                )?,
+            });
+        } else if last_reused {
+            replacement.extend_from_slice(&xml[end.start..end.start_tag_end]);
+            replacement.extend_from_slice(&toc_overlay_entry_properties(
+                end_properties,
+                &end_scan,
+                Some(generated_properties),
+            )?);
+        } else {
+            replacement.extend_from_slice(format!("<w:p xmlns:w=\"{W_NS}\">").as_bytes());
+            replacement.extend_from_slice(generated_properties);
+        }
+        replacement.extend_from_slice(&toc_close_fragment_namespaces(
+            &entry[properties_end..entry.len() - b"</w:p>".len()],
+            &generated_bindings,
+        )?);
+        if index + 1 < entries.len() || (!single && !last_reused) {
+            replacement.extend_from_slice(
+                if first_reused {
+                    format!("</{}>", begin.name).into_bytes()
+                } else {
+                    b"</w:p>".to_vec()
+                }
+                .as_slice(),
+            );
+        }
+    }
+    if !single && !merge_end {
+        replacement.extend_from_slice(&xml[end.start..end.content_start]);
+    }
+    edits.push(FieldSourceEdit {
+        start: span.result_start,
+        end: span.result_end,
+        replacement,
+    });
+    if single && entries.len() > 1 {
+        // The final generated entry no longer inherits the original paragraph
+        // scope. Retained end content must carry that scope on every moved root.
+        edits.push(FieldSourceEdit {
+            start: span.result_end,
+            end: end.content_end,
+            replacement: toc_close_fragment_namespaces(
+                &xml[span.result_end..end.content_end],
+                &end.namespaces,
+            )?,
+        });
+        edits.push(FieldSourceEdit {
+            start: end.content_end,
+            end: end.end,
+            replacement: b"</w:p>".to_vec(),
+        });
+    }
+    if !single && merge_begin && merge_end && entries.len() == 1 {
+        // The end run and every trailing sibling move out of their original
+        // namespace scope. Close each retained root, without rewriting tokens.
+        edits.push(FieldSourceEdit {
+            start: span.result_end,
+            end: end.content_end,
+            replacement: toc_close_fragment_namespaces(
+                &xml[span.result_end..end.content_end],
+                &end.namespaces,
+            )?,
+        });
+        edits.push(FieldSourceEdit {
+            start: end.content_end,
+            end: end.end,
+            replacement: format!("</{}>", begin.name).into_bytes(),
+        });
+    }
+    edits.sort_by_key(|edit| edit.start);
+    Ok(Some(edits))
+}
+
+/// Resolve a fragment in its actual paragraph scope, retaining exact byte ranges.
+struct TocFragmentScan {
+    namespaces: BTreeMap<String, String>,
+    style: Option<(String, std::ops::Range<usize>)>,
+    has_run: bool,
+    blocks_replacement: bool,
+    has_opaque_properties: bool,
+    property_root: Option<(usize, usize, usize, usize, String)>,
+    children: Vec<(Option<String>, std::ops::Range<usize>)>,
+}
+
+fn toc_fragment_scan(
+    fragment: &[u8],
+    bindings: &BTreeMap<String, String>,
+) -> Result<TocFragmentScan> {
+    let mut wrapper = b"<toc-fragment".to_vec();
+    for (prefix, uri) in bindings {
+        if prefix == "xml" {
+            continue;
+        }
+        wrapper.extend_from_slice(
+            if prefix.is_empty() {
+                " xmlns".to_owned()
+            } else {
+                format!(" xmlns:{prefix}")
+            }
+            .as_bytes(),
+        );
+        wrapper.extend_from_slice(format!("=\"{}\"", xml_escape_attribute(uri)).as_bytes());
+    }
+    wrapper.push(b'>');
+    let origin = wrapper.len();
+    wrapper.extend_from_slice(fragment);
+    wrapper.extend_from_slice(b"</toc-fragment>");
+    let mut reader = NsReader::from_reader(wrapper.as_slice());
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut scan = TocFragmentScan {
+        namespaces: bindings.clone(),
+        style: None,
+        has_run: false,
+        blocks_replacement: false,
+        has_opaque_properties: false,
+        property_root: None,
+        children: Vec::new(),
+    };
+    let mut child: Option<(Option<String>, usize)> = None;
+    let mut owned = HashSet::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid TOC boundary XML: {error}")))?;
+        let word = namespace_is_word(&namespace);
+        let after = reader.buffer_position() as usize;
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                let empty = matches!(event, Event::Empty(_));
+                let name = element.name();
+                let local = local_name(name.as_ref());
+                if depth >= 1 && word && local == b"r" {
+                    scan.has_run = true;
+                }
+                if depth == 1 && word && matches!(local, b"pPr" | b"tabs") {
+                    if scan.property_root.is_some() {
+                        return Err(Error::Other(
+                            "duplicate owned TOC paragraph properties".to_owned(),
+                        ));
+                    }
+                    for attribute in element.attributes() {
+                        let attribute = attribute.map_err(|error| {
+                            Error::Other(format!("invalid TOC boundary namespace: {error}"))
+                        })?;
+                        let key = attribute.key.as_ref();
+                        let prefix = if key == b"xmlns" {
+                            Some(String::new())
+                        } else {
+                            key.strip_prefix(b"xmlns:")
+                                .map(|prefix| String::from_utf8_lossy(prefix).into_owned())
+                        };
+                        if let Some(prefix) = prefix {
+                            let value = attribute
+                                .decoded_and_normalized_value(
+                                    XmlVersion::Implicit1_0,
+                                    element.decoder(),
+                                )
+                                .map_err(|error| {
+                                    Error::Other(format!("invalid TOC boundary namespace: {error}"))
+                                })?
+                                .into_owned();
+                            if value.is_empty() {
+                                scan.namespaces.remove(&prefix);
+                            } else {
+                                scan.namespaces.insert(prefix, value);
+                            }
+                        }
+                    }
+                    let start = before - origin;
+                    let opening = after - origin;
+                    scan.property_root = Some((
+                        start,
+                        opening,
+                        opening,
+                        opening,
+                        String::from_utf8_lossy(name.as_ref()).into_owned(),
+                    ));
+                    if empty {
+                        scan.property_root.as_mut().unwrap().2 = start;
+                    }
+                }
+                // A generated stop cannot erase opaque facts attached to an
+                // existing stop. Leave this boundary in the generic topology.
+                let inside_tab_stop = depth >= 3
+                    && child
+                        .as_ref()
+                        .is_some_and(|(key, _)| key.as_deref() == Some("tabs"));
+                if inside_tab_stop && (depth > 3 || !word || local != b"tab") {
+                    scan.blocks_replacement = true;
+                }
+                let inside_style = child
+                    .as_ref()
+                    .is_some_and(|(key, _)| key.as_deref() == Some("pStyle"));
+                if inside_style && depth >= 3 {
+                    scan.blocks_replacement = true;
+                }
+                if scan.property_root.is_some() && depth >= 1 {
+                    if depth >= 2 && !word {
+                        scan.has_opaque_properties = true;
+                    }
+                    for attribute in element.attributes() {
+                        let attribute = attribute.map_err(|error| {
+                            Error::Other(format!("invalid TOC property attribute: {error}"))
+                        })?;
+                        let key = attribute.key.as_ref();
+                        let declaration = key == b"xmlns" || key.starts_with(b"xmlns:");
+                        // Namespace closure on a generated Word fact is not an
+                        // opaque producer declaration. Its exact binding is
+                        // already required by the qualified owner itself.
+                        if key == b"xmlns:w"
+                            && word
+                            && ((depth == 2 && name.as_ref() == b"w:pStyle")
+                                || (inside_tab_stop && depth == 3 && name.as_ref() == b"w:tab"))
+                            && attribute
+                                .decoded_and_normalized_value(
+                                    XmlVersion::Implicit1_0,
+                                    element.decoder(),
+                                )
+                                .map_err(|error| {
+                                    Error::Other(format!("invalid TOC property namespace: {error}"))
+                                })?
+                                == W_NS
+                        {
+                            continue;
+                        }
+                        let (attribute_namespace, attribute_local) =
+                            reader.resolver().resolve_attribute(attribute.key);
+                        // Only these attributes are generated entry facts. A
+                        // recognized property name does not own its other data.
+                        let owned_fact = !declaration
+                            && word
+                            && namespace_is_word(&attribute_namespace)
+                            && ((depth == 2
+                                && local == b"pStyle"
+                                && attribute_local.as_ref() == b"val")
+                                || (inside_tab_stop
+                                    && depth == 3
+                                    && local == b"tab"
+                                    && matches!(
+                                        attribute_local.as_ref(),
+                                        b"val" | b"leader" | b"pos"
+                                    )));
+                        if !owned_fact {
+                            scan.has_opaque_properties = true;
+                            if inside_tab_stop || (depth == 2 && word && local == b"pStyle") {
+                                // These owners are replaced or removed, including
+                                // zero-entry style clearing. Keep opaque owners.
+                                scan.blocks_replacement = true;
+                            }
+                        }
+                    }
+                }
+                if depth == 2 && scan.property_root.is_some() {
+                    let key = word.then(|| String::from_utf8_lossy(local).into_owned());
+                    if word
+                        && scan
+                            .property_root
+                            .as_ref()
+                            .is_some_and(|root| !root.4.ends_with(":tabs") && root.4 != "tabs")
+                        && !matches!(local, b"pStyle" | b"tabs")
+                    {
+                        scan.has_opaque_properties = true;
+                    }
+                    if let Some(ref key) = key {
+                        if key != "tab" && !owned.insert(key.clone()) {
+                            return Err(Error::Other(format!(
+                                "duplicate owned TOC paragraph property {key}"
+                            )));
+                        }
+                        if matches!(local, b"sectPr" | b"numPr" | b"pPrChange") {
+                            scan.blocks_replacement = true;
+                        }
+                    }
+                    let range = before - origin..after - origin;
+                    if word && local == b"pStyle" {
+                        let mut value = None;
+                        for attribute in element.attributes() {
+                            let attribute = attribute.map_err(|error| {
+                                Error::Other(format!("invalid TOC property attribute: {error}"))
+                            })?;
+                            let (namespace, local) =
+                                reader.resolver().resolve_attribute(attribute.key);
+                            if namespace_is_word(&namespace) && local.as_ref() == b"val" {
+                                if value.is_some() {
+                                    return Err(Error::Other(
+                                        "duplicate owned TOC style value".to_owned(),
+                                    ));
+                                }
+                                value = Some(
+                                    attribute
+                                        .decoded_and_normalized_value(
+                                            XmlVersion::Implicit1_0,
+                                            element.decoder(),
+                                        )
+                                        .map_err(|error| {
+                                            Error::Other(format!(
+                                                "invalid TOC style value: {error}"
+                                            ))
+                                        })?
+                                        .into_owned(),
+                                );
+                            }
+                        }
+                        let value = value.ok_or_else(|| {
+                            Error::Other("TOC entry style has no owned value".to_owned())
+                        })?;
+                        scan.style = Some((value, range.clone()));
+                    }
+                    if empty {
+                        scan.children.push((key, range));
+                    } else {
+                        child = Some((key, range.start));
+                    }
+                }
+                if word && depth > 2 && matches!(local, b"ins" | b"del" | b"moveFrom" | b"moveTo") {
+                    scan.blocks_replacement = true;
+                }
+                if !empty {
+                    depth += 1;
+                }
+            }
+            Event::End(_) => {
+                depth = depth
+                    .checked_sub(1)
+                    .ok_or_else(|| Error::Other("unbalanced TOC boundary XML".to_owned()))?;
+                if depth == 2
+                    && let Some((key, start)) = child.take()
+                {
+                    let range = start..after - origin;
+                    if key.as_deref() == Some("pStyle")
+                        && let Some((_, old)) = scan.style.as_mut()
+                    {
+                        *old = range.clone();
+                    }
+                    scan.children.push((key, range));
+                }
+                if depth == 1
+                    && let Some(root) = scan.property_root.as_mut()
+                {
+                    // Only the pPr root is active at depth two.
+                    if root.3 == root.1 {
+                        root.2 = before - origin;
+                        root.3 = after - origin;
+                    }
+                }
+            }
+            Event::Comment(_)
+            | Event::PI(_)
+            | Event::CData(_)
+            | Event::Text(_)
+            | Event::GeneralRef(_) => {
+                if depth >= 2
+                    && scan
+                        .property_root
+                        .as_ref()
+                        .is_some_and(|root| root.3 == root.1)
+                {
+                    // Ordinary XML indentation does not protect an otherwise
+                    // mergeable root. All other body tokens are imported facts.
+                    let opaque = match &event {
+                        Event::Text(text) => !text
+                            .iter()
+                            .all(|byte| matches!(byte, b' ' | b'\t' | b'\r' | b'\n')),
+                        _ => true,
+                    };
+                    scan.has_opaque_properties |= opaque;
+                }
+                if (depth >= 4
+                    && child
+                        .as_ref()
+                        .is_some_and(|(key, _)| key.as_deref() == Some("tabs")))
+                    || (depth >= 3
+                        && child
+                            .as_ref()
+                            .is_some_and(|(key, _)| key.as_deref() == Some("pStyle")))
+                {
+                    // These tokens belong to the imported stop, not the generated
+                    // entry facts. Replacing the stop would discard their bytes.
+                    scan.blocks_replacement = true;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    Ok(scan)
+}
+
+/// Overlay generated style and tab facts. Retain all other source particles.
+fn toc_overlay_entry_properties(
+    original: &[u8],
+    scan: &TocFragmentScan,
+    generated: Option<&[u8]>,
+) -> Result<Vec<u8>> {
+    let canonical = BTreeMap::from([("w".to_owned(), W_NS.to_owned())]);
+    let mut replacements = Vec::new();
+    if let Some(generated) = generated {
+        let new_scan = toc_fragment_scan(generated, &canonical)?;
+        for (name, range) in new_scan.children {
+            let name = name.unwrap();
+            let replacement = if name == "pStyle"
+                && let Some((old_id, old_range)) = &scan.style
+            {
+                let generated_scan = toc_fragment_scan(generated, &canonical)?;
+                let new_id = &generated_scan
+                    .style
+                    .as_ref()
+                    .ok_or_else(|| Error::Other("generated TOC style is absent".to_owned()))?
+                    .0;
+                if old_id == new_id {
+                    original[old_range.clone()].to_vec()
+                } else {
+                    toc_retarget_style(&original[old_range.clone()], new_id, &scan.namespaces)?
+                }
+            } else {
+                toc_close_fragment_namespaces(&generated[range], &canonical)?
+            };
+            replacements.push((name, replacement));
+        }
+    }
+    let Some((start, opening_end, closing_start, end, ref name)) = scan.property_root else {
+        return generated.map_or_else(
+            || Ok(original.to_vec()),
+            |properties| toc_close_fragment_namespaces(properties, &canonical),
+        );
+    };
+    let mut output = original[..start].to_vec();
+    let empty = opening_end == end && closing_start == start;
+    if empty {
+        output.extend_from_slice(&original[start..opening_end - 2]);
+        output.push(b'>');
+    } else {
+        output.extend_from_slice(&original[start..opening_end]);
+    }
+    // pStyle comes first in CT_PPr. Insert it before retaining source particles.
+    if let Some((_, replacement)) = replacements.iter().find(|(key, _)| key == "pStyle") {
+        output.extend_from_slice(replacement);
+    }
+    let mut cursor = opening_end;
+    let mut tabs_written = false;
+    for (key, range) in &scan.children {
+        output.extend_from_slice(&original[cursor..range.start]);
+        if key.as_deref() == Some("pStyle") {
+            // Remove the complete old style, including a started element's end.
+        } else if key.as_deref() == Some("tabs") {
+            if let Some((_, replacement)) = replacements.iter().find(|(key, _)| key == "tabs") {
+                output.extend_from_slice(&toc_overlay_tab_particles(
+                    &original[range.clone()],
+                    replacement,
+                    &scan.namespaces,
+                )?);
+            } else {
+                output.extend_from_slice(&original[range.clone()]);
+            }
+            tabs_written = true;
+        } else {
+            // Tabs precede spacing and later CT_PPr properties. Unknown particles
+            // keep their original order and exact source bytes.
+            if !tabs_written
+                && matches!(
+                    key.as_deref(),
+                    Some(
+                        "suppressAutoHyphens"
+                            | "kinsoku"
+                            | "wordWrap"
+                            | "overflowPunct"
+                            | "topLinePunct"
+                            | "autoSpaceDE"
+                            | "autoSpaceDN"
+                            | "bidi"
+                            | "adjustRightInd"
+                            | "snapToGrid"
+                            | "spacing"
+                            | "ind"
+                            | "contextualSpacing"
+                            | "mirrorIndents"
+                            | "suppressOverlap"
+                            | "jc"
+                            | "textDirection"
+                            | "textAlignment"
+                            | "textboxTightWrap"
+                            | "outlineLvl"
+                            | "divId"
+                            | "cnfStyle"
+                            | "rPr"
+                            | "sectPr"
+                            | "pPrChange"
+                    )
+                )
+            {
+                if let Some((_, replacement)) = replacements.iter().find(|(key, _)| key == "tabs") {
+                    output.extend_from_slice(replacement);
+                }
+                tabs_written = true;
+            }
+            output.extend_from_slice(&original[range.clone()]);
+        }
+        cursor = range.end;
+    }
+    if !tabs_written
+        && let Some((_, replacement)) = replacements.iter().find(|(key, _)| key == "tabs")
+    {
+        output.extend_from_slice(replacement);
+    }
+    if !empty {
+        output.extend_from_slice(&original[cursor..closing_start]);
+    }
+    if empty {
+        output.extend_from_slice(format!("</{name}>").as_bytes());
+    } else {
+        output.extend_from_slice(&original[closing_start..end]);
+    }
+    output.extend_from_slice(&original[end..]);
+    Ok(output)
+}
+
+/// Change only the qualified style value, retaining opaque attributes and body.
+fn toc_retarget_style(
+    original: &[u8],
+    value: &str,
+    bindings: &BTreeMap<String, String>,
+) -> Result<Vec<u8>> {
+    let closed = xml_fragment_with_namespaces(original, bindings, "TOC style")?;
+    let mut reader = NsReader::from_reader(closed.as_slice());
+    let mut buffer = Vec::new();
+    let (_, event) = reader
+        .read_resolved_event_into(&mut buffer)
+        .map_err(|error| Error::Other(format!("invalid TOC style: {error}")))?;
+    let element = match event {
+        Event::Start(element) | Event::Empty(element) => element,
+        _ => return Err(Error::Other("TOC style has no root".to_owned())),
+    };
+    for attribute in element.attributes() {
+        let attribute = attribute
+            .map_err(|error| Error::Other(format!("invalid TOC style attribute: {error}")))?;
+        let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
+        if namespace_is_word(&namespace) && local.as_ref() == b"val" {
+            let (_, start, end) = attribute_source_span(original, attribute.key.as_ref())
+                .ok_or_else(|| Error::Other("TOC style source value is unavailable".to_owned()))?;
+            let mut output = original[..start].to_vec();
+            output.extend_from_slice(xml_escape_attribute(value).as_bytes());
+            output.extend_from_slice(&original[end..]);
+            return Ok(output);
+        }
+    }
+    Err(Error::Other("TOC style has no qualified value".to_owned()))
+}
+
+/// Replace owned tab stops while keeping the source tabs root and opaque particles.
+fn toc_overlay_tab_particles(
+    original: &[u8],
+    generated: &[u8],
+    bindings: &BTreeMap<String, String>,
+) -> Result<Vec<u8>> {
+    let old = toc_fragment_scan(original, bindings)?;
+    let canonical = BTreeMap::from([("w".to_owned(), W_NS.to_owned())]);
+    let new = toc_fragment_scan(generated, &canonical)?;
+    let (start, opening, closing, end, name) = old
+        .property_root
+        .as_ref()
+        .ok_or_else(|| Error::Other("TOC tabs have no owned root".to_owned()))?;
+    let (new_start, new_opening, new_closing, _, _) = new
+        .property_root
+        .as_ref()
+        .ok_or_else(|| Error::Other("generated TOC tabs have no owned root".to_owned()))?;
+    let _ = (start, new_start);
+    let replacement =
+        toc_close_fragment_namespaces(&generated[*new_opening..*new_closing], &canonical)?;
+    let empty = *opening == *end && *closing == *start;
+    let mut output = Vec::new();
+    if empty {
+        output.extend_from_slice(&original[..*opening - 2]);
+        output.push(b'>');
+    } else {
+        output.extend_from_slice(&original[..*opening]);
+    }
+    let mut cursor = *opening;
+    let mut written = false;
+    for (key, range) in old.children {
+        output.extend_from_slice(&original[cursor..range.start]);
+        if key.as_deref() == Some("tab") {
+            if !written {
+                output.extend_from_slice(&replacement);
+                written = true;
+            }
+        } else {
+            output.extend_from_slice(&original[range.clone()]);
+        }
+        cursor = range.end;
+    }
+    if !written {
+        output.extend_from_slice(&replacement);
+    }
+    if !empty {
+        output.extend_from_slice(&original[cursor..*closing]);
+        output.extend_from_slice(&original[*closing..*end]);
+    } else {
+        output.extend_from_slice(format!("</{name}>").as_bytes());
+    }
+    output.extend_from_slice(&original[*end..]);
+    Ok(output)
+}
+
+/// Close every top-level fragment root using its original inherited namespace map.
+fn toc_close_fragment_namespaces(
+    fragment: &[u8],
+    bindings: &BTreeMap<String, String>,
+) -> Result<Vec<u8>> {
+    let mut reader = quick_xml::Reader::from_reader(fragment);
+    reader.config_mut().trim_text(false);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut cursor = 0usize;
+    let mut root = 0usize;
+    let mut output = Vec::new();
+    loop {
+        let before = reader.buffer_position() as usize;
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| Error::Other(format!("invalid retained TOC fragment: {error}")))?
+        {
+            Event::Start(_) => {
+                if depth == 0 {
+                    root = before;
+                }
+                depth += 1;
+            }
+            Event::Empty(_) if depth == 0 => {
+                let end = reader.buffer_position() as usize;
+                output.extend_from_slice(&fragment[cursor..before]);
+                output.extend_from_slice(&xml_fragment_with_namespaces(
+                    &fragment[before..end],
+                    bindings,
+                    "TOC fragment",
+                )?);
+                cursor = end;
+            }
+            Event::End(_) => {
+                depth = depth
+                    .checked_sub(1)
+                    .ok_or_else(|| Error::Other("unbalanced retained TOC fragment".to_owned()))?;
+                if depth == 0 {
+                    let end = reader.buffer_position() as usize;
+                    output.extend_from_slice(&fragment[cursor..root]);
+                    output.extend_from_slice(&xml_fragment_with_namespaces(
+                        &fragment[root..end],
+                        bindings,
+                        "TOC fragment",
+                    )?);
+                    cursor = end;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    if depth != 0 {
+        return Err(Error::Other("unclosed retained TOC fragment".to_owned()));
+    }
+    output.extend_from_slice(&fragment[cursor..]);
+    Ok(output)
+}
+
+/// Every style identifier a TOC entry of any level may carry: the producer
+/// styles named `toc 1` to `toc 9`, the canonical `TOC1` to `TOC9`, and the
+/// styles this rebuild resolved.
+fn toc_entry_style_ids(
+    styles: &CT_Styles,
+    resolved: &BTreeMap<u8, TocEntryStyle>,
+) -> BTreeSet<String> {
+    let mut ids = (1..=9)
+        .map(|level| format!("TOC{level}"))
+        .collect::<BTreeSet<_>>();
+    for style in &styles.styles {
+        let is_entry_name = style.name.as_deref().is_some_and(|name| {
+            (1..=9).any(|level| name.trim().eq_ignore_ascii_case(&format!("toc {level}")))
+        });
+        if style.style_type == StyleType::Paragraph && !style.style_id.is_empty() && is_entry_name {
+            ids.insert(style.style_id.clone());
+        }
+    }
+    ids.extend(resolved.values().map(|style| style.style_id.clone()));
+    ids
 }
 
 fn relocate_end_boundary_bookmark_starts(

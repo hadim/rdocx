@@ -519,6 +519,15 @@ preservation case keeps alternate-prefix field scaffolding and neighbouring raw
 XML while proving an untouched custom part is byte-identical after save and
 reopen. Failure cases compare the live document before and after the rejected
 rebuild.
+Entry-boundary regressions cover unchanged, growing, shrinking, single and
+empty TOCs, including an empty rebuild followed by a positive rebuild. They
+check balanced field markers, unchanged instructions, nested fields, adjacent
+TOCs, content controls and marker-only fallback. Source controls retain opaque
+paragraph attributes and properties, entity spellings and suffixes across
+alias, default and rebound namespace cases. Complete started styles are removed
+without malformed closing tags. Duplicate properties refuse without mutation.
+Repeated rebuild and save/reopen must retain the same owned source facts.
+Fresh installed Python tests exercise the existing public rebuild method.
 The entry-style and geometry regression supplies localized style ids, an A4
 section with 1417 twip side margins, a style-owned 7777 twip right tab, one
 missing TOC style, and a numbered heading with a tab suffix. It proves
