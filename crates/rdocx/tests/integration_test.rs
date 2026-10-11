@@ -5229,6 +5229,62 @@ fn html_import_projects_a_reopenable_word_document() {
 }
 
 #[test]
+fn html_import_keeps_safe_links_and_data_uri_images() {
+    use base64::Engine as _;
+
+    let data_uri = format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(mhtml_pixel_png())
+    );
+    let parsed = Document::from_html(&format!(
+        "<p><a href='https://example.test/path'>link</a> <img src='{data_uri}' width='2' height='3'><img src='{data_uri}'></p><p><a href='javascript:alert(1)'>unsafe</a><img src='data:image/svg+xml;utf8,&lt;svg/&gt;' alt='vector'></p>"
+    ))
+    .expect("HTML with links and images");
+    assert_eq!(
+        parsed
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.message.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "dropped HTML link target and retained anchor text",
+            "dropped undecodable HTML image data URI and retained alternate text",
+        ]
+    );
+    let mut document = parsed.document;
+    let links = document.links();
+    assert_eq!(links.len(), 1, "{links:?}");
+    assert_eq!(links[0].text, "link");
+    assert_eq!(links[0].url.as_deref(), Some("https://example.test/path"));
+    let images = document.images();
+    assert_eq!(images.len(), 2);
+    assert!(images.iter().all(|image| !image.is_anchor));
+    assert_eq!(images[0].embed_id, images[1].embed_id);
+    assert_eq!(
+        (images[0].width_emu, images[0].height_emu),
+        (19_050, 28_575)
+    );
+    assert_eq!(document.paragraph(1).unwrap().text(), "unsafevector");
+
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    let mut ids = xml
+        .match_indices("<wp:docPr id=\"")
+        .map(|(start, marker)| {
+            let rest = &xml[start + marker.len()..];
+            rest[..rest.find('"').unwrap()].to_owned()
+        })
+        .collect::<Vec<_>>();
+    ids.dedup();
+    assert_eq!(
+        ids.len(),
+        2,
+        "every picture has its own drawing id: {ids:?}"
+    );
+}
+
+#[test]
 fn rich_html_fragments_match_word_in_every_supported_container() {
     use base64::Engine as _;
 

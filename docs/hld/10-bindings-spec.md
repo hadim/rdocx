@@ -1392,9 +1392,11 @@ message. Invalid UTF-8, resource-limit violations, and unrecoverable projection
 failures return `Error::Html` without publishing a partial document. The path
 constructor caps reads at 64 MiB even if the file changes after its metadata is
 read. The importer supports source-ordered paragraphs, runs, nested lists, and
-spanned tables plus the bounded inline and embedded CSS subset. It does not
-fetch external resources. Python, WASM, and CLI surfaces gain no HTML import
-entry point and retain their existing methods and error contracts.
+spanned tables plus the bounded inline and embedded CSS subset. It keeps safe
+hyperlinks and base64 data URI images, as a fragment insertion does, and keeps
+the alternate text of an image it cannot decode. It does not fetch external
+resources. Python, WASM, and CLI surfaces gain no HTML import entry point and
+retain their existing methods and error contracts.
 
 Native Rust callers can also insert rich HTML into an existing Word story with
 `Document::insert_html_fragment(&ContentLocation, &str,

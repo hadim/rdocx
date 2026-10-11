@@ -311,6 +311,16 @@ fn from_html_with_resources(
         Html::parse_fragment(html)
     };
     validate_dom(&dom, limits)?;
+    // Without a resource set, the document keeps its safe links and its data
+    // URI images, as an inserted fragment does.
+    let own_projection;
+    let projection = match projection {
+        Some(projection) => projection,
+        None => {
+            own_projection = fragment_projection(&dom, &[], limits, true)?;
+            &own_projection
+        }
+    };
 
     let mut document = Document::new();
     let importer = Importer {
@@ -326,7 +336,7 @@ fn from_html_with_resources(
         runs: 0,
         rows: 0,
         cells: 0,
-        projection,
+        projection: Some(projection),
         embedded_images: HashMap::new(),
     };
     let mut importer = importer;
@@ -361,7 +371,7 @@ pub(crate) fn project_html_fragment(
         Html::parse_fragment(html)
     };
     validate_dom(&dom, limits)?;
-    let projection = fragment_projection(&dom, images, limits)?;
+    let projection = fragment_projection(&dom, images, limits, false)?;
     let mut importer = Importer {
         dom: &dom,
         document,
@@ -392,6 +402,7 @@ fn fragment_projection(
     dom: &Html,
     images: &[HtmlImageResource<'_>],
     limits: Limits,
+    skip_invalid_data_uris: bool,
 ) -> Result<HtmlProjection> {
     if images.len() > MAX_MHTML_PARTS {
         return Err(html_error("images", "HTML image count exceeds the limit"));
@@ -447,44 +458,18 @@ fn fragment_projection(
         {
             continue;
         }
-        let (metadata, encoded) = source[5..].split_once(',').ok_or_else(|| {
-            html_error(
-                element_path(image),
-                "image data URI has no payload separator",
-            )
-        })?;
-        let (content_type, encoding) = metadata.split_once(';').ok_or_else(|| {
-            html_error(element_path(image), "image data URI has no base64 encoding")
-        })?;
-        if !encoding.eq_ignore_ascii_case("base64") {
-            return Err(html_error(
-                element_path(image),
-                "image data URI must use base64 encoding",
-            ));
-        }
-        let bytes = BASE64.decode(encoded).map_err(|_| {
-            html_error(
-                element_path(image),
-                "image data URI has invalid base64 data",
-            )
-        })?;
+        let (bytes, info) = match decode_image_data_uri(image, &source[5..]) {
+            Ok(decoded) => decoded,
+            // A whole-document import keeps the alternate text of an image it
+            // cannot decode, as it does for any other unresolved image.
+            Err(_) if skip_invalid_data_uris => continue,
+            Err(error) => return Err(error),
+        };
         total_bytes = total_bytes
             .checked_add(bytes.len())
             .ok_or_else(|| html_error("images", "image byte count overflowed"))?;
         if total_bytes > limits.input_bytes {
             return Err(html_error("images", "HTML images exceed the 64 MiB limit"));
-        }
-        let info = oxml_media::probe(&bytes).ok_or_else(|| {
-            html_error(
-                element_path(image),
-                "image data URI bytes are unsupported or malformed",
-            )
-        })?;
-        if !content_type.eq_ignore_ascii_case(info.format.content_type()) {
-            return Err(html_error(
-                element_path(image),
-                "image data URI MIME type does not match its bytes",
-            ));
         }
         let filename = format!("inline-{inline_index}.{}", info.format.extension());
         inline_index = inline_index
@@ -516,6 +501,47 @@ fn fragment_projection(
         hyperlinks,
         strict_references: false,
     })
+}
+
+/// Decode the payload of a base64 image data URI and check its declared type.
+fn decode_image_data_uri(
+    image: ElementRef<'_>,
+    payload: &str,
+) -> Result<(Vec<u8>, oxml_media::ImageInfo)> {
+    let (metadata, encoded) = payload.split_once(',').ok_or_else(|| {
+        html_error(
+            element_path(image),
+            "image data URI has no payload separator",
+        )
+    })?;
+    let (content_type, encoding) = metadata
+        .split_once(';')
+        .ok_or_else(|| html_error(element_path(image), "image data URI has no base64 encoding"))?;
+    if !encoding.eq_ignore_ascii_case("base64") {
+        return Err(html_error(
+            element_path(image),
+            "image data URI must use base64 encoding",
+        ));
+    }
+    let bytes = BASE64.decode(encoded).map_err(|_| {
+        html_error(
+            element_path(image),
+            "image data URI has invalid base64 data",
+        )
+    })?;
+    let info = oxml_media::probe(&bytes).ok_or_else(|| {
+        html_error(
+            element_path(image),
+            "image data URI bytes are unsupported or malformed",
+        )
+    })?;
+    if !content_type.eq_ignore_ascii_case(info.format.content_type()) {
+        return Err(html_error(
+            element_path(image),
+            "image data URI MIME type does not match its bytes",
+        ));
+    }
+    Ok((bytes, info))
 }
 
 impl Document {
@@ -3118,13 +3144,19 @@ impl Importer<'_> {
                                 format!("unresolved image resource `{source}`"),
                             ));
                         }
-                        self.diagnostic(
-                            &location,
-                            None,
+                        // A data URI is named by its kind, not its payload.
+                        let message = if source
+                            .get(..5)
+                            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("data:"))
+                        {
+                            "dropped undecodable HTML image data URI and retained alternate text"
+                                .to_string()
+                        } else {
                             format!(
                                 "dropped unresolved HTML image `{source}` and retained alternate text"
-                            ),
-                        )?;
+                            )
+                        };
+                        self.diagnostic(&location, None, message)?;
                         if let Some(alt) = element.attr("alt")
                             && !alt.is_empty()
                         {
