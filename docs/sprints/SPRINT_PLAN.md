@@ -2163,13 +2163,13 @@ requirements discussions264 and281.
 | F-X212 | Align native accessibility with visible paragraph content | M |
 | F-X213 | Preserve TOC entry boundary paragraphs during rebuild | M |
 
-**Current delivery checkpoint, user replan**: seven of twenty-one active stories
-are completed and integrated, F-X193, F-X194, F-X196, F-X197, F-X198, F-X199
-and F-X212. F-X195, F-X200, F-X206 and F-X213 are in progress. Ten stories have
-approved designs and await implementation. F-X192 and F-283 move to S92,
-with their contracts, dirty worker work, reviews and required evidence retained.
-Their completion is no longer required to close S91. F-X195 still needs its
-remaining runtime gates and provider wiring.
+**Current delivery checkpoint**: eight of twenty-one active stories are
+completed and integrated, F-X193, F-X194, F-X195, F-X196, F-X197, F-X198,
+F-X199 and F-X212. F-X200, F-X206, F-X210 and F-X213 are in progress.
+Nine stories have approved designs and await implementation. F-X192 and
+F-283 move to S92, with their contracts, dirty worker work, reviews and
+required evidence retained. Their completion is no longer required to close
+S91. F-X195 completed its scoped provider gates and dependency checkpoint.
 F-X197 completes the scoped dependency prefix with reviewed live colours,
 installed Python coverage, native checks, unchanged rendering hashes,
 verified packaging and policy acceptance.
@@ -2194,12 +2194,13 @@ to `9fd0b8da374b8c641e7ab89c0bd3d76bd2f4519a`. Its updated contribution
 remains assigned to F-X203. Its immutable update has been assessed against
 the existing approved contract, with remaining acceptance controls retained.
 All twenty-eight included issues and twenty-two PRs match this resolution map.
+The 2026-10-11 16:19 UTC refresh found no additions or changed PR heads.
 
 | Included issues | Included PRs | S91 acceptance owners | Resolution work |
 |---|---|---|---|
 | No linked issue | [294](https://github.com/tensorbee/rdocx/pull/294) | F-X193 | Semantic HTML highlights, completed. |
 | [295](https://github.com/tensorbee/rdocx/issues/295), [300](https://github.com/tensorbee/rdocx/issues/300) | [317](https://github.com/tensorbee/rdocx/pull/317) | F-X194 | Cell text frames and signed removable table indentation, completed with scoped acceptance. |
-| [296](https://github.com/tensorbee/rdocx/issues/296), [297](https://github.com/tensorbee/rdocx/issues/297) | [315](https://github.com/tensorbee/rdocx/pull/315) | F-X195 | Caller fonts and variable styles across layout and output. |
+| [296](https://github.com/tensorbee/rdocx/issues/296), [297](https://github.com/tensorbee/rdocx/issues/297) | [315](https://github.com/tensorbee/rdocx/pull/315) | F-X195 | Caller fonts and variable styles across layout and output, completed with scoped acceptance. |
 | [298](https://github.com/tensorbee/rdocx/issues/298) | [317](https://github.com/tensorbee/rdocx/pull/317) | F-X196, F-X212 | CLI validation and native accessibility complete with scoped acceptance. |
 | [299](https://github.com/tensorbee/rdocx/issues/299) | [317](https://github.com/tensorbee/rdocx/pull/317) | F-X197 | Shared Python colour inputs and font colour formats. |
 | [301](https://github.com/tensorbee/rdocx/issues/301) | [317](https://github.com/tensorbee/rdocx/pull/317) | F-X198, F-X202 | Atomic refusal complete. Synchronized alternate-copy editing remains. |
