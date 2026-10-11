@@ -3020,3 +3020,9 @@ options for F-X218. No draft blocks these plans.
 Hash baseline remains ROOT-exclusive. Ordinary implementation never runs
 concurrently in a shared source, test, manifest or HLD owner. Final full
 verification and review cover the integrated26-story result.
+
+## Rolling intake, PR354
+
+The 2026-10-11 19:57 UTC refresh found [PR354](https://github.com/tensorbee/rdocx/pull/354) at head5a2c657eb705ab53048ab5d4e729b9014d6e0c0e. Its compatibility-mode and CommonMark export fixes address Issues332 and334 already assigned to F-X203. Reuse this contribution within that existing story, with no duplicate implementation owner. The exact retrieved patch is c4814b20267e16c75dd36a972a0e87eb7b8e2c07a3889614315125fc2a2f9b0d at /private/tmp/S91-PR354-intake/diff.patch. Independent assessment and consumer reconciliation remain pending. The approved original issue acceptance remains required, including cases the PR explicitly leaves out. Contributor results do not waive local pinned oracle or output-delta review gates.
+
+Intake now contains40 open issues and23 open PRs. Issues264 and281 remain excluded discussion records. No issue or existing PR head changed in this refresh. This intake does not mark F-X203 implemented or complete.
