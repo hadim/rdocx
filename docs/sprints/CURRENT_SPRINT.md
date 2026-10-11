@@ -6,8 +6,8 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 now contains twenty-one active stories, eight completed, five in progress
-and eight approved pending implementation. Rolling contribution intake is reopened at the user's latest instruction.
+S91 now contains twenty-one active stories, eight completed, one integrated
+and reviewed, four running and eight approved pending implementation. Rolling contribution intake is reopened at the user's latest instruction.
 
 ## Spec references
 
@@ -82,7 +82,7 @@ checkpoints. Final closure requires complete issue acceptance and explicit
 integrated or superseded PR resolution. Keep Issues264 and281 open.
 Read-only intake is retained at /private/tmp/S91-intake-reopened-20261011.
 Earlier frozen-intake paragraphs are historical and superseded by this decision.
-The 2026-10-11 18:20 UTC refresh found no new records or changed PR heads.
+The 2026-10-11 18:43 UTC refresh found no new records or changed PR heads.
 All current records retain the acceptance owners in SPRINT_PLAN.md.
 
 PR302 entered the rolling intake at immutable head
@@ -810,3 +810,32 @@ Eight stories are completed, one is integrated and reviewed, four are
 running, and eight approved stories await their prerequisite checkpoints.
 GitHub reconciliation follows the sprint-close workflow. Issues264 and281
 remain excluded and open.
+
+## Current verification checkpoint, 2026-10-11 18:43 UTC
+
+Eight of21 active stories are completed. F-X213 is scoped-verified and
+integrated, awaiting final sprint verification and ledgers. F-X200, F-X206,
+F-X207 and F-X210 remain running. Eight dependent stories remain approved
+and have not started. All28 included issues and22 PRs retain their acceptance
+owners. The latest GitHub refresh found no new records or changed heads.
+
+F-X200 has actual188 installed passes, scoped Clippy, format and WASM passes,
+and four verified package dry-runs. Independent pass62 attributes exactly two
+XML hash changes to eight canonical namespace declarations with equal expanded
+XML trees. The expected changes are declared, with baseline handling still due.
+Pass63 reviews the four actual archive records and active-clear HLD wording.
+Current compressed remeasurement, scoped completion and integration remain due.
+
+F-X206's namespace repair passes independent pass70 and173 drawing tests,
+with two historical ignores. Broader native verification found two Word
+library render-control failures. They remain failed and are under diagnosis.
+F-X207 full working pass3 found affine anchor, font attribute and unused shared
+cell inventory defects. Distinct remediation and focused verification are
+running. F-X210 has fresh paired wheels built locally and both pinned Word
+render controls passing. Public consumer compilation exceeded its unchanged
+300-second limit. Exact feature-graph prebuild precedes the unchanged test
+retry, with no conformance acceptance claimed.
+
+Only completed prerequisites unlock the remaining stories. Full integrated
+verification, clean sprint review and close preflight remain required.
+Issues264 and281 remain excluded and open. S91 is not ready for close.
