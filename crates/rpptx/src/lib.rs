@@ -137,6 +137,7 @@ mod animation;
 mod diagram;
 #[cfg(feature = "default-template")]
 mod html;
+mod html_export;
 mod markdown;
 #[cfg(feature = "default-template")]
 mod odp;
@@ -7793,7 +7794,7 @@ pub enum SlideContent<'a> {
     Picture(ShapeRef<'a>),
 }
 
-/// What a Markdown export of a presentation includes.
+/// What a Markdown or HTML export of a presentation includes.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ExportOptions {
     /// Write each slide's speaker notes after its content.

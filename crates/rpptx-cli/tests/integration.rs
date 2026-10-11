@@ -689,7 +689,7 @@ fn inspect_and_text_report_presentation_order() {
 }
 
 #[test]
-fn convert_writes_markdown_in_outline_order() {
+fn convert_writes_markdown_and_html_in_outline_order() {
     let temp = TempWorkspace::new("convert-markdown");
     let deck = temp.path.join("roadmap.pptx");
     write_structured_deck(&deck);
@@ -731,16 +731,43 @@ fn convert_writes_markdown_in_outline_order() {
     assert!(converted.status.success());
     assert_eq!(fs::read_to_string(&output).unwrap(), slide_one);
 
+    let presentation = Presentation::open(&deck).unwrap();
+    for (flags, options) in [
+        (&[][..], rpptx::ExportOptions::default()),
+        (
+            &["--notes", "--skip-hidden"][..],
+            rpptx::ExportOptions {
+                notes: true,
+                skip_hidden: true,
+            },
+        ),
+    ] {
+        let output = temp.path.join("roadmap.html");
+        let mut args = vec!["convert", deck.to_str().unwrap(), "--to", "html", "--force"];
+        args.extend(flags);
+        let converted = cli(&args);
+        assert!(
+            converted.status.success(),
+            "{}",
+            String::from_utf8_lossy(&converted.stderr)
+        );
+        let html = fs::read_to_string(&output).unwrap();
+        assert_eq!(html, presentation.to_html(options));
+        assert!(html.contains("<li>plain <strong><u>rich</u></strong>\n<ul>\n<li>nested</li>"));
+        assert_eq!(html.contains("<h1>Slide 2</h1>"), flags.is_empty());
+    }
+
     let rejected = cli(&["convert", deck.to_str().unwrap(), "--to", "docx"]);
     assert!(!rejected.status.success());
     assert!(
-        String::from_utf8_lossy(&rejected.stderr).contains("Supported: pdf, md, png, jpeg, tiff")
+        String::from_utf8_lossy(&rejected.stderr)
+            .contains("Supported: pdf, html, md, png, jpeg, tiff")
     );
     let rejected = cli(&["convert", deck.to_str().unwrap(), "--to", "pdf", "--notes"]);
     assert!(!rejected.status.success());
     assert!(
         String::from_utf8_lossy(&rejected.stderr)
-            .contains("--notes and --skip-hidden apply only to Markdown output")
+            .contains("--notes and --skip-hidden apply only to HTML and Markdown output")
     );
     assert!(!temp.path.join("roadmap.pdf").exists());
 }

@@ -1046,6 +1046,198 @@ fn markdown_export_writes_one_section_per_slide_in_outline_order() {
     );
 }
 
+/// Checks that an HTML export is a document an HTML parser reads without a
+/// parse error and that also parses as well-formed XML.
+#[cfg(feature = "default-template")]
+fn assert_valid_html(html: &str) {
+    let document = scraper::Html::parse_document(html);
+    assert_eq!(
+        document.errors,
+        Vec::<std::borrow::Cow<'static, str>>::new()
+    );
+    let mut reader = quick_xml::Reader::from_str(html);
+    let mut open = Vec::new();
+    loop {
+        match reader.read_event().unwrap() {
+            quick_xml::events::Event::Start(start) => {
+                open.push(String::from_utf8(start.name().as_ref().to_vec()).unwrap());
+            }
+            quick_xml::events::Event::End(end) => {
+                assert_eq!(
+                    open.pop().as_deref(),
+                    Some(std::str::from_utf8(end.name().as_ref()).unwrap())
+                );
+            }
+            quick_xml::events::Event::Empty(empty) => {
+                assert!(
+                    [b"br".as_slice(), b"img", b"meta"].contains(&empty.name().as_ref()),
+                    "{:?} is not a void element",
+                    empty.name()
+                );
+            }
+            quick_xml::events::Event::Eof => break,
+            _ => {}
+        }
+    }
+    assert!(open.is_empty(), "unclosed {open:?}");
+}
+
+#[test]
+#[cfg(feature = "default-template")]
+fn html_export_writes_one_section_per_slide_and_parses_as_html_and_xml() {
+    let mut presentation = export_test_deck();
+    {
+        let index = presentation
+            .slide(0)
+            .unwrap()
+            .shapes()
+            .position(|shape| shape.table().is_some())
+            .unwrap();
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut frame = slide.shape_mut(index).unwrap();
+        let mut table = frame.table_mut().unwrap();
+        table.insert_row(2).unwrap();
+        let mut cell = table.cell_mut(2, 0).unwrap();
+        cell.set_text("Both \"quoted\"");
+        cell.merge_to(2, 1).unwrap();
+    }
+    let slide_one = concat!(
+        "<section id=\"slide-1\">\n",
+        "<h1>Quarterly review</h1>\n",
+        "<ul>\n",
+        "<li>Revenue <strong>rose</strong> by ten percent\n",
+        "<ul>\n",
+        "<li>North</li>\n",
+        "<li><em>South</em>\n",
+        "<ul>\n",
+        "<li>2*3 snake_case [x] &lt;b&gt; &amp; a|b</li>\n",
+        "</ul>\n",
+        "</li>\n",
+        "</ul>\n",
+        "</li>\n",
+        "<li>See the <a href=\"https://example.com/q3?a=(1)\">report</a>.</li>\n",
+        "</ul>\n",
+        "<table>\n",
+        "<thead>\n",
+        "<tr><th>Region</th><th>Total</th></tr>\n",
+        "</thead>\n",
+        "<tbody>\n",
+        "<tr><td>North</td><td>1|2</td></tr>\n",
+        "<tr><td colspan=\"2\">Both &quot;quoted&quot;</td></tr>\n",
+        "</tbody>\n",
+        "</table>\n",
+        "<img src=\"data:image/png;base64,",
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR42mP4z8AAAAMBAQD3A0FDAAAAAElFTkSuQmCC",
+        "\" alt=\"Company logo &amp; brand\" />\n",
+    );
+    let notes = concat!(
+        "<aside class=\"notes\">\n",
+        "<h2>Notes</h2>\n",
+        "<p>Mention the new office.</p>\n",
+        "<p>Thank the team.</p>\n",
+        "</aside>\n",
+    );
+    let slide_two =
+        "<section id=\"slide-2\">\n<h1>Backup</h1>\n<ul>\n<li>Spare</li>\n</ul>\n</section>\n";
+    let slide_three = concat!(
+        "<section id=\"slide-3\">\n<h1>Slide 3</h1>\n",
+        "<ul>\n<li>1. Not a list</li>\n</ul>\n</section>\n",
+    );
+    let document = |body: String| {
+        format!(
+            "<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\" />\n\
+             <title>Presentation</title>\n</head>\n<body>\n{body}</body>\n</html>\n"
+        )
+    };
+
+    let html = presentation.to_html(rpptx::ExportOptions::default());
+    assert_eq!(
+        html,
+        document(format!("{slide_one}</section>\n{slide_two}{slide_three}"))
+    );
+    assert_valid_html(&html);
+    let html = presentation.to_html(rpptx::ExportOptions {
+        notes: true,
+        skip_hidden: true,
+    });
+    assert_eq!(
+        html,
+        document(format!("{slide_one}{notes}</section>\n{slide_three}"))
+    );
+    assert_valid_html(&html);
+
+    // The document title comes from the core properties, escaped.
+    presentation.core_properties_mut().title = Some("Q3 <draft>".to_owned());
+    let html = presentation.to_html(rpptx::ExportOptions::default());
+    assert!(html.contains("<title>Q3 &lt;draft&gt;</title>"), "{html}");
+    assert_valid_html(&html);
+    // The parser does report what the check rejects.
+    assert!(
+        !scraper::Html::parse_document("<p>a</div>")
+            .errors
+            .is_empty()
+    );
+}
+
+/// One slide whose text box holds a paragraph of `(text, run properties)`
+/// runs, the properties given as `a:rPr` attributes, written as the HTML of
+/// its one list item.
+#[cfg(feature = "default-template")]
+fn html_of_runs(runs: &[(&str, &str)]) -> String {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    let mut shape = slide
+        .add_textbox(Emu(0), Emu(0), Emu(3_000_000), Emu(500_000))
+        .unwrap();
+    let mut frame = shape.text_frame().unwrap();
+    let mut paragraph = frame.add_paragraph();
+    for &(text, attributes) in runs {
+        let xml = format!(
+            r#"<a:rPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" {attributes}/>"#
+        );
+        paragraph
+            .add_run(text)
+            .set_properties(CT_TextCharacterProperties::from_xml(xml.as_bytes()).unwrap());
+    }
+    let html = presentation.to_html(rpptx::ExportOptions::default());
+    assert_valid_html(&html);
+    let start = html.find("<li>").unwrap() + "<li>".len();
+    let end = html.rfind("</li>").unwrap();
+    html[start..end].to_owned()
+}
+
+#[test]
+#[cfg(feature = "default-template")]
+fn html_export_writes_run_formatting_as_nested_elements_and_escapes_text() {
+    for (runs, html) in [
+        (
+            &[("a ", ""), ("b", r#"b="1""#), ("c", r#"b="1""#)][..],
+            "a <strong>bc</strong>",
+        ),
+        (
+            &[("both", r#"b="1" i="1""#)],
+            "<strong><em>both</em></strong>",
+        ),
+        (
+            &[
+                ("x", r#"u="sng""#),
+                ("2", r#"baseline="30000""#),
+                ("i", r#"baseline="-25000""#),
+                ("old", r#"strike="sngStrike""#),
+                ("plain", r#"u="none" strike="noStrike" b="0""#),
+            ],
+            "<u>x</u><sup>2</sup><sub>i</sub><s>old</s>plain",
+        ),
+        (
+            &[("it's <tag> \u{85}\"q\"\nnext", "")],
+            "it&#39;s &lt;tag&gt; &quot;q&quot;<br />next",
+        ),
+    ] {
+        assert_eq!(html_of_runs(runs), html, "{runs:?}");
+    }
+}
+
 /// One slide whose text box holds a paragraph of `(text, bold, italic,
 /// strike)` runs, written as Markdown without its heading.
 fn markdown_of_runs(runs: &[(&str, bool, bool, bool)]) -> String {

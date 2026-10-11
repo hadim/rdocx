@@ -20,7 +20,8 @@ presentation, notes, handout, PDF, and animation outputs.
 - Insert and remove table rows and columns, extending or shrinking merged
   cells and growing or shrinking the frame by the row or column size.
 - Produce PDF, PDF/A, resolved slide frames, notes, handouts, and animations.
-- Export a deck to Markdown, one section per slide in outline order.
+- Export a deck to Markdown or semantic HTML, one section per slide in
+  outline order.
 - Import HTML, ODP, and PDF through explicit facade APIs.
 - Resolve master, layout, placeholder, theme, chart, SmartArt, media, notes,
   comments, and timing state while preserving unmodelled package content.

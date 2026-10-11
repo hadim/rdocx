@@ -33,7 +33,7 @@ enum Command {
         #[arg(long)]
         notes: bool,
     },
-    /// Convert a presentation to deterministic PDF, image or Markdown output
+    /// Convert a presentation to deterministic PDF, image, HTML or Markdown output
     Convert {
         file: PathBuf,
         #[arg(long, short = 't')]
@@ -43,10 +43,10 @@ enum Command {
         /// Replace existing output files, but never the input file
         #[arg(long)]
         force: bool,
-        /// Write each slide's speaker notes in Markdown output
+        /// Write each slide's speaker notes in HTML or Markdown output
         #[arg(long)]
         notes: bool,
-        /// Leave hidden slides out of Markdown output
+        /// Leave hidden slides out of HTML or Markdown output
         #[arg(long)]
         skip_hidden: bool,
         #[arg(long, default_value = "150")]

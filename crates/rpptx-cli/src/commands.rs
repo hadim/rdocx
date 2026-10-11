@@ -364,16 +364,18 @@ pub fn convert(
     let image_format = parse_image_format(format, image.quality, image.transparent);
     let extension = match (format, image_format.as_ref()) {
         ("pdf", _) => "pdf",
+        ("html", _) => "html",
         ("md" | "markdown", _) => "md",
         (_, Ok((_, extension))) => extension,
         (other, Err(_)) => {
-            return Err(
-                format!("Unknown format: {other}. Supported: pdf, md, png, jpeg, tiff").into(),
-            );
+            return Err(format!(
+                "Unknown format: {other}. Supported: pdf, html, md, png, jpeg, tiff"
+            )
+            .into());
         }
     };
-    if (export.notes || export.skip_hidden) && extension != "md" {
-        return Err("--notes and --skip-hidden apply only to Markdown output".into());
+    if (export.notes || export.skip_hidden) && !matches!(extension, "html" | "md") {
+        return Err("--notes and --skip-hidden apply only to HTML and Markdown output".into());
     }
     let output = output
         .map(Path::to_path_buf)
@@ -441,6 +443,11 @@ pub fn convert(
                     }
                 }
             }
+        }
+        "html" => {
+            let html = presentation.to_html(export);
+            stage_and_publish(&[(output.clone(), html.into_bytes())], force)?;
+            writeln!(stdout, "Written to {}", output.display())?;
         }
         "md" | "markdown" => {
             let markdown = presentation.to_markdown(export);

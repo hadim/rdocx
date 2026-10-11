@@ -4070,6 +4070,36 @@ def test_issue_352_to_markdown_writes_one_section_per_slide():
     )
 
 
+def test_issue_353_to_html_writes_one_section_per_slide():
+    import xml.etree.ElementTree as ElementTree
+
+    import rpptx
+
+    prs = rpptx.Presentation()
+    prs.slides.add_slide(prs.slide_layouts[1])
+    prs.slides[0].shapes.title.text = "Q&A <live>"
+    prs.slides[0].placeholders[1].text_frame.text = "Ship"
+    prs.slides[0].notes_text = "Say hello"
+    prs.slides[0].shapes.add_picture(io.BytesIO(_tiny_png()), 0, 0)
+    prs.slides.add_slide(prs.slide_layouts[6])
+    prs.slides[1].hidden = True
+
+    html = prs.to_html()
+    section = (
+        '<section id="slide-1">\n<h1>Q&amp;A &lt;live&gt;</h1>\n'
+        "<ul>\n<li>Ship</li>\n</ul>\n"
+        '<img src="data:image/png;base64,'
+    )
+    assert section in html
+    assert '<section id="slide-2">\n<h1>Slide 2</h1>\n</section>\n' in html
+    assert "Say hello" not in html
+    ElementTree.fromstring(html.removeprefix("<!DOCTYPE html>\n"))
+
+    html = prs.to_html(notes=True, skip_hidden=True)
+    assert '<aside class="notes">\n<h2>Notes</h2>\n<p>Say hello</p>\n</aside>\n' in html
+    assert "slide-2" not in html
+
+
 def test_issue_169_shape_click_hyperlink_round_trips_and_python_pptx_reads_it(tmp_path):
     import pptx
     import rpptx
