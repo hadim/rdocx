@@ -397739,3 +397739,91 @@ fn bibliography_apa_gurmukhi_gujarati_odia_1096_recovered_cache_is_preserved_wit
     let mut reopened = Document::from_bytes(&bytes).unwrap();
     assert_eq!(reopened.to_bytes().unwrap(), bytes);
 }
+
+/// A header or footer picture is related from its own part, which is the only
+/// part whose relationships its drawings can reach.
+mod embed_image_in_story_relates_the_image_from_the_story_part {
+    use super::f254_story;
+    use oxml_opc::relationship::rel_types;
+    use rdocx::{Document, StoryKind};
+
+    /// A valid 1 x 1 PNG.
+    const PNG: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
+        0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0a, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00,
+        0x01, 0x00, 0x00, 0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49,
+        0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    fn image_relationships(bytes: &[u8], part: &str) -> Vec<(String, String)> {
+        let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        package
+            .get_part_rels(part)
+            .into_iter()
+            .flat_map(|relationships| &relationships.items)
+            .filter(|relationship| relationship.rel_type == rel_types::IMAGE)
+            .map(|relationship| (relationship.id.clone(), relationship.target.clone()))
+            .collect()
+    }
+
+    #[test]
+    fn a_header_and_a_footer_image_belong_to_their_own_parts() {
+        let mut document = Document::new();
+        document.set_header("Logo");
+        document.set_footer("Footer");
+        let header = f254_story(&document, StoryKind::Header);
+        let footer = f254_story(&document, StoryKind::Footer);
+        let in_header = document
+            .embed_image_in_story(&header, PNG, "logo.png")
+            .unwrap();
+        let in_footer = document
+            .embed_image_in_story(&footer, PNG, "seal.png")
+            .unwrap();
+        assert_eq!(
+            document.image_data_for_story(&header, &in_header).unwrap(),
+            PNG
+        );
+        assert_eq!(
+            document.image_data_for_story(&footer, &in_footer).unwrap(),
+            PNG
+        );
+
+        let bytes = document.to_bytes().unwrap();
+        let header_images = image_relationships(&bytes, header.part_name());
+        let footer_images = image_relationships(&bytes, footer.part_name());
+        assert_eq!(header_images.len(), 1, "{header_images:?}");
+        assert_eq!(footer_images.len(), 1, "{footer_images:?}");
+        assert_eq!(header_images[0].0, in_header);
+        assert_eq!(footer_images[0].0, in_footer);
+        assert!(
+            header_images[0].1.contains("media/image"),
+            "{header_images:?}"
+        );
+        assert!(image_relationships(&bytes, "/word/document.xml").is_empty());
+
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        let header = f254_story(&reopened, StoryKind::Header);
+        assert_eq!(
+            reopened.image_data_for_story(&header, &in_header).unwrap(),
+            PNG
+        );
+    }
+
+    #[test]
+    fn a_malformed_image_is_refused_and_changes_nothing() {
+        let mut document = Document::new();
+        document.set_header("Logo");
+        let header = f254_story(&document, StoryKind::Header);
+        let before = document.to_bytes().unwrap();
+        let error = document
+            .embed_image_in_story(&header, b"not an image", "logo.png")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("`logo.png` is unsupported or malformed"),
+            "{error}"
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+}

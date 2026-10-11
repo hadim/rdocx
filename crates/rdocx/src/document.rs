@@ -17832,6 +17832,52 @@ impl Document {
         Ok(relationship_id)
     }
 
+    /// Embed an image into the package and relate it from a checked story
+    /// owner's part, returning the relationship ID.
+    ///
+    /// A header, footer, footnote or endnote picture must be related from its
+    /// own part: a relationship of the main document part is out of its reach,
+    /// and Word reports the picture as broken. Pass the returned ID to
+    /// [`crate::Run::add_picture`] on a run of that story. For the body this
+    /// is [`Self::embed_image`].
+    pub fn embed_image_in_story(
+        &mut self,
+        story: &StoryId,
+        image_data: &[u8],
+        filename: &str,
+    ) -> Result<String> {
+        if oxml_media::probe(image_data).is_none() {
+            return Err(Error::Other(format!(
+                "picture `{filename}` is unsupported or malformed"
+            )));
+        }
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        candidate.story_source_and_owner(story)?;
+        let owner = story.part_name.clone();
+        let (part_name, format) = candidate.reserve_image_part(image_data, filename)?;
+        candidate.install_reserved_image_part(&part_name, image_data, format);
+        candidate.add_relative_internal_relationship_checked(
+            &owner,
+            rel_types::IMAGE,
+            &part_name,
+        )?;
+        let target = relative_target(&owner, &part_name);
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        let relationship_id = reopened
+            .package
+            .get_part_rels(&owner)
+            .into_iter()
+            .flat_map(|relationships| &relationships.items)
+            .find(|relationship| {
+                relationship.rel_type == rel_types::IMAGE && relationship.target == target
+            })
+            .map(|relationship| relationship.id.clone())
+            .ok_or_else(|| Error::Other("embedded image relationship was lost".to_owned()))?;
+        self.commit_staged_mutation(reopened);
+        Ok(relationship_id)
+    }
+
     /// Resolve and validate one internal relationship in a checked story scope.
     pub fn validate_internal_relationship_for_story(
         &self,
