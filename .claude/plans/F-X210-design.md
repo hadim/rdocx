@@ -366,3 +366,13 @@ source changes. Full current discussions and reused source blob hashes are
 authenticated in /private/tmp/S91-PR319-0073a15-intake/receipt.json.
 The prior source assessment and existing feature ownership remain applicable.
 No duplicate work, asset approval, baseline or contributor pass claim changes.
+
+## Joint checklist font acceptance, 2026-10-11
+
+The current F-X200/F-X210 provider passed the four actual unchecked/checked caller and no-caller controls. R10 completed all35 bounded command rows with exit0, unchanged complete source guards and naturally reaped process groups. Receipt1b5d6206be78327e5a8664590494b0ce638d21659be607649fe2a4b25d1f40ec is /private/tmp/S91-F-X200-F210-checkbox-font-text-experiments-r10-prepared/actual-comparator-1/receipt.json. Original source-derived origins, exact approved3968-byte physical font, reachable painted CID and Unicode marker mapping are authenticated. Independent approved source-font PDF and original contour PNG positives are1.0 for every owner, with all wrong-character, blank and six-point negatives below the unchanged.99 threshold. Full original font experiment A remains distinguishing evidence only. Previous path-raster comparison failures remain failed, without a threshold or geometry change.
+
+This completes the joint checkbox paint obligation. F-X210 still requires its remaining scoped package/license/risk gates, HLD, final review and integration. F-X200 still requires attributed baseline and policy/feature partition closure. No feature is marked complete by this one obligation.
+
+## Existing font inventory carriers
+
+Update the existing CLAUDE.md inventory and .github/workflows/ci.yml package-member inventory to32 fonts and10 legal files. scripts/test_sprint_workflow.py retains the actual inventory assertions with those counts. Independent review21 covers this three-carrier correction. No additional product file or new acceptance waiver is introduced. Actual verified archive measurements remain required before changing their existing README and policy carriers.
