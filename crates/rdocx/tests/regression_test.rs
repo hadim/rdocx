@@ -9865,6 +9865,101 @@ fn html_import_projects_nested_lists_and_spanned_tables() {
     }));
 }
 
+fn html_to_markdown(html: &str) -> String {
+    Document::from_html(html)
+        .expect("supported HTML")
+        .document
+        .to_markdown()
+}
+
+#[test]
+fn markdown_export_keeps_emphasis_and_block_boundaries_readable_by_commonmark() {
+    // The three cases of issue 332.
+    assert_eq!(
+        html_to_markdown("<p>Sales <b>rose</b> by <i>ten</i> percent.</p>"),
+        "Sales **rose** by *ten* percent.\n\n"
+    );
+    assert_eq!(
+        html_to_markdown("<p><b>Quar</b><b>terly</b> report</p>"),
+        "**Quarterly** report\n\n"
+    );
+    assert_eq!(
+        html_to_markdown("<ul><li>North</li></ul><table><tr><td>a</td><td>b</td></tr></table>"),
+        "- North\n\n| a | b |\n| --- | --- |\n\n"
+    );
+
+    for (html, markdown) in [
+        // `*` delimiters may sit inside a word.
+        ("<p><b>Quar</b>terly</p>", "**Quar**terly\n\n"),
+        // Nested and coinciding marks share delimiters instead of repeating them.
+        (
+            "<p><b>Quarterly <i>report</i></b> due</p>",
+            "**Quarterly *report*** due\n\n",
+        ),
+        (
+            "<p><b><i>both</i></b> and <i>a <b>b</b> c</i></p>",
+            "***both*** and *a **b** c*\n\n",
+        ),
+        ("<p><b>bold</b><i>italic</i></p>", "**bold***italic*\n\n"),
+        (
+            "<p><s>old <b>bold</b></s> new</p>",
+            "~~old **bold**~~ new\n\n",
+        ),
+        // Whitespace alone takes no delimiters.
+        ("<p>a<b> </b>b</p>", "a b\n\n"),
+        // Punctuation next to a delimiter is fine when whitespace or
+        // punctuation is on the other side.
+        (
+            "<p>He said <b>\u{201c}yes.\u{201d}</b> Then <i>(maybe)</i>.</p>",
+            "He said **\u{201c}yes.\u{201d}** Then *(maybe)*.\n\n",
+        ),
+        // Inside a word it is not, so those spans are written as HTML.
+        (
+            "<p>Price<b>:</b>10 and word<i>(x)</i>word</p>",
+            "Price<strong>:</strong>10 and word<em>(x)</em>word\n\n",
+        ),
+        // Document text that would read as Markdown syntax is escaped.
+        (
+            "<p>2*3*4 snake_case [x] &lt;b&gt; a~b | `c` \\</p>",
+            "2\\*3\\*4 snake\\_case \\[x\\] \\<b> a\\~b | \\`c\\` \\\\\n\n",
+        ),
+        ("<p><b>*</b>x</p>", "<strong>\\*</strong>x\n\n"),
+        // A list ends with a blank line before any other block.
+        ("<ul><li>a</li></ul><p>after</p>", "- a\n\nafter\n\n"),
+        (
+            "<ol><li>a</li></ol><h2>Heading</h2>",
+            "1. a\n\n## Heading\n\n",
+        ),
+        (
+            "<table><tr><td>a</td></tr></table><ul><li>b</li></ul>",
+            "| a |\n| --- |\n\n- b\n",
+        ),
+        // A nested item is indented to its parent's text column.
+        (
+            "<ol><li>one<ul><li>nested</li></ul></li><li>two</li></ol>",
+            "1. one\n   - nested\n1. two\n",
+        ),
+        (
+            "<ul><li>one<ol><li>nested</li></ol></li></ul>",
+            "- one\n  1. nested\n",
+        ),
+        // A pipe in a cell is escaped, and nowhere else.
+        (
+            "<table><tr><td>a|b</td></tr></table>",
+            "| a\\|b |\n| --- |\n\n",
+        ),
+        // A pipe table row is one line.
+        (
+            "<table><tr><td>a<br>b</td></tr></table>",
+            "| a<br>b |\n| --- |\n\n",
+        ),
+        // So is an ATX heading.
+        ("<h1>Annual<br>report</h1>", "# Annual<br>report\n\n"),
+    ] {
+        assert_eq!(html_to_markdown(html), markdown, "{html}");
+    }
+}
+
 fn compatibility_page_elements(
     elements: &[oxml_layout::PositionedElement],
 ) -> Vec<&oxml_layout::PositionedElement> {
