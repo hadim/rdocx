@@ -553,6 +553,17 @@ def test_update_fields_on_open_sets_clears_and_removes_the_setting():
         assert document.to_bytes() == before
 
 
+def test_a_new_document_names_compatibility_mode_15_so_word_does_not_open_it_in_compatibility_mode():
+    import rdocx
+
+    mode = (
+        b'<w:compat><w:compatSetting w:name="compatibilityMode" '
+        b'w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat>'
+    )
+    with zipfile.ZipFile(io.BytesIO(rdocx.Document().to_bytes())) as archive:
+        assert mode in archive.read("word/settings.xml")
+
+
 def _one_pixel_png(pixel=b"\xff\xff\xff"):
     def chunk(kind, data):
         crc = struct.pack(">I", zlib.crc32(kind + data))

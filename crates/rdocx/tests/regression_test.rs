@@ -9868,6 +9868,101 @@ fn html_import_projects_nested_lists_and_spanned_tables() {
     }));
 }
 
+fn html_to_markdown(html: &str) -> String {
+    Document::from_html(html)
+        .expect("supported HTML")
+        .document
+        .to_markdown()
+}
+
+#[test]
+fn markdown_export_keeps_emphasis_and_block_boundaries_readable_by_commonmark() {
+    // The three cases of issue 332.
+    assert_eq!(
+        html_to_markdown("<p>Sales <b>rose</b> by <i>ten</i> percent.</p>"),
+        "Sales **rose** by *ten* percent.\n\n"
+    );
+    assert_eq!(
+        html_to_markdown("<p><b>Quar</b><b>terly</b> report</p>"),
+        "**Quarterly** report\n\n"
+    );
+    assert_eq!(
+        html_to_markdown("<ul><li>North</li></ul><table><tr><td>a</td><td>b</td></tr></table>"),
+        "- North\n\n| a | b |\n| --- | --- |\n\n"
+    );
+
+    for (html, markdown) in [
+        // `*` delimiters may sit inside a word.
+        ("<p><b>Quar</b>terly</p>", "**Quar**terly\n\n"),
+        // Nested and coinciding marks share delimiters instead of repeating them.
+        (
+            "<p><b>Quarterly <i>report</i></b> due</p>",
+            "**Quarterly *report*** due\n\n",
+        ),
+        (
+            "<p><b><i>both</i></b> and <i>a <b>b</b> c</i></p>",
+            "***both*** and *a **b** c*\n\n",
+        ),
+        ("<p><b>bold</b><i>italic</i></p>", "**bold***italic*\n\n"),
+        (
+            "<p><s>old <b>bold</b></s> new</p>",
+            "~~old **bold**~~ new\n\n",
+        ),
+        // Whitespace alone takes no delimiters.
+        ("<p>a<b> </b>b</p>", "a b\n\n"),
+        // Punctuation next to a delimiter is fine when whitespace or
+        // punctuation is on the other side.
+        (
+            "<p>He said <b>\u{201c}yes.\u{201d}</b> Then <i>(maybe)</i>.</p>",
+            "He said **\u{201c}yes.\u{201d}** Then *(maybe)*.\n\n",
+        ),
+        // Inside a word it is not, so those spans are written as HTML.
+        (
+            "<p>Price<b>:</b>10 and word<i>(x)</i>word</p>",
+            "Price<strong>:</strong>10 and word<em>(x)</em>word\n\n",
+        ),
+        // Document text that would read as Markdown syntax is escaped.
+        (
+            "<p>2*3*4 snake_case [x] &lt;b&gt; a~b | `c` \\</p>",
+            "2\\*3\\*4 snake\\_case \\[x\\] \\<b> a\\~b | \\`c\\` \\\\\n\n",
+        ),
+        ("<p><b>*</b>x</p>", "<strong>\\*</strong>x\n\n"),
+        // A list ends with a blank line before any other block.
+        ("<ul><li>a</li></ul><p>after</p>", "- a\n\nafter\n\n"),
+        (
+            "<ol><li>a</li></ol><h2>Heading</h2>",
+            "1. a\n\n## Heading\n\n",
+        ),
+        (
+            "<table><tr><td>a</td></tr></table><ul><li>b</li></ul>",
+            "| a |\n| --- |\n\n- b\n",
+        ),
+        // A nested item is indented to its parent's text column.
+        (
+            "<ol><li>one<ul><li>nested</li></ul></li><li>two</li></ol>",
+            "1. one\n   - nested\n1. two\n",
+        ),
+        (
+            "<ul><li>one<ol><li>nested</li></ol></li></ul>",
+            "- one\n  1. nested\n",
+        ),
+        // A pipe in a cell is escaped, and nowhere else.
+        (
+            "<table><tr><td>a|b</td></tr></table>",
+            "| a\\|b |\n| --- |\n\n",
+        ),
+        // A pipe table row is one line.
+        (
+            "<table><tr><td>a<br>b</td></tr></table>",
+            "| a<br>b |\n| --- |\n\n",
+        ),
+        // So is an ATX heading.
+        ("<h1>Annual<br>report</h1>", "# Annual<br>report\n\n"),
+    ] {
+        assert_eq!(html_to_markdown(html), markdown, "{html}");
+    }
+}
+
 fn compatibility_page_elements(
     elements: &[oxml_layout::PositionedElement],
 ) -> Vec<&oxml_layout::PositionedElement> {
@@ -38569,6 +38664,69 @@ fn settings_part_text(bytes: &[u8]) -> String {
     String::from_utf8(package.get_part("/word/settings.xml").unwrap().to_vec()).unwrap()
 }
 
+#[test]
+fn new_documents_name_compatibility_mode_15_so_word_does_not_open_them_in_compatibility_mode() {
+    const COMPAT: &str = r#"<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat>"#;
+    let mut created = vec![Document::new()];
+    for class in [
+        WordPackageClass::Document,
+        WordPackageClass::MacroEnabledDocument,
+        WordPackageClass::Template,
+        WordPackageClass::MacroEnabledTemplate,
+    ] {
+        created.push(Document::new_with_profile(
+            WordCreationProfile::WordCompatible(class),
+        ));
+    }
+    created.push(Document::from_html("<p>Hello</p>").unwrap().document);
+    for mut document in created {
+        document.add_paragraph("Hello");
+        let settings = settings_part_text(&document.to_bytes().unwrap());
+        assert!(settings.contains(COMPAT), "{settings}");
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.compatibility_settings().len(), 1);
+        assert_eq!(reopened.settings_diagnostics(), &[]);
+    }
+
+    // Settings authored on a new document keep the compat group in schema
+    // order, and a caller's own mode replaces the default rather than
+    // adding a second one.
+    let mut document = Document::new();
+    document.set_document_variable("Client", "Acme").unwrap();
+    document.set_default_tab_stop(Twips(720)).unwrap();
+    let settings = settings_part_text(&document.to_bytes().unwrap());
+    let tab = settings.find("<w:defaultTabStop").unwrap();
+    let compat = settings.find(COMPAT).unwrap();
+    let variables = settings.find("<w:docVars>").unwrap();
+    assert!(tab < compat && compat < variables, "{settings}");
+    document
+        .set_compatibility_setting(
+            "compatibilityMode",
+            "http://schemas.microsoft.com/office/word",
+            "14",
+        )
+        .unwrap();
+    assert_eq!(document.compatibility_settings().len(), 1);
+    assert_eq!(document.compatibility_settings()[0].value, "14");
+
+    // The minimal profile keeps its two-part package and gains no settings part.
+    let mut minimal =
+        Document::new_with_profile(WordCreationProfile::Minimal(WordPackageClass::Document));
+    assert!(minimal.compatibility_settings().is_empty());
+    let package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(minimal.to_bytes().unwrap()))
+            .unwrap();
+    assert!(package.get_part("/word/settings.xml").is_none());
+
+    // An opened legacy document that names no compatibility mode stays as it was.
+    let legacy =
+        format!(r#"<w:settings xmlns:w="{W_NS}"><w:defaultTabStop w:val="720"/></w:settings>"#);
+    let mut opened = settings_document(&legacy);
+    assert!(opened.compatibility_settings().is_empty());
+    opened.add_paragraph("Edited");
+    assert_eq!(settings_part_text(&opened.to_bytes().unwrap()), legacy);
+}
+
 /// F-265, complete run property and inline authoring.
 #[test]
 fn comparison_tracks_paragraph_properties_with_revision_identities() {
@@ -44587,7 +44745,14 @@ mod tab_stop_regressions {
                 &["T", "I12"],
             ),
         ];
-        let document_2010 = document(&paragraphs);
+        // A new document names mode 15, so the legacy case drops it.
+        let mut document_2010 = document(&paragraphs);
+        document_2010
+            .remove_compatibility_setting(
+                "compatibilityMode",
+                "http://schemas.microsoft.com/office/word",
+            )
+            .unwrap();
         assert_at(run(&document_2010, "M12").1, 590.0, "Word 2010");
         assert_at(run(&document_2010, "I12").1, 540.0, "Word 2010 indented");
         let mut document_2013 = document(&paragraphs);
@@ -50732,6 +50897,13 @@ fn identical_text_boxes_keep_distinct_physical_owners_across_pages_and_inline_co
 // Exact replay of generator SHA-256 0335394fffe04039c4b194bd74546f80808f211ddf505a1d3405c877e32fb1d2.
 fn f279_continuous_oracle(case: &str) -> Document {
     let mut d = Document::new();
+    // Word measured these packages without a compatibility mode, so the
+    // oracle input drops the mode 15 a new document names.
+    d.remove_compatibility_setting(
+        "compatibilityMode",
+        "http://schemas.microsoft.com/office/word",
+    )
+    .unwrap();
     d.set_update_fields_on_open(Some(false)).unwrap();
     let body = StoryId::body();
     f279_oracle_append(

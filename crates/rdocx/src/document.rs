@@ -221,8 +221,12 @@ pub enum WordPackageClass {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WordCreationProfile {
     /// The compact package graph historically emitted by `rdocx`.
+    ///
+    /// It has no settings part, so it names no compatibility mode.
     Minimal(WordPackageClass),
     /// A Word-compatible blank package with the standard owned support parts.
+    ///
+    /// Its settings name compatibility mode 15, as Word's own new documents do.
     WordCompatible(WordPackageClass),
 }
 
@@ -13881,7 +13885,20 @@ impl Document {
         if compatible {
             styles.styles.extend(style::common_styles());
         }
-        let settings = compatible.then(CT_Settings::new);
+        // Word writes compatibility mode 15 into every document it creates.
+        // A document that names no mode opens in Compatibility Mode and lays
+        // out under the legacy rules (see `build_layout_input`).
+        let settings = compatible.then(|| {
+            let mut settings = CT_Settings::new();
+            settings
+                .set_compatibility_setting(CompatibilitySetting {
+                    name: "compatibilityMode".to_owned(),
+                    uri: "http://schemas.microsoft.com/office/word".to_owned(),
+                    value: "15".to_owned(),
+                })
+                .expect("fresh Word settings accept a compatibility setting");
+            settings
+        });
         let core_properties = compatible.then(Box::<CoreProperties>::default);
         let application_properties = compatible.then(default_application_properties);
         let mut package = if compatible {

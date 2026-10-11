@@ -1465,7 +1465,9 @@ default. `WordCreationProfile` separates package completeness from the four
 `WordPackageClass` identities, so native callers can select DOCX, DOCM, DOTX,
 or DOTM while retaining an explicit compact package option. The compatible
 profile owns its main document, styles, settings, theme, font table, core
-properties, and application properties without loading a template.
+properties, and application properties without loading a template. Its
+settings name compatibility mode 15, so fresh documents lay out under the
+modern rules.
 Fresh Word-compatible documents initialize the common Word paragraph and table
 styles in the native facade. Minimal-profile documents retain the compact
 Normal and Heading1 set.
