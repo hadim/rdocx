@@ -4046,6 +4046,30 @@ def test_issue_169_effective_geometry_materializes_missing_partners():
     )
 
 
+def test_issue_352_to_markdown_writes_one_section_per_slide():
+    import rpptx
+
+    prs = rpptx.Presentation()
+    prs.slides.add_slide(prs.slide_layouts[1])
+    prs.slides[0].shapes.title.text = "Roadmap"
+    prs.slides[0].placeholders[1].text_frame.text = "Ship 2*3"
+    prs.slides[0].placeholders[1].text_frame.add_paragraph()
+    prs.slides[0].placeholders[1].text_frame.paragraphs[1].text = "Nested"
+    prs.slides[0].placeholders[1].text_frame.paragraphs[1].level = 1
+    prs.slides[0].shapes.add_table(1, 2, 0, 0, 100_000, 100_000)
+    prs.slides[0].shapes[-1].table.cell(0, 0).text = "A"
+    prs.slides[0].shapes[-1].table.cell(0, 1).text = "B|C"
+    prs.slides[0].notes_text = "Say hello"
+    prs.slides.add_slide(prs.slide_layouts[6])
+    prs.slides[1].hidden = True
+
+    visible = "# Roadmap\n\n- Ship 2\\*3\n  - Nested\n\n| A | B\\|C |\n| --- | --- |\n"
+    assert prs.to_markdown() == visible + "\n# Slide 2\n"
+    assert prs.to_markdown(notes=True, skip_hidden=True) == (
+        visible + "\n> **Notes**\n>\n> Say hello\n"
+    )
+
+
 def test_issue_169_shape_click_hyperlink_round_trips_and_python_pptx_reads_it(tmp_path):
     import pptx
     import rpptx

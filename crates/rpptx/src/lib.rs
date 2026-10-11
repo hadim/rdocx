@@ -137,6 +137,7 @@ mod animation;
 mod diagram;
 #[cfg(feature = "default-template")]
 mod html;
+mod markdown;
 #[cfg(feature = "default-template")]
 mod odp;
 #[cfg(feature = "render")]
@@ -7761,6 +7762,92 @@ impl<'a> SlideRef<'a> {
             .notes
             .as_ref()
             .map(|notes| notes.notes.notes_text())
+    }
+
+    /// Returns the slide content in reading order, the title left out.
+    ///
+    /// Shapes are read in z-order, each shape's own paragraphs, table or
+    /// picture before the children of a group or alternate content. This is
+    /// the order `rpptx outline` prints and the Markdown export writes.
+    pub fn content(&self) -> Vec<SlideContent<'a>> {
+        let title = self.title();
+        let mut content = Vec::new();
+        for shape in self.shapes() {
+            if title != Some(shape) {
+                collect_content(shape, &mut content);
+            }
+        }
+        content
+    }
+}
+
+/// One piece of slide content in reading order, as [`SlideRef::content`]
+/// returns it.
+#[derive(Clone, Copy)]
+pub enum SlideContent<'a> {
+    /// A paragraph of a shape's text frame.
+    Paragraph(TextParagraphRef<'a>),
+    /// A table, its cells in row-major order.
+    Table(TableRef<'a>),
+    /// A picture shape.
+    Picture(ShapeRef<'a>),
+}
+
+/// What a Markdown export of a presentation includes.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ExportOptions {
+    /// Write each slide's speaker notes after its content.
+    pub notes: bool,
+    /// Leave out the slides hidden from the slideshow.
+    pub skip_hidden: bool,
+}
+
+fn collect_content<'a>(shape: ShapeRef<'a>, content: &mut Vec<SlideContent<'a>>) {
+    if shape.kind() == ShapeKind::Picture {
+        content.push(SlideContent::Picture(shape));
+    }
+    if let Some(frame) = shape.text_frame() {
+        content.extend(
+            (0..frame.paragraph_count())
+                .filter_map(|index| frame.paragraph(index))
+                .map(SlideContent::Paragraph),
+        );
+    }
+    if let Some(table) = shape.table() {
+        content.push(SlideContent::Table(table));
+    }
+    for child in shape.children() {
+        collect_content(child, content);
+    }
+}
+
+/// Whether a hyperlink target is an address a reader can open. A jump to
+/// another slide resolves to a part name, which is no link outside the deck.
+fn is_external_link(address: &str) -> bool {
+    let lower = address.trim().to_ascii_lowercase();
+    ["http://", "https://", "mailto:"]
+        .iter()
+        .any(|scheme| lower.starts_with(scheme))
+}
+
+/// Returns a picture's alternative text, `p:cNvPr/@descr`, when it has one.
+fn picture_alt_text(picture: ShapeRef<'_>) -> Option<String> {
+    let xml = picture.xml().ok()?;
+    let mut reader = quick_xml::Reader::from_reader(xml.as_slice());
+    loop {
+        match reader.read_event().ok()? {
+            XmlEvent::Start(start) | XmlEvent::Empty(start)
+                if start.local_name().as_ref() == b"cNvPr" =>
+            {
+                let attribute = start.try_get_attribute("descr").ok()??;
+                let value = attribute
+                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())
+                    .ok()?;
+                return (!value.trim().is_empty()).then(|| value.into_owned());
+            }
+            XmlEvent::Eof => return None,
+            _ => {}
+        }
     }
 }
 

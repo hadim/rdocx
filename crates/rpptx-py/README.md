@@ -56,6 +56,8 @@ with open("review.pdf", "wb") as output:
   leaves the deck unchanged on a mismatch.
 - Package and PresentationML validation that returns the issues
   `rpptx validate` reports as typed values.
+- Markdown export, one section per slide, with `to_markdown(notes=...,
+  skip_hidden=...)`.
 - Speaker-note text plus modern comment authors, threads, replies, thread
   resolution and removal, and ordered comment movement.
 - Master, layout, placeholder, theme, shape, chart, media, and relationship

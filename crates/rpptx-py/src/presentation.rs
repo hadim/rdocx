@@ -321,6 +321,15 @@ impl PyPresentation {
         self.try_replace_text(py, placeholder, replacement, expect)
     }
 
+    /// Writes the presentation as CommonMark, one section per slide.
+    #[pyo3(signature = (*, notes = false, skip_hidden = false))]
+    fn to_markdown(&self, py: Python<'_>, notes: bool, skip_hidden: bool) -> String {
+        py.detach(|| {
+            self.inner
+                .to_markdown(rpptx::ExportOptions { notes, skip_hidden })
+        })
+    }
+
     /// Returns every package and PresentationML invariant violation.
     fn validate<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
         let issues = py.detach(|| self.inner.validate());

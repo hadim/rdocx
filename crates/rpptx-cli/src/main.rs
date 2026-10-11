@@ -33,7 +33,7 @@ enum Command {
         #[arg(long)]
         notes: bool,
     },
-    /// Convert a presentation to deterministic PDF or image output
+    /// Convert a presentation to deterministic PDF, image or Markdown output
     Convert {
         file: PathBuf,
         #[arg(long, short = 't')]
@@ -43,6 +43,12 @@ enum Command {
         /// Replace existing output files, but never the input file
         #[arg(long)]
         force: bool,
+        /// Write each slide's speaker notes in Markdown output
+        #[arg(long)]
+        notes: bool,
+        /// Leave hidden slides out of Markdown output
+        #[arg(long)]
+        skip_hidden: bool,
         #[arg(long, default_value = "150")]
         dpi: f64,
         /// One-based slide range for image output, such as 1,3-5
@@ -233,6 +239,8 @@ fn run_cli() {
             to,
             output,
             force,
+            notes,
+            skip_hidden,
             dpi,
             slides,
             quality,
@@ -243,6 +251,7 @@ fn run_cli() {
             output.as_deref(),
             force,
             dpi,
+            rpptx::ExportOptions { notes, skip_hidden },
             commands::ImageOptions {
                 slides: slides.as_deref(),
                 quality,

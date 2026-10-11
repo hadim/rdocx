@@ -356,6 +356,7 @@ pub fn convert(
     output: Option<&Path>,
     force: bool,
     dpi: f64,
+    export: rpptx::ExportOptions,
     image: ImageOptions<'_>,
 ) -> Result<()> {
     validate_dpi(dpi)?;
@@ -363,11 +364,17 @@ pub fn convert(
     let image_format = parse_image_format(format, image.quality, image.transparent);
     let extension = match (format, image_format.as_ref()) {
         ("pdf", _) => "pdf",
+        ("md" | "markdown", _) => "md",
         (_, Ok((_, extension))) => extension,
         (other, Err(_)) => {
-            return Err(format!("Unknown format: {other}. Supported: pdf, png, jpeg, tiff").into());
+            return Err(
+                format!("Unknown format: {other}. Supported: pdf, md, png, jpeg, tiff").into(),
+            );
         }
     };
+    if (export.notes || export.skip_hidden) && extension != "md" {
+        return Err("--notes and --skip-hidden apply only to Markdown output".into());
+    }
     let output = output
         .map(Path::to_path_buf)
         .unwrap_or_else(|| default_output_path(file, extension));
@@ -434,6 +441,11 @@ pub fn convert(
                     }
                 }
             }
+        }
+        "md" | "markdown" => {
+            let markdown = presentation.to_markdown(export);
+            stage_and_publish(&[(output.clone(), markdown.into_bytes())], force)?;
+            writeln!(stdout, "Written to {}", output.display())?;
         }
         _ => unreachable!(),
     }
@@ -670,18 +682,39 @@ pub fn outline(file: &Path, as_json: bool, notes: bool) -> Result<()> {
     let mut slides = Vec::new();
     let mut stdout = io::stdout().lock();
     for (index, slide) in presentation.slides().enumerate() {
-        let title_shape = slide.title();
         let title = normalize_outline_text(
-            &title_shape
+            &slide
+                .title()
                 .and_then(|shape| shape.text())
                 .unwrap_or_default(),
         );
         let mut items = Vec::new();
-        for shape in slide.shapes() {
-            if title_shape == Some(shape) {
-                continue;
+        for content in slide.content() {
+            match content {
+                rpptx::SlideContent::Paragraph(paragraph) => {
+                    push_outline_item(paragraph, &mut items);
+                }
+                rpptx::SlideContent::Table(table) => {
+                    for row in 0..table.row_count() {
+                        for column in 0..table.column_count() {
+                            let Some(cell) = table.cell(row, column) else {
+                                continue;
+                            };
+                            if cell.is_spanned() {
+                                continue;
+                            }
+                            if let Some(frame) = cell.text_frame() {
+                                for index in 0..frame.paragraph_count() {
+                                    if let Some(paragraph) = frame.paragraph(index) {
+                                        push_outline_item(paragraph, &mut items);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                rpptx::SlideContent::Picture(_) => {}
             }
-            collect_shape_outline(shape, &mut items);
         }
         if as_json {
             slides.push(json!({
@@ -714,39 +747,10 @@ pub fn outline(file: &Path, as_json: bool, notes: bool) -> Result<()> {
     Ok(())
 }
 
-fn collect_shape_outline(shape: ShapeRef<'_>, items: &mut Vec<(u8, String)>) {
-    if let Some(frame) = shape.text_frame() {
-        collect_frame_outline(frame, items);
-    }
-    if let Some(table) = shape.table() {
-        for row in 0..table.row_count() {
-            for column in 0..table.column_count() {
-                let Some(cell) = table.cell(row, column) else {
-                    continue;
-                };
-                if cell.is_spanned() {
-                    continue;
-                }
-                if let Some(frame) = cell.text_frame() {
-                    collect_frame_outline(frame, items);
-                }
-            }
-        }
-    }
-    for child in shape.children() {
-        collect_shape_outline(child, items);
-    }
-}
-
-fn collect_frame_outline(frame: TextFrameRef<'_>, items: &mut Vec<(u8, String)>) {
-    for index in 0..frame.paragraph_count() {
-        let Some(paragraph) = frame.paragraph(index) else {
-            continue;
-        };
-        let text = normalize_outline_text(&paragraph.text());
-        if !text.is_empty() {
-            items.push((paragraph.level(), text));
-        }
+fn push_outline_item(paragraph: TextParagraphRef<'_>, items: &mut Vec<(u8, String)>) {
+    let text = normalize_outline_text(&paragraph.text());
+    if !text.is_empty() {
+        items.push((paragraph.level(), text));
     }
 }
 

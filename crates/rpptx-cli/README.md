@@ -41,6 +41,7 @@ rpptx comment add deck.pptx --slide 2 --author Reviewer \
   --text "Check the figures" --date 2026-09-25T10:00:00Z -o reviewed.pptx
 rpptx comment list reviewed.pptx --json
 rpptx convert deck.pptx --to pdf -o deck.pdf
+rpptx convert deck.pptx --to md --notes --skip-hidden -o deck.md
 rpptx thumbnail deck.pptx -o thumbnail.png
 ```
 
@@ -67,6 +68,13 @@ breaks appear only in the paragraph text, where a line break is U+000B. Run
 `formatting` is `null` when a run has no direct properties. Otherwise it records
 nullable direct bold, italic, underline, font, point size, and sRGB colour
 values.
+
+`convert --to md` writes CommonMark with GitHub pipe tables, one section per
+slide headed by its title. The rest of the slide follows the order `outline`
+prints: paragraphs as list items nested by level with their direct bold,
+italic, strikethrough and external links, tables with the first row as header,
+and pictures as images carrying their alt text. `--notes` adds each slide's
+speaker notes as a block quote, and `--skip-hidden` leaves hidden slides out.
 
 `outline --json` reports each slide's title, its outline items with their
 levels, and its speaker notes. Notes are the plain text of the notes body, with

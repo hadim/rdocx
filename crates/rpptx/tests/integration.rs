@@ -879,6 +879,256 @@ fn html_browser_differential_rejects_geometry_text_and_pixel_perturbations() {
     assert!(!f224_browser_gate_accepts(true, true, 1, perturbed_ssim));
 }
 
+/// A deck with a titled slide holding nested and formatted bullets, a link, a
+/// table, a picture with alt text and notes, a hidden slide, and an untitled
+/// slide.
+fn export_test_deck() -> Presentation {
+    let mut presentation = Presentation::new().unwrap();
+    let layout = |name: &str| {
+        (0..presentation.layout_count())
+            .find(|&index| presentation.layout_name(index) == Some(name))
+            .unwrap()
+    };
+    let (content, blank) = (layout("Title and Content"), layout("Blank"));
+    let bold = {
+        let mut properties = CT_TextCharacterProperties::default();
+        properties.bold = Some(true);
+        properties
+    };
+    let italic = {
+        let mut properties = CT_TextCharacterProperties::default();
+        properties.italic = Some(true);
+        properties
+    };
+
+    for (title, hidden) in [("Quarterly review", false), ("Backup", true)] {
+        let index = presentation.len();
+        presentation.add_slide(content).unwrap();
+        let slide = presentation.slide(index).unwrap();
+        let title_index = slide
+            .shapes()
+            .position(|shape| shape.placeholder_type() == Some("title"))
+            .unwrap();
+        let body_index = slide
+            .shapes()
+            .position(|shape| shape.placeholder_idx() == Some(1))
+            .unwrap();
+        let mut slide = presentation.slide_mut(index).unwrap();
+        slide.set_hidden(hidden);
+        slide
+            .shape_mut(title_index)
+            .unwrap()
+            .set_text(title)
+            .unwrap();
+        let mut body = slide.shape_mut(body_index).unwrap();
+        if hidden {
+            body.set_text("Spare").unwrap();
+            continue;
+        }
+        body.set_text("Revenue ").unwrap();
+        let mut frame = body.text_frame().unwrap();
+        let mut paragraph = frame.paragraph_mut(0).unwrap();
+        paragraph.add_run("rose").set_properties(bold.clone());
+        paragraph.add_run(" by ten percent");
+        let mut north = frame.add_paragraph();
+        north.add_run("North");
+        north.set_level(1);
+        let mut south = frame.add_paragraph();
+        south.add_run("South").set_properties(italic.clone());
+        south.set_level(1);
+        let mut literal = frame.add_paragraph();
+        literal.add_run("2*3 snake_case [x] <b> & a|b");
+        literal.set_level(2);
+        let mut linked = frame.add_paragraph();
+        linked.add_run("See the ");
+        linked.add_run("report");
+        linked.add_run(".");
+        frame.add_paragraph().add_run(" ");
+
+        let mut table = slide
+            .add_table(2, 2, Emu(0), Emu(4_000_000), Emu(4_000_000), Emu(800_000))
+            .unwrap();
+        let mut table = table.table_mut().unwrap();
+        for (row, column, text) in [
+            (0, 0, "Region"),
+            (0, 1, "Total"),
+            (1, 0, "North"),
+            (1, 1, "1|2"),
+        ] {
+            table.cell_mut(row, column).unwrap().set_text(text);
+        }
+        presentation
+            .set_notes_text(index, "Mention the new office.\nThank the team.")
+            .unwrap();
+        presentation
+            .add_picture(
+                index,
+                &valid_one_pixel_png(),
+                "logo.png",
+                Emu(0),
+                Emu(0),
+                None,
+                None,
+            )
+            .unwrap();
+    }
+    let body_id = presentation
+        .slide(0)
+        .unwrap()
+        .shapes()
+        .find(|shape| shape.placeholder_idx() == Some(1))
+        .and_then(|shape| shape.non_visual_id())
+        .unwrap();
+    presentation
+        .set_run_hyperlink(0, body_id, 4, 1, Some("https://example.com/q3?a=(1)"))
+        .unwrap();
+
+    presentation.add_slide(blank).unwrap();
+    presentation
+        .slide_mut(2)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(3_000_000), Emu(500_000))
+        .unwrap()
+        .set_text("1. Not a list")
+        .unwrap();
+
+    // The facade has no alt text setter yet, so the picture gets one in XML.
+    let mut package = open_opc(&presentation.to_bytes().unwrap(), "export deck");
+    let slide_part = "/ppt/slides/slide1.xml";
+    let xml = String::from_utf8(package.get_part(slide_part).unwrap().to_vec()).unwrap();
+    let described = xml.replacen(
+        r#"name="Picture "#,
+        r#"descr="Company logo &amp; brand" name="Picture "#,
+        1,
+    );
+    assert_ne!(described, xml);
+    package.set_part(slide_part, described.into_bytes());
+    let mut bytes = Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    Presentation::from_bytes(bytes.get_ref()).unwrap()
+}
+
+#[test]
+fn markdown_export_writes_one_section_per_slide_in_outline_order() {
+    let presentation = export_test_deck();
+    let slide_one = concat!(
+        "# Quarterly review\n\n",
+        "- Revenue **rose** by ten percent\n",
+        "  - North\n",
+        "  - *South*\n",
+        "    - 2\\*3 snake\\_case \\[x\\] \\<b> \\& a|b\n",
+        "- See the [report](https://example.com/q3?a=\\(1\\)).\n\n",
+        "| Region | Total |\n",
+        "| --- | --- |\n",
+        "| North | 1\\|2 |\n\n",
+        "![Company logo \\& brand]()\n\n",
+    );
+    let notes = "> **Notes**\n>\n> Mention the new office.\n>\n> Thank the team.\n\n";
+    let slide_two = "# Backup\n\n- Spare\n\n";
+    let slide_three = "# Slide 3\n\n- 1\\. Not a list\n";
+
+    assert_eq!(
+        presentation.to_markdown(rpptx::ExportOptions::default()),
+        format!("{slide_one}{slide_two}{slide_three}")
+    );
+    assert_eq!(
+        presentation.to_markdown(rpptx::ExportOptions {
+            notes: true,
+            skip_hidden: true,
+        }),
+        format!("{slide_one}{notes}{slide_three}")
+    );
+    assert_eq!(
+        Presentation::new()
+            .unwrap()
+            .to_markdown(rpptx::ExportOptions::default()),
+        ""
+    );
+}
+
+/// One slide whose text box holds a paragraph of `(text, bold, italic,
+/// strike)` runs, written as Markdown without its heading.
+fn markdown_of_runs(runs: &[(&str, bool, bool, bool)]) -> String {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    let mut slide = presentation.slide_mut(0).unwrap();
+    let mut shape = slide
+        .add_textbox(Emu(0), Emu(0), Emu(3_000_000), Emu(500_000))
+        .unwrap();
+    let mut frame = shape.text_frame().unwrap();
+    let mut paragraph = frame.add_paragraph();
+    for &(text, bold, italic, strike) in runs {
+        let mut properties = CT_TextCharacterProperties::default();
+        properties.bold = bold.then_some(true);
+        properties.italic = italic.then_some(true);
+        properties.strike = strike.then_some(rpptx::TextStrike::Single);
+        paragraph.add_run(text).set_properties(properties);
+    }
+    let markdown = presentation.to_markdown(rpptx::ExportOptions::default());
+    markdown.strip_prefix("# Slide 1\n\n").unwrap().to_owned()
+}
+
+#[test]
+fn markdown_export_writes_emphasis_and_line_starts_that_commonmark_reads_as_the_slide_means() {
+    const N: bool = false;
+    const Y: bool = true;
+    for (runs, markdown) in [
+        // Whitespace stays outside delimiters, and equal runs share them.
+        (
+            &[("Sales ", N, N, N), ("rose ", Y, N, N), ("today", N, N, N)][..],
+            "- Sales **rose** today\n",
+        ),
+        (
+            &[("Quar", Y, N, N), ("terly", Y, N, N)],
+            "- **Quarterly**\n",
+        ),
+        (
+            &[("Quar", Y, N, N), ("terly", N, N, N)],
+            "- **Quar**terly\n",
+        ),
+        (
+            &[
+                ("Quarterly ", Y, N, N),
+                ("report", Y, Y, N),
+                (" due", N, N, N),
+            ],
+            "- **Quarterly *report*** due\n",
+        ),
+        (
+            &[("bold", Y, N, N), ("italic", N, Y, N)],
+            "- **bold***italic*\n",
+        ),
+        (
+            &[("old ", N, N, Y), ("bold", Y, N, Y), (" new", N, N, N)],
+            "- ~~old **bold**~~ new\n",
+        ),
+        (&[("a", N, N, N), (" ", Y, N, N), ("b", N, N, N)], "- a b\n"),
+        // Inside a word, punctuation would keep delimiters from flanking.
+        (
+            &[("Price", N, N, N), (":", Y, N, N), ("10", N, N, N)],
+            "- Price<strong>:</strong>10\n",
+        ),
+        (
+            &[("*", Y, N, N), ("x", N, N, N)],
+            "- <strong>\\*</strong>x\n",
+        ),
+        // Text that would start a block is escaped.
+        (&[("# Not a heading", N, N, N)], "- \\# Not a heading\n"),
+        (&[("> not a quote", N, N, N)], "- \\> not a quote\n"),
+        (&[("- not nested", N, N, N)], "- \\- not nested\n"),
+        (&[("---", N, N, N)], "- \\---\n"),
+        (&[("2) second", N, N, N)], "- 2\\) second\n"),
+        (&[("#hashtag and 2024.", N, N, N)], "- #hashtag and 2024.\n"),
+        // A line break continues the item, and a blank line would end it.
+        (
+            &[("line one\n- line two\n\nthree", N, N, N)],
+            "- line one  \n  \\- line two  \n  three\n",
+        ),
+    ] {
+        assert_eq!(markdown_of_runs(runs), markdown, "{runs:?}");
+    }
+}
+
 #[test]
 fn embedded_inventory_reports_exact_hashes_relationships_and_signature_state() {
     let mut package = embedded_fixture_package(true);
