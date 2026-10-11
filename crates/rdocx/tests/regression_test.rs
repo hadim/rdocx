@@ -397880,6 +397880,21 @@ mod story_text_reads_run_tabs_and_breaks {
                 "A\t\n\u{000c}\u{000b}B",
             ),
             (nested, "yes"),
+            // A field that ends in a later paragraph, as a table of contents
+            // does, reads as plain runs in each paragraph.
+            (
+                format!(
+                    r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>{instruction}<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>e1</w:t><w:br w:type="page"/></w:r>"#
+                ),
+                "e1\n",
+            ),
+            (
+                r#"<w:r><w:t>e2</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#
+                    .to_owned(),
+                "e2",
+            ),
+            (UNCLOSED_FIELD.to_owned(), "ab"),
+            (DELETED_FIELD_START.to_owned(), "kept"),
         ];
         let body = cases
             .iter()
@@ -397942,6 +397957,28 @@ mod story_text_reads_run_tabs_and_breaks {
         );
         assert!(xml.contains("<w:r><w:tab/></w:r></w:del>"), "{xml}");
         assert!(xml.contains("</w:instrText><w:tab/>"), "{xml}");
+    }
+
+    /// A field that does not close in the paragraph reads as plain runs.
+    const UNCLOSED_FIELD: &str = r#"<w:r><w:t>a</w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r><w:t>b</w:t></w:r>"#;
+
+    /// The field characters of a deleted field are not in the accepted view.
+    const DELETED_FIELD_START: &str = r#"<w:del w:id="2" w:author="A"><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:delInstrText xml:space="preserve"> PAGE </w:delInstrText></w:r></w:del><w:r><w:t>kept</w:t></w:r>"#;
+
+    #[test]
+    fn set_story_text_replaces_the_text_of_unclosed_and_deleted_fields() {
+        for content in [UNCLOSED_FIELD, DELETED_FIELD_START] {
+            let mut document =
+                document_with_content_controls(&wrap_word_body(&format!("<w:p>{content}</w:p>")));
+            let item = document.story_item_snapshots().unwrap().remove(0);
+            document.set_story_text(item.location(), "n\tm").unwrap();
+            assert_eq!(document.paragraphs()[0].text(), "n\tm", "{content}");
+            assert_eq!(
+                paragraph_texts(&document),
+                [(StoryKind::Body, Some("n\tm".to_owned()))],
+                "{content}"
+            );
+        }
     }
 
     /// New text with a tab or a line break writes `w:tab` and `w:br`, as
