@@ -40,7 +40,7 @@ and ten approved pending implementation. Rolling contribution intake is reopened
 | F-X207 | Persist PowerPoint autofit and implement fit_text | L | pending | - |
 | F-X208 | Author PowerPoint footer fields themes and transitions | L | pending | - |
 | F-X209 | Edit PowerPoint masters layouts and themes | L | pending | - |
-| F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | pending | - |
+| F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | in-progress | codex |
 | F-X211 | Complete Python script compatibility and safe XML access | L | pending | - |
 | F-X212 | Align native accessibility with visible paragraph content | M | done | - |
 | F-X213 | Preserve TOC entry boundary paragraphs during rebuild | M | in-progress | codex |
@@ -781,3 +781,15 @@ Full integrated sprint verification and clean sprint review remain required.
 The 12:22:15 UTC intake refresh has22 open PRs and28 included issues, with no
 new records or changed heads. Issues264 and281 remain excluded and open.
 Bibliography and the deferred authoring carryovers remain atS92.
+
+## F-X210 parallel source reservation, 2026-10-11
+
+The completed F-X195 prefix permits F-X210 to start in its isolated codex
+worker. Its first source phase owns existing bundled_fonts.rs and the exact
+nine approved font assets only. It creates deciding tests in the existing
+inline test module before asset and registration production changes. Shared
+font.rs, output, Word/PPT lowering and consumer carriers remain reserved to
+the current owners until explicit source handover. Cargo, package and baseline
+work remain serialized by the integrator. No formal dependency is changed.
+After this claim S91 has eight completed stories, four in progress and nine
+pending. Full sprint verification and clean sprint review remain due.
