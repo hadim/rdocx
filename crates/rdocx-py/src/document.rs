@@ -741,8 +741,8 @@ impl PyHyperlink {
 pub struct PyPicture {
     pub(crate) relationship_id: String,
     /// The position in `Document.pictures`, which selects this picture for
-    /// `Document.set_picture_size`.
-    index: usize,
+    /// `Document.set_picture_size`. A header or footer picture has none.
+    index: Option<usize>,
     revision: u64,
     name: Option<String>,
     description: Option<String>,
@@ -3025,7 +3025,7 @@ impl PyDocument {
             .map(|(index, image)| {
                 let part = self.inner.image_content_type(&image.embed_id);
                 PyPicture {
-                    index,
+                    index: Some(index),
                     revision: self.revisions.current(),
                     content_type: part.as_ref().map(|(content_type, _)| content_type.clone()),
                     filename: part
@@ -3046,6 +3046,40 @@ impl PyDocument {
                 }
             })
             .collect())
+    }
+
+    /// Snapshot a picture just added to a header or footer run, which
+    /// `Document.pictures` does not list.
+    pub(crate) fn story_picture_snapshot(
+        &self,
+        py: Python<'_>,
+        story: &rdocx::StoryId,
+        relationship_id: String,
+        options: &rdocx::PictureOptions,
+    ) -> PyResult<PyPicture> {
+        let part = self
+            .inner
+            .image_content_type_for_story(story, &relationship_id)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let blob = self
+            .inner
+            .image_data_for_story(story, &relationship_id)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        Ok(PyPicture {
+            index: None,
+            revision: self.revisions.current(),
+            filename: part.1.rsplit('/').next().map(str::to_owned),
+            content_type: Some(part.0),
+            blob: Some(PyBytes::new(py, &blob).unbind()),
+            relationship_id,
+            name: options.name.clone(),
+            description: options.description.clone(),
+            title: options.title.clone(),
+            decorative: options.decorative,
+            width: options.width.to_emu(),
+            height: options.height.to_emu(),
+            inline: options.anchor.is_none(),
+        })
     }
 
     pub(crate) fn scoped_replacement<F>(
@@ -3643,6 +3677,12 @@ impl PyDocument {
         // No content moves, so live handles stay valid.
         if let Ok(picture) = picture.cast::<PyPicture>() {
             let picture = picture.get();
+            let index = picture.index.ok_or_else(|| {
+                PyValueError::new_err(
+                    "a header or footer picture is not in document.pictures, \
+                     which lists the body pictures only",
+                )
+            })?;
             if picture.revision != self.revisions.current() {
                 return Err(crate::stale_to_pyerr(
                     py,
@@ -3654,7 +3694,6 @@ impl PyDocument {
                     },
                 ));
             }
-            let index = picture.index;
             return py
                 .detach(|| self.inner.set_picture_size_at(index, width, height))
                 .map(|()| 1)

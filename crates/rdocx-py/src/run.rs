@@ -285,15 +285,6 @@ impl PyRun {
         relative_to: Option<(String, String)>,
     ) -> PyResult<Py<crate::document::PyPicture>> {
         let (location, _) = self.validate(py)?;
-        // The image relationship would land on the document part, which a
-        // header or footer part cannot reach, so Word would report a broken
-        // picture. Refuse until the binding embeds into the story's part.
-        if matches!(location, ParagraphLocation::Story { .. }) {
-            return Err(pyo3::exceptions::PyNotImplementedError::new_err(
-                "Run.add_picture works in body and table-cell runs, not yet in a header or footer \
-                 run; a header or footer picture is not available from Python yet",
-            ));
-        }
         let (data, filename) = crate::document::picture_source(image, filename)?;
         let options = crate::document::PictureArguments {
             width,
@@ -314,7 +305,13 @@ impl PyRun {
             .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
         let (relationship_id, drawing_id) = {
             let mut document = self.document.borrow_mut(py);
-            let relationship_id = document.inner.embed_image(&data, &filename);
+            // A header or footer picture is related from its own part.
+            let relationship_id = match location {
+                ParagraphLocation::Story { slot, at } => {
+                    crate::story::image_relationship(py, &mut document, slot, at, &data, &filename)?
+                }
+                _ => document.inner.embed_image(&data, &filename),
+            };
             let drawing_id = document
                 .inner
                 .reserve_drawing_id()
@@ -322,6 +319,7 @@ impl PyRun {
             (relationship_id, drawing_id)
         };
         let mut added = Ok(());
+        let authored = options.clone();
         self.edit(py, |run| {
             added = run.add_picture_with_options(&relationship_id, drawing_id, options)
         })?;
@@ -330,6 +328,14 @@ impl PyRun {
         // path of every later story item.
         let mut document = self.document.borrow_mut(py);
         document.revisions.bump();
+        if let ParagraphLocation::Story { slot, .. } = location {
+            let story = slot
+                .story(py, &document.inner)?
+                .ok_or_else(|| PyRuntimeError::new_err("the added picture was not found"))?;
+            let picture =
+                document.story_picture_snapshot(py, &story, relationship_id, &authored)?;
+            return Py::new(py, picture);
+        }
         // The new relationship is the picture's own, as python-docx returns
         // the inline shape it adds.
         let picture = document

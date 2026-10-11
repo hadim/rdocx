@@ -5955,3 +5955,61 @@ def test_deeply_nested_text_boxes_raise_instead_of_crashing():
     )
     with pytest.raises(rdocx.RdocxError, match="text box nesting exceeds 16 levels"):
         _replace_document_body(rdocx.Document(), body)
+
+
+def test_run_add_picture_in_a_header_or_footer_is_related_from_its_part():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("Body")
+    header = document.sections[0].header
+    header.paragraphs[0].text = "Logo: "
+    logo = header.paragraphs[0].runs[0].add_picture(
+        _one_pixel_png(), rdocx.Inches(1), description="logo"
+    )
+    footer = document.sections[0].footer
+    footer.paragraphs[0].text = "Seal "
+    seal = footer.paragraphs[0].runs[0].add_picture(
+        _one_pixel_png(b"\x00\x00\x00"), rdocx.Inches(0.5)
+    )
+    assert (logo.content_type, logo.description, logo.inline) == ("image/png", "logo", True)
+    assert (logo.width, logo.height) == (rdocx.Inches(1), rdocx.Inches(1))
+    assert logo.blob == _one_pixel_png()
+    assert seal.blob == _one_pixel_png(b"\x00\x00\x00")
+    # The body pictures stay the only ones Document.pictures lists.
+    assert document.pictures == ()
+    with pytest.raises(ValueError, match="not in document.pictures"):
+        document.set_picture_size(logo, rdocx.Inches(2), rdocx.Inches(2))
+
+    stories = {story.kind: story for story in document.stories}
+    for picture, kind in ((logo, "header"), (seal, "footer")):
+        target = _relationship_target(
+            document, stories[kind].part_name, picture.relationship_id
+        )
+        assert target.startswith("word/media/image"), target
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as archive:
+        assert b"/image" not in archive.read("word/_rels/document.xml.rels")
+    assert document.validate().errors == ()
+
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert reopened.sections[0].header.paragraphs[0].text == "Logo: "
+    drawings = [
+        item.story.kind for item in reopened.story_items if item.kind == "drawing"
+    ]
+    assert sorted(drawings) == ["footer", "header"]
+
+
+def test_run_add_picture_in_a_header_matches_python_docx():
+    docx = pytest.importorskip("docx")
+    import rdocx
+
+    document = rdocx.Document()
+    document.sections[0].header.paragraphs[0].text = "Logo: "
+    document.sections[0].header.paragraphs[0].runs[0].add_picture(
+        _one_pixel_png(), rdocx.Inches(1)
+    )
+    read = docx.Document(io.BytesIO(document.to_bytes()))
+    header = read.sections[0].header
+    blips = header._element.xpath(".//a:blip/@r:embed")
+    assert len(blips) == 1
+    assert header.part.related_parts[blips[0]].blob == _one_pixel_png()

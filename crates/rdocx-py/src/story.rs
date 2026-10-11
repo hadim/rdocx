@@ -237,6 +237,33 @@ pub(crate) fn hyperlink_relationship(
         .map_err(|error| rdocx_to_pyerr(py, error))
 }
 
+/// The relationship of a picture in a header or footer, which its own part
+/// owns: a relationship of the document part is out of its reach.
+pub(crate) fn image_relationship(
+    py: Python<'_>,
+    document: &mut PyDocument,
+    slot: StorySlot,
+    at: rdocx::HeaderFooterParagraph,
+    data: &[u8],
+    filename: &str,
+) -> PyResult<String> {
+    let story = slot.story(py, &document.inner)?;
+    let story = story
+        .filter(|story| {
+            matches!(
+                document
+                    .inner
+                    .read_header_footer_paragraph(story, at, |_| ()),
+                Ok(Some(()))
+            )
+        })
+        .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
+    document
+        .inner
+        .embed_image_in_story(&story, data, filename)
+        .map_err(|error| rdocx_to_pyerr(py, error))
+}
+
 /// Make Word show the variant just written: a first-page story needs its
 /// section's different first page, and an even-page story needs the
 /// document's odd and even pages setting.
