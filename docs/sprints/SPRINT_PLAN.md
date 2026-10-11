@@ -2136,7 +2136,7 @@ review, package checks and exact-SHA publication approval remain required.
 
 **Goal**: finish completed stories and all included issue/PR repairs. The user
 parks the separate S90 bibliography and navigation carryovers at S92. Rolling
-intake includes twenty-eight issues and twenty-one PRs, excluding only the
+intake includes twenty-eight issues and twenty-two PRs, excluding only the
 requirements discussions264 and281.
 
 | F-ID | Title | Size |
