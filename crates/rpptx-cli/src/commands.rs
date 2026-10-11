@@ -1009,6 +1009,70 @@ fn next_comment_guid(presentation: &Presentation) -> String {
         .expect("a finite set of used ids leaves a sequential id free")
 }
 
+/// Which slides `slide import` copies, where they land, and how.
+pub struct SlideImportInput<'a> {
+    pub slides: Option<&'a str>,
+    pub at: Option<usize>,
+    pub keep_source_formatting: bool,
+    pub keep_sections: bool,
+}
+
+/// Imports slides of `source` into `dest` and publishes the result atomically.
+///
+/// Each diagnostic, such as a dropped slide jump, is printed to standard
+/// error as a warning.
+pub fn slide_import(
+    dest: &Path,
+    source: &Path,
+    input: SlideImportInput<'_>,
+    output: &Path,
+    as_json: bool,
+) -> Result<()> {
+    ensure_output_paths_available(&[output.to_path_buf()])?;
+    let mut presentation = Presentation::open(dest)?;
+    let source_presentation = Presentation::open(source)?;
+    let indexes = selected_zero_based_slides(source_presentation.len(), input.slides)?;
+    let insert_index = match input.at {
+        None => None,
+        Some(at) if at == 0 || at > presentation.len() + 1 => {
+            return Err(format!(
+                "position {at} is out of range for {} slides",
+                presentation.len()
+            )
+            .into());
+        }
+        Some(at) => Some(at - 1),
+    };
+    let import = presentation.import_slides(
+        &source_presentation,
+        &indexes,
+        &rpptx::SlideImportOptions {
+            insert_index,
+            keep_source_formatting: input.keep_source_formatting,
+            keep_sections: input.keep_sections,
+            ..rpptx::SlideImportOptions::default()
+        },
+    )?;
+    publish_presentation(&presentation, output)?;
+    for diagnostic in &import.diagnostics {
+        eprintln!("Warning: {diagnostic}");
+    }
+    mutation_record(
+        as_json,
+        "import",
+        json!({
+            "source_slides": indexes.iter().map(|index| index + 1).collect::<Vec<_>>(),
+            "slides": import.indexes.iter().map(|index| index + 1).collect::<Vec<_>>(),
+            "warnings": import
+                .diagnostics
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+        }),
+        output,
+    )
+}
+
 fn publish_presentation(presentation: &Presentation, output: &Path) -> Result<()> {
     stage_and_publish(
         &[(

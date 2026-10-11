@@ -15,6 +15,8 @@ replaces text, and produces deterministic fixed output.
 - Modern comment thread listing, addition, replies, resolution, and removal.
 - Scriptable output covers slide order, notes, comments, recursive group
   content, relationship-backed media, and deterministic rendering diagnostics.
+- Slide import from another deck, with a slide range, an insertion position,
+  and optional source formatting and sections.
 
 ## Measured footprint and speed
 
@@ -37,6 +39,8 @@ cargo install rpptx-cli --version '^0.14.0'
 rpptx inspect deck.pptx --json
 rpptx text deck.pptx --json
 rpptx outline deck.pptx --notes
+rpptx slide import deck.pptx library.pptx --slides 1,3-5 --at 2 \
+  --keep-source-formatting -o merged.pptx
 rpptx comment add deck.pptx --slide 2 --author Reviewer \
   --text "Check the figures" --date 2026-09-25T10:00:00Z -o reviewed.pptx
 rpptx comment list reviewed.pptx --json
@@ -68,6 +72,18 @@ breaks appear only in the paragraph text, where a line break is U+000B. Run
 nullable direct bold, italic, underline, font, point size, and sRGB colour
 values.
 
+`slide import DEST SOURCE` copies the slides of SOURCE given by the one-based
+`--slides` range, in source order, or every slide, into DEST and writes the
+result to `-o/--output`. `--at` is the one-based position of the first copy,
+and the copies are appended without it. Charts, embedded objects, comments and
+notes travel with the slides. A jump to a slide that is not imported stops
+working and is reported as a `Warning:` line on standard error and in the
+`warnings` of the `--json` record, which also lists the one-based
+`source_slides` and the `slides` they became. `--keep-source-formatting` keeps
+the source layout, master and theme, and `--keep-sections` keeps the source
+sections. Like the comment mutations, it refuses an existing output and
+publishes only a complete presentation.
+
 `outline --json` reports each slide's title, its outline items with their
 levels, and its speaker notes. Notes are the plain text of the notes body, with
 paragraphs and line breaks both written as newlines. `--notes` prints one
@@ -92,8 +108,8 @@ as a directory, a symbolic link, a FIFO, or a device like `/dev/null`. A run
 checks every file it would write before it writes the first one, and publishes
 each file only once it is complete, so a failed run leaves no truncated output.
 
-The output extension of `replace` and of every comment mutation selects the
-package class the output declares. A `.potx` template written to `deck.pptx`
+The output extension of `replace`, of `slide import` and of every comment
+mutation selects the package class the output declares. A `.potx` template written to `deck.pptx`
 becomes a presentation, and a deck that carries a VBA project cannot change to
 a macro-free extension.
 

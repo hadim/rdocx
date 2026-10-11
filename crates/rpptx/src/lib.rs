@@ -375,6 +375,15 @@ pub struct SlideImportOptions {
     /// is reused, so importing several slides that share a source layout
     /// adds that layout and its master once. It excludes `layout_index`.
     pub keep_source_formatting: bool,
+    /// Keeps the source sections of the copies as sections of this
+    /// presentation. Each run of consecutive copies whose source slides
+    /// share a section becomes one section named like it, and copies of
+    /// slides outside every source section form an "Untitled Section". The
+    /// copies must land on a section boundary, and a presentation without
+    /// sections gets its existing slides in a "Default Section", so every
+    /// slide stays in exactly one section. Ignored when the source has no
+    /// sections.
+    pub keep_sections: bool,
 }
 
 /// A non-fatal change made while importing slides.
@@ -3133,11 +3142,131 @@ impl Presentation {
                 }),
             )?;
         }
+        if options.keep_sections && !source.sections().is_empty() {
+            let source_indexes = copies
+                .iter()
+                .map(|(index, _, _)| *index)
+                .collect::<Vec<_>>();
+            staged.keep_imported_sections(source, &source_indexes, inserted)?;
+        }
         self.commit_candidate(staged)?;
         Ok(SlideImport {
             indexes: (inserted..inserted + copies.len()).collect(),
             diagnostics,
         })
+    }
+
+    /// Gives the copies of `source_indexes`, inserted from `inserted`, the
+    /// sections of their source slides, as `SlideImportOptions::keep_sections`
+    /// describes.
+    fn keep_imported_sections(
+        &mut self,
+        source: &Presentation,
+        source_indexes: &[usize],
+        inserted: usize,
+    ) -> Result<()> {
+        const OPERATION: &str = "import slide";
+        let invalid =
+            |error: OxmlError| invalid_presentation_mutation(OPERATION, error.to_string());
+        let mut used = self
+            .sections()
+            .iter()
+            .filter_map(|section| section.id.as_ref())
+            .map(|id| id.to_ascii_uppercase())
+            .collect::<HashSet<_>>();
+        let mut section_id = |preferred: Option<&str>| {
+            if let Some(preferred) = preferred
+                && used.insert(preferred.to_ascii_uppercase())
+            {
+                return preferred.to_owned();
+            }
+            let id = (1_u64..)
+                .map(|index| format!("{{00000000-0000-4000-8000-{index:012X}}}"))
+                .find(|id| !used.contains(id))
+                .expect("a finite set of used ids leaves a sequential id free");
+            used.insert(id.clone());
+            id
+        };
+
+        let mut runs: Vec<(Option<usize>, Vec<u32>)> = Vec::new();
+        for (offset, &index) in source_indexes.iter().enumerate() {
+            let source_id = source.slides[index].id;
+            let section = source
+                .sections()
+                .iter()
+                .position(|section| section.slide_ids.contains(&source_id));
+            let copy_id = self.slides[inserted + offset].id;
+            match runs.last_mut() {
+                Some((last, ids)) if *last == section => ids.push(copy_id),
+                _ => runs.push((section, vec![copy_id])),
+            }
+        }
+        let mut imported = Vec::with_capacity(runs.len());
+        for (section, ids) in runs {
+            let section = section.map(|section| &source.sections()[section]);
+            let id = section_id(section.and_then(|section| section.id.as_deref()));
+            let name = section
+                .and_then(|section| section.name.as_deref())
+                .unwrap_or("Untitled Section");
+            imported.push(Section::new(id, name, ids).map_err(invalid)?);
+        }
+
+        let count = source_indexes.len();
+        let before = self.slides[..inserted]
+            .iter()
+            .map(|record| record.id)
+            .collect::<Vec<_>>();
+        let after = self.slides[inserted + count..]
+            .iter()
+            .map(|record| record.id)
+            .collect::<Vec<_>>();
+        let mut sections = self.sections().to_vec();
+        let position = if sections.is_empty() {
+            if !before.is_empty() && !after.is_empty() {
+                return Err(invalid_presentation_mutation(
+                    OPERATION,
+                    "kept sections go at the start or the end of a presentation without sections"
+                        .to_owned(),
+                ));
+            }
+            let existing = if before.is_empty() {
+                after
+            } else {
+                before.clone()
+            };
+            if !existing.is_empty() {
+                sections.push(
+                    Section::new(section_id(None), "Default Section", existing).map_err(invalid)?,
+                );
+            }
+            if before.is_empty() { 0 } else { sections.len() }
+        } else {
+            let section_of = |id: &u32| {
+                sections
+                    .iter()
+                    .position(|section| section.slide_ids.contains(id))
+            };
+            let previous = before.last().map(section_of);
+            let next = after.first().map(section_of);
+            if let (Some(Some(previous)), Some(Some(next))) = (previous, next)
+                && previous == next
+            {
+                return Err(invalid_presentation_mutation(
+                    OPERATION,
+                    format!(
+                        "kept sections cannot split the section {:?}, insert at a section boundary",
+                        sections[previous].name.as_deref().unwrap_or_default()
+                    ),
+                ));
+            }
+            match (previous, next) {
+                (_, Some(Some(next))) => next,
+                (Some(Some(previous)), _) => previous + 1,
+                _ => sections.len(),
+            }
+        };
+        sections.splice(position..position, imported);
+        self.presentation.set_sections(sections).map_err(invalid)
     }
 
     /// Returns the first layout named like the layout of `source` slide `index`.
@@ -3572,7 +3701,13 @@ impl Presentation {
         if let Some(existing) = adopted.get(layout) {
             return Ok(existing.clone());
         }
-        for record in &self.layouts {
+        // A layout of the same name comes first, so that a copy within one
+        // presentation keeps its own layout even when another is equal.
+        let (same_name, others): (Vec<_>, Vec<_>) = self
+            .layouts
+            .iter()
+            .partition(|record| record.part_name == layout);
+        for record in same_name.into_iter().chain(others) {
             if formatting_parts_equal(source_package, layout, &self.package, &record.part_name)? {
                 adopted.insert(layout.to_owned(), record.part_name.clone());
                 return Ok(record.part_name.clone());

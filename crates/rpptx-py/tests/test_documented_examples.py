@@ -3792,6 +3792,51 @@ def test_import_slide_keeps_source_formatting_once_per_source_layout(tmp_path):
     assert oracle.slides[2].slide_layout.placeholders[0].left != kept_title.left
 
 
+def test_import_slides_merges_a_deck_with_its_notes_and_sections(tmp_path):
+    import rpptx
+
+    def build_source(deck):
+        from pptx.oxml import parse_xml
+        from pptx.util import Inches
+
+        for text in ["B1", "B2", "B3"]:
+            slide = deck.slides.add_slide(deck.slide_layouts[6])
+            slide.shapes.add_textbox(Inches(1), Inches(1), Inches(3), Inches(1)).text_frame.text = text
+            slide.notes_slide.notes_text_frame.text = f"Notes {text}"
+        ids = [slide.slide_id for slide in deck.slides]
+        deck.part._element.append(parse_xml(
+            '<p:extLst xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">'
+            '<p:ext uri="{521415D9-36F7-43E2-AB2F-B90AF26B5E84}">'
+            '<p14:sectionLst xmlns:p14="http://schemas.microsoft.com/office/powerpoint/2010/main">'
+            '<p14:section name="Intro" id="{AAAAAAAA-0000-4000-8000-000000000001}">'
+            f'<p14:sldIdLst><p14:sldId id="{ids[0]}"/></p14:sldIdLst></p14:section>'
+            '<p14:section name="Body" id="{AAAAAAAA-0000-4000-8000-000000000002}">'
+            f'<p14:sldIdLst><p14:sldId id="{ids[1]}"/><p14:sldId id="{ids[2]}"/></p14:sldIdLst>'
+            '</p14:section></p14:sectionLst></p:ext></p:extLst>'
+        ))
+
+    def build_target(deck):
+        from pptx.util import Inches
+
+        slide = deck.slides.add_slide(deck.slide_layouts[6])
+        slide.shapes.add_textbox(Inches(1), Inches(1), Inches(3), Inches(1)).text_frame.text = "A1"
+
+    source = rpptx.Presentation(_python_pptx_deck(tmp_path / "source.pptx", build_source))
+    prs = rpptx.Presentation(_python_pptx_deck(tmp_path / "target.pptx", build_target))
+    copies = prs.slides.import_slides(source, keep_sections=True)
+    assert [slide.notes_text for slide in copies] == ["Notes B1", "Notes B2", "Notes B3"]
+    picked = prs.slides.import_slides(source, [-1, 0], index=1)
+    assert [slide.shapes[0].text for slide in picked] == ["B3", "B1"]
+    assert [slide.shapes[0].text for slide in prs.slides] == ["A1", "B3", "B1", "B1", "B2", "B3"]
+    with pytest.raises(IndexError):
+        prs.slides.import_slides(source, [3])
+    output = tmp_path / "merged.pptx"
+    prs.save(output)
+    presentation_xml = _package_parts(output.read_bytes())["ppt/presentation.xml"].decode()
+    names = re.findall(r'<p14:section [^>]*name="([^"]*)"', presentation_xml)
+    assert names == ["Default Section", "Intro", "Body"]
+
+
 def test_import_slide_warns_when_it_drops_a_slide_jump(tmp_path):
     import warnings
 

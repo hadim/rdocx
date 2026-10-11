@@ -118,6 +118,37 @@ enum Command {
         #[command(subcommand)]
         command: CommentCommand,
     },
+    /// Copy slides between presentations
+    Slide {
+        #[command(subcommand)]
+        command: SlideCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum SlideCommand {
+    /// Import slides of SOURCE into DEST and write the result to a new file
+    Import {
+        dest: PathBuf,
+        source: PathBuf,
+        /// One-based source slide range, such as 1,3-5, imported in source order
+        #[arg(long)]
+        slides: Option<String>,
+        /// One-based position of the first imported slide in the result
+        #[arg(long)]
+        at: Option<usize>,
+        /// Keep the source layout, master and theme of each slide
+        #[arg(long)]
+        keep_source_formatting: bool,
+        /// Keep the source sections of the imported slides
+        #[arg(long)]
+        keep_sections: bool,
+        #[arg(long, short = 'o')]
+        output: PathBuf,
+        /// Output the operation record as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -340,6 +371,29 @@ fn run_cli() {
                 output,
                 json,
             } => commands::comment_remove(&file, &id, &output, json),
+        },
+        Command::Slide { command } => match command {
+            SlideCommand::Import {
+                dest,
+                source,
+                slides,
+                at,
+                keep_source_formatting,
+                keep_sections,
+                output,
+                json,
+            } => commands::slide_import(
+                &dest,
+                &source,
+                commands::SlideImportInput {
+                    slides: slides.as_deref(),
+                    at,
+                    keep_source_formatting,
+                    keep_sections,
+                },
+                &output,
+                json,
+            ),
         },
     };
     // Standard output is line buffered, so a last line without a newline is

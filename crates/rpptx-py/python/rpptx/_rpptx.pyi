@@ -294,6 +294,16 @@ class SlideCollection:
         *,
         keep_source_formatting: bool = False,
     ) -> Slide: ...
+    def import_slides(
+        self,
+        source: Presentation,
+        slides: list[int] | None = None,
+        *,
+        layout: SlideLayout | None = None,
+        index: int | None = None,
+        keep_source_formatting: bool = False,
+        keep_sections: bool = False,
+    ) -> list[Slide]: ...
     def remove(self, slide: Slide) -> None: ...
     def duplicate(self, slide: Slide) -> Slide: ...
     def move(self, from_: int, to: int) -> None: ...

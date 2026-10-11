@@ -546,6 +546,91 @@ impl PySlideCollection {
             .capture(smallvec![PathSeg::Slide(index)]);
         Py::new(py, PySlide::new(self.presentation.clone_ref(py), path))
     }
+
+    /// Runs the native import of the slides at `indexes` of `source`, raises
+    /// a `UserWarning` per diagnostic, and returns the copies.
+    ///
+    /// A slide of this presentation is imported from a snapshot. Each slide
+    /// maps to itself, so the copy keeps its jumps, and without `layout` the
+    /// copy keeps its own layout, which is equal to itself.
+    #[allow(clippy::too_many_arguments)]
+    fn import_from(
+        &self,
+        py: Python<'_>,
+        source: Py<PyPresentation>,
+        indexes: Vec<usize>,
+        layout: Option<&Bound<'_, PyAny>>,
+        index: Option<isize>,
+        keep_source_formatting: bool,
+        keep_sections: bool,
+    ) -> PyResult<Vec<Py<PySlide>>> {
+        let len = self.len(py)?;
+        let layout_index = match layout {
+            Some(layout) => {
+                let layout = layout.extract::<PyRef<'_, PySlideLayout>>()?;
+                if !layout.presentation.is(&self.presentation) {
+                    return Err(PyValueError::new_err(
+                        "layout is not a layout of this presentation",
+                    ));
+                }
+                layout.validate(py)?;
+                Some(layout.index)
+            }
+            None => None,
+        };
+        let inserted = match index {
+            None => len,
+            Some(index) => {
+                let normalized = if index < 0 {
+                    len as isize + index
+                } else {
+                    index
+                };
+                if normalized < 0 || normalized > len as isize {
+                    return Err(PyIndexError::new_err("slide index out of range"));
+                }
+                normalized as usize
+            }
+        };
+        let mut options = rpptx::SlideImportOptions {
+            layout_index,
+            insert_index: Some(inserted),
+            keep_source_formatting,
+            keep_sections,
+            ..rpptx::SlideImportOptions::default()
+        };
+        let (paths, diagnostics) = {
+            let mut presentation = self.presentation.borrow_mut(py);
+            let result = if source.is(&self.presentation) {
+                let copy = presentation.inner.clone();
+                options.keep_source_formatting |= layout_index.is_none();
+                options.mapped_slides = (0..copy.len()).map(|index| (index, index)).collect();
+                presentation.inner.import_slides(&copy, &indexes, &options)
+            } else {
+                let source = source.borrow(py);
+                presentation
+                    .inner
+                    .import_slides(&source.inner, &indexes, &options)
+            };
+            let import = result.map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+            presentation.revisions.bump();
+            let paths = import
+                .indexes
+                .iter()
+                .map(|&index| {
+                    presentation
+                        .revisions
+                        .capture(smallvec![PathSeg::Slide(index)])
+                })
+                .collect::<Vec<_>>();
+            (paths, import.diagnostics)
+        };
+        warn_import_diagnostics(py, &diagnostics)?;
+        paths
+            .into_iter()
+            .map(|path| Py::new(py, PySlide::new(self.presentation.clone_ref(py), path)))
+            .collect()
+    }
 }
 
 #[pymethods]
@@ -619,73 +704,61 @@ impl PySlideCollection {
         index: Option<isize>,
         keep_source_formatting: bool,
     ) -> PyResult<Py<PySlide>> {
-        let len = self.len(py)?;
         let slide = slide.extract::<PyRef<'_, PySlide>>()?;
         let source_index = slide.validate(py)?;
-        let layout_index = match layout {
-            Some(layout) => {
-                let layout = layout.extract::<PyRef<'_, PySlideLayout>>()?;
-                if !layout.presentation.is(&self.presentation) {
-                    return Err(PyValueError::new_err(
-                        "layout is not a layout of this presentation",
-                    ));
-                }
-                layout.validate(py)?;
-                Some(layout.index)
-            }
-            None => None,
-        };
-        let inserted = match index {
-            None => len,
-            Some(index) => {
-                let normalized = if index < 0 {
-                    len as isize + index
-                } else {
-                    index
-                };
-                if normalized < 0 || normalized > len as isize {
-                    return Err(PyIndexError::new_err("slide index out of range"));
-                }
-                normalized as usize
-            }
-        };
         let source = slide.presentation.clone_ref(py);
         drop(slide);
-        let mut options = rpptx::SlideImportOptions {
-            layout_index,
-            insert_index: Some(inserted),
+        let mut imported = self.import_from(
+            py,
+            source,
+            vec![source_index],
+            layout,
+            index,
             keep_source_formatting,
-            ..rpptx::SlideImportOptions::default()
+            false,
+        )?;
+        Ok(imported.remove(0))
+    }
+
+    /// Imports every slide of `source`, or the slides at `slides`, in that
+    /// order, and returns the copies.
+    ///
+    /// `slides` holds slide indexes of `source`, counted from the end when
+    /// negative. `layout`, `index` and `keep_source_formatting` act as for
+    /// `import_slide`, and the copies land at consecutive positions.
+    /// `keep_sections` keeps the source sections of the copies as sections
+    /// of this presentation. A jump between two imported slides lands on the
+    /// copy.
+    #[pyo3(signature = (source, slides=None, *, layout=None, index=None, keep_source_formatting=false, keep_sections=false))]
+    #[allow(clippy::too_many_arguments)]
+    fn import_slides(
+        &self,
+        py: Python<'_>,
+        source: &Bound<'_, PyAny>,
+        slides: Option<Vec<isize>>,
+        layout: Option<&Bound<'_, PyAny>>,
+        index: Option<isize>,
+        keep_source_formatting: bool,
+        keep_sections: bool,
+    ) -> PyResult<Vec<Py<PySlide>>> {
+        let source = source.extract::<Py<PyPresentation>>()?;
+        let source_len = source.borrow(py).inner.len();
+        let indexes = match slides {
+            None => (0..source_len).collect(),
+            Some(slides) => slides
+                .into_iter()
+                .map(|slide| normalize_index(slide, source_len, "slide"))
+                .collect::<PyResult<Vec<_>>>()?,
         };
-        let (path, diagnostics) = {
-            let mut presentation = self.presentation.borrow_mut(py);
-            let result = if source.is(&self.presentation) {
-                // Every slide of this presentation is its own counterpart,
-                // so the copy keeps its jumps.
-                let copy = presentation.inner.clone();
-                if !keep_source_formatting {
-                    options.layout_index =
-                        layout_index.or_else(|| copy.slide_layout_index(source_index));
-                }
-                options.mapped_slides = (0..copy.len()).map(|index| (index, index)).collect();
-                presentation
-                    .inner
-                    .import_slides(&copy, &[source_index], &options)
-            } else {
-                let source = source.borrow(py);
-                presentation
-                    .inner
-                    .import_slides(&source.inner, &[source_index], &options)
-            };
-            let import = result.map_err(|error| crate::rpptx_to_pyerr(py, error))?;
-            presentation.revisions.bump();
-            let path = presentation
-                .revisions
-                .capture(smallvec![PathSeg::Slide(inserted)]);
-            (path, import.diagnostics)
-        };
-        warn_import_diagnostics(py, &diagnostics)?;
-        Py::new(py, PySlide::new(self.presentation.clone_ref(py), path))
+        self.import_from(
+            py,
+            source,
+            indexes,
+            layout,
+            index,
+            keep_source_formatting,
+            keep_sections,
+        )
     }
 
     /// Removes one slide of this presentation with its notes and owned media.

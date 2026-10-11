@@ -16727,6 +16727,148 @@ fn import_slides_keeps_source_formatting_with_one_master_per_source_layout() {
     assert_eq!(reused.slide_layout_index(0), Some(5));
 }
 
+/// A deck of blank slides with one text box each, the shared test picture on
+/// every slide, and speaker notes naming the slide.
+fn merge_deck(texts: &[&str]) -> Presentation {
+    let mut deck = Presentation::new().unwrap();
+    for (index, text) in texts.iter().enumerate() {
+        deck.add_slide(6).unwrap();
+        deck.slide_mut(index)
+            .unwrap()
+            .add_textbox(Emu(457_200), Emu(457_200), Emu(4_572_000), Emu(914_400))
+            .unwrap()
+            .set_text(text)
+            .unwrap();
+        deck.add_picture(
+            index,
+            &png_header(4, 3),
+            "shared.png",
+            Emu(0),
+            Emu(0),
+            None,
+            None,
+        )
+        .unwrap();
+        deck.set_notes_text(index, &format!("Notes {text}"))
+            .unwrap();
+    }
+    deck
+}
+
+#[test]
+fn import_slides_merges_a_deck_with_its_notes_media_and_sections() {
+    use rpptx::Section;
+    let intro = "{AAAAAAAA-0000-4000-8000-000000000001}";
+    let body = "{AAAAAAAA-0000-4000-8000-000000000002}";
+    let mut source = merge_deck(&["B1", "B2", "B3"]);
+    let ids = (0..3)
+        .map(|index| source.slide(index).unwrap().id())
+        .collect::<Vec<_>>();
+    source
+        .set_sections(vec![
+            Section::new(intro, "Intro", vec![ids[0]]).unwrap(),
+            Section::new(body, "Body", vec![ids[1], ids[2]]).unwrap(),
+        ])
+        .unwrap();
+    let mut merged = merge_deck(&["A1", "A2"]);
+    let keep_sections = SlideImportOptions {
+        keep_sections: true,
+        ..SlideImportOptions::default()
+    };
+
+    let import = merged
+        .import_slides(&source, &[0, 1, 2], &keep_sections)
+        .unwrap();
+
+    assert_eq!(import.indexes, [2, 3, 4]);
+    assert!(import.diagnostics.is_empty());
+    let texts = |deck: &Presentation| {
+        (0..deck.len())
+            .map(|index| deck.slide(index).unwrap().text())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(texts(&merged), ["A1", "A2", "B1", "B2", "B3"]);
+    for (index, text) in texts(&merged).iter().enumerate() {
+        assert_eq!(
+            merged.slide(index).unwrap().notes_text().as_deref(),
+            Some(format!("Notes {text}").as_str())
+        );
+    }
+    let package = saved_valid_package(&merged, "merged decks");
+    let media = package
+        .parts
+        .keys()
+        .filter(|part| part.starts_with("/ppt/media/"))
+        .collect::<Vec<_>>();
+    assert_eq!(media.len(), 1, "every slide shares one picture: {media:?}");
+    let sections = merged.sections();
+    let slide_ids = (0..merged.len())
+        .map(|index| merged.slide(index).unwrap().id())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        sections
+            .iter()
+            .map(|section| (section.name.as_deref().unwrap(), section.slide_ids.clone()))
+            .collect::<Vec<_>>(),
+        [
+            ("Default Section", slide_ids[..2].to_vec()),
+            ("Intro", slide_ids[2..3].to_vec()),
+            ("Body", slide_ids[3..].to_vec()),
+        ]
+    );
+    assert_eq!(sections[1].id.as_deref(), Some(intro));
+
+    // Inside a section the kept sections would split it, so nothing changes.
+    let before = merged.to_bytes().unwrap();
+    let error = merged
+        .import_slides(
+            &source,
+            &[0],
+            &SlideImportOptions {
+                insert_index: Some(4),
+                ..keep_sections.clone()
+            },
+        )
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("cannot split the section \"Body\""),
+        "{error}"
+    );
+    assert_eq!(merged.to_bytes().unwrap(), before);
+
+    // At a section boundary a picked slide gets its own section, under a
+    // fresh id since the destination already uses its source id.
+    merged
+        .import_slides(
+            &source,
+            &[0],
+            &SlideImportOptions {
+                insert_index: Some(3),
+                ..keep_sections.clone()
+            },
+        )
+        .unwrap();
+    assert_eq!(texts(&merged), ["A1", "A2", "B1", "B1", "B2", "B3"]);
+    let names = merged
+        .sections()
+        .iter()
+        .map(|section| section.name.clone().unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["Default Section", "Intro", "Intro", "Body"]);
+    assert_ne!(merged.sections()[2].id.as_deref(), Some(intro));
+    saved_valid_package(&merged, "merged at a section boundary");
+
+    // Without the option, the sections of the source are not copied.
+    let mut plain = merge_deck(&["A1"]);
+    plain
+        .import_slides(&source, &[2, 0], &SlideImportOptions::default())
+        .unwrap();
+    assert_eq!(texts(&plain), ["A1", "B3", "B1"]);
+    assert!(plain.sections().is_empty());
+}
+
 fn png_header(width: u32, height: u32) -> Vec<u8> {
     let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
     bytes.extend_from_slice(&width.to_be_bytes());

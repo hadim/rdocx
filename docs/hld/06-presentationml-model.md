@@ -352,6 +352,19 @@ another producer or with other relationship ids is copied, never merged. A
 layout or master may relate to images, tags and legacy drawings, a master to
 its theme, and any other internal relationship is refused.
 
+`import_slides` with every index merges presentations in one staged commit, so
+jumps between the merged slides survive. `options.keep_sections` keeps the
+source sections of the copies. Each run of consecutive copies whose source
+slides share a section becomes one destination section with the source name,
+and the source section id unless the destination already uses it, in which
+case a fresh sequential GUID replaces it. Copies outside every source section
+form an "Untitled Section". The new sections are spliced into the destination
+section list at the insertion point, which must lie at a section boundary. A
+destination without sections first gets its existing slides in a "Default
+Section", as PowerPoint names it, and accepts the copies only at its start or
+end, so that every slide keeps exactly one section. Without the option, as
+for every other slide insertion, the copies join no section.
+
 Duplication, transfer and import rewrite each copied notes or diagram part
 with one exact pass over its complete relationship map, including the
 collapsed notes back-relationship. A second
