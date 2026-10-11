@@ -2165,8 +2165,8 @@ requirements discussions264 and281.
 
 **Current delivery checkpoint**: eight of twenty-one active stories are
 completed and integrated, F-X193, F-X194, F-X195, F-X196, F-X197, F-X198,
-F-X199 and F-X212. F-X200, F-X206, F-X210 and F-X213 are in progress.
-Nine stories have approved designs and await implementation. F-X192 and
+F-X199 and F-X212. F-X200, F-X206, F-X207, F-X210 and F-X213 are in progress.
+Eight stories have approved designs and await implementation. F-X192 and
 F-283 move to S92, with their contracts, dirty worker work, reviews and
 required evidence retained. Their completion is no longer required to close
 S91. F-X195 completed its scoped provider gates and dependency checkpoint.
@@ -2194,7 +2194,7 @@ to `9fd0b8da374b8c641e7ab89c0bd3d76bd2f4519a`. Its updated contribution
 remains assigned to F-X203. Its immutable update has been assessed against
 the existing approved contract, with remaining acceptance controls retained.
 All twenty-eight included issues and twenty-two PRs match this resolution map.
-The 2026-10-11 16:19 UTC refresh found no additions or changed PR heads.
+The 2026-10-11 17:06 UTC refresh found no additions or changed PR heads.
 
 | Included issues | Included PRs | S91 acceptance owners | Resolution work |
 |---|---|---|---|
