@@ -2262,6 +2262,11 @@ impl Document {
                 edits.append(&mut merged);
                 continue;
             }
+            if span.begin_paragraph == span.end_paragraph {
+                return Err(Error::Other(
+                    "table of contents result must span paragraph boundaries".to_owned(),
+                ));
+            }
             edits.push(FieldSourceEdit {
                 start: span.result_start,
                 end: span.result_end,
@@ -7108,11 +7113,6 @@ fn update_dynamic_field_stack(
             let separator_paragraph = field.separator_paragraph.ok_or_else(|| {
                 Error::Other("table of contents field is missing its separator".to_owned())
             })?;
-            if separator_paragraph == paragraph && generated == DynamicOwnerPolicy::Toc {
-                return Err(Error::Other(
-                    "table of contents result must span paragraph boundaries".to_owned(),
-                ));
-            }
             if separator_paragraph != field.begin_paragraph {
                 return Err(Error::Other(
                     "table of contents instruction crosses a paragraph boundary".to_owned(),
@@ -9147,21 +9147,21 @@ fn dynamic_toc_replacement(
 /// the last one when the source TOC already wrote them that way.
 ///
 /// Word and Google Docs put the field begin in the first entry paragraph and
-/// the end in the last one. The generic replacement would leave both markers
-/// in empty paragraphs of their own. Here the first entry takes over the
-/// begin paragraph and the last entry takes over the end paragraph. Both
-/// keep their opening tag, so identity attributes survive, and take the
-/// generated paragraph properties, so a plain paragraph-mark format is
-/// replaced.
+/// the end in the last one, the same paragraph for a single entry. The
+/// generic replacement would leave both markers in empty paragraphs of their
+/// own. Here the first entry takes over the begin paragraph and the last
+/// entry takes over the end paragraph, so one generated entry holds both
+/// markers. Both paragraphs keep their opening tag, so identity attributes
+/// survive, and take the generated paragraph properties, so a plain
+/// paragraph-mark format is replaced.
 ///
 /// A boundary paragraph counts as an entry when it has a TOC entry style of
 /// any level and a run in the field result. One whose properties end a
 /// section, number the paragraph or track a revision keeps the generic
-/// layout, and so does an end paragraph with a run after the end marker. A
-/// single generated entry takes over the begin paragraph only, so the result
-/// still spans two paragraphs, and an old entry left holding the end marker
-/// alone loses its entry style. An empty rebuild keeps the generic layout.
-/// `None` means the generic replacement applies.
+/// layout, and so does an end paragraph with a run after the end marker. An
+/// empty rebuild keeps the generic layout, except that a single paragraph
+/// keeps both markers and loses its entry style, and that paragraph can be
+/// rebuilt again. `None` means the generic replacement applies.
 fn entry_boundary_toc_edits(
     xml: &[u8],
     span: &DynamicTocSpan,
@@ -9177,10 +9177,10 @@ fn entry_boundary_toc_edits(
         || !span.separator_wrapper_names.is_empty()
         || !span.end_wrapper_prefixes.is_empty()
         || !end_boundary_bookmark_starts.is_empty()
-        || span.begin_paragraph == span.end_paragraph
     {
         return None;
     }
+    let single = span.begin_paragraph == span.end_paragraph;
     let begin = paragraphs.get(span.begin_paragraph)?;
     let end = paragraphs.get(span.end_paragraph)?;
     // Generated entries escape their text, so `</w:p>` only closes an entry.
@@ -9191,7 +9191,7 @@ fn entry_boundary_toc_edits(
         entries.push(&generated[entry_start..entry_end]);
         entry_start = entry_end;
     }
-    if entry_start != generated.len() || entries.is_empty() {
+    if entry_start != generated.len() || (entries.is_empty() && !single) {
         return None;
     }
     // The entry style of an old entry whose properties can be replaced.
@@ -9204,22 +9204,78 @@ fn entry_boundary_toc_edits(
             .then_some(style.1)
     };
     let end_tag = xml.get(span.end_paragraph_start..end.start_tag_end)?;
-    let end_properties = xml.get(end.start_tag_end..end.content_start)?;
+    let begin_properties = xml.get(begin.start_tag_end..begin.content_start)?;
+    let after_end_has_run = toc_fragment_scan(xml.get(span.end_run_end..end.content_end)?).has_run;
+    if single {
+        // An old entry, or a paragraph an empty rebuild left with the
+        // markers alone.
+        let result = xml.get(span.result_start..span.result_end)?;
+        let style = if toc_fragment_scan(result).has_run {
+            Some(entry_style(begin_properties, result)?)
+        } else {
+            let scan = toc_fragment_scan(begin_properties);
+            if scan.blocks_replacement {
+                return None;
+            }
+            scan.style.map(|style| style.1)
+        };
+        if begin.content_start != span.begin_run_start || after_end_has_run {
+            return None;
+        }
+        let Some((first, rest)) = entries.split_first() else {
+            // Nothing to list: both markers stay, without the entry style.
+            let style = style.unwrap_or_default();
+            let mut properties = begin_properties[..style.start].to_vec();
+            properties.extend_from_slice(&begin_properties[style.end..]);
+            return Some(vec![
+                FieldSourceEdit {
+                    start: begin.start_tag_end,
+                    end: begin.content_start,
+                    replacement: properties,
+                },
+                FieldSourceEdit {
+                    start: span.result_start,
+                    end: span.result_end,
+                    replacement: Vec::new(),
+                },
+            ]);
+        };
+        let properties_end = find_bytes(first, PROPERTIES_END)? + PROPERTIES_END.len();
+        let mut replacement = Vec::new();
+        if let Some((last, middle)) = rest.split_last() {
+            replacement.extend_from_slice(&first[properties_end..]);
+            for entry in middle {
+                replacement.extend_from_slice(entry);
+            }
+            replacement.extend_from_slice(&last[..last.len() - PARAGRAPH_END.len()]);
+        } else {
+            replacement
+                .extend_from_slice(&first[properties_end..first.len() - PARAGRAPH_END.len()]);
+        }
+        return Some(vec![
+            FieldSourceEdit {
+                start: begin.start_tag_end,
+                end: begin.content_start,
+                replacement: first[PARAGRAPH_START.len()..properties_end].to_vec(),
+            },
+            FieldSourceEdit {
+                start: span.result_start,
+                end: span.result_end,
+                replacement,
+            },
+        ]);
+    }
     let merge_begin = begin.content_start == span.begin_run_start
         && entry_style(
-            xml.get(begin.start_tag_end..begin.content_start)?,
+            begin_properties,
             xml.get(span.result_start..begin.content_end)?,
         )
         .is_some();
-    let end_entry_style = if (end_tag.starts_with(b"<w:p>") || end_tag.starts_with(b"<w:p "))
-        && !toc_fragment_scan(xml.get(span.end_run_end..end.content_end)?).has_run
-    {
-        entry_style(end_properties, xml.get(end.content_start..span.result_end)?)
-    } else {
-        None
-    };
-    let merge_end = end_entry_style.is_some() && (entries.len() > 1 || !merge_begin);
-    if !merge_begin && end_entry_style.is_none() {
+    let end_properties = xml.get(end.start_tag_end..end.content_start)?;
+    let merge_end = (end_tag.starts_with(b"<w:p>") || end_tag.starts_with(b"<w:p "))
+        && !after_end_has_run
+        && entry_style(end_properties, xml.get(end.content_start..span.result_end)?).is_some();
+    if !merge_begin && !merge_end {
         return None;
     }
     let mut edits = Vec::new();
@@ -9240,6 +9296,8 @@ fn entry_boundary_toc_edits(
         }
         let mut entry_end = entry.len();
         if index == last && merge_end {
+            // A single entry that took over the begin paragraph also
+            // takes the end marker, and the end paragraph goes.
             entry_end -= PARAGRAPH_END.len();
             if entry_start == 0 {
                 replacement.extend_from_slice(end_tag);
@@ -9249,16 +9307,8 @@ fn entry_boundary_toc_edits(
         replacement.extend_from_slice(&entry[entry_start..entry_end]);
     }
     if !merge_end {
-        // The end marker keeps a paragraph of its own, without the entry
-        // style it had, as in the layout the generic replacement keeps.
         replacement.extend_from_slice(end_tag);
-        match end_entry_style {
-            Some(style) => {
-                replacement.extend_from_slice(&end_properties[..style.start]);
-                replacement.extend_from_slice(&end_properties[style.end..]);
-            }
-            None => replacement.extend_from_slice(end_properties),
-        }
+        replacement.extend_from_slice(end_properties);
     }
     edits.push(FieldSourceEdit {
         start: span.result_start,

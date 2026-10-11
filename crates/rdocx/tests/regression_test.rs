@@ -12564,25 +12564,77 @@ fn toc_rebuild_moves_entry_boundary_markers_to_the_new_first_and_last_entries() 
 }
 
 #[test]
-fn toc_rebuild_of_entry_boundary_markers_keeps_a_result_paragraph_boundary() {
-    // One heading cannot hold both markers: the result must still span two
-    // paragraphs, so the end keeps a paragraph of its own, without the entry
-    // style it had.
+fn toc_rebuild_puts_both_markers_in_a_single_entry() {
+    // Word writes a one-entry TOC as one paragraph holding the begin, the
+    // entry and the end. Rebuilding two old entries into one does the same.
     let body = entry_boundary_toc_body(&["Old one", "Old two"], &["Only"]);
     let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
     for _ in 0..2 {
         assert_eq!(document.rebuild_toc().unwrap().entry_count, 1);
         let xml = document_xml(&mut document);
+        assert_eq!(body_paragraph_xml(&xml).len(), 2, "{xml}");
         let toc = toc_paragraph_xml(&xml);
-        assert_eq!(body_paragraph_xml(&xml).len(), 3, "{xml}");
         assert_eq!(toc.len(), 1, "{xml}");
         assert!(toc[0].contains(r#"w:fldCharType="begin""#), "{xml}");
         assert!(toc[0].contains("Only"), "{xml}");
-        let end = body_paragraph_xml(&xml)[1];
-        assert!(end.contains(r#"w:fldCharType="end""#), "{xml}");
-        assert!(!end.contains("<w:pStyle"), "{xml}");
+        assert!(toc[0].contains(r#"w:fldCharType="end""#), "{xml}");
+        assert!(!xml.contains("Old"), "{xml}");
+    }
+}
+
+#[test]
+fn toc_rebuild_accepts_a_single_paragraph_toc() {
+    for headings in [&["Only"][..], &["Alpha", "Beta", "Gamma"][..]] {
+        let body = entry_boundary_toc_body(&["Old entry"], headings);
+        let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+        for _ in 0..2 {
+            assert_eq!(document.rebuild_toc().unwrap().entry_count, headings.len());
+            let xml = document_xml(&mut document);
+            assert!(!xml.contains("Old entry"), "{xml}");
+            assert_eq!(body_paragraph_xml(&xml).len(), 2 * headings.len(), "{xml}");
+            let toc = toc_paragraph_xml(&xml);
+            assert_eq!(toc.len(), headings.len(), "{xml}");
+            assert!(toc[0].contains(r#"w:fldCharType="begin""#), "{xml}");
+            assert!(
+                toc[toc.len() - 1].contains(r#"w:fldCharType="end""#),
+                "{xml}"
+            );
+            for (entry, heading) in toc_entry_signatures(&xml).iter().zip(headings) {
+                assert_eq!(entry.0, format!("{heading}\t1"), "{xml}");
+            }
+        }
     }
 
+    // No heading keeps both markers in the paragraph, without the entry
+    // style, and the emptied TOC can be rebuilt again.
+    let body = entry_boundary_toc_body(&["Old entry"], &[]);
+    let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+    for _ in 0..2 {
+        assert_eq!(document.rebuild_toc().unwrap().entry_count, 0);
+        let xml = document_xml(&mut document);
+        let paragraphs = body_paragraph_xml(&xml);
+        assert_eq!(paragraphs.len(), 1, "{xml}");
+        assert!(paragraphs[0].contains(r#"w:fldCharType="begin""#), "{xml}");
+        assert!(paragraphs[0].contains(r#"w:fldCharType="end""#), "{xml}");
+        assert!(!paragraphs[0].contains("<w:pStyle"), "{xml}");
+        assert!(!xml.contains("Old entry"), "{xml}");
+    }
+
+    // A single paragraph that is no entry is still refused.
+    let body = r#"
+        <w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>TOC \o "1-1"</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>No table of contents entries found.</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Heading</w:t></w:r></w:p>
+    "#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+    let error = document.rebuild_toc().unwrap_err();
+    assert!(
+        error.to_string().contains("must span paragraph boundaries"),
+        "{error}"
+    );
+}
+
+#[test]
+fn toc_rebuild_of_entry_boundary_markers_keeps_an_empty_rebuild_generic() {
     // No heading keeps the begin and end paragraphs, emptied of entries.
     let body = entry_boundary_toc_body(&["Old one", "Old two", "Old three"], &[]);
     let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
