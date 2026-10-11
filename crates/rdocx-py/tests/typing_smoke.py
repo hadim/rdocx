@@ -54,6 +54,28 @@ from rdocx import (
 )
 
 
+def exercise_rdocx_chart_types(document: Document, after: StoryItem) -> None:
+    from rdocx._rdocx import Chart, ChartSeries
+    from rdocx.chart.data import CategoryChartData, CategorySeriesData, XyChartData, XySeriesData
+    from rdocx.enum.chart import XL_CHART_TYPE
+
+    data = CategoryChartData(number_format="0.0")
+    data.categories = ["North", "South"]
+    added: CategorySeriesData = data.add_series("Revenue", (1.5, 2), number_format=None)
+    xy_data = XyChartData()
+    xy_series: XySeriesData = xy_data.add_series("Up")
+    xy_series.add_data_point(1, 2.5)
+    item: StoryItem = document.add_chart(XL_CHART_TYPE.LINE_MARKERS, Inches(4), Inches(3), data)
+    document.add_chart(XL_CHART_TYPE.XY_SCATTER_LINES, Inches(4), Inches(3), xy_data, after=after)
+    charts: tuple[Chart, ...] = document.charts
+    assert_type(charts[0].chart_type, XL_CHART_TYPE | None)
+    assert_type(charts[0].categories, tuple[str, ...])
+    series: tuple[ChartSeries, ...] = charts[0].series
+    assert_type(series[0].name, str)
+    assert_type(series[0].values, tuple[float | None, ...])
+    (added, item)
+
+
 def exercise_rdocx_types(path: Path) -> None:
     document = Document(path)
     # Comment-aware removal keeps the existing bool surface.

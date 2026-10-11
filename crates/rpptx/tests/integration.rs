@@ -14012,6 +14012,260 @@ fn add_chart_caches_and_workbook_share_one_source() {
 }
 
 #[test]
+fn authored_chart_reads_back_its_kind_and_data_after_reopen() {
+    let bytes = presentation_with_authored_chart().to_bytes().unwrap();
+    let presentation = Presentation::from_bytes(&bytes).unwrap();
+    let chart_index = presentation.slide(0).unwrap().shapes().len() - 1;
+    assert_eq!(
+        presentation.chart(0, &[chart_index]).unwrap(),
+        (Some(ChartKind::Bar), f124_chart_data())
+    );
+    for not_a_chart in [&[][..], &[0], &[chart_index + 1]] {
+        assert!(presentation.chart(0, not_a_chart).is_err());
+    }
+    assert!(matches!(
+        presentation.chart(1, &[chart_index]),
+        Err(rpptx::Error::UnknownSlideIndex { index: 1, .. })
+    ));
+}
+
+fn replacement_chart_data(series: usize, categories: usize) -> ChartData {
+    ChartData {
+        categories: (0..categories)
+            .map(|index| format!("Week {}", index + 1))
+            .collect(),
+        series: (0..series)
+            .map(|item| {
+                (
+                    format!("Region {item}"),
+                    (0..categories)
+                        .map(|index| (item * 100 + index) as f64 + 0.25)
+                        .collect(),
+                )
+            })
+            .collect(),
+        ..ChartData::default()
+    }
+}
+
+/// Returns the series of the single chart part of a deck and the part name of
+/// the workbook its `c:externalData` references.
+fn chart_series_and_workbook(package: &OpcPackage) -> (Vec<oxml_chart::Series>, String) {
+    let chart_part = package
+        .parts
+        .keys()
+        .find(|part| part.starts_with("/ppt/charts/chart"))
+        .unwrap()
+        .clone();
+    let series = CT_ChartSpace::from_xml(package.get_part(&chart_part).unwrap())
+        .unwrap()
+        .chart
+        .plot_area
+        .series()
+        .unwrap();
+    let workbook_id =
+        oxml_chart::chart_workbook_relationship_id(package.get_part(&chart_part).unwrap())
+            .unwrap()
+            .unwrap();
+    let relationship = package
+        .get_part_rels(&chart_part)
+        .unwrap()
+        .get_by_id(&workbook_id)
+        .unwrap();
+    assert_eq!(relationship.rel_type, rel_types::PACKAGE);
+    let workbook_part = OpcPackage::resolve_rel_target(&chart_part, &relationship.target);
+    assert_eq!(
+        package.content_types.content_type_for(&workbook_part),
+        Some(content_types::EMBEDDED_WORKBOOK)
+    );
+    (series, workbook_part)
+}
+
+/// Reads the single chart part of a saved deck and checks the cells of its
+/// embedded workbook at the addresses the replacement layout uses.
+fn replaced_chart_parts(bytes: &[u8], data: &ChartData) -> (Vec<oxml_chart::Series>, String) {
+    let package = open_opc(bytes, "replaced chart");
+    let (series, workbook_part) = chart_series_and_workbook(&package);
+    let workbook =
+        OpcPackage::from_reader(Cursor::new(package.get_part(&workbook_part).unwrap())).unwrap();
+    let worksheet = String::from_utf8(
+        workbook
+            .get_part("/xl/worksheets/sheet1.xml")
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap();
+    let shared_strings = shared_string_values(
+        std::str::from_utf8(workbook.get_part("/xl/sharedStrings.xml").unwrap()).unwrap(),
+    );
+    let cell = |address: String| {
+        let (shared, value) = worksheet_cell(&worksheet, &address);
+        if shared {
+            shared_strings[value.parse::<usize>().unwrap()].clone()
+        } else {
+            value.to_owned()
+        }
+    };
+    let column = |index: usize| ((b'A' + index as u8) as char).to_string();
+    assert_eq!(cell("A1".to_owned()), "Category");
+    for (row, label) in data.categories.iter().enumerate() {
+        assert_eq!(&cell(format!("A{}", row + 2)), label);
+    }
+    for (index, (name, values)) in data.series.iter().enumerate() {
+        assert_eq!(&cell(format!("{}1", column(index + 1))), name);
+        for (row, value) in values.iter().enumerate() {
+            assert_eq!(
+                cell(format!("{}{}", column(index + 1), row + 2)),
+                value.to_string()
+            );
+        }
+    }
+    (series, workbook_part)
+}
+
+#[test]
+fn replace_chart_data_rewrites_corpus_and_authored_charts_and_their_workbooks() {
+    let corpus_deck = corpus_dir().join("chart-slide-bg.pptx");
+    let mut decks = vec![(
+        "authored",
+        presentation_with_authored_chart().to_bytes().unwrap(),
+    )];
+    if corpus_deck.is_file() {
+        decks.push(("chart-slide-bg", fs::read(&corpus_deck).unwrap()));
+    } else {
+        assert!(
+            std::env::var_os("RDOCX_PPTX_CORPUS_REQUIRED").is_none(),
+            "required chart corpus deck is missing: {}",
+            corpus_deck.display()
+        );
+    }
+    for (deck, source) in decks {
+        let original = Presentation::from_bytes(&source).unwrap();
+        let chart_index = original
+            .slide(0)
+            .unwrap()
+            .shapes()
+            .position(|shape| shape.shape_type() == Some(rpptx::ShapeType::Chart))
+            .unwrap();
+        let (kind, before) = original.chart(0, &[chart_index]).unwrap();
+        let issues_before = original.validate().len();
+        let (original_series, original_workbook) =
+            chart_series_and_workbook(&open_opc(&source, deck));
+        let count = before.series.len();
+        for (series, categories) in [
+            (1, before.categories.len()),
+            (count + 2, before.categories.len()),
+            (count, before.categories.len() + 3),
+        ] {
+            let data = replacement_chart_data(series, categories);
+            let mut presentation = Presentation::from_bytes(&source).unwrap();
+            presentation
+                .replace_chart_data(0, &[chart_index], &data)
+                .unwrap();
+            let bytes = presentation.to_bytes().unwrap();
+            let reopened = Presentation::from_bytes(&bytes).unwrap();
+            assert_eq!(
+                reopened.chart(0, &[chart_index]).unwrap(),
+                (
+                    kind,
+                    ChartData {
+                        number_format: before.number_format.clone(),
+                        ..data.clone()
+                    }
+                ),
+                "{deck}: {series} series, {categories} categories, kept number format"
+            );
+            assert_eq!(reopened.validate().len(), issues_before, "{deck}");
+            let (written, workbook_part) = replaced_chart_parts(&bytes, &data);
+            assert_eq!(
+                workbook_part, original_workbook,
+                "{deck}: workbook rewritten in place"
+            );
+            for (position, item) in written.iter().enumerate() {
+                let column = (b'B' + position as u8) as char;
+                assert_eq!(
+                    item.values.formula,
+                    format!("Sheet1!${column}$2:${column}${}", categories + 1)
+                );
+                assert_eq!(
+                    item.name.as_ref().unwrap().formula,
+                    format!("Sheet1!${column}$1")
+                );
+                let template = original_series
+                    .get(position)
+                    .unwrap_or(original_series.last().unwrap());
+                if position < original_series.len() {
+                    assert_eq!(
+                        item.sp_pr, template.sp_pr,
+                        "{deck}: series {position} keeps its formatting"
+                    );
+                    assert_eq!((item.index, item.order), (template.index, template.order));
+                } else {
+                    assert_eq!(item.index, written[position - 1].index + 1);
+                    if template.sp_pr.is_some() {
+                        assert_ne!(
+                            item.sp_pr, template.sp_pr,
+                            "{deck}: added series {position} takes a new colour"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn replace_chart_data_embeds_a_new_workbook_for_a_linked_one() {
+    let bytes = presentation_with_authored_chart().to_bytes().unwrap();
+    let mut package = open_opc(&bytes, "linked chart workbook");
+    let chart_part = package
+        .parts
+        .keys()
+        .find(|part| part.starts_with("/ppt/charts/chart"))
+        .unwrap()
+        .clone();
+    let relationships = package.get_part_rels_mut(&chart_part).unwrap();
+    let embedded = relationships.items[0].target.clone();
+    let linked = relationships.items[0].id.clone();
+    relationships.items[0].target = "file:///C:/Data/Book1.xlsx".to_owned();
+    relationships.items[0].target_mode = Some("External".to_owned());
+    let mut linked_bytes = Cursor::new(Vec::new());
+    package.write_to(&mut linked_bytes).unwrap();
+    let linked_bytes = linked_bytes.into_inner();
+
+    let mut presentation = Presentation::from_bytes(&linked_bytes).unwrap();
+    let chart_index = presentation.slide(0).unwrap().shapes().len() - 1;
+    let data = replacement_chart_data(3, 2);
+    let unchanged = presentation.to_bytes().unwrap();
+    assert!(
+        presentation
+            .replace_chart_data(0, &[chart_index], &replacement_chart_data(0, 2))
+            .is_err()
+    );
+    assert!(presentation.replace_chart_data(0, &[0], &data).is_err());
+    assert_eq!(presentation.to_bytes().unwrap(), unchanged);
+    presentation
+        .replace_chart_data(0, &[chart_index], &data)
+        .unwrap();
+    let saved = presentation.to_bytes().unwrap();
+    let (_, workbook_part) = replaced_chart_parts(&saved, &data);
+    let reopened = open_opc(&saved, "relinked chart workbook");
+    let relationships = reopened.get_part_rels(&chart_part).unwrap();
+    assert!(relationships.get_by_id(&linked).is_none());
+    assert_eq!(relationships.items.len(), 1);
+    assert_ne!(
+        workbook_part,
+        OpcPackage::resolve_rel_target(&chart_part, &embedded)
+    );
+    assert!(
+        Presentation::from_bytes(&saved)
+            .unwrap()
+            .validate()
+            .is_empty()
+    );
+}
+
+#[test]
 fn add_chart_rejects_invalid_data_without_mutation() {
     let invalid = [
         ChartData {

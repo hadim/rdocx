@@ -10,6 +10,8 @@ from typing import (
     overload as _overload,
 )
 
+from .chart.data import CategoryChartData as _CategoryChartData, XyChartData as _XyChartData
+from .enum.chart import XL_CHART_TYPE as _XL_CHART_TYPE
 from .dml.color import RGBColor as _RGBColor
 from .enum.dml import (
     MSO_ARROWHEAD_LENGTH as _MSO_ARROWHEAD_LENGTH,
@@ -712,6 +714,10 @@ class Shape:
     def crop_bottom(self, value: float) -> None: ...
     def replace_image(self, image_file: _ImageFile) -> None: ...
     @property
+    def has_chart(self) -> bool: ...
+    @property
+    def chart(self) -> Chart: ...
+    @property
     def shapes(self) -> ShapeCollection: ...
     @property
     def text(self) -> str: ...
@@ -964,6 +970,15 @@ class ShapeCollection:
     def add_textbox(self, left: int, top: int, width: int, height: int) -> Shape: ...
     def add_shape(
         self, shape_type: _MSO_SHAPE | str, left: int, top: int, width: int, height: int
+    ) -> Shape: ...
+    def add_chart(
+        self,
+        chart_type: _XL_CHART_TYPE,
+        left: int,
+        top: int,
+        width: int,
+        height: int,
+        chart_data: _CategoryChartData | _XyChartData,
     ) -> Shape: ...
     def add_connector(
         self,
@@ -1592,3 +1607,27 @@ class Cell:
     def border_top(self) -> LineFormat: ...
     @property
     def border_bottom(self) -> LineFormat: ...
+
+
+__all__ += ["Chart", "ChartSeries"]
+
+
+@_final
+class Chart:
+    def __new__(cls, *, _private: _Never) -> Chart: ...
+    @property
+    def chart_type(self) -> _XL_CHART_TYPE | None: ...
+    @property
+    def categories(self) -> tuple[str, ...]: ...
+    @property
+    def series(self) -> tuple[ChartSeries, ...]: ...
+    def replace_data(self, chart_data: _CategoryChartData | _XyChartData) -> None: ...
+
+
+@_final
+class ChartSeries:
+    def __new__(cls, *, _private: _Never) -> ChartSeries: ...
+    @property
+    def name(self) -> str: ...
+    @property
+    def values(self) -> tuple[float | None, ...]: ...

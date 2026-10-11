@@ -288,6 +288,619 @@ pub fn authored_chart_parts(
     Ok((chart_xml, workbook_bytes))
 }
 
+/// Reads the chart family and cached data of one ChartML part.
+///
+/// The kind is `None` unless the part holds one plot of a shape that
+/// [`authored_chart_parts`] writes, so another bar direction or grouping, a
+/// stacked line or area, a 3-D or a combination chart reads as `None` and
+/// still reads its data. The data holds the categories of the first series,
+/// every series with its name and cached values, and the number format of the
+/// first series when it is not `General`. Literal names and categories, and
+/// the leaf level of multi-level categories, are read too. A cache spreads
+/// over its declared point count: a missing value reads as NaN and a missing
+/// label as an empty string, and an omitted cache reads as no points. Axis
+/// titles and the palette are not read.
+pub fn read_chart_data(chart_xml: &[u8]) -> Result<(Option<ChartKind>, ChartData)> {
+    let chart_space = CT_ChartSpace::from_xml(chart_xml)?;
+    let plot_area = &chart_space.chart.plot_area;
+    let kind = match plot_area.plots() {
+        Ok([plot]) => match plot {
+            Plot::Bar {
+                direction: BarDirection::Column,
+                grouping: BarGrouping::Clustered,
+                ..
+            } => Some(ChartKind::Bar),
+            Plot::Line {
+                grouping: Grouping::Standard,
+                ..
+            } => Some(ChartKind::Line),
+            Plot::Pie { .. } => Some(ChartKind::Pie),
+            Plot::Doughnut { .. } => Some(ChartKind::Doughnut),
+            Plot::Area {
+                grouping: Grouping::Standard,
+                ..
+            } => Some(ChartKind::Area),
+            Plot::Scatter {
+                style: ScatterStyle::LineMarker,
+                ..
+            } => Some(ChartKind::Scatter),
+            Plot::Radar {
+                style: RadarStyle::Standard,
+                ..
+            } => Some(ChartKind::Radar),
+            _ => None,
+        },
+        _ => None,
+    };
+    let series = plot_area.series()?;
+    let categories = match series.first() {
+        Some(first) => series_category_labels(first)?,
+        None => Vec::new(),
+    };
+    let number_format = series
+        .first()
+        .map(|first| first.values.format_code.clone())
+        .filter(|format| format != "General");
+    let series = series
+        .iter()
+        .map(|item| {
+            Ok((
+                series_name_label(item)?,
+                dense_points(&item.values.markup, &item.values.values, f64::NAN)?,
+            ))
+        })
+        .collect::<Result<_>>()?;
+    Ok((
+        kind,
+        ChartData {
+            categories,
+            series,
+            number_format,
+            ..ChartData::default()
+        },
+    ))
+}
+
+/// Returns the relationship id of the `c:externalData` workbook reference of
+/// one ChartML part, or `None` when the part has none.
+pub fn chart_workbook_relationship_id(chart_xml: &[u8]) -> Result<Option<String>> {
+    let chart_space = CT_ChartSpace::from_xml(chart_xml)?;
+    for raw in chart_space.raw_children.at(10) {
+        if raw_chart_local(raw, &chart_space.namespace_declarations)?.as_deref()
+            != Some(b"externalData")
+        {
+            continue;
+        }
+        let mut reader = Reader::from_reader(raw);
+        let mut buffer = Vec::new();
+        loop {
+            match reader
+                .read_event_into(&mut buffer)
+                .map_err(OxmlError::from)?
+            {
+                Event::Start(element) | Event::Empty(element) => {
+                    return capture_attributes(&element)?
+                        .into_iter()
+                        .find_map(|(key, value)| {
+                            (key.contains(':') && local_name(key.as_bytes()) == b"id")
+                                .then_some(Some(value))
+                        })
+                        .ok_or_else(|| {
+                            ChartError::MissingElement("c:externalData/@r:id".to_owned())
+                        });
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+            buffer.clear();
+        }
+    }
+    Ok(None)
+}
+
+/// Replaces the categories and series of one ChartML part and authors the
+/// single-sheet workbook that backs them, laid out as
+/// [`authored_chart_parts`] lays it out.
+///
+/// Series are matched to `data` in document order across every plot. A kept
+/// series keeps its formatting and unmodelled children, and only its name,
+/// categories and values, their caches and their `c:f` formulas change. A
+/// series beyond `data` is removed. A series added for `data` clones the last
+/// series with the next `c:idx` and `c:order`, without its `c:extLst`, and an
+/// explicit solid colour of its line, fill or marker takes the theme accent
+/// PowerPoint gives that index. Number formats of kept series stay unless
+/// `data` sets one. Numeric categories stay numeric when every new label is a
+/// number. With `workbook_relationship_id`, the part's `c:externalData`
+/// points at that relationship, and is added when missing.
+///
+/// A chart without series, or with a bubble plot, cannot be replaced.
+pub fn replace_chart_data(
+    chart_xml: &[u8],
+    data: &ChartData,
+    workbook_relationship_id: Option<&str>,
+) -> Result<(Vec<u8>, Vec<u8>)> {
+    if data.categories.is_empty() {
+        return Err(invalid_replacement_value(
+            "at least one category is required",
+        ));
+    }
+    if data.series.is_empty() {
+        return Err(invalid_replacement_value("at least one series is required"));
+    }
+    for (name, values) in &data.series {
+        if values.len() != data.categories.len() {
+            return Err(invalid_replacement_value(format!(
+                "series {name:?} has {} values for {} categories",
+                values.len(),
+                data.categories.len()
+            )));
+        }
+        if values.iter().any(|value| !value.is_finite()) {
+            return Err(invalid_replacement_value(format!(
+                "series {name:?} contains a nonfinite value"
+            )));
+        }
+    }
+    if let Some(format) = &data.number_format {
+        NumericData::new("Sheet1!$A$2".to_owned(), format.clone(), vec![0.0])?;
+    }
+
+    let mut chart_space = CT_ChartSpace::from_xml(chart_xml)?;
+    let plot_area = &mut chart_space.chart.plot_area;
+    if plot_area.plots.is_none() {
+        for raw in plot_area.raw_children.at(0) {
+            if let Some(local) = chart_root_local(raw, &plot_area.namespace_bindings)?
+                && is_plot_container(&local)
+                && !is_supported_series_plot(&local)
+            {
+                return Err(invalid_replacement_value(format!(
+                    "the data of a c:{} plot cannot be replaced",
+                    String::from_utf8_lossy(&local)
+                )));
+            }
+        }
+    }
+    let current = plot_area.series()?;
+    let Some(last) = current.last() else {
+        return Err(invalid_replacement_value(
+            "a chart without series cannot take new data",
+        ));
+    };
+    let numeric_categories = if current[0].uses_scatter_wrappers
+        || matches!(current[0].categories, Some(AxisData::Numeric(_)))
+    {
+        let numbers = data
+            .categories
+            .iter()
+            .map(|label| label.parse::<f64>().ok().filter(|value| value.is_finite()))
+            .collect::<Option<Vec<_>>>();
+        if numbers.is_none() && current[0].uses_scatter_wrappers {
+            return Err(invalid_replacement_value(
+                "every x value of a scatter chart must be a finite number",
+            ));
+        }
+        numbers
+    } else {
+        None
+    };
+    let category_format = match &current[0].categories {
+        Some(AxisData::Numeric(numbers)) if numbers.format_code != "General" => {
+            Some(numbers.format_code.clone())
+        }
+        _ => None,
+    };
+    let series_format = |position: usize| {
+        data.number_format.clone().unwrap_or_else(|| {
+            current
+                .get(position)
+                .unwrap_or(last)
+                .values
+                .format_code
+                .clone()
+        })
+    };
+
+    let category_column = match &numeric_categories {
+        Some(values) => Column::Number {
+            header: "Category".to_owned(),
+            values: values.clone(),
+            number_format: category_format,
+        },
+        None => Column::Text {
+            header: "Category".to_owned(),
+            values: data.categories.clone(),
+        },
+    };
+    let mut columns = Vec::with_capacity(data.series.len() + 1);
+    columns.push(category_column);
+    columns.extend(
+        data.series
+            .iter()
+            .enumerate()
+            .map(|(position, (name, values))| Column::Number {
+                header: name.clone(),
+                values: values.clone(),
+                number_format: Some(series_format(position)).filter(|format| format != "General"),
+            }),
+    );
+    let workbook = Workbook::new("Sheet1", columns).map_err(invalid_replacement_value)?;
+    let category_formula = workbook
+        .formula_range(0)
+        .expect("validated categories produce a formula range");
+
+    let mut next_index = current.iter().map(|item| item.index).max().unwrap_or(0);
+    let mut next_order = current.iter().map(|item| item.order).max().unwrap_or(0);
+    let mut replaced = Vec::with_capacity(data.series.len());
+    for (position, (name, values)) in data.series.iter().enumerate() {
+        let mut series = match current.get(position) {
+            Some(existing) => existing.clone(),
+            None => {
+                next_index = next_index
+                    .checked_add(1)
+                    .ok_or_else(|| invalid_replacement_value("series index overflows c:idx"))?;
+                next_order = next_order
+                    .checked_add(1)
+                    .ok_or_else(|| invalid_replacement_value("series order overflows c:order"))?;
+                cloned_series(last, next_index, next_order)?
+            }
+        };
+        let values_formula = workbook
+            .formula_range(position + 1)
+            .expect("validated series produces a formula range");
+        series.replace_data(
+            format!("Sheet1!${}$1", spreadsheet_column_name(position + 1)),
+            name,
+            &category_formula,
+            &data.categories,
+            numeric_categories.as_deref(),
+            values_formula,
+            values,
+            series_format(position),
+        )?;
+        replaced.push(series);
+    }
+
+    if let Some(plots) = &mut plot_area.plots {
+        match plots.as_mut_slice() {
+            [
+                Plot::Bar { series, .. }
+                | Plot::Line { series, .. }
+                | Plot::Pie { series, .. }
+                | Plot::Doughnut { series, .. }
+                | Plot::Area { series, .. }
+                | Plot::Scatter { series, .. }
+                | Plot::Radar { series, .. },
+            ] => *series = replaced,
+            _ => {
+                return Err(invalid_replacement_value(
+                    "typed plot area requires exactly one plot family",
+                ));
+            }
+        }
+    } else {
+        let existing_count = current.len();
+        let mut replaced = replaced.into_iter();
+        let mut seen = 0usize;
+        let mut children = OrderedRawChildren::default();
+        for raw in plot_area.raw_children.at(0) {
+            let local = chart_root_local(raw, &plot_area.namespace_bindings)?;
+            if !local.as_deref().is_some_and(is_supported_series_plot) {
+                children.push(0, raw.to_vec());
+                continue;
+            }
+            let rewritten =
+                rewrite_raw_children(raw, &plot_area.namespace_bindings, |local, child| {
+                    if local != Some(b"ser") {
+                        return Ok(vec![child]);
+                    }
+                    seen += 1;
+                    let mut written = Vec::new();
+                    if seen == existing_count {
+                        for series in replaced.by_ref() {
+                            written.push(series.to_xml()?);
+                        }
+                    } else if let Some(series) = replaced.next() {
+                        written.push(series.to_xml()?);
+                    }
+                    Ok(written)
+                })?;
+            children.push(0, rewritten);
+        }
+        plot_area.raw_children = children;
+    }
+
+    if let Some(relationship_id) = workbook_relationship_id {
+        let declarations = &chart_space.namespace_declarations;
+        chart_space.raw_children.retain(|raw| {
+            !matches!(raw_chart_local(raw, declarations), Ok(Some(local)) if local == b"externalData")
+        });
+        chart_space.raw_children.push(
+            10,
+            format!(
+                r#"<c:externalData r:id="{}"><c:autoUpdate val="0"/></c:externalData>"#,
+                quick_xml::escape::escape(relationship_id)
+            )
+            .into_bytes(),
+        );
+    }
+    let chart_xml = chart_space.to_xml()?;
+    CT_ChartSpace::from_xml(&chart_xml)?;
+    let workbook_bytes = workbook
+        .to_xlsx_bytes()
+        .map_err(invalid_replacement_value)?;
+    Ok((chart_xml, workbook_bytes))
+}
+
+fn invalid_replacement_value(error: impl fmt::Display) -> ChartError {
+    ChartError::InvalidValue {
+        element: "chart data replacement".to_owned(),
+        value: error.to_string(),
+    }
+}
+
+/// Clones the last series as the template of an added series, as PowerPoint
+/// does, without the extension list that carries its unique id.
+fn cloned_series(last: &Series, index: u32, order: u32) -> Result<Series> {
+    let mut series = last.clone();
+    series.index = index;
+    series.order = order;
+    if let Some(properties) = &mut series.sp_pr {
+        recolour_solid_fills(properties, index);
+    }
+    let bindings = declared_bindings(&series.namespace_declarations);
+    let mut children = OrderedRawChildren::default();
+    for boundary in 0..=8 {
+        for raw in series.raw_children.at(boundary) {
+            let raw = match chart_root_local(raw, &bindings)?.as_deref() {
+                Some(b"extLst") => continue,
+                Some(b"marker") => rewrite_raw_children(raw, &bindings, |local, child| {
+                    if local != Some(b"spPr") {
+                        return Ok(vec![child]);
+                    }
+                    let mut properties = CT_ShapeProperties::from_xml(&child)?;
+                    recolour_solid_fills(&mut properties, index);
+                    let mut writer = Writer::new(Vec::new());
+                    properties.write_xml_as(&mut writer, "c:spPr")?;
+                    Ok(vec![writer.into_inner()])
+                })?,
+                _ => raw.to_vec(),
+            };
+            children.push(boundary, raw);
+        }
+    }
+    series.raw_children = children;
+    Ok(series)
+}
+
+/// Gives an explicit solid line or fill colour the theme accent PowerPoint
+/// assigns to the series index, so a cloned series does not repeat it.
+fn recolour_solid_fills(properties: &mut CT_ShapeProperties, index: u32) {
+    let accent = || ColorChoice::Scheme {
+        value: format!("accent{}", index % 6 + 1),
+        transforms: Vec::new(),
+        raw_children: OrderedRawChildren::default(),
+    };
+    if let Some(Fill::Solid(solid)) = &mut properties.fill
+        && solid.color.is_some()
+    {
+        solid.color = Some(accent());
+    }
+    if let Some(line) = &mut properties.line
+        && let Some(Fill::Solid(solid)) = &mut line.fill
+        && solid.color.is_some()
+    {
+        solid.color = Some(accent());
+    }
+}
+
+/// Rewrites the direct children of one raw element. The start and end tags,
+/// text and comments stay verbatim, and `rewrite` returns the replacement of
+/// each child element from its ChartML local name, `None` outside ChartML,
+/// and its raw XML.
+fn rewrite_raw_children(
+    raw: &[u8],
+    inherited: &NamespaceBindings,
+    mut rewrite: impl FnMut(Option<&[u8]>, Vec<u8>) -> Result<Vec<Vec<u8>>>,
+) -> Result<Vec<u8>> {
+    let mut reader = Reader::from_reader(raw);
+    let mut writer = Writer::new(Vec::new());
+    let mut buffer = Vec::new();
+    let (end, namespaces) = loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(OxmlError::from)?
+        {
+            Event::Start(element) => {
+                writer
+                    .write_event(Event::Start(element.to_owned()))
+                    .map_err(OxmlError::from)?;
+                break (
+                    element.to_end().into_owned(),
+                    bindings_with_local(inherited, &element)?,
+                );
+            }
+            Event::Empty(_) | Event::Eof => return Ok(raw.to_vec()),
+            _ => {}
+        }
+        buffer.clear();
+    };
+    loop {
+        buffer.clear();
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(OxmlError::from)?
+        {
+            Event::Start(element) => {
+                let local = chart_child_local(&element, &namespaces)?;
+                let child = capture_element(&mut reader, &element)?;
+                for written in rewrite(local.as_deref(), child)? {
+                    writer
+                        .get_mut()
+                        .write_all(&written)
+                        .map_err(OxmlError::from)?;
+                }
+            }
+            Event::Empty(element) => {
+                let local = chart_child_local(&element, &namespaces)?;
+                let child = capture_empty_element(&element)?;
+                for written in rewrite(local.as_deref(), child)? {
+                    writer
+                        .get_mut()
+                        .write_all(&written)
+                        .map_err(OxmlError::from)?;
+                }
+            }
+            Event::End(_) => break,
+            Event::Eof => {
+                return Err(missing_end(&String::from_utf8_lossy(end.name().as_ref())));
+            }
+            event => writer.write_event(event).map_err(OxmlError::from)?,
+        }
+    }
+    writer
+        .write_event(Event::End(end))
+        .map_err(OxmlError::from)?;
+    Ok(writer.into_inner())
+}
+
+/// The namespace bindings in scope for raw children of an element whose
+/// extra declarations are `declarations`, over the fixed `c`, `a` and `r`.
+fn declared_bindings(declarations: &XmlAttributes) -> NamespaceBindings {
+    let mut bindings = chart_namespace_defaults();
+    for (name, namespace) in declarations {
+        let prefix = name
+            .strip_prefix("xmlns")
+            .map(|rest| rest.trim_start_matches(':'))
+            .unwrap_or(name);
+        upsert_namespace_binding(&mut bindings, prefix.as_bytes().to_vec(), namespace.clone());
+    }
+    bindings
+}
+
+/// The ChartML local name of one raw child of an element whose extra
+/// namespace declarations are `declarations`.
+fn raw_chart_local(raw: &[u8], declarations: &XmlAttributes) -> Result<Option<Vec<u8>>> {
+    chart_root_local(raw, &declared_bindings(declarations))
+}
+
+/// Spreads cached points over their declared count, filling gaps with
+/// `missing`.
+fn dense_points<T: Clone>(markup: &ReferenceMarkup, values: &[T], missing: T) -> Result<Vec<T>> {
+    let (declared, indexes) = cache_layout(markup, values.len())?;
+    let mut dense = vec![missing; dense_point_count(declared)?];
+    for (index, value) in indexes.into_iter().zip(values) {
+        dense[index as usize] = value.clone();
+    }
+    Ok(dense)
+}
+
+/// A declared point count bounded by the worksheet row limit, so a corrupt
+/// count cannot allocate without bound.
+fn dense_point_count(declared: u32) -> Result<usize> {
+    const MAX_WORKSHEET_ROWS: u32 = 1_048_576;
+    if declared > MAX_WORKSHEET_ROWS {
+        return Err(invalid_attribute("ptCount", "val", declared.to_string()));
+    }
+    Ok(declared as usize)
+}
+
+fn series_name_label(series: &Series) -> Result<String> {
+    if let Some(name) = &series.name {
+        return Ok(name.values.first().cloned().unwrap_or_default());
+    }
+    if series.opaque_name {
+        for raw in series.raw_children.at(2) {
+            if raw_chart_local(raw, &series.namespace_declarations)?.as_deref() == Some(b"tx") {
+                return Ok(opaque_point_labels(raw, &series.namespace_declarations)?
+                    .into_iter()
+                    .next()
+                    .unwrap_or_default());
+            }
+        }
+    }
+    Ok(String::new())
+}
+
+fn series_category_labels(series: &Series) -> Result<Vec<String>> {
+    match &series.categories {
+        Some(AxisData::String(labels)) => {
+            dense_points(&labels.markup, &labels.values, String::new())
+        }
+        Some(AxisData::Numeric(numbers)) => {
+            let labels = numbers
+                .values
+                .iter()
+                .map(|value| value.to_string())
+                .collect::<Vec<_>>();
+            dense_points(&numbers.markup, &labels, String::new())
+        }
+        None if series.opaque_categories => {
+            for raw in series.raw_children.at(5) {
+                if raw_chart_local(raw, &series.namespace_declarations)?.as_deref() == Some(b"cat")
+                {
+                    return opaque_point_labels(raw, &series.namespace_declarations);
+                }
+            }
+            Ok(Vec::new())
+        }
+        None => Ok(Vec::new()),
+    }
+}
+
+/// Reads the labels of a series name or category list this crate keeps
+/// opaque: a literal name, a literal string or number list, or the first,
+/// leaf level of a multi-level string reference.
+fn opaque_point_labels(raw: &[u8], declarations: &XmlAttributes) -> Result<Vec<String>> {
+    let namespaces = declared_bindings(declarations);
+    let mut reader = Reader::from_reader(raw);
+    let mut buffer = Vec::new();
+    let mut declared = None;
+    let mut points = Vec::new();
+    loop {
+        match reader
+            .read_event_into(&mut buffer)
+            .map_err(OxmlError::from)?
+        {
+            Event::Start(element) => match local_name(element.name().as_ref()) {
+                b"pt" => {
+                    let child = capture_element(&mut reader, &element)?;
+                    let (index, value, _) = parse_point(&child, &namespaces)?;
+                    points.push((index, value));
+                }
+                b"v" => {
+                    let child = capture_element(&mut reader, &element)?;
+                    return Ok(vec![parse_text_element(&child, b"v", &namespaces)?.0]);
+                }
+                b"f" | b"formatCode" => {
+                    capture_element(&mut reader, &element)?;
+                }
+                _ => {}
+            },
+            Event::Empty(element) if local_name(element.name().as_ref()) == b"ptCount" => {
+                if declared.is_none() {
+                    let child = capture_empty_element(&element)?;
+                    declared = Some(parse_u32_scalar(&child, "ptCount")?.0);
+                }
+            }
+            Event::End(element) if local_name(element.name().as_ref()) == b"lvl" => break,
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let count = points
+        .iter()
+        .map(|(index, _)| index.saturating_add(1))
+        .chain(declared)
+        .max()
+        .unwrap_or(0);
+    let mut labels = vec![String::new(); dense_point_count(count)?];
+    for (index, value) in points {
+        labels[index as usize] = value;
+    }
+    Ok(labels)
+}
+
 fn validate_chart_data(kind: ChartKind, data: &ChartData) -> Result<()> {
     if data.categories.is_empty() {
         return Err(invalid_authoring_value("at least one category is required"));
@@ -3943,6 +4556,19 @@ struct ReferenceMarkup {
     declared_point_count: Option<u32>,
     point_indexes: Vec<u32>,
     points: Vec<PointMarkup>,
+    cache_omitted: bool,
+}
+
+impl ReferenceMarkup {
+    /// Drops the point layout and per-point markup of the cache so that new
+    /// values are written as a dense cache, keeping the reference itself.
+    fn reset_cache_points(&mut self) {
+        self.cache_children = OrderedRawChildren::default();
+        self.declared_point_count = None;
+        self.point_indexes.clear();
+        self.points.clear();
+        self.cache_omitted = false;
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -4415,6 +5041,78 @@ impl Series {
     pub fn raw_children(&self) -> &OrderedRawChildren {
         &self.raw_children
     }
+
+    /// Points the name, categories and values of this series at new workbook
+    /// ranges and rewrites their caches, keeping the reference markup. A
+    /// literal or multi-level name or category list becomes a reference.
+    /// `numeric_categories` holds the categories as numbers when the series
+    /// takes a numeric category cache.
+    #[allow(clippy::too_many_arguments)]
+    fn replace_data(
+        &mut self,
+        name_formula: String,
+        name: &str,
+        category_formula: &str,
+        categories: &[String],
+        numeric_categories: Option<&[f64]>,
+        values_formula: String,
+        values: &[f64],
+        format_code: String,
+    ) -> Result<()> {
+        let declarations = &self.namespace_declarations;
+        if self.opaque_name {
+            self.raw_children
+                .retain(|raw| !matches!(raw_chart_local(raw, declarations), Ok(Some(local)) if local == b"tx"));
+            self.opaque_name = false;
+            self.name_markup = None;
+        }
+        match &mut self.name {
+            Some(reference) => {
+                reference.formula = name_formula;
+                reference.values = vec![name.to_owned()];
+                reference.markup.reset_cache_points();
+            }
+            None => self.name = Some(StringRef::new(name_formula, vec![name.to_owned()])?),
+        }
+
+        if self.opaque_categories {
+            self.raw_children
+                .retain(|raw| !matches!(raw_chart_local(raw, declarations), Ok(Some(local)) if local == b"cat"));
+            self.opaque_categories = false;
+            self.categories_markup = None;
+        }
+        match (&mut self.categories, numeric_categories) {
+            (Some(AxisData::Numeric(reference)), Some(numbers)) => {
+                reference.formula = category_formula.to_owned();
+                reference.values = numbers.to_vec();
+                reference.markup.reset_cache_points();
+            }
+            (Some(AxisData::String(reference)), None) => {
+                reference.formula = category_formula.to_owned();
+                reference.values = categories.to_vec();
+                reference.markup.reset_cache_points();
+            }
+            (slot, Some(numbers)) => {
+                *slot = Some(AxisData::Numeric(NumericData::new(
+                    category_formula.to_owned(),
+                    "General".to_owned(),
+                    numbers.to_vec(),
+                )?));
+            }
+            (slot, None) => {
+                *slot = Some(AxisData::String(StringRef::new(
+                    category_formula.to_owned(),
+                    categories.to_vec(),
+                )?));
+            }
+        }
+
+        self.values.formula = values_formula;
+        self.values.format_code = format_code;
+        self.values.values = values.to_vec();
+        self.values.markup.reset_cache_points();
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -4745,12 +5443,25 @@ fn parse_reference(
                             let (formula, formula_markup) = formula
                                 .ok_or_else(|| ChartError::MissingElement("c:f".to_owned()))?;
                             validate_formula(&formula, "c:f")?;
-                            let (format_code, values, cache_markup) = cache.ok_or_else(|| {
-                                ChartError::MissingElement(format!(
-                                    "c:{}",
-                                    String::from_utf8_lossy(cache_local)
-                                ))
-                            })?;
+                            // A reference may omit its cache. It reads as no
+                            // values and is written back without one.
+                            let cache_omitted = cache.is_none();
+                            let (format_code, values, cache_markup) = cache.unwrap_or_else(|| {
+                                (
+                                    None,
+                                    Vec::new(),
+                                    CacheMarkup {
+                                        raw_attributes: Vec::new(),
+                                        raw_children: OrderedRawChildren::default(),
+                                        format_code: None,
+                                        format_code_omitted: numeric,
+                                        point_count: ScalarMarkup::default(),
+                                        declared_point_count: None,
+                                        point_indexes: Vec::new(),
+                                        points: Vec::new(),
+                                    },
+                                )
+                            });
                             let markup = ReferenceMarkup {
                                 raw_attributes,
                                 raw_children: raw_children_in_schema_order(&raw_children, 2),
@@ -4763,6 +5474,7 @@ fn parse_reference(
                                 declared_point_count: cache_markup.declared_point_count,
                                 point_indexes: cache_markup.point_indexes,
                                 points: cache_markup.points,
+                                cache_omitted,
                             };
                             return Ok(ParsedReference {
                                 formula,
@@ -5299,6 +6011,9 @@ fn write_string_cache(
     values: &[String],
     markup: &ReferenceMarkup,
 ) -> Result<()> {
+    if markup.cache_omitted && values.is_empty() {
+        return Ok(());
+    }
     let (declared_count, indexes) = cache_layout(markup, values.len())?;
     let mut start = BytesStart::new("c:strCache");
     push_attributes(&mut start, &markup.cache_attributes);
@@ -5334,6 +6049,9 @@ fn write_numeric_cache(
     data: &NumericData,
     markup: &ReferenceMarkup,
 ) -> Result<()> {
+    if markup.cache_omitted && data.values.is_empty() {
+        return Ok(());
+    }
     let (declared_count, indexes) = cache_layout(markup, data.values.len())?;
     let mut start = BytesStart::new("c:numCache");
     push_attributes(&mut start, &markup.cache_attributes);
@@ -11072,7 +11790,8 @@ mod tests {
         ChartKind, DataLabelPosition, DispBlanksAs, Domain, Grouping, NumberFormat, NumericData,
         Orientation, Plot, R_NS, ScatterStyle, Series, StringRef, TickLabelPosition, TickMark,
         authored_chart_parts, capture_event, local_name, matches_local_name, nice_number_scale,
-        render_chart as render_chart_with_theme, render_geometry as render_geometry_with_theme,
+        read_chart_data, render_chart as render_chart_with_theme,
+        render_geometry as render_geometry_with_theme,
     };
 
     const MANIFEST: &str = include_str!("../../../scripts/pptx-corpus-manifest.tsv");
@@ -11209,6 +11928,364 @@ mod tests {
         parsed.format_code = "0.00".to_owned();
         let written = String::from_utf8(parsed.to_xml().unwrap()).unwrap();
         assert!(written.contains("<c:formatCode>0.00</c:formatCode>"));
+    }
+
+    #[test]
+    fn authored_chart_data_reads_back_with_its_kind() {
+        let data = ChartData {
+            categories: vec!["North".to_owned(), "South".to_owned()],
+            series: vec![
+                ("Revenue".to_owned(), vec![12.5, 19.0]),
+                ("Cost".to_owned(), vec![8.0, 11.5]),
+            ],
+            number_format: Some("0.00".to_owned()),
+            category_axis_title: Some("Region".to_owned()),
+            value_axis_title: None,
+            palette: vec![RgbColor::parse("2B6FE3").unwrap()],
+        };
+        let read_data = ChartData {
+            category_axis_title: None,
+            palette: Vec::new(),
+            ..data.clone()
+        };
+        for kind in [
+            ChartKind::Bar,
+            ChartKind::Line,
+            ChartKind::Area,
+            ChartKind::Scatter,
+            ChartKind::Radar,
+        ] {
+            let mut kind_data = data.clone();
+            let mut expected = read_data.clone();
+            if kind == ChartKind::Scatter {
+                kind_data.categories = vec!["1.5".to_owned(), "2".to_owned()];
+                expected.categories = kind_data.categories.clone();
+            }
+            let (chart, _) = authored_chart_parts(kind, &kind_data, "rId1").unwrap();
+            assert_eq!(read_chart_data(&chart).unwrap(), (Some(kind), expected));
+        }
+        for kind in [ChartKind::Pie, ChartKind::Doughnut] {
+            let single = ChartData {
+                series: data.series[..1].to_vec(),
+                number_format: None,
+                ..data.clone()
+            };
+            let (chart, _) = authored_chart_parts(kind, &single, "rId1").unwrap();
+            let (read_kind, read) = read_chart_data(&chart).unwrap();
+            assert_eq!(read_kind, Some(kind));
+            assert_eq!(read.categories, single.categories);
+            assert_eq!(read.series, single.series);
+            assert_eq!(read.number_format, None);
+        }
+
+        let (column, _) = authored_chart_parts(ChartKind::Bar, &data, "rId1").unwrap();
+        let horizontal = String::from_utf8(column)
+            .unwrap()
+            .replace(r#"<c:barDir val="col"/>"#, r#"<c:barDir val="bar"/>"#);
+        let (kind, read) = read_chart_data(horizontal.as_bytes()).unwrap();
+        assert_eq!(kind, None);
+        assert_eq!(read, read_data);
+    }
+
+    fn replacement_data(series: usize, categories: usize) -> ChartData {
+        ChartData {
+            categories: (0..categories)
+                .map(|index| format!("Q{}", index + 1))
+                .collect(),
+            series: (0..series)
+                .map(|item| {
+                    (
+                        format!("Line {item}"),
+                        (0..categories)
+                            .map(|index| (item * 10 + index) as f64 + 0.5)
+                            .collect(),
+                    )
+                })
+                .collect(),
+            ..ChartData::default()
+        }
+    }
+
+    fn workbook_sheet(workbook: &[u8]) -> String {
+        let package = OpcPackage::from_reader(std::io::Cursor::new(workbook)).unwrap();
+        String::from_utf8(
+            package
+                .get_part("/xl/worksheets/sheet1.xml")
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn replaced_chart_data_rewrites_caches_formulas_and_keeps_series_formatting() {
+        let data = ChartData {
+            palette: vec![
+                RgbColor::parse("2B6FE3").unwrap(),
+                RgbColor::parse("F0761F").unwrap(),
+            ],
+            ..replacement_data(2, 3)
+        };
+        for kind in [ChartKind::Bar, ChartKind::Line] {
+            let (chart, _) = authored_chart_parts(kind, &data, "rId7").unwrap();
+            assert_eq!(
+                super::chart_workbook_relationship_id(&chart).unwrap(),
+                Some("rId7".to_owned())
+            );
+            for (series, categories) in [(1, 3), (4, 3), (2, 5)] {
+                let new_data = ChartData {
+                    number_format: Some("0.0".to_owned()),
+                    ..replacement_data(series, categories)
+                };
+                let (replaced, workbook) =
+                    super::replace_chart_data(&chart, &new_data, None).unwrap();
+                assert_eq!(
+                    read_chart_data(&replaced).unwrap(),
+                    (Some(kind), new_data.clone())
+                );
+                let parsed = CT_ChartSpace::from_xml(&replaced).unwrap();
+                let parsed_series = parsed.chart.plot_area.series().unwrap();
+                let last_column = super::spreadsheet_column_name(series);
+                let last = parsed_series.last().unwrap();
+                assert_eq!(
+                    last.values.formula,
+                    format!("Sheet1!${last_column}$2:${last_column}${}", categories + 1)
+                );
+                assert_eq!(
+                    last.name.as_ref().unwrap().formula,
+                    format!("Sheet1!${last_column}$1")
+                );
+                let Some(AxisData::String(labels)) = &last.categories else {
+                    panic!("categories stay a string reference");
+                };
+                assert_eq!(labels.formula, format!("Sheet1!$A$2:$A${}", categories + 1));
+                let keys = parsed_series
+                    .iter()
+                    .map(|item| (item.index, item.order))
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    keys,
+                    (0..series as u32).map(|key| (key, key)).collect::<Vec<_>>()
+                );
+                let xml = std::str::from_utf8(&replaced).unwrap();
+                assert!(
+                    xml.contains(r#"<a:srgbClr val="2B6FE3"/>"#),
+                    "{kind:?}: first colour kept"
+                );
+                assert_eq!(
+                    xml.contains(r#"<a:srgbClr val="F0761F"/>"#),
+                    series >= 2,
+                    "{kind:?}: the second colour goes with its series"
+                );
+                for added in 2..series {
+                    assert!(
+                        xml.contains(&format!(r#"<a:schemeClr val="accent{}"/>"#, added + 1)),
+                        "{kind:?}: added series {added} takes its accent"
+                    );
+                }
+                assert!(xml.contains(r#"<c:externalData r:id="rId7">"#));
+                let sheet = workbook_sheet(&workbook);
+                let last_value = new_data.series.last().unwrap().1.last().unwrap();
+                assert!(
+                    sheet.contains(&format!(
+                        r#"<c r="{last_column}{}" s="1"><v>{last_value}</v>"#,
+                        categories + 1
+                    )),
+                    "{sheet}"
+                );
+            }
+        }
+
+        let scatter = ChartData {
+            categories: vec!["1".to_owned(), "2.5".to_owned()],
+            ..replacement_data(1, 2)
+        };
+        let (chart, _) = authored_chart_parts(ChartKind::Scatter, &scatter, "rId1").unwrap();
+        let xy = ChartData {
+            categories: vec!["0.5".to_owned(), "1.5".to_owned(), "3".to_owned()],
+            ..replacement_data(2, 3)
+        };
+        let (replaced, _) = super::replace_chart_data(&chart, &xy, Some("rId4")).unwrap();
+        assert_eq!(
+            read_chart_data(&replaced).unwrap(),
+            (Some(ChartKind::Scatter), xy)
+        );
+        let xml = std::str::from_utf8(&replaced).unwrap();
+        assert_eq!(xml.matches("<c:externalData").count(), 1);
+        assert!(xml.contains(r#"<c:externalData r:id="rId4">"#));
+        assert!(super::replace_chart_data(&chart, &replacement_data(1, 2), None).is_err());
+        for invalid in [
+            replacement_data(0, 2),
+            replacement_data(1, 0),
+            ChartData {
+                number_format: Some("\u{1}".to_owned()),
+                ..replacement_data(1, 2)
+            },
+            ChartData {
+                series: vec![("Short".to_owned(), vec![1.0])],
+                ..replacement_data(1, 2)
+            },
+            ChartData {
+                series: vec![("Nan".to_owned(), vec![1.0, f64::NAN])],
+                ..replacement_data(1, 2)
+            },
+        ] {
+            assert!(super::replace_chart_data(&chart, &invalid, None).is_err());
+        }
+    }
+
+    #[test]
+    fn foreign_chart_shapes_read_and_replace_through_opaque_plots() {
+        let (chart, _) =
+            authored_chart_parts(ChartKind::Bar, &replacement_data(2, 3), "rId1").unwrap();
+        let chart = String::from_utf8(chart).unwrap();
+        // A multi-level category list, a literal name, a sparse value cache
+        // and an omitted name cache, in a 3-D plot this crate keeps opaque.
+        let first_categories = chart
+            .split_once("<c:cat>")
+            .unwrap()
+            .1
+            .split_once("</c:cat>")
+            .unwrap()
+            .0;
+        let foreign = chart
+            .replace("c:barChart>", "c:bar3DChart>")
+            .replacen(
+                first_categories,
+                r#"<c:multiLvlStrRef><c:f>Sheet1!$A$2:$B$4</c:f><c:multiLvlStrCache><c:ptCount val="3"/><c:lvl><c:pt idx="0"><c:v>Q1</c:v></c:pt><c:pt idx="2"><c:v>Q3</c:v></c:pt></c:lvl><c:lvl><c:pt idx="0"><c:v>Year</c:v></c:pt></c:lvl></c:multiLvlStrCache></c:multiLvlStrRef>"#,
+                1,
+            )
+            .replacen(
+                r#"<c:tx><c:strRef><c:f>Sheet1!$B$1</c:f><c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>Line 0</c:v></c:pt></c:strCache></c:strRef></c:tx>"#,
+                "<c:tx><c:v>Literal</c:v></c:tx>",
+                1,
+            )
+            .replacen(r#"<c:pt idx="1"><c:v>1.5</c:v></c:pt>"#, "", 1)
+            .replacen(
+                r#"<c:strCache><c:ptCount val="1"/><c:pt idx="0"><c:v>Line 1</c:v></c:pt></c:strCache>"#,
+                "",
+                1,
+            );
+        assert!(foreign.contains("<c:bar3DChart>") && foreign.contains("Literal"));
+        assert!(!foreign.contains("<c:v>1.5</c:v>") && !foreign.contains("<c:v>Line 1</c:v>"));
+        let rewritten = CT_ChartSpace::from_xml(foreign.as_bytes())
+            .unwrap()
+            .to_xml()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8(rewritten)
+                .unwrap()
+                .matches("<c:strCache>")
+                .count(),
+            foreign.matches("<c:strCache>").count(),
+            "an omitted cache stays omitted"
+        );
+
+        let (kind, read) = read_chart_data(foreign.as_bytes()).unwrap();
+        assert_eq!(kind, None);
+        assert_eq!(read.categories, ["Q1", "", "Q3"]);
+        assert_eq!(read.series[0].0, "Literal");
+        assert_eq!(read.series[1].0, "");
+        assert_eq!(read.series[0].1[0], 0.5);
+        assert!(read.series[0].1[1].is_nan());
+        assert_eq!(read.series[0].1[2], 2.5);
+
+        for (series, categories) in [(1, 4), (3, 2)] {
+            let data = replacement_data(series, categories);
+            let (replaced, _) = super::replace_chart_data(foreign.as_bytes(), &data, None).unwrap();
+            assert_eq!(read_chart_data(&replaced).unwrap(), (None, data));
+            let xml = std::str::from_utf8(&replaced).unwrap();
+            assert!(xml.contains("<c:bar3DChart>"));
+            assert!(!xml.contains("multiLvlStrRef") && !xml.contains("Literal"));
+            assert_eq!(
+                xml.matches("<c:ser ").count() + xml.matches("<c:ser>").count(),
+                series
+            );
+        }
+
+        let bubble = foreign.replace("c:bar3DChart>", "c:bubbleChart>");
+        assert!(
+            super::replace_chart_data(bubble.as_bytes(), &replacement_data(1, 2), None).is_err()
+        );
+
+        // Another prefix for the chart namespace finds the same workbook
+        // reference and series children, and replaces that reference.
+        let aliased = foreign
+            .replace("<c:", "<ch:")
+            .replace("</c:", "</ch:")
+            .replace("xmlns:c=", "xmlns:ch=");
+        assert_eq!(
+            super::chart_workbook_relationship_id(aliased.as_bytes()).unwrap(),
+            Some("rId1".to_owned())
+        );
+        // The sparse cache reads NaN, so the two reads compare as text.
+        assert_eq!(
+            format!("{:?}", read_chart_data(aliased.as_bytes()).unwrap()),
+            format!("{:?}", (None::<ChartKind>, read))
+        );
+        let data = replacement_data(3, 2);
+        let (replaced, _) =
+            super::replace_chart_data(aliased.as_bytes(), &data, Some("rId9")).unwrap();
+        assert_eq!(read_chart_data(&replaced).unwrap(), (None, data));
+        let xml = std::str::from_utf8(&replaced).unwrap();
+        assert_eq!(xml.matches("externalData r:id=").count(), 1, "{xml}");
+        assert!(!xml.contains("Literal") && !xml.contains("multiLvlStrRef"));
+        assert_eq!(
+            super::chart_workbook_relationship_id(&replaced).unwrap(),
+            Some("rId9".to_owned())
+        );
+    }
+
+    #[test]
+    fn every_corpus_chart_reads_and_replaces_its_data() {
+        let Some(corpus) = require_or_skip_corpus() else {
+            return;
+        };
+        verify_fetched_corpus(&corpus);
+        let mut replaced_parts = 0usize;
+        for path in manifest_paths() {
+            let package = OpcPackage::open(corpus.join(path))
+                .unwrap_or_else(|error| panic!("{path}: open failed: {error}"));
+            for (part, xml) in &package.parts {
+                if !is_chart_part(part) {
+                    continue;
+                }
+                let (kind, read) = read_chart_data(xml)
+                    .unwrap_or_else(|error| panic!("{path} {part}: read failed: {error}"));
+                if read.series.is_empty() {
+                    continue;
+                }
+                let current = read.series.len();
+                for (series, categories) in [
+                    (1, read.categories.len().max(1)),
+                    (current + 1, read.categories.len().max(1)),
+                    (current, read.categories.len() + 2),
+                ] {
+                    let mut data = replacement_data(series, categories);
+                    if CT_ChartSpace::from_xml(xml)
+                        .unwrap()
+                        .chart
+                        .plot_area
+                        .series()
+                        .unwrap()[0]
+                        .uses_scatter_wrappers
+                    {
+                        data.categories = (0..categories).map(|index| index.to_string()).collect();
+                    }
+                    let (replaced, _) = super::replace_chart_data(xml, &data, None)
+                        .unwrap_or_else(|error| panic!("{path} {part}: replace failed: {error}"));
+                    let (replaced_kind, replaced_data) = read_chart_data(&replaced).unwrap();
+                    assert_eq!(replaced_kind, kind, "{path} {part}: kind changed");
+                    assert_eq!(replaced_data.series, data.series, "{path} {part}");
+                    assert_eq!(replaced_data.categories.len(), categories, "{path} {part}");
+                }
+                replaced_parts += 1;
+            }
+        }
+        assert!(
+            replaced_parts >= 20,
+            "corpus chart coverage changed: {replaced_parts}"
+        );
     }
 
     fn render_geometry(chart: &super::CT_Chart, bounds: Rect) -> super::Result<ChartGeometry> {

@@ -58,6 +58,13 @@ with open("review.pdf", "wb") as output:
   leaves the deck unchanged on a mismatch.
 - Package and PresentationML validation that returns the issues
   `rpptx validate` reports as typed values.
+- Editable charts with their embedded workbook through
+  `slide.shapes.add_chart(chart_type, left, top, width, height, chart_data)`,
+  with `CategoryChartData` or `XyChartData` from `rpptx.chart.data` and the
+  `XL_CHART_TYPE` members rpptx authors, as in python-pptx. `shape.chart`
+  reads back the chart type, categories, and series values of any chart, and
+  `chart.replace_data(chart_data)` rewrites the data of an existing chart and
+  its embedded workbook while keeping the series formatting.
 - Speaker-note text plus modern comment authors, threads, replies, thread
   resolution and removal, and ordered comment movement.
 - Master, layout, placeholder, theme, shape, chart, media, and relationship

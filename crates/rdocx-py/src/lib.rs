@@ -1,5 +1,6 @@
 //! Python bindings for the rdocx facade.
 
+mod chart;
 mod document;
 mod formatting;
 mod paragraph;
@@ -368,6 +369,8 @@ pub(crate) fn rdocx_to_pyerr(py: Python<'_>, error: rdocx::Error) -> PyErr {
 #[pymodule]
 fn _rdocx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyDocument>()?;
+    module.add_class::<chart::PyChart>()?;
+    module.add_class::<chart::PyChartSeries>()?;
     module.add_class::<PyRunPosition>()?;
     module.add_class::<PyRunRange>()?;
     module.add_class::<PyBookmark>()?;

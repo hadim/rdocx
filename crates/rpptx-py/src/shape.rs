@@ -746,6 +746,25 @@ impl PyShape {
         )
     }
 
+    /// True when the shape is a graphic frame that holds a chart.
+    #[getter]
+    fn has_chart(&self, py: Python<'_>) -> PyResult<bool> {
+        Ok(self.read(py, |shape| shape.shape_type())? == Some(rpptx::ShapeType::Chart))
+    }
+
+    /// The chart this graphic frame holds. Raises `ValueError` for any other
+    /// shape, as python-pptx does.
+    #[getter]
+    fn chart(&self, py: Python<'_>) -> PyResult<Py<crate::chart::PyChart>> {
+        if !self.has_chart(py)? {
+            return Err(PyValueError::new_err("shape does not contain a chart"));
+        }
+        Py::new(
+            py,
+            crate::chart::PyChart::new(self.presentation.clone_ref(py), self.path.clone()),
+        )
+    }
+
     #[getter]
     fn has_table(&self, py: Python<'_>) -> PyResult<bool> {
         self.validate(py)?;
@@ -1443,6 +1462,47 @@ impl PyShapeCollection {
                 )
                 .map(drop)
         })
+    }
+
+    /// Appends an editable chart and its embedded workbook to the slide, as
+    /// python-pptx `add_chart` does, and returns its graphic frame.
+    ///
+    /// `chart_type` is an `XL_CHART_TYPE` member and `chart_data` a
+    /// `CategoryChartData` or `XyChartData`. A group cannot take a chart.
+    #[allow(clippy::too_many_arguments)]
+    fn add_chart(
+        &mut self,
+        py: Python<'_>,
+        chart_type: &Bound<'_, PyAny>,
+        left: i64,
+        top: i64,
+        width: i64,
+        height: i64,
+        chart_data: &Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyShape>> {
+        let kind = crate::chart::chart_kind(chart_type)?;
+        let data = crate::chart::chart_data(chart_data)?;
+        self.validate(py)?;
+        let slide = slide_index(&self.path)?;
+        if shape_indices(&self.path).next().is_some() {
+            return Err(PyValueError::new_err("a group cannot take a chart"));
+        }
+        let index = self.len(py)?;
+        self.presentation
+            .borrow_mut(py)
+            .inner
+            .add_chart(
+                slide,
+                kind,
+                rpptx::Emu(left),
+                rpptx::Emu(top),
+                rpptx::Emu(width),
+                rpptx::Emu(height),
+                &data,
+            )
+            .map(drop)
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        self.capture_added(py, index)
     }
 
     fn add_connector(
