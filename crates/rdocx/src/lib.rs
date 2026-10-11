@@ -90,8 +90,9 @@ pub use field::{
     TocRebuildReport,
 };
 pub use html::{
-    HtmlDiagnostic, HtmlFragmentInsertResult, HtmlImageResource, HtmlReadResult, MhtmlDiagnostic,
-    MhtmlReadResult, MhtmlWriteResult,
+    HtmlDiagnostic, HtmlFragmentInsertResult, HtmlImageResource, HtmlReadResult,
+    MarkdownDiagnostic, MarkdownOptions, MarkdownReadResult, MhtmlDiagnostic, MhtmlReadResult,
+    MhtmlWriteResult,
 };
 pub use math::{
     MathConversionDiagnostic, MathConversionResult, equation_from_latex, equation_from_mathml,

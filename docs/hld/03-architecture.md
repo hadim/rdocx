@@ -96,7 +96,9 @@ not claim a codec decoder.
 `scraper` for HTML5 document and fragment tree repair, then projects supported
 content directly into the one owned WordprocessingML document model. The edge
 does not enter `rdocx-html`, which remains an outbound emitter. This avoids a
-dependency cycle and avoids a second public intermediate document model.
+dependency cycle and avoids a second public intermediate document model. Inbound
+Markdown is parsed with `pulldown-cmark` and projected into HTML for that same
+importer, so the two formats share one mapping to Word.
 `Document::insert_html_fragment` reuses that importer against a staged document
 and emits concrete body content at a checked `ContentLocation`. Body and
 main-document cell destinations mutate their typed owners so retained sibling

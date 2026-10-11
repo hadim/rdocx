@@ -1001,6 +1001,14 @@ declares the dependency directly. Both facade graphs pass Rust 1.93, the wasm32
 checks, dependency policy, patched package dry runs, and the 10 MiB archive
 ceiling.
 
+`pulldown-cmark` 0.13.4 has one direct named consumer, the private inbound
+Markdown importer inside `rdocx`. The edge disables default features, so the
+HTML renderer and the `getopts` command line stay out, and it adds only
+`unicase` to the graph beside the existing `bitflags` and `memchr`.
+`pulldown-cmark` is MIT licensed and `unicase` is MIT or Apache-2.0. The
+importer writes its own HTML for the existing HTML importer instead. No `oxml-*`, Python, WASM, or CLI crate
+declares the dependency directly, and the wasm32 check passes.
+
 `lopdf` 0.44.0 has one direct named consumer, the private inbound PDF importer
 inside `rpptx`. The optional edge disables default features and is activated
 only by `render`. It owns strict bounded PDF object, page, resource, stream,

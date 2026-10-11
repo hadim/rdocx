@@ -5285,6 +5285,412 @@ fn html_import_keeps_safe_links_and_data_uri_images() {
     );
 }
 
+fn markdown(source: &str) -> rdocx::MarkdownReadResult {
+    Document::from_markdown(source).expect("supported Markdown")
+}
+
+fn markdown_messages(result: &rdocx::MarkdownReadResult) -> Vec<(&str, &str)> {
+    result
+        .diagnostics
+        .iter()
+        .map(|diagnostic| (diagnostic.location.as_str(), diagnostic.message.as_str()))
+        .collect()
+}
+
+#[test]
+fn markdown_headings_take_the_word_heading_styles() {
+    let result = markdown(
+        "# One\n\n## Two\n\n### Three\n\n#### Four\n\n##### Five\n\n###### Six\n\nSetext\n======\n",
+    );
+    assert!(result.diagnostics.is_empty());
+    let styles = (0..7)
+        .map(|index| {
+            result
+                .document
+                .paragraph(index)
+                .unwrap()
+                .style_id()
+                .map(str::to_owned)
+        })
+        .collect::<Vec<_>>();
+    let expected = [
+        "Heading1", "Heading2", "Heading3", "Heading4", "Heading5", "Heading6", "Heading1",
+    ];
+    assert_eq!(
+        styles,
+        expected.map(|style| Some(style.to_owned())).to_vec()
+    );
+    assert_eq!(result.document.paragraph(6).unwrap().text(), "Setext");
+}
+
+#[test]
+fn markdown_paragraphs_keep_the_body_style_and_line_breaks() {
+    let result = markdown("First line\nsame paragraph  \nafter a break\n\nSecond paragraph\n");
+    assert!(result.diagnostics.is_empty());
+    let first = result.document.paragraph(0).unwrap();
+    assert_eq!(first.style_id(), None);
+    assert_eq!(first.text(), "First line same paragraph\nafter a break");
+    assert_eq!(
+        result.document.paragraph(1).unwrap().text(),
+        "Second paragraph"
+    );
+    assert_eq!(result.document.paragraph_count(), 2);
+}
+
+#[test]
+fn markdown_inline_marks_become_run_formatting() {
+    let result = markdown("*em* **strong** `code` ~~gone~~ ***both***\n");
+    assert!(result.diagnostics.is_empty());
+    let paragraph = result.document.paragraph(0).unwrap();
+    let runs = (0..paragraph.run_count())
+        .map(|index| paragraph.run(index).unwrap())
+        .filter(|run| !run.text().trim().is_empty())
+        .map(|run| {
+            (
+                // The importer carries a collapsed space into the next run.
+                run.text().trim().to_owned(),
+                run.italic_value() == Some(true),
+                run.bold_value() == Some(true),
+                run.strike_value() == Some(true),
+                run.font_name().map(str::to_owned),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        runs,
+        [
+            ("em".to_owned(), true, false, false, None),
+            ("strong".to_owned(), false, true, false, None),
+            (
+                "code".to_owned(),
+                false,
+                false,
+                false,
+                Some("Courier New".to_owned())
+            ),
+            ("gone".to_owned(), false, false, true, None),
+            ("both".to_owned(), true, true, false, None),
+        ]
+    );
+
+    // The elements the Markdown export writes for formatting stay formatting.
+    let spans = markdown("a<strong>b</strong>c<em>d</em><del>e</del><br>f\n");
+    assert!(spans.diagnostics.is_empty(), "{:?}", spans.diagnostics);
+    let paragraph = spans.document.paragraph(0).unwrap();
+    assert_eq!(paragraph.text(), "abcde\nf");
+    assert_eq!(paragraph.run(1).unwrap().bold_value(), Some(true));
+    assert_eq!(paragraph.run(3).unwrap().italic_value(), Some(true));
+    assert_eq!(paragraph.run(4).unwrap().strike_value(), Some(true));
+}
+
+#[test]
+fn markdown_nested_lists_become_numbering_levels() {
+    let result = markdown("- one\n  1. nested\n  2. again\n- two\n\n3. three\n4. four\n");
+    assert!(result.diagnostics.is_empty());
+    let document = &result.document;
+    let items = (0..6)
+        .map(|index| {
+            let paragraph = document.paragraph(index).unwrap();
+            let (num_id, level) = paragraph.numbering().expect("list item numbering");
+            let format = document.numbering_level(num_id, level).unwrap();
+            (
+                paragraph.text(),
+                num_id,
+                level,
+                format.format_name.to_owned(),
+                format.start,
+            )
+        })
+        .collect::<Vec<_>>();
+    let bullets = items[0].1;
+    let ordered = items[4].1;
+    assert_ne!(bullets, ordered, "separate lists number separately");
+    assert_eq!(
+        items,
+        [
+            ("one".to_owned(), bullets, 0, "bullet".to_owned(), 1),
+            ("nested".to_owned(), bullets, 1, "decimal".to_owned(), 1),
+            ("again".to_owned(), bullets, 1, "decimal".to_owned(), 1),
+            ("two".to_owned(), bullets, 0, "bullet".to_owned(), 1),
+            ("three".to_owned(), ordered, 0, "decimal".to_owned(), 3),
+            ("four".to_owned(), ordered, 0, "decimal".to_owned(), 3),
+        ]
+    );
+
+    let loose = markdown("- first\n\n  second paragraph\n- next\n");
+    assert_eq!(
+        loose.document.paragraph(0).unwrap().text(),
+        "first\nsecond paragraph"
+    );
+    assert_eq!(loose.document.paragraph(1).unwrap().text(), "next");
+}
+
+#[test]
+fn markdown_tables_become_word_tables_with_a_header_row() {
+    let result = markdown("| Name | Value |\n| :--- | ---: |\n| a | **1** |\n| b | 2 |\n");
+    assert!(result.diagnostics.is_empty());
+    let table = result.document.table(0).unwrap();
+    let cells = (0..3)
+        .map(|row| {
+            (0..2)
+                .map(|column| table.cell(row, column).unwrap().text())
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(cells, [["Name", "Value"], ["a", "1"], ["b", "2"]]);
+    let mut document = result.document;
+    let bytes = document.to_bytes().unwrap();
+    let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let xml = std::str::from_utf8(package.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(xml.contains("<w:tblHeader/>"), "{xml}");
+    assert!(xml.contains("<w:jc w:val=\"right\"/>"), "{xml}");
+
+    let dropped = markdown("- item\n\n  | a |\n  | - |\n  | b |\n");
+    assert_eq!(
+        markdown_messages(&dropped),
+        [("line 3", "dropped a table inside a list item")]
+    );
+}
+
+#[test]
+fn markdown_links_become_hyperlinks_and_unsafe_targets_keep_their_text() {
+    let result = markdown(
+        "See [the report](https://example.test/report \"title\") and <https://example.test/auto>.\n\nMail <me@example.test> or [run](javascript:alert(1)).\n",
+    );
+    assert_eq!(
+        markdown_messages(&result),
+        [(
+            "line 3",
+            "dropped link target `javascript:alert(1)` and kept its text"
+        )]
+    );
+    let links = result
+        .document
+        .links()
+        .into_iter()
+        .map(|link| (link.text, link.url))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        links,
+        [
+            (
+                "the report".to_owned(),
+                Some("https://example.test/report".to_owned())
+            ),
+            (
+                "https://example.test/auto".to_owned(),
+                Some("https://example.test/auto".to_owned())
+            ),
+            (
+                "me@example.test".to_owned(),
+                Some("mailto:me@example.test".to_owned())
+            ),
+        ]
+    );
+    assert_eq!(
+        result.document.paragraph(1).unwrap().text(),
+        "Mail me@example.test or run."
+    );
+}
+
+#[test]
+fn markdown_images_become_inline_pictures_from_local_files() {
+    let root = std::env::temp_dir().join(format!("rdocx-markdown-images-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join("figures")).unwrap();
+    std::fs::write(root.join("figures/pixel.png"), mhtml_pixel_png()).unwrap();
+    let source = "![a pixel](figures/pixel.png) ![again](figures/pixel.png)\n\n![missing](figures/none.png)\n\n![remote](https://example.test/x.png)\n";
+    std::fs::write(root.join("notes.md"), source).unwrap();
+
+    let result = Document::open_markdown(root.join("notes.md")).expect("Markdown file");
+    let messages = markdown_messages(&result);
+    assert_eq!(messages.len(), 2, "{messages:?}");
+    assert_eq!(messages[0].0, "line 3");
+    assert!(
+        messages[0]
+            .1
+            .starts_with("dropped image `figures/none.png` (")
+    );
+    assert_eq!(
+        messages[1],
+        (
+            "line 5",
+            "dropped remote image `https://example.test/x.png`, which is not fetched, and kept its alternate text"
+        )
+    );
+    let images = result.document.images();
+    assert_eq!(images.len(), 2);
+    assert!(images.iter().all(|image| !image.is_anchor));
+    assert_eq!(images[0].embed_id, images[1].embed_id);
+    assert_eq!(images[0].description.as_deref(), Some("a pixel"));
+    assert_eq!(
+        result.document.image_data(&images[0].embed_id),
+        Some(mhtml_pixel_png())
+    );
+    assert_eq!(result.document.paragraph(1).unwrap().text(), "missing");
+
+    let without_base = markdown("![a pixel](figures/pixel.png)\n");
+    assert_eq!(
+        markdown_messages(&without_base),
+        [(
+            "line 1",
+            "dropped local image `figures/pixel.png` without a base directory and kept its alternate text"
+        )]
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn markdown_block_quotes_and_code_blocks_take_word_styles() {
+    let result = markdown(
+        "> quoted\n> text\n>\n> second\n\n```rust\nfn main() {\n    run();\n}\n```\n\n    indented\n",
+    );
+    assert!(result.diagnostics.is_empty());
+    let document = &result.document;
+    let quote = document.paragraph(0).unwrap();
+    assert_eq!(
+        (quote.style_id(), quote.text().as_str()),
+        (Some("Quote"), "quoted text")
+    );
+    assert_eq!(document.paragraph(1).unwrap().style_id(), Some("Quote"));
+    let code = document.paragraph(2).unwrap();
+    assert_eq!(code.style_id(), Some("HTMLPreformatted"));
+    assert_eq!(code.text(), "fn main() {\n    run();\n}");
+    assert_eq!(code.run(0).unwrap().font_name(), Some("Courier New"));
+    assert_eq!(document.paragraph(3).unwrap().text(), "indented");
+    let style = document
+        .style("HTMLPreformatted")
+        .expect("created code style");
+    assert_eq!(style.name(), Some("HTML Preformatted"));
+    assert_eq!(style.based_on(), Some("Normal"));
+
+    // HTML maps the same constructs to the same styles, whole or inserted.
+    let html = Document::from_html("<blockquote>quoted</blockquote><pre>code</pre>")
+        .unwrap()
+        .document;
+    assert_eq!(html.paragraph(0).unwrap().style_id(), Some("Quote"));
+    assert_eq!(
+        html.paragraph(1).unwrap().style_id(),
+        Some("HTMLPreformatted")
+    );
+    let mut inserted = Document::new();
+    let body = inserted
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Body)
+        .unwrap();
+    inserted
+        .insert_html_fragment(&rdocx::ContentLocation::end(body), "<pre>code</pre>", &[])
+        .unwrap();
+    let mut inserted = Document::from_bytes(&inserted.to_bytes().unwrap()).unwrap();
+    assert_eq!(
+        inserted.paragraph(0).unwrap().style_id(),
+        Some("HTMLPreformatted")
+    );
+    assert!(inserted.style("HTMLPreformatted").is_some());
+    assert!(inserted.validate_style_graph().is_ok());
+    inserted.to_bytes().unwrap();
+
+    let in_item = markdown("- item\n\n  ```\n  a  b\n  c\n  ```\n");
+    assert_eq!(
+        markdown_messages(&in_item),
+        [(
+            "line 3",
+            "kept a code block inside a list item as line-broken code text"
+        )]
+    );
+    assert_eq!(
+        in_item.document.paragraph(0).unwrap().text(),
+        "item\na b\nc"
+    );
+}
+
+#[test]
+fn markdown_raw_html_and_thematic_breaks_are_dropped_with_their_line() {
+    let result = markdown("<div>\nblock\n</div>\n\nText with <b>inline</b> tags.\n\n---\n");
+    assert_eq!(
+        markdown_messages(&result),
+        [
+            ("line 1", "dropped a raw HTML block"),
+            ("line 5", "dropped inline raw HTML `<b>`"),
+            ("line 5", "dropped inline raw HTML `</b>`"),
+            ("line 7", "dropped a thematic break"),
+        ]
+    );
+    assert_eq!(
+        result.document.paragraph(0).unwrap().text(),
+        "Text with inline tags."
+    );
+    assert_eq!(result.document.paragraph_count(), 1);
+}
+
+#[test]
+fn markdown_takes_the_styles_headers_and_footers_of_a_template() {
+    let mut template = Document::new();
+    template.add_paragraph("template body to replace");
+    template.set_header("Template header");
+    template.set_footer("Template footer");
+    template
+        .add_style(rdocx::StyleBuilder::paragraph("Heading1", "heading 1").based_on("Normal"))
+        .ok();
+    let template_bytes = template
+        .to_bytes_as(rdocx::WordPackageClass::Template)
+        .unwrap();
+    let template = Document::from_bytes(&template_bytes).unwrap();
+
+    let result = Document::from_markdown_with_options(
+        "# Title\n\n> quoted\n",
+        rdocx::MarkdownOptions {
+            base_dir: None,
+            template: Some(&template),
+        },
+    )
+    .expect("Markdown with a template");
+    assert!(result.diagnostics.is_empty());
+    let document = result.document;
+    assert_eq!(
+        document.package_class().unwrap(),
+        rdocx::WordPackageClass::Document
+    );
+    assert_eq!(document.text(), "Title\nquoted\n");
+    assert_eq!(document.header_text().as_deref(), Some("Template header"));
+    assert_eq!(document.footer_text().as_deref(), Some("Template footer"));
+    assert_eq!(document.paragraph(0).unwrap().style_id(), Some("Heading1"));
+    assert_eq!(document.paragraph(1).unwrap().style_id(), Some("Quote"));
+}
+
+#[test]
+fn markdown_round_trips_through_docx_for_the_supported_constructs() {
+    // The Markdown export spells every construct one way: `-` bullets, `1.`
+    // for every ordered item, `*` emphasis, `**` strong, a `---` separator
+    // under the first table row, and a blank line after each block except
+    // between two lists that follow each other. This
+    // source is written that way, so it comes back unchanged.
+    let source = "# Report\n\n\
+        ## Findings\n\n\
+        A paragraph with *emphasis*, **strong**, ~~struck~~ and a [link](https://example.test/report).  \n\
+        After a hard break, with escaped \\*stars\\*.\n\n\
+        - first\n\
+        - second\n  \
+          - nested\n    \
+            1. deep\n\
+        - third\n\
+        1. one\n\
+        1. two\n\n\
+        | Name | Value |\n\
+        | --- | --- |\n\
+        | a | **1** |\n\
+        | b | [x](https://example.test/x) |\n\n\
+        ### Closing\n\n\
+        Last paragraph.\n\n";
+    let result = markdown(source);
+    assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+    let mut document = result.document;
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(reopened.to_markdown(), source);
+}
+
 #[test]
 fn rich_html_fragments_match_word_in_every_supported_container() {
     use base64::Engine as _;
