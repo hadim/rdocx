@@ -2477,6 +2477,28 @@ def test_header_footer_and_story_text_edit_the_section_stories():
     assert _story_paragraph_texts(reopened, "body") == ["body"]
 
 
+def test_story_items_keep_a_run_tab_in_the_body_header_and_footer():
+    docx = pytest.importorskip("docx")
+    import rdocx
+
+    source = docx.Document()
+    section = source.sections[0]
+    for paragraph in (
+        source.add_paragraph(),
+        section.header.paragraphs[0],
+        section.footer.paragraphs[0],
+    ):
+        paragraph.add_run("left")
+        paragraph.add_run().add_tab()
+        paragraph.add_run("right")
+    buffer = io.BytesIO()
+    source.save(buffer)
+
+    document = rdocx.Document.from_bytes(buffer.getvalue())
+    for kind in ("body", "header", "footer"):
+        assert _story_paragraph_texts(document, kind) == ["left\tright"], kind
+
+
 def test_set_story_text_rejects_a_story_that_is_not_in_the_document():
     import rdocx
 

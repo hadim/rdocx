@@ -10324,6 +10324,16 @@ fn story_item_text(xml: &[u8], item: &StoryItemSpan) -> Result<Option<String>> {
                 {
                     in_text += 1;
                     found = true;
+                } else if !opaque
+                    && complex_field_text_visible(item, &complex_results)
+                    && accepted_story_text_visible(&element_stack)
+                    && nested_owner_depth == 0
+                    && is_word_namespace
+                    && local_name == b"tab"
+                    && story_run_child(&element_stack)
+                {
+                    text.push('\t');
+                    found = true;
                 }
                 let inherited = element_stack
                     .last()
@@ -10380,6 +10390,16 @@ fn story_item_text(xml: &[u8], item: &StoryItemSpan) -> Result<Option<String>> {
                     && is_word_namespace
                     && local_name.as_ref() == b"t"
                 {
+                    found = true;
+                } else if !opaque
+                    && complex_field_text_visible(item, &complex_results)
+                    && accepted_story_text_visible(&element_stack)
+                    && nested_owner_depth == 0
+                    && is_word_namespace
+                    && local_name.as_ref() == b"tab"
+                    && story_run_child(&element_stack)
+                {
+                    text.push('\t');
                     found = true;
                 }
             }
@@ -10440,6 +10460,14 @@ fn story_item_text(xml: &[u8], item: &StoryItemSpan) -> Result<Option<String>> {
         buffer.clear();
     }
     Ok((found || item.complex_field).then_some(text))
+}
+
+/// Return whether an element opened at this stack is run content, so a run's
+/// `w:tab` counts as text and a tab stop under `w:tabs` does not.
+fn story_run_child(stack: &[XmlElementFrame]) -> bool {
+    stack
+        .last()
+        .is_some_and(|frame| !frame.opaque && frame.is_word && frame.local_name == b"r")
 }
 
 fn story_text_start(element: &BytesStart<'_>, preserve_space: bool) -> Result<Vec<u8>> {
@@ -31208,6 +31236,26 @@ mod tests {
                 Some("host".to_owned())
             );
         }
+    }
+
+    /// A run's `w:tab`, empty or not, reads as a tab. A tab stop in the
+    /// paragraph properties and a tab in a deleted run do not.
+    #[test]
+    fn story_item_text_reads_run_tabs_only() {
+        let xml = format!(
+            r#"<w:document xmlns:w="{WORD_NAMESPACE}"><w:body><w:p><w:pPr><w:tabs><w:tab w:val="right" w:pos="9000"/><w:tab w:val="left" w:pos="100"></w:tab></w:tabs></w:pPr><w:r><w:t>a</w:t><w:tab/><w:t>b</w:t></w:r><w:del w:id="1" w:author="A"><w:r><w:tab/></w:r></w:del><w:r><w:tab></w:tab><w:t>c</w:t></w:r></w:p><w:p><w:r><w:tab/></w:r></w:p></w:body></w:document>"#
+        );
+
+        let owners = scan_story_owners(xml.as_bytes(), StoryKind::Body).unwrap();
+        let items = scan_story_items(xml.as_bytes(), &owners[0]).unwrap();
+
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| story_item_text(xml.as_bytes(), item).unwrap())
+                .collect::<Vec<_>>(),
+            [Some("a\tb\tc".to_owned()), Some("\t".to_owned())]
+        );
     }
 
     #[test]

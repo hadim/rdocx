@@ -7129,7 +7129,7 @@ fn complex_field_cached_snapshot_namespace_and_literal_text_matrix() {
         ("", ""),
         (
             r#"<w:r><w:t>A&amp;&lt;</w:t></w:r><w:r><w:t><![CDATA[B>]]></w:t><w:tab/><w:br/><w:cr/><w:t>C</w:t></w:r>"#,
-            "A&<B>C",
+            "A&<B>\tC",
         ),
         (
             r#"<w:r><w:t xml:space="preserve"> 7 </w:t></w:r><w:r><w:t>8</w:t></w:r>"#,
@@ -397738,4 +397738,82 @@ fn bibliography_apa_gurmukhi_gujarati_odia_1096_recovered_cache_is_preserved_wit
     );
     let mut reopened = Document::from_bytes(&bytes).unwrap();
     assert_eq!(reopened.to_bytes().unwrap(), bytes);
+}
+
+/// #339: a `w:tab` in a run reads as a tab in every story item, as it does in
+/// `Paragraph::text`, rather than joining the text on either side.
+mod story_text_keeps_run_tabs {
+    use rdocx::{Document, StoryItemKind, StoryKind};
+
+    /// Write "left", a tab run, and "right" in the body, the default header,
+    /// and the default footer.
+    fn document_with_tabs() -> Document {
+        let mut document = Document::new();
+        document.add_paragraph("left");
+        document.set_header("left");
+        document.set_footer("left");
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+                .unwrap();
+        let mut parts = package
+            .parts
+            .keys()
+            .filter(|name| {
+                name.as_str() == "/word/document.xml"
+                    || name.starts_with("/word/header")
+                    || name.starts_with("/word/footer")
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        parts.sort();
+        assert_eq!(parts.len(), 3, "{parts:?}");
+        for part in parts {
+            let xml = String::from_utf8(package.get_part(&part).unwrap().to_vec()).unwrap();
+            assert_eq!(xml.matches(">left</w:t></w:r>").count(), 1, "{part}");
+            let xml = xml.replace(
+                ">left</w:t></w:r>",
+                ">left</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>right</w:t></w:r>",
+            );
+            package.set_part(&part, xml.into_bytes());
+        }
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(bytes.get_ref()).unwrap()
+    }
+
+    #[test]
+    fn story_items_of_the_body_header_and_footer_keep_a_run_tab() {
+        let document = document_with_tabs();
+        assert_eq!(document.paragraphs()[0].text(), "left\tright");
+
+        let texts = document
+            .story_item_snapshots()
+            .unwrap()
+            .into_iter()
+            .filter(|item| item.location().item_kind() == StoryItemKind::Paragraph)
+            .map(|item| {
+                (
+                    item.location().story().kind(),
+                    item.text().map(str::to_owned),
+                )
+            })
+            .collect::<Vec<_>>();
+        let expected = Some("left\tright".to_owned());
+        assert_eq!(
+            texts,
+            [
+                (StoryKind::Body, expected.clone()),
+                (StoryKind::Header, expected.clone()),
+                (StoryKind::Footer, expected.clone()),
+            ]
+        );
+
+        for story in document.stories().unwrap() {
+            for item in document.story_items(&story).unwrap() {
+                if item.kind() == StoryItemKind::Paragraph {
+                    assert_eq!(item.text().unwrap(), expected, "{story:?}");
+                }
+            }
+        }
+    }
 }

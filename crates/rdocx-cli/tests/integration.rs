@@ -806,6 +806,69 @@ fn text_views_never_read_the_fallback_copy_of_a_word_text_box() {
     }
 }
 
+/// #339: a tab run between "left" and "right" reads as a tab in the body, the
+/// header, and the footer of both text views.
+#[test]
+fn text_views_keep_a_run_tab_in_every_story() {
+    let temp = TempWorkspace::new("text-tabs");
+    let input = temp.path.join("tabs.docx");
+    let mut document = fixture_document(&["left"]);
+    document.set_header("left");
+    document.set_footer("left");
+    document.save(&input).unwrap();
+    let mut package = OpcPackage::open(&input).unwrap();
+    let parts = package
+        .parts
+        .keys()
+        .filter(|name| {
+            name.as_str() == "/word/document.xml"
+                || name.starts_with("/word/header")
+                || name.starts_with("/word/footer")
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(parts.len(), 3, "{parts:?}");
+    for part in parts {
+        let xml = String::from_utf8(package.get_part(&part).unwrap().to_vec()).unwrap();
+        assert_eq!(xml.matches(">left</w:t></w:r>").count(), 1, "{part}");
+        let xml = xml.replace(
+            ">left</w:t></w:r>",
+            ">left</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>right</w:t></w:r>",
+        );
+        package.set_part(&part, xml.into_bytes());
+    }
+    package.save(&input).unwrap();
+
+    let plain = cli(&["text", path_text(&input)]);
+    assert_success(&plain, "plain text");
+    assert_eq!(
+        String::from_utf8(plain.stdout).unwrap(),
+        "left\tright\n\
+         --- header (/word/header1.xml) ---\nleft\tright\n\
+         --- footer (/word/footer1.xml) ---\nleft\tright\n"
+    );
+
+    let structured = cli(&["text", path_text(&input), "--json"]);
+    assert_success(&structured, "structured text");
+    let value: Value = serde_json::from_slice(&structured.stdout).unwrap();
+    assert_eq!(value["paragraphs"][0]["text"], "left\tright");
+    let stories = value["stories"].as_array().unwrap();
+    assert_eq!(
+        stories
+            .iter()
+            .map(|story| story["kind"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["header", "footer"]
+    );
+    for story in stories {
+        assert_eq!(
+            story["items"],
+            json!([{ "index_path": [0], "kind": "paragraph", "text": "left\tright" }]),
+            "{story}"
+        );
+    }
+}
+
 #[test]
 fn text_views_keep_the_body_when_a_story_part_cannot_be_read() {
     let temp = TempWorkspace::new("text-unreadable-story");
