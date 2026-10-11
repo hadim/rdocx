@@ -6,8 +6,8 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 now contains twenty-six active stories, eight completed, one integrated
-and reviewed, four running, thirteen approved pending implementation. Rolling contribution intake is reopened at the user's latest instruction.
+S91 now contains twenty-six active stories, nine completed, one integrated
+and reviewed, three running, thirteen approved pending implementation. Rolling contribution intake is reopened at the user's latest instruction.
 
 ## Spec references
 
@@ -40,7 +40,7 @@ and reviewed, four running, thirteen approved pending implementation. Rolling co
 | F-X207 | Persist PowerPoint autofit and implement fit_text | L | in-progress | codex |
 | F-X208 | Author PowerPoint footer fields themes and transitions | L | pending | - |
 | F-X209 | Edit PowerPoint masters layouts and themes | L | pending | - |
-| F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | in-progress | codex |
+| F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | done | - |
 | F-X211 | Complete Python script compatibility and safe XML access | L | pending | - |
 | F-X212 | Align native accessibility with visible paragraph content | M | done | - |
 | F-X213 | Preserve TOC entry boundary paragraphs during rebuild | M | in-progress | codex |
@@ -1025,12 +1025,14 @@ F-X206 review84 approves three targeted layout corrections and an assertion-mess
 R32 focused execution stopped at compilation because its new test referenced quick_xml without a direct dependency. No named test ran. A correction will use the existing paragraph serialization API, retaining the deciding assertions and adding no dependency. Review84 is superseded for that compilation assumption. The production correction remains subject to actual focused acceptance.
 
 
-## Targeted acceptance update, 2026-10-11 23:00 UTC
+## Targeted acceptance update, 2026-10-12 00:55 BST
 
-Latest intake /private/tmp/S91-intake-refresh-20261011T225800Z/receipt.json, checked at22:54UTC, remains unchanged at38 included issues and28 open PRs, with no advanced heads. Issues264 and281 remain excluded. Sprint state remains8 completed,1 reviewed,4 running and13 approved, with10 carryovers. Final integrated verification and sprint review remain due.
+The latest intake, checked at23:42:53UTC, remains unchanged at38 included issues and28 open PRs. Issues264 and281 remain excluded. Receipt: /private/tmp/S91-intake-refresh-20261011T234400Z/receipt.json. State is9 completed,1 reviewed,3 running and13 approved, with10 carryovers. Final integrated verification and sprint review remain due.
 
-F-X206 has qualified original OXML membership35 and render membership118 with one historical ignored control, using retained original passes plus exact repaired selectors. R40 independently recovers both historical archive hashes, attributes all17 changed members to approved naming, namespace closure and modeled attribute order, and passes both current archive selectors. Actual receipt407a84cf records both passes. Labelled serialization behavior commit remains due. The pinned LibreOffice26.2.5.2 source render is captured, and the equal-axis native move, resize and glue operation saves endCxn id3 idx3 and reopens without repair. Source and vector geometry checks, nonuniform operation, final installed controls and remaining scoped riders remain due.
+F-X210 is complete at the scoped dependency checkpoint. Labelled integration eff7af54 retains the F-X213 exact-source TOC guard. Independent integration review30 has zero defects and smells. Actual receiptbc249642 records seven integrated checks with exit0, three font regressions, two TOC controls, Word/CLI check and49 matching hashes. Final metadata-only measurement receipt1011d0fa has exact51029765 normalized member bytes and37 members, with compressed3573503 within2 bytes of the recorded3573501. Measurement-only packages confer no new verified archive credit. Exactly12 independently reviewed Georgia-to-Gelasio values change and37 entries remain exact.
 
-F-X207 completed current scoped riders, genuine verified archives and policy141 with two existing published-family opt-in skips and no failures. Actual source-derived full-scene PDF comparisons pass22 of22 with all66 negatives below0.99, receipta7c503b1. Separate SVG-versus-PDF raster comparisons fail22 of22 and remain failed. Those cross-pipeline results do not establish native PNG acceptance. Five genuine rich and caller-font input/fact controls pass, receiptb4a501b4, including exact original variable700 font bytes and nonsynthetic selection. Their independent paint references and the9823EMU native allocation distinction remain due.
+F-X206's imported duplicate-ID save panic is repaired with a genuine semantic Base failure, deciding native PASS, scoped Clippy and rebuilt PPT wheel. All15 affected installed cases pass. Remaining104 caller-font cases pass without skips, receipt97aefe42. Actual mandatory eight-owner SVG control passes, with16 source-contour scores at least0.99543, receipt8aa1c3b1. Factory2 and recovery14 pass. Two extra fixture failures have scoped corrections awaiting their actual retry. Remaining risk gates, source partition and final review stay due.
 
-F-X210 has seven genuine verified package dry-runs and final measurements. Actual receiptbbf9b470 passes six measurements, two failed policy retries, prose and diff checks. Composite policy qualification is139 passes and two existing skips. ROOT adopts exactly twelve independently reviewed Georgia-to-Gelasio hashes, preserving37 entries. Actual receipte4715741 then records all49 matching. Whole-feature review29 finds zero defects and smells. Normal labelled behavior commit, structured handoff and integration are next. No full sprint verification or closure is claimed.
+F-X207's independent source-derived rendering composite passes42 positives and126 strict negatives. Its native allocated extent is classified separately from physical containment, without equality or tolerance claims. Final whole-feature review7 found one preservation defect: publishing refresh can discard unknown autofit attributes, including on unrelated owners. Separate remediation is underway. Previous failed reference and raster comparisons remain failed.
+
+The unattended LibreOffice runner uses headless operation, recovery suppression and isolated profiles. All four affected Office controls and the decimal fixture pass, receipt2f51bb64. The app is absent after qualification. Reproducible historical build targets and seven package extraction directories were removed, while required sources, archives, logs, worker branches and active build caches remain retained.

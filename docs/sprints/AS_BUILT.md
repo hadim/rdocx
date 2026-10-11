@@ -19019,3 +19019,23 @@ push, main merge, tag or publication is claimed.
 **Hash harness.** Unchanged. All49 canonical entries match the accepted baseline. The earlier stale-baseline failure is attributed separately to already accepted F-X212 behavior. No new baseline change was introduced. Final full integrated sprint verification and sprint review remain due.
 
 **Notes for future sessions.** Source head229bba9c3550c2e72592a3ce461bb04a6c00f045 and handoff-only tipbc38d1d9d19f204ed8930397d298859c39561d5c are validated. Local integration989950b8 consumes the handoff. Exact scoped and integrated receipts, actual archives and immutable failures remain under /private/tmp/S91-F-X195-default-axis-green-producer-r68-root-executable. Keep work/f-x195-codex through final verification and close. No GitHub closure, push, main merge, tag or publication is claimed.
+
+### F-X210, Extend metric-compatible fonts and bullet fallbacks
+
+**Sprint.** S91
+**Completed.** 2026-10-12
+**Size.** L, estimated 4 to 5 days, actual not recorded
+
+**What was built.** Georgia and Segoe UI use approved Gelasio and Selawik substitutes with measured compatibility limits. Nine approved assets include the checkbox subset. Qualified Symbol and Wingdings bullets use finite semantic fallbacks. Native, Python and CLI diagnostic companions return facts from the same successful render, preserving existing byte APIs and source codes.
+
+**Non-obvious choices.** Caller faces retain precedence. Actual contributing requests govern Aptos warnings and warm replay. Selawik italic synthesis and absent genuine Bold parity remain explicit. Symbol fallback claims semantic coverage rather than original outline parity. The nine assets retain authenticated source, licenses and recipes.
+
+**Deviations from the design plan.** No product deviation. Original failed wrappers and tests remain failed, with exact successful recoveries qualified separately. Upstream license whitespace is retained verbatim. Integration preserves the F-X213 exact-source guard and reconciles only the affected Word package measurement.
+
+**Spec sections touched.** HLD08 font and bullet rendering, HLD10 diagnostic consumers, HLD14 F-X210 acceptance and HLD15 bundled inventory and packaging.
+
+**Tests.** Scoped evidence b61ed332 authenticates native, installed, typing, original-font16, joint checkbox4, no-default141 plus3 docs, both WASM, license and seven genuine verified package dry runs. Policy completion is composite139 passes and2 existing skips. Whole-feature review29 and integration review30 report zero defects and smells. Integrated receiptbc249642 records seven commands0, three font regressions, two TOC controls, Word/CLI check and hash49. Postedit measurement receipt1011d0fa binds exact source members and3573503/51029765/37, within the existing64-byte compression tolerance. Measurement-only packaging grants no new publication verification.
+
+**Hash harness.** Exactly12 reviewed Georgia-to-Gelasio PNG and PDF values change. The other37 entries remain exact. Actual integrated49 entries match the accepted baseline2bd99ae659a44c9e0677f27701698152a5bb8ce88cd541e3a255389dee99dd72. Full sprint verification and review remain due.
+
+**Notes for future sessions.** Source7363ce342ee07897ded52cc422db34492738931a and completion-only tipdc7074d1d43ee843ef6a39519dada8084c0bd94f validate the consumed handoff. Local integrationeff7af54 is recorded. Keep the worker branch through final verification and close. Required evidence remains under /private/tmp/S91-F-X210-*. No GitHub closure, push, main merge, tag or publication is claimed.
