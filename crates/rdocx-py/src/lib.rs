@@ -12,7 +12,6 @@ use pyo3::types::{PyAny, PyType};
 
 use oxml_py_support::StaleElementError;
 
-use document::PyHtmlDiagnostic;
 use document::{
     PyBookmark, PyBoundingBox, PyComment, PyComparisonDiagnostic, PyContentFragment,
     PyCoreProperties, PyDocument, PyHeaderFooterVariant, PyHyperlink,
@@ -20,6 +19,7 @@ use document::{
     PyRunPosition, PyRunRange, PySection, PyStory, PyStoryItem, PyStoryRunPosition,
     PyStoryRunRange, PyStyle, PySvgDiagnostic, PySvgRenderResult, PyTocRebuildReport,
 };
+use document::{PyHtmlDiagnostic, PyMarkdownDiagnostic};
 use formatting::{PyFont, PyParagraphFormat};
 use paragraph::{PyParagraph, PyParagraphCollection};
 use run::{PyRun, PyRunCollection};
@@ -127,6 +127,7 @@ fn _rdocx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyComparisonDiagnostic>()?;
     module.add_class::<PySvgDiagnostic>()?;
     module.add_class::<PyHtmlDiagnostic>()?;
+    module.add_class::<PyMarkdownDiagnostic>()?;
     module.add_class::<PySvgRenderResult>()?;
     module.add_class::<PyBoundingBox>()?;
     module.add_class::<PyLayoutFragment>()?;

@@ -45,11 +45,12 @@ enum Command {
     },
     /// Convert DOCX to another format (docx, pdf, html, md, png, jpeg, tiff)
     ///
-    /// An input file named `.html` or `.htm` is read as HTML instead, and is
-    /// converted to DOCX unless `--to` names another format. What the HTML
-    /// import drops or approximates is printed as warnings on stderr.
+    /// An input file named `.html` or `.htm` is read as HTML instead, and one
+    /// named `.md` or `.markdown` as Markdown. Both are converted to DOCX
+    /// unless `--to` names another format. What the import drops or
+    /// approximates is printed as warnings on stderr.
     Convert {
-        /// Path to the DOCX or HTML file
+        /// Path to the DOCX, HTML or Markdown file
         file: PathBuf,
         /// Output format: docx, pdf, html, md, png, jpeg, tiff (required for DOCX input)
         #[arg(long, short = 't')]
@@ -60,6 +61,9 @@ enum Command {
         /// Replace existing output files, but never the input file
         #[arg(long)]
         force: bool,
+        /// DOCX or DOTX whose styles, headers and footers Markdown input takes
+        #[arg(long)]
+        template: Option<PathBuf>,
         /// DPI for image rendering (default: 150)
         #[arg(long, default_value = "150")]
         dpi: u32,
@@ -479,6 +483,7 @@ fn run_cli() {
             to,
             output,
             force,
+            template,
             dpi,
             font_dir,
             revision_view,
@@ -490,6 +495,7 @@ fn run_cli() {
             to.as_deref(),
             output.as_deref(),
             force,
+            template.as_deref(),
             dpi,
             font_dir.as_deref(),
             revision_view,

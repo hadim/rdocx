@@ -1037,6 +1037,77 @@ fn convert_creates_a_styled_docx_from_an_html_file() {
 }
 
 #[test]
+fn convert_creates_a_docx_from_markdown_with_a_template() {
+    let temp = TempWorkspace::new("convert-markdown");
+    let template_path = temp.path.join("template.docx");
+    let mut template = fixture_document(&["template body"]);
+    template.set_header("Template header");
+    template.save(&template_path).unwrap();
+    let input = temp.path.join("notes.md");
+    fs::write(
+        &input,
+        format!(
+            "# Notes\n\nSee [the site](https://example.test/).\n\n- one\n  - two\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n\n![dot]({PIXEL_DATA_URI})\n\n> quoted\n\n<span>raw</span>\n"
+        ),
+    )
+    .unwrap();
+
+    let docx = input.with_extension("docx");
+    let output = cli(&[
+        "convert",
+        path_text(&input),
+        "--template",
+        path_text(&template_path),
+    ]);
+    assert!(output.status.success(), "convert Markdown to DOCX failed");
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("Written to {}\n", docx.display())
+    );
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "Warning: line 16: dropped inline raw HTML `<span>`\nWarning: line 16: dropped inline raw HTML `</span>`\n"
+    );
+    let document = Document::open(&docx).unwrap();
+    assert_eq!(document.header_text().as_deref(), Some("Template header"));
+    assert_eq!(document.paragraph(0).unwrap().style_id(), Some("Heading1"));
+    assert_eq!(document.paragraph(1).unwrap().text(), "See the site.");
+    let levels = (2..4)
+        .map(|index| {
+            document
+                .paragraph(index)
+                .unwrap()
+                .numbering()
+                .map(|(_, level)| level)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(levels, [Some(0), Some(1)]);
+    assert_eq!(document.table(0).unwrap().cell(1, 1).unwrap().text(), "2");
+    assert_eq!(
+        document.links()[0].url.as_deref(),
+        Some("https://example.test/")
+    );
+    assert_eq!(document.images().len(), 1);
+    assert_eq!(document.paragraph(5).unwrap().style_id(), Some("Quote"));
+    assert!(!document.text().contains("template body"));
+
+    let output = cli(&[
+        "convert",
+        path_text(&template_path),
+        "--to",
+        "md",
+        "--template",
+        path_text(&template_path),
+    ]);
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8(output.stderr)
+            .unwrap()
+            .contains("--template applies only to Markdown input")
+    );
+}
+
+#[test]
 fn convert_replaces_an_existing_output_only_with_force_and_never_its_input() {
     let temp = TempWorkspace::new("convert-output-policy");
     let input = temp.path.join("source.docx");

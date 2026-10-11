@@ -51,6 +51,7 @@ rdocx replace template.docx -p TOKEN -v ready --expect 1 -o report.docx
 rdocx convert report.docx --to pdf -o report.pdf
 rdocx convert redline.docx --to pdf --revision-view tracked -o redline.pdf
 rdocx convert page.html -o page.docx
+rdocx convert notes.md --template brand.dotx -o notes.docx
 rdocx diff before.docx after.docx
 rdocx diff before.docx after.docx --exit-code --json
 rdocx validate report.docx
@@ -150,11 +151,15 @@ block content control with its story `index_path`, its `kind`, and its `text`.
 body, one section per part under a bold label. They leave comments out,
 because comments annotate a document rather than belong to it.
 
-`convert` reads an input file named `.html` or `.htm` as HTML and writes
-DOCX unless `--to` names another format. DOCX input needs `--to`, which also
-accepts `docx`. Headings, lists, tables, safe links and data URI images are
-kept. Each part of the HTML that is dropped or approximated is printed on
-stderr as a `Warning:` line with its location.
+`convert` reads an input file named `.html` or `.htm` as HTML, and one named
+`.md` or `.markdown` as CommonMark with GitHub tables, and writes DOCX unless
+`--to` names another format. DOCX input needs `--to`, which also accepts
+`docx`. Headings, lists, tables, safe links and images are kept. HTML images
+come from data URIs, and Markdown images also from files next to the input.
+`--template` names a DOCX or DOTX whose styles, headers and footers a Markdown
+conversion takes. Each part of the input that is dropped or approximated is
+printed on stderr as a `Warning:` line with its location, a Markdown line
+number for Markdown input.
 
 `convert` to PDF or images and `render` use the accepted revision view by
 default. `--revision-view tracked` shows both sides of tracked changes.

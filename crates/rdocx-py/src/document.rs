@@ -306,6 +306,42 @@ fn html_read_result<'py>(
     PyTuple::new(py, [document.into_any(), diagnostics.into_any()])
 }
 
+/// One loss or approximation reported by a Markdown import.
+#[pyclass(name = "MarkdownDiagnostic", frozen, get_all, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyMarkdownDiagnostic {
+    pub location: String,
+    pub message: String,
+}
+
+#[pymethods]
+impl PyMarkdownDiagnostic {
+    #[new]
+    #[pyo3(signature = (*, location, message))]
+    fn new(location: String, message: String) -> Self {
+        Self { location, message }
+    }
+}
+
+/// The converted document followed by the Markdown import diagnostics.
+fn markdown_read_result<'py>(
+    py: Python<'py>,
+    result: rdocx::MarkdownReadResult,
+) -> PyResult<Bound<'py, PyTuple>> {
+    let document = Bound::new(py, PyDocument::from_document(result.document))?;
+    let diagnostics = PyTuple::new(
+        py,
+        result
+            .diagnostics
+            .into_iter()
+            .map(|item| PyMarkdownDiagnostic {
+                location: item.location,
+                message: item.message,
+            }),
+    )?;
+    PyTuple::new(py, [document.into_any(), diagnostics.into_any()])
+}
+
 #[pyclass(name = "SvgRenderResult", frozen, eq, skip_from_py_object)]
 #[derive(Clone, PartialEq, Eq)]
 pub struct PySvgRenderResult {
@@ -2133,6 +2169,57 @@ impl PyDocument {
             .detach(|| rdocx::Document::from_html(html))
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         html_read_result(py, result)
+    }
+
+    /// Create a document from CommonMark with GitHub tables. Local images
+    /// resolve against `base_dir`, and `template` supplies the styles,
+    /// headers and footers. Returns the document and a tuple of
+    /// `MarkdownDiagnostic` values for what was dropped.
+    #[staticmethod]
+    #[pyo3(signature = (markdown, *, base_dir = None, template = None))]
+    fn from_markdown<'py>(
+        markdown: &str,
+        py: Python<'py>,
+        base_dir: Option<PathBuf>,
+        template: Option<PyRef<'_, PyDocument>>,
+    ) -> PyResult<Bound<'py, PyTuple>> {
+        let template = template.as_deref().map(|template| &template.inner);
+        let result = py
+            .detach(|| {
+                rdocx::Document::from_markdown_with_options(
+                    markdown,
+                    rdocx::MarkdownOptions {
+                        base_dir: base_dir.as_deref(),
+                        template,
+                    },
+                )
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        markdown_read_result(py, result)
+    }
+
+    /// Create a document from a UTF-8 Markdown file, as `from_markdown`
+    /// does, with local images resolved against the file's directory.
+    #[staticmethod]
+    #[pyo3(signature = (path, *, template = None))]
+    fn open_markdown<'py>(
+        path: PathBuf,
+        py: Python<'py>,
+        template: Option<PyRef<'_, PyDocument>>,
+    ) -> PyResult<Bound<'py, PyTuple>> {
+        let template = template.as_deref().map(|template| &template.inner);
+        let result = py
+            .detach(|| {
+                rdocx::Document::open_markdown_with_options(
+                    path,
+                    rdocx::MarkdownOptions {
+                        base_dir: None,
+                        template,
+                    },
+                )
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        markdown_read_result(py, result)
     }
 
     /// Create a document from a UTF-8 HTML file, as `from_html` does.

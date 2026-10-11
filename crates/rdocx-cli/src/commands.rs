@@ -666,14 +666,39 @@ fn collect_control_paragraphs(
 
 /// Open the document a conversion reads, by the input file's extension.
 ///
-/// HTML input prints its import diagnostics as warnings on stderr. Returns
-/// the document and the default output format for that input.
-fn open_conversion_input(file: &Path) -> Result<(Document, Option<&'static str>)> {
+/// HTML and Markdown input print their import diagnostics as warnings on
+/// stderr. Returns the document and the default output format for that input.
+fn open_conversion_input(
+    file: &Path,
+    template: Option<&Path>,
+) -> Result<(Document, Option<&'static str>)> {
     let extension = file
         .extension()
         .and_then(|extension| extension.to_str())
         .map(str::to_ascii_lowercase);
+    let markdown = matches!(extension.as_deref(), Some("md" | "markdown"));
+    if template.is_some() && !markdown {
+        return Err("--template applies only to Markdown input".into());
+    }
     match extension.as_deref() {
+        Some("md" | "markdown") => {
+            let template = template.map(Document::open).transpose()?;
+            let result = Document::open_markdown_with_options(
+                file,
+                rdocx::MarkdownOptions {
+                    base_dir: None,
+                    template: template.as_ref(),
+                },
+            )?;
+            print_import_warnings(result.diagnostics.iter().map(|diagnostic| {
+                (
+                    diagnostic.location.as_str(),
+                    None,
+                    diagnostic.message.as_str(),
+                )
+            }));
+            Ok((result.document, Some("docx")))
+        }
         Some("html" | "htm") => {
             let result = Document::open_html(file)?;
             print_import_warnings(result.diagnostics.iter().map(|diagnostic| {
@@ -701,19 +726,20 @@ fn print_import_warnings<'a>(
     }
 }
 
-/// Convert a DOCX or HTML file to another format.
+/// Convert a DOCX, HTML or Markdown file to another format.
 #[allow(clippy::too_many_arguments)]
 pub fn convert(
     file: &Path,
     to: Option<&str>,
     output: Option<&Path>,
     force: bool,
+    template: Option<&Path>,
     dpi: u32,
     font_dir: Option<&Path>,
     revision_view: RevisionView,
     image: ImageOptions<'_>,
 ) -> Result<()> {
-    let (mut doc, default_to) = open_conversion_input(file)?;
+    let (mut doc, default_to) = open_conversion_input(file, template)?;
     let to = to.or(default_to).ok_or(
         "--to is required for DOCX input. Supported: docx, pdf, html, md, png, jpeg, tiff",
     )?;
@@ -2602,6 +2628,7 @@ mod tests {
             Some("md"),
             None,
             false,
+            None,
             96,
             None,
             RevisionView::Accepted,

@@ -1430,7 +1430,13 @@ numbering, settings, headers, and footers the output takes, with its body
 replaced and a template class saved as a document. Raw HTML other than the
 line break and formatting elements the Markdown export writes, thematic
 breaks, remote images, and unsafe link targets are dropped with a diagnostic.
-Input failures return `Error::Html`.
+Input failures return `Error::Html`. Python binds the constructors as
+`Document.from_markdown(markdown, base_dir=None, template=None)` and
+`Document.open_markdown(path, template=None)`, each returning the document and
+a tuple of frozen `MarkdownDiagnostic` values. The CLI `convert` command reads
+a `.md` or `.markdown` input as Markdown, writes DOCX by default, takes a
+`--template`, and prints each diagnostic on stderr. WASM gains no Markdown
+entry point.
 
 Native Rust callers can import and export bounded MHTML through
 `Document::from_mhtml_bytes`, `Document::open_mhtml`,

@@ -23,6 +23,7 @@ from rdocx import (
     LayoutBackedFieldUpdateReport,
     LayoutPage,
     ListLevel,
+    MarkdownDiagnostic,
     RGBColor,
     ReplacementCountError,
     Paragraph,
@@ -63,6 +64,13 @@ def exercise_rdocx_types(path: Path) -> None:
     html_inserted = html_document.insert_html("<p>x</p>", after=None)
     assert_type(html_inserted, tuple[HtmlDiagnostic, ...])
     assert_type(html_inserted[0].property, str | None)
+    md_document, md_diagnostics = Document.from_markdown("# typed", base_dir=path)
+    assert_type(md_document, Document)
+    assert_type(md_diagnostics, tuple[MarkdownDiagnostic, ...])
+    opened_md: tuple[Document, tuple[MarkdownDiagnostic, ...]] = Document.open_markdown(
+        path, template=md_document
+    )
+    assert_type(md_diagnostics[0].location, str)
     paragraph: Paragraph = document.add_paragraph("typed")
     run: Run = paragraph.add_run(" run")
     paragraph.text = None
