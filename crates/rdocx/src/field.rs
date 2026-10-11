@@ -2114,6 +2114,7 @@ impl Document {
         diagnostics.extend(toc_default_style_diagnostics(&candidate.styles));
         let (toc_entry_styles, retained_style_defects) =
             ensure_toc_entry_styles(&mut candidate, &sources)?;
+        let entry_style_ids = toc_entry_style_ids(&candidate.styles, &toc_entry_styles);
         diagnostics.extend(retained_style_defects);
         candidate.flush_to_package()?;
         let rebuilt_toc_spans = toc_spans
@@ -2255,7 +2256,7 @@ impl Document {
                 span,
                 &provisional_paragraphs,
                 &generated,
-                &toc_entry_styles,
+                &entry_style_ids,
                 &end_bookmark_starts[toc_index],
             ) {
                 edits.append(&mut merged);
@@ -9148,21 +9149,28 @@ fn dynamic_toc_replacement(
 /// Word and Google Docs put the field begin in the first entry paragraph and
 /// the end in the last one. The generic replacement would leave both markers
 /// in empty paragraphs of their own. Here the first entry takes over the
-/// begin paragraph, whose properties it replaces, and the last entry takes
-/// over the end paragraph. A boundary paragraph counts as an entry when it
-/// has a TOC entry style and a run in the field result. Any other boundary
-/// paragraph, or one ending a section, keeps the generic layout. A single generated entry takes over the begin
-/// paragraph only, so the result still spans two paragraphs, and an empty
-/// rebuild keeps the generic layout. `None` means the generic replacement
-/// applies.
+/// begin paragraph and the last entry takes over the end paragraph. Both
+/// keep their opening tag, so identity attributes survive, and take the
+/// generated paragraph properties, so a plain paragraph-mark format is
+/// replaced.
+///
+/// A boundary paragraph counts as an entry when it has a TOC entry style of
+/// any level and a run in the field result. One whose properties end a
+/// section, number the paragraph or track a revision keeps the generic
+/// layout, and so does an end paragraph with a run after the end marker. A
+/// single generated entry takes over the begin paragraph only, so the result
+/// still spans two paragraphs, and an old entry left holding the end marker
+/// alone loses its entry style. An empty rebuild keeps the generic layout.
+/// `None` means the generic replacement applies.
 fn entry_boundary_toc_edits(
     xml: &[u8],
     span: &DynamicTocSpan,
     paragraphs: &[TocParagraphInsertion],
     generated: &[u8],
-    entry_styles: &BTreeMap<u8, TocEntryStyle>,
+    entry_style_ids: &BTreeSet<String>,
     end_boundary_bookmark_starts: &[u8],
 ) -> Option<Vec<FieldSourceEdit>> {
+    const PARAGRAPH_START: &[u8] = b"<w:p>";
     const PARAGRAPH_END: &[u8] = b"</w:p>";
     const PROPERTIES_END: &[u8] = b"</w:pPr>";
     if span.start_paragraph_name != "w:p"
@@ -9186,30 +9194,32 @@ fn entry_boundary_toc_edits(
     if entry_start != generated.len() || entries.is_empty() {
         return None;
     }
-    let is_entry = |properties: &[u8], content: &[u8]| {
-        let (style, _) = toc_fragment_scan(properties);
-        find_bytes(properties, b"sectPr").is_none()
-            && style.is_some_and(|style| {
-                entry_styles
-                    .values()
-                    .any(|entry_style| entry_style.style_id == style)
-            })
-            && toc_fragment_scan(content).1
+    // The entry style of an old entry whose properties can be replaced.
+    let entry_style = |properties: &[u8], content: &[u8]| {
+        let scan = toc_fragment_scan(properties);
+        let style = scan.style?;
+        (!scan.blocks_replacement
+            && entry_style_ids.contains(&style.0)
+            && toc_fragment_scan(content).has_run)
+            .then_some(style.1)
     };
-    let end_opening = xml.get(span.end_paragraph_start..span.end_paragraph_content_start)?;
+    let end_tag = xml.get(span.end_paragraph_start..end.start_tag_end)?;
+    let end_properties = xml.get(end.start_tag_end..end.content_start)?;
     let merge_begin = begin.content_start == span.begin_run_start
-        && is_entry(
+        && entry_style(
             xml.get(begin.start_tag_end..begin.content_start)?,
             xml.get(span.result_start..begin.content_end)?,
-        );
-    let merge_end = (entries.len() > 1 || !merge_begin)
-        && (end_opening.starts_with(b"<w:p>") || end_opening.starts_with(b"<w:p "))
-        && !toc_fragment_scan(xml.get(span.end_run_end..end.content_end)?).1
-        && is_entry(
-            xml.get(end.start_tag_end..end.content_start)?,
-            xml.get(end.content_start..span.result_end)?,
-        );
-    if !merge_begin && !merge_end {
+        )
+        .is_some();
+    let end_entry_style = if (end_tag.starts_with(b"<w:p>") || end_tag.starts_with(b"<w:p "))
+        && !toc_fragment_scan(xml.get(span.end_run_end..end.content_end)?).has_run
+    {
+        entry_style(end_properties, xml.get(end.content_start..span.result_end)?)
+    } else {
+        None
+    };
+    let merge_end = end_entry_style.is_some() && (entries.len() > 1 || !merge_begin);
+    if !merge_begin && end_entry_style.is_none() {
         return None;
     }
     let mut edits = Vec::new();
@@ -9222,21 +9232,33 @@ fn entry_boundary_toc_edits(
             edits.push(FieldSourceEdit {
                 start: begin.start_tag_end,
                 end: begin.content_start,
-                replacement: entry[b"<w:p>".len()..properties_end].to_vec(),
+                replacement: entry[PARAGRAPH_START.len()..properties_end].to_vec(),
             });
             entry_start = properties_end;
         } else if index == 0 {
             replacement.extend_from_slice(PARAGRAPH_END);
         }
-        let entry_end = if index == last && merge_end {
-            entry.len() - PARAGRAPH_END.len()
-        } else {
-            entry.len()
-        };
+        let mut entry_end = entry.len();
+        if index == last && merge_end {
+            entry_end -= PARAGRAPH_END.len();
+            if entry_start == 0 {
+                replacement.extend_from_slice(end_tag);
+                entry_start = PARAGRAPH_START.len();
+            }
+        }
         replacement.extend_from_slice(&entry[entry_start..entry_end]);
     }
     if !merge_end {
-        replacement.extend_from_slice(end_opening);
+        // The end marker keeps a paragraph of its own, without the entry
+        // style it had, as in the layout the generic replacement keeps.
+        replacement.extend_from_slice(end_tag);
+        match end_entry_style {
+            Some(style) => {
+                replacement.extend_from_slice(&end_properties[..style.start]);
+                replacement.extend_from_slice(&end_properties[style.end..]);
+            }
+            None => replacement.extend_from_slice(end_properties),
+        }
     }
     edits.push(FieldSourceEdit {
         start: span.result_start,
@@ -9246,19 +9268,56 @@ fn entry_boundary_toc_edits(
     Some(edits)
 }
 
-/// The `w:pStyle` value and whether a `w:r` run occurs in a fragment of
-/// paragraph XML.
-fn toc_fragment_scan(fragment: &[u8]) -> (Option<String>, bool) {
+/// Every style identifier a TOC entry of any level may carry: the producer
+/// styles named `toc 1` to `toc 9`, the canonical `TOC1` to `TOC9`, and the
+/// styles this rebuild resolved.
+fn toc_entry_style_ids(
+    styles: &CT_Styles,
+    resolved: &BTreeMap<u8, TocEntryStyle>,
+) -> BTreeSet<String> {
+    let mut ids = (1..=9)
+        .map(|level| format!("TOC{level}"))
+        .collect::<BTreeSet<_>>();
+    for style in &styles.styles {
+        let is_entry_name = style.name.as_deref().is_some_and(|name| {
+            (1..=9).any(|level| name.trim().eq_ignore_ascii_case(&format!("toc {level}")))
+        });
+        if style.style_type == StyleType::Paragraph && !style.style_id.is_empty() && is_entry_name {
+            ids.insert(style.style_id.clone());
+        }
+    }
+    ids.extend(resolved.values().map(|style| style.style_id.clone()));
+    ids
+}
+
+struct TocFragmentScan {
+    /// The `w:pStyle` value and the byte range of its element.
+    style: Option<(String, std::ops::Range<usize>)>,
+    has_run: bool,
+    /// A section break, numbering or tracked revision the generated entry
+    /// properties would drop.
+    blocks_replacement: bool,
+}
+
+/// Scan a fragment of paragraph XML for its style, runs and properties that
+/// must not be replaced.
+fn toc_fragment_scan(fragment: &[u8]) -> TocFragmentScan {
+    let mut scan = TocFragmentScan {
+        style: None,
+        has_run: false,
+        blocks_replacement: false,
+    };
     let mut reader = quick_xml::Reader::from_reader(fragment);
     reader.config_mut().check_end_names = false;
     let mut buffer = Vec::new();
-    let mut style = None;
     loop {
+        let before = reader.buffer_position() as usize;
         match reader.read_event_into(&mut buffer) {
             Ok(Event::Start(element) | Event::Empty(element)) => match element.name().as_ref() {
-                b"w:r" => return (style, true),
-                b"w:pStyle" if style.is_none() => {
-                    style = element
+                b"w:r" => scan.has_run = true,
+                b"w:pStyle" if scan.style.is_none() => {
+                    let after = reader.buffer_position() as usize;
+                    scan.style = element
                         .try_get_attribute("w:val")
                         .ok()
                         .flatten()
@@ -9270,11 +9329,13 @@ fn toc_fragment_scan(fragment: &[u8]) -> (Option<String>, bool) {
                                 )
                                 .ok()
                         })
-                        .map(|value| value.into_owned());
+                        .map(|value| (value.into_owned(), before..after));
                 }
+                b"w:sectPr" | b"w:numPr" | b"w:pPrChange" | b"w:ins" | b"w:del" | b"w:moveFrom"
+                | b"w:moveTo" => scan.blocks_replacement = true,
                 _ => {}
             },
-            Ok(Event::Eof) | Err(_) => return (style, false),
+            Ok(Event::Eof) | Err(_) => return scan,
             Ok(_) => {}
         }
         buffer.clear();

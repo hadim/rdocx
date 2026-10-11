@@ -12465,10 +12465,21 @@ fn toc_rebuild_handles_the_largest_outline_level_without_panicking() {
 /// first entry paragraph and the end in the last one, followed by one
 /// Heading1 paragraph per heading.
 fn entry_boundary_toc_body(entries: &[&str], headings: &[&str]) -> String {
+    let entries = entries
+        .iter()
+        .map(|entry| ("TOC1", *entry))
+        .collect::<Vec<_>>();
+    styled_entry_boundary_toc_body(&entries, headings)
+}
+
+/// [`entry_boundary_toc_body`] with an explicit style for each old entry.
+fn styled_entry_boundary_toc_body(entries: &[(&str, &str)], headings: &[&str]) -> String {
     let last = entries.len() - 1;
     let mut body = String::new();
-    for (index, entry) in entries.iter().enumerate() {
-        body.push_str(r#"<w:p><w:pPr><w:pStyle w:val="TOC1"/></w:pPr>"#);
+    for (index, (style, entry)) in entries.iter().enumerate() {
+        body.push_str(&format!(
+            r#"<w:p><w:pPr><w:pStyle w:val="{style}"/></w:pPr>"#
+        ));
         if index == 0 {
             body.push_str(r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-3" \h \z \u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>"#);
         }
@@ -12555,7 +12566,8 @@ fn toc_rebuild_moves_entry_boundary_markers_to_the_new_first_and_last_entries() 
 #[test]
 fn toc_rebuild_of_entry_boundary_markers_keeps_a_result_paragraph_boundary() {
     // One heading cannot hold both markers: the result must still span two
-    // paragraphs, so the end keeps a paragraph of its own.
+    // paragraphs, so the end keeps a paragraph of its own, without the entry
+    // style it had.
     let body = entry_boundary_toc_body(&["Old one", "Old two"], &["Only"]);
     let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
     for _ in 0..2 {
@@ -12563,10 +12575,12 @@ fn toc_rebuild_of_entry_boundary_markers_keeps_a_result_paragraph_boundary() {
         let xml = document_xml(&mut document);
         let toc = toc_paragraph_xml(&xml);
         assert_eq!(body_paragraph_xml(&xml).len(), 3, "{xml}");
-        assert_eq!(toc.len(), 2, "{xml}");
+        assert_eq!(toc.len(), 1, "{xml}");
         assert!(toc[0].contains(r#"w:fldCharType="begin""#), "{xml}");
         assert!(toc[0].contains("Only"), "{xml}");
-        assert!(toc[1].contains(r#"w:fldCharType="end""#), "{xml}");
+        let end = body_paragraph_xml(&xml)[1];
+        assert!(end.contains(r#"w:fldCharType="end""#), "{xml}");
+        assert!(!end.contains("<w:pStyle"), "{xml}");
     }
 
     // No heading keeps the begin and end paragraphs, emptied of entries.
@@ -12579,6 +12593,123 @@ fn toc_rebuild_of_entry_boundary_markers_keeps_a_result_paragraph_boundary() {
     assert!(!xml.contains("Old"), "{xml}");
     assert!(toc[0].contains(r#"w:fldCharType="begin""#), "{xml}");
     assert!(toc[1].contains(r#"w:fldCharType="end""#), "{xml}");
+}
+
+#[test]
+fn toc_rebuild_recognizes_entry_boundary_markers_at_any_old_level() {
+    // The old boundary entries use levels the rebuilt TOC no longer has.
+    for old in [
+        [("TOC1", "One"), ("TOC1", "Two"), ("TOC2", "Two A")],
+        [("TOC2", "Zero"), ("TOC1", "One"), ("TOC1", "Two")],
+    ] {
+        let body = styled_entry_boundary_toc_body(&old, &["Alpha", "Beta", "Gamma"]);
+        let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+
+        assert_eq!(document.rebuild_toc().unwrap().entry_count, 3);
+        let xml = document_xml(&mut document);
+        assert_eq!(body_paragraph_xml(&xml).len(), 6, "{xml}");
+        let toc = toc_paragraph_xml(&xml);
+        assert_eq!(toc.len(), 3, "{xml}");
+        assert!(toc.iter().all(|entry| entry.contains("TOC1")), "{xml}");
+        assert!(toc[0].contains(r#"w:fldCharType="begin""#), "{xml}");
+        assert!(toc[2].contains(r#"w:fldCharType="end""#), "{xml}");
+    }
+}
+
+#[test]
+fn toc_rebuild_keeps_the_word_layout_of_a_toc_content_control() {
+    // Word wraps the TOC in a content control under a TOC heading, puts the
+    // begin in the first entry, links each entry, and writes the end in an
+    // unstyled paragraph of its own.
+    let entry = |anchor: &str, title: &str| {
+        format!(
+            r#"<w:hyperlink w:anchor="{anchor}" w:history="1"><w:r><w:rPr><w:rStyle w:val="Hyperlink"/><w:noProof/></w:rPr><w:t>{title}</w:t></w:r><w:r><w:rPr><w:noProof/><w:webHidden/></w:rPr><w:tab/></w:r><w:r><w:rPr><w:noProof/><w:webHidden/></w:rPr><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:rPr><w:noProof/><w:webHidden/></w:rPr><w:instrText xml:space="preserve"> PAGEREF {anchor} \h </w:instrText></w:r><w:r><w:rPr><w:noProof/><w:webHidden/></w:rPr></w:r><w:r><w:rPr><w:noProof/><w:webHidden/></w:rPr><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:noProof/><w:webHidden/></w:rPr><w:t>1</w:t></w:r><w:r><w:rPr><w:noProof/><w:webHidden/></w:rPr><w:fldChar w:fldCharType="end"/></w:r></w:hyperlink>"#
+        )
+    };
+    let body = format!(
+        r#"
+        <w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="Table of Contents"/><w:docPartUnique/></w:docPartObj></w:sdtPr><w:sdtContent>
+        <w:p><w:pPr><w:pStyle w:val="TOCHeading"/></w:pPr><w:r><w:t>Contents</w:t></w:r></w:p>
+        <w:p w:rsidR="00A1B2C3"><w:pPr><w:pStyle w:val="TOC1"/><w:tabs><w:tab w:val="right" w:leader="dot" w:pos="9350"/></w:tabs><w:rPr><w:noProof/></w:rPr></w:pPr><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-3" \h \z \u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>{first}</w:p>
+        <w:p><w:pPr><w:pStyle w:val="TOC1"/><w:tabs><w:tab w:val="right" w:leader="dot" w:pos="9350"/></w:tabs><w:rPr><w:noProof/></w:rPr></w:pPr>{second}</w:p>
+        <w:p><w:r><w:rPr><w:b/><w:bCs/><w:noProof/></w:rPr><w:fldChar w:fldCharType="end"/></w:r></w:p>
+        </w:sdtContent></w:sdt>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:bookmarkStart w:id="1" w:name="_Toc1"/><w:r><w:t>Alpha</w:t></w:r><w:bookmarkEnd w:id="1"/></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:bookmarkStart w:id="2" w:name="_Toc2"/><w:r><w:t>Beta</w:t></w:r><w:bookmarkEnd w:id="2"/></w:p>
+        "#,
+        first = entry("_Toc1", "Old alpha"),
+        second = entry("_Toc2", "Old beta"),
+    );
+    let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+    let before = body_paragraph_xml(&document_xml(&mut document)).len();
+
+    for _ in 0..2 {
+        assert_eq!(document.rebuild_toc().unwrap().entry_count, 2);
+        let xml = document_xml(&mut document);
+        let paragraphs = body_paragraph_xml(&xml);
+        assert_eq!(paragraphs.len(), before, "{xml}");
+        assert!(!xml.contains("Old "), "{xml}");
+        assert!(paragraphs[0].contains("TOCHeading"), "{xml}");
+        assert!(paragraphs[1].contains(r#"w:rsidR="00A1B2C3""#), "{xml}");
+        assert!(paragraphs[1].contains(r#"w:fldCharType="begin""#), "{xml}");
+        assert!(paragraphs[1].contains("Alpha"), "{xml}");
+        assert!(paragraphs[2].contains("Beta"), "{xml}");
+        assert!(paragraphs[3].contains(r#"w:fldCharType="end""#), "{xml}");
+        assert!(!paragraphs[3].contains("<w:pStyle"), "{xml}");
+        assert_eq!(
+            xml.matches(r#"<w:pStyle w:val="TOC1"/>"#).count(),
+            2,
+            "{xml}"
+        );
+        assert_eq!(xml.matches("PAGEREF _Toc").count(), 2, "{xml}");
+    }
+}
+
+#[test]
+fn toc_rebuild_keeps_the_generic_layout_around_unreplaceable_boundaries() {
+    // A run after the end marker keeps the end paragraph, and its text.
+    let body = r#"
+        <w:p><w:pPr><w:pStyle w:val="TOC1"/></w:pPr><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-3" </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>Old one</w:t></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="TOC1"/></w:pPr><w:r><w:t>Old two</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r><w:r><w:t>After the field</w:t></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>One</w:t></w:r></w:p>
+        <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Two</w:t></w:r></w:p>
+    "#;
+    let mut document = document_with_field_parts(&wrap_word_body(body), None, None);
+    assert_eq!(document.rebuild_toc().unwrap().entry_count, 2);
+    let xml = document_xml(&mut document);
+    let paragraphs = body_paragraph_xml(&xml);
+    assert_eq!(paragraphs.len(), 5, "{xml}");
+    assert!(paragraphs[0].contains(r#"w:fldCharType="begin""#), "{xml}");
+    assert!(paragraphs[0].contains("One"), "{xml}");
+    assert!(paragraphs[2].contains(r#"w:fldCharType="end""#), "{xml}");
+    assert!(paragraphs[2].contains("After the field"), "{xml}");
+    assert!(!xml.contains("Old "), "{xml}");
+
+    // Numbering or a tracked change in the boundary properties keeps them.
+    for properties in [
+        r#"<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>"#,
+        r#"<w:rPr><w:ins w:id="7" w:author="Ada"/></w:rPr>"#,
+        r#"<w:pPrChange w:id="8" w:author="Ada"><w:pPr/></w:pPrChange>"#,
+    ] {
+        let body = format!(
+            r#"
+            <w:p><w:pPr><w:pStyle w:val="TOC1"/>{properties}</w:pPr><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-3" </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>Old one</w:t></w:r></w:p>
+            <w:p><w:pPr><w:pStyle w:val="TOC1"/>{properties}</w:pPr><w:r><w:t>Old two</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>
+            <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>One</w:t></w:r></w:p>
+            "#
+        );
+        let mut document = document_with_field_parts(&wrap_word_body(&body), None, None);
+        assert_eq!(document.rebuild_toc().unwrap().entry_count, 1);
+        let xml = document_xml(&mut document);
+        let paragraphs = body_paragraph_xml(&xml);
+        assert_eq!(paragraphs.len(), 4, "{properties}: {xml}");
+        assert!(!paragraphs[0].contains("One"), "{properties}: {xml}");
+        assert!(paragraphs[1].contains("One"), "{properties}: {xml}");
+        assert!(
+            paragraphs[2].contains(r#"w:fldCharType="end""#),
+            "{properties}: {xml}"
+        );
+    }
 }
 
 #[test]

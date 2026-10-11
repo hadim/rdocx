@@ -1855,7 +1855,6 @@ def test_rebuild_toc_accepts_identity_attributes_on_the_field_runs():
         assert identity in saved
 
 
-
 def test_rebuild_toc_keeps_the_field_markers_in_the_first_and_last_entries():
     import rdocx
 
@@ -1894,6 +1893,7 @@ def test_rebuild_toc_keeps_the_field_markers_in_the_first_and_last_entries():
         if (paragraph.style or "").startswith("TOC")
     ]
     assert toc == ["One\t1", "Two\t1", "Three\t1"]
+
 
 def test_update_page_fields_writes_layout_page_numbers():
     import rdocx
