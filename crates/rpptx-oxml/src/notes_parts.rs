@@ -350,8 +350,11 @@ impl ParsedRoot {
                 }
                 namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
                 self.notes_style = Some(
-                    CT_TextListStyle::from_xml(&raw)
-                        .map_err(|error| OxmlError::InvalidValue(error.to_string()))?,
+                    CT_TextListStyle::from_xml_with_inherited_namespaces(
+                        &raw,
+                        &namespaces.entries(),
+                    )
+                    .map_err(|error| OxmlError::InvalidValue(error.to_string()))?,
                 );
                 self.boundary = 4;
             }

@@ -599,3 +599,43 @@ def fx210_notes_diagnostic_companion_signatures(presentation: Presentation, dire
     dirs: list[str | Path] = [directory, str(directory)]
     assert_type(presentation.to_notes_pdf_with_diagnostics(fonts=fonts, font_dir=directory, font_dirs=dirs), tuple[bytes, tuple[str, ...]])
     assert_type(presentation.render_all_notes_with_diagnostics(72.0, fonts=fonts, font_dir=directory, font_dirs=dirs), tuple[list[bytes], tuple[str, ...]])
+
+
+def fx208_authoring_signatures(presentation: Presentation, slide: Slide) -> None:
+    from rpptx import HeaderFooter, PlaceholderFormat, SlideMaster, SlideTransition, Theme
+    from rpptx.dml.color import RGBColor
+    from rpptx.enum.shapes import PP_PLACEHOLDER_TYPE
+    presentation.set_header_footer(slide_number=True, footer="footer", date="auto", hide_on_title=False, date_format="datetime13", date_cache="")
+    assert_type(presentation.slide_number_start, int | None)
+    presentation.slide_number_start = 0
+    presentation.slide_number_start = None
+    footer = slide.header_footer
+    assert_type(footer, HeaderFooter)
+    assert_type(footer.slide_number_policy, bool | None)
+    assert_type(footer.footer_policy, bool | None)
+    assert_type(footer.date_policy, bool | None)
+    assert_type(footer.policy_source, str)
+    assert_type(footer.date_cache, str | None)
+    footer.date = "fixed"
+    footer.footer = None
+    master = presentation.slide_masters[0]
+    assert_type(master, SlideMaster)
+    theme = master.theme
+    assert_type(theme, Theme)
+    assert_type(theme.colors, dict[str, RGBColor | None])
+    assert_type(theme.fonts.major.latin, str)
+    assert_type(theme.fonts.minor.east_asian, str)
+    transition = slide.transition
+    assert_type(transition, SlideTransition)
+    transition.type = "split"
+    transition.direction = "horizontal-in"
+    transition.duration = 1.25
+    assert_type(transition.advance_on_click, bool | None)
+    transition.advance_on_click = False
+    transition.advance_after = 0.0
+    transition.apply_to_all()
+    metadata = slide.shapes[0].placeholder_format
+    assert_type(metadata, PlaceholderFormat)
+    assert_type(metadata.type, PP_PLACEHOLDER_TYPE)
+    assert_type(metadata.idx, int)
+    slide.shapes[0].text_frame.paragraphs[0].add_field("slidenum", "")

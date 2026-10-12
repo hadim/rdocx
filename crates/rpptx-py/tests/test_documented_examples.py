@@ -8436,3 +8436,190 @@ def test_fx207_invalid_font_directory_and_late_unfit_preserve_the_complete_deck(
         presentation.refresh_autofit(fonts=fonts)
     assert presentation.to_bytes() == before
     assert presentation.slides[0].shapes[0].text_frame.text == "First line\nSecond line\nThird line"
+
+
+def test_fx208_deck_footer_public_base(tmp_path):
+    from rpptx import Presentation
+    prs = Presentation()
+    prs.slides.add_slide(prs.slide_layouts[0])
+    prs.slides.add_slide(prs.slide_layouts[1])
+    path = tmp_path / "footer-positive.pptx"
+    prs.save(path)
+    assert len(Presentation(path).slides) == 2
+    prs.set_header_footer(slide_number=True, footer="F208 owned footer", date="fixed date")
+    assert prs.slides[1].header_footer.footer == "F208 owned footer"
+    assert prs.slides[0].header_footer.footer is None
+    hf = prs.slides[1].header_footer
+    assert hf.source == "slide" and hf.policy_source == "layout"
+    assert hf.footer_policy is True and hf.footer_present
+    before = prs.to_bytes()
+    prs.set_header_footer(slide_number=True, footer="F208 owned footer", date="fixed date")
+    assert prs.to_bytes() == before
+    reopened = Presentation.from_bytes(before)
+    assert reopened.slides[1].header_footer.date == "fixed date"
+    from rpptx import RpptxError
+    with pytest.raises(RpptxError):
+        prs.set_header_footer(footer="invalid\x00")
+    assert prs.to_bytes() == before
+    prs.set_header_footer(date="auto", date_cache="same", hide_on_title=False)
+    hf = prs.slides[1].header_footer
+    assert hf.date_mode == "automatic" and hf.date_cache == "same"
+    hf.date = "same"
+    assert hf.date_mode == "fixed" and hf.date_cache is None
+    assert Presentation.from_bytes(prs.to_bytes()).slides[1].header_footer.date_mode == "fixed"
+    before = prs.to_bytes()
+    hf.date = "same"
+    assert prs.to_bytes() == before
+
+
+def test_fx208_slide_footer_public_base():
+    from rpptx import Presentation
+    prs = Presentation()
+    prs.slides.add_slide(prs.slide_layouts[1])
+    assert len(prs.slides[0].shapes) >= 2
+    prs.slides[0].header_footer.footer = "F208 local"
+    assert prs.slides[0].header_footer.footer == "F208 local"
+    hf = prs.slides[0].header_footer
+    hf.date = "auto"
+    hf.date_format = "datetime13"
+    hf.slide_number = True
+    assert hf.footer == "F208 local" and hf.date_format == "datetime13"
+    before = prs.to_bytes()
+    from rpptx import RpptxError
+    with pytest.raises(RpptxError):
+        hf.date_format = "datetime14"
+    assert prs.to_bytes() == before
+    hf.footer = ""
+    assert hf.footer == "" and hf.footer_present
+    hf.footer = None
+    assert hf.footer is None and not hf.footer_present
+
+
+def test_fx208_transition_public_base():
+    from rpptx import Presentation
+    prs = Presentation()
+    prs.slides.add_slide(prs.slide_layouts[1])
+    assert len(prs.slides) == 1
+    prs.slides[0].transition.type = "split"
+    prs.slides[0].transition.direction = "horizontal-in"
+    assert prs.slides[0].transition.type == "split"
+    transition = prs.slides[0].transition
+    directions = {
+        "fade": [None], "cut": [None],
+        "push": [None, "left", "up", "right", "down"],
+        "wipe": [None, "left", "up", "right", "down"],
+        "cover": [None, "left", "up", "right", "down", "left-up", "right-up", "left-down", "right-down"],
+        "uncover": [None, "left", "up", "right", "down", "left-up", "right-up", "left-down", "right-down"],
+        "split": [None, "horizontal-in", "horizontal-out", "vertical-in", "vertical-out"],
+        "zoom": [None, "in", "out"],
+    }
+    for kind, allowed in directions.items():
+        transition.type = kind
+        for direction in allowed:
+            transition.direction = direction
+            transition.duration = 1.2349
+            transition.advance_after = 0.0009
+            transition.advance_on_click = False
+            assert transition.duration == 1.234
+            assert transition.advance_after == 0.0
+            assert transition.advance_on_click is False
+            reopened = Presentation.from_bytes(prs.to_bytes()).slides[0].transition
+            assert reopened.type == kind and reopened.direction == direction
+            assert reopened.duration == 1.234 and reopened.advance_after == 0.0
+            before = prs.to_bytes()
+            transition.duration = 1.2349
+            assert prs.to_bytes() == before
+    before = prs.to_bytes()
+    for invalid in [float("nan"), float("inf"), -0.01]:
+        with pytest.raises(ValueError):
+            transition.duration = invalid
+        assert prs.to_bytes() == before
+    with pytest.raises(ValueError):
+        transition.type = "unknown"
+    assert prs.to_bytes() == before
+    transition.type = None
+    assert transition.type is None and transition.duration is None
+    assert transition.advance_after is None and transition.advance_on_click is None
+
+
+def test_fx208_master_theme_public_base():
+    from rpptx import Presentation
+    prs = Presentation()
+    assert len(prs.slide_layouts) >= 2
+    master = prs.slide_masters[0]
+    assert len(master.theme.colors) == 12
+    assert master.theme.fonts.major.latin
+    assert set(master.theme.colors) == {"dk1", "lt1", "dk2", "lt2", "accent1", "accent2", "accent3", "accent4", "accent5", "accent6", "hlink", "folHlink"}
+    assert len(master.slide_layouts) == len(prs.slide_layouts)
+    theme = master.theme
+    before = prs.to_bytes()
+    with pytest.raises(AttributeError):
+        theme.name = "changed"
+    assert prs.to_bytes() == before
+    prs.slides.add_slide(prs.slide_layouts[1])
+    assert theme.name == master.theme.name
+
+
+def test_fx208_placeholder_metadata_public_base():
+    from rpptx import Presentation
+    prs = Presentation()
+    prs.slides.add_slide(prs.slide_layouts[0])
+    title = prs.slides[0].shapes.title
+    assert title is not None
+    assert title.is_placeholder
+    assert title.placeholder_format.idx == 0
+    assert int(title.placeholder_format.type) == 3
+    from rpptx import PP_PLACEHOLDER
+    assert title.placeholder_format.type == PP_PLACEHOLDER.CENTER_TITLE
+    metadata = title.placeholder_format
+    title.text = "New title"
+    assert metadata.idx == 0
+    assert metadata.type == PP_PLACEHOLDER.CENTER_TITLE
+
+
+def test_fx208_field_authoring_public_base():
+    from rpptx import Presentation
+    prs = Presentation()
+    prs.slides.add_slide(prs.slide_layouts[6])
+    shape = prs.slides[0].shapes.add_textbox(914400, 914400, 3657600, 914400)
+    shape.text_frame.paragraphs[0].add_run("Page ")
+    paragraph = prs.slides[0].shapes[-1].text_frame.paragraphs[0]
+    assert paragraph.text == "Page "
+    paragraph.add_field("slidenum", "cached")
+    assert "cached" in prs.slides[0].shapes[-1].text_frame.paragraphs[0].text
+    import io
+    import zipfile
+    import xml.etree.ElementTree as ET
+    ns = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
+    for kind, cache in [("datetime1", None), ("datetime13", "")]:
+        prs.slides[0].shapes[-1].text_frame.paragraphs[0].add_field(kind, cache)
+    with zipfile.ZipFile(io.BytesIO(prs.to_bytes())) as package:
+        fields = ET.fromstring(package.read("ppt/slides/slide1.xml")).findall(".//a:fld", ns)
+    assert len(fields) == 3 and len({field.get("id") for field in fields}) == 3
+    assert fields[1].find("a:t", ns) is None
+    assert fields[2].find("a:t", ns) is not None
+    before = prs.to_bytes()
+    from rpptx import RpptxError
+    with pytest.raises(RpptxError):
+        prs.slides[0].shapes[-1].text_frame.paragraphs[0].add_field("unknown")
+    assert prs.to_bytes() == before
+    assert Presentation.from_bytes(before).to_bytes() == before
+
+
+def test_fx208_number_start_public_base(tmp_path):
+    from rpptx import Presentation
+    prs = Presentation()
+    prs.slides.add_slide(prs.slide_layouts[1])
+    assert len(prs.slides) == 1
+    prs.slide_number_start = 0
+    path = tmp_path / "start-zero.pptx"
+    prs.save(path)
+    assert Presentation(path).slide_number_start == 0
+    before = prs.to_bytes()
+    prs.slide_number_start = 0
+    assert prs.to_bytes() == before
+    with pytest.raises((OverflowError, ValueError)):
+        prs.slide_number_start = -1
+    assert prs.to_bytes() == before
+    prs.slide_number_start = None
+    assert Presentation.from_bytes(prs.to_bytes()).slide_number_start is None

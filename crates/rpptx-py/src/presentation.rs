@@ -8,7 +8,9 @@ use smallvec::smallvec;
 
 use crate::layout::PyTextFrameLayout;
 use crate::shape::length;
-use crate::slide::{PySlideCollection, PySlideLayoutCollection};
+use crate::slide::{
+    PySlideCollection, PySlideLayoutCollection, PySlideMaster, PySlideMasterCollection,
+};
 use crate::{replacement_count_to_pyerr, rpptx_to_pyerr, rpptx_value_to_pyerr};
 
 /// The bundled 16:9 slide size, paired with the first dimension set on a deck
@@ -627,6 +629,97 @@ impl PyPresentation {
         )?;
         self.publish_owners(candidate, prepared)?;
         Ok(())
+    }
+
+    #[pyo3(signature = (slide_number=true, footer=None, date=None, hide_on_title=true, date_format="datetime1", *, date_cache=None))]
+    fn set_header_footer(
+        mut slf: PyRefMut<'_, Self>,
+        slide_number: bool,
+        footer: Option<String>,
+        date: Option<String>,
+        hide_on_title: bool,
+        date_format: &str,
+        date_cache: Option<String>,
+    ) -> PyResult<()> {
+        let py = slf.py();
+        let presentation = &mut *slf;
+        let settings = crate::slide::header_footer_settings(
+            slide_number,
+            footer,
+            date,
+            date_format,
+            date_cache,
+        );
+        let mut candidate = presentation.inner.clone();
+        if candidate
+            .set_header_footer(&settings, hide_on_title)
+            .map_err(|e| rpptx_to_pyerr(py, e))?
+        {
+            let proofs = presentation.footer_owners(&candidate)?;
+            let prepared = presentation.prepare_owners(
+                &candidate,
+                "Presentation.set_header_footer",
+                &proofs,
+                false,
+                false,
+                false,
+            )?;
+            presentation.publish_owners(candidate, prepared)?;
+        }
+        Ok(())
+    }
+
+    #[getter]
+    fn slide_number_start(&self, py: Python<'_>) -> PyResult<Option<u32>> {
+        self.inner
+            .slide_number_start()
+            .map_err(|e| rpptx_to_pyerr(py, e))
+    }
+
+    #[setter]
+    fn set_slide_number_start(&mut self, py: Python<'_>, value: Option<u32>) -> PyResult<()> {
+        if self
+            .inner
+            .slide_number_start()
+            .map_err(|e| rpptx_to_pyerr(py, e))?
+            == value
+        {
+            return Ok(());
+        }
+        let mut candidate = self.inner.clone();
+        candidate
+            .set_slide_number_start(value)
+            .map_err(|e| rpptx_to_pyerr(py, e))?;
+        let proofs = self.unchanged_owners()?;
+        let prepared = self.prepare_owners(
+            &candidate,
+            "Presentation.slide_number_start",
+            &proofs,
+            false,
+            false,
+            false,
+        )?;
+        self.publish_owners(candidate, prepared)
+    }
+
+    #[getter]
+    fn slide_masters(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<PySlideMasterCollection>> {
+        let path = slf
+            .borrow(py)
+            .revisions
+            .capture_scopes(smallvec![], &[slf.borrow(py).masters.clone()])
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        Py::new(py, PySlideMasterCollection::new(slf, path))
+    }
+
+    #[getter]
+    fn slide_master(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<PySlideMaster>> {
+        let path = slf
+            .borrow(py)
+            .revisions
+            .capture_scopes(smallvec![], &[slf.borrow(py).masters.clone()])
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        PySlideMasterCollection::new(slf, path).item(py, 0)
     }
 
     #[getter]
@@ -1353,6 +1446,55 @@ impl PyPresentation {
             self.publish_owners(candidate, prepared)?;
         }
         Ok(count)
+    }
+
+    /// Footer staging only removes owned footer shapes, appends fresh copies,
+    /// and preserves every surviving physical identity. Match that explicit
+    /// native guarantee and compare complete text owners before publication.
+    pub(crate) fn footer_owners(
+        &self,
+        candidate: &rpptx::Presentation,
+    ) -> PyResult<Vec<OwnerSurvival>> {
+        use oxml_py_support::ContentPath;
+        let next = owner_addresses(candidate)?;
+        let mut proofs = Vec::new();
+        proofs.try_reserve_exact(self.owners.len()).map_err(|_| {
+            pyo3::exceptions::PyMemoryError::new_err("footer owner allocation failed")
+        })?;
+        for old in &self.owners {
+            let matching = next
+                .iter()
+                .filter(|address| address.physical == old.address.physical)
+                .collect::<Vec<_>>();
+            let [after] = matching.as_slice() else {
+                if matching.is_empty() {
+                    continue;
+                }
+                return Err(PyValueError::new_err("footer owner identity is ambiguous"));
+            };
+            let before_path = ContentPath::new(old.address.path.clone(), self.revisions.current());
+            let after_path = ContentPath::new(after.path.clone(), self.revisions.current());
+            let text_changed = match &old.address.physical {
+                PhysicalOwner::Shape { .. } => {
+                    crate::shape::native_shape_ref_at(&self.inner, &before_path)
+                        .and_then(|shape| shape.text_frame())
+                        != crate::shape::native_shape_ref_at(candidate, &after_path)
+                            .and_then(|shape| shape.text_frame())
+                }
+                // Footer publication does not change notes or any table cell.
+                PhysicalOwner::Slide(_) | PhysicalOwner::Cell { .. } | PhysicalOwner::Layout(_) => {
+                    false
+                }
+            };
+            proofs.push(OwnerSurvival {
+                generation: old.owner.generation(),
+                destination: after.path.clone(),
+                layout_index: after.layout_index,
+                text_changed,
+                grid_changed: false,
+            });
+        }
+        Ok(proofs)
     }
 
     pub(crate) fn unchanged_owners(&self) -> PyResult<Vec<OwnerSurvival>> {

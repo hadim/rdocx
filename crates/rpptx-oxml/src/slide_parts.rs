@@ -178,6 +178,23 @@ pub struct CT_HeaderFooter {
 }
 
 impl CT_HeaderFooter {
+    /// Creates a container with these flags, `None` keeping the enabled default.
+    pub fn new(
+        slide_number: Option<bool>,
+        header: Option<bool>,
+        footer: Option<bool>,
+        date_time: Option<bool>,
+    ) -> Self {
+        Self {
+            slide_number,
+            header,
+            footer,
+            date_time,
+            raw_attributes: RawAttributes::new(),
+            raw_children: OrderedRawChildren::default(),
+        }
+    }
+
     pub fn slide_number_enabled(&self) -> bool {
         self.slide_number.unwrap_or(true)
     }
@@ -736,6 +753,14 @@ impl CT_SlideLayout {
             raw_attributes: parsed.raw_attributes,
             raw_children: parsed.raw_children,
         })
+    }
+
+    /// Returns the `type` attribute, such as `title` for a title slide layout.
+    pub fn layout_type(&self) -> Option<&str> {
+        self.raw_attributes
+            .iter()
+            .find(|(name, _)| name == "type")
+            .map(|(_, value)| value.as_str())
     }
 
     pub fn to_xml(&self) -> Result<Vec<u8>> {
@@ -1878,7 +1903,10 @@ fn capture_text_style(
         if styles[index].is_some() {
             return Err(duplicate(std::str::from_utf8(name).unwrap_or("text style")));
         }
-        styles[index] = Some(CT_TextListStyle::from_xml(&raw).map_err(map_drawing_error)?);
+        styles[index] = Some(
+            CT_TextListStyle::from_xml_with_inherited_namespaces(&raw, &namespaces.entries())
+                .map_err(map_drawing_error)?,
+        );
         *boundary = (*boundary).max(index + 1);
     } else {
         children.push(*boundary, raw);

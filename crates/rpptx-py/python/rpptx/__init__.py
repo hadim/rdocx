@@ -2,7 +2,7 @@
 
 from .enum.dml import MSO_THEME_COLOR
 from .dml.color import RGBColor
-from .enum.shapes import MSO_SHAPE
+from .enum.shapes import MSO_SHAPE, PP_PLACEHOLDER, PP_PLACEHOLDER_TYPE
 from .enum.text import MSO_ANCHOR, MSO_AUTO_SIZE, MSO_UNDERLINE, PP_ALIGN
 from .util import Inches, Length, Pt
 
@@ -36,6 +36,7 @@ class ReplacementCountError(RpptxError):
 
 
 from ._rpptx import Comment, CommentAuthor, CommentReply, Presentation
+from ._rpptx import SlideTransition, HeaderFooter, PlaceholderFormat, SlideMaster, SlideMasterCollection, Theme, ThemeFonts, ThemeFontSet
 from ._rpptx import AutofitRefreshResult, AutofitUpdate, BoundingBox, TextFrameLayout, TextLineLayout, ValidationIssue
 
 __all__ = [
@@ -48,6 +49,16 @@ __all__ = [
     "MSO_ANCHOR",
     "MSO_AUTO_SIZE",
     "MSO_SHAPE",
+    "PP_PLACEHOLDER",
+    "PP_PLACEHOLDER_TYPE",
+    "HeaderFooter",
+    "SlideTransition",
+    "PlaceholderFormat",
+    "SlideMaster",
+    "SlideMasterCollection",
+    "Theme",
+    "ThemeFonts",
+    "ThemeFontSet",
     "MSO_UNDERLINE",
     "PP_ALIGN",
     "PackageError",

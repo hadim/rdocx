@@ -461,3 +461,16 @@ writer retains ownership of fixed-prefix `a:srgbClr` serialization.
 Anything not in the list above is captured verbatim through
 `oxml_core::raw_xml::capture_element` and re-emitted in place. That is not a
 fallback, it is the design: parse what you render, preserve the rest.
+
+## PowerPoint field and theme access
+
+Paragraph field insertion supports slidenum, the imported datetime alias and datetime1 through
+datetime13. It preserves absent versus empty cached text, copies the selected
+paragraph formatting and allocates an identity unique across slide, layout and
+master fields. No automatic date operation reads a clock or locale. The caller
+supplies automatic cached text explicitly.
+
+Each presentation master exposes its own relationship-resolved Theme. Read-only
+colors include all twelve scheme slots as the existing scalar RGB values. Major
+and minor font sets expose Latin, East Asian and complex-script typefaces. An
+absent slot remains absent instead of borrowing a different master's theme.

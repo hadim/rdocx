@@ -42,8 +42,8 @@ use oxml_drawing::table::{CT_Table, CT_TableCell, CT_TableCellProperties, CT_Tab
 #[cfg(feature = "render")]
 use oxml_drawing::text::CT_TextListStyle;
 use oxml_drawing::text::{
-    CT_RegularTextRun, CT_TextBody, CT_TextParagraph, Coordinate32Value, NormalAutofit,
-    TextAutofit, TextRun, TextWrap,
+    CT_RegularTextRun, CT_TextBody, CT_TextField, CT_TextParagraph, Coordinate32Value,
+    NormalAutofit, TextAutofit, TextRun, TextWrap,
 };
 pub use oxml_drawing::text::{
     CT_TextCharacterProperties, CT_TextParagraphProperties, TextAlignment, TextAnchor, TextBullet,
@@ -99,7 +99,6 @@ use rpptx_oxml::namespace::{P_NS, R_NS};
 use rpptx_oxml::notes_parts::{CT_HandoutMaster, CT_NotesMaster, CT_NotesSlide};
 pub use rpptx_oxml::picture::MediaKind;
 use rpptx_oxml::picture::{CT_Picture, MediaSource as PictureMediaSource, PictureMedia};
-#[cfg(feature = "render")]
 use rpptx_oxml::placeholder::PlaceholderKey;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType};
 pub use rpptx_oxml::presentation::Section;
@@ -123,11 +122,12 @@ use rpptx_oxml::timing::{CT_Timing, MediaCommandKind, MediaDisplayPolicy};
 use rpptx_oxml::timing::{TimingNode, TimingTarget};
 #[cfg(feature = "render")]
 use rpptx_render::timeline::{
-    compose_morph_transition, compose_transition, layout_timeline_slide_with_diagnostics,
+    compose_morph_transition, compose_transition, layout_timeline_slide_with_displayed_number,
 };
 #[cfg(feature = "render")]
 use rpptx_render::{
-    MediaData, RenderInput, layout_presentation_with_font_manager_and_text_directions_mut,
+    MediaData, RenderInput, layout_presentation_with_displayed_numbers,
+    layout_presentation_with_font_manager_and_text_directions_mut,
 };
 use thiserror::Error;
 
@@ -681,6 +681,39 @@ pub enum ValidationIssue {
     MissingThemeRel {
         master: usize,
     },
+}
+
+/// One slide master's theme, as [`Presentation::theme`] reads it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Theme {
+    /// The `a:theme/@name`.
+    pub name: Option<String>,
+    /// The colour scheme in `dk1`, `lt1`, `dk2`, `lt2`, `accent1` to
+    /// `accent6`, `hlink`, `folHlink` order. A system colour reads as its
+    /// last computed value, and a colour rpptx cannot resolve as `None`.
+    pub colors: Vec<(&'static str, Option<RgbColor>)>,
+    /// The heading fonts, `+mj-lt` and its East Asian and complex-script peers.
+    pub major_font: ThemeFonts,
+    /// The body fonts, `+mn-lt` and its East Asian and complex-script peers.
+    pub minor_font: ThemeFonts,
+}
+
+impl Theme {
+    /// Returns one scheme colour by its slot name, such as `accent1`.
+    pub fn color(&self, slot: &str) -> Option<RgbColor> {
+        self.colors
+            .iter()
+            .find(|(name, _)| *name == slot)
+            .and_then(|(_, color)| *color)
+    }
+}
+
+/// The typefaces of one theme font collection, empty when the theme names none.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ThemeFonts {
+    pub latin: String,
+    pub east_asian: String,
+    pub complex_script: String,
 }
 
 /// An opened PresentationML package and its ordered slide read model.
@@ -2725,6 +2758,34 @@ impl Presentation {
             })
     }
 
+    /// Reads the optional displayed start without flattening absent and zero.
+    pub fn slide_number_start(&self) -> Result<Option<u32>> {
+        self.presentation
+            .first_slide_number()
+            .map_err(|error| Error::MalformedPart {
+                part_name: self.presentation_part.clone(),
+                message: error.to_string(),
+            })
+    }
+
+    /// Stages checked displayed numbering without changing physical slide IDs.
+    pub fn set_slide_number_start(&mut self, value: Option<u32>) -> Result<()> {
+        let start = value.unwrap_or(1);
+        if let Some(last) = self.slides.len().checked_sub(1) {
+            let last = u32::try_from(last)
+                .map_err(|_| invalid_slide_mutation("set slide number start", "too many slides"))?;
+            start.checked_add(last).ok_or_else(|| {
+                invalid_slide_mutation("set slide number start", "displayed slide number overflow")
+            })?;
+        }
+        if self.slide_number_start()? == value {
+            return Ok(());
+        }
+        let mut staged = self.clone();
+        staged.presentation.set_first_slide_number(value);
+        self.commit_candidate(staged)
+    }
+
     /// Returns shared package core properties without dirtying their source part.
     pub fn core_properties(&self) -> Option<&CoreProperties> {
         self.core_properties.as_ref()
@@ -2735,6 +2796,152 @@ impl Presentation {
         self.core_properties_dirty = true;
         self.core_properties
             .get_or_insert_with(CoreProperties::default)
+    }
+
+    /// Reads the current theme reached by one presentation master.
+    pub fn theme(&self, master_index: usize) -> Result<Option<Theme>> {
+        let Some(master_part) = self.master_part(master_index)? else {
+            return Ok(None);
+        };
+        let theme_part = related_internal_part(&self.package, &master_part, rel_types::THEME)?
+            .ok_or_else(|| Error::MalformedPart {
+                part_name: master_part.clone(),
+                message: "slide master has no theme relationship".to_owned(),
+            })?;
+        let theme = oxml_drawing::theme::CT_OfficeStyleSheet::from_xml(required_part(
+            &self.package,
+            &theme_part,
+        )?)
+        .map_err(|error| Error::MalformedPart {
+            part_name: theme_part,
+            message: error.to_string(),
+        })?;
+        let elements = &theme.theme_elements;
+        let fonts = |collection: &oxml_drawing::theme::CT_FontCollection| ThemeFonts {
+            latin: collection.latin.typeface.clone(),
+            east_asian: collection.east_asian.typeface.clone(),
+            complex_script: collection.complex_script.typeface.clone(),
+        };
+        Ok(Some(Theme {
+            name: theme.name.clone(),
+            colors: elements
+                .color_scheme
+                .iter()
+                .map(|(slot, choice)| {
+                    let color = oxml_drawing::color::resolve_color(
+                        choice,
+                        &oxml_drawing::color::ColorMap::default(),
+                        &[],
+                    )
+                    .ok()
+                    .map(|color| RgbColor::new(color.red, color.green, color.blue));
+                    (slot.as_str(), color)
+                })
+                .collect(),
+            major_font: fonts(&elements.font_scheme.major_font),
+            minor_font: fonts(&elements.font_scheme.minor_font),
+        }))
+    }
+
+    /// Resolves one master's part name, `Ok(None)` for an unknown index.
+    fn master_part(&self, master_index: usize) -> Result<Option<String>> {
+        let Some(master) = self.presentation.slide_master_ids.get(master_index) else {
+            return Ok(None);
+        };
+        let relationship = self
+            .package
+            .get_part_rels(&self.presentation_part)
+            .and_then(|relationships| relationships.get_by_id(&master.relationship_id))
+            .ok_or_else(|| Error::MissingRelationship {
+                source_part: self.presentation_part.clone(),
+                relationship_id: master.relationship_id.clone(),
+            })?;
+        if relationship.rel_type != rel_types::SLIDE_MASTER {
+            return Err(Error::MalformedPart {
+                part_name: self.presentation_part.clone(),
+                message: "master relationship has the wrong type".into(),
+            });
+        }
+        reject_external(&self.presentation_part, relationship)?;
+        Ok(Some(OpcPackage::resolve_rel_target(
+            &self.presentation_part,
+            &relationship.target,
+        )))
+    }
+
+    /// Returns the zero-based layout indices one master owns, in the order
+    /// [`Self::layout_name`] numbers them, or `None` for an unknown master.
+    pub fn master_layouts(&self, master_index: usize) -> Option<Vec<usize>> {
+        let master_part = self.master_part(master_index).ok()??;
+        Some(
+            (0..self.layouts.len())
+                .filter(|&layout_index| {
+                    self.layout_master_part(layout_index)
+                        .is_ok_and(|(part, _)| part.eq_ignore_ascii_case(&master_part))
+                })
+                .collect(),
+        )
+    }
+
+    /// Returns the `p:hf` flags of one master, `None` without the element
+    /// or for an unknown master. New slides receive the date, footer and
+    /// slide-number placeholders these flags enable.
+    pub fn master_header_footer(&self, master_index: usize) -> Result<Option<HeaderFooterFlags>> {
+        let Some(master_part) = self.master_part(master_index)? else {
+            return Ok(None);
+        };
+        let master = CT_SlideMaster::from_xml(required_part(&self.package, &master_part)?)
+            .map_err(|error| Error::MalformedPart {
+                part_name: master_part,
+                message: error.to_string(),
+            })?;
+        Ok(master.header_footer.as_ref().map(HeaderFooterFlags::from))
+    }
+
+    /// Returns the `p:hf` flags of one layout, which win over its master's,
+    /// `None` without the element or for an unknown layout.
+    pub fn layout_header_footer(&self, layout_index: usize) -> Option<HeaderFooterFlags> {
+        self.layouts
+            .get(layout_index)
+            .and_then(|record| record.layout.header_footer.as_ref())
+            .map(HeaderFooterFlags::from)
+    }
+
+    /// Returns legal inherited policy provenance without projecting painted slide fields.
+    pub fn slide_header_footer_policy(
+        &self,
+        slide_index: usize,
+    ) -> Result<Option<(&'static str, HeaderFooterFlags)>> {
+        if self.slides.get(slide_index).is_none() {
+            return Err(invalid_slide_mutation(
+                "read header/footer policy",
+                "slide index out of range",
+            ));
+        }
+        let layout_index = self.slide_layout_index(slide_index).ok_or_else(|| {
+            invalid_slide_mutation(
+                "read header/footer policy",
+                "slide layout is not reached from a master",
+            )
+        })?;
+        if let Some(flags) = self.layout_header_footer(layout_index) {
+            return Ok(Some(("layout", flags)));
+        }
+        let (_, master) = self.layout_master_part(layout_index)?;
+        Ok(master
+            .header_footer
+            .as_ref()
+            .map(|flags| ("master", HeaderFooterFlags::from(flags))))
+    }
+
+    /// Counts masters in presentation relationship order.
+    pub fn slide_master_count(&self) -> usize {
+        self.presentation.slide_master_ids.len()
+    }
+
+    /// Resolves one master identity in presentation relationship order.
+    pub fn slide_master_part_name(&self, index: usize) -> Result<Option<String>> {
+        self.master_part(index)
     }
 
     /// Returns the number of layouts reachable through presentation masters.
@@ -4097,6 +4304,10 @@ impl Presentation {
                 .set_name(&name)
                 .map_err(|error| invalid_slide_mutation("add slide", error.to_string()))?;
             shape_tree.children.push(ShapeTreeChild::Shape(shape));
+        }
+
+        for shape in self.new_slide_latent_shapes(layout_index, &mut shape_ids)? {
+            shape_tree.children.push(shape);
         }
 
         let slide_part = MediaNamer::scan(
@@ -5850,12 +6061,13 @@ fn render_prepared_timeline_request(
         }
     };
     let mut layout_diagnostics = Vec::new();
-    let incoming_frame = layout_timeline_slide_with_diagnostics(
+    let incoming_frame = layout_timeline_slide_with_displayed_number(
         &assembly.input,
         request.slide_index,
         &incoming,
         Some(&incoming_directions),
         font_manager,
+        assembly.first_slide_number,
     )
     .map_err(|error| render_failure(error.to_string()))?;
     let mut incoming_diagnostics = incoming_frame.diagnostics.into_iter();
@@ -5876,12 +6088,13 @@ fn render_prepared_timeline_request(
     )?;
     let outgoing_page = match (request.outgoing_slide_index, outgoing.as_ref()) {
         (Some(index), Some(outgoing)) => {
-            let frame = layout_timeline_slide_with_diagnostics(
+            let frame = layout_timeline_slide_with_displayed_number(
                 &assembly.input,
                 index,
                 outgoing,
                 outgoing_directions.as_ref(),
                 font_manager,
+                assembly.first_slide_number,
             )
             .map_err(|error| render_failure(error.to_string()))?;
             let source = assembly
@@ -13922,6 +14135,7 @@ struct PreparedSlideAssembly {
 
 #[cfg(feature = "render")]
 struct PreparedRenderAssembly {
+    first_slide_number: usize,
     input: RenderInput,
     layout: LayoutResult,
     font_manager: FontManager,
@@ -14192,10 +14406,14 @@ fn prepare_render_context(
     };
     #[cfg(test)]
     PREPARED_LAYOUT_COUNT.with(|count| count.set(count.get() + 1));
-    let mut layout = layout_presentation_with_font_manager_and_text_directions_mut(
+    let mut layout = layout_presentation_with_displayed_numbers(
         &input,
         &mut font_manager,
-        &text_directions,
+        Some(&text_directions),
+        presentation
+            .first_slide_number()
+            .map_err(|error| render_failure(error.to_string()))?
+            .unwrap_or(1) as usize,
     )
     .map_err(|error| render_failure(error.to_string()))?;
     if layout.pages.len() != input.slides.len() {
@@ -14218,6 +14436,10 @@ fn prepare_render_context(
         )?;
     }
     Ok(PreparedRenderAssembly {
+        first_slide_number: presentation
+            .first_slide_number()
+            .map_err(|error| render_failure(error.to_string()))?
+            .unwrap_or(1) as usize,
         input,
         layout,
         font_manager,
@@ -15116,6 +15338,1556 @@ fn render_related_part(
         source_part,
         &relationship.target,
     ))
+}
+
+/// The date, footer and slide number of slides, as PowerPoint's Header and
+/// Footer dialog sets them.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct HeaderFooter {
+    /// Whether the slide shows its number.
+    pub slide_number: bool,
+    /// The footer text, or `None` for no footer.
+    pub footer: Option<String>,
+    /// The date shown on the slide.
+    pub date: HeaderFooterDate,
+}
+
+/// The date a slide shows in its date placeholder.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum HeaderFooterDate {
+    /// No date placeholder.
+    #[default]
+    Off,
+    /// Fixed text, written as a run.
+    Fixed(String),
+    /// A `datetime1` to `datetime13` field that PowerPoint refreshes when it
+    /// opens the file. `text` is the cached value other readers show and
+    /// rpptx renders, see [`date_field_text`].
+    Automatic {
+        field_type: String,
+        text: Option<String>,
+    },
+}
+
+/// Which date, footer and slide-number placeholders a master's or layout's
+/// `p:hf` supplies. Optional values retain source attribute presence.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HeaderFooterFlags {
+    pub date: Option<bool>,
+    pub footer: Option<bool>,
+    pub slide_number: Option<bool>,
+}
+
+impl From<&CT_HeaderFooter> for HeaderFooterFlags {
+    fn from(header_footer: &CT_HeaderFooter) -> Self {
+        Self {
+            date: header_footer.date_time,
+            footer: header_footer.footer,
+            slide_number: header_footer.slide_number,
+        }
+    }
+}
+
+/// The kinds of `a:fld` that [`Presentation::add_text_field`] writes.
+const FIELD_TYPES: [&str; 15] = [
+    "slidenum",
+    "datetime",
+    "datetime1",
+    "datetime2",
+    "datetime3",
+    "datetime4",
+    "datetime5",
+    "datetime6",
+    "datetime7",
+    "datetime8",
+    "datetime9",
+    "datetime10",
+    "datetime11",
+    "datetime12",
+    "datetime13",
+];
+
+/// The text PowerPoint caches for a slide-number field before it numbers it.
+pub const SLIDE_NUMBER_FIELD_TEXT: &str = "\u{2039}#\u{203a}";
+
+const MONTHS: [&str; 12] = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
+
+const WEEKDAYS: [&str; 7] = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+];
+
+/// Formats a calendar date as PowerPoint's English (United States) date
+/// fields `datetime1` to `datetime7` show it, for use as cached field text.
+///
+/// `datetime` reads as `datetime1`. The time formats `datetime8` to
+/// `datetime13` need a time of day and are refused, as is an invalid date.
+pub fn date_field_text(field_type: &str, year: i32, month: u32, day: u32) -> Result<String> {
+    let operation = "format a date field";
+    let days_in_month = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        _ => 0,
+    };
+    if day == 0 || day > days_in_month {
+        return Err(invalid_slide_mutation(
+            operation,
+            format!("{year:04}-{month:02}-{day:02} is not a calendar date"),
+        ));
+    }
+    let month_name = MONTHS[month as usize - 1];
+    let short_month = &month_name[..3];
+    let short_year = year.rem_euclid(100);
+    Ok(match field_type {
+        "datetime" | "datetime1" => format!("{month}/{day}/{year}"),
+        "datetime2" => format!(
+            "{}, {month_name} {day}, {year}",
+            WEEKDAYS[weekday_index(year, month, day)]
+        ),
+        "datetime3" => format!("{day} {month_name} {year}"),
+        "datetime4" => format!("{month_name} {day}, {year}"),
+        "datetime5" => format!("{day}-{short_month}-{short_year:02}"),
+        "datetime6" => format!("{month_name} {short_year:02}"),
+        "datetime7" => format!("{short_month}-{short_year:02}"),
+        other => {
+            return Err(invalid_slide_mutation(
+                operation,
+                format!(
+                    "date field type {other:?} is not a date format, use datetime1 to datetime7"
+                ),
+            ));
+        }
+    })
+}
+
+/// Monday is 0, by the days-from-civil count of 1970-01-01, a Thursday.
+fn weekday_index(year: i32, month: u32, day: u32) -> usize {
+    let year = i64::from(year) - i64::from(month <= 2);
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let month = i64::from(month);
+    let day_of_year = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + i64::from(day) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+    (days + 3).rem_euclid(7) as usize
+}
+
+/// Builds one `a:fld` of a validated type with its cached text.
+pub(crate) fn text_field(
+    field_type: &str,
+    text: Option<&str>,
+    ids: &mut HashSet<String>,
+) -> Result<CT_TextField> {
+    if !FIELD_TYPES.contains(&field_type) {
+        return Err(invalid_slide_mutation(
+            "add a field",
+            format!(
+                "field type {field_type:?} is not supported, use slidenum or datetime1 to datetime13"
+            ),
+        ));
+    }
+    oxml_core::xml::reject_non_xml_characters("field text", text.unwrap_or(""))
+        .map_err(|error| invalid_slide_mutation("add a field", error.to_string()))?;
+    let id = next_field_identity(ids)?;
+    let escaped = text
+        .unwrap_or("")
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    let mut field = CT_TextField::from_xml(
+        format!(
+            "<a:fld xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" id=\"{id}\" type=\"{field_type}\"><a:t>{escaped}</a:t></a:fld>"
+        )
+        .as_bytes(),
+    )
+    .map_err(|error| invalid_slide_mutation("add a field", error.to_string()))?;
+    if text.is_none() {
+        field.text = None;
+    }
+    Ok(field)
+}
+
+fn next_field_identity(ids: &mut HashSet<String>) -> Result<String> {
+    let mut next = 1u64;
+    loop {
+        let id = format!("{{8C1E7A2B-5F3D-4B6E-9A40-{next:012X}}}");
+        if ids.insert(id.clone()) {
+            return Ok(id);
+        }
+        next = next
+            .checked_add(1)
+            .filter(|value| *value <= 0xffffffffffff)
+            .ok_or_else(|| invalid_slide_mutation("add a field", "field identity exhausted"))?;
+    }
+}
+
+fn renew_copied_field_ids(body: &mut CT_TextBody, ids: &mut HashSet<String>) -> Result<()> {
+    for index in 0..body.paragraphs().len() {
+        for run in &mut body.paragraph_mut(index).expect("owned paragraph").runs {
+            if let TextRun::Field(field) = run {
+                field.id = next_field_identity(ids)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Appends a field after the paragraph's existing runs.
+pub(crate) fn push_field(paragraph: &mut CT_TextParagraph, field: CT_TextField) {
+    // `add_run` keeps preserved paragraph children in place, then the new
+    // regular run becomes the field.
+    paragraph.add_run("");
+    if let Some(last) = paragraph.runs.last_mut() {
+        *last = TextRun::Field(Box::new(field));
+    }
+}
+
+/// The three latent placeholder kinds, in PowerPoint's slide order.
+const LATENT_KINDS: [PhType; 3] = [PhType::DateTime, PhType::Footer, PhType::SlideNumber];
+
+fn latent_name(kind: &PhType) -> &'static str {
+    match kind {
+        PhType::DateTime => "Date Placeholder",
+        PhType::Footer => "Footer Placeholder",
+        _ => "Slide Number Placeholder",
+    }
+}
+
+fn latent_label(kind: &PhType) -> &'static str {
+    match kind {
+        PhType::DateTime => "date",
+        PhType::Footer => "footer",
+        _ => "slide number",
+    }
+}
+
+fn is_kind(shape: &CT_Shape, kind: &PhType) -> bool {
+    shape
+        .placeholder
+        .as_ref()
+        .is_some_and(|placeholder| placeholder.ph_type.as_ref() == Some(kind))
+}
+
+/// Finds the first shape placeholder of one kind, groups included.
+fn find_latent<'a>(children: &'a [ShapeTreeChild], kind: &PhType) -> Option<&'a CT_Shape> {
+    children.iter().find_map(|child| match child {
+        ShapeTreeChild::Shape(shape) if is_kind(shape, kind) => Some(shape),
+        ShapeTreeChild::GroupShape(group) => find_latent(&group.children, kind),
+        _ => None,
+    })
+}
+
+fn find_latent_mut<'a>(
+    children: &'a mut [ShapeTreeChild],
+    kind: &PhType,
+) -> Option<&'a mut CT_Shape> {
+    for child in children {
+        match child {
+            ShapeTreeChild::Shape(shape) if is_kind(shape, kind) => return Some(shape),
+            ShapeTreeChild::GroupShape(group) => {
+                if let Some(found) = find_latent_mut(&mut group.children, kind) {
+                    return Some(found);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn remove_latent(children: &mut Vec<ShapeTreeChild>, kind: &PhType) {
+    children.retain_mut(|child| match child {
+        ShapeTreeChild::Shape(shape) => !is_kind(shape, kind),
+        ShapeTreeChild::GroupShape(group) => {
+            remove_latent(&mut group.children, kind);
+            true
+        }
+        _ => true,
+    });
+}
+
+fn has_field(body: &CT_TextBody, prefix: &str) -> bool {
+    field_type(body).is_some_and(|field_type| field_type.starts_with(prefix))
+}
+
+fn field_type(body: &CT_TextBody) -> Option<&str> {
+    body.paragraphs().iter().find_map(|paragraph| {
+        paragraph.runs.iter().find_map(|run| match run {
+            TextRun::Field(field) => field.field_type.as_deref(),
+            _ => None,
+        })
+    })
+}
+
+/// One paragraph holding only `field`, formatted as `template`'s first one.
+///
+/// The field keeps the character properties, `lang` included, of the first
+/// run or field it replaces, as PowerPoint does.
+fn field_paragraph(template: Option<&CT_TextBody>, mut field: CT_TextField) -> CT_TextParagraph {
+    let mut paragraph = template
+        .and_then(|body| body.paragraphs().first())
+        .cloned()
+        .unwrap_or_default();
+    let properties = paragraph.runs.iter().find_map(|run| match run {
+        TextRun::Run(run) => run.properties.clone(),
+        TextRun::Field(field) => field.run_properties.clone(),
+        TextRun::Break(_) => None,
+    });
+    if field.run_properties.is_none() {
+        field.run_properties = properties;
+    }
+    paragraph.set_text("");
+    if let Some(first) = paragraph.runs.first_mut() {
+        *first = TextRun::Field(Box::new(field));
+    }
+    paragraph
+}
+
+/// What one latent placeholder holds on a slide.
+enum LatentContent<'a> {
+    SlideNumber,
+    Text(&'a str),
+    DateField {
+        field_type: &'a str,
+        text: Option<&'a str>,
+    },
+}
+
+/// Rewrites a latent placeholder's paragraphs to hold `content`, keeping the
+/// formatting of its first paragraph. A slide number that already holds a
+/// `slidenum` field is kept as it is.
+fn fill_latent_body(
+    body: &mut CT_TextBody,
+    content: &LatentContent<'_>,
+    ids: &mut HashSet<String>,
+) -> Result<()> {
+    let paragraph = match content {
+        LatentContent::SlideNumber if has_field(body, "slidenum") => return Ok(()),
+        LatentContent::SlideNumber => field_paragraph(
+            Some(body),
+            text_field("slidenum", Some(SLIDE_NUMBER_FIELD_TEXT), ids)?,
+        ),
+        LatentContent::Text(text) => {
+            if body.plain_text() == *text
+                && !body
+                    .paragraphs()
+                    .iter()
+                    .flat_map(|paragraph| &paragraph.runs)
+                    .any(|run| matches!(run, TextRun::Field(_)))
+            {
+                return Ok(());
+            }
+            body.set_text(text);
+            return Ok(());
+        }
+        LatentContent::DateField { field_type, text }
+            if body.paragraphs().len() == 1
+                && body.paragraphs()[0].runs.len() == 1
+                && matches!(&body.paragraphs()[0].runs[0], TextRun::Field(field)
+                if field.field_type.as_deref().map(|value| if value == "datetime" { "datetime1" } else { value }) == Some(if *field_type == "datetime" { "datetime1" } else { *field_type }) && (text.is_none() || field.text.as_ref().map(|value| value.value.as_str()) == *text)) =>
+        {
+            return Ok(());
+        }
+        LatentContent::DateField { field_type, text } => {
+            field_paragraph(Some(body), text_field(field_type, *text, ids)?)
+        }
+    };
+    body.set_text("");
+    if let Some(first) = body.paragraph_mut(0) {
+        *first = paragraph;
+    }
+    Ok(())
+}
+
+/// The layout placeholder a new slide copies, else the master one placed by
+/// an explicit transform, since a slide placeholder inherits only through
+/// its layout.
+fn latent_template<'a>(
+    layout: &'a CT_SlideLayout,
+    master: &'a CT_SlideMaster,
+    kind: &PhType,
+) -> Option<(&'a CT_Shape, bool)> {
+    find_latent(&layout.common_slide_data.shape_tree.children, kind)
+        .map(|shape| (shape, false))
+        .or_else(|| {
+            find_latent(&master.common_slide_data.shape_tree.children, kind)
+                .map(|shape| (shape, true))
+        })
+}
+
+/// Finds the unique inherited placeholder without guessing a kind from its name.
+fn footer_geometry_owner<'a>(
+    children: &'a [ShapeTreeChild],
+    key: &PlaceholderKey,
+) -> Result<Option<&'a CT_Shape>> {
+    let mut found = None;
+    for child in children {
+        let candidate = match child {
+            ShapeTreeChild::Shape(shape) => shape
+                .placeholder
+                .as_ref()
+                .is_some_and(|placeholder| {
+                    if matches!(
+                        key.ph_type,
+                        PhType::DateTime | PhType::Footer | PhType::SlideNumber
+                    ) {
+                        key.ph_type == placeholder.key().ph_type
+                    } else {
+                        key.matches(&placeholder.key())
+                    }
+                })
+                .then_some(shape),
+            ShapeTreeChild::GroupShape(group) => footer_geometry_owner(&group.children, key)?,
+            _ => None,
+        };
+        if let Some(candidate) = candidate {
+            if found.is_some() {
+                return Err(invalid_slide_mutation(
+                    "set the header and footer",
+                    "ambiguous inherited footer geometry",
+                ));
+            }
+            found = Some(candidate);
+        }
+    }
+    Ok(found)
+}
+
+/// Uses the same whole-transform precedence as slide rendering. An incomplete
+/// explicit transform cannot borrow an extent from a different owner.
+fn validate_footer_geometry(
+    shape: &CT_Shape,
+    layout: &CT_SlideLayout,
+    master: Option<&CT_SlideMaster>,
+) -> Result<()> {
+    let mut transform = shape.shape_properties.transform.as_ref();
+    if transform.is_none()
+        && let Some(placeholder) = shape.placeholder.as_ref()
+        && let Some(layout_shape) = footer_geometry_owner(
+            &layout.common_slide_data.shape_tree.children,
+            &placeholder.key(),
+        )?
+    {
+        transform = layout_shape.shape_properties.transform.as_ref();
+        if transform.is_none()
+            && let (Some(master), Some(layout_placeholder)) =
+                (master, layout_shape.placeholder.as_ref())
+        {
+            transform = footer_geometry_owner(
+                &master.common_slide_data.shape_tree.children,
+                &layout_placeholder.key(),
+            )?
+            .and_then(|owner| owner.shape_properties.transform.as_ref());
+        }
+    }
+    if !transform.is_some_and(|value| {
+        value
+            .extent
+            .is_some_and(|extent| extent.cx.0 > 0 && extent.cy.0 > 0)
+    }) {
+        return Err(invalid_slide_mutation(
+            "set the header and footer",
+            "missing effective footer geometry",
+        ));
+    }
+    Ok(())
+}
+
+/// A slide-owned copy of a layout or master latent placeholder.
+fn latent_copy(
+    template: &CT_Shape,
+    from_master: bool,
+    kind: &PhType,
+    ids: &mut ShapeIdAllocator,
+) -> Result<CT_Shape> {
+    let _ = from_master;
+    let id = ids.allocate();
+    let mut shape = template
+        .clone_with_id(id)
+        .map_err(|error| invalid_slide_mutation("add a header or footer", error.to_string()))?;
+    shape
+        .set_name(&format!("{} {}", latent_name(kind), id))
+        .map_err(|error| invalid_slide_mutation("add a header or footer", error.to_string()))?;
+    Ok(shape)
+}
+
+fn copy_footer_template(
+    children: &[ShapeTreeChild],
+    kind: &PhType,
+    ids: &mut ShapeIdAllocator,
+    field_ids: &mut HashSet<String>,
+) -> Result<Option<ShapeTreeChild>> {
+    for child in children {
+        match child {
+            ShapeTreeChild::Shape(shape) if is_kind(shape, kind) => {
+                let mut shape = latent_copy(shape, true, kind, ids)?;
+                if let Some(body) = shape.text_body.as_mut() {
+                    renew_copied_field_ids(body, field_ids)?;
+                }
+                return Ok(Some(ShapeTreeChild::Shape(shape)));
+            }
+            ShapeTreeChild::GroupShape(group) => {
+                if let Some(child) = copy_footer_template(&group.children, kind, ids, field_ids)? {
+                    let mut cloned = group.clone_with_id(ids.allocate()).map_err(|error| {
+                        invalid_slide_mutation("set the header and footer", error.to_string())
+                    })?;
+                    cloned.children = vec![child];
+                    return Ok(Some(ShapeTreeChild::GroupShape(Box::new(cloned))));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(None)
+}
+
+/// Gives a slide exactly the date, footer and slide-number placeholders
+/// `settings` asks for, copying missing ones from its layout or master.
+fn apply_to_slide(
+    slide: &mut CT_Slide,
+    layout: &CT_SlideLayout,
+    master: &CT_SlideMaster,
+    layout_name: &str,
+    settings: &HeaderFooter,
+    field_ids: &mut HashSet<String>,
+) -> Result<()> {
+    let mut ids = ShapeIdAllocator::scan(&slide.common_slide_data.shape_tree);
+    for kind in LATENT_KINDS {
+        let content = match (&kind, settings) {
+            (
+                PhType::SlideNumber,
+                HeaderFooter {
+                    slide_number: true, ..
+                },
+            ) => Some(LatentContent::SlideNumber),
+            (
+                PhType::Footer,
+                HeaderFooter {
+                    footer: Some(text), ..
+                },
+            ) => Some(LatentContent::Text(text)),
+            (PhType::DateTime, HeaderFooter { date, .. }) => match date {
+                HeaderFooterDate::Off => None,
+                HeaderFooterDate::Fixed(text) => Some(LatentContent::Text(text)),
+                HeaderFooterDate::Automatic { field_type, text } => {
+                    Some(LatentContent::DateField {
+                        field_type,
+                        text: text.as_deref(),
+                    })
+                }
+            },
+            _ => None,
+        };
+        let count = footer_placeholder_count(&slide.common_slide_data.shape_tree.children, &kind);
+        if count > 1 {
+            return Err(invalid_slide_mutation(
+                "set the header and footer",
+                "duplicate slide footer placeholder",
+            ));
+        }
+        let children = &mut slide.common_slide_data.shape_tree.children;
+        let Some(content) = content else {
+            remove_latent(children, &kind);
+            continue;
+        };
+        if find_latent(children, &kind).is_none() {
+            let (template, from_master) =
+                latent_template(layout, master, &kind).ok_or_else(|| {
+                    invalid_slide_mutation(
+                        "set the header and footer",
+                        format!(
+                            "layout {layout_name:?} and its master have no {} placeholder to copy, add one to the master or layout first",
+                            latent_label(&kind)
+                        ),
+                    )
+                })?;
+            if footer_placeholder_count(&layout.common_slide_data.shape_tree.children, &kind) > 1
+                || (footer_placeholder_count(&layout.common_slide_data.shape_tree.children, &kind)
+                    == 0
+                    && footer_placeholder_count(
+                        &master.common_slide_data.shape_tree.children,
+                        &kind,
+                    ) > 1)
+            {
+                return Err(invalid_slide_mutation(
+                    "set the header and footer",
+                    "ambiguous template footer placeholder",
+                ));
+            }
+            validate_footer_geometry(template, layout, Some(master))?;
+            let source_xml = template.to_xml().map_err(|error| {
+                invalid_slide_mutation("set the header and footer", error.to_string())
+            })?;
+            if !relationship_ids(&source_xml)
+                .map_err(|error| {
+                    invalid_slide_mutation("set the header and footer", error.to_string())
+                })?
+                .is_empty()
+            {
+                return Err(invalid_slide_mutation(
+                    "set the header and footer",
+                    "relationship-bearing footer template requires owner remapping",
+                ));
+            }
+            let source = if from_master {
+                &master.common_slide_data.shape_tree.children
+            } else {
+                &layout.common_slide_data.shape_tree.children
+            };
+            let copy =
+                copy_footer_template(source, &kind, &mut ids, field_ids)?.ok_or_else(|| {
+                    invalid_slide_mutation(
+                        "set the header and footer",
+                        "missing qualified template",
+                    )
+                })?;
+            let copied_xml = match &copy {
+                ShapeTreeChild::Shape(shape) => shape.to_xml(),
+                ShapeTreeChild::GroupShape(group) => group.to_xml(),
+                _ => unreachable!(),
+            }
+            .map_err(|e| invalid_slide_mutation("set the header and footer", e.to_string()))?;
+            if !relationship_ids(&copied_xml)
+                .map_err(|e| invalid_slide_mutation("set the header and footer", e.to_string()))?
+                .is_empty()
+            {
+                return Err(invalid_slide_mutation(
+                    "set the header and footer",
+                    "relationship-bearing footer group requires owner remapping",
+                ));
+            }
+            children.push(copy);
+        }
+        let shape = find_latent_mut(children, &kind).expect("the placeholder exists");
+        validate_footer_geometry(shape, layout, Some(master))?;
+        let body = shape.text_body.get_or_insert_with(CT_TextBody::new);
+        fill_latent_body(body, &content, field_ids)?;
+    }
+    Ok(())
+}
+
+/// Reads what a slide's own latent placeholders show.
+fn read_slide(slide: &CT_Slide) -> HeaderFooter {
+    let children = &slide.common_slide_data.shape_tree.children;
+    let text = |kind: &PhType| {
+        find_latent(children, kind).map(|shape| {
+            (
+                shape
+                    .text_body
+                    .as_ref()
+                    .map(CT_TextBody::plain_text)
+                    .unwrap_or_default(),
+                shape.text_body.as_ref(),
+            )
+        })
+    };
+    let date = match text(&PhType::DateTime) {
+        None => HeaderFooterDate::Off,
+        Some((_, Some(body))) if has_field(body, "datetime") => HeaderFooterDate::Automatic {
+            field_type: field_type(body).unwrap_or("datetime1").to_owned(),
+            text: body
+                .paragraphs()
+                .iter()
+                .flat_map(|paragraph| &paragraph.runs)
+                .find_map(|run| match run {
+                    TextRun::Field(field) => {
+                        Some(field.text.as_ref().map(|value| value.value.clone()))
+                    }
+                    _ => None,
+                })
+                .flatten(),
+        },
+        Some((text, _)) => HeaderFooterDate::Fixed(text),
+    };
+    HeaderFooter {
+        slide_number: find_latent(children, &PhType::SlideNumber).is_some(),
+        footer: text(&PhType::Footer).map(|(text, _)| text),
+        date,
+    }
+}
+
+/// The `p:hf` flags that make new slides receive these placeholders.
+fn update_header_footer_flags(flags: &mut Option<CT_HeaderFooter>, settings: &HeaderFooter) {
+    let flags = flags.get_or_insert_with(|| CT_HeaderFooter::new(None, None, None, None));
+    flags.slide_number = Some(settings.slide_number);
+    flags.footer = Some(settings.footer.is_some());
+    flags.date_time = Some(settings.date != HeaderFooterDate::Off);
+}
+
+/// Updates the text of a template's footer and date placeholders, so a
+/// slide added later copies what the deck shows.
+fn update_templates(
+    children: &mut [ShapeTreeChild],
+    settings: &HeaderFooter,
+    ids: &mut HashSet<String>,
+) -> Result<()> {
+    if let (Some(text), Some(shape)) = (
+        settings.footer.as_deref(),
+        find_latent_mut(children, &PhType::Footer),
+    ) {
+        fill_latent_body(
+            shape.text_body.get_or_insert_with(CT_TextBody::new),
+            &LatentContent::Text(text),
+            ids,
+        )?;
+    }
+    if let Some(shape) = find_latent_mut(children, &PhType::DateTime) {
+        let content = match &settings.date {
+            HeaderFooterDate::Off => return Ok(()),
+            HeaderFooterDate::Fixed(text) => LatentContent::Text(text),
+            HeaderFooterDate::Automatic { field_type, text } => LatentContent::DateField {
+                field_type,
+                text: text.as_deref(),
+            },
+        };
+        fill_latent_body(
+            shape.text_body.get_or_insert_with(CT_TextBody::new),
+            &content,
+            ids,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_settings(settings: &HeaderFooter) -> Result<()> {
+    let date_text = match &settings.date {
+        HeaderFooterDate::Off => None,
+        HeaderFooterDate::Fixed(text) => Some(text.as_str()),
+        HeaderFooterDate::Automatic { text, .. } => text.as_deref(),
+    };
+    for text in settings.footer.as_deref().into_iter().chain(date_text) {
+        oxml_core::xml::reject_non_xml_characters("footer text", text).map_err(|error| {
+            invalid_slide_mutation("set the header and footer", error.to_string())
+        })?;
+    }
+    if let HeaderFooterDate::Automatic { field_type, .. } = &settings.date
+        && !(field_type == "datetime" || (1..=13).any(|i| field_type == &format!("datetime{i}")))
+    {
+        return Err(invalid_slide_mutation(
+            "set the header and footer",
+            "use datetime1 to datetime13",
+        ));
+    }
+    Ok(())
+}
+
+fn footer_malformed(part_name: &str, error: impl ToString) -> Error {
+    Error::MalformedPart {
+        part_name: part_name.to_owned(),
+        message: error.to_string(),
+    }
+}
+
+impl Presentation {
+    /// Returns a layout's master part and parsed master.
+    pub(crate) fn layout_master_part(
+        &self,
+        layout_index: usize,
+    ) -> Result<(String, CT_SlideMaster)> {
+        let record = &self.layouts[layout_index];
+        let master_part =
+            related_internal_part(&self.package, &record.part_name, rel_types::SLIDE_MASTER)?
+                .ok_or_else(|| {
+                    footer_malformed(&record.part_name, "layout has no slide master relationship")
+                })?;
+        let master = CT_SlideMaster::from_xml(required_part(&self.package, &master_part)?)
+            .map_err(|error| footer_malformed(&master_part, error))?;
+        Ok((master_part, master))
+    }
+
+    /// The latent placeholders a new slide on this layout receives.
+    ///
+    /// Explicit authoring copies supported layout or master templates enabled
+    /// by the layout policy, else the master policy.
+    /// Without either container a new slide receives none.
+    pub(crate) fn new_slide_latent_shapes(
+        &self,
+        layout_index: usize,
+        ids: &mut ShapeIdAllocator,
+    ) -> Result<Vec<ShapeTreeChild>> {
+        let layout = &self.layouts[layout_index].layout;
+        if layout.layout_type() == Some("title")
+            && self
+                .presentation
+                .show_special_placeholders_on_title_slide()
+                .map_err(|e| invalid_slide_mutation("add slide", e.to_string()))?
+                == Some(false)
+        {
+            return Ok(Vec::new());
+        }
+        // A layout reached without a master relationship has no master flags
+        // or placeholders to fall back on.
+        let layout_part = &self.layouts[layout_index].part_name;
+        let master =
+            match related_internal_part(&self.package, layout_part, rel_types::SLIDE_MASTER)? {
+                Some(master_part) => Some(
+                    CT_SlideMaster::from_xml(required_part(&self.package, &master_part)?)
+                        .map_err(|error| footer_malformed(&master_part, error))?,
+                ),
+                None => None,
+            };
+        let Some(header_footer) = layout.header_footer.clone().or_else(|| {
+            master
+                .as_ref()
+                .and_then(|master| master.header_footer.clone())
+        }) else {
+            return Ok(Vec::new());
+        };
+        let mut field_ids = self.field_identity_inventory()?;
+        let mut shapes = Vec::new();
+        for kind in LATENT_KINDS {
+            let enabled = match kind {
+                PhType::DateTime => header_footer.date_time_enabled(),
+                PhType::Footer => header_footer.footer_enabled(),
+                _ => header_footer.slide_number_enabled(),
+            };
+            // As set_header_footer does, a layout without the placeholder
+            // falls back on the master's.
+            let template = match &master {
+                Some(master) => latent_template(layout, master, &kind),
+                None => find_latent(&layout.common_slide_data.shape_tree.children, &kind)
+                    .map(|shape| (shape, false)),
+            };
+            if enabled && template.is_none() {
+                return Err(invalid_slide_mutation(
+                    "add slide",
+                    "enabled footer policy has no qualified template",
+                ));
+            }
+            let layout_count =
+                footer_placeholder_count(&layout.common_slide_data.shape_tree.children, &kind);
+            if enabled
+                && (layout_count > 1
+                    || (layout_count == 0
+                        && master.as_ref().is_some_and(|master| {
+                            footer_placeholder_count(
+                                &master.common_slide_data.shape_tree.children,
+                                &kind,
+                            ) > 1
+                        })))
+            {
+                return Err(invalid_slide_mutation(
+                    "add slide",
+                    "ambiguous enabled footer template",
+                ));
+            }
+            if let Some((template, from_master)) = template
+                && enabled
+            {
+                validate_footer_geometry(template, layout, master.as_ref())?;
+                let source = if from_master {
+                    &master
+                        .as_ref()
+                        .expect("master source")
+                        .common_slide_data
+                        .shape_tree
+                        .children
+                } else {
+                    &layout.common_slide_data.shape_tree.children
+                };
+                let mut copy = copy_footer_template(source, &kind, ids, &mut field_ids)?
+                    .ok_or_else(|| {
+                        invalid_slide_mutation("add slide", "missing qualified footer template")
+                    })?;
+                let xml = match &copy {
+                    ShapeTreeChild::Shape(shape) => shape.to_xml(),
+                    ShapeTreeChild::GroupShape(group) => group.to_xml(),
+                    _ => unreachable!(),
+                }
+                .map_err(|error| invalid_slide_mutation("add slide", error.to_string()))?;
+                if !relationship_ids(&xml)
+                    .map_err(|error| invalid_slide_mutation("add slide", error.to_string()))?
+                    .is_empty()
+                {
+                    return Err(invalid_slide_mutation(
+                        "add slide",
+                        "relationship-bearing footer template requires owner remapping",
+                    ));
+                }
+                if kind == PhType::SlideNumber {
+                    let body = match &mut copy {
+                        ShapeTreeChild::Shape(shape) => {
+                            shape.text_body.get_or_insert_with(CT_TextBody::new)
+                        }
+                        ShapeTreeChild::GroupShape(group) => {
+                            find_latent_mut(&mut group.children, &kind)
+                                .expect("copied placeholder")
+                                .text_body
+                                .get_or_insert_with(CT_TextBody::new)
+                        }
+                        _ => unreachable!(),
+                    };
+                    fill_latent_body(body, &LatentContent::SlideNumber, &mut field_ids)?;
+                }
+                shapes.push(copy);
+            }
+        }
+        Ok(shapes)
+    }
+
+    /// Returns the date, footer and slide number one slide shows through
+    /// the placeholders it owns, or `None` for an unknown slide.
+    pub fn slide_header_footer(&self, slide_index: usize) -> Option<HeaderFooter> {
+        self.slides
+            .get(slide_index)
+            .map(|record| read_slide(&record.slide))
+    }
+
+    /// Appends a checked field to one current shape or table-cell paragraph.
+    /// IDs are allocated against the complete retained presentation inventory.
+    pub fn add_text_field(
+        &mut self,
+        slide_index: usize,
+        child_path: &[usize],
+        cell: Option<(usize, usize)>,
+        paragraph_index: usize,
+        field_type: &str,
+        text: Option<&str>,
+    ) -> Result<String> {
+        self.require_slide_index(slide_index)?;
+        let mut ids = self.field_identity_inventory()?;
+        let mut field = text_field(field_type, text, &mut ids)?;
+        let mut candidate = self.clone();
+        let child = child_at_mut(
+            &mut candidate.slides[slide_index]
+                .slide
+                .common_slide_data
+                .shape_tree
+                .children,
+            child_path,
+        )
+        .ok_or_else(|| {
+            invalid_slide_mutation("Paragraph.add_field", "text owner path is absent")
+        })?;
+        let body = match (child, cell) {
+            (ShapeTreeChild::Shape(shape), None) => shape.text_body.as_mut(),
+            (ShapeTreeChild::GraphicFrame(frame), Some((row, column))) => frame
+                .graphic_data
+                .table_mut()
+                .and_then(|table| table.rows.get_mut(row))
+                .and_then(|row| row.cells.get_mut(column))
+                .and_then(|cell| cell.text_body.as_mut()),
+            _ => None,
+        }
+        .ok_or_else(|| invalid_slide_mutation("Paragraph.add_field", "owner has no text body"))?;
+        let paragraph = body.paragraph_mut(paragraph_index).ok_or_else(|| {
+            invalid_slide_mutation("Paragraph.add_field", "paragraph index is absent")
+        })?;
+        if let Some(TextRun::Run(run)) = paragraph.runs.last() {
+            field.run_properties = run.properties.clone();
+        }
+        let id = field.id.clone();
+        push_field(paragraph, field);
+        self.commit_candidate(candidate)?;
+        Ok(id)
+    }
+
+    /// Sets one slide's date, footer and slide number.
+    ///
+    /// Missing placeholders are copied from the slide's layout, or from its
+    /// master with an explicit position when the layout has none, and
+    /// switched-off ones are removed. The masters and layouts are unchanged.
+    /// A layout and master without the placeholder a setting needs is an
+    /// error, and the slide is left as it was.
+    pub fn set_slide_header_footer(
+        &mut self,
+        slide_index: usize,
+        settings: &HeaderFooter,
+    ) -> Result<bool> {
+        validate_settings(settings)?;
+        let slide_count = self.slides.len();
+        let layout_index =
+            self.slide_layout_index(slide_index)
+                .ok_or(Error::UnknownSlideIndex {
+                    index: slide_index,
+                    slide_count,
+                })?;
+        let (_, master) = self.layout_master_part(layout_index)?;
+        let layout = &self.layouts[layout_index].layout;
+        let layout_name = layout.common_slide_data.name.clone().unwrap_or_default();
+        let mut field_ids = self.field_identity_inventory()?;
+        let mut staged = self.clone();
+        let mut slide = staged.slides[slide_index].slide.clone();
+        apply_to_slide(
+            &mut slide,
+            layout,
+            &master,
+            &layout_name,
+            settings,
+            &mut field_ids,
+        )?;
+        if slide == self.slides[slide_index].slide {
+            return Ok(false);
+        }
+        staged.slides[slide_index].slide = slide;
+        self.commit_candidate(staged)?;
+        Ok(true)
+    }
+
+    /// Sets the date, footer and slide number of every slide, as
+    /// PowerPoint's Header and Footer dialog does with Apply to All.
+    ///
+    /// Each slide owns the placeholders it shows, copied from its layout
+    /// when missing. With `hide_on_title`, slides on a title layout show
+    /// none, as "Don't show on title slide" does. Every master and layout
+    /// receives the matching `p:hf` flags and the footer and date text, so a
+    /// slide added later gets the same placeholders. A layout and master
+    /// without a placeholder a slide needs is an error, and nothing changes.
+    pub fn set_header_footer(
+        &mut self,
+        settings: &HeaderFooter,
+        hide_on_title: bool,
+    ) -> Result<bool> {
+        validate_settings(settings)?;
+        let hidden = HeaderFooter::default();
+        let title_layouts = self
+            .layouts
+            .iter()
+            .map(|record| hide_on_title && record.layout.layout_type() == Some("title"))
+            .collect::<Vec<_>>();
+        let mut staged = self.clone();
+        let mut field_ids = self.field_identity_inventory()?;
+        let mut changed = false;
+        let mut masters = Vec::<(String, CT_SlideMaster)>::new();
+        for layout_index in 0..staged.layouts.len() {
+            let (master_part, master) = staged.layout_master_part(layout_index)?;
+            if !masters.iter().any(|(part, _)| part == &master_part) {
+                masters.push((master_part, master));
+            }
+        }
+        for slide_index in 0..staged.slides.len() {
+            let layout_index = staged.slide_layout_index(slide_index).ok_or_else(|| {
+                footer_malformed(
+                    &staged.slides[slide_index].part_name,
+                    "slide layout is not reached from a slide master",
+                )
+            })?;
+            let (master_part, _) = staged.layout_master_part(layout_index)?;
+            let master = &masters
+                .iter()
+                .find(|(part, _)| part == &master_part)
+                .expect("every layout master was collected")
+                .1;
+            let layout = &staged.layouts[layout_index].layout;
+            let layout_name = layout.common_slide_data.name.clone().unwrap_or_default();
+            let effective = if title_layouts[layout_index] {
+                &hidden
+            } else {
+                settings
+            };
+            let mut slide = staged.slides[slide_index].slide.clone();
+            apply_to_slide(
+                &mut slide,
+                layout,
+                master,
+                &layout_name,
+                effective,
+                &mut field_ids,
+            )?;
+            changed |= slide != staged.slides[slide_index].slide;
+            staged.slides[slide_index].slide = slide;
+        }
+        for (layout_index, record) in staged.layouts.iter_mut().enumerate() {
+            let original = record.layout.clone();
+            let effective = if title_layouts[layout_index] {
+                &hidden
+            } else {
+                settings
+            };
+            update_header_footer_flags(&mut record.layout.header_footer, effective);
+            update_templates(
+                &mut record.layout.common_slide_data.shape_tree.children,
+                settings,
+                &mut field_ids,
+            )?;
+            if record.layout == original {
+                continue;
+            }
+            changed = true;
+            let xml = record
+                .layout
+                .to_xml()
+                .map_err(|error| footer_malformed(&record.part_name, error))?;
+            staged.package.set_part(&record.part_name, xml);
+        }
+        staged
+            .presentation
+            .set_show_special_placeholders_on_title_slide(hide_on_title.then_some(false));
+        for (master_part, mut master) in masters {
+            let original = master.clone();
+            update_header_footer_flags(&mut master.header_footer, settings);
+            update_templates(
+                &mut master.common_slide_data.shape_tree.children,
+                settings,
+                &mut field_ids,
+            )?;
+            if master == original {
+                continue;
+            }
+            changed = true;
+            let xml = master
+                .to_xml()
+                .map_err(|error| footer_malformed(&master_part, error))?;
+            staged.package.set_part(&master_part, xml);
+        }
+        if !changed && staged.presentation == self.presentation {
+            return Ok(false);
+        }
+        self.commit_candidate(staged)?;
+        Ok(true)
+    }
+}
+
+fn footer_placeholder_count(children: &[ShapeTreeChild], kind: &PhType) -> usize {
+    children
+        .iter()
+        .map(|child| match child {
+            ShapeTreeChild::Shape(shape) => usize::from(is_kind(shape, kind)),
+            ShapeTreeChild::GroupShape(group) => footer_placeholder_count(&group.children, kind),
+            _ => 0,
+        })
+        .sum()
+}
+
+impl Presentation {
+    /// Scans current qualified field identities including retained owner parts.
+    pub fn field_identity_inventory(&self) -> Result<HashSet<String>> {
+        let package = self.staged_package(true)?;
+        let mut ids = HashSet::new();
+        for (name, bytes) in &package.parts {
+            if !name.ends_with(".xml") {
+                continue;
+            }
+            let mut reader = NsReader::from_reader(bytes.as_slice());
+            let mut buffer = Vec::new();
+            loop {
+                let (namespace, event) = reader
+                    .read_resolved_event_into(&mut buffer)
+                    .map_err(|error| footer_malformed(name, error))?;
+                match event {
+                    XmlEvent::Start(start) | XmlEvent::Empty(start)
+                        if matches!(namespace, XmlResolveResult::Bound(XmlNamespace(uri)) if uri == A_NS.as_bytes())
+                            && xml_local_name(start.name().as_ref()) == b"fld" =>
+                    {
+                        for attr in start.attributes() {
+                            let attr = attr.map_err(|error| footer_malformed(name, error))?;
+                            if attr.key.as_ref() == b"id" {
+                                ids.insert(
+                                    attr.decoded_and_normalized_value(
+                                        XmlVersion::Implicit1_0,
+                                        reader.decoder(),
+                                    )
+                                    .map_err(|error| footer_malformed(name, error))?
+                                    .to_uppercase(),
+                                );
+                            }
+                        }
+                    }
+                    XmlEvent::Eof => break,
+                    _ => {}
+                }
+                buffer.clear();
+            }
+        }
+        Ok(ids)
+    }
+}
+
+/// A transition effect.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum TransitionKind {
+    Fade,
+    Push,
+    Wipe,
+    Split,
+    Cover,
+    /// PowerPoint's Uncover, the `p:pull` element.
+    Uncover,
+    Cut,
+    Zoom,
+    /// An effect rpptx reads but does not author, by its element name, such
+    /// as `blinds` or `morph`.
+    Other(String),
+}
+
+impl TransitionKind {
+    /// The authorable kinds, by the names [`Self::parse`] accepts.
+    pub const NAMES: [&'static str; 8] = [
+        "fade", "push", "wipe", "split", "cover", "uncover", "cut", "zoom",
+    ];
+
+    /// Parses an authorable kind name, `None` for any other name.
+    pub fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "fade" => Self::Fade,
+            "push" => Self::Push,
+            "wipe" => Self::Wipe,
+            "split" => Self::Split,
+            "cover" => Self::Cover,
+            "uncover" => Self::Uncover,
+            "cut" => Self::Cut,
+            "zoom" => Self::Zoom,
+            _ => return None,
+        })
+    }
+
+    /// The kind's name, the element name for [`Self::Other`].
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Fade => "fade",
+            Self::Push => "push",
+            Self::Wipe => "wipe",
+            Self::Split => "split",
+            Self::Cover => "cover",
+            Self::Uncover => "uncover",
+            Self::Cut => "cut",
+            Self::Zoom => "zoom",
+            Self::Other(name) => name,
+        }
+    }
+
+    /// The directions this kind accepts, the first one being the default.
+    pub fn directions(&self) -> &'static [TransitionDirection] {
+        use TransitionDirection::*;
+        match self {
+            Self::Push | Self::Wipe => &[Left, Up, Right, Down],
+            Self::Cover | Self::Uncover => {
+                &[Left, Up, Right, Down, LeftUp, RightUp, LeftDown, RightDown]
+            }
+            Self::Split => &[HorizontalOut, HorizontalIn, VerticalOut, VerticalIn],
+            Self::Zoom => &[Out, In],
+            Self::Fade | Self::Cut | Self::Other(_) => &[],
+        }
+    }
+
+    fn element(&self) -> &str {
+        match self {
+            Self::Uncover => "pull",
+            other => other.name(),
+        }
+    }
+}
+
+/// The direction an effect moves the incoming slide, as the effect's `dir`
+/// and, for split, `orient` attributes write it. `Left` is `dir="l"`, which
+/// PowerPoint's user interface calls "From Right" for push and wipe.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TransitionDirection {
+    Left,
+    Up,
+    Right,
+    Down,
+    LeftUp,
+    RightUp,
+    LeftDown,
+    RightDown,
+    In,
+    Out,
+    HorizontalIn,
+    HorizontalOut,
+    VerticalIn,
+    VerticalOut,
+}
+
+impl TransitionDirection {
+    /// Every direction, by the names [`Self::parse`] accepts.
+    pub const NAMES: [&'static str; 14] = [
+        "left",
+        "up",
+        "right",
+        "down",
+        "left-up",
+        "right-up",
+        "left-down",
+        "right-down",
+        "in",
+        "out",
+        "horizontal-in",
+        "horizontal-out",
+        "vertical-in",
+        "vertical-out",
+    ];
+
+    const ALL: [Self; 14] = [
+        Self::Left,
+        Self::Up,
+        Self::Right,
+        Self::Down,
+        Self::LeftUp,
+        Self::RightUp,
+        Self::LeftDown,
+        Self::RightDown,
+        Self::In,
+        Self::Out,
+        Self::HorizontalIn,
+        Self::HorizontalOut,
+        Self::VerticalIn,
+        Self::VerticalOut,
+    ];
+
+    /// Parses a direction name such as `left` or `horizontal-in`.
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::NAMES
+            .iter()
+            .position(|candidate| *candidate == name)
+            .map(|index| Self::ALL[index])
+    }
+
+    /// The direction's name.
+    pub fn name(self) -> &'static str {
+        let index = Self::ALL
+            .iter()
+            .position(|candidate| *candidate == self)
+            .expect("every direction is listed");
+        Self::NAMES[index]
+    }
+
+    fn attributes(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            Self::Left => &[("dir", "l")],
+            Self::Up => &[("dir", "u")],
+            Self::Right => &[("dir", "r")],
+            Self::Down => &[("dir", "d")],
+            Self::LeftUp => &[("dir", "lu")],
+            Self::RightUp => &[("dir", "ru")],
+            Self::LeftDown => &[("dir", "ld")],
+            Self::RightDown => &[("dir", "rd")],
+            Self::In => &[("dir", "in")],
+            Self::Out => &[("dir", "out")],
+            Self::HorizontalIn => &[("orient", "horz"), ("dir", "in")],
+            Self::HorizontalOut => &[("orient", "horz"), ("dir", "out")],
+            Self::VerticalIn => &[("orient", "vert"), ("dir", "in")],
+            Self::VerticalOut => &[("orient", "vert"), ("dir", "out")],
+        }
+    }
+}
+
+/// A slide transition and how the slide show advances past the slide.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SlideTransition {
+    /// The effect, `None` for a transition that only sets advance timing.
+    pub kind: Option<TransitionKind>,
+    /// The effect direction, `None` for the kind's default.
+    pub direction: Option<TransitionDirection>,
+    /// The effect duration in milliseconds, `None` for the default speed.
+    pub duration_ms: Option<u64>,
+    /// Whether a click advances, true by default.
+    pub advance_on_click: Option<bool>,
+    /// Advance automatically after this many milliseconds.
+    pub advance_after_ms: Option<u64>,
+}
+
+impl SlideTransition {
+    fn from_model(model: &rpptx_oxml::timing::CT_SlideTransition) -> Self {
+        let kind = model.effect.as_ref().map(|effect| match effect {
+            rpptx_oxml::timing::TransitionEffect::Cut => TransitionKind::Cut,
+            rpptx_oxml::timing::TransitionEffect::Fade => TransitionKind::Fade,
+            rpptx_oxml::timing::TransitionEffect::Wipe => TransitionKind::Wipe,
+            rpptx_oxml::timing::TransitionEffect::Push => TransitionKind::Push,
+            rpptx_oxml::timing::TransitionEffect::Zoom => TransitionKind::Zoom,
+            rpptx_oxml::timing::TransitionEffect::Split => TransitionKind::Split,
+            rpptx_oxml::timing::TransitionEffect::Cover => TransitionKind::Cover,
+            rpptx_oxml::timing::TransitionEffect::Uncover => TransitionKind::Uncover,
+            rpptx_oxml::timing::TransitionEffect::Morph => {
+                TransitionKind::Other("morph".to_owned())
+            }
+            rpptx_oxml::timing::TransitionEffect::Other(name) => match name.as_str() {
+                "split" => TransitionKind::Split,
+                "cover" => TransitionKind::Cover,
+                "pull" => TransitionKind::Uncover,
+                _ => TransitionKind::Other(name.clone()),
+            },
+        });
+        let parameter = |name: &str| {
+            model
+                .effect_parameters
+                .iter()
+                .find(|parameter| parameter.name == name)
+                .map(|parameter| parameter.value.as_str())
+        };
+        // An effect that names any direction attribute reads with the
+        // schema defaults for the others, so `<p:split orient="vert"/>` is
+        // vertical-out. One that names none keeps the default, `None`.
+        let direction = kind.as_ref().and_then(|kind| {
+            let defaults = kind.directions().first()?.attributes();
+            if !defaults.iter().any(|(name, _)| parameter(name).is_some()) {
+                return None;
+            }
+            kind.directions().iter().copied().find(|direction| {
+                direction.attributes().iter().all(|(name, value)| {
+                    let default = defaults
+                        .iter()
+                        .find(|(default_name, _)| default_name == name)
+                        .map(|(_, value)| *value);
+                    parameter(name).or(default) == Some(*value)
+                })
+            })
+        });
+        Self {
+            kind,
+            direction,
+            duration_ms: model.duration_ms,
+            advance_on_click: model.advance_on_click,
+            advance_after_ms: model.advance_after_ms,
+        }
+    }
+
+    /// Builds the `p:transition` this value writes, `None` when it has no
+    /// effect and the default advance, which is no transition at all.
+    fn to_model(
+        &self,
+        previous: Option<&rpptx_oxml::timing::CT_SlideTransition>,
+    ) -> Result<Option<rpptx_oxml::timing::CT_SlideTransition>> {
+        let operation = "set a slide transition";
+        if let Some(TransitionKind::Other(name)) = &self.kind {
+            return Err(invalid_slide_mutation(
+                operation,
+                format!(
+                    "transition {name:?} cannot be authored, use one of {}",
+                    TransitionKind::NAMES.join(", ")
+                ),
+            ));
+        }
+        if let Some(direction) = self.direction {
+            let accepted = self
+                .kind
+                .as_ref()
+                .map_or(&[][..], TransitionKind::directions);
+            if !accepted.contains(&direction) {
+                let kind = self.kind.as_ref().map_or("no effect", TransitionKind::name);
+                let names = accepted
+                    .iter()
+                    .map(|direction| direction.name())
+                    .collect::<Vec<_>>();
+                return Err(invalid_slide_mutation(
+                    operation,
+                    if names.is_empty() {
+                        format!("{kind} takes no direction")
+                    } else {
+                        format!(
+                            "{kind} does not take direction {}, use one of {}",
+                            direction.name(),
+                            names.join(", ")
+                        )
+                    },
+                ));
+            }
+        }
+        if self.kind.is_none() && self.duration_ms.is_some() {
+            return Err(invalid_slide_mutation(
+                operation,
+                "a duration needs an effect, set a transition type first",
+            ));
+        }
+        if self.kind.is_none() && self.advance_on_click.is_none() && self.advance_after_ms.is_none()
+        {
+            return Ok(None);
+        }
+        let attributes = self
+            .direction
+            .map_or(&[][..], TransitionDirection::attributes);
+        let effect = self.kind.as_ref().map(|kind| (kind.element(), attributes));
+        match previous {
+            Some(previous) => previous.with_settings(
+                effect,
+                self.duration_ms,
+                self.advance_on_click,
+                self.advance_after_ms,
+            ),
+            None => rpptx_oxml::timing::CT_SlideTransition::authored(
+                effect,
+                self.duration_ms,
+                self.advance_on_click,
+                self.advance_after_ms,
+            ),
+        }
+        .map(Some)
+        .map_err(|error| invalid_slide_mutation(operation, error.to_string()))
+    }
+}
+
+impl SlideRef<'_> {
+    /// Returns the selected transition and optional advance settings.
+    pub fn transition(&self) -> Option<SlideTransition> {
+        self.record
+            .slide
+            .transition
+            .as_ref()
+            .map(SlideTransition::from_model)
+    }
+}
+
+impl SlideMut<'_> {
+    /// Changes owned transition settings while retaining producer siblings.
+    pub fn set_transition(&mut self, transition: Option<&SlideTransition>) -> Result<bool> {
+        self.presentation
+            .set_slide_transition(self.index, transition)
+    }
+}
+
+impl Presentation {
+    /// Stages a selected transition change and validates the resulting package.
+    pub fn set_slide_transition(
+        &mut self,
+        index: usize,
+        transition: Option<&SlideTransition>,
+    ) -> Result<bool> {
+        let mut candidate = self.clone();
+        let record = candidate.slides.get_mut(index).ok_or_else(|| {
+            invalid_slide_mutation("set a slide transition", "slide index out of range")
+        })?;
+        let model = transition
+            .map(|value| value.to_model(record.slide.transition.as_ref()))
+            .transpose()?
+            .flatten();
+        let changed = record.slide.transition != model;
+        if changed {
+            record.slide.transition = model;
+        }
+        if changed {
+            self.commit_candidate(candidate)?;
+        }
+        Ok(changed)
+    }
+    /// Stages one transition intent against each slide's retained source.
+    pub fn set_all_transitions(&mut self, transition: Option<&SlideTransition>) -> Result<bool> {
+        let mut candidate = self.clone();
+        let mut changed = false;
+        for record in &mut candidate.slides {
+            let model = transition
+                .map(|value| value.to_model(record.slide.transition.as_ref()))
+                .transpose()?
+                .flatten();
+            if model != record.slide.transition {
+                record.slide.transition = model;
+                changed = true;
+            }
+        }
+        if changed {
+            self.commit_candidate(candidate)?;
+        }
+        Ok(changed)
+    }
 }
 
 #[cfg(test)]
@@ -17190,6 +18962,675 @@ mod write_tests {
                 .get_part(&presentation.presentation_part)
                 .unwrap(),
             before
+        );
+    }
+
+    #[test]
+    fn fx208_footer_owned_fields_are_unique_idempotent_and_atomic() {
+        let mut p = Presentation::new().unwrap();
+        p.add_slide(0).unwrap();
+        p.add_slide(1).unwrap();
+        let settings = HeaderFooter {
+            slide_number: true,
+            footer: Some("F208 footer".into()),
+            date: HeaderFooterDate::Automatic {
+                field_type: "datetime13".into(),
+                text: None,
+            },
+        };
+        p.set_header_footer(&settings, true).unwrap();
+        assert_eq!(p.slide_header_footer(0), Some(HeaderFooter::default()));
+        assert_eq!(p.slide_header_footer(1), Some(settings.clone()));
+        let saved = p.to_bytes().unwrap();
+        p.set_header_footer(&settings, true).unwrap();
+        assert_eq!(
+            p.to_bytes().unwrap(),
+            saved,
+            "identical footer publication must retain source"
+        );
+        let mut reopened = Presentation::from_bytes(&saved).unwrap();
+        assert_eq!(reopened.slide_header_footer(1), Some(settings.clone()));
+        reopened.add_slide(1).unwrap();
+        assert_eq!(reopened.slide_header_footer(2), Some(settings.clone()));
+        let identities = reopened.field_identity_inventory().unwrap();
+        let package = reopened.staged_package(true).unwrap();
+        let mut actual = Vec::new();
+        for (name, xml) in &package.parts {
+            if !name.contains("/slides/") || !name.ends_with(".xml") {
+                continue;
+            }
+            let slide = CT_Slide::from_xml(xml).unwrap();
+            fn fields(children: &[ShapeTreeChild], actual: &mut Vec<String>) {
+                for child in children {
+                    match child {
+                        ShapeTreeChild::Shape(shape) => {
+                            if let Some(body) = &shape.text_body {
+                                for run in body
+                                    .paragraphs()
+                                    .iter()
+                                    .flat_map(|paragraph| &paragraph.runs)
+                                {
+                                    if let TextRun::Field(field) = run {
+                                        actual.push(field.id.clone());
+                                    }
+                                }
+                            }
+                        }
+                        ShapeTreeChild::GroupShape(group) => fields(&group.children, actual),
+                        _ => {}
+                    }
+                }
+            }
+            fields(&slide.common_slide_data.shape_tree.children, &mut actual);
+        }
+        assert_eq!(actual.len(), 4);
+        assert_eq!(actual.iter().collect::<HashSet<_>>().len(), actual.len());
+        assert!(actual.iter().all(|id| identities.contains(id)));
+        let cached = HeaderFooter {
+            date: HeaderFooterDate::Automatic {
+                field_type: "datetime1".into(),
+                text: Some("same displayed text".into()),
+            },
+            ..settings.clone()
+        };
+        reopened.set_slide_header_footer(1, &cached).unwrap();
+        assert_eq!(reopened.slide_header_footer(1).unwrap().date, cached.date);
+        let fixed = HeaderFooter {
+            date: HeaderFooterDate::Fixed("same displayed text".into()),
+            ..cached
+        };
+        reopened.set_slide_header_footer(1, &fixed).unwrap();
+        assert_eq!(reopened.slide_header_footer(1).unwrap().date, fixed.date);
+        let fixed_bytes = reopened.to_bytes().unwrap();
+        assert_eq!(
+            Presentation::from_bytes(&fixed_bytes)
+                .unwrap()
+                .slide_header_footer(1)
+                .unwrap()
+                .date,
+            fixed.date
+        );
+        reopened.set_slide_header_footer(1, &fixed).unwrap();
+        assert_eq!(reopened.to_bytes().unwrap(), fixed_bytes);
+        let before = reopened.to_bytes().unwrap();
+        let bad = HeaderFooter {
+            footer: Some("invalid\0text".into()),
+            ..settings
+        };
+        assert!(reopened.set_header_footer(&bad, false).is_err());
+        assert_eq!(reopened.to_bytes().unwrap(), before);
+    }
+
+    #[test]
+    fn fx208_header_footer_policy_retains_presence_and_scope_without_paint_projection() {
+        let mut deck = Presentation::new().unwrap();
+        deck.add_slide(6).unwrap();
+        let layout = deck.slide_layout_index(0).unwrap();
+        let (master_part, mut master) = deck.layout_master_part(layout).unwrap();
+        master.header_footer = None;
+        deck.package
+            .set_part(&master_part, master.to_xml().unwrap());
+        deck.layouts[layout].layout.header_footer = None;
+        assert_eq!(deck.slide_header_footer_policy(0).unwrap(), None);
+        assert!(!deck.slide_header_footer(0).unwrap().slide_number);
+        master.header_footer = Some(CT_HeaderFooter::new(Some(false), None, Some(true), None));
+        deck.package
+            .set_part(&master_part, master.to_xml().unwrap());
+        assert_eq!(
+            deck.slide_header_footer_policy(0).unwrap(),
+            Some((
+                "master",
+                HeaderFooterFlags {
+                    date: None,
+                    footer: Some(true),
+                    slide_number: Some(false)
+                }
+            ))
+        );
+        deck.layouts[layout].layout.header_footer =
+            Some(CT_HeaderFooter::new(None, None, Some(false), Some(true)));
+        assert_eq!(
+            deck.slide_header_footer_policy(0).unwrap(),
+            Some((
+                "layout",
+                HeaderFooterFlags {
+                    date: Some(true),
+                    footer: Some(false),
+                    slide_number: None
+                }
+            ))
+        );
+        let owned = deck.slide_header_footer(0).unwrap();
+        assert!(
+            !owned.slide_number && owned.footer.is_none() && owned.date == HeaderFooterDate::Off
+        );
+        let layout_part = deck.layouts[layout].part_name.clone();
+        deck.package
+            .set_part(&layout_part, deck.layouts[layout].layout.to_xml().unwrap());
+        let reopened = Presentation::from_bytes(&deck.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            reopened.slide_header_footer_policy(0).unwrap(),
+            deck.slide_header_footer_policy(0).unwrap()
+        );
+        assert_eq!(reopened.slide_header_footer(0), deck.slide_header_footer(0));
+    }
+
+    #[test]
+    fn fx208_fields_retain_cache_presence_and_global_identity_atomically() {
+        let mut deck = Presentation::new().unwrap();
+        deck.add_slide(6).unwrap();
+        deck.slide_mut(0)
+            .unwrap()
+            .add_textbox(Emu(0), Emu(0), Emu(914400), Emu(914400))
+            .unwrap();
+        let mut ids = std::collections::HashSet::new();
+        for kind in FIELD_TYPES {
+            for cache in [None, Some(""), Some("retained cache")] {
+                let id = deck.add_text_field(0, &[0], None, 0, kind, cache).unwrap();
+                assert!(ids.insert(id));
+            }
+        }
+        let body = child_at(
+            &deck.slides[0].slide.common_slide_data.shape_tree.children,
+            &[0],
+        )
+        .and_then(|owner| match owner {
+            ShapeTreeChild::Shape(shape) => shape.text_body.as_ref(),
+            _ => None,
+        })
+        .unwrap();
+        let fields = body.paragraphs()[0]
+            .runs
+            .iter()
+            .filter_map(|run| match run {
+                TextRun::Field(field) => Some(field),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(fields.len(), FIELD_TYPES.len() * 3);
+        assert_eq!(fields[0].text, None);
+        assert_eq!(
+            fields[1].text.as_ref().map(|text| text.value.as_str()),
+            Some("")
+        );
+        assert_eq!(
+            fields[2].text.as_ref().map(|text| text.value.as_str()),
+            Some("retained cache")
+        );
+        let before = deck.to_bytes().unwrap();
+        assert!(
+            deck.add_text_field(0, &[0], None, 0, "unknown", None)
+                .is_err()
+        );
+        assert!(
+            deck.add_text_field(0, &[0], None, 0, "slidenum", Some("invalid\u{0}"))
+                .is_err()
+        );
+        assert!(
+            deck.add_text_field(0, &[0], None, 999, "slidenum", None)
+                .is_err()
+        );
+        assert_eq!(deck.to_bytes().unwrap(), before);
+        let reopened = Presentation::from_bytes(&before).unwrap();
+        assert_eq!(
+            reopened.field_identity_inventory().unwrap(),
+            deck.field_identity_inventory().unwrap()
+        );
+    }
+
+    #[test]
+    fn fx208_transitions_preserve_retained_siblings_and_all_slide_atomicity() {
+        let mut deck = Presentation::new().unwrap();
+        deck.add_slide(6).unwrap();
+        deck.add_slide(6).unwrap();
+        let original = format!(
+            r#"<q:transition xmlns:q="{P_NS}" xmlns:e="urn:fx208" e:raw='opaque' advClick="0"><q:fade/><q:sndAc><q:stSnd><q:snd name="owned sound"/></q:stSnd></q:sndAc><q:extLst><q:ext uri="opaque"><e:payload/></q:ext></q:extLst></q:transition>"#
+        );
+        deck.slides[0].slide.transition =
+            Some(rpptx_oxml::timing::CT_SlideTransition::from_xml(original.as_bytes()).unwrap());
+        for name in TransitionKind::NAMES {
+            let kind = TransitionKind::parse(name).unwrap();
+            for direction in
+                std::iter::once(None).chain(kind.directions().iter().copied().map(Some))
+            {
+                let value = SlideTransition {
+                    direction,
+                    kind: Some(kind.clone()),
+                    duration_ms: Some(1234),
+                    advance_on_click: Some(false),
+                    advance_after_ms: Some(0),
+                };
+                deck.set_slide_transition(0, Some(&value)).unwrap();
+                let raw =
+                    String::from_utf8(deck.slides[0].slide.transition.as_ref().unwrap().to_xml())
+                        .unwrap();
+                assert!(
+                    raw.contains("e:raw='opaque'")
+                        && raw.contains("<q:sndAc>")
+                        && raw.contains("<e:payload/>"),
+                    "{raw}"
+                );
+                assert_eq!(deck.slide(0).unwrap().transition(), Some(value.clone()));
+                let bytes = deck.to_bytes().unwrap();
+                assert!(!deck.set_slide_transition(0, Some(&value)).unwrap());
+                assert_eq!(deck.to_bytes().unwrap(), bytes);
+                assert_eq!(
+                    Presentation::from_bytes(&bytes)
+                        .unwrap()
+                        .slide(0)
+                        .unwrap()
+                        .transition(),
+                    Some(value)
+                );
+            }
+        }
+        let before = deck.to_bytes().unwrap();
+        let invalid = SlideTransition {
+            kind: Some(TransitionKind::Fade),
+            direction: Some(TransitionDirection::Left),
+            ..SlideTransition::default()
+        };
+        assert!(deck.set_all_transitions(Some(&invalid)).is_err());
+        assert_eq!(deck.to_bytes().unwrap(), before);
+        let alternate = format!(
+            r#"<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:q="{P_NS}" xmlns:e="urn:fx208"><mc:Choice Requires="e"><e:transition retained="unknown"/></mc:Choice><mc:Fallback><q:transition><q:fade/><q:sndAc/><q:extLst><q:ext uri="opaque"><e:payload/></q:ext></q:extLst></q:transition></mc:Fallback></mc:AlternateContent>"#
+        );
+        // Parse the valid MC wrapper through its owning slide parser.
+        let slide = deck.slides[0].slide.to_xml().unwrap();
+        let slide = String::from_utf8(slide).unwrap();
+        let mut typed = deck.slides[0].slide.clone();
+        typed.transition = None;
+        let clean = String::from_utf8(typed.to_xml().unwrap()).unwrap();
+        let injected = clean.replace("</p:sld>", &format!("{alternate}</p:sld>"));
+        deck.slides[0].slide = CT_Slide::from_xml(injected.as_bytes()).unwrap();
+        let cover = SlideTransition {
+            kind: Some(TransitionKind::Cover),
+            direction: Some(TransitionDirection::RightDown),
+            ..SlideTransition::default()
+        };
+        deck.set_slide_transition(0, Some(&cover)).unwrap();
+        let retained =
+            String::from_utf8(deck.slides[0].slide.transition.as_ref().unwrap().to_xml()).unwrap();
+        assert!(retained.contains(
+            "<mc:Choice Requires=\"e\"><e:transition retained=\"unknown\"/></mc:Choice>"
+        ));
+        assert!(retained.contains("<q:sndAc/>") && retained.contains("<e:payload/>"));
+        assert_eq!(deck.slide(0).unwrap().transition(), Some(cover.clone()));
+        let opaque = format!(
+            r#"<q:transition xmlns:q="{P_NS}" xmlns:e="urn:fx208"><q:fade e:opaque='retain'/></q:transition>"#
+        );
+        deck.slides[1].slide.transition =
+            Some(rpptx_oxml::timing::CT_SlideTransition::from_xml(opaque.as_bytes()).unwrap());
+        let before = deck.to_bytes().unwrap();
+        assert!(deck.set_all_transitions(Some(&cover)).is_err());
+        assert_eq!(deck.to_bytes().unwrap(), before);
+        let _ = slide;
+        deck.set_slide_transition(0, None).unwrap();
+        assert!(deck.slide(0).unwrap().transition().is_none());
+    }
+
+    #[test]
+    fn fx208_compatible_imported_date_alias_keeps_cache_and_identity() {
+        let mut deck = Presentation::new().unwrap();
+        deck.add_slide(1).unwrap();
+        let alias = HeaderFooter {
+            date: HeaderFooterDate::Automatic {
+                field_type: "datetime".to_owned(),
+                text: Some("retained cache".to_owned()),
+            },
+            ..HeaderFooter::default()
+        };
+        deck.set_slide_header_footer(0, &alias).unwrap();
+        let before = deck.to_bytes().unwrap();
+        let ids = deck.field_identity_inventory().unwrap();
+        let current = HeaderFooter {
+            date: HeaderFooterDate::Automatic {
+                field_type: "datetime1".to_owned(),
+                text: None,
+            },
+            ..HeaderFooter::default()
+        };
+        deck.set_slide_header_footer(0, &current).unwrap();
+        assert!(
+            matches!(deck.slide_header_footer(0).unwrap().date, HeaderFooterDate::Automatic { text: Some(ref text), .. } if text == "retained cache"),
+            "compatible datetime alias must preserve its cached value"
+        );
+        assert_eq!(deck.field_identity_inventory().unwrap(), ids);
+        assert_eq!(deck.to_bytes().unwrap(), before);
+        let mut reopened = Presentation::from_bytes(&before).unwrap();
+        reopened.set_header_footer(&current, false).unwrap();
+        assert!(
+            matches!(reopened.slide_header_footer(0).unwrap().date, HeaderFooterDate::Automatic { text: Some(ref text), .. } if text == "retained cache")
+        );
+    }
+
+    #[test]
+    fn fx208_missing_footer_geometry_refuses_before_publication() {
+        let mut source = Presentation::new().unwrap();
+        source.add_slide(1).unwrap();
+        let settings = HeaderFooter {
+            footer: Some("geometry control".to_owned()),
+            ..HeaderFooter::default()
+        };
+        let mut positive = source.clone();
+        positive.set_header_footer(&settings, false).unwrap();
+        assert_eq!(
+            positive.slide_header_footer(0).unwrap().footer.as_deref(),
+            Some("geometry control")
+        );
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(source.to_bytes().unwrap())).unwrap();
+        let layout_part = source.layouts[1].part_name.clone();
+        let mut layout = CT_SlideLayout::from_xml(package.get_part(&layout_part).unwrap()).unwrap();
+        find_latent_mut(
+            &mut layout.common_slide_data.shape_tree.children,
+            &PhType::Footer,
+        )
+        .unwrap()
+        .shape_properties
+        .transform = None;
+        let (master_part, mut master) = source.layout_master_part(1).unwrap();
+        find_latent_mut(
+            &mut master.common_slide_data.shape_tree.children,
+            &PhType::Footer,
+        )
+        .unwrap()
+        .shape_properties
+        .transform = None;
+        package.set_part(&layout_part, layout.to_xml().unwrap());
+        package.set_part(&master_part, master.to_xml().unwrap());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut deck = Presentation::from_bytes(bytes.get_ref()).unwrap();
+        assert!(
+            find_latent(
+                &deck.layouts[1].layout.common_slide_data.shape_tree.children,
+                &PhType::Footer
+            )
+            .unwrap()
+            .shape_properties
+            .transform
+            .is_none()
+        );
+        assert!(
+            find_latent(
+                &deck
+                    .layout_master_part(1)
+                    .unwrap()
+                    .1
+                    .common_slide_data
+                    .shape_tree
+                    .children,
+                &PhType::Footer
+            )
+            .unwrap()
+            .shape_properties
+            .transform
+            .is_none()
+        );
+        let before = deck.to_bytes().unwrap();
+        assert!(
+            deck.set_header_footer(&settings, false).is_err(),
+            "missing footer geometry must refuse before publication"
+        );
+        assert_eq!(deck.to_bytes().unwrap(), before);
+        // Enabled legal policy with the same valid but unplaced template must
+        // also refuse new-slide publication.
+        layout.header_footer = Some(CT_HeaderFooter::new(
+            Some(false),
+            Some(false),
+            Some(true),
+            Some(false),
+        ));
+        package.set_part(&layout_part, layout.to_xml().unwrap());
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut deck = Presentation::from_bytes(bytes.get_ref()).unwrap();
+        let before = deck.to_bytes().unwrap();
+        assert!(
+            deck.add_slide(1).is_err(),
+            "missing enabled footer geometry must refuse new slide"
+        );
+        assert_eq!(deck.to_bytes().unwrap(), before);
+        for (width, height) in [(0, 1), (1, 0), (-1, 1), (1, -1)] {
+            let mut transform = CT_Transform2D::from_xml(
+                b"<a:xfrm xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:ext cx=\"1\" cy=\"1\"/></a:xfrm>"
+            ).unwrap();
+            transform.extent = Some(CT_PositiveSize2D {
+                cx: Emu(width),
+                cy: Emu(height),
+            });
+            if width < 0 || height < 0 {
+                // The XML parser already rejects negative sizes. Also check
+                // the typed authoring boundary before any publication.
+                assert!(CT_Transform2D::from_xml(&transform.to_xml().unwrap()).is_err());
+                let mut typed = source.clone();
+                let layout = &mut typed.layouts[1].layout;
+                layout.header_footer = Some(CT_HeaderFooter::new(
+                    Some(false),
+                    Some(false),
+                    Some(true),
+                    Some(false),
+                ));
+                find_latent_mut(
+                    &mut layout.common_slide_data.shape_tree.children,
+                    &PhType::Footer,
+                )
+                .unwrap()
+                .shape_properties
+                .transform = Some(transform);
+                let before = typed.to_bytes().unwrap();
+                assert!(typed.set_header_footer(&settings, false).is_err());
+                assert_eq!(typed.to_bytes().unwrap(), before);
+                assert!(typed.add_slide(1).is_err());
+                assert_eq!(typed.to_bytes().unwrap(), before);
+                continue;
+            }
+            find_latent_mut(
+                &mut layout.common_slide_data.shape_tree.children,
+                &PhType::Footer,
+            )
+            .unwrap()
+            .shape_properties
+            .transform = Some(transform.clone());
+            find_latent_mut(
+                &mut master.common_slide_data.shape_tree.children,
+                &PhType::Footer,
+            )
+            .unwrap()
+            .shape_properties
+            .transform = Some(transform);
+            package.set_part(&layout_part, layout.to_xml().unwrap());
+            package.set_part(&master_part, master.to_xml().unwrap());
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            package.write_to(&mut bytes).unwrap();
+            let mut deck = Presentation::from_bytes(bytes.get_ref()).unwrap();
+            let before = deck.to_bytes().unwrap();
+            assert!(
+                deck.set_header_footer(&settings, false).is_err(),
+                "nonpositive footer geometry {width}/{height} must refuse"
+            );
+            assert_eq!(deck.to_bytes().unwrap(), before);
+            assert!(
+                deck.add_slide(1).is_err(),
+                "nonpositive new-slide footer geometry {width}/{height} must refuse"
+            );
+            assert_eq!(deck.to_bytes().unwrap(), before);
+        }
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn fx208_uncached_date_reports_without_computing_ambient_text() {
+        let mut deck = Presentation::new().unwrap();
+        deck.add_slide(6).unwrap();
+        deck.slide_mut(0)
+            .unwrap()
+            .add_textbox(Emu(914400), Emu(914400), Emu(3657600), Emu(914400))
+            .unwrap();
+        deck.add_text_field(0, &[0], None, 0, "datetime1", None)
+            .unwrap();
+        let bytes = deck.to_bytes().unwrap();
+        let (_, layout) = deck.render_deterministic().unwrap();
+        assert!(
+            layout
+                .diagnostics
+                .iter()
+                .any(|value| value.message.contains("uncached automatic date")),
+            "uncached automatic date must report no computed static date"
+        );
+        assert_eq!(deck.to_bytes().unwrap(), bytes);
+        let reopened = Presentation::from_bytes(&bytes).unwrap();
+        let (_, layout) = reopened.render_deterministic().unwrap();
+        assert!(
+            layout
+                .diagnostics
+                .iter()
+                .any(|value| value.message.contains("uncached automatic date"))
+        );
+        let mut empty = Presentation::new().unwrap();
+        empty.add_slide(6).unwrap();
+        empty
+            .slide_mut(0)
+            .unwrap()
+            .add_textbox(Emu(914400), Emu(914400), Emu(3657600), Emu(914400))
+            .unwrap();
+        empty
+            .add_text_field(0, &[0], None, 0, "datetime1", Some(""))
+            .unwrap();
+        let (_, layout) = empty.render_deterministic().unwrap();
+        assert!(
+            !layout
+                .diagnostics
+                .iter()
+                .any(|value| value.message.contains("uncached automatic date"))
+        );
+    }
+
+    #[test]
+    #[ignore = "requires the pinned native branded and two-master input family"]
+    fn fx208_native_branded_masters_footer_and_new_slide_outputs() {
+        let directory = std::path::PathBuf::from(
+            std::env::var("RDOCX_FX208_NATIVE_INPUT_DIR").expect("pinned native input directory"),
+        );
+        let output = std::path::PathBuf::from(
+            std::env::var("RDOCX_FX208_NATIVE_OUTPUT_DIR")
+                .expect("isolated native output directory"),
+        );
+        std::fs::create_dir_all(&output).unwrap();
+        let mut deck = Presentation::open(directory.join("ion-office-two-masters.pptx")).unwrap();
+        assert_eq!(deck.slide_master_count(), 2);
+        assert_ne!(
+            deck.theme(0).unwrap().unwrap().name,
+            deck.theme(1).unwrap().unwrap().name
+        );
+        let original_layout = deck.slide_layout_index(0).unwrap();
+        let automatic = HeaderFooter {
+            slide_number: true,
+            footer: Some("Global footer".to_owned()),
+            date: HeaderFooterDate::Automatic {
+                field_type: "datetime1".to_owned(),
+                text: Some("12/10/2026".to_owned()),
+            },
+        };
+        deck.set_header_footer(&automatic, false).unwrap();
+        deck.set_slide_number_start(Some(0)).unwrap();
+        let bytes = deck.to_bytes().unwrap();
+        deck.set_header_footer(&automatic, false).unwrap();
+        assert_eq!(deck.to_bytes().unwrap(), bytes);
+        std::fs::write(output.join("library-global-auto-start0.pptx"), &bytes).unwrap();
+        let fixed = HeaderFooter {
+            footer: Some("Selected override".to_owned()),
+            date: HeaderFooterDate::Fixed("12/10/2026".to_owned()),
+            ..automatic.clone()
+        };
+        deck.set_slide_header_footer(1, &fixed).unwrap();
+        assert_eq!(deck.slide_header_footer(1), Some(fixed.clone()));
+        assert_eq!(deck.slide_header_footer(0), Some(automatic.clone()));
+        let bytes = deck.to_bytes().unwrap();
+        let mut reopened = Presentation::from_bytes(&bytes).unwrap();
+        assert_eq!(reopened.slide_header_footer(1), Some(fixed));
+        std::fs::write(output.join("library-local-fixed-start0.pptx"), &bytes).unwrap();
+        reopened.add_slide(original_layout).unwrap();
+        assert_eq!(
+            reopened.slide_header_footer(reopened.len() - 1),
+            Some(automatic)
+        );
+        assert_eq!(reopened.slide_number_start().unwrap(), Some(0));
+        assert_eq!(reopened.slide_master_count(), 2);
+        let new_slide = reopened.to_bytes().unwrap();
+        std::fs::write(output.join("library-new-branded-slide.pptx"), &new_slide).unwrap();
+        let template = Presentation::open(directory.join("ion-office-footer-native.potx")).unwrap();
+        assert_eq!(template.slide_master_count(), 2);
+        let path = output.join("library-native-template.potx");
+        let bytes = template.to_bytes_for_path(&path).unwrap();
+        assert_eq!(
+            Presentation::from_bytes(&bytes)
+                .unwrap()
+                .slide_header_footer(1),
+            template.slide_header_footer(1)
+        );
+        std::fs::write(path, bytes).unwrap();
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn fx208_displayed_start_zero_keeps_physical_pages_and_timeline_fields() {
+        let mut p = Presentation::new().unwrap();
+        p.add_slide(1).unwrap();
+        p.add_slide(1).unwrap();
+        p.set_header_footer(
+            &HeaderFooter {
+                slide_number: true,
+                ..HeaderFooter::default()
+            },
+            false,
+        )
+        .unwrap();
+        p.set_slide_number_start(Some(0)).unwrap();
+        let (_, layout) = p.render_deterministic().unwrap();
+        assert_eq!(
+            layout
+                .pages
+                .iter()
+                .map(|page| page.page_number)
+                .collect::<Vec<_>>(),
+            [1, 2]
+        );
+        let runs = fx210_layout_runs(&layout);
+        assert!(runs.iter().any(|run| run.text == "0"));
+        assert!(runs.iter().any(|run| run.text == "1"));
+        let frame = p
+            .render_timeline_deterministic(
+                0,
+                TimelinePosition {
+                    elapsed_ms: 0,
+                    click_count: 0,
+                },
+                None,
+            )
+            .unwrap();
+        let mut texts = Vec::new();
+        oxml_layout::walk(&frame.page.elements, &mut |element, _| match element {
+            PositionedElement::Text(run) => texts.push(run.text.clone()),
+            PositionedElement::MultilingualText(run) => texts.push(run.legacy_projection().text),
+            _ => {}
+        });
+        assert!(
+            texts.iter().any(|text| text == "0"),
+            "timeline texts: {texts:?}, state: {:?}",
+            frame.state
+        );
+        assert_eq!(frame.page.page_number, 1);
+        let before = p.to_bytes().unwrap();
+        assert!(p.set_slide_number_start(Some(u32::MAX)).is_err());
+        assert_eq!(p.to_bytes().unwrap(), before);
+        assert_eq!(
+            Presentation::from_bytes(&before)
+                .unwrap()
+                .slide_number_start()
+                .unwrap(),
+            Some(0)
         );
     }
 

@@ -3906,3 +3906,19 @@ entry-limit failure and preparation refusal discard complete candidates.
 Actual rebuilt Python tests prove checked setter errors and once-only revision
 publication. Strict typing and CLI validation are separate execution evidence.
 All 49 deterministic hash entries remain unchanged.
+
+## PowerPoint footer and transition acceptance
+
+Public Base controls separately decide deck footer, local footer, transition,
+per-master theme, placeholder metadata, field insertion and displayed start.
+Current native and installed tests require repeat bytes, save/reopen, unique
+field identities, absent versus empty caches, automatic versus fixed modes and
+late atomic refusal. All eight effect kinds and every supported direction need
+selected-effect and retained-sibling checks, including compatibility branches.
+
+Pinned native PowerPoint inputs cover default and branded templates, multiple
+masters, new-slide policy, title suppression and explicit local overrides.
+Latent hf-only state must not paint fields. Actual native artifacts and repair
+status accompany output claims. Python requires current wheel member and origin
+proofs, strict typing and stubtest. CLI requires safe publication and help tests.
+WASM, deterministic hashes and affected verified archives remain separate gates.

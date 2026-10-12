@@ -7079,7 +7079,7 @@ Require scoped verification and independent zero-defect, zero-smell review.
 
 Resolve [Issue311](https://github.com/tensorbee/rdocx/issues/311) in S91,
 part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
-coverage checklist. Implement layout/master hf-aware slide-owned footer/date/number placeholder creation, deck/per-slide controls, skip-title and add_field. Expose placeholder format and theme colours/fonts. Render uncached slidenum and firstSlideNum correctly. Confirm actual PowerPoint hf-only behavior before changing the renderer. Author the requested common transitions with direction, duration and advance controls, lifting the specific existing non-goal. Add footer CLI and inspection using Python-visible operations.
+coverage checklist. Implement layout/master hf-aware slide-owned footer/date/number placeholder creation, deck/per-slide controls, skip-title and add_field. Expose placeholder format and theme colours/fonts. Render uncached slidenum and firstSlideNum with separate displayed and physical numbering. Legal hf-only policy remains latent until slide-owned fields exist. Author the requested common transitions with direction, duration and advance controls, lifting the specific existing non-goal. Add footer CLI and inspection using Python-visible operations.
 
 **Depends on**: F-X197, F-X206.
 **Test gate**: regression. Reproduce each missing operation or reported defect

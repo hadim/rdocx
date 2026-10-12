@@ -130,7 +130,7 @@ struct ShapeIdOccurrence {
 
 /// Assigns fresh non-visual shape ids and rewrites connector endpoints.
 pub fn rewrite_shape_ids(raw: &[u8]) -> Result<Vec<u8>> {
-    let occurrences = shape_id_occurrences(raw)?;
+    let occurrences = shape_id_occurrences(raw, NamespaceBindings::default())?;
     let occupied = occurrences
         .iter()
         .filter(|occurrence| occurrence.defines_shape)
@@ -174,10 +174,13 @@ pub fn rewrite_shape_ids(raw: &[u8]) -> Result<Vec<u8>> {
     Ok(rewritten)
 }
 
-fn shape_id_occurrences(raw: &[u8]) -> Result<Vec<ShapeIdOccurrence>> {
+fn shape_id_occurrences(
+    raw: &[u8],
+    inherited: NamespaceBindings,
+) -> Result<Vec<ShapeIdOccurrence>> {
     let mut reader = Reader::from_reader(raw);
     let mut buffer = Vec::new();
-    let mut scopes = vec![NamespaceBindings::default()];
+    let mut scopes = vec![inherited];
     let mut occurrences = Vec::new();
     loop {
         let event_start = reader.buffer_position() as usize;
@@ -1017,6 +1020,23 @@ impl CT_Shape {
             decorative,
             &bindings,
         )
+    }
+
+    /// Copies a placeholder with a fresh slide identity while retaining its
+    /// producer properties and qualified opaque payload.
+    pub fn clone_with_id(&self, id: u32) -> Result<Self> {
+        let mut cloned = self.clone();
+        let bindings = accessibility_parent_bindings(
+            &cloned.raw.raw_attributes,
+            &cloned.raw.non_visual_attributes,
+        );
+        let raw = &mut cloned.raw.non_visual_drawing_properties;
+        let occurrence = shape_id_occurrences(raw, bindings)?
+            .into_iter()
+            .find(|value| value.defines_shape)
+            .ok_or_else(|| OxmlError::MissingElement("placeholder cNvPr id".into()))?;
+        raw.splice(occurrence.range, id.to_string().bytes());
+        Ok(cloned)
     }
 
     /// Changes the producer-facing non-visual shape name.
@@ -1915,6 +1935,15 @@ impl Default for CT_ShapeTree {
 }
 
 impl CT_GroupShape {
+    /// Copies an ancestor group with a fresh identity, retaining exact geometry
+    /// and producer metadata for a selected placeholder descendant.
+    pub fn clone_with_id(&self, id: u32) -> Result<Self> {
+        let mut cloned = self.clone();
+        set_non_visual_drawing_text(cloned.accessibility_xml_mut()?, "id", Some(&id.to_string()))?;
+        cloned.non_visual_group_properties.non_visual_id = Some(id);
+        Ok(cloned)
+    }
+
     /// Creates an empty group with the required non-visual and property shells.
     pub fn new_empty(id: u32, name: &str) -> Self {
         let mut group = Self {
@@ -3457,6 +3486,43 @@ mod style_tests {
         );
         assert_eq!(shape.to_xml().unwrap(), before);
         assert_eq!(shape.non_visual_id(), Some(19));
+    }
+
+    #[test]
+    fn fx208_placeholder_identity_clone_respects_actual_namespace_ownership() {
+        let source = "<q:sp xmlns:q='http://schemas.openxmlformats.org/presentationml/2006/main' xmlns:a='http://schemas.openxmlformats.org/drawingml/2006/main' xmlns:f='urn:foreign'><q:nvSpPr><q:cNvPr id='19' name='Imported' f:id='opaque'><f:payload id='44'/></q:cNvPr><q:cNvSpPr/><q:nvPr><q:ph type='ftr' idx='4'/></q:nvPr></q:nvSpPr><q:spPr/></q:sp>";
+        let shape = CT_Shape::from_xml(source.as_bytes()).unwrap();
+        let before = shape.to_xml().unwrap();
+        let cloned = shape.clone_with_id(77).unwrap();
+        let saved = cloned.to_xml().unwrap();
+        assert_eq!(cloned.non_visual_id(), Some(77));
+        assert_eq!(cloned.placeholder, shape.placeholder);
+        assert!(
+            std::str::from_utf8(&saved)
+                .unwrap()
+                .contains("f:id='opaque'")
+        );
+        assert!(
+            std::str::from_utf8(&saved)
+                .unwrap()
+                .contains("<f:payload id='44'/>")
+        );
+        assert_eq!(shape.to_xml().unwrap(), before);
+        assert_eq!(
+            CT_Shape::from_xml(&saved).unwrap().non_visual_id(),
+            Some(77)
+        );
+        for invalid in [
+            source
+                .replace("<q:cNvPr", "<f:cNvPr")
+                .replace("</q:cNvPr>", "</f:cNvPr>"),
+            source
+                .replace("<q:cNvPr", "<u:cNvPr")
+                .replace("</q:cNvPr>", "</u:cNvPr>"),
+            source.replace("<q:cNvPr", "<q:cNvPr xmlns:q='urn:foreign'"),
+        ] {
+            assert!(CT_Shape::from_xml(invalid.as_bytes()).is_err());
+        }
     }
 
     #[test]

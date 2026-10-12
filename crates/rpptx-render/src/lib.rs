@@ -270,7 +270,7 @@ pub fn layout_presentation_with_font_manager(
     input: &RenderInput,
     mut font_manager: FontManager,
 ) -> Result<LayoutResult, RenderInputError> {
-    layout_presentation_with_font_manager_inner(input, &mut font_manager, None)
+    layout_presentation_with_displayed_numbers(input, &mut font_manager, None, 1)
 }
 
 /// Lowers every slide with paragraph directions from the additive resolver path.
@@ -301,13 +301,16 @@ pub fn layout_presentation_with_font_manager_and_text_directions_mut(
     font_manager: &mut FontManager,
     text_directions: &[ResolvedSlideTextDirections],
 ) -> Result<LayoutResult, RenderInputError> {
-    layout_presentation_with_font_manager_inner(input, font_manager, Some(text_directions))
+    layout_presentation_with_displayed_numbers(input, font_manager, Some(text_directions), 1)
 }
 
-fn layout_presentation_with_font_manager_inner(
+/// Layout with explicit displayed slide numbering and unchanged physical page IDs.
+/// The facade and timeline assembly share this checked number context.
+pub fn layout_presentation_with_displayed_numbers(
     input: &RenderInput,
     font_manager: &mut FontManager,
     text_directions: Option<&[ResolvedSlideTextDirections]>,
+    first_slide_number: usize,
 ) -> Result<LayoutResult, RenderInputError> {
     font_manager.begin_layout();
     let mut shaping_diagnostics = Vec::new();
@@ -316,7 +319,11 @@ fn layout_presentation_with_font_manager_inner(
             layout_resolved_slide_with_diagnostics(
                 input,
                 &input.slides[index],
-                index + 1,
+                first_slide_number.checked_add(index).ok_or_else(|| {
+                    RenderInputError::TextLayout {
+                        detail: "displayed slide number overflow".into(),
+                    }
+                })?,
                 font_manager,
                 text_directions
                     .and_then(|directions| directions.get(index))
@@ -325,7 +332,10 @@ fn layout_presentation_with_font_manager_inner(
                 &mut shaping_diagnostics,
             )
             .map_err(|error| text_layout_context(error, &format!("slide {}, ", index + 1)))
-            .map(Arc::new)
+            .map(|mut page| {
+                page.page_number = index + 1;
+                Arc::new(page)
+            })
         })
         .collect::<Result<Vec<_>, _>>()?;
     let mut diagnostics: Vec<Diagnostic> = input

@@ -2715,12 +2715,38 @@ impl PartialEq for CT_TextParagraphProperties {
             && {
                 let mut left = self.raw_attributes.clone();
                 let mut right = other.raw_attributes.clone();
-                left.retain(|(key, value)| key != "xmlns:r" || value != TEXT_REL_NS);
-                right.retain(|(key, value)| key != "xmlns:r" || value != TEXT_REL_NS);
+                let inherited_binding =
+                    |key: &str, value: &str, namespaces: &[(String, String)]| {
+                        let prefix = if key == "xmlns" {
+                            Some("")
+                        } else {
+                            key.strip_prefix("xmlns:")
+                        };
+                        prefix.is_some_and(|prefix| {
+                            namespaces
+                                .iter()
+                                .any(|(name, uri)| name == prefix && uri == value)
+                        })
+                    };
+                left.retain(|(key, value)| {
+                    !(key == "xmlns:r" && value == TEXT_REL_NS)
+                        && !inherited_binding(key, value, &other.source_namespaces)
+                });
+                right.retain(|(key, value)| {
+                    !(key == "xmlns:r" && value == TEXT_REL_NS)
+                        && !inherited_binding(key, value, &self.source_namespaces)
+                });
                 left.sort();
                 right.sort();
                 left == right
             }
+            && matches!(
+                (
+                    text_owner_closure(self.source_xml.as_deref().unwrap_or_default(), &self.source_namespaces),
+                    text_owner_closure(other.source_xml.as_deref().unwrap_or_default(), &other.source_namespaces),
+                ),
+                (Ok(left), Ok(right)) if left == right
+            )
             && self.raw_children == other.raw_children
     }
 }

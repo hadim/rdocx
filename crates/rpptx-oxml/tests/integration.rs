@@ -2295,7 +2295,11 @@ fn presentation_reads_any_prefix_and_writes_fixed_prefixes_in_schema_order() {
     )));
     assert!(written_text.contains(r#"<p:sldMasterId id="2147483648" r:id="rId1"/>"#));
     assert!(written_text.contains(r#"<p:sldId id="256" r:id="rId2" v:id="producer-id"/>"#));
-    assert!(written_text.contains(r#"<p:defaultTextStyle/>"#));
+    assert!(
+        direct_expanded_children(&written)
+            .contains(&(P_NS.as_bytes().to_vec(), b"defaultTextStyle".to_vec()))
+    );
+    assert!(written_text.contains("<q:defaultTextStyle"));
     assert!(written_text.contains(r#"<q:custom value="a &amp; b"><q:n/></q:custom>"#));
     assert!(written_text.contains(
         r#"<q:notesMasterIdLst><q:notesMasterId rel:id="rIdNotes"/></q:notesMasterIdLst>"#
@@ -2309,7 +2313,7 @@ fn presentation_reads_any_prefix_and_writes_fixed_prefixes_in_schema_order() {
     let slides = written_text.find("<p:sldIdLst").unwrap();
     let slide_size = written_text.find("<p:sldSz").unwrap();
     let notes_size = written_text.find("<p:notesSz").unwrap();
-    let defaults = written_text.find("<p:defaultTextStyle").unwrap();
+    let defaults = written_text.find("<q:defaultTextStyle").unwrap();
     let extensions = written_text.find("<q:extLst").unwrap();
     assert!(
         master < notes_master
@@ -3917,9 +3921,21 @@ fn ordinary_shape_properties_round_trip_in_schema_order() {
             "<x:after/>",
             "<x:between-shape/>",
             "<p:style",
-            "<p:txBody",
         ],
     );
+    let children = direct_expanded_children(&written);
+    assert_eq!(
+        children,
+        [
+            (P_NS, "nvSpPr"),
+            (P_NS, "spPr"),
+            ("urn:producer", "between-shape"),
+            (P_NS, "style"),
+            (P_NS, "txBody"),
+        ]
+        .map(|(uri, local)| (uri.as_bytes().to_vec(), local.as_bytes().to_vec()))
+    );
+    assert!(text.contains("<q:txBody"));
     assert_eq!(shape, CT_Shape::from_xml(&written).unwrap());
 }
 
@@ -4484,9 +4500,14 @@ fn notes_parts_read_any_prefix_write_fixed_prefixes_and_schema_order() {
             "<p:cSld",
             "<p:clrMap",
             "<p:hf",
-            "<p:notesStyle",
+            "<q:notesStyle",
             "<q:extLst",
         ],
+    );
+    assert_eq!(
+        direct_expanded_children(&master_written),
+        ["cSld", "clrMap", "hf", "notesStyle", "extLst"]
+            .map(|local| (P_NS.as_bytes().to_vec(), local.as_bytes().to_vec()))
     );
     assert_eq!(master, CT_NotesMaster::from_xml(&master_written).unwrap());
 
@@ -5876,4 +5897,42 @@ fn unchanged_text_bodies_keep_inherited_a_raw_bytes_and_unsafe_rewrite_fails() {
         "invalid value: cannot rewrite comment text body with producer-owned a descendants"
     );
     assert!(CommentList::from_xml(xml).unwrap().to_xml().is_ok());
+}
+
+fn direct_expanded_children(xml: &[u8]) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let mut reader = quick_xml::NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut depth = 0;
+    let mut children = Vec::new();
+    loop {
+        let (namespace, event) = reader.read_resolved_event_into(&mut buffer).unwrap();
+        match event {
+            quick_xml::events::Event::Start(element) => {
+                if depth == 1 {
+                    let quick_xml::name::ResolveResult::Bound(uri) = namespace else {
+                        panic!("shape child must retain a qualified namespace");
+                    };
+                    children.push((
+                        uri.as_ref().to_vec(),
+                        element.local_name().as_ref().to_vec(),
+                    ));
+                }
+                depth += 1;
+            }
+            quick_xml::events::Event::Empty(element) if depth == 1 => {
+                let quick_xml::name::ResolveResult::Bound(uri) = namespace else {
+                    panic!("shape child must retain a qualified namespace");
+                };
+                children.push((
+                    uri.as_ref().to_vec(),
+                    element.local_name().as_ref().to_vec(),
+                ));
+            }
+            quick_xml::events::Event::End(_) => depth -= 1,
+            quick_xml::events::Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    children
 }

@@ -1,6 +1,6 @@
 # F-X208, Author PowerPoint footer fields themes and transitions
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X197, F-X206
@@ -213,13 +213,13 @@ by this design.
 
 ## Implementation checklist
 
-- [ ] Capture and pin native PowerPoint footer/new-slide behavior.
-- [ ] Resolve legal owner state, title suppression and theme proxy contracts.
-- [ ] Approve exact source claims, primitives and expected output changes.
-- [ ] Reproduce public defects on the claimed Base before implementation.
-- [ ] Implement full Issue311 native/Python/CLI acceptance and existing tests.
-- [ ] Run scoped verification and native oracle/risk riders.
-- [ ] Obtain clean independent review and prepare validated handoff.
+- [x] Capture and pin native PowerPoint footer/new-slide behavior.
+- [x] Resolve legal owner state, title suppression and theme proxy contracts.
+- [x] Approve exact source claims, primitives and expected output changes.
+- [x] Reproduce public defects on the claimed Base before implementation.
+- [x] Implement full Issue311 native/Python/CLI acceptance and existing tests.
+- [x] Run scoped verification and native oracle/risk riders.
+- [x] Obtain clean independent review and prepare validated handoff.
 
 ## Open questions
 
@@ -352,3 +352,55 @@ source changes. Full current discussions and reused source blob hashes are
 authenticated in /private/tmp/S91-PR324-232b5db-intake/receipt.json.
 The prior source assessment and existing feature ownership remain applicable.
 No duplicate work, asset approval, baseline or contributor pass claim changes.
+
+## Qualified provider parser closure
+
+The existing comment and reply text-body readers pass the captured enclosing
+namespace bindings into CT_TextBody. Diagram text uses the same selected-root
+parser with its actual diagram scope. Presentation defaultTextStyle uses the
+existing CT_TextListStyle parser with inherited bindings. The same concrete
+route applies to slide master title, body and other styles and notes master
+notesStyle. Physical source
+declarations and opaque children remain retained separately from namespace
+lookup, and unsafe canonical rewrites still refuse. SmartArt edited text
+extracts its qualified root structurally, preserving root attributes instead
+of assuming a literal attribute-free opening token. No synthetic namespace
+declarations are injected into stored source owners.
+
+The affected existing regression controls are
+comment_fallback_shadows_and_inherited_reply_drawing_namespace_survive,
+list_owned_comment_shadows_and_typed_drawing_children_keep_their_namespaces,
+unchanged_text_bodies_keep_inherited_a_raw_bytes_and_unsafe_rewrite_fails,
+edited_smartart_text_retains_safe_root_attributes_and_namespaces,
+modelled_nested_elements_reject_fixed_prefix_rebinding and
+ordinary_shape_properties_round_trip_in_schema_order. The last control checks
+expanded namespace identity and schema order while retaining the imported
+text-body alias. These repairs close the existing qualified preservation
+contract needed by the field and footer parser and serializer gates.
+
+## Scoped completion evidence
+
+The claimed Base public controls and native latent-owner discriminator reached
+real semantic failures before implementation. Subsequent native footer, field,
+numbering, policy, transition, clone and positive-geometry controls passed.
+Independent whole pass7 and bounded correction passes9 and11 close the
+implementation findings. Pass12 authenticates the affected archive metadata.
+All earlier failed receipts remain retained, with no failed wrapper relabelled.
+
+The final qualified source has complete OXML156 and DrawingML179 passes,
+seven-crate check and Clippy, retained affected native family and corpus tests,
+current seven installed public cases with zero skips, strict mypy and stubtest.
+Both WASM targets, public docs and all49 deterministic hashes pass. Existing
+Office-only ignored tests remain uncredited. ROOT authenticated branded two
+masters, POTX, native new-slide, footer and fixed-date operations with native
+save/reopen and six visual pages using PowerPoint16.113.4. This is bounded
+Office acceptance, without a pixel identity or Google Slides claim.
+
+Six affected verified dry-runs retain actual archives and complete source,
+mode, membership, manifest and VCS proof. Metadata-only remeasurement retains
+exact normalized totals with compressed deltas within64bytes. Current scoped
+README cases pass, and workflow policy reports141tests with two declared
+skips. Formatting, prose, adapter and diff checks pass. Evidence is indexed
+in .claude/scratch/F-X208-start-1/scoped-evidence-final-preparation.json and
+actual-current-metadata-gates-2/receipt.json. Source45 metadata changes leave
+all compiled, rendered and installed inputs byte-exact. No baseline moves.

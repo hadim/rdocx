@@ -51,16 +51,25 @@ impl PartialEq for CT_TextListStyle {
             && self
                 .raw_attributes
                 .iter()
-                .filter(|(key, value)| {
-                    key != "xmlns:r"
-                        || value
-                            != "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-                })
-                .eq(other.raw_attributes.iter().filter(|(key, value)| {
-                    key != "xmlns:r"
-                        || value
-                            != "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
-                }))
+                .filter(|(key, _)| key != "xmlns" && !key.starts_with("xmlns:"))
+                .eq(other
+                    .raw_attributes
+                    .iter()
+                    .filter(|(key, _)| key != "xmlns" && !key.starts_with("xmlns:")))
+            && matches!(
+                (
+                    super::paragraph::text_namespace_scope(
+                        &text_source_start(&self.source_tag, &self.source_root),
+                        &[],
+                    ),
+                    super::paragraph::text_namespace_scope(
+                        &text_source_start(&other.source_tag, &other.source_root),
+                        &[],
+                    ),
+                ),
+                (Ok(left), Ok(right)) if left.iter().filter(|(key, value)| key != "r" || value != "http://schemas.openxmlformats.org/officeDocument/2006/relationships").map(|(key, value)| (key, value)).collect::<std::collections::BTreeMap<_, _>>()
+                    == right.iter().filter(|(key, value)| key != "r" || value != "http://schemas.openxmlformats.org/officeDocument/2006/relationships").map(|(key, value)| (key, value)).collect::<std::collections::BTreeMap<_, _>>()
+            )
             && self.raw_children == other.raw_children
     }
 }
@@ -71,6 +80,15 @@ impl CT_TextListStyle {
     /// PresentationML wrappers that share this DrawingML content model.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         Self::from_xml_with_namespaces(xml, &TextNamespaceScope::default())
+    }
+
+    /// Parses a list-style fragment using its actual enclosing namespace bindings.
+    /// The original root attributes and opaque children remain retained source facts.
+    pub fn from_xml_with_inherited_namespaces(
+        xml: &[u8],
+        inherited: &[(String, String)],
+    ) -> Result<Self> {
+        Self::from_xml_with_namespaces(xml, &TextNamespaceScope::inherited(inherited))
     }
 
     pub(crate) fn from_xml_with_namespaces(

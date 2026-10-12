@@ -249,8 +249,11 @@ impl PresentationParseState {
                     return Err(duplicate("defaultTextStyle"));
                 }
                 self.default_text_style = Some(
-                    CT_TextListStyle::from_xml(&raw)
-                        .map_err(|error| invalid_value(error.to_string()))?,
+                    CT_TextListStyle::from_xml_with_inherited_namespaces(
+                        &raw,
+                        &namespaces.entries(),
+                    )
+                    .map_err(|error| invalid_value(error.to_string()))?,
                 );
                 self.boundary = self.boundary.max(13);
             }
@@ -337,6 +340,58 @@ impl CT_Presentation {
             slide_id_list_raw_children: OrderedRawChildren::default(),
             original_slide_relationship_ids: Vec::new(),
             raw_children: OrderedRawChildren::default(),
+        }
+    }
+
+    /// Presence-sensitive displayed number of the first slide. Physical page
+    /// ordinals remain independent. The schema permits an explicit zero.
+    pub fn first_slide_number(&self) -> Result<Option<u32>> {
+        self.raw_attributes
+            .iter()
+            .find(|(name, _)| name == "firstSlideNum")
+            .map(|(_, value)| {
+                value
+                    .trim()
+                    .parse::<u32>()
+                    .map_err(|_| OxmlError::InvalidValue(format!("invalid firstSlideNum: {value}")))
+            })
+            .transpose()
+    }
+
+    /// Patches only the qualified root's unqualified displayed-number attribute.
+    pub fn set_first_slide_number(&mut self, value: Option<u32>) {
+        self.raw_attributes
+            .retain(|(name, _)| name != "firstSlideNum");
+        if let Some(value) = value {
+            self.raw_attributes
+                .push(("firstSlideNum".into(), value.to_string()));
+        }
+    }
+
+    /// Retains presence of title-layout special-placeholder visibility policy.
+    pub fn show_special_placeholders_on_title_slide(&self) -> Result<Option<bool>> {
+        self.raw_attributes
+            .iter()
+            .find(|(name, _)| name == "showSpecialPlsOnTitleSld")
+            .map(|(_, value)| match value.as_str() {
+                "1" | "true" | "on" => Ok(true),
+                "0" | "false" | "off" => Ok(false),
+                _ => Err(OxmlError::InvalidValue(
+                    "invalid title-placeholder visibility".into(),
+                )),
+            })
+            .transpose()
+    }
+
+    /// Patches title-placeholder visibility, retaining every other root operand.
+    pub fn set_show_special_placeholders_on_title_slide(&mut self, value: Option<bool>) {
+        self.raw_attributes
+            .retain(|(name, _)| name != "showSpecialPlsOnTitleSld");
+        if let Some(value) = value {
+            self.raw_attributes.push((
+                "showSpecialPlsOnTitleSld".into(),
+                if value { "1" } else { "0" }.into(),
+            ));
         }
     }
 

@@ -2450,3 +2450,69 @@ fn fx206_cli_recovery_reports_fallback_omission_and_keeps_fatal_output_atomic() 
     assert!(!output.status.success());
     assert_eq!(fs::read(&target).unwrap(), b"original");
 }
+
+#[test]
+fn fx208_footer_cli_safe_publication_and_inspection() {
+    let temp = TempWorkspace::new("fx208-footer");
+    let input = temp.path.join("input.pptx");
+    let output = temp.path.join("footer.pptx");
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(1).unwrap();
+    std::fs::write(&input, presentation.to_bytes().unwrap()).unwrap();
+    let before = std::fs::read(&input).unwrap();
+    let help = cli(&["footer", "--help"]);
+    assert!(help.status.success());
+    let help = String::from_utf8(help.stdout).unwrap();
+    for option in [
+        "--date-cache",
+        "--date-format",
+        "--skip-title",
+        "--slide-number",
+        "--footer",
+    ] {
+        assert!(help.contains(option), "missing {option}");
+    }
+    let result = cli(&[
+        "footer",
+        input.to_str().unwrap(),
+        "--footer",
+        "CLI footer",
+        "--date",
+        "auto",
+        "--date-cache",
+        "cached",
+        "--slide-number",
+        "--output",
+        output.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let reopened = Presentation::open(&output).unwrap();
+    assert_eq!(
+        reopened.slide_header_footer(0).unwrap().footer.as_deref(),
+        Some("CLI footer")
+    );
+    assert_eq!(std::fs::read(&input).unwrap(), before);
+    let inspect = cli(&["inspect", output.to_str().unwrap(), "--json"]);
+    assert!(inspect.status.success());
+    let value: serde_json::Value = serde_json::from_slice(&inspect.stdout).unwrap();
+    assert!(value.get("masters").is_some());
+    assert!(value["masters"][0].get("header_footer").is_some());
+    let invalid = cli(&[
+        "footer",
+        input.to_str().unwrap(),
+        "--date",
+        "off",
+        "--date-cache",
+        "cached",
+        "--output",
+        input.to_str().unwrap(),
+        "--force",
+    ]);
+    assert!(!invalid.status.success());
+    assert_eq!(std::fs::read(&input).unwrap(), before);
+}

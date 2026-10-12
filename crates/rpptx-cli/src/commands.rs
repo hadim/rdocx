@@ -10,8 +10,9 @@ use oxml_cli_support::{
 };
 use oxml_pdf::{RasterFormat, RasterOptions, RasterOutput};
 use rpptx::{
-    AutofitMode, Comment, CommentAuthor, CommentReply, Presentation, ShapeKind, ShapeRef, SlideRef,
-    TextFrameRef, TextParagraphRef, TextRunRef,
+    AutofitMode, Comment, CommentAuthor, CommentReply, HeaderFooter, HeaderFooterDate,
+    HeaderFooterFlags, Presentation, ShapeKind, ShapeRef, SlideRef, TextFrameRef, TextParagraphRef,
+    TextRunRef, Theme, ThemeFonts,
 };
 use serde_json::{Value, json};
 
@@ -54,6 +55,8 @@ pub fn inspect(file: &Path, as_json: bool) -> Result<()> {
             "file": file.display().to_string(),
             "slides": presentation.len(),
             "layouts": presentation.layout_count(),
+            "slide_number_start": presentation.slide_number_start()?,
+            "masters": masters_json(&presentation)?,
             "slide_size": size.map(|(width, height)| json!({
                 "width_emu": width.0,
                 "height_emu": height.0,
@@ -83,6 +86,7 @@ pub fn inspect(file: &Path, as_json: bool) -> Result<()> {
 
     let mut stdout = io::stdout().lock();
     writeln!(stdout, "File: {}", file.display())?;
+    print_masters(&mut stdout, &presentation)?;
     writeln!(stdout, "Slides: {}", presentation.len())?;
     writeln!(stdout, "Layouts: {}", presentation.layout_count())?;
     if let Some((width, height)) = size {
@@ -1197,4 +1201,190 @@ fn validate_raster_dimensions(width_points: f64, height_points: f64, dpi: f64) -
         .into());
     }
     Ok(())
+}
+
+fn header_footer_json(flags: Option<HeaderFooterFlags>) -> Value {
+    flags.map_or(Value::Null, |flags| {
+        json!({
+            "date": flags.date,
+            "footer": flags.footer,
+            "slide_number": flags.slide_number,
+        })
+    })
+}
+
+fn header_footer_label(flags: Option<HeaderFooterFlags>) -> String {
+    let Some(flags) = flags else {
+        return "no p:hf".to_owned();
+    };
+    let enabled = [
+        (flags.slide_number, "slide number"),
+        (flags.footer, "footer"),
+        (flags.date, "date"),
+    ]
+    .into_iter()
+    .map(|(enabled, name)| {
+        format!(
+            "{name}={}",
+            enabled.map_or("absent", |enabled| if enabled { "true" } else { "false" })
+        )
+    })
+    .collect::<Vec<_>>();
+    if enabled.is_empty() {
+        "p:hf none".to_owned()
+    } else {
+        format!("p:hf {}", enabled.join(", "))
+    }
+}
+
+fn theme_fonts_json(fonts: &ThemeFonts) -> Value {
+    json!({
+        "latin": fonts.latin,
+        "east_asian": fonts.east_asian,
+        "complex_script": fonts.complex_script,
+    })
+}
+
+fn theme_json(theme: &Theme) -> Value {
+    let colors = theme
+        .colors
+        .iter()
+        .map(|(slot, color)| {
+            (
+                (*slot).to_owned(),
+                color.map_or(Value::Null, |color| json!(color.to_string())),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
+    json!({
+        "name": theme.name,
+        "colors": colors,
+        "fonts": {
+            "major": theme_fonts_json(&theme.major_font),
+            "minor": theme_fonts_json(&theme.minor_font),
+        },
+    })
+}
+
+/// Masters with their theme, `p:hf` flags and layouts, for `inspect --json`.
+fn masters_json(presentation: &Presentation) -> Result<Vec<Value>> {
+    (0..presentation.slide_master_count())
+        .map(|master| {
+            let layouts = presentation
+                .master_layouts(master)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|layout| {
+                    json!({
+                        "index": layout + 1,
+                        "name": presentation.layout_name(layout),
+                        "header_footer": header_footer_json(presentation.layout_header_footer(layout)),
+                    })
+                })
+                .collect::<Vec<_>>();
+            Ok(json!({
+                "index": master + 1,
+                "theme": presentation.theme(master)?.as_ref().map(theme_json),
+                "header_footer": header_footer_json(presentation.master_header_footer(master)?),
+                "layouts": layouts,
+            }))
+        })
+        .collect()
+}
+
+fn print_masters(stdout: &mut impl Write, presentation: &Presentation) -> Result<()> {
+    writeln!(stdout, "Masters: {}", presentation.slide_master_count())?;
+    for master in 0..presentation.slide_master_count() {
+        let theme = presentation.theme(master)?;
+        writeln!(
+            stdout,
+            "Master {}: theme={}, {}",
+            master + 1,
+            theme
+                .as_ref()
+                .and_then(|theme| theme.name.as_deref())
+                .unwrap_or(""),
+            header_footer_label(presentation.master_header_footer(master)?)
+        )?;
+        if let Some(theme) = theme {
+            let colors = theme
+                .colors
+                .iter()
+                .map(|(slot, color)| {
+                    format!(
+                        "{slot}={}",
+                        color.map_or_else(|| "?".to_owned(), |color| color.to_string())
+                    )
+                })
+                .collect::<Vec<_>>();
+            writeln!(stdout, "  Colors: {}", colors.join(" "))?;
+            for (label, fonts) in [("Major", &theme.major_font), ("Minor", &theme.minor_font)] {
+                writeln!(
+                    stdout,
+                    "  {label} font: latin={}, east_asian={}, complex_script={}",
+                    fonts.latin, fonts.east_asian, fonts.complex_script
+                )?;
+            }
+        }
+        for layout in presentation.master_layouts(master).unwrap_or_default() {
+            writeln!(
+                stdout,
+                "  Layout {}: {}, {}",
+                layout + 1,
+                presentation.layout_name(layout).unwrap_or(""),
+                header_footer_label(presentation.layout_header_footer(layout))
+            )?;
+        }
+    }
+    Ok(())
+}
+
+pub struct FooterInput<'a> {
+    pub slide_number: bool,
+    pub footer: Option<&'a str>,
+    pub date: &'a str,
+    pub date_format: &'a str,
+    pub date_cache: Option<&'a str>,
+    pub skip_title: bool,
+}
+
+pub fn footer(
+    file: &Path,
+    input: FooterInput<'_>,
+    output: Option<&Path>,
+    force: bool,
+    as_json: bool,
+) -> Result<()> {
+    let output = output
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| default_output_path(file, "footer.pptx"));
+    ensure_output_paths_allowed(std::slice::from_ref(&output), file, force)?;
+    let date = match input.date {
+        "off" => HeaderFooterDate::Off,
+        "auto" => HeaderFooterDate::Automatic {
+            field_type: input.date_format.to_owned(),
+            text: input.date_cache.map(str::to_owned),
+        },
+        text => HeaderFooterDate::Fixed(text.to_owned()),
+    };
+    if input.date != "auto" && input.date_cache.is_some() {
+        return Err("--date-cache requires --date auto".into());
+    }
+    let settings = HeaderFooter {
+        slide_number: input.slide_number,
+        footer: input.footer.map(str::to_owned),
+        date,
+    };
+    let mut presentation = Presentation::open(file)?;
+    presentation.set_header_footer(&settings, input.skip_title)?;
+    stage_and_publish(
+        &[(output.clone(), presentation.to_bytes_for_path(&output)?)],
+        force,
+    )?;
+    mutation_record(
+        as_json,
+        "footer",
+        json!({ "slides": presentation.len(), "slide_number_start": presentation.slide_number_start()? }),
+        &output,
+    )
 }

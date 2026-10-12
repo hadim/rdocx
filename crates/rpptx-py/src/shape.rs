@@ -31,6 +31,7 @@ type Crop = (
 );
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_class::<PyPlaceholderFormat>()?;
     module.add_class::<PyShape>()?;
     module.add_class::<PyShapeClickAction>()?;
     module.add_class::<PyShapeHyperlink>()?;
@@ -406,6 +407,22 @@ impl PyShape {
 
 #[pymethods]
 impl PyShape {
+    #[getter]
+    fn is_placeholder(&self, py: Python<'_>) -> PyResult<bool> {
+        self.read(py, |shape| shape.placeholder_idx().is_some())
+    }
+
+    #[getter]
+    fn placeholder_format(&self, py: Python<'_>) -> PyResult<PyPlaceholderFormat> {
+        if !self.is_placeholder(py)? {
+            return Err(PyValueError::new_err("shape is not a placeholder"));
+        }
+        Ok(PyPlaceholderFormat {
+            presentation: self.presentation.clone_ref(py),
+            path: self.path.clone(),
+        })
+    }
+
     fn ungroup<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, pyo3::types::PyList>> {
         self.validate(py)?;
         let mut presentation = self.presentation.borrow_mut(py);
@@ -1120,6 +1137,46 @@ impl PyShape {
             py,
             PyTable::new(self.presentation.clone_ref(py), self.path.clone()),
         )
+    }
+}
+
+/// Read-only placeholder metadata bound to its current causal shape owner.
+#[pyclass(name = "PlaceholderFormat")]
+pub struct PyPlaceholderFormat {
+    presentation: Py<PyPresentation>,
+    path: ContentPath,
+}
+
+#[pymethods]
+impl PyPlaceholderFormat {
+    #[getter]
+    fn idx(&self, py: Python<'_>) -> PyResult<u32> {
+        PyShape {
+            presentation: self.presentation.clone_ref(py),
+            path: self.path.clone(),
+        }
+        .read(py, |shape| shape.placeholder_idx())?
+        .ok_or_else(|| PyValueError::new_err("shape is not a placeholder"))
+    }
+
+    #[getter]
+    fn r#type(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let shape = PyShape {
+            presentation: self.presentation.clone_ref(py),
+            path: self.path.clone(),
+        };
+        let (idx, token) = shape.read(py, |shape| {
+            (
+                shape.placeholder_idx(),
+                shape.placeholder_type().map(str::to_owned),
+            )
+        })?;
+        idx.ok_or_else(|| PyValueError::new_err("shape is not a placeholder"))?;
+        Ok(py
+            .import("rpptx.enum.shapes")?
+            .getattr("PP_PLACEHOLDER")?
+            .call_method1("from_xml", (token.unwrap_or_else(|| "obj".into()),))?
+            .unbind())
     }
 }
 

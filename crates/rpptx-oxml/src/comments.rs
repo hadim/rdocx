@@ -696,8 +696,13 @@ fn parse_comment_children(
                     && text_body.is_none()
                 {
                     text_body_attributes = text_body_root_attributes(&child, &raw)?;
-                    text_body =
-                        Some(CT_TextBody::from_xml_as(&raw, b"txBody").map_err(text_error)?);
+                    text_body = Some(
+                        CT_TextBody::from_xml_with_inherited_namespaces(
+                            &raw,
+                            &namespaces.entries(),
+                        )
+                        .map_err(text_error)?,
+                    );
                     text_body_raw = Some(raw);
                     boundary = 4;
                 } else if local == b"extLst" && uri == Some(P_NS) {
@@ -848,8 +853,11 @@ fn parse_reply(xml: &[u8], inherited: &NamespaceBindings) -> Result<CommentReply
                             {
                                 text_body_attributes = text_body_root_attributes(&child, &raw)?;
                                 text_body = Some(
-                                    CT_TextBody::from_xml_as(&raw, b"txBody")
-                                        .map_err(text_error)?,
+                                    CT_TextBody::from_xml_with_inherited_namespaces(
+                                        &raw,
+                                        &child_ns.entries(),
+                                    )
+                                    .map_err(text_error)?,
                                 );
                                 text_body_raw = Some(raw);
                                 boundary = 1;

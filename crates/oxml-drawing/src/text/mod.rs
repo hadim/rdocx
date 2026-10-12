@@ -102,7 +102,9 @@ impl CT_TextBody {
         Self::from_xml_as_with_namespaces(xml, b"txBody", inherited)
     }
 
-    fn from_xml_as_with_namespaces(
+    /// Parses a caller-selected text-body root in its actual enclosing namespace scope.
+    /// Retained source declarations stay separate from inherited lookup bindings.
+    pub fn from_xml_as_with_namespaces(
         xml: &[u8],
         root_local_name: &[u8],
         inherited: &[(String, String)],

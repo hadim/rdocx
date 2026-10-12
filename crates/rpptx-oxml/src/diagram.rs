@@ -509,7 +509,12 @@ impl DiagramPoint {
                     &NamespaceBindings::from_entries(&self.text_inherited_namespaces),
                 )?;
             }
-            write_diagram_text(writer, text, &self.text_attributes)?;
+            write_diagram_text(
+                writer,
+                text,
+                &self.text_attributes,
+                &self.text_inherited_namespaces,
+            )?;
         }
         emit_raw(writer, &self.raw_after_text)?;
         writer.write_event(Event::End(BytesEnd::new("dgm:pt")))?;
@@ -823,7 +828,7 @@ fn parse_point(xml: &[u8], inherited: &NamespaceBindings) -> Result<DiagramPoint
                 let (text_start, _) = root_and_children_in_any_namespace(&raw, b"t")?;
                 text_attributes = all_attributes(&text_start)?;
                 text = Some(
-                    CT_TextBody::from_xml_as(&raw, b"t")
+                    CT_TextBody::from_xml_as_with_namespaces(&raw, b"t", &namespaces.entries())
                         .map_err(|error| OxmlError::InvalidValue(error.to_string()))?,
                 );
                 text_source_xml = Some(raw);
@@ -1742,24 +1747,41 @@ fn write_diagram_text<W: Write>(
     writer: &mut Writer<W>,
     text: &CT_TextBody,
     attributes: &RawAttributes,
+    inherited: &[(String, String)],
 ) -> Result<()> {
-    const OPEN: &[u8] = b"<dgm:t>";
-    const CLOSE: &[u8] = b"</dgm:t>";
     let mut canonical = Writer::new(Vec::new());
     text.write_xml_as(&mut canonical, "dgm:t")
         .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
     let canonical = canonical.into_inner();
-    if !canonical.starts_with(OPEN) || !canonical.ends_with(CLOSE) {
-        return Err(OxmlError::InvalidValue(
-            "canonical diagram text wrapper is malformed".to_owned(),
-        ));
+    let (canonical_start, children) = root_and_children_in_any_namespace(&canonical, b"t")?;
+    let mut retained_attributes = attributes.clone();
+    for (name, value) in all_attributes(&canonical_start)? {
+        if let Some((_, existing)) = retained_attributes.iter().find(|(key, _)| key == &name) {
+            if existing != &value {
+                return Err(OxmlError::InvalidValue(format!(
+                    "diagram text wrapper attribute {name} conflicts with retained source"
+                )));
+            }
+        } else {
+            let declared_prefix = if name == "xmlns" {
+                Some("")
+            } else {
+                name.strip_prefix("xmlns:")
+            };
+            if declared_prefix.is_some_and(|prefix| {
+                inherited
+                    .iter()
+                    .any(|(key, uri)| key == prefix && uri == &value)
+            }) {
+                continue;
+            }
+            retained_attributes.push((name, value));
+        }
     }
     let mut start = BytesStart::new("dgm:t");
-    push_attributes(&mut start, attributes);
+    push_attributes(&mut start, &retained_attributes);
     writer.write_event(Event::Start(start))?;
-    writer
-        .get_mut()
-        .write_all(&canonical[OPEN.len()..canonical.len() - CLOSE.len()])?;
+    emit_raw(writer, &children)?;
     writer.write_event(Event::End(BytesEnd::new("dgm:t")))?;
     Ok(())
 }

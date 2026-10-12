@@ -108,7 +108,7 @@ causes data loss, only reduced fidelity when rendering.
 
 | Area | v1 behaviour |
 |---|---|
-| Animations, transitions, `p:timing` | Preserved, irrelevant to static rendering |
+| Animations and unsupported transitions, `p:timing` | Preserved, irrelevant to static rendering. Common transition authoring is bounded to none, fade, push, wipe, split, cover, uncover, cut and zoom |
 | Unsupported SmartArt algorithms and unmodelled `dgm:` content | Preserved. Rendering uses the drawing fallback part, else its cached picture, else its bounding box. The six exact pinned native layouts are handled before this fallback |
 | OLE objects, ActiveX | Preserved, rendered as the stored preview image |
 | Video and audio | Preserved, rendered as the poster frame |

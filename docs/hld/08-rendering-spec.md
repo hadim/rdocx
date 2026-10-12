@@ -2000,7 +2000,7 @@ directions, or unsupported modes add diagnostics rather than executable
 fallbacks.
 
 `rpptx-render` lowers evaluated shapes through the same private page path used
-by static rendering. Cut, fade, wipe, push, and zoom compose complete
+by static rendering. Cut, fade, wipe, push, split, cover, uncover and zoom compose complete
 `PageFrame` groups without changing backend contracts. Fade uses source-over
 composition with the opaque outgoing page. Directional wipes clip in the
 oriented transition space. Morph correlates explicit `!!` names across stable
@@ -2484,3 +2484,13 @@ to points. Translation, fractional scale, alternating axis flips, nine-way
 alignment, source crop, and `rotate_with_shape` are applied in presentation
 lowering. Repeats use deterministic row-major order and are bounded by element
 and cloned-media byte limits before allocation.
+
+## PowerPoint displayed field assembly
+
+Static and timeline presentation paths pass the displayed start into their
+substantive layout assembly. Existing render entry points retain start one and
+RenderInput retains its existing fields. Uncached slide-number fields evaluate
+in that same layout pass. Physical page indices remain independent. Split uses
+centered incoming or outgoing clips. Cover moves the incoming page and uncover
+moves the outgoing page, with checked effect-specific directions. Invalid
+parameters remain diagnostic instead of silently selecting another effect.

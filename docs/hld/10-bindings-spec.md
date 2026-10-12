@@ -3425,3 +3425,26 @@ Generated-table rebuild errors include checked target mutations that would
 require unsafe canonical serialization beneath conflicting retained namespace
 bindings. The error leaves the package and existing caches unchanged. Namespace
 aliases are accepted when the source projection and mutation are safe.
+
+## PowerPoint footer, field, theme and transition authoring
+
+Presentation.set_header_footer accepts slide_number, footer, date, hide_on_title
+and date_format, with keyword-only date_cache. None disables a field, an empty
+string is an explicit cache or fixed value, and auto selects an automatic date.
+Live Slide.header_footer changes individual fields and exposes presence, mode,
+cache and legal policy provenance. Shape.placeholder_format exposes immutable
+source idx and placeholder type through the live shape owner. Paragraph.add_field
+uses the existing staged owner publication and presentation-wide field identity
+inventory. Presentation.slide_number_start preserves optional source presence.
+
+Presentation.slide_masters exposes linked per-master Theme proxies. Colors and
+major/minor Latin, East Asian and complex-script fonts are read-only.
+Slide.transition exposes the eight common effects, effect-specific direction,
+optional duration, click and after policy. Seconds are finite and nonnegative,
+with checked truncation to milliseconds. Apply-to-all stages all slides before
+publication. Removing the transition does not remove timing. Retained sound,
+extensions and compatibility branches survive supported edits.
+
+The footer CLI uses explicit date caches and safe output publication without
+overwriting its input. Inspect reports each master's theme, footer policy and
+displayed numbering separately from physical slide identity.

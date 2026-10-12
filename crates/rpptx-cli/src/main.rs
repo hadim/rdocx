@@ -122,6 +122,30 @@ enum Command {
         #[arg(long)]
         notes: bool,
     },
+    /// Apply slide-owned footer fields to the presentation
+    Footer {
+        file: PathBuf,
+        #[arg(long)]
+        slide_number: bool,
+        #[arg(long)]
+        footer: Option<String>,
+        /// off, auto for an uncached automatic field, or fixed text
+        #[arg(long, default_value = "off")]
+        date: String,
+        #[arg(long, default_value = "datetime1")]
+        date_format: String,
+        /// Explicit automatic date cache, without consulting the clock
+        #[arg(long)]
+        date_cache: Option<String>,
+        #[arg(long)]
+        skip_title: bool,
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        json: bool,
+    },
     /// Inspect and mutate modern PowerPoint comment threads
     Comment {
         #[command(subcommand)]
@@ -299,6 +323,31 @@ fn run_cli() {
             force,
         } => commands::thumbnail(&file, output.as_deref(), force, font_dir.as_deref()),
         Command::Outline { file, json, notes } => commands::outline(&file, json, notes),
+        Command::Footer {
+            file,
+            slide_number,
+            footer,
+            date,
+            date_format,
+            date_cache,
+            skip_title,
+            output,
+            force,
+            json,
+        } => commands::footer(
+            &file,
+            commands::FooterInput {
+                slide_number,
+                footer: footer.as_deref(),
+                date: &date,
+                date_format: &date_format,
+                date_cache: date_cache.as_deref(),
+                skip_title,
+            },
+            output.as_deref(),
+            force,
+            json,
+        ),
         Command::Comment { command } => match command {
             CommentCommand::List { file, json } => commands::comment_list(&file, json),
             CommentCommand::Add {

@@ -1178,6 +1178,9 @@ pub enum TransitionEffect {
     Wipe,
     Push,
     Zoom,
+    Split,
+    Cover,
+    Uncover,
     Morph,
     Other(String),
 }
@@ -1319,6 +1322,53 @@ impl CT_SlideTransition {
 
     pub fn raw_xml(&self) -> &[u8] {
         &self.raw_xml
+    }
+
+    /// Applies owned effect and advance settings without replacing retained siblings.
+    pub fn with_settings(
+        &self,
+        effect: Option<(&str, &[(&str, &str)])>,
+        duration_ms: Option<u64>,
+        advance_on_click: Option<bool>,
+        advance_after_ms: Option<u64>,
+    ) -> Result<Self> {
+        let inherited = NamespaceBindings::from_entries(&self.inherited_namespaces);
+        let selected = if root_is(&self.raw_xml, &inherited, MC_NS, b"AlternateContent")? {
+            selected_transition_fragment(&self.raw_xml, &inherited)?
+                .ok_or_else(|| OxmlError::MissingElement("selected transition".into()))?
+        } else {
+            SelectedFragment {
+                xml: self.raw_xml.clone(),
+                parent_namespaces: inherited.clone(),
+                range: 0..self.raw_xml.len(),
+            }
+        };
+        let mut raw = edit_transition_settings(
+            &selected.xml,
+            &selected.parent_namespaces,
+            effect,
+            duration_ms,
+            advance_on_click,
+            advance_after_ms,
+        )?;
+        if selected.range != (0..self.raw_xml.len()) {
+            let mut retained = self.raw_xml[..selected.range.start].to_vec();
+            retained.append(&mut raw);
+            retained.extend_from_slice(&self.raw_xml[selected.range.end..]);
+            raw = retained;
+        }
+        Self::from_retained_fragment(&raw, &inherited)
+    }
+
+    /// Builds a new canonical transition with explicit namespace ownership.
+    pub fn authored(
+        effect: Option<(&str, &[(&str, &str)])>,
+        duration_ms: Option<u64>,
+        advance_on_click: Option<bool>,
+        advance_after_ms: Option<u64>,
+    ) -> Result<Self> {
+        let empty = Self::from_xml(format!("<p:transition xmlns:p=\"{P_NS}\"/>").as_bytes())?;
+        empty.with_settings(effect, duration_ms, advance_on_click, advance_after_ms)
     }
 
     /// Changes the transition speed while preserving every child subtree.
@@ -3744,6 +3794,15 @@ fn replace_tag_attribute(
     attribute_name: &str,
     value: &str,
 ) -> Result<Vec<u8>> {
+    patch_tag_attribute(xml, range, attribute_name, Some(value))
+}
+
+fn patch_tag_attribute(
+    xml: &[u8],
+    range: std::ops::Range<usize>,
+    attribute_name: &str,
+    value: Option<&str>,
+) -> Result<Vec<u8>> {
     let tag = &xml[range.clone()];
     let mut index = 1usize;
     while index < tag.len()
@@ -3796,6 +3855,11 @@ fn replace_tag_attribute(
             ));
         }
         if &tag[name_start..name_end] == attribute_name.as_bytes() {
+            let Some(value) = value else {
+                let mut output = xml[..range.start + name_start].to_vec();
+                output.extend_from_slice(&xml[range.start + index + 1..]);
+                return Ok(output);
+            };
             let mut output = Vec::with_capacity(xml.len() + value.len());
             output.extend_from_slice(&xml[..range.start + value_start]);
             output.extend_from_slice(escaped_attribute(value, quote).as_bytes());
@@ -3804,6 +3868,9 @@ fn replace_tag_attribute(
         }
         index += 1;
     }
+    let Some(value) = value else {
+        return Ok(xml.to_vec());
+    };
     let insertion = insertion
         .ok_or_else(|| OxmlError::InvalidValue("missing start-tag terminator".to_owned()))?;
     let mut output = Vec::with_capacity(xml.len() + attribute_name.len() + value.len() + 4);
@@ -3815,6 +3882,231 @@ fn replace_tag_attribute(
     output.extend_from_slice(b"\"");
     output.extend_from_slice(&xml[range.start + insertion..]);
     Ok(output)
+}
+
+fn edit_transition_settings(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+    effect: Option<(&str, &[(&str, &str)])>,
+    duration: Option<u64>,
+    click: Option<bool>,
+    after: Option<u64>,
+) -> Result<Vec<u8>> {
+    let mut reader = Reader::from_reader(xml);
+    let root = loop {
+        match reader.read_event()? {
+            Event::Start(start) | Event::Empty(start) => break start.into_owned(),
+            Event::Eof => return Err(OxmlError::MissingElement("transition".into())),
+            _ => {}
+        }
+    };
+    let scope = inherited.with_start(&root)?;
+    let root_end = reader.buffer_position() as usize;
+    let mut raw = xml.to_vec();
+    // Reuse a bound duration alias. A new prefix is chosen outside every retained scope.
+    let attributes = all_attributes(&root)?;
+    let existing_duration = attributes
+        .iter()
+        .find(|(key, _)| {
+            local_name(key.as_bytes()) == b"dur"
+                && scope.attribute_uri(key.as_bytes()) == Some(P14_NS)
+        })
+        .map(|(key, _)| key.clone());
+    let duration_key = match existing_duration {
+        Some(key) => key,
+        None => {
+            let mut serial = 0usize;
+            let prefix = loop {
+                let prefix = format!("fx208dur{serial}");
+                if !String::from_utf8_lossy(xml).contains(&format!("{prefix}:"))
+                    && !scope.entries().iter().any(|(key, _)| key == &prefix)
+                {
+                    break prefix;
+                }
+                serial += 1;
+            };
+            if duration.is_some() {
+                raw = patch_tag_attribute(
+                    &raw,
+                    0..root_end,
+                    &format!("xmlns:{prefix}"),
+                    Some(P14_NS),
+                )?;
+            }
+            format!("{prefix}:dur")
+        }
+    };
+    for (key, value) in [
+        (duration_key.as_str(), duration.map(|n| n.to_string())),
+        (
+            "advClick",
+            click.map(|n| if n { "1" } else { "0" }.to_owned()),
+        ),
+        ("advTm", after.map(|n| n.to_string())),
+    ] {
+        let mut r = Reader::from_reader(raw.as_slice());
+        loop {
+            if matches!(r.read_event()?, Event::Start(_) | Event::Empty(_)) {
+                break;
+            }
+        }
+        let end = r.buffer_position() as usize;
+        raw = patch_tag_attribute(&raw, 0..end, key, value.as_deref())?;
+    }
+    replace_transition_effect(&raw, inherited, effect)
+}
+
+fn replace_transition_effect(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+    effect: Option<(&str, &[(&str, &str)])>,
+) -> Result<Vec<u8>> {
+    let mut reader = Reader::from_reader(xml);
+    let mut scope = None;
+    let mut root_end = 0usize;
+    let mut insertion = None;
+    loop {
+        let begin = reader.buffer_position() as usize;
+        match reader.read_event()? {
+            Event::Start(start) if scope.is_none() => {
+                scope = Some(inherited.with_start(&start)?);
+                root_end = reader.buffer_position() as usize;
+            }
+            Event::Empty(start) if scope.is_none() => {
+                let end = reader.buffer_position() as usize;
+                let name = start.name().as_ref().to_vec();
+                let mut expanded = xml[..end - 2].to_vec();
+                expanded.extend_from_slice(b">");
+                expanded.extend_from_slice(b"</");
+                expanded.extend_from_slice(&name);
+                expanded.extend_from_slice(b">");
+                expanded.extend_from_slice(&xml[end..]);
+                return replace_transition_effect(&expanded, inherited, effect);
+            }
+            Event::Start(child) | Event::Empty(child) => {
+                let empty = xml[begin..reader.buffer_position() as usize].ends_with(b"/>");
+                let parent = scope.as_ref().expect("transition root");
+                let child_scope = parent.with_start(&child)?;
+                let raw = if empty {
+                    xml[begin..reader.buffer_position() as usize].to_vec()
+                } else {
+                    capture_element(&mut reader, &child)?
+                };
+                let end = reader.buffer_position() as usize;
+                match transition_child_projection(&child, &child_scope, Some(&raw))? {
+                    Some(TransitionChild::Effect(..))
+                    | Some(TransitionChild::UnsupportedEffect) => {
+                        let replacement =
+                            if child_scope.element_uri(child.name().as_ref()) == Some(MC_NS) {
+                                let selected =
+                                    selected_effect_fragment(&raw, parent)?.ok_or_else(|| {
+                                        OxmlError::InvalidValue(
+                                            "cannot edit an unselected transition choice".into(),
+                                        )
+                                    })?;
+                                let replacement =
+                                    edit_transition_effect_fragment(&selected.xml, effect)?;
+                                let mut branch = raw[..selected.range.start].to_vec();
+                                branch.extend_from_slice(&replacement);
+                                branch.extend_from_slice(&raw[selected.range.end..]);
+                                branch
+                            } else {
+                                edit_transition_effect_fragment(&raw, effect)?
+                            };
+                        let mut output = xml[..begin].to_vec();
+                        output.extend_from_slice(&replacement);
+                        output.extend_from_slice(&xml[end..]);
+                        return Ok(output);
+                    }
+                    Some(TransitionChild::SoundAction | TransitionChild::ExtensionList) => {
+                        insertion.get_or_insert(begin);
+                    }
+                    _ => {}
+                }
+            }
+            Event::End(_) => {
+                insertion.get_or_insert(begin);
+                break;
+            }
+            Event::Eof => return Err(OxmlError::MissingElement("closing transition".into())),
+            _ => {}
+        }
+    }
+    let replacement = transition_effect_xml(effect)?;
+    let index = insertion.unwrap_or(root_end);
+    let mut output = xml[..index].to_vec();
+    output.extend_from_slice(&replacement);
+    output.extend_from_slice(&xml[index..]);
+    Ok(output)
+}
+
+fn edit_transition_effect_fragment(
+    xml: &[u8],
+    effect: Option<(&str, &[(&str, &str)])>,
+) -> Result<Vec<u8>> {
+    let Some((name, parameters)) = effect else {
+        return Ok(Vec::new());
+    };
+    let mut reader = Reader::from_reader(xml);
+    let (start, empty) = loop {
+        match reader.read_event()? {
+            Event::Start(start) => break (start.into_owned(), false),
+            Event::Empty(start) => break (start.into_owned(), true),
+            Event::Eof => return Err(OxmlError::MissingElement("transition effect".into())),
+            _ => {}
+        }
+    };
+    if local_name(start.name().as_ref()) != name.as_bytes() {
+        let attrs = all_attributes(&start)?;
+        if !empty
+            || attrs
+                .iter()
+                .any(|(key, _)| key != "dir" && key != "orient" && !key.starts_with("xmlns"))
+        {
+            return Err(OxmlError::InvalidValue(
+                "transition type change cannot discard retained effect payload".into(),
+            ));
+        }
+        return transition_effect_xml(effect);
+    }
+    let mut raw = xml.to_vec();
+    for key in ["dir", "orient"] {
+        let value = parameters
+            .iter()
+            .find(|(name, _)| *name == key)
+            .map(|(_, value)| *value);
+        let mut reader = Reader::from_reader(raw.as_slice());
+        loop {
+            if matches!(reader.read_event()?, Event::Start(_) | Event::Empty(_)) {
+                break;
+            }
+        }
+        let end = reader.buffer_position() as usize;
+        raw = patch_tag_attribute(&raw, 0..end, key, value)?;
+    }
+    Ok(raw)
+}
+
+fn transition_effect_xml(effect: Option<(&str, &[(&str, &str)])>) -> Result<Vec<u8>> {
+    let Some((name, parameters)) = effect else {
+        return Ok(Vec::new());
+    };
+    if !matches!(
+        name,
+        "fade" | "push" | "wipe" | "split" | "cover" | "pull" | "cut" | "zoom"
+    ) {
+        return Err(OxmlError::InvalidValue(
+            "unsupported authored transition".into(),
+        ));
+    }
+    let mut start = BytesStart::new(format!("p:{name}"));
+    start.push_attribute(("xmlns:p", P_NS));
+    for (key, value) in parameters {
+        start.push_attribute((*key, *value));
+    }
+    let mut writer = Writer::new(Vec::new());
+    writer.write_event(Event::Empty(start))?;
+    Ok(writer.into_inner())
 }
 
 fn escaped_attribute(value: &str, quote: u8) -> String {
@@ -3973,6 +4265,9 @@ fn parse_transition_effect(value: &[u8]) -> TransitionEffect {
         b"wipe" => TransitionEffect::Wipe,
         b"push" => TransitionEffect::Push,
         b"zoom" => TransitionEffect::Zoom,
+        b"split" => TransitionEffect::Split,
+        b"cover" => TransitionEffect::Cover,
+        b"pull" => TransitionEffect::Uncover,
         value => TransitionEffect::Other(String::from_utf8_lossy(value).into_owned()),
     }
 }

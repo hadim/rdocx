@@ -797,6 +797,66 @@ impl PyParagraph {
         )
     }
 
+    #[pyo3(signature = (field_type, text=None))]
+    fn add_field(&self, py: Python<'_>, field_type: &str, text: Option<String>) -> PyResult<()> {
+        let paragraph = self.validate(py)?;
+        let mut p = self.presentation.borrow_mut(py);
+        let path = p
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("text owner is absent"))?;
+        let slide = slide_index(&path)?;
+        let children = path
+            .segs
+            .iter()
+            .filter_map(|seg| {
+                if let PathSeg::Shape(index) = seg {
+                    Some(*index)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        let cell = path.segs.iter().find_map(|seg| {
+            if let PathSeg::Cell(index) = seg {
+                Some(*index)
+            } else {
+                None
+            }
+        });
+        let row = path.segs.iter().find_map(|seg| {
+            if let PathSeg::Row(index) = seg {
+                Some(*index)
+            } else {
+                None
+            }
+        });
+        if row.is_some() != cell.is_some() {
+            return Err(PyIndexError::new_err("cell path is incomplete"));
+        }
+        let cell = row.zip(cell);
+        let mut candidate = p.inner.clone();
+        candidate
+            .add_text_field(
+                slide,
+                &children,
+                cell,
+                paragraph,
+                field_type,
+                text.as_deref(),
+            )
+            .map_err(|e| rpptx_to_pyerr(py, e))?;
+        let proofs = p.text_changed_owners(&self.path)?;
+        let prepared = p.prepare_owners(
+            &candidate,
+            "Paragraph.add_field",
+            &proofs,
+            false,
+            false,
+            false,
+        )?;
+        p.publish_owners(candidate, prepared)
+    }
+
     #[pyo3(signature = (text = ""))]
     fn add_run(&self, py: Python<'_>, text: &str) -> PyResult<Py<PyRun>> {
         let index = self.validate(py)?;

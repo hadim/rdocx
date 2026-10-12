@@ -1141,9 +1141,14 @@ allocation is needed in exactly two other operations: adding a new placeholder t
 a *layout*, and copying a slide between presentations whose layouts assign
 different indices. Both are separate code paths.
 
-`dt`, `ftr` and `sldNum` are **latent** placeholders. They are drawn from the
-layout or master directly and are never cloned onto a new slide, because cloning
-them produces duplicate footers.
+`dt`, `ftr` and `sldNum` are **latent** templates. Legal master or layout
+`p:hf` flags alone do not paint them. Rendering paints these fields only when
+the slide owns a materialized placeholder. Explicit footer authoring and new
+slides with enabled legal policy clone the qualified layout template, falling
+back to the linked master. Cloning preserves geometry, metadata, group ancestry
+and unknown payload, with fresh shape and presentation-wide field identities.
+Absent policy does not invent fields. Duplicate templates, missing enabled
+templates and unsupported relationship-bearing copies refuse atomically.
 
 Notes-page composition overlays a notes-slide placeholder only when its full
 key resolves against the notes master. An unmatched notes-slide overlay is
@@ -1173,8 +1178,10 @@ behaviours, effects, motion paths, and unsupported timing nodes. Transition
 values expose speed, Office 2010 duration, advance policy, effect parameters,
 and Office 2015 morph metadata. Expanded-name readers select supported
 `mc:AlternateContent` choices or their fallback. The complete captured subtree
-remains the serialization source, and supported mutations replace only their
-own attribute value bytes. Unsupported siblings, owner attributes, namespace
+remains the serialization source. Supported transition settings edit their
+owned attributes and selected effect while retaining sound, extensions and
+inactive compatibility branches. Removing a transition leaves timing intact.
+Unsupported siblings, owner attributes, namespace
 bindings, and relationship-bearing content therefore remain byte-identical.
 
 Picture media projects only schema-owned direct children. Standard
@@ -1396,3 +1403,17 @@ The asset must live under the crate's own directory. A workspace-root `assets/`
 compiles locally but is not included in the published `.crate`.
 
 The PresentationML model crates remain version `0.0.0` with `publish = false`.
+
+## Footer authoring and displayed numbering
+
+Deck header/footer publication stages every affected slide and legal policy
+owner before commit. Slide-local publication changes only the selected field.
+Title suppression follows the linked qualified title layout. Applied-state
+readers distinguish materialized content from optional master or layout flags
+and report the legal policy source. Automatic and fixed date modes remain
+distinct even when their visible cached strings are equal. Repeated unchanged
+intents leave source parts and package bytes untouched.
+
+The optional firstSlideNum preserves absence and accepts zero. Displayed
+numbers use checked start-plus-slide-index arithmetic. Physical slide identity,
+page ordinal, output naming, notes and handout numbering do not change.
