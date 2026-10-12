@@ -32839,6 +32839,96 @@ mod masters_layouts_and_themes {
             "Roboto"
         );
     }
+
+    #[test]
+    fn import_keeps_source_formatting_edited_in_memory() {
+        use rpptx::SlideImportOptions;
+        let keep = SlideImportOptions {
+            keep_source_formatting: true,
+            ..SlideImportOptions::default()
+        };
+        let accent = RgbColor::new(0x7B, 0x1E, 0x3A);
+        let background = Fill::from_xml(
+            br#"<a:solidFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:srgbClr val="1A237E"/></a:solidFill>"#,
+        )
+        .unwrap();
+        let mut source = Presentation::new().unwrap();
+        source.add_slide(1).unwrap();
+        source
+            .slide_mut(0)
+            .unwrap()
+            .shape_mut(0)
+            .unwrap()
+            .set_text("Kept")
+            .unwrap();
+        // Unsaved edits of the source layout, theme and master.
+        source.set_layout_name(1, "Agenda").unwrap();
+        source.set_theme_color(0, "accent1", accent).unwrap();
+        source
+            .set_part_background(PartRef::Master(0), background.clone())
+            .unwrap();
+
+        let mut destination = Presentation::new().unwrap();
+        destination.add_slide(0).unwrap();
+        let layouts = destination.layout_count();
+        // No destination layout is named "Agenda", so a plain import refuses.
+        assert!(
+            destination
+                .import_slides(&source, &[0], &SlideImportOptions::default())
+                .is_err()
+        );
+        let copy = destination
+            .import_slides(&source, &[0], &keep)
+            .unwrap()
+            .indexes[0];
+        let bytes = destination.to_bytes().unwrap();
+        let destination = Presentation::from_bytes(&bytes).unwrap();
+        assert!(destination.validate().is_empty());
+        let layout = destination.slide_layout_index(copy).unwrap();
+        assert_eq!(destination.layout_name(layout), Some("Agenda"));
+        assert_eq!(destination.layout_count(), layouts + 1);
+        let master = destination.layout_master(layout).unwrap();
+        assert_eq!((destination.master_count(), master), (2, 1));
+        assert_eq!(
+            destination.theme(1).unwrap().unwrap().color("accent1"),
+            Some(accent)
+        );
+        assert_ne!(
+            destination.theme(0).unwrap().unwrap().color("accent1"),
+            Some(accent)
+        );
+        assert_eq!(
+            destination
+                .part_background_fill(PartRef::Master(1))
+                .unwrap(),
+            Some(&background)
+        );
+
+        // An unsaved edit of the destination layout is what the source layout
+        // is compared with, so the edited layout is not reused.
+        let mut source = Presentation::new().unwrap();
+        source.add_slide(1).unwrap();
+        let mut destination = Presentation::new().unwrap();
+        destination.set_layout_name(1, "Renamed").unwrap();
+        let copy = destination
+            .import_slides(&source, &[0], &keep)
+            .unwrap()
+            .indexes[0];
+        let layout = destination.slide_layout_index(copy).unwrap();
+        assert_eq!(destination.layout_name(layout), Some("Title and Content"));
+        assert_eq!(destination.layout_count(), layouts + 1);
+        assert_eq!(destination.master_count(), 1);
+        assert_eq!(destination.layout_name(1), Some("Renamed"));
+
+        // A plain import of an unedited source still takes the destination layout.
+        let mut destination = Presentation::new().unwrap();
+        let copy = destination
+            .import_slides(&source, &[0], &SlideImportOptions::default())
+            .unwrap()
+            .indexes[0];
+        assert_eq!(destination.slide_layout_index(copy), Some(1));
+        assert_eq!(destination.layout_count(), layouts);
+    }
 }
 
 #[cfg(feature = "render")]
