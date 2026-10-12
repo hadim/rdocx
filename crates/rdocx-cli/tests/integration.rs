@@ -4369,6 +4369,10 @@ fn font_commands_embed_list_remove_and_set_the_embedding_settings() {
         format!("embed\nWritten to {}\n", bold_path.display())
     );
 
+    assert_success(
+        &cli(&["validate", path_text(&bold_path)]),
+        "validate embedded",
+    );
     let listed = cli(&["font", "list", path_text(&bold_path)]);
     assert_success(&listed, "font list");
     let listed = String::from_utf8_lossy(&listed.stdout).into_owned();
