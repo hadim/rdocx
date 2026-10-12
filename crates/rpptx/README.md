@@ -21,6 +21,8 @@ presentation, notes, handout, PDF, and animation outputs.
   cells and growing or shrinking the frame by the row or column size.
 - Produce PDF, PDF/A, resolved slide frames, notes, handouts, and animations.
 - Import HTML, ODP, and PDF through explicit facade APIs.
+- Embed, list, and remove fonts in the Embedded OpenType form PowerPoint
+  reads, after explicit license authorization.
 - Resolve master, layout, placeholder, theme, chart, SmartArt, media, notes,
   comments, and timing state while preserving unmodelled package content.
 

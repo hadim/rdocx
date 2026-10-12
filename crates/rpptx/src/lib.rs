@@ -102,8 +102,10 @@ use rpptx_oxml::picture::{CT_Picture, MediaSource as PictureMediaSource, Picture
 #[cfg(feature = "render")]
 use rpptx_oxml::placeholder::PlaceholderKey;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType};
-pub use rpptx_oxml::presentation::Section;
-use rpptx_oxml::presentation::{CT_Presentation, CT_SlideId, custom_show_relationship_ids};
+use rpptx_oxml::presentation::{
+    CT_EmbeddedFontListEntry, CT_Presentation, CT_SlideId, custom_show_relationship_ids,
+};
+pub use rpptx_oxml::presentation::{EmbeddedFontKind, Section};
 use rpptx_oxml::relmap::{
     relationship_ids, release_hyperlinks, rewrite_exact_rel_ids, rewrite_rel_ids,
 };
@@ -4598,6 +4600,699 @@ impl Presentation {
         Ok(shape_ref(tree.append_child(ShapeTreeChild::GraphicFrame(
             Box::new(frame),
         ))))
+    }
+}
+
+const EMBEDDED_FONT_EXTENSION: &str = "fntdata";
+const EMBEDDED_FONT_CONTENT_TYPE: &str = "application/x-fontdata";
+const EOT_VERSION: u32 = 0x0002_0001;
+const EOT_MAGIC: u16 = 0x504C;
+const EOT_FLAG_COMPRESSED: u32 = 0x0000_0004;
+const EOT_FLAG_XOR_ENCRYPTED: u32 = 0x1000_0000;
+const EOT_XOR_KEY: u8 = 0x50;
+const EOT_FIXED_HEADER_LEN: usize = 80;
+
+/// The caller's explicit authorization and exact license identity.
+///
+/// PresentationML has no place for the license, so it is checked when a face
+/// is embedded and is not written to the package.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FontEmbeddingLicense {
+    pub authorized: bool,
+    pub identity: String,
+}
+
+impl FontEmbeddingLicense {
+    pub fn new(authorized: bool, identity: impl Into<String>) -> Self {
+        Self {
+            authorized,
+            identity: identity.into(),
+        }
+    }
+}
+
+/// Caller-owned TrueType or OpenType bytes for one embedded face.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EmbeddedFont {
+    pub kind: EmbeddedFontKind,
+    pub data: Vec<u8>,
+    pub license: FontEmbeddingLicense,
+}
+
+impl EmbeddedFont {
+    pub fn new(kind: EmbeddedFontKind, data: Vec<u8>, license: FontEmbeddingLicense) -> Self {
+        Self {
+            kind,
+            data,
+            license,
+        }
+    }
+}
+
+/// How a stored embedded font part is encoded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EmbeddedFontFormat {
+    /// Embedded OpenType without MicroType Express compression, the form this
+    /// crate writes.
+    Eot,
+    /// Embedded OpenType with MicroType Express compression, as PowerPoint
+    /// writes it. The part is preserved but not decoded.
+    CompressedEot,
+    /// A bare TrueType or OpenType font.
+    Sfnt,
+    /// A missing part or bytes in no recognized form.
+    Unknown,
+}
+
+/// One embedded face as the package stores it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EmbeddedFontFace {
+    pub kind: EmbeddedFontKind,
+    pub relationship_id: String,
+    /// The resolved font part, or `None` when the relationship is missing,
+    /// external, or of another type.
+    pub part_name: Option<String>,
+    pub format: EmbeddedFontFormat,
+    pub stored_len: usize,
+    /// The sfnt bytes, when the stored form can be decoded.
+    pub data: Option<Vec<u8>>,
+}
+
+/// One `p:embeddedFont` entry and its faces in schema order.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EmbeddedTypeface {
+    pub typeface: String,
+    pub panose: Option<String>,
+    pub pitch_family: Option<i8>,
+    pub charset: Option<i8>,
+    pub faces: Vec<EmbeddedFontFace>,
+}
+
+impl Presentation {
+    /// Returns the embedded fonts of `p:embeddedFontLst` in list order.
+    pub fn embedded_fonts(&self) -> Vec<EmbeddedTypeface> {
+        self.presentation
+            .embedded_fonts()
+            .iter()
+            .map(|entry| EmbeddedTypeface {
+                typeface: entry.typeface.clone(),
+                panose: entry.panose.clone(),
+                pitch_family: entry.pitch_family,
+                charset: entry.charset,
+                faces: entry
+                    .faces()
+                    .map(|(kind, relationship_id)| self.embedded_font_face(kind, relationship_id))
+                    .collect(),
+            })
+            .collect()
+    }
+
+    /// Embeds one face of a font after explicit license authorization.
+    ///
+    /// The face is stored as uncompressed Embedded OpenType in a
+    /// `/ppt/fonts/fontN.fntdata` part, the form PowerPoint reads, and
+    /// `embedTrueTypeFonts` is set. A face that already exists is replaced.
+    /// `typeface` should be the family name of the font, since that is the
+    /// name slides use and PowerPoint matches.
+    pub fn embed_font(&mut self, typeface: &str, font: EmbeddedFont) -> Result<()> {
+        let operation = "embed font";
+        validate_font_embedding_license(&font.license)
+            .map_err(|message| invalid_presentation_mutation(operation, message))?;
+        let mut entry = CT_EmbeddedFontListEntry::new(typeface)
+            .map_err(|error| invalid_presentation_mutation(operation, error.to_string()))?;
+        let sfnt = SfntTables::parse(&font.data)
+            .map_err(|message| invalid_presentation_mutation(operation, message))?;
+        let eot = sfnt
+            .embedded_open_type()
+            .map_err(|message| invalid_presentation_mutation(operation, message))?;
+
+        let mut staged = self.clone();
+        let presentation_part = staged.presentation_part.clone();
+        let existing = staged
+            .presentation
+            .embedded_fonts()
+            .iter()
+            .find(|entry| entry.typeface == typeface)
+            .and_then(|entry| entry.face(font.kind))
+            .map(str::to_owned);
+        let reusable_target = existing.as_deref().and_then(|relationship_id| {
+            let target = staged.embedded_font_target(relationship_id)?;
+            (staged
+                .presentation
+                .embedded_font_relationship_reference_count(relationship_id)
+                == 1
+                && internal_relationship_count(&staged.package, &target) == 1)
+                .then_some(target)
+        });
+        let (relationship_id, part_name) = match (existing.clone(), reusable_target) {
+            (Some(relationship_id), Some(target)) => (relationship_id, target),
+            _ => {
+                let part_name = MediaNamer::scan(
+                    "/ppt/fonts",
+                    "font",
+                    staged.package.parts.keys().map(String::as_str),
+                )
+                .next_part_name(EMBEDDED_FONT_EXTENSION);
+                let relationship_id = staged
+                    .package
+                    .get_or_create_part_rels(&presentation_part)
+                    .add(
+                        rel_types::FONT,
+                        &relative_part_target(&presentation_part, &part_name),
+                    );
+                (relationship_id, part_name)
+            }
+        };
+        staged.package.set_part(&part_name, eot);
+        if part_name
+            .to_ascii_lowercase()
+            .ends_with(&format!(".{EMBEDDED_FONT_EXTENSION}"))
+        {
+            register_content_type(
+                &mut staged.package,
+                &part_name,
+                EMBEDDED_FONT_EXTENSION,
+                EMBEDDED_FONT_CONTENT_TYPE,
+            );
+        } else if staged.package.content_types.content_type_for(&part_name)
+            != Some(EMBEDDED_FONT_CONTENT_TYPE)
+        {
+            staged
+                .package
+                .content_types
+                .add_override(&part_name, EMBEDDED_FONT_CONTENT_TYPE);
+        }
+
+        match staged.presentation.embedded_font_mut(typeface) {
+            Some(existing_entry) => {
+                existing_entry.set_face(font.kind, relationship_id.clone());
+            }
+            None => {
+                entry.panose = sfnt.panose_hex();
+                entry.pitch_family = Some(sfnt.pitch_and_family());
+                entry.charset = Some(sfnt.charset());
+                entry.set_face(font.kind, relationship_id.clone());
+                staged
+                    .presentation
+                    .push_embedded_font(entry)
+                    .map_err(|error| invalid_presentation_mutation(operation, error.to_string()))?;
+            }
+        }
+        if let Some(previous) = existing.filter(|previous| *previous != relationship_id) {
+            staged.release_embedded_font_relationship(&previous)?;
+        }
+        staged.presentation.set_embed_true_type_fonts(Some(true));
+        self.commit_candidate(staged)
+    }
+
+    /// Removes one embedded face, and its part once nothing references it.
+    ///
+    /// An entry left with no face is removed from the list.
+    pub fn remove_embedded_font(
+        &mut self,
+        typeface: &str,
+        kind: EmbeddedFontKind,
+    ) -> Result<Option<EmbeddedFontFace>> {
+        let Some(relationship_id) = self
+            .presentation
+            .embedded_fonts()
+            .iter()
+            .find(|entry| entry.typeface == typeface)
+            .and_then(|entry| entry.face(kind))
+            .map(str::to_owned)
+        else {
+            return Ok(None);
+        };
+        let removed = self.embedded_font_face(kind, &relationship_id);
+        let mut staged = self.clone();
+        let entry = staged
+            .presentation
+            .embedded_font_mut(typeface)
+            .expect("the face's entry exists");
+        entry.remove_face(kind);
+        if entry.faces().next().is_none() && !entry.has_raw_children() {
+            staged.presentation.remove_embedded_font(typeface);
+        }
+        staged.release_embedded_font_relationship(&relationship_id)?;
+        self.commit_candidate(staged)?;
+        Ok(Some(removed))
+    }
+
+    /// Removes one embedded font entry with every face it owns.
+    pub fn remove_font(&mut self, typeface: &str) -> Result<Option<EmbeddedTypeface>> {
+        let Some(removed) = self
+            .embedded_fonts()
+            .into_iter()
+            .find(|entry| entry.typeface == typeface)
+        else {
+            return Ok(None);
+        };
+        let mut staged = self.clone();
+        staged.presentation.remove_embedded_font(typeface);
+        for face in &removed.faces {
+            staged.release_embedded_font_relationship(&face.relationship_id)?;
+        }
+        self.commit_candidate(staged)?;
+        Ok(Some(removed))
+    }
+
+    /// Returns whether `p:presentation/@embedTrueTypeFonts` is true.
+    pub fn embed_true_type_fonts(&self) -> bool {
+        self.presentation.embed_true_type_fonts().unwrap_or(false)
+    }
+
+    /// Sets `embedTrueTypeFonts`, which PowerPoint requires before it uses
+    /// embedded fonts. False removes the attribute, its default.
+    pub fn set_embed_true_type_fonts(&mut self, value: bool) {
+        self.presentation
+            .set_embed_true_type_fonts(value.then_some(true));
+    }
+
+    /// Returns whether `p:presentation/@saveSubsetFonts` is true.
+    pub fn save_subset_fonts(&self) -> bool {
+        self.presentation.save_subset_fonts().unwrap_or(false)
+    }
+
+    /// Sets `saveSubsetFonts`, which asks PowerPoint to embed only the
+    /// characters in use when it saves. False removes the attribute.
+    pub fn set_save_subset_fonts(&mut self, value: bool) {
+        self.presentation
+            .set_save_subset_fonts(value.then_some(true));
+    }
+
+    fn embedded_font_target(&self, relationship_id: &str) -> Option<String> {
+        self.package
+            .get_part_rels(&self.presentation_part)?
+            .get_by_id(relationship_id)
+            .filter(|relationship| {
+                relationship.rel_type == rel_types::FONT && !relationship_is_external(relationship)
+            })
+            .map(|relationship| {
+                OpcPackage::resolve_rel_target(&self.presentation_part, &relationship.target)
+            })
+    }
+
+    fn embedded_font_face(
+        &self,
+        kind: EmbeddedFontKind,
+        relationship_id: &str,
+    ) -> EmbeddedFontFace {
+        let part_name = self.embedded_font_target(relationship_id);
+        let stored = part_name
+            .as_deref()
+            .and_then(|part_name| self.package.get_part(part_name));
+        let (format, data) =
+            stored.map_or((EmbeddedFontFormat::Unknown, None), decode_embedded_font);
+        EmbeddedFontFace {
+            kind,
+            relationship_id: relationship_id.to_owned(),
+            part_name: part_name.filter(|_| stored.is_some()),
+            format,
+            stored_len: stored.map_or(0, <[u8]>::len),
+            data,
+        }
+    }
+
+    /// Drops a font relationship that no modelled face and no preserved
+    /// presentation XML references, then prunes its part when unreachable.
+    fn release_embedded_font_relationship(&mut self, relationship_id: &str) -> Result<()> {
+        if self
+            .presentation
+            .embedded_font_relationship_reference_count(relationship_id)
+            > 0
+        {
+            return Ok(());
+        }
+        let xml = self
+            .presentation
+            .to_xml()
+            .map_err(|error| Error::MalformedPart {
+                part_name: self.presentation_part.clone(),
+                message: error.to_string(),
+            })?;
+        let xml = String::from_utf8_lossy(&xml);
+        if xml.contains(&format!("\"{relationship_id}\""))
+            || xml.contains(&format!("'{relationship_id}'"))
+        {
+            return Ok(());
+        }
+        let Some(target) = self.embedded_font_target(relationship_id) else {
+            return Ok(());
+        };
+        if let Some(relationships) = self.package.get_part_rels_mut(&self.presentation_part) {
+            relationships.items.retain(|relationship| {
+                relationship.id != relationship_id
+                    || relationship.rel_type != rel_types::FONT
+                    || relationship_is_external(relationship)
+            });
+        }
+        prune_unreachable_parts(&mut self.package, &HashSet::from([target]));
+        let suffix = format!(".{EMBEDDED_FONT_EXTENSION}");
+        if !self
+            .package
+            .parts
+            .keys()
+            .any(|part| part.to_ascii_lowercase().ends_with(&suffix))
+            && self
+                .package
+                .content_types
+                .defaults
+                .get(EMBEDDED_FONT_EXTENSION)
+                .is_some_and(|content_type| content_type == EMBEDDED_FONT_CONTENT_TYPE)
+        {
+            self.package
+                .content_types
+                .remove_default(EMBEDDED_FONT_EXTENSION);
+        }
+        Ok(())
+    }
+}
+
+fn internal_relationship_count(package: &OpcPackage, target: &str) -> usize {
+    std::iter::once(("/", &package.package_rels))
+        .chain(
+            package
+                .part_rels
+                .iter()
+                .map(|(source, relationships)| (source.as_str(), relationships)),
+        )
+        .flat_map(|(source, relationships)| {
+            relationships
+                .items
+                .iter()
+                .map(move |relationship| (source, relationship))
+        })
+        .filter(|(source, relationship)| {
+            !relationship_is_external(relationship)
+                && OpcPackage::resolve_rel_target(source, &relationship.target)
+                    .eq_ignore_ascii_case(target)
+        })
+        .count()
+}
+
+fn validate_font_embedding_license(
+    license: &FontEmbeddingLicense,
+) -> std::result::Result<(), String> {
+    if !license.authorized {
+        return Err("font embedding requires explicit caller authorization".to_owned());
+    }
+    if license.identity.trim().is_empty() {
+        return Err("font embedding requires an exact license identity".to_owned());
+    }
+    if license.identity.len() > 4096 {
+        return Err("font embedding license identity exceeds 4096 bytes".to_owned());
+    }
+    if license
+        .identity
+        .bytes()
+        .any(|byte| matches!(byte, b'\t' | b'\n' | b'\r'))
+    {
+        return Err(
+            "font embedding license identity contains XML-normalized whitespace".to_owned(),
+        );
+    }
+    Ok(())
+}
+
+/// Classifies a stored font part and decodes it to sfnt bytes when it can.
+fn decode_embedded_font(bytes: &[u8]) -> (EmbeddedFontFormat, Option<Vec<u8>>) {
+    if SfntTables::parse(bytes).is_ok() {
+        return (EmbeddedFontFormat::Sfnt, Some(bytes.to_vec()));
+    }
+    let (Some(eot_size), Some(font_data_size), Some(flags), Some(magic)) = (
+        read_u32_le(bytes, 0),
+        read_u32_le(bytes, 4),
+        read_u32_le(bytes, 12),
+        read_u16_le(bytes, 34),
+    ) else {
+        return (EmbeddedFontFormat::Unknown, None);
+    };
+    let (eot_size, font_data_size) = (eot_size as usize, font_data_size as usize);
+    if magic != EOT_MAGIC
+        || eot_size > bytes.len()
+        || font_data_size > eot_size.saturating_sub(EOT_FIXED_HEADER_LEN)
+    {
+        return (EmbeddedFontFormat::Unknown, None);
+    }
+    if flags & EOT_FLAG_COMPRESSED != 0 {
+        return (EmbeddedFontFormat::CompressedEot, None);
+    }
+    let mut data = bytes[eot_size - font_data_size..eot_size].to_vec();
+    if flags & EOT_FLAG_XOR_ENCRYPTED != 0 {
+        for byte in &mut data {
+            *byte ^= EOT_XOR_KEY;
+        }
+    }
+    let data = SfntTables::parse(&data).is_ok().then_some(data);
+    (EmbeddedFontFormat::Eot, data)
+}
+
+fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
+    bytes
+        .get(offset..offset + 2)
+        .map(|slice| u16::from_le_bytes([slice[0], slice[1]]))
+}
+
+fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
+    bytes
+        .get(offset..offset + 4)
+        .map(|slice| u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
+}
+
+fn read_u16_be(bytes: &[u8], offset: usize) -> Option<u16> {
+    bytes
+        .get(offset..offset + 2)
+        .map(|slice| u16::from_be_bytes([slice[0], slice[1]]))
+}
+
+fn read_u32_be(bytes: &[u8], offset: usize) -> Option<u32> {
+    bytes
+        .get(offset..offset + 4)
+        .map(|slice| u32::from_be_bytes([slice[0], slice[1], slice[2], slice[3]]))
+}
+
+/// The `OS/2`, `head`, `name` and `post` tables of one TrueType or OpenType
+/// font, bounds-checked against the font bytes.
+struct SfntTables<'a> {
+    data: &'a [u8],
+    os2: &'a [u8],
+    head: &'a [u8],
+    name: &'a [u8],
+    post: Option<&'a [u8]>,
+}
+
+impl<'a> SfntTables<'a> {
+    fn parse(data: &'a [u8]) -> std::result::Result<Self, String> {
+        match data.first_chunk::<4>() {
+            Some(b"\x00\x01\x00\x00" | b"OTTO" | b"true") => {}
+            Some(b"ttcf") => {
+                return Err(
+                    "a font collection cannot be embedded, pass one TrueType or OpenType face"
+                        .to_owned(),
+                );
+            }
+            _ => return Err("embedded font bytes are not a supported sfnt font".to_owned()),
+        }
+        let malformed = || "embedded font bytes have a malformed sfnt table directory".to_owned();
+        let table_count = read_u16_be(data, 4).ok_or_else(malformed)?;
+        if table_count == 0 || table_count > 512 {
+            return Err(malformed());
+        }
+        let table = |tag: &[u8; 4]| -> std::result::Result<Option<&'a [u8]>, String> {
+            for index in 0..usize::from(table_count) {
+                let record = 12 + index * 16;
+                let record_tag = data.get(record..record + 4).ok_or_else(malformed)?;
+                if record_tag != tag {
+                    continue;
+                }
+                let offset = read_u32_be(data, record + 8).ok_or_else(malformed)? as usize;
+                let length = read_u32_be(data, record + 12).ok_or_else(malformed)? as usize;
+                let end = offset.checked_add(length).ok_or_else(malformed)?;
+                return data.get(offset..end).map(Some).ok_or_else(malformed);
+            }
+            Ok(None)
+        };
+        let required = |tag: &[u8; 4]| {
+            table(tag)?.ok_or_else(|| {
+                format!(
+                    "embedded font has no {} table",
+                    String::from_utf8_lossy(tag).trim_end()
+                )
+            })
+        };
+        let tables = Self {
+            data,
+            os2: required(b"OS/2")?,
+            head: required(b"head")?,
+            name: required(b"name")?,
+            post: table(b"post")?,
+        };
+        if tables.os2.len() < 78 || tables.head.len() < 12 {
+            return Err("embedded font has a truncated OS/2 or head table".to_owned());
+        }
+        Ok(tables)
+    }
+
+    fn os2_version(&self) -> u16 {
+        read_u16_be(self.os2, 0).unwrap_or(0)
+    }
+
+    fn panose(&self) -> &'a [u8] {
+        &self.os2[32..42]
+    }
+
+    fn code_page_ranges(&self) -> (u32, u32) {
+        if self.os2_version() >= 1 && self.os2.len() >= 86 {
+            (
+                read_u32_be(self.os2, 78).unwrap_or(0),
+                read_u32_be(self.os2, 82).unwrap_or(0),
+            )
+        } else {
+            (0, 0)
+        }
+    }
+
+    /// The `panose` attribute value, omitted when the font leaves it unset.
+    fn panose_hex(&self) -> Option<String> {
+        let panose = self.panose();
+        panose.iter().any(|byte| *byte != 0).then(|| {
+            panose
+                .iter()
+                .map(|byte| format!("{byte:02X}"))
+                .collect::<String>()
+        })
+    }
+
+    /// The Windows `pitchFamily` byte: pitch in the low bits, family above.
+    fn pitch_and_family(&self) -> i8 {
+        let fixed_pitch = self
+            .post
+            .and_then(|post| read_u32_be(post, 12))
+            .is_some_and(|is_fixed_pitch| is_fixed_pitch != 0);
+        let panose = self.panose();
+        let family = match panose[0] {
+            _ if fixed_pitch || panose[3] == 9 => 0x30,
+            2 if (11..=13).contains(&panose[1]) => 0x20,
+            2 => 0x10,
+            3 => 0x40,
+            4 | 5 => 0x50,
+            _ => 0x00,
+        };
+        family | if fixed_pitch { 1 } else { 2 }
+    }
+
+    /// The Windows character set: symbol when the font declares the symbol
+    /// code page, otherwise ANSI.
+    fn charset(&self) -> i8 {
+        if self.code_page_ranges().0 & 0x8000_0000 != 0 {
+            2
+        } else {
+            0
+        }
+    }
+
+    /// One `name` table string as UTF-16LE, preferring Windows English.
+    fn name_utf16le(&self, name_id: u16) -> Vec<u8> {
+        let count = read_u16_be(self.name, 2).unwrap_or(0);
+        let strings = usize::from(read_u16_be(self.name, 4).unwrap_or(0));
+        let mut best: Option<(u8, &[u8], bool)> = None;
+        for index in 0..usize::from(count) {
+            let record = 6 + index * 12;
+            let (
+                Some(platform),
+                Some(encoding),
+                Some(language),
+                Some(id),
+                Some(length),
+                Some(offset),
+            ) = (
+                read_u16_be(self.name, record),
+                read_u16_be(self.name, record + 2),
+                read_u16_be(self.name, record + 4),
+                read_u16_be(self.name, record + 6),
+                read_u16_be(self.name, record + 8),
+                read_u16_be(self.name, record + 10),
+            )
+            else {
+                break;
+            };
+            if id != name_id {
+                continue;
+            }
+            let rank = match (platform, encoding, language) {
+                (3, 1, 0x0409) => 0,
+                (3, 0 | 1 | 10, _) => 1,
+                (0, _, _) => 2,
+                (1, 0, 0) => 3,
+                _ => continue,
+            };
+            let start = strings + usize::from(offset);
+            let Some(bytes) = self.name.get(start..start + usize::from(length)) else {
+                continue;
+            };
+            if best.is_none_or(|(best_rank, _, _)| rank < best_rank) {
+                best = Some((rank, bytes, platform != 1));
+            }
+        }
+        match best {
+            Some((_, bytes, true)) => bytes
+                .chunks_exact(2)
+                .flat_map(|unit| [unit[1], unit[0]])
+                .collect(),
+            Some((_, bytes, false)) => bytes
+                .iter()
+                .flat_map(|byte| {
+                    let unit = if byte.is_ascii() {
+                        u16::from(*byte)
+                    } else {
+                        0xFFFD
+                    };
+                    unit.to_le_bytes()
+                })
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Wraps the font in an uncompressed Embedded OpenType 2.1 header.
+    fn embedded_open_type(&self) -> std::result::Result<Vec<u8>, String> {
+        let too_large = || "embedded font is too large for Embedded OpenType".to_owned();
+        let font_data_size = u32::try_from(self.data.len()).map_err(|_| too_large())?;
+        let os2 = self.os2;
+        let (code_page_1, code_page_2) = self.code_page_ranges();
+        let mut header = Vec::with_capacity(EOT_FIXED_HEADER_LEN + 256);
+        header.extend_from_slice(&[0; 4]);
+        header.extend_from_slice(&font_data_size.to_le_bytes());
+        header.extend_from_slice(&EOT_VERSION.to_le_bytes());
+        header.extend_from_slice(&0_u32.to_le_bytes());
+        header.extend_from_slice(self.panose());
+        header.push(1);
+        header.push(u8::from(read_u16_be(os2, 62).unwrap_or(0) & 1 != 0));
+        header.extend_from_slice(&u32::from(read_u16_be(os2, 4).unwrap_or(400)).to_le_bytes());
+        header.extend_from_slice(&read_u16_be(os2, 8).unwrap_or(0).to_le_bytes());
+        header.extend_from_slice(&EOT_MAGIC.to_le_bytes());
+        for offset in [42, 46, 50, 54] {
+            header.extend_from_slice(&read_u32_be(os2, offset).unwrap_or(0).to_le_bytes());
+        }
+        header.extend_from_slice(&code_page_1.to_le_bytes());
+        header.extend_from_slice(&code_page_2.to_le_bytes());
+        header.extend_from_slice(&read_u32_be(self.head, 8).unwrap_or(0).to_le_bytes());
+        header.extend_from_slice(&[0; 16]);
+        debug_assert_eq!(header.len(), EOT_FIXED_HEADER_LEN);
+        // Family, style, version and full names, each after a zero padding word.
+        for name_id in [1, 2, 5, 4] {
+            let name = self.name_utf16le(name_id);
+            let size = u16::try_from(name.len()).map_err(|_| too_large())?;
+            header.extend_from_slice(&0_u16.to_le_bytes());
+            header.extend_from_slice(&size.to_le_bytes());
+            header.extend_from_slice(&name);
+        }
+        // The padding word and an empty root string.
+        header.extend_from_slice(&[0; 4]);
+        let eot_size = u32::try_from(header.len() + self.data.len()).map_err(|_| too_large())?;
+        header[0..4].copy_from_slice(&eot_size.to_le_bytes());
+        header.extend_from_slice(self.data);
+        Ok(header)
     }
 }
 

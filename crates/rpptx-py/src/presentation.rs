@@ -1,12 +1,13 @@
 use std::path::PathBuf;
 
 use oxml_py_support::RevisionCounter;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList, PyTuple};
 use smallvec::smallvec;
 
 use crate::layout::PyTextFrameLayout;
-use crate::shape::length;
+use crate::shape::{image_bytes, length};
 use crate::slide::{PySlideCollection, PySlideLayoutCollection};
 use crate::{replacement_count_to_pyerr, rpptx_to_pyerr, rpptx_value_to_pyerr};
 
@@ -113,6 +114,170 @@ impl PyComment {
     fn replies<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
         PyTuple::new(py, self.replies.iter().cloned())
     }
+}
+
+/// The caller's explicit authorization and exact license identity for one
+/// embedded font face. Neither has a default, so authorization is always a
+/// deliberate argument.
+#[pyclass(
+    name = "FontEmbeddingLicense",
+    frozen,
+    get_all,
+    eq,
+    skip_from_py_object
+)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyFontEmbeddingLicense {
+    pub authorized: bool,
+    pub identity: String,
+}
+
+#[pymethods]
+impl PyFontEmbeddingLicense {
+    #[new]
+    #[pyo3(signature = (*, authorized, identity))]
+    fn new(authorized: bool, identity: String) -> Self {
+        Self {
+            authorized,
+            identity,
+        }
+    }
+}
+
+/// One embedded face as the package stores it.
+#[pyclass(name = "EmbeddedFontFace", frozen, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyEmbeddedFontFace {
+    kind: &'static str,
+    relationship_id: String,
+    part_name: Option<String>,
+    format: &'static str,
+    stored_len: usize,
+    data: Option<Vec<u8>>,
+}
+
+impl From<rpptx::EmbeddedFontFace> for PyEmbeddedFontFace {
+    fn from(face: rpptx::EmbeddedFontFace) -> Self {
+        Self {
+            kind: embedded_font_kind_name(face.kind),
+            relationship_id: face.relationship_id,
+            part_name: face.part_name,
+            format: match face.format {
+                rpptx::EmbeddedFontFormat::Eot => "eot",
+                rpptx::EmbeddedFontFormat::CompressedEot => "compressed_eot",
+                rpptx::EmbeddedFontFormat::Sfnt => "sfnt",
+                rpptx::EmbeddedFontFormat::Unknown => "unknown",
+            },
+            stored_len: face.stored_len,
+            data: face.data,
+        }
+    }
+}
+
+#[pymethods]
+impl PyEmbeddedFontFace {
+    #[getter]
+    fn kind(&self) -> &str {
+        self.kind
+    }
+
+    #[getter]
+    fn relationship_id(&self) -> &str {
+        &self.relationship_id
+    }
+
+    #[getter]
+    fn part_name(&self) -> Option<&str> {
+        self.part_name.as_deref()
+    }
+
+    #[getter]
+    fn format(&self) -> &str {
+        self.format
+    }
+
+    #[getter]
+    fn stored_len(&self) -> usize {
+        self.stored_len
+    }
+
+    /// The TrueType or OpenType bytes, or `None` when the stored form is
+    /// compressed or unrecognized.
+    #[getter]
+    fn data<'py>(&self, py: Python<'py>) -> Option<Bound<'py, PyBytes>> {
+        self.data.as_deref().map(|data| PyBytes::new(py, data))
+    }
+}
+
+/// One embedded font entry and its faces in schema order.
+#[pyclass(name = "EmbeddedTypeface", frozen, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyEmbeddedTypeface {
+    typeface: String,
+    panose: Option<String>,
+    pitch_family: Option<i8>,
+    charset: Option<i8>,
+    faces: Vec<PyEmbeddedFontFace>,
+}
+
+impl From<rpptx::EmbeddedTypeface> for PyEmbeddedTypeface {
+    fn from(font: rpptx::EmbeddedTypeface) -> Self {
+        Self {
+            typeface: font.typeface,
+            panose: font.panose,
+            pitch_family: font.pitch_family,
+            charset: font.charset,
+            faces: font.faces.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+#[pymethods]
+impl PyEmbeddedTypeface {
+    #[getter]
+    fn typeface(&self) -> &str {
+        &self.typeface
+    }
+
+    #[getter]
+    fn panose(&self) -> Option<&str> {
+        self.panose.as_deref()
+    }
+
+    #[getter]
+    fn pitch_family(&self) -> Option<i8> {
+        self.pitch_family
+    }
+
+    #[getter]
+    fn charset(&self) -> Option<i8> {
+        self.charset
+    }
+
+    #[getter]
+    fn faces<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, self.faces.iter().cloned())
+    }
+}
+
+fn embedded_font_kind_name(kind: rpptx::EmbeddedFontKind) -> &'static str {
+    match kind {
+        rpptx::EmbeddedFontKind::Regular => "regular",
+        rpptx::EmbeddedFontKind::Bold => "bold",
+        rpptx::EmbeddedFontKind::Italic => "italic",
+        rpptx::EmbeddedFontKind::BoldItalic => "bold_italic",
+    }
+}
+
+fn embedded_font_kind(name: &str) -> PyResult<rpptx::EmbeddedFontKind> {
+    rpptx::EmbeddedFontKind::ALL
+        .into_iter()
+        .find(|kind| embedded_font_kind_name(*kind) == name)
+        .ok_or_else(|| {
+            PyValueError::new_err(format!(
+                "font face kind must be regular, bold, italic or bold_italic, not {name:?}"
+            ))
+        })
 }
 
 /// One issue `Presentation::validate` reports, with the snake_case variant
@@ -375,6 +540,97 @@ impl PyPresentation {
             .map_err(|error| rpptx_to_pyerr(py, error))?;
         self.revisions.bump();
         Ok(())
+    }
+
+    #[getter]
+    fn embedded_fonts<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(
+            py,
+            self.inner
+                .embedded_fonts()
+                .into_iter()
+                .map(PyEmbeddedTypeface::from),
+        )
+    }
+
+    /// Embeds one face of a TrueType or OpenType font from a path, bytes, or
+    /// a binary file-like object. The license states the identity and
+    /// authorizes the embedding explicitly.
+    #[pyo3(signature = (typeface, font, kind = "regular", *, license))]
+    fn embed_font(
+        &mut self,
+        py: Python<'_>,
+        typeface: &str,
+        font: &Bound<'_, PyAny>,
+        kind: &str,
+        license: PyRef<'_, PyFontEmbeddingLicense>,
+    ) -> PyResult<()> {
+        let kind = embedded_font_kind(kind)?;
+        let (data, _) = image_bytes(font)?;
+        let font = rpptx::EmbeddedFont::new(
+            kind,
+            data,
+            rpptx::FontEmbeddingLicense::new(license.authorized, license.identity.clone()),
+        );
+        drop(license);
+        py.detach(|| self.inner.embed_font(typeface, font))
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        self.revisions.bump();
+        Ok(())
+    }
+
+    /// Removes one embedded face and returns it, or `None` when absent.
+    fn remove_embedded_font(
+        &mut self,
+        py: Python<'_>,
+        typeface: &str,
+        kind: &str,
+    ) -> PyResult<Option<PyEmbeddedFontFace>> {
+        let kind = embedded_font_kind(kind)?;
+        let removed = self
+            .inner
+            .remove_embedded_font(typeface, kind)
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        if removed.is_some() {
+            self.revisions.bump();
+        }
+        Ok(removed.map(Into::into))
+    }
+
+    /// Removes one embedded font with every face and returns it, or `None`.
+    fn remove_font(
+        &mut self,
+        py: Python<'_>,
+        typeface: &str,
+    ) -> PyResult<Option<PyEmbeddedTypeface>> {
+        let removed = self
+            .inner
+            .remove_font(typeface)
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        if removed.is_some() {
+            self.revisions.bump();
+        }
+        Ok(removed.map(Into::into))
+    }
+
+    #[getter]
+    fn embed_true_type_fonts(&self) -> bool {
+        self.inner.embed_true_type_fonts()
+    }
+
+    #[setter(embed_true_type_fonts)]
+    fn set_embed_true_type_fonts(&mut self, value: bool) {
+        self.inner.set_embed_true_type_fonts(value);
+    }
+
+    #[getter]
+    fn save_subset_fonts(&self) -> bool {
+        self.inner.save_subset_fonts()
+    }
+
+    #[setter(save_subset_fonts)]
+    fn set_save_subset_fonts(&mut self, value: bool) {
+        self.inner.set_save_subset_fonts(value);
     }
 
     #[getter]
