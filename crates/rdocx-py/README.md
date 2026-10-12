@@ -62,6 +62,10 @@ with open("report.pdf", "wb") as output:
 - Core document properties such as title, author, and revision, read and
   written through `Document.core_properties` under python-docx's names.
 - Picture replacement and resizing by image relationship.
+- Font-table records listed through `Document.fonts`, and TrueType or
+  OpenType faces embedded with `Document.embed_font` after an explicit
+  `FontEmbeddingLicense`, so the document keeps its font on a machine that
+  does not have it installed.
 - Complete paragraph and run formatting, multilingual and vertical typography,
   conditional and floating tables, section semantics, settings, fields, forms,
   equations, drawings, comments, and metadata.

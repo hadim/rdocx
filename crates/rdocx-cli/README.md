@@ -18,6 +18,8 @@ and produces fixed or flow output without an Office host.
 - Tracked revision inspection, filtered resolution, table-of-contents rebuilds,
   and document comparison at run, word, or character granularity with ignore
   options.
+- Font-table listing, font face embedding after an explicit licence
+  authorization, face removal, and the Word font embedding settings.
 - Package-preserving edits cover the final S74 paragraph, run, typography,
   table, section, settings, field, form, equation, and drawing surface.
 
@@ -67,6 +69,12 @@ rdocx compare original.docx edited.docx --author Reviewer \
   --timestamp 2026-09-13T12:00:00Z --granularity word --ignore-comments \
   --ignore-story header -o redline.docx
 rdocx toc rebuild report.docx -o refreshed.docx
+rdocx font embed report.docx ExampleSans-Bold.ttf --name 'Example Sans' \
+  --face bold --license-authorized --license-identity 'OFL-1.1: Example Sans' \
+  -o embedded.docx
+rdocx font list embedded.docx --json
+rdocx font remove embedded.docx --name 'Example Sans' --face bold -o plain.docx
+rdocx font settings embedded.docx --save-subset-fonts true -o subset.docx
 ```
 
 Comment `add` ranges use zero-based body paragraph and run boundaries. The

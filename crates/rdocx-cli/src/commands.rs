@@ -17,8 +17,9 @@ use quick_xml::name::{Namespace, ResolveResult};
 use quick_xml::reader::NsReader;
 use rdocx::{
     BodyItemRef, ComparisonGranularity, ComparisonOptions, ComparisonStoryKind, Document,
-    HdrFtrType, HeaderFooterKind, RasterFormat, RasterOptions, RasterOutput, RevisionKind,
-    RevisionView, RunRange, StoryId, StoryItemKind, StoryKind,
+    EmbeddedFont, EmbeddedFontKind, FontEmbeddingLicense, HdrFtrType, HeaderFooterKind,
+    RasterFormat, RasterOptions, RasterOutput, RevisionKind, RevisionView, RunRange, StoryId,
+    StoryItemKind, StoryKind,
 };
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Document};
@@ -1830,6 +1831,232 @@ pub fn toc_rebuild(file: &Path, output: &Path, json_output: bool) -> Result<()> 
         writeln!(stdout, "Written to {}", output.display())?;
     }
     Ok(())
+}
+
+/// The licence, key and subset flag of one `font embed` call.
+pub struct FontEmbedOptions {
+    pub license: FontEmbeddingLicense,
+    pub font_key: Option<String>,
+    pub subsetted: bool,
+}
+
+/// The font embedding settings a `font settings` call changes, `None` for
+/// the ones it leaves alone.
+pub struct FontEmbeddingSettings {
+    pub embed_true_type_fonts: Option<bool>,
+    pub embed_system_fonts: Option<bool>,
+    pub save_subset_fonts: Option<bool>,
+}
+
+/// Embedded face names. They follow the Python `EmbeddedFont.kind` names.
+const EMBEDDED_FONT_KINDS: [(&str, EmbeddedFontKind); 4] = [
+    ("regular", EmbeddedFontKind::Regular),
+    ("bold", EmbeddedFontKind::Bold),
+    ("italic", EmbeddedFontKind::Italic),
+    ("bold_italic", EmbeddedFontKind::BoldItalic),
+];
+
+/// Parse a `--face` value.
+pub fn parse_embedded_font_kind(name: &str) -> std::result::Result<EmbeddedFontKind, String> {
+    EMBEDDED_FONT_KINDS
+        .iter()
+        .find(|(known, _)| *known == name)
+        .map(|(_, kind)| *kind)
+        .ok_or_else(|| {
+            format!("unknown font face {name:?}, expected regular, bold, italic, or bold_italic")
+        })
+}
+
+fn embedded_font_kind_label(kind: EmbeddedFontKind) -> &'static str {
+    EMBEDDED_FONT_KINDS
+        .iter()
+        .find(|(_, known)| *known == kind)
+        .map(|(name, _)| *name)
+        .expect("every face kind has a name")
+}
+
+fn font_embedding_settings_json(doc: &Document) -> Value {
+    json!({
+        "embed_true_type_fonts": doc.embed_true_type_fonts(),
+        "embed_system_fonts": doc.embed_system_fonts(),
+        "save_subset_fonts": doc.save_subset_fonts(),
+    })
+}
+
+/// List font-table records, their embedded faces and the embedding settings.
+pub fn font_list(file: &Path, json_output: bool) -> Result<()> {
+    let doc = Document::open(file)?;
+    let fonts = doc.fonts();
+    if json_output {
+        let records = fonts
+            .iter()
+            .map(|font| {
+                json!({
+                    "name": font.name,
+                    "alternate_name": font.alternate_name,
+                    "family": font.family,
+                    "pitch": font.pitch,
+                    "embedded": font.embedded_fonts.iter().map(|embedded| json!({
+                        "face": embedded_font_kind_label(embedded.kind),
+                        "font_key": embedded.font_key,
+                        "subsetted": embedded.subsetted,
+                        "license_authorized": embedded.license.authorized,
+                        "license_identity": embedded.license.identity,
+                        "byte_count": embedded.data.len(),
+                    })).collect::<Vec<_>>(),
+                })
+            })
+            .collect::<Vec<_>>();
+        return print_json(json!({
+            "scope": "font_table",
+            "fonts": records,
+            "settings": font_embedding_settings_json(&doc),
+        }));
+    }
+    let mut stdout = io::stdout().lock();
+    if fonts.is_empty() {
+        writeln!(stdout, "(no fonts)")?;
+    }
+    for font in &fonts {
+        let faces = font
+            .embedded_fonts
+            .iter()
+            .map(|embedded| embedded_font_kind_label(embedded.kind))
+            .collect::<Vec<_>>();
+        if faces.is_empty() {
+            writeln!(stdout, "{}", font.name)?;
+        } else {
+            writeln!(stdout, "{}\tembedded: {}", font.name, faces.join(", "))?;
+        }
+    }
+    let setting = |value: Option<bool>| match value {
+        Some(true) => "true",
+        Some(false) => "false",
+        None => "unset",
+    };
+    writeln!(
+        stdout,
+        "Settings: embedTrueTypeFonts={} embedSystemFonts={} saveSubsetFonts={}",
+        setting(doc.embed_true_type_fonts()),
+        setting(doc.embed_system_fonts()),
+        setting(doc.save_subset_fonts())
+    )?;
+    Ok(())
+}
+
+/// Embed one font file as a face of a font-table record and publish the
+/// complete document atomically.
+pub fn font_embed(
+    file: &Path,
+    font_file: &Path,
+    name: &str,
+    face: EmbeddedFontKind,
+    options: FontEmbedOptions,
+    output: &Path,
+    json_output: bool,
+) -> Result<()> {
+    let mut doc = Document::open(file)?;
+    let data = std::fs::read(font_file)
+        .map_err(|error| format!("cannot read font file {}: {error}", font_file.display()))?;
+    let font_key = options
+        .font_key
+        .unwrap_or_else(|| EmbeddedFont::derive_font_key(&data));
+    let byte_count = data.len();
+    doc.embed_font(
+        name,
+        EmbeddedFont::new(face, data, font_key.clone(), options.license)
+            .with_subsetted(options.subsetted),
+    )?;
+    publish_document(&mut doc, output)?;
+    mutation_record(
+        json_output,
+        "font_table",
+        "embed",
+        json!({
+            "name": name,
+            "face": embedded_font_kind_label(face),
+            "font_key": font_key,
+            "byte_count": byte_count,
+        }),
+        output,
+    )
+}
+
+/// Remove one embedded face, or a whole font-table record, and publish the
+/// complete document atomically.
+pub fn font_remove(
+    file: &Path,
+    name: &str,
+    face: Option<EmbeddedFontKind>,
+    output: &Path,
+    json_output: bool,
+) -> Result<()> {
+    let mut doc = Document::open(file)?;
+    match face {
+        Some(face) => {
+            if doc.remove_embedded_font(name, face)?.is_none() {
+                return Err(format!(
+                    "font {name} has no embedded {} face",
+                    embedded_font_kind_label(face)
+                )
+                .into());
+            }
+        }
+        None => {
+            if doc.remove_font(name)?.is_none() {
+                return Err(format!("font {name} does not exist").into());
+            }
+        }
+    }
+    publish_document(&mut doc, output)?;
+    mutation_record(
+        json_output,
+        "font_table",
+        "remove",
+        json!({
+            "name": name,
+            "face": face.map(embedded_font_kind_label),
+        }),
+        output,
+    )
+}
+
+/// Set the font embedding settings and publish the complete document
+/// atomically.
+pub fn font_settings(
+    file: &Path,
+    settings: FontEmbeddingSettings,
+    output: &Path,
+    json_output: bool,
+) -> Result<()> {
+    if settings.embed_true_type_fonts.is_none()
+        && settings.embed_system_fonts.is_none()
+        && settings.save_subset_fonts.is_none()
+    {
+        return Err(
+            "pass at least one of --embed-true-type-fonts, --embed-system-fonts, \
+                    or --save-subset-fonts"
+                .into(),
+        );
+    }
+    let mut doc = Document::open(file)?;
+    if let Some(value) = settings.embed_true_type_fonts {
+        doc.set_embed_true_type_fonts(value)?;
+    }
+    if let Some(value) = settings.embed_system_fonts {
+        doc.set_embed_system_fonts(value)?;
+    }
+    if let Some(value) = settings.save_subset_fonts {
+        doc.set_save_subset_fonts(value)?;
+    }
+    publish_document(&mut doc, output)?;
+    mutation_record(
+        json_output,
+        "settings",
+        "set",
+        json!({ "settings": font_embedding_settings_json(&doc) }),
+        output,
+    )
 }
 
 impl RevisionAction {
