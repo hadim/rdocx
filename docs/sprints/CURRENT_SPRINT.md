@@ -6,8 +6,8 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 now contains twenty-eight active stories, twenty completed, three running,
-five approved pending implementation. The latest bounded intake includes39 issues and29 PRs, plus final minor-release preparation.
+S91 now contains twenty-eight active stories, twenty completed, four running,
+four approved pending implementation. The latest bounded intake includes39 issues and29 PRs, plus final minor-release preparation.
 
 ## Spec references
 
@@ -61,7 +61,7 @@ style selection and F9/save, but ordinary reopen and acceptance remain pending.
 F-283 retains its approved navigation contract and dependency on F-X200.
 Neither story is completed or part of S91 close acceptance. S92 is planned,
 not opened. The existing S92 template and form programme remains planned.
-All twenty-eight current PRs and thirty-eight included issues remain in S91.
+All twenty-nine current PRs and thirty-nine included issues remain in S91.
 
 ## Sequencing note
 
