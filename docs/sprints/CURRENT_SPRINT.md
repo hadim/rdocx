@@ -38,7 +38,7 @@ thirteen approved pending implementation. Rolling contribution intake is reopene
 | F-X205 | Complete Python PowerPoint text fill and export parity | L | pending | - |
 | F-X206 | Complete PowerPoint shape authoring and live handles | L | done | - |
 | F-X207 | Persist PowerPoint autofit and implement fit_text | L | in-progress | codex |
-| F-X208 | Author PowerPoint footer fields themes and transitions | L | pending | - |
+| F-X208 | Author PowerPoint footer fields themes and transitions | L | in-progress | codex |
 | F-X209 | Edit PowerPoint masters layouts and themes | L | pending | - |
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | done | - |
 | F-X211 | Complete Python script compatibility and safe XML access | L | pending | - |
