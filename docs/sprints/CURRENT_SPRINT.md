@@ -1049,13 +1049,13 @@ handoff. Ten stories are completed, three running and thirteen approved.
 Final integrated full verification and sprint review remain due.
 
 
-## Parallel closure update, 2026-10-12 02:28 BST
+## Parallel closure update, 2026-10-12 02:55 BST
 
 Eleven of26 active stories are completed, two are running and13 approved
 stories await their exclusive source and dependency boundaries. Authenticated
-intake at01:21:13 UTC remains38 included issues and28 PRs, with no arrivals,
+intake at01:55:15 UTC remains38 included issues and28 PRs, with no arrivals,
 changed records or advanced heads. Issues264 and281 remain excluded.
-Receipt: /private/tmp/S91-intake-refresh-20261012T012200Z/receipt.json.
+Receipt: /private/tmp/S91-intake-refresh-20261012T015500Z/receipt.json.
 
 F-X206 is integrated at72e5eac9 and completed at the scoped dependency
 checkpoint. Its actual current checks pass11 crates, Clippy, focused native
@@ -1068,19 +1068,23 @@ Five worker commits retain separate behavior attribution. Original failed
 receipts remain failed, with successful affected successors recorded separately.
 The structured handoff is consumed. Full sprint verification remains due.
 
-F-X200 has clean owned-provider projection review65 and finite adoption steps.
-Its current Word wheel and five installed controls remain qualified. The
-reviewed two namespace hash values remain exclusively pending ROOT adoption
-after labelled Word behavior integration. Actual integrated provider history
-now permits its30 source-carrier and six HLD-section adoption and focused gates.
+F-X200 has clean owned-provider, compiler-closure and archive reviews65 to67.
+Its actual current source passes focused native controls, a fresh Word wheel,
+five installed regressions, strict typing, stubtest and three verified archives.
+All eight affected metadata and policy rows pass. Independent collection of
+all49 actual sample hashes reproduces exactly the two reviewed namespace
+changes and matches the approved candidate. Its labelled implementation and
+handoff are being prepared. ROOT adopts the exclusive baseline after source
+integration and confirms the integrated hash gate before completion.
 
-F-X207 passes16 affected native and38 text controls,15 installed controls,
-preservation and namespace probes, strict typing and stubtest. Its actual
-metadata and two archives pass. Independent provider review11 caught one
-missing constructor field. The exact one-field correction has clean review12.
-Localized rebinding to the completed rendering provider is prepared. Actual
-composed namespace and affine controls, artifact and archive renewal remain due.
-All20 current Word package and distribution metadata members remain preserved.
+F-X207 has clean owned-provider, constructor, fixture and metadata reviews11
+to14. Actual current source passes namespace preservation and refusal,
+combined transformed-anchor controls, Clippy, both WASM graphs, a fresh PPT
+wheel, fifteen installed regressions, strict typing and stubtest. Four current
+verified archives and all nine affected metadata, policy and hash rows pass.
+All49 hashes match the unchanged baseline. Its labelled implementation and
+handoff are being prepared. All20 current Word package and distribution
+metadata members remain preserved through the PPT installation.
 
 The clean completed F-X206 worktree was removed without force. Its branch
 remains. All1715 required scratch evidence files,285763684 logical bytes,
