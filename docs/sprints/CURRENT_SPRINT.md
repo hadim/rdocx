@@ -6,8 +6,8 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 now contains twenty-six active stories, nine completed, one integrated
-and reviewed, three running, thirteen approved pending implementation. Rolling contribution intake is reopened at the user's latest instruction.
+S91 now contains twenty-six active stories, ten completed, three running,
+thirteen approved pending implementation. Rolling contribution intake is reopened at the user's latest instruction.
 
 ## Spec references
 
@@ -43,7 +43,7 @@ and reviewed, three running, thirteen approved pending implementation. Rolling c
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | done | - |
 | F-X211 | Complete Python script compatibility and safe XML access | L | pending | - |
 | F-X212 | Align native accessibility with visible paragraph content | M | done | - |
-| F-X213 | Preserve TOC entry boundary paragraphs during rebuild | M | in-progress | codex |
+| F-X213 | Preserve TOC entry boundary paragraphs during rebuild | M | done | - |
 | F-X214 | Bound recursive PowerPoint parsing and traversal | L | pending | - |
 | F-X215 | Create charts in Python and replace existing chart data | L | pending | - |
 | F-X216 | Import complete slides and merge decks with source formatting | L | pending | - |
@@ -1036,3 +1036,14 @@ F-X206's imported duplicate-ID save panic is repaired with a genuine semantic Ba
 F-X207's independent source-derived rendering composite passes42 positives and126 strict negatives. Its native allocated extent is classified separately from physical containment, without equality or tolerance claims. Final whole-feature review7 found one preservation defect: publishing refresh can discard unknown autofit attributes, including on unrelated owners. Separate remediation is underway. Previous failed reference and raster comparisons remain failed.
 
 The unattended LibreOffice runner uses headless operation, recovery suppression and isolated profiles. All four affected Office controls and the decimal fixture pass, receipt2f51bb64. The app is absent after qualification. Reproducible historical build targets and seven package extraction directories were removed, while required sources, archives, logs, worker branches and active build caches remain retained.
+
+
+## TOC scoped completion checkpoint, 2026-10-12
+
+F-X213 is completed following its recorded integration4b5eb59b and clean
+integration review17. The completed F-X210 prefix retains its exact-source
+TOC guard. Actual composed receiptbc249642 passes both original TOC
+integration controls and the combined Word/CLI check, with49 matching hashes.
+The full worker scoped acceptance remains source-qualified in its consumed
+handoff. Ten stories are completed, three running and thirteen approved.
+Final integrated full verification and sprint review remain due.

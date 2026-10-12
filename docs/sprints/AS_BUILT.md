@@ -19039,3 +19039,24 @@ push, main merge, tag or publication is claimed.
 **Hash harness.** Exactly12 reviewed Georgia-to-Gelasio PNG and PDF values change. The other37 entries remain exact. Actual integrated49 entries match the accepted baseline2bd99ae659a44c9e0677f27701698152a5bb8ce88cd541e3a255389dee99dd72. Full sprint verification and review remain due.
 
 **Notes for future sessions.** Source7363ce342ee07897ded52cc422db34492738931a and completion-only tipdc7074d1d43ee843ef6a39519dada8084c0bd94f validate the consumed handoff. Local integrationeff7af54 is recorded. Keep the worker branch through final verification and close. Required evidence remains under /private/tmp/S91-F-X210-*. No GitHub closure, push, main merge, tag or publication is claimed.
+
+
+### F-X213, Preserve TOC entry boundary paragraphs during rebuild
+
+**Completed**: 2026-10-12, S91, scoped integration checkpoint.
+
+**What was built.** Issue340 and PR341 repair TOC entry-owned field boundaries without dropping opaque paragraph properties, markers or namespace bindings. Repeated rebuild, save and reopen preserve the bounded Word topology. Unknown owner data selects the safe generic route or a named atomic refusal. Unchanged read-only saves retain original package member bytes without widening rich query or mutation admission.
+
+**Non-obvious choices.** Exact generated Word namespace closure remains eligible on repeated rebuild. Other opaque style and stop owners remain protected. The prior comment-source compatibility expectation is explicitly reconciled in the approved plan and HLD04, with all dirty-owner refusal and raw anchor controls retained.
+
+**Test gate.** Both original boundary controls fail against the claimed Base and pass after repair. Scoped native21, library525, regression2352, integration366 and two doctests pass. Existing ignored counts remain seven in the library and regression suites and eight in integration. Both fresh installed controls pass with zero ignored, along with strict mypy and stubtest. Scoped check, Clippy, format, both WASM graphs, documentation and README consumers pass. Policy141 passes with two existing conditional skips. Verified22 current worker archives remain below10MiB. Scoped packaging receipt4d174532 and installed receipt2b58eac1 retain their actual source qualifications.
+
+**Integration evidence.** Implementation7171c304 and completion tipc01f53d6 supplied the consumed structured handoff. Integration4b5eb59b is independently reviewed in pass17 with zero defects and smells. Completed F-X210 integration retains the exact TOC source guard, with composition independently reviewed in pass30. Actual composed receiptbc249642 passes two TOC controls and the combined Word/CLI check, with unchanged source and natural process cleanup. Combined Word archive measurement is reconciled under F-X210 and is measurement-only evidence.
+
+**Hash harness.** The F-X213 worker matches all49 entries unchanged. The integrated prefix matches all49 current values after the separately reviewed F-X210 twelve-value font delta. No TOC delta is adopted.
+
+**Spec sections touched.** HLD04 package source preservation, HLD08 TOC rebuilding, HLD12 boundary regression controls and HLD14 delivered acceptance.
+
+**Deviations from the design plan.** The approved compatibility amendment distinguishes unchanged exact saves from strict rich-query and mutation admission. No serializer waiver or reduced opaque-payload assertion is introduced. Historical failed compiler, runtime and policy receipts remain retained separately from successful retries.
+
+**Notes for future sessions.** Keep the worker branch and required source-qualified evidence through final sprint verification and review. This checkpoint does not claim the full integrated sprint gate, contributor closure, push, main merge, tag or publication.
