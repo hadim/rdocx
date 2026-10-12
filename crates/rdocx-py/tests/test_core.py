@@ -886,6 +886,35 @@ def test_issue_351_the_space_around_emphasis_stays_outside_it():
     assert marks(md.paragraphs[0]) == marks(html.paragraphs[0])[:1] + marks(html.paragraphs[0])[3:]
 
 
+def test_issue_351_spaces_on_both_sides_of_a_span_edge_collapse_into_one():
+    import rdocx
+
+    def marks(paragraph):
+        return [
+            (run.text, bool(run.font.underline), bool(run.font.strike), bool(run.font.bold), bool(run.font.italic))
+            for run in paragraph.runs
+        ]
+
+    plain = (False, False, False, False)
+    for tag, mark in [("u", (True, False, False, False)), ("s", (False, True, False, False)),
+                      ("b", (False, False, True, False)), ("i", (False, False, False, True))]:
+        html, _ = rdocx.Document.from_html(f"<p>a <{tag}>b </{tag}> c</p><p>and <{tag}> that</{tag}></p>")
+        assert marks(html.paragraphs[0]) == [("a ", *plain), ("b ", *mark), ("c", *plain)], tag
+        assert marks(html.paragraphs[1]) == [("and ", *plain), ("that", *mark)], tag
+    nested, _ = rdocx.Document.from_html("<p>a <b>b <i> c</i></b> d</p>")
+    assert marks(nested.paragraphs[0]) == [
+        ("a ", *plain), ("b ", False, False, True, False), ("c", False, False, True, True), (" d", *plain)]
+    linked, _ = rdocx.Document.from_html('<p>a <a href="https://example.test/">b </a> c</p>')
+    assert [run.text for run in linked.paragraphs[0].runs] == ["a ", "b ", "c"]
+    kept, _ = rdocx.Document.from_html("<p>a&nbsp;&nbsp;<s>b</s></p>")
+    assert kept.paragraphs[0].text == "a\u00a0\u00a0b"
+    md, _ = rdocx.Document.from_markdown("a [b ](https://example.test/) c\n\na [ b](https://example.test/)\n")
+    assert [run.text for run in md.paragraphs[0].runs] == ["a ", "b ", "c"]
+    assert [run.text for run in md.paragraphs[1].runs] == ["a ", "b"]
+    inserted = rdocx.Document()
+    inserted.insert_html("<p>a <s>b </s> c</p>")
+    assert marks(inserted.paragraphs[-1]) == [("a ", *plain), ("b ", False, True, False, False), ("c", *plain)]
+
 def test_issue_351_markdown_creates_a_styled_document(tmp_path):
     import rdocx
 

@@ -1183,12 +1183,17 @@ fn write_paragraphs(frame: &mut TextFrame<'_>, paragraphs: &[ParagraphModel]) ->
                     // A collapsed space before differently formatted text
                     // stays with the text it was written in, as a browser
                     // lays it out, rather than becoming the first character
-                    // of an underlined, struck or linked run.
+                    // of an underlined, struck or linked run. The whitespace
+                    // this text starts with continues the same sequence, so
+                    // it adds no second space.
+                    let mut text = text.as_str();
                     if pending_space
                         && emitted
                         && let Some(space) = space_properties.take_if(|space| {
                             *space != properties
-                                && text.chars().any(|character| !character.is_whitespace())
+                                && text
+                                    .chars()
+                                    .any(|character| !character.is_ascii_whitespace())
                         })
                     {
                         if space_ends_last_run
@@ -1203,6 +1208,8 @@ fn write_paragraphs(frame: &mut TextFrame<'_>, paragraphs: &[ParagraphModel]) ->
                             paragraph.runs.push(TextRun::Run(run));
                         }
                         pending_space = false;
+                        text = text
+                            .trim_start_matches(|character: char| character.is_ascii_whitespace());
                     }
                     let was_pending = pending_space;
                     let text = collapse_text(text, &mut pending_space, emitted);
@@ -1686,11 +1693,13 @@ fn strip_css_comments(css: &str) -> String {
     output
 }
 
+/// Collapses each run of HTML whitespace (space, tab and line breaks) into
+/// one pending space. A non-breaking space is not collapsible: it is text.
 fn collapse_text(text: &str, pending_space: &mut bool, emitted: bool) -> String {
     let mut output = String::new();
     let mut emitted = emitted;
     for character in text.chars() {
-        if character.is_whitespace() {
+        if character.is_ascii_whitespace() {
             *pending_space = true;
         } else {
             if *pending_space && emitted {

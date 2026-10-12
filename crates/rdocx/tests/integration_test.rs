@@ -5983,6 +5983,123 @@ fn the_space_around_an_emphasised_span_stays_outside_it() {
 }
 
 #[test]
+fn spaces_on_both_sides_of_a_span_edge_collapse_into_one() {
+    const PLAIN: [bool; 4] = [false; 4];
+    const U: [bool; 4] = [true, false, false, false];
+    const S: [bool; 4] = [false, true, false, false];
+    const B: [bool; 4] = [false, false, true, false];
+    const I: [bool; 4] = [false, false, false, true];
+    const BI: [bool; 4] = [false, false, true, true];
+    let runs = |items: &[(&str, [bool; 4])]| {
+        items
+            .iter()
+            .map(|(text, marks)| ((*text).to_owned(), *marks))
+            .collect::<Vec<_>>()
+    };
+    let html = |source: &str| Document::from_html(source).unwrap().document;
+    // The one space stays where the whitespace sequence starts: at the end
+    // of the span when it ends one, before the span when it starts one.
+    for (tag, mark) in [("u", U), ("s", S), ("b", B), ("i", I)] {
+        let ending = html(&format!("<p>a <{tag}>b </{tag}> c</p>"));
+        assert_eq!(
+            marked_runs(&ending.paragraph(0).unwrap()),
+            runs(&[("a ", PLAIN), ("b ", mark), ("c", PLAIN)]),
+            "{tag} end"
+        );
+        let starting = html(&format!("<p>and <{tag}> that</{tag}></p>"));
+        assert_eq!(
+            marked_runs(&starting.paragraph(0).unwrap()),
+            runs(&[("and ", PLAIN), ("that", mark)]),
+            "{tag} start"
+        );
+    }
+    // Nested spans, and a span that holds only whitespace between two edges.
+    let nested = html(
+        "<p>a <b>b <i> c</i></b> d</p><p><b>x <i>y </i></b> z</p><p>a <s>b </s><i> </i> c</p>",
+    );
+    assert_eq!(
+        marked_runs(&nested.paragraph(0).unwrap()),
+        runs(&[("a ", PLAIN), ("b ", B), ("c", BI), (" d", PLAIN)])
+    );
+    assert_eq!(
+        marked_runs(&nested.paragraph(1).unwrap()),
+        runs(&[("x ", B), ("y ", BI), ("z", PLAIN)])
+    );
+    assert_eq!(
+        marked_runs(&nested.paragraph(2).unwrap()),
+        runs(&[("a ", PLAIN), ("b ", S), ("c", PLAIN)])
+    );
+    // A non-breaking space is not collapsible and stays as written.
+    let kept = html("<p>a&nbsp;&nbsp;<s>b</s></p><p>a <s>b </s>&nbsp;c</p>");
+    assert_eq!(kept.paragraph(0).unwrap().text(), "a\u{a0}\u{a0}b");
+    assert_eq!(kept.paragraph(1).unwrap().text(), "a b \u{a0}c");
+
+    // A link keeps the space it ends with, and the text after it none.
+    let link_texts = |document: &Document| {
+        document
+            .links()
+            .into_iter()
+            .map(|link| link.text)
+            .collect::<Vec<_>>()
+    };
+    let linked = html(
+        "<p>a <a href=\"https://example.test/\">b </a> c</p>\
+         <p>a <a href=\"https://example.test/\"> b</a></p>",
+    );
+    assert_eq!(
+        marked_runs(&linked.paragraph(0).unwrap()),
+        runs(&[("a ", PLAIN), ("b ", PLAIN), ("c", PLAIN)])
+    );
+    assert_eq!(
+        marked_runs(&linked.paragraph(1).unwrap()),
+        runs(&[("a ", PLAIN), ("b", PLAIN)])
+    );
+    assert_eq!(link_texts(&linked), ["b ", "b"]);
+
+    // Markdown writes the span edges with links, also inside a strong span.
+    let md = markdown(
+        "a [b ](https://example.test/) c\n\na [ b](https://example.test/)\n\n\
+         **b [c ](https://example.test/)** d\n",
+    )
+    .document;
+    assert_eq!(
+        marked_runs(&md.paragraph(0).unwrap()),
+        runs(&[("a ", PLAIN), ("b ", PLAIN), ("c", PLAIN)])
+    );
+    assert_eq!(
+        marked_runs(&md.paragraph(1).unwrap()),
+        runs(&[("a ", PLAIN), ("b", PLAIN)])
+    );
+    assert_eq!(
+        marked_runs(&md.paragraph(2).unwrap()),
+        runs(&[("b ", B), ("c ", B), ("d", PLAIN)])
+    );
+    assert_eq!(link_texts(&md), ["b ", "b", "c "]);
+
+    // Inserting a fragment builds its paragraphs the same way.
+    let mut inserted = Document::new();
+    let body = inserted
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Body)
+        .unwrap();
+    inserted
+        .insert_html_fragment(
+            &rdocx::ContentLocation::end(body),
+            "<p>a <s>b </s> c</p>",
+            &[],
+        )
+        .unwrap();
+    let inserted = Document::from_bytes(&inserted.to_bytes().unwrap()).unwrap();
+    let last = inserted.paragraph_count() - 1;
+    assert_eq!(
+        marked_runs(&inserted.paragraph(last).unwrap()),
+        runs(&[("a ", PLAIN), ("b ", S), ("c", PLAIN)])
+    );
+}
+
+#[test]
 fn markdown_nested_lists_become_numbering_levels() {
     let result = markdown("- one\n  1. nested\n  2. again\n- two\n\n3. three\n4. four\n");
     assert!(result.diagnostics.is_empty());
