@@ -35,7 +35,7 @@ eleven approved pending implementation. Rolling contribution intake is reopened 
 | F-X202 | Complete Word tables pictures and internal links | L | pending | - |
 | F-X203 | Complete Python Word document operations and validation | L | pending | - |
 | F-X204 | Complete shared CLI one-shot editing commands | L | pending | - |
-| F-X205 | Complete Python PowerPoint text fill and export parity | L | pending | - |
+| F-X205 | Complete Python PowerPoint text fill and export parity | L | in-progress | codex |
 | F-X206 | Complete PowerPoint shape authoring and live handles | L | done | - |
 | F-X207 | Persist PowerPoint autofit and implement fit_text | L | done | - |
 | F-X208 | Author PowerPoint footer fields themes and transitions | L | done | - |
