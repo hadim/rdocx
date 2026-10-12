@@ -4705,16 +4705,16 @@ def test_font_embedding_embeds_lists_and_removes_faces_with_an_explicit_license(
     prs = Presentation()
     regular = _caladea("Regular")
     bold = _caladea("Bold").read_bytes()
-    licensed = FontEmbeddingLicense(authorized=True, identity="OFL-1.1")
-    assert (licensed.authorized, licensed.identity) == (True, "OFL-1.1")
+    licensed = FontEmbeddingLicense(authorized=True, identity="Apache-2.0: Caladea")
+    assert (licensed.authorized, licensed.identity) == (True, "Apache-2.0: Caladea")
     with pytest.raises(TypeError):
-        FontEmbeddingLicense(identity="OFL-1.1")
+        FontEmbeddingLicense(identity="Apache-2.0: Caladea")
     with pytest.raises(TypeError):
-        prs.embed_font("Caladea", regular, license="OFL-1.1")
+        prs.embed_font("Caladea", regular, license="Apache-2.0: Caladea")
     with pytest.raises(rpptx.RpptxError, match="explicit caller authorization"):
         prs.embed_font(
             "Caladea", regular,
-            license=FontEmbeddingLicense(authorized=False, identity="OFL-1.1"),
+            license=FontEmbeddingLicense(authorized=False, identity="Apache-2.0: Caladea"),
         )
     with pytest.raises(rpptx.RpptxError, match="exact license identity"):
         prs.embed_font(

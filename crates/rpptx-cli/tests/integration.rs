@@ -2130,7 +2130,7 @@ fn font_commands_embed_list_remove_and_set_font_settings() {
             "--face".to_owned(),
             face.to_owned(),
             "--license-identity".to_owned(),
-            "OFL-1.1".to_owned(),
+            "Apache-2.0: Caladea".to_owned(),
             "--output".to_owned(),
             arg(output),
         ];

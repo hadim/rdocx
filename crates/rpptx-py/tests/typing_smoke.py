@@ -507,7 +507,7 @@ def exercise_rpptx_text_layout_types(presentation: Presentation) -> None:
 
 
 def exercise_rpptx_font_embedding_types(presentation: Presentation, font: Path) -> None:
-    license = FontEmbeddingLicense(authorized=True, identity="OFL-1.1")
+    license = FontEmbeddingLicense(authorized=True, identity="Apache-2.0: Caladea")
     authorized: bool = license.authorized
     identity: str = license.identity
     presentation.embed_font("Caladea", font, license=license)

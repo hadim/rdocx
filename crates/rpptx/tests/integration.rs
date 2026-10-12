@@ -27932,7 +27932,7 @@ fn caladea_face(face: &str) -> Vec<u8> {
 }
 
 fn open_font_license() -> rpptx::FontEmbeddingLicense {
-    rpptx::FontEmbeddingLicense::new(true, "SIL Open Font License 1.1")
+    rpptx::FontEmbeddingLicense::new(true, "Apache-2.0: Caladea")
 }
 
 #[cfg(feature = "default-template")]
@@ -28209,7 +28209,7 @@ fn font_embedding_requires_authorization_a_license_identity_and_one_sfnt_face() 
         (
             "Caladea",
             regular.clone(),
-            FontEmbeddingLicense::new(false, "OFL-1.1"),
+            FontEmbeddingLicense::new(false, "Apache-2.0: Caladea"),
             "explicit caller authorization",
         ),
         (
@@ -28221,7 +28221,7 @@ fn font_embedding_requires_authorization_a_license_identity_and_one_sfnt_face() 
         (
             "Caladea",
             regular.clone(),
-            FontEmbeddingLicense::new(true, "OFL\n1.1"),
+            FontEmbeddingLicense::new(true, "Apache-2.0\nCaladea"),
             "whitespace",
         ),
         (
@@ -28375,5 +28375,57 @@ fn compressed_and_unmodelled_embedded_fonts_survive_saves_and_unrelated_edits() 
     assert_eq!(
         face.data.as_deref(),
         Some(caladea_face("Regular").as_slice())
+    );
+}
+
+#[test]
+#[cfg(feature = "default-template")]
+fn the_eot_header_reads_names_from_a_windows_symbol_encoded_name_table() {
+    use rpptx::{EmbeddedFont, EmbeddedFontKind};
+
+    // Leave only Windows symbol (3, 0) name records: Unicode and Macintosh
+    // records move to an unknown platform, and (3, 1) records become (3, 0).
+    let mut symbol = caladea_face("Regular");
+    let table_count = usize::from(u16::from_be_bytes([symbol[4], symbol[5]]));
+    let name = (0..table_count)
+        .map(|index| 12 + index * 16)
+        .find(|record| &symbol[*record..*record + 4] == b"name")
+        .map(|record| u32::from_be_bytes(symbol[record + 8..record + 12].try_into().unwrap()))
+        .unwrap() as usize;
+    let count = usize::from(u16::from_be_bytes([symbol[name + 2], symbol[name + 3]]));
+    for index in 0..count {
+        let record = name + 6 + index * 12;
+        let platform = u16::from_be_bytes([symbol[record], symbol[record + 1]]);
+        if platform == 3 {
+            symbol[record + 2..record + 4].copy_from_slice(&0_u16.to_be_bytes());
+        } else {
+            symbol[record..record + 2].copy_from_slice(&7_u16.to_be_bytes());
+        }
+    }
+
+    let mut presentation = rpptx::Presentation::new().unwrap();
+    presentation
+        .embed_font(
+            "Caladea",
+            EmbeddedFont::new(EmbeddedFontKind::Regular, symbol, open_font_license()),
+        )
+        .unwrap();
+    let package = open_opc(&presentation.to_bytes().unwrap(), "symbol names");
+    let eot = package.get_part("/ppt/fonts/font1.fntdata").unwrap();
+    let family = "Caladea"
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+    assert_eq!(usize::from(u16_le_at(eot, 82)), family.len());
+    assert_eq!(&eot[84..84 + family.len()], family.as_slice());
+    let style_at = 84 + family.len();
+    let style = "Regular"
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+    assert_eq!(usize::from(u16_le_at(eot, style_at + 2)), style.len());
+    assert_eq!(
+        &eot[style_at + 4..style_at + 4 + style.len()],
+        style.as_slice()
     );
 }
