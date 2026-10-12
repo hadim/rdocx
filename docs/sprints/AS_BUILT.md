@@ -19160,6 +19160,6 @@ push, main merge, tag or publication is claimed.
 
 **Hash harness.** All49 integrated entries match the approved baseline. No new delta is adopted. Final full sprint verification and review remain due.
 
-**Spec sections touched.** HLD02,07,08,10,12 and14, matching the approved impact list and preserving completed shared contracts.
+**Spec sections touched.** HLD02,04,08,10,12 and14, matching the approved impact list and preserving completed shared contracts.
 
 **Notes for future sessions.** Implementationc29ef66c and handoff-only tipc2305905 retain claim ancestry. Keep work/f-x201-codex through final review and close. Required scratch and samples remain under /private/tmp/S91-F-X201-integration-checkpoint/retained-worker. Transfer the warm cache for the next Word worker. No GitHub closure, push, main merge, tag or publication is claimed.
