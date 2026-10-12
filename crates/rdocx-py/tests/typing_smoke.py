@@ -410,3 +410,40 @@ def fx200_checked_list_factory_signatures(document: Document) -> None:
     assert_type(document.add_bullet_list_item("item", level=8), Paragraph)
     assert_type(document.add_numbered_list_item("item"), Paragraph)
     assert_type(document.add_numbered_list_item("item", level=8), Paragraph)
+
+
+def fx203_owned_document_operations(document: Document, paragraph: Paragraph, path: Path) -> None:
+    from rdocx import (
+        ContentControl, CustomFileTime, CustomProperty, DocumentFragment,
+        ContentLocation, Equation, EquationConversionResult, EquationInsertResult,
+        FragmentConflictPolicy, OdtExportResult, RtfExportResult, EpubExportResult,
+        TextReport, ValidationReport, validate_bytes, validate_file,
+    )
+    assert_type(document.text_report(), TextReport)
+    assert_type(document.validate(), ValidationReport)
+    assert_type(validate_bytes(document.to_bytes()), ValidationReport)
+    assert_type(validate_file(path), ValidationReport)
+    assert_type(document.to_odt(), OdtExportResult)
+    assert_type(document.to_rtf(), RtfExportResult)
+    assert_type(document.to_epub(), EpubExportResult)
+    assert_type(document.word_count(), int)
+    assert_type(document.character_count(include_spaces=False), int)
+    assert_type(document.render_template({"name": "Ada", "flag": True, "items": [1, None]}), int)
+    document.settings.track_revisions = None
+    document.app_properties.company = "Example"
+    document.custom_properties.set("date", CustomFileTime("2026-10-12T12:00:00Z"))
+    assert_type(document.custom_properties.get("date"), CustomProperty | None)
+    assert_type(document.custom_properties.delete("absent"), bool)
+    policy = FragmentConflictPolicy.reuse_equivalent().with_style_reuse(False)
+    story = document.stories[0]
+    start = ContentLocation(story, "paragraph", [0])
+    end = ContentLocation.end(story)
+    fragment = DocumentFragment.from_range(document, start, end)
+    assert_type(document.import_fragment(end, fragment, policy=policy), None)
+    assert_type(document.insert_document(Document(), at=0, policy=policy), None)
+    assert_type(document.content_controls(), tuple[ContentControl, ...])
+    assert_type(document.set_content_control_value_by_tag("check", "true"), int)
+    assert_type(paragraph.equations(), tuple[Equation, ...])
+    inserted = paragraph.add_equation("x+1", format="latex")
+    assert_type(inserted, EquationInsertResult)
+    assert_type(inserted.equation.to_latex(), EquationConversionResult)

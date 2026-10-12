@@ -2517,6 +2517,49 @@ def test_header_footer_and_story_text_edit_the_section_stories():
     assert _story_paragraph_texts(reopened, "body") == ["body"]
 
 
+@pytest.mark.parametrize(
+    ("separator", "expected"),
+    [("add_tab", "left\tright"), ("add_break", "left\nright")],
+)
+def test_story_items_keep_run_tabs_and_breaks_in_the_body_header_and_footer(
+    separator, expected
+):
+    docx = pytest.importorskip("docx")
+    import rdocx
+
+    source = docx.Document()
+    section = source.sections[0]
+    for paragraph in (
+        source.add_paragraph(),
+        section.header.paragraphs[0],
+        section.footer.paragraphs[0],
+    ):
+        paragraph.add_run("left")
+        getattr(paragraph.add_run(), separator)()
+        paragraph.add_run("right")
+    buffer = io.BytesIO()
+    source.save(buffer)
+
+    document = rdocx.Document.from_bytes(buffer.getvalue())
+    kinds = ("body", "header", "footer")
+    for kind in kinds:
+        assert _story_paragraph_texts(document, kind) == [expected], kind
+
+    # The new text replaces the tab or the break too, and a tab or a line
+    # feed in it reads back as written.
+    for value in ("new", "a\tb\nc"):
+        for kind in kinds:
+            item = next(
+                item
+                for item in document.story_items
+                if item.story.kind == kind and item.kind == "paragraph"
+            )
+            document.set_story_text(item, value)
+        for kind in kinds:
+            assert _story_paragraph_texts(document, kind) == [value], kind
+        assert document.paragraphs[0].text == value
+
+
 def test_set_story_text_rejects_a_story_that_is_not_in_the_document():
     import rdocx
 
@@ -2596,7 +2639,7 @@ def test_footer_with_text_tab_and_page_fields_is_built_for_one_section():
         "First section.",
         "Second section.",
     ]
-    assert _story_paragraph_texts(document, "footer") == ["ConfidentialPage 1 of 1"]
+    assert _story_paragraph_texts(document, "footer") == ["Confidential\tPage 1 of 1"]
 
     report = document.update_layout_backed_fields()
     assert (report.page_fields, report.num_pages_fields) == (0, 0)
@@ -2771,7 +2814,7 @@ def test_complex_field_nested_snapshots_keep_links_and_read_handles():
     assert all(item.revision == snapshots[0].revision for item in snapshots)
     links = document.hyperlinks
     assert [(link.text, link.url, link.anchor) for link in links] == [
-        ("7yes", "https://example.test/field-owner", None), ("neighbor", None, "neighbor")]
+        ("yes", "https://example.test/field-owner", None), ("neighbor", None, "neighbor")]
     assert links[0].relationship_id == relationship_id
     assert document.hyperlinks == links
     assert document.story_items == snapshots
@@ -4840,3 +4883,386 @@ def test_fx201_checked_note_cell_boundary_preserves_other_owners_and_refuses_sta
         getattr(document, "add_" + family)(foreign, "foreign refused")
     assert document.to_bytes() == before
     assert rdocx.Document.from_bytes(before).to_bytes() == before
+
+
+@pytest.mark.parametrize("operation", [
+    "to_html", "to_markdown", "text", "text_report", "to_odt", "to_rtf", "to_epub",
+    "word_count", "character_count", "page_count", "validate", "content_controls",
+])
+def test_fx203_installed_document_operation_has_deciding_result(operation):
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("Alpha beta")
+    result = getattr(document, operation)()
+    if operation in ("to_html", "to_markdown", "text"):
+        assert "Alpha beta" in result
+    elif operation == "text_report":
+        assert "Alpha beta" in result.text
+        assert result.revision_view == "accepted"
+        assert isinstance(result.diagnostics, tuple)
+    elif operation in ("to_odt", "to_rtf", "to_epub"):
+        assert isinstance(result.bytes, bytes) and result.bytes
+        assert isinstance(result.diagnostics, tuple)
+    elif operation == "word_count":
+        assert result == 2
+    elif operation == "character_count":
+        assert result == 10
+    elif operation == "page_count":
+        assert result == 1
+    elif operation == "validate":
+        assert result.is_valid
+        assert isinstance(result.findings, tuple)
+    else:
+        assert result == ()
+
+
+def test_fx203_installed_template_and_checked_insertion_have_real_results():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("Hello {{ name }}")
+    assert document.render_template({"name": "Ada"}) == 1
+    assert document.paragraphs[0].text == "Hello Ada"
+    source = rdocx.Document()
+    source.add_paragraph("Imported")
+    before = source.to_bytes()
+    document.insert_document(source, at=1)
+    assert [p.text for p in document.paragraphs] == ["Hello Ada", "Imported"]
+    assert source.to_bytes() == before
+
+
+def test_fx203_installed_properties_and_tracking_are_live_and_typed():
+    import rdocx
+
+    document = rdocx.Document()
+    document.custom_properties.set("Approved", True)
+    assert document.custom_properties.get("Approved").value is True
+    assert document.custom_properties.get("Approved").type == "bool"
+    document.app_properties.company = "Example"
+    assert document.app_properties.company == "Example"
+    document.settings.track_revisions = True
+    assert document.settings.track_revisions is True
+    document.settings.track_revisions = None
+    assert document.settings.track_revisions is None
+
+
+def test_fx203_installed_equation_snapshot_keeps_conversion_boundary():
+    import rdocx
+
+    document = rdocx.Document()
+    paragraph = document.add_paragraph("")
+    inserted = paragraph.add_equation("x+1", format="latex")
+    assert isinstance(inserted.diagnostics, tuple)
+    equations = document.paragraphs[0].equations()
+    assert len(equations) == 1
+    result = equations[0].to_latex()
+    assert result.is_display is False
+    assert len(result.equations) == 1
+    assert "x" in result.equations[0].value
+
+
+def test_fx203_installed_settings_tracking_has_presence_and_live_owner():
+    from rdocx import Document
+    document = Document()
+    paragraph = document.add_paragraph("kept")
+    settings = document.settings
+    assert settings.track_revisions is None
+    settings.track_revisions = False
+    assert settings.track_revisions is False
+    settings.track_revisions = True
+    assert document.settings.track_revisions is True
+    settings.track_revisions = None
+    assert settings.track_revisions is None
+    assert paragraph.text == "kept"
+
+
+def test_fx203_installed_app_properties_are_live_and_counts_are_metadata():
+    from rdocx import Document
+    document = Document()
+    document.add_paragraph("one two")
+    properties = document.app_properties
+    properties.company = "Example"
+    properties.manager = "Owner"
+    assert document.app_properties.company == "Example"
+    assert document.app_properties.manager == "Owner"
+    assert document.word_count() == 2
+
+
+def test_fx203_installed_module_validation_does_not_require_open_document():
+    import rdocx
+    document = rdocx.Document()
+    document.add_paragraph("visible")
+    before = document.to_bytes()
+    report = rdocx.validate_bytes(before)
+    assert report.is_valid
+    assert isinstance(report.findings, tuple)
+    assert document.to_bytes() == before
+
+
+def test_fx203_installed_fragment_policy_exposes_three_independent_toggles():
+    import rdocx
+    policy = rdocx.FragmentConflictPolicy.reuse_equivalent()
+    assert policy.with_style_reuse(False) is not policy
+    assert policy.with_numbering_reuse(False) is not policy
+    assert policy.with_related_part_reuse(False) is not policy
+    assert rdocx.FragmentConflictPolicy.rename_all() is not policy
+
+
+def test_fx203_installed_content_control_setter_owns_qualified_text():
+    from rdocx import Document
+    document = _replace_document_body(Document(), '<w:sdt><w:sdtPr><w:tag w:val="customer"/><w:alias w:val="Name"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>old</w:t></w:r></w:p></w:sdtContent></w:sdt>')
+    assert document.set_content_control_value_by_tag("customer", "new") == 1
+    assert document.set_content_control_value_by_alias("Name", "final") == 1
+    assert document.content_controls()[0].text == "final"
+
+
+def test_fx203_custom_property_snapshots_dates_bounds_and_atomic_noops():
+    import rdocx
+    document = rdocx.Document()
+    paragraph = document.add_paragraph("live")
+    properties = document.custom_properties
+    assert properties.get("missing") is None
+    before = document.to_bytes()
+    assert properties.delete("missing") is False
+    assert document.to_bytes() == before
+    properties.set("Approved", True)
+    original = properties.get("Approved")
+    assert original.type == "bool" and original.value is True
+    properties.set("Approved", False)
+    assert original.value is True
+    assert properties.get("Approved").pid == original.pid
+    assert properties.get("Approved").fmtid == original.fmtid
+    date = "2024-02-29T23:59:59.123+05:30"
+    properties.set("When", rdocx.CustomFileTime(date))
+    assert properties.get("When").type == "filetime"
+    assert properties.get("When").value == date
+    for date in ["2023-02-29T00:00:00Z", "2024-01-01T00:00:60Z", "2024-01-01T00:00:00", "0000-01-01T00:00:00Z"]:
+        before = document.to_bytes()
+        with pytest.raises(ValueError):
+            properties.set("When", rdocx.CustomFileTime(date))
+        assert document.to_bytes() == before
+    for value, error in [(2**31, OverflowError), (-2**31 - 1, OverflowError), (float("inf"), ValueError), (float("nan"), ValueError), (object(), TypeError), (None, TypeError)]:
+        before = document.to_bytes()
+        with pytest.raises(error):
+            properties.set("Bad", value)
+        assert document.to_bytes() == before
+    before = document.to_bytes()
+    properties.set("Approved", False)
+    assert document.to_bytes() == before
+    assert paragraph.text == "live"
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert reopened.custom_properties.get("When").value == "2024-02-29T23:59:59.123+05:30"
+    assert properties.delete("Approved") is True
+    assert properties.get("Approved") is None
+
+
+def test_fx203_app_property_optional_latest_owner_and_failure_atomicity():
+    from rdocx import Document, RdocxError
+    document = Document()
+    paragraph = document.add_paragraph("live")
+    first = document.app_properties
+    second = document.app_properties
+    first.company = "Example"
+    second.manager = "Owner"
+    assert first.manager == "Owner" and second.company == "Example"
+    first.template = ""
+    assert second.template == ""
+    before = document.to_bytes()
+    second.company = "Example"
+    assert document.to_bytes() == before
+    with pytest.raises(RdocxError, match="application version"):
+        first.application_version = "invalid"
+    assert document.to_bytes() == before
+    first.company = None
+    assert second.company is None
+    assert paragraph.text == "live"
+    reopened = Document.from_bytes(document.to_bytes())
+    assert reopened.app_properties.manager == "Owner"
+    assert reopened.app_properties.template == ""
+
+
+def test_fx203_fragment_snapshot_physical_boundaries_and_empty_source_validation():
+    import rdocx
+    source = rdocx.Document()
+    source.add_paragraph("first")
+    source.add_paragraph("second")
+    body = next(story for story in source.stories if story.kind == "body")
+    start = rdocx.ContentLocation(body, "paragraph", [0])
+    end = rdocx.ContentLocation(body, "paragraph", [1])
+    fragment = rdocx.DocumentFragment.from_range(source, start, end)
+    source.paragraphs[0].text = "changed"
+    destination = rdocx.Document()
+    destination.add_paragraph("kept")
+    body = next(story for story in destination.stories if story.kind == "body")
+    destination.import_fragment(rdocx.ContentLocation.end(body), fragment)
+    assert [p.text for p in destination.paragraphs] == ["kept", "first"]
+    before = destination.to_bytes()
+    empty = rdocx.Document()
+    with pytest.raises(IndexError):
+        destination.insert_document(empty, at=99)
+    assert destination.to_bytes() == before
+    with pytest.raises(OverflowError):
+        destination.insert_document(source, at=-1)
+    assert destination.to_bytes() == before
+    with pytest.raises(TypeError):
+        destination.insert_document(source, at=True)
+    assert destination.to_bytes() == before
+    reopened = rdocx.Document.from_bytes(before)
+    assert [p.text for p in reopened.paragraphs] == ["kept", "first"]
+
+
+def test_fx203_content_control_snapshots_atomic_noop_and_duplicate_inventory():
+    from rdocx import Document
+    xml = '<w:sdt><w:sdtPr><w:tag w:val="same"/><w:alias w:val="Name"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>old</w:t></w:r></w:p></w:sdtContent></w:sdt>'
+    document = _replace_document_body(Document(), xml + xml)
+    controls = document.content_controls()
+    assert isinstance(controls, tuple) and len(controls) == 2
+    before = document.to_bytes()
+    assert document.set_content_control_value_by_tag("absent", "new") == 0
+    assert document.to_bytes() == before
+    assert document.set_content_control_value_by_tag("same", "old") == 2
+    assert document.to_bytes() == before
+    assert document.set_content_control_value_by_alias("Name", "new") == 2
+    assert [control.text for control in controls] == ["old", "old"]
+    assert [control.text for control in document.content_controls()] == ["new", "new"]
+    assert [control.text for control in Document.from_bytes(document.to_bytes()).content_controls()] == ["new", "new"]
+
+
+def test_fx203_equation_display_children_losses_and_source_snapshot_are_ordered():
+    import rdocx
+    ns = "http://schemas.openxmlformats.org/officeDocument/2006/math"
+    one = '<m:oMath f:keep="yes"><m:r><m:t>x</m:t></m:r><f:opaque/></m:oMath>'
+    body = f'<w:p><m:oMathPara xmlns:m="{ns}" xmlns:f="urn:foreign" f:keep="yes"><m:oMathParaPr><m:jc m:val="center"/></m:oMathParaPr>{one}{one}<m:oMath><m:r><m:t>y</m:t></m:r></m:oMath></m:oMathPara></w:p>'
+    document = _replace_document_body(rdocx.Document(), body)
+    before = document.to_bytes()
+    equations = document.paragraphs[0].equations()
+    assert isinstance(equations, tuple) and len(equations) == 1
+    equation = equations[0]
+    assert equation.is_display is True
+    for conversion in [equation.to_latex(), equation.to_mathml()]:
+        assert conversion.is_display is True
+        assert isinstance(conversion.equations, tuple) and len(conversion.equations) == 3
+        assert conversion.equations[0].value == conversion.equations[1].value
+        assert "x" in conversion.equations[0].value and "y" in conversion.equations[2].value
+        assert conversion.equations[0].diagnostics and conversion.equations[1].diagnostics
+        assert any("wrapper" in loss.message for loss in conversion.diagnostics)
+        assert any("justification" in loss.message for loss in conversion.diagnostics)
+    assert document.to_bytes() == before
+    document.paragraphs[0].add_equation("z+1", format="latex")
+    assert len(equation.to_latex().equations) == 3
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert [eq.is_display for eq in reopened.paragraphs[0].equations()] == [True, False]
+    before = document.to_bytes()
+    with pytest.raises(ValueError, match="format"):
+        document.paragraphs[0].add_equation("bad", format="unknown")
+    assert document.to_bytes() == before
+
+
+def test_fx203_checkbox_font_glyph_and_opaque_owner_are_atomic_and_repeatable():
+    import rdocx
+    body = '<w:sdt><w:sdtPr><w:tag w:val="check"/><x:checkbox xmlns:x="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:f="urn:foreign"><f:checked f:val="opaque"/><x:checked x:val="0" f:keep="yes"/><x:checkedState x:val="0041" x:font="Carlito"/><x:uncheckedState x:val="0042" x:font="Selawik"/></x:checkbox></w:sdtPr><w:sdtContent><w:p><w:r><w:t>B</w:t></w:r></w:p></w:sdtContent></w:sdt>'
+    document = _replace_document_body(rdocx.Document(), body)
+    snapshot = document.content_controls()[0]
+    settings = document.settings
+    assert document.set_content_control_value_by_tag("check", "true") == 1
+    assert snapshot.text == "B"
+    assert document.content_controls()[0].text == "A"
+    xml = _document_xml(document)
+    assert b'<f:checked f:val="opaque"/>' in xml and b'f:keep="yes"' in xml
+    assert b'w:ascii="Carlito"' in xml and b'w:hAnsi="Carlito"' in xml
+    before = document.to_bytes()
+    assert document.set_content_control_value_by_tag("check", "true") == 1
+    assert document.to_bytes() == before
+    assert settings.track_revisions is None
+    assert document.set_content_control_value_by_tag("check", "false") == 1
+    assert document.content_controls()[0].text == "B"
+    assert b'w:ascii="Selawik"' in _document_xml(document)
+    assert rdocx.Document.from_bytes(document.to_bytes()).content_controls()[0].text == "B"
+
+
+@pytest.mark.parametrize("invalid", ["D800", "0000"])
+def test_fx203_checkbox_late_invalid_state_preserves_package_and_snapshots(invalid):
+    import rdocx
+    def control(code):
+        return f'<w:sdt><w:sdtPr><w:tag w:val="check"/><x:checkbox xmlns:x="http://schemas.microsoft.com/office/word/2010/wordml"><x:checkedState x:val="{code}" x:font="Carlito"/></x:checkbox></w:sdtPr><w:sdtContent><w:p><w:r><w:t>old</w:t></w:r></w:p></w:sdtContent></w:sdt>'
+    document = _replace_document_body(rdocx.Document(), control("0041") + control(invalid))
+    controls = document.content_controls()
+    paragraph = document.paragraphs[0]
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="glyph"):
+        document.set_content_control_value_by_tag("check", "true")
+    assert document.to_bytes() == before
+    assert paragraph.text == "old"
+    assert [c.text for c in controls] == ["old", "old"]
+    assert [c.text for c in document.content_controls()] == ["old", "old"]
+
+
+def test_fx203_checkbox_default_namespace_has_qualified_glyph_font_and_repeat():
+    import rdocx
+    body = '<w:sdt><w:sdtPr><w:tag w:val="check"/><checkbox xmlns="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:q="http://schemas.microsoft.com/office/word/2010/wordml"><checked q:val="0"/><checkedState q:val="0044" q:font="Carlito"/></checkbox></w:sdtPr><w:sdtContent><w:p><w:r><w:t>old</w:t></w:r></w:p></w:sdtContent></w:sdt>'
+    document = _replace_document_body(rdocx.Document(), body)
+    assert document.content_controls()[0].type == "checkbox"
+    assert document.set_content_control_value_by_tag("check", "true") == 1
+    assert document.content_controls()[0].text == "D"
+    assert b'w:ascii="Carlito"' in _document_xml(document)
+    before = document.to_bytes()
+    assert document.set_content_control_value_by_tag("check", "true") == 1
+    assert document.to_bytes() == before
+    assert rdocx.Document.from_bytes(before).content_controls()[0].text == "D"
+
+
+def test_fx203_template_json_conversion_is_typed_and_atomically_preflighted():
+    import rdocx
+    document = rdocx.Document()
+    document.add_paragraph("{{ flag }} {{ large }} {{ name }}")
+    assert document.render_template({"flag": True, "large": 2**64 - 1, "name": "Ada"}) == 3
+    assert document.paragraphs[0].text == "true 18446744073709551615 Ada"
+    document = rdocx.Document()
+    document.add_paragraph("{{ name }}")
+    held = document.paragraphs[0]
+    cycle = []
+    cycle.append(cycle)
+    class Arbitrary:
+        def __str__(self):
+            raise AssertionError("arbitrary string conversion must never run")
+    for data, error in [
+        ({"name": cycle}, ValueError), ({"name": float("nan")}, ValueError),
+        ({"name": float("inf")}, ValueError), ({"name": 2**64}, ValueError),
+        ({"name": -(2**63)-1}, ValueError), ({"name": Arbitrary()}, TypeError),
+        ({1: "not a string key"}, TypeError), (["not a dict"], TypeError),
+    ]:
+        before = document.to_bytes()
+        with pytest.raises(error):
+            document.render_template(data)
+        assert document.to_bytes() == before
+        assert held.text == "{{ name }}"
+    assert document.render_template({"name": "Ada"}) == 1
+    assert rdocx.Document.from_bytes(document.to_bytes()).paragraphs[0].text == "Ada"
+
+
+def test_fx203_exports_keep_owned_payload_and_full_loss_records():
+    import rdocx
+    from xml.etree import ElementTree
+    document = rdocx.Document()
+    document.add_paragraph("Export α beta")
+    document.add_table(1, 1).cell(0, 0).text = "Cell Ω"
+    before = document.to_bytes()
+    odt, rtf, epub = document.to_odt(), document.to_rtf(), document.to_epub()
+    with zipfile.ZipFile(io.BytesIO(odt.bytes)) as archive:
+        root = ElementTree.fromstring(archive.read("content.xml"))
+        text_ns = "{urn:oasis:names:tc:opendocument:xmlns:text:1.0}"
+        for element in root.iter(text_ns + "s"):
+            element.text = " " * int(element.get(text_ns + "c", "1"))
+        content = "".join(root.itertext())
+        assert "Export α beta" in content and "Cell Ω" in content
+    assert rtf.bytes.startswith(b"{\\rtf")
+    with zipfile.ZipFile(io.BytesIO(epub.bytes)) as archive:
+        assert archive.read("mimetype") == b"application/epub+zip"
+        content = "".join("".join(ElementTree.fromstring(archive.read(name)).itertext()) for name in archive.namelist() if name.endswith(".xhtml"))
+        assert "Export α beta" in content and "Cell Ω" in content
+    for result in (odt, rtf, epub):
+        assert isinstance(result.diagnostics, tuple)
+        for diagnostic in result.diagnostics:
+            assert isinstance(diagnostic.message, str) and diagnostic.message
+    assert document.to_bytes() == before

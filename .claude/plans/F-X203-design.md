@@ -1,6 +1,6 @@
 # F-X203, Complete Python Word document operations and validation
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X196, F-X201, F-X212
@@ -237,7 +237,7 @@ that native expansion must be explicitly designed and tested, not assumed.
 | Category | Test | Asserts |
 |---|---|---|
 | regression | test_issue306_missing_operations_on_installed_base | Genuine missing-method failures for every advertised operation before production edits |
-| regression | python_markdown_html_match_native_cli | Sample corpus accepted content, headings/lists/tables/links/bold/italic, exact MD CLI bytes |
+| regression | python_markdown_html_match_native_cli | Sample corpus accepted content, headings/lists/tables/links/bold/italic, exact Python/native Rust bare HTML and Markdown bytes. CLI equals those exports plus independently source-authored related-story appendices, with direct full equality when no appendix exists |
 | regression | python_all_story_text_matches_cli | Body tables/controls, headers/footers/notes/comments/text boxes, ordering/markers/newlines, accepted revisions |
 | regression | malformed_story_text_keeps_cli_degraded_scope | Same retained body, scope and diagnostic, no silent loss or source mutation |
 | regression | python_exports_retain_loss_diagnostics | ODT/RTF/EPUB bytes open with native converter, unsupported source reports path/message, deterministic output |
@@ -267,6 +267,7 @@ corpus Python MD, text and validation parity is required, not optional.
 ## HLD impact
 
 - `docs/hld/03-architecture.md`
+- `docs/hld/04-opc-and-packaging.md`
 - `docs/hld/08-rendering-spec.md`
 - `docs/hld/10-bindings-spec.md`
 - `docs/hld/12-testing-strategy.md`
@@ -323,17 +324,17 @@ write sprint totals. Fresh dependency-prefix source is the test Base.
 
 ## Implementation checklist
 
-- [ ] Integrate reviewed X196/X201 and resolve final count/text/validation scope.
-- [ ] Freeze typed signatures, diagnostics and exact source ownership.
-- [ ] Prove each missing installed Base operation and corpus parity failure.
-- [ ] Share native CLI validation/text without changing its report semantics.
-- [ ] Bind exports/templates/checked assembly/properties/equations/controls/settings.
-- [ ] Fix Issue332 in the shared native Markdown emitter with preservation controls.
-- [ ] Set Issue334 fresh WordCompatible mode15 without normalizing imported documents.
-- [ ] Prove source preservation, revision and malformed atomic controls.
-- [ ] Run complete sample-corpus parity and declared runtime/typing/oracle gates.
-- [ ] Run scoped hash, package, repository-policy, WASM and risk riders.
-- [ ] Finish independent zero-defect, zero-smell review, HLD and valid handoff.
+- [x] Integrate reviewed X196/X201 and resolve final count/text/validation scope.
+- [x] Freeze typed signatures, diagnostics and exact source ownership.
+- [x] Prove each missing installed Base operation and corpus parity failure.
+- [x] Share native CLI validation/text without changing its report semantics.
+- [x] Bind exports/templates/checked assembly/properties/equations/controls/settings.
+- [x] Fix Issue332 in the shared native Markdown emitter with preservation controls.
+- [x] Set Issue334 fresh WordCompatible mode15 without normalizing imported documents.
+- [x] Prove source preservation, revision and malformed atomic controls.
+- [x] Run complete sample-corpus parity and declared runtime/typing/oracle gates.
+- [x] Run scoped hash, package, repository-policy, WASM and risk riders.
+- [x] Finish independent zero-defect, zero-smell review, HLD and valid handoff.
 
 ## Open questions
 
@@ -649,3 +650,7 @@ adoption, runtime acceptance or feature completion is asserted by intake.
 The 2026-10-11 19:57 UTC refresh found [PR354](https://github.com/tensorbee/rdocx/pull/354) at head5a2c657eb705ab53048ab5d4e729b9014d6e0c0e. Its compatibility-mode and CommonMark export fixes address Issues332 and334 already assigned to F-X203. Reuse this contribution within that existing story, with no duplicate implementation owner. The exact retrieved patch is c4814b20267e16c75dd36a972a0e87eb7b8e2c07a3889614315125fc2a2f9b0d at /private/tmp/S91-PR354-intake/diff.patch. Read-only contribution assessment is complete at /private/tmp/S91-PR354-intake/assessment.md, SHA7c7dab495057d1bcc0920e94af90231c6aaab76c068f3b1e6780f46c8807d19a. Consumer reconciliation remains pending. Preserve original edge whitespace and terminal hard breaks, retain field boundaries, and change list state only for emitted nonempty table output. Reuse the constructor and Markdown hunks without copying contributor archive numbers. The approved original issue acceptance remains required, including cases the PR explicitly leaves out. Contributor results do not waive local pinned oracle or output-delta review gates.
 
 Intake now contains40 open issues and23 open PRs. Issues264 and281 remain excluded discussion records. No issue or existing PR head changed in this refresh. This intake does not mark F-X203 implemented or complete.
+
+## Existing JSON conversion dependency
+
+The binding's concrete Python JSON converter uses `serde_json.workspace = true` in the existing rdocx-py manifest. The workspace and native facade already use this package. Only the binding dependency edge and corresponding generated lockfile dependency list change. Existing package versions, checksums and features remain fixed. Conversion reads actual dict/list/tuple containers through their native Python storage, checks bool before int, refuses cycles, nonfinite floats and out-of-range integers before any publication. It does not invoke arbitrary stringification or custom object getters.

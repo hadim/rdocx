@@ -3505,3 +3505,11 @@ to_handout_pdf accepts1,2,3,4,6 or9 slides per page. Both accept the common
 keyword-only caller-font inputs. from_odp(file) and to_odp return the
 presentation or bytes with ordered OdpDiagnostics. save_reports exposes the
 ordered report payload.
+
+## Python Word document operations
+
+Document exposes HTML and Markdown, CLI-equivalent text and owned TextReport, typed ODT, RTF and EPUB payloads with complete ordered diagnostic tuples, and explicit body word and character counts. Validation accepts an owned document snapshot, bytes or a path. Package decode and path errors propagate, while admitted advisory findings preserve native severity, order and validity.
+
+Template input accepts a string-keyed dict of bounded JSON values. Bool precedes integer conversion. Nonfinite values, cyclic containers, out-of-range integers and arbitrary objects refuse before publication. FragmentConflictPolicy exposes independent style, numbering and related-part reuse choices. ContentLocation and DocumentFragment retain physical source boundaries. Checked insertion uses the native fragment path and excludes final section properties by default.
+
+CustomFileTime validates explicit RFC3339 text. CustomProperties returns immutable typed snapshots and stages checked set/delete operations. AppProperties and presence-sensitive track_revisions are live document-owned handles. Equations return immutable source snapshots, ordered per-child conversion results and native loss diagnostics. Tag and alias control updates stage all selected qualified values once. Runtime constructors, explicit exports and strict stubs describe the same public classes and defaults.

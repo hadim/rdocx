@@ -5,7 +5,9 @@ use std::path::PathBuf;
 use oxml_py_support::{PathSeg, RevisionCounter, StaleElementError, revision_to_pyerr};
 use pyo3::exceptions::{PyIndexError, PyOverflowError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyBool, PyBytes, PyFloat, PyList, PyMapping, PyString, PyTuple};
+use pyo3::types::{
+    PyAny, PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyMapping, PyString, PyTuple,
+};
 use smallvec::smallvec;
 
 use rdocx_oxml::{ST_PageOrientation, ST_SectionType};
@@ -1916,6 +1918,22 @@ pub struct PySettings {
 #[pymethods]
 impl PySettings {
     #[getter]
+    fn track_revisions(&self, py: Python<'_>) -> Option<bool> {
+        self.document.borrow(py).inner.track_revisions()
+    }
+    #[setter]
+    fn set_track_revisions(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        let mut document = self.document.borrow_mut(py);
+        if document.inner.track_revisions() == value {
+            return Ok(());
+        }
+        match value {
+            Some(value) => document.inner.set_track_revisions(value),
+            None => document.inner.remove_track_revisions().map(|_| ()),
+        }
+        .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+    #[getter]
     fn odd_and_even_pages_header_footer(&self, py: Python<'_>) -> bool {
         self.document.borrow(py).inner.even_and_odd_headers()
     }
@@ -2546,6 +2564,434 @@ impl PyLayoutBackedFieldUpdateReport {
 }
 
 /// One text field of the native core-properties model.
+
+#[pyclass(name = "CustomFileTime", frozen, get_all, skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyCustomFileTime {
+    value: String,
+}
+
+fn valid_custom_filetime(value: &str) -> bool {
+    let b = value.as_bytes();
+    if b.len() < 20
+        || !b.is_ascii()
+        || b[4] != b'-'
+        || b[7] != b'-'
+        || b[10] != b'T'
+        || b[13] != b':'
+        || b[16] != b':'
+    {
+        return false;
+    }
+    let number = |start: usize, end: usize| -> Option<u32> {
+        b[start..end]
+            .iter()
+            .all(u8::is_ascii_digit)
+            .then(|| value[start..end].parse().ok())
+            .flatten()
+    };
+    let (Some(year), Some(month), Some(day), Some(hour), Some(minute), Some(second)) = (
+        number(0, 4),
+        number(5, 7),
+        number(8, 10),
+        number(11, 13),
+        number(14, 16),
+        number(17, 19),
+    ) else {
+        return false;
+    };
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if leap {
+                29
+            } else {
+                28
+            }
+        }
+        _ => return false,
+    };
+    if year == 0 || day == 0 || day > days || hour > 23 || minute > 59 || second > 59 {
+        return false;
+    }
+    let mut at = 19;
+    if b.get(at) == Some(&b'.') {
+        at += 1;
+        let start = at;
+        while b.get(at).is_some_and(u8::is_ascii_digit) {
+            at += 1;
+        }
+        if at == start {
+            return false;
+        }
+    }
+    if b.get(at) == Some(&b'Z') {
+        return at + 1 == b.len();
+    }
+    if !matches!(b.get(at), Some(b'+') | Some(b'-')) || at + 6 != b.len() || b[at + 3] != b':' {
+        return false;
+    }
+    number(at + 1, at + 3).is_some_and(|n| n <= 23)
+        && number(at + 4, at + 6).is_some_and(|n| n <= 59)
+}
+
+#[pymethods]
+impl PyCustomFileTime {
+    #[new]
+    fn new(value: String) -> PyResult<Self> {
+        if !valid_custom_filetime(&value) {
+            return Err(PyValueError::new_err(
+                "CustomFileTime requires a valid Gregorian RFC3339 date with explicit timezone and no leap second",
+            ));
+        }
+        Ok(Self { value })
+    }
+}
+
+#[pyclass(name = "CustomProperty", frozen, skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyCustomProperty {
+    property: rdocx::CustomProperty,
+}
+
+#[pymethods]
+impl PyCustomProperty {
+    #[getter]
+    fn name(&self) -> Option<String> {
+        self.property.name.clone()
+    }
+    #[getter]
+    fn pid(&self) -> i32 {
+        self.property.pid
+    }
+    #[getter]
+    fn fmtid(&self) -> String {
+        self.property.fmtid.clone()
+    }
+    #[getter]
+    fn r#type(&self) -> &'static str {
+        use rdocx::CustomPropertyValue as V;
+        match &self.property.value {
+            V::Lpstr(_) => "lpstr",
+            V::Lpwstr(_) => "lpwstr",
+            V::I4(_) => "i4",
+            V::R8(_) => "r8",
+            V::Bool(_) => "bool",
+            V::FileTime(_) => "filetime",
+            V::Empty => "empty",
+            V::Raw(_) => "raw",
+        }
+    }
+    #[getter]
+    fn value(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        use rdocx::CustomPropertyValue as V;
+        Ok(match &self.property.value {
+            V::Lpstr(v) | V::Lpwstr(v) | V::FileTime(v) => v.into_pyobject(py)?.into_any().unbind(),
+            V::I4(v) => v.into_pyobject(py)?.into_any().unbind(),
+            V::R8(v) => v.into_pyobject(py)?.into_any().unbind(),
+            V::Bool(v) => v.into_pyobject(py)?.to_owned().into_any().unbind(),
+            V::Empty => py.None(),
+            V::Raw(v) => PyBytes::new(py, v).into_any().unbind(),
+        })
+    }
+}
+
+#[pyclass(name = "CustomProperties")]
+pub struct PyCustomProperties {
+    document: Py<PyDocument>,
+}
+
+#[pymethods]
+impl PyCustomProperties {
+    fn get(&self, py: Python<'_>, name: &str) -> Option<PyCustomProperty> {
+        self.document
+            .borrow(py)
+            .inner
+            .custom_property(name)
+            .cloned()
+            .map(|property| PyCustomProperty { property })
+    }
+    fn set(&self, py: Python<'_>, name: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        use rdocx::CustomPropertyValue as V;
+        if name.is_empty() {
+            return Err(PyValueError::new_err(
+                "custom property name must not be empty",
+            ));
+        }
+        let authored = if value.is_instance_of::<PyBool>() {
+            V::Bool(value.extract()?)
+        } else if value.is_instance_of::<PyInt>() {
+            V::I4(
+                value
+                    .extract()
+                    .map_err(|_| PyOverflowError::new_err("custom integer must fit signed32"))?,
+            )
+        } else if value.is_instance_of::<PyFloat>() {
+            let n: f64 = value.extract()?;
+            if !n.is_finite() {
+                return Err(PyValueError::new_err("custom float must be finite"));
+            }
+            V::R8(n)
+        } else if value.is_instance_of::<PyString>() {
+            V::Lpwstr(value.extract()?)
+        } else if let Ok(v) = value.extract::<PyRef<'_, PyCustomFileTime>>() {
+            V::FileTime(v.value.clone())
+        } else {
+            return Err(PyTypeError::new_err(
+                "custom property requires str, bool, signed32 int, finite float or CustomFileTime",
+            ));
+        };
+        let mut document = self.document.borrow_mut(py);
+        let mut property = if let Some(existing) = document.inner.custom_property(name) {
+            existing.clone()
+        } else {
+            let used: std::collections::BTreeSet<i32> = document
+                .inner
+                .custom_properties()
+                .iter()
+                .map(|p| p.pid)
+                .collect();
+            let pid = (2..=i32::MAX)
+                .find(|pid| !used.contains(pid))
+                .ok_or_else(|| PyOverflowError::new_err("no custom property PID available"))?;
+            rdocx::CustomProperty {
+                fmtid: "{D5CDD505-2E9C-101B-9397-08002B2CF9AE}".into(),
+                pid,
+                name: Some(name.into()),
+                value: V::Empty,
+            }
+        };
+        let authored = match (&property.value, authored) {
+            (V::Lpstr(_), V::Lpwstr(v)) => V::Lpstr(v),
+            (_, v) => v,
+        };
+        if property.value == authored {
+            return Ok(());
+        }
+        property.value = authored;
+        document
+            .inner
+            .set_custom_property(property)
+            .map_err(|e| rdocx_to_pyerr(py, e))
+    }
+    fn delete(&self, py: Python<'_>, name: &str) -> PyResult<bool> {
+        self.document
+            .borrow_mut(py)
+            .inner
+            .remove_custom_property(name)
+            .map(|p| p.is_some())
+            .map_err(|e| rdocx_to_pyerr(py, e))
+    }
+}
+
+// These concrete field selectors update the latest owned model, preserving its
+// opaque child order and namespace metadata. Reading never creates a part.
+type AppTextField = fn(&mut rdocx::AppProperties) -> &mut Option<String>;
+#[pyclass(name = "AppProperties")]
+pub struct PyAppProperties {
+    document: Py<PyDocument>,
+}
+impl PyAppProperties {
+    fn text(&self, py: Python<'_>, field: AppTextField) -> Option<String> {
+        let mut p = self
+            .document
+            .borrow(py)
+            .inner
+            .application_properties()?
+            .clone();
+        field(&mut p).clone()
+    }
+    fn set_text(&self, py: Python<'_>, field: AppTextField, value: Option<String>) -> PyResult<()> {
+        let mut document = self.document.borrow_mut(py);
+        let mut p = document
+            .inner
+            .application_properties()
+            .cloned()
+            .unwrap_or_default();
+        if *field(&mut p) == value {
+            return Ok(());
+        }
+        *field(&mut p) = value;
+        document
+            .inner
+            .set_application_properties(p)
+            .map_err(|e| rdocx_to_pyerr(py, e))
+    }
+}
+#[pymethods]
+impl PyAppProperties {
+    #[getter]
+    fn company(&self, py: Python<'_>) -> Option<String> {
+        self.text(py, |p| &mut p.company)
+    }
+    #[setter]
+    fn set_company(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |p| &mut p.company, value)
+    }
+    #[getter]
+    fn manager(&self, py: Python<'_>) -> Option<String> {
+        self.text(py, |p| &mut p.manager)
+    }
+    #[setter]
+    fn set_manager(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |p| &mut p.manager, value)
+    }
+    #[getter]
+    fn template(&self, py: Python<'_>) -> Option<String> {
+        self.text(py, |p| &mut p.template)
+    }
+    #[setter]
+    fn set_template(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |p| &mut p.template, value)
+    }
+    #[getter]
+    fn application(&self, py: Python<'_>) -> Option<String> {
+        self.text(py, |p| &mut p.application)
+    }
+    #[setter]
+    fn set_application(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |p| &mut p.application, value)
+    }
+    #[getter]
+    fn application_version(&self, py: Python<'_>) -> Option<String> {
+        self.text(py, |p| &mut p.application_version)
+    }
+    #[setter]
+    fn set_application_version(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |p| &mut p.application_version, value)
+    }
+    #[getter]
+    fn presentation_format(&self, py: Python<'_>) -> Option<String> {
+        self.text(py, |p| &mut p.presentation_format)
+    }
+    #[setter]
+    fn set_presentation_format(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |p| &mut p.presentation_format, value)
+    }
+    #[getter]
+    fn pages(&self, py: Python<'_>) -> Option<i32> {
+        self.document
+            .borrow(py)
+            .inner
+            .application_properties()
+            .and_then(|p| p.pages)
+    }
+    #[getter]
+    fn words(&self, py: Python<'_>) -> Option<i32> {
+        self.document
+            .borrow(py)
+            .inner
+            .application_properties()
+            .and_then(|p| p.words)
+    }
+    #[getter]
+    fn characters(&self, py: Python<'_>) -> Option<i32> {
+        self.document
+            .borrow(py)
+            .inner
+            .application_properties()
+            .and_then(|p| p.characters)
+    }
+    #[getter]
+    fn characters_with_spaces(&self, py: Python<'_>) -> Option<i32> {
+        self.document
+            .borrow(py)
+            .inner
+            .application_properties()
+            .and_then(|p| p.characters_with_spaces)
+    }
+    #[getter]
+    fn lines(&self, py: Python<'_>) -> Option<i32> {
+        self.document
+            .borrow(py)
+            .inner
+            .application_properties()
+            .and_then(|p| p.lines)
+    }
+    #[getter]
+    fn paragraphs(&self, py: Python<'_>) -> Option<i32> {
+        self.document
+            .borrow(py)
+            .inner
+            .application_properties()
+            .and_then(|p| p.paragraphs)
+    }
+    #[getter]
+    fn slides(&self, py: Python<'_>) -> Option<i32> {
+        self.document
+            .borrow(py)
+            .inner
+            .application_properties()
+            .and_then(|p| p.slides)
+    }
+    #[getter]
+    fn notes(&self, py: Python<'_>) -> Option<i32> {
+        self.document
+            .borrow(py)
+            .inner
+            .application_properties()
+            .and_then(|p| p.notes)
+    }
+    #[getter]
+    fn total_time(&self, py: Python<'_>) -> Option<i32> {
+        self.document
+            .borrow(py)
+            .inner
+            .application_properties()
+            .and_then(|p| p.total_time)
+    }
+    #[getter]
+    fn hidden_slides(&self, py: Python<'_>) -> Option<i32> {
+        self.document
+            .borrow(py)
+            .inner
+            .application_properties()
+            .and_then(|p| p.hidden_slides)
+    }
+    #[getter]
+    fn multimedia_clips(&self, py: Python<'_>) -> Option<i32> {
+        self.document
+            .borrow(py)
+            .inner
+            .application_properties()
+            .and_then(|p| p.multimedia_clips)
+    }
+    #[getter]
+    fn scale_crop(&self, py: Python<'_>) -> Option<bool> {
+        self.document
+            .borrow(py)
+            .inner
+            .application_properties()
+            .and_then(|p| p.scale_crop)
+    }
+    #[getter]
+    fn links_up_to_date(&self, py: Python<'_>) -> Option<bool> {
+        self.document
+            .borrow(py)
+            .inner
+            .application_properties()
+            .and_then(|p| p.links_up_to_date)
+    }
+    #[getter]
+    fn shared_document(&self, py: Python<'_>) -> Option<bool> {
+        self.document
+            .borrow(py)
+            .inner
+            .application_properties()
+            .and_then(|p| p.shared_document)
+    }
+    #[getter]
+    fn hyperlinks_changed(&self, py: Python<'_>) -> Option<bool> {
+        self.document
+            .borrow(py)
+            .inner
+            .application_properties()
+            .and_then(|p| p.hyperlinks_changed)
+    }
+}
+
 type CoreField = fn(&mut rdocx::CoreProperties) -> &mut Option<String>;
 
 /// The longest text python-docx accepts for a core property.
@@ -2886,7 +3332,237 @@ pub struct PyDocument {
     pub(crate) revisions: RevisionCounter,
 }
 
+#[pyclass(name = "FragmentConflictPolicy", frozen, skip_from_py_object)]
+#[derive(Clone, Copy)]
+pub struct PyFragmentConflictPolicy {
+    inner: rdocx::FragmentConflictPolicy,
+}
+#[pymethods]
+impl PyFragmentConflictPolicy {
+    #[staticmethod]
+    fn reuse_equivalent() -> Self {
+        Self {
+            inner: rdocx::FragmentConflictPolicy::reuse_equivalent(),
+        }
+    }
+    #[staticmethod]
+    fn rename_all() -> Self {
+        Self {
+            inner: rdocx::FragmentConflictPolicy::rename_all(),
+        }
+    }
+    fn with_style_reuse(&self, reuse: bool) -> Self {
+        Self {
+            inner: self.inner.with_style_reuse(reuse),
+        }
+    }
+    fn with_numbering_reuse(&self, reuse: bool) -> Self {
+        Self {
+            inner: self.inner.with_numbering_reuse(reuse),
+        }
+    }
+    fn with_related_part_reuse(&self, reuse: bool) -> Self {
+        Self {
+            inner: self.inner.with_related_part_reuse(reuse),
+        }
+    }
+}
+
+#[pyclass(name = "ContentLocation", frozen, skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyContentLocation {
+    story: PyStory,
+    kind: String,
+    index_path: Vec<usize>,
+    is_end: bool,
+}
+impl PyContentLocation {
+    fn native(&self, py: Python<'_>, document: &PyDocument) -> PyResult<rdocx::ContentLocation> {
+        let story = document.native_story(py, &self.story)?;
+        if self.is_end {
+            Ok(rdocx::ContentLocation::end(story))
+        } else {
+            Ok(rdocx::ContentLocation::new(
+                story,
+                story_item_kind_from_name(&self.kind)?,
+                self.index_path.clone(),
+            ))
+        }
+    }
+}
+#[pymethods]
+impl PyContentLocation {
+    #[new]
+    fn new(story: PyRef<'_, PyStory>, item_kind: String, index_path: Vec<usize>) -> PyResult<Self> {
+        story_item_kind_from_name(&item_kind)?;
+        Ok(Self {
+            story: story.clone(),
+            kind: item_kind,
+            index_path,
+            is_end: false,
+        })
+    }
+    #[staticmethod]
+    fn end(story: PyRef<'_, PyStory>) -> Self {
+        Self {
+            story: story.clone(),
+            kind: "preserved_node".into(),
+            index_path: Vec::new(),
+            is_end: true,
+        }
+    }
+    #[getter]
+    fn story(&self) -> PyStory {
+        self.story.clone()
+    }
+    #[getter]
+    fn item_kind(&self) -> &str {
+        &self.kind
+    }
+    #[getter]
+    fn index_path<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, &self.index_path)
+    }
+}
+
+#[pyclass(name = "DocumentFragment", frozen, skip_from_py_object)]
+pub struct PyDocumentFragment {
+    inner: rdocx::DocumentFragment,
+}
+#[pymethods]
+impl PyDocumentFragment {
+    #[staticmethod]
+    #[pyo3(signature = (document, start, end, *, include_final_section_properties=false))]
+    fn from_range(
+        py: Python<'_>,
+        document: PyRef<'_, PyDocument>,
+        start: PyRef<'_, PyContentLocation>,
+        end: PyRef<'_, PyContentLocation>,
+        include_final_section_properties: bool,
+    ) -> PyResult<Self> {
+        let start = start.native(py, &document)?;
+        let end = end.native(py, &document)?;
+        rdocx::DocumentFragment::from_range(
+            &document.inner,
+            &start,
+            &end,
+            include_final_section_properties,
+        )
+        .map(|inner| Self { inner })
+        .map_err(|e| rdocx_to_pyerr(py, e))
+    }
+}
+
+/// One content control of the document body.
+#[pyclass(name = "ContentControl", frozen, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyContentControl {
+    #[pyo3(get)]
+    tag: Option<String>,
+    #[pyo3(get)]
+    alias: Option<String>,
+    #[pyo3(get)]
+    id: Option<i32>,
+    #[pyo3(get, name = "type")]
+    control_type: &'static str,
+    #[pyo3(get)]
+    text: String,
+}
+
+impl From<rdocx::ContentControlRef<'_>> for PyContentControl {
+    fn from(control: rdocx::ContentControlRef<'_>) -> Self {
+        Self {
+            tag: control.tag().map(str::to_owned),
+            alias: control.alias().map(str::to_owned),
+            id: control.id(),
+            control_type: content_control_type_name(control.control_type()),
+            text: control.text(),
+        }
+    }
+}
+
+#[pymethods]
+impl PyContentControl {
+    fn __repr__(&self) -> String {
+        let optional = |value: &Option<String>| match value {
+            Some(value) => format!("{value:?}"),
+            None => "None".to_owned(),
+        };
+        format!(
+            "ContentControl(tag={}, alias={}, type={:?}, text={:?})",
+            optional(&self.tag),
+            optional(&self.alias),
+            self.control_type,
+            self.text
+        )
+    }
+}
+
+/// A control without a type element is a rich text control.
+fn content_control_type_name(
+    control_type: Option<rdocx_oxml::content_control::SdtType>,
+) -> &'static str {
+    use rdocx_oxml::content_control::SdtType;
+    match control_type {
+        None | Some(SdtType::RichText) => "rich_text",
+        Some(SdtType::PlainText) => "plain_text",
+        Some(SdtType::Picture) => "picture",
+        Some(SdtType::CheckBox) => "checkbox",
+        Some(SdtType::ComboBox) => "combo_box",
+        Some(SdtType::DropDownList) => "dropdown_list",
+        Some(SdtType::Date) => "date",
+        Some(SdtType::DocumentPartList) => "document_part_list",
+        Some(SdtType::DocumentPartObject) => "document_part_object",
+        Some(SdtType::Group) => "group",
+        Some(SdtType::RepeatingSection) => "repeating_section",
+        Some(SdtType::RepeatingSectionItem) => "repeating_section_item",
+        Some(SdtType::Citation) => "citation",
+        Some(SdtType::Equation) => "equation",
+        Some(SdtType::Bibliography) => "bibliography",
+    }
+}
+
 impl PyDocument {
+    fn publish_api_candidate(
+        &mut self,
+        py: Python<'_>,
+        mut candidate: rdocx::Document,
+        operation: &'static str,
+    ) -> PyResult<()> {
+        let before = self.inner.to_bytes().map_err(|e| rdocx_to_pyerr(py, e))?;
+        let after = candidate.to_bytes().map_err(|e| rdocx_to_pyerr(py, e))?;
+        if before == after {
+            return Ok(());
+        }
+        let prepared = self
+            .revisions
+            .prepare_scopes(operation, &[], &[])
+            .map_err(revision_to_pyerr)?;
+        self.revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        self.inner = candidate;
+        self.revisions.bump();
+        Ok(())
+    }
+    fn set_control_value(
+        &mut self,
+        py: Python<'_>,
+        name: &str,
+        value: &str,
+        by_tag: bool,
+    ) -> PyResult<usize> {
+        let mut candidate = self.inner.clone_for_staging();
+        let count = if by_tag {
+            candidate.set_content_control_value_by_tag(name, value)
+        } else {
+            candidate.set_content_control_value_by_alias(name, value)
+        }
+        .map_err(|e| rdocx_to_pyerr(py, e))?;
+        self.publish_api_candidate(py, candidate, "Document.set_content_control_value")?;
+        Ok(count)
+    }
+
     fn create_note(
         slf: &Bound<'_, Self>,
         py: Python<'_>,
@@ -3649,6 +4325,223 @@ impl PyDocument {
         py.detach(|| self.inner.to_bytes())
             .map(|bytes| PyBytes::new(py, &bytes))
             .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    fn to_html(&self, py: Python<'_>) -> String {
+        py.detach(|| self.inner.to_html())
+    }
+    fn to_markdown(&self, py: Python<'_>) -> String {
+        py.detach(|| self.inner.to_markdown())
+    }
+    fn text(&self, py: Python<'_>) -> String {
+        py.detach(|| self.inner.text_report().text)
+    }
+    fn text_report(&self, py: Python<'_>) -> PyTextReport {
+        py.detach(|| self.inner.text_report()).into()
+    }
+    fn word_count(&self) -> usize {
+        self.inner.word_count()
+    }
+    #[pyo3(signature = (*, include_spaces = true))]
+    fn character_count(&self, include_spaces: bool) -> usize {
+        self.inner.character_count(include_spaces)
+    }
+    fn validate(&self, py: Python<'_>) -> PyResult<PyValidationReport> {
+        py.detach(|| self.inner.validate())
+            .map(Into::into)
+            .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+    fn to_odt(&self, py: Python<'_>) -> PyResult<PyOdtExportResult> {
+        let result = py
+            .detach(|| self.inner.to_odt_bytes())
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        Ok(PyOdtExportResult {
+            bytes: result.bytes,
+            diagnostics: result
+                .diagnostics
+                .into_iter()
+                .map(|d| PyOdtDiagnostic {
+                    path: d.path,
+                    message: d.message,
+                })
+                .collect(),
+        })
+    }
+    fn to_rtf(&self, py: Python<'_>) -> PyResult<PyRtfExportResult> {
+        let result = py
+            .detach(|| self.inner.to_rtf_bytes())
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        Ok(PyRtfExportResult {
+            bytes: result.bytes,
+            diagnostics: result
+                .diagnostics
+                .into_iter()
+                .map(|d| PyRtfDiagnostic {
+                    offset: d.offset,
+                    destination: d.destination,
+                    message: d.message,
+                })
+                .collect(),
+        })
+    }
+    fn to_epub(&self, py: Python<'_>) -> PyResult<PyEpubExportResult> {
+        let result = py
+            .detach(|| self.inner.to_epub_bytes())
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        Ok(PyEpubExportResult {
+            bytes: result.bytes,
+            diagnostics: result
+                .diagnostics
+                .into_iter()
+                .map(|d| PyEpubDiagnostic {
+                    path: d.path,
+                    message: d.message,
+                })
+                .collect(),
+        })
+    }
+    #[pyo3(signature = (*, fonts = None, font_dir = None, font_dirs = None))]
+    fn page_count<'py>(
+        &self,
+        py: Python<'py>,
+        fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
+        font_dir: Option<PathBuf>,
+        font_dirs: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<usize> {
+        let caller_fonts = collect_caller_fonts(py, fonts, font_dir, font_dirs)?;
+        let refs = caller_fonts.as_ref().map(|files| {
+            files
+                .iter()
+                .map(|font| (font.family.as_str(), font.data.as_slice()))
+                .collect::<Vec<_>>()
+        });
+        py.detach(|| match refs {
+            None => self
+                .inner
+                .layout_deterministic()
+                .map(|layout| layout.layout.pages.len()),
+            Some(ref fonts) => self
+                .inner
+                .layout_with_additional_fonts_and_options(fonts, rdocx::RenderOptions::default())
+                .map(|layout| layout.layout.pages.len()),
+        })
+        .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+    fn render_template(&mut self, py: Python<'_>, data: &Bound<'_, PyAny>) -> PyResult<usize> {
+        if !data.is_instance_of::<PyDict>() {
+            return Err(PyTypeError::new_err(
+                "render_template data must be a dict with string keys",
+            ));
+        }
+        let data = template_value(data, "data", &mut Vec::new())?;
+        let before = self
+            .inner
+            .to_bytes()
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let mut candidate = self.inner.clone_for_staging();
+        let count = py
+            .detach(|| candidate.render_template(&data))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let after = candidate
+            .to_bytes()
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        if after != before {
+            let prepared = self
+                .revisions
+                .prepare_scopes("Document.render_template", &[], &[])
+                .map_err(revision_to_pyerr)?;
+            self.revisions
+                .commit_scopes(prepared)
+                .map_err(revision_to_pyerr)?;
+            self.inner = candidate;
+            self.revisions.bump();
+        }
+        Ok(count)
+    }
+
+    fn content_controls<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(
+            py,
+            self.inner
+                .content_controls()
+                .into_iter()
+                .map(PyContentControl::from),
+        )
+    }
+    fn set_content_control_value_by_tag(
+        &mut self,
+        py: Python<'_>,
+        tag: &str,
+        value: &str,
+    ) -> PyResult<usize> {
+        self.set_control_value(py, tag, value, true)
+    }
+    fn set_content_control_value_by_alias(
+        &mut self,
+        py: Python<'_>,
+        alias: &str,
+        value: &str,
+    ) -> PyResult<usize> {
+        self.set_control_value(py, alias, value, false)
+    }
+    #[pyo3(signature = (destination, fragment, *, policy=None))]
+    fn import_fragment(
+        &mut self,
+        py: Python<'_>,
+        destination: PyRef<'_, PyContentLocation>,
+        fragment: PyRef<'_, PyDocumentFragment>,
+        policy: Option<PyRef<'_, PyFragmentConflictPolicy>>,
+    ) -> PyResult<()> {
+        let destination = destination.native(py, self)?;
+        let mut candidate = self.inner.clone_for_staging();
+        candidate
+            .import_fragment(
+                &destination,
+                &fragment.inner,
+                policy.map(|p| p.inner).unwrap_or_default(),
+            )
+            .map_err(|e| rdocx_to_pyerr(py, e))?;
+        self.publish_api_candidate(py, candidate, "Document.import_fragment")
+    }
+    #[pyo3(signature = (other, *, at, policy=None))]
+    fn insert_document(
+        &mut self,
+        py: Python<'_>,
+        other: PyRef<'_, PyDocument>,
+        at: &Bound<'_, PyAny>,
+        policy: Option<PyRef<'_, PyFragmentConflictPolicy>>,
+    ) -> PyResult<()> {
+        if at.is_instance_of::<PyBool>() {
+            return Err(PyTypeError::new_err(
+                "at must be a physical body index, not bool",
+            ));
+        }
+        let at = at.extract::<usize>()?;
+        let destination = self.body_location(py, at)?;
+        if other.inner.content_count() == 0 {
+            return Ok(());
+        }
+        let start = other.body_location(py, 0)?;
+        let end = rdocx::ContentLocation::end(other.body_story(py)?);
+        let fragment = rdocx::DocumentFragment::from_range(&other.inner, &start, &end, false)
+            .map_err(|e| rdocx_to_pyerr(py, e))?;
+        let mut candidate = self.inner.clone_for_staging();
+        candidate
+            .import_fragment(
+                &destination,
+                &fragment,
+                policy.map(|p| p.inner).unwrap_or_default(),
+            )
+            .map_err(|e| rdocx_to_pyerr(py, e))?;
+        self.publish_api_candidate(py, candidate, "Document.insert_document")
+    }
+    #[getter]
+    fn custom_properties(slf: Py<Self>) -> PyCustomProperties {
+        PyCustomProperties { document: slf }
+    }
+    #[getter]
+    fn app_properties(slf: Py<Self>) -> PyAppProperties {
+        PyAppProperties { document: slf }
     }
 
     #[getter]
@@ -6569,4 +7462,305 @@ fn collect_caller_fonts<'py>(
         })
         .map_err(|error| rdocx_to_pyerr(py, rdocx::Error::Layout(error)))?;
     Ok((!selected.is_empty()).then_some(selected))
+}
+
+#[pyclass(name = "OdtDiagnostic", frozen, get_all, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyOdtDiagnostic {
+    pub path: String,
+    pub message: String,
+}
+
+#[pyclass(name = "RtfDiagnostic", frozen, get_all, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyRtfDiagnostic {
+    pub offset: usize,
+    pub destination: Option<String>,
+    pub message: String,
+}
+
+#[pyclass(name = "EpubDiagnostic", frozen, get_all, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyEpubDiagnostic {
+    pub path: String,
+    pub message: String,
+}
+
+#[pyclass(name = "TextDiagnostic", frozen, get_all, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyTextDiagnostic {
+    pub message: String,
+}
+
+#[pyclass(name = "ValidationFinding", frozen, get_all, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyValidationFinding {
+    pub severity: String,
+    pub message: String,
+}
+
+#[pyclass(name = "OdtExportResult", frozen, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyOdtExportResult {
+    bytes: Vec<u8>,
+    diagnostics: Vec<PyOdtDiagnostic>,
+}
+#[pymethods]
+impl PyOdtExportResult {
+    #[getter]
+    fn bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.bytes)
+    }
+    #[getter]
+    fn diagnostics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, self.diagnostics.iter().cloned())
+    }
+}
+
+#[pyclass(name = "RtfExportResult", frozen, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyRtfExportResult {
+    bytes: Vec<u8>,
+    diagnostics: Vec<PyRtfDiagnostic>,
+}
+#[pymethods]
+impl PyRtfExportResult {
+    #[getter]
+    fn bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.bytes)
+    }
+    #[getter]
+    fn diagnostics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, self.diagnostics.iter().cloned())
+    }
+}
+
+#[pyclass(name = "EpubExportResult", frozen, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyEpubExportResult {
+    bytes: Vec<u8>,
+    diagnostics: Vec<PyEpubDiagnostic>,
+}
+#[pymethods]
+impl PyEpubExportResult {
+    #[getter]
+    fn bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.bytes)
+    }
+    #[getter]
+    fn diagnostics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, self.diagnostics.iter().cloned())
+    }
+}
+
+#[pyclass(name = "TextReport", frozen, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyTextReport {
+    text: String,
+    scope: String,
+    revision_view: String,
+    diagnostics: Vec<PyTextDiagnostic>,
+}
+#[pymethods]
+impl PyTextReport {
+    #[getter]
+    fn text(&self) -> &str {
+        &self.text
+    }
+    #[getter]
+    fn scope(&self) -> &str {
+        &self.scope
+    }
+    #[getter]
+    fn revision_view(&self) -> &str {
+        &self.revision_view
+    }
+    #[getter]
+    fn diagnostics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, self.diagnostics.iter().cloned())
+    }
+}
+impl From<rdocx::TextReport> for PyTextReport {
+    fn from(report: rdocx::TextReport) -> Self {
+        Self {
+            text: report.text,
+            scope: report.scope.to_owned(),
+            revision_view: report.revision_view.to_owned(),
+            diagnostics: report
+                .diagnostics
+                .into_iter()
+                .map(|d| PyTextDiagnostic { message: d.message })
+                .collect(),
+        }
+    }
+}
+#[pyclass(name = "ValidationReport", frozen, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyValidationReport {
+    findings: Vec<PyValidationFinding>,
+}
+impl From<rdocx::ValidationReport> for PyValidationReport {
+    fn from(report: rdocx::ValidationReport) -> Self {
+        Self {
+            findings: report
+                .findings
+                .into_iter()
+                .map(|finding| PyValidationFinding {
+                    severity: match finding.severity {
+                        rdocx::ValidationSeverity::Error => "error",
+                        rdocx::ValidationSeverity::Warning => "warning",
+                    }
+                    .to_owned(),
+                    message: finding.message,
+                })
+                .collect(),
+        }
+    }
+}
+#[pymethods]
+impl PyValidationReport {
+    #[getter]
+    fn findings<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, self.findings.iter().cloned())
+    }
+    #[getter]
+    fn is_valid(&self) -> bool {
+        self.findings
+            .iter()
+            .all(|finding| finding.severity != "error")
+    }
+}
+#[pyfunction]
+pub fn validate_bytes(data: &[u8], py: Python<'_>) -> PyResult<PyValidationReport> {
+    py.detach(|| rdocx::validate_document_bytes(data))
+        .map(Into::into)
+        .map_err(|error| rdocx_to_pyerr(py, error))
+}
+#[pyfunction]
+pub fn validate_file(path: PathBuf, py: Python<'_>) -> PyResult<PyValidationReport> {
+    py.detach(|| rdocx::validate_document_file(path))
+        .map(Into::into)
+        .map_err(|error| rdocx_to_pyerr(py, error))
+}
+
+fn type_name(value: &Bound<'_, PyAny>) -> String {
+    value
+        .get_type()
+        .name()
+        .map(|name| name.to_string())
+        .unwrap_or_else(|_| "object".to_owned())
+}
+
+fn is_mapping(value: &Bound<'_, PyAny>) -> PyResult<bool> {
+    Ok(value.is_instance_of::<PyDict>())
+}
+
+/// The deepest nesting of dicts and lists template data may use.
+const MAX_TEMPLATE_DATA_DEPTH: usize = 256;
+
+/// Convert template data to JSON. `path` names the value in error messages,
+/// and `open` holds the containers being converted, to refuse a cycle and
+/// bound the depth.
+fn template_value(
+    value: &Bound<'_, PyAny>,
+    path: &str,
+    open: &mut Vec<usize>,
+) -> PyResult<serde_json::Value> {
+    use serde_json::Value;
+
+    if value.is_none() {
+        return Ok(Value::Null);
+    }
+    if let Ok(flag) = value.cast::<PyBool>() {
+        return Ok(Value::Bool(flag.is_true()));
+    }
+    if value.is_instance_of::<PyInt>() {
+        if let Ok(number) = value.extract::<i64>() {
+            return Ok(Value::from(number));
+        }
+        if let Ok(number) = value.extract::<u64>() {
+            return Ok(Value::from(number));
+        }
+        return Err(PyValueError::new_err(format!(
+            "template data {path} is an integer outside the 64-bit range; pass it as a str"
+        )));
+    }
+    if let Ok(number) = value.cast::<PyFloat>() {
+        return serde_json::Number::from_f64(number.value())
+            .map(Value::Number)
+            .ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "template data {path} is {}, which has no text form; pass a str instead",
+                    number.value()
+                ))
+            });
+    }
+    if let Ok(text) = value.cast::<PyString>() {
+        return Ok(Value::String(text.to_cow()?.into_owned()));
+    }
+    let container =
+        is_mapping(value)? || value.is_instance_of::<PyList>() || value.is_instance_of::<PyTuple>();
+    if container {
+        let identity = value.as_ptr() as usize;
+        if open.contains(&identity) {
+            return Err(PyValueError::new_err(format!(
+                "template data {path} contains itself; template data must be a tree"
+            )));
+        }
+        if open.len() == MAX_TEMPLATE_DATA_DEPTH {
+            return Err(PyValueError::new_err(format!(
+                "template data {path} nests deeper than {MAX_TEMPLATE_DATA_DEPTH} dicts and lists"
+            )));
+        }
+        open.push(identity);
+        let converted = template_container(value, path, open);
+        open.pop();
+        return converted;
+    }
+    let datetime = value.py().import("datetime")?;
+    let hint = if value.is_instance(&datetime.getattr("date")?)?
+        || value.is_instance(&datetime.getattr("time")?)?
+    {
+        "format it first, for example with value.strftime(\"%d %B %Y\") or value.isoformat()"
+    } else {
+        "convert it to a str, int, float, bool, None, dict or list first"
+    };
+    Err(PyTypeError::new_err(format!(
+        "template data {path} is a {}, which a template cannot render; {hint}",
+        type_name(value)
+    )))
+}
+
+/// Convert one dict or list of template data.
+fn template_container(
+    value: &Bound<'_, PyAny>,
+    path: &str,
+    open: &mut Vec<usize>,
+) -> PyResult<serde_json::Value> {
+    use serde_json::Value;
+
+    if is_mapping(value)? {
+        let mut object = serde_json::Map::new();
+        for (key, item) in value.cast::<PyDict>()?.iter() {
+            let Ok(key) = key.extract::<String>() else {
+                return Err(PyTypeError::new_err(format!(
+                    "template data {path} has a {} key; tag paths need str keys",
+                    type_name(&key)
+                )));
+            };
+            let value = template_value(&item, &format!("{path}[{key:?}]"), open)?;
+            object.insert(key, value);
+        }
+        return Ok(Value::Object(object));
+    }
+    let mut array = Vec::new();
+    let items = if let Ok(list) = value.cast::<PyList>() {
+        list.iter().collect::<Vec<_>>()
+    } else {
+        value.cast::<PyTuple>()?.iter().collect::<Vec<_>>()
+    };
+    for (index, item) in items.iter().enumerate() {
+        array.push(template_value(item, &format!("{path}[{index}]"), open)?);
+    }
+    Ok(Value::Array(array))
 }

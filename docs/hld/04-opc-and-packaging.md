@@ -1820,3 +1820,9 @@ Unrelated producer relationships and opaque owners survive. Namespace context
 used for drawing projection remains separate from physical saved XML.
 
 DrawingML text watermark compatibility preserves one WPS choice and a real VML type136 textpath fallback in the same physical owner. Inactive fallback projection cannot paint a second watermark. Half-opacity is admitted before header, relationship or drawing-identity allocation, and other requested text opacity values refuse atomically.
+
+## Checked Word operation source ownership
+
+Document import closes the native fragment dependency graph before publication. Physical locations retain story identity, item kind and index path. Invalid destination indices refuse even when the imported document is empty. Reading properties or exporting text does not allocate package parts. Custom-property snapshots retain PID, fmtid, type and raw unsupported values. App-property mutations act on the latest owner and preserve unrelated producer fields.
+
+Checkbox admission and state selection use expanded Word2010 names, including qualified aliases and the default namespace. Only the selected qualified checked value changes. Foreign same-name elements, attributes, namespace declarations and opaque child order remain source-owned. The selected Unicode scalar and state font are admitted together before any matching control changes. Forbidden XML text and late invalid state values refuse the entire operation.

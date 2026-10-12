@@ -1,12 +1,163 @@
 use oxml_py_support::{ContentPath, PathSeg};
 use pyo3::exceptions::{PyIndexError, PyKeyError, PyRuntimeError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyList, PySlice};
+use pyo3::types::{PyAny, PyList, PySlice, PyTuple};
 use smallvec::smallvec;
 
 use crate::document::PyDocument;
 use crate::run::{PyRun, PyRunCollection};
 use crate::{normalize_index, stale_to_pyerr};
+
+#[pyclass(
+    name = "MathConversionDiagnostic",
+    frozen,
+    get_all,
+    skip_from_py_object
+)]
+#[derive(Clone)]
+pub struct PyMathConversionDiagnostic {
+    path: String,
+    message: String,
+}
+impl From<rdocx::MathConversionDiagnostic> for PyMathConversionDiagnostic {
+    fn from(value: rdocx::MathConversionDiagnostic) -> Self {
+        Self {
+            path: value.path,
+            message: value.message,
+        }
+    }
+}
+#[pyclass(name = "MathConversionResult", frozen, skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyMathConversionResult {
+    value: String,
+    diagnostics: Vec<PyMathConversionDiagnostic>,
+}
+#[pymethods]
+impl PyMathConversionResult {
+    #[getter]
+    fn value(&self) -> &str {
+        &self.value
+    }
+    #[getter]
+    fn diagnostics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let values = self
+            .diagnostics
+            .iter()
+            .cloned()
+            .map(|v| Py::new(py, v))
+            .collect::<PyResult<Vec<_>>>()?;
+        PyTuple::new(py, values)
+    }
+}
+#[pyclass(name = "EquationConversionResult", frozen, skip_from_py_object)]
+pub struct PyEquationConversionResult {
+    is_display: bool,
+    equations: Vec<PyMathConversionResult>,
+    diagnostics: Vec<PyMathConversionDiagnostic>,
+}
+#[pymethods]
+impl PyEquationConversionResult {
+    #[getter]
+    fn is_display(&self) -> bool {
+        self.is_display
+    }
+    #[getter]
+    fn equations<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let values = self
+            .equations
+            .iter()
+            .cloned()
+            .map(|v| Py::new(py, v))
+            .collect::<PyResult<Vec<_>>>()?;
+        PyTuple::new(py, values)
+    }
+    #[getter]
+    fn diagnostics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let values = self
+            .diagnostics
+            .iter()
+            .cloned()
+            .map(|v| Py::new(py, v))
+            .collect::<PyResult<Vec<_>>>()?;
+        PyTuple::new(py, values)
+    }
+}
+#[pyclass(name = "Equation", frozen, skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyEquation {
+    inner: rdocx::OfficeMath,
+}
+impl PyEquation {
+    fn conversion(&self, mathml: bool) -> PyEquationConversionResult {
+        let mut diagnostics = Vec::new();
+        let children: Vec<&rdocx::CT_OMath> = match &self.inner {
+            rdocx::OfficeMath::Inline(equation) => vec![equation],
+            rdocx::OfficeMath::Display(display) => {
+                let mut remainder = display.clone();
+                remainder.equations.clear();
+                if remainder.has_unsupported_content() {
+                    diagnostics.push(PyMathConversionDiagnostic { path: "/oMathPara".into(), message: "display wrapper preserved content is not represented by per-equation conversion".into() });
+                }
+                if display.properties.justification.is_some() {
+                    diagnostics.push(PyMathConversionDiagnostic { path: "/oMathPara/oMathParaPr/jc".into(), message: "display group justification is not represented by per-equation conversion".into() });
+                }
+                display.equations.iter().collect()
+            }
+        };
+        let equations = children.into_iter().map(|child| {
+            let argument = rdocx::MathArgument::new(child.expressions.clone());
+            let converted = if mathml { rdocx::equation_to_mathml(&argument) } else { rdocx::equation_to_latex(&argument) };
+            let mut diagnostics: Vec<_> = converted.diagnostics.into_iter().map(PyMathConversionDiagnostic::from).collect();
+            let mut remainder = child.clone();
+            remainder.expressions.clear();
+            if remainder.has_unsupported_content() {
+                diagnostics.push(PyMathConversionDiagnostic { path: "/oMath".into(), message: "equation container preserved content is not represented by expression conversion".into() });
+            }
+            PyMathConversionResult { value: converted.value, diagnostics }
+        }).collect();
+        PyEquationConversionResult {
+            is_display: matches!(self.inner, rdocx::OfficeMath::Display(_)),
+            equations,
+            diagnostics,
+        }
+    }
+}
+#[pymethods]
+impl PyEquation {
+    #[getter]
+    fn is_display(&self) -> bool {
+        matches!(self.inner, rdocx::OfficeMath::Display(_))
+    }
+    fn to_latex(&self) -> PyEquationConversionResult {
+        self.conversion(false)
+    }
+    fn to_mathml(&self) -> PyEquationConversionResult {
+        self.conversion(true)
+    }
+}
+#[pyclass(name = "EquationInsertResult", frozen, skip_from_py_object)]
+pub struct PyEquationInsertResult {
+    equation: PyEquation,
+    diagnostics: Vec<PyMathConversionDiagnostic>,
+}
+#[pymethods]
+impl PyEquationInsertResult {
+    #[getter]
+    fn equation(&self) -> PyEquation {
+        self.equation.clone()
+    }
+    #[getter]
+    fn diagnostics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let values = self
+            .diagnostics
+            .iter()
+            .cloned()
+            .map(|v| Py::new(py, v))
+            .collect::<PyResult<Vec<_>>>()?;
+        PyTuple::new(py, values)
+    }
+}
 
 #[derive(Clone)]
 pub(crate) enum ParagraphLocation {
@@ -373,6 +524,72 @@ impl PyParagraph {
 
 #[pymethods]
 impl PyParagraph {
+    fn equations<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let location = self.validate(py)?;
+        let document = self.document.borrow(py);
+        let equations = location
+            .read(&document.inner, |p| {
+                p.equations()
+                    .cloned()
+                    .map(|inner| PyEquation { inner })
+                    .collect::<Vec<_>>()
+            })
+            .map_err(|e| crate::rdocx_to_pyerr(py, e))?;
+        let values = equations
+            .into_iter()
+            .map(|v| Py::new(py, v))
+            .collect::<PyResult<Vec<_>>>()?;
+        PyTuple::new(py, values)
+    }
+    #[pyo3(signature = (source, *, format))]
+    fn add_equation(
+        &self,
+        py: Python<'_>,
+        source: &str,
+        format: &str,
+    ) -> PyResult<Py<PyEquationInsertResult>> {
+        let converted = match format {
+            "latex" => rdocx::equation_from_latex(source),
+            "mathml" => rdocx::equation_from_mathml(source),
+            _ => {
+                return Err(PyValueError::new_err(
+                    "equation format must be latex or mathml",
+                ));
+            }
+        }
+        .map_err(|e| crate::rdocx_to_pyerr(py, e))?;
+        let equation = rdocx::OfficeMath::inline(converted.value.expressions);
+        let result = Py::new(
+            py,
+            PyEquationInsertResult {
+                equation: PyEquation {
+                    inner: equation.clone(),
+                },
+                diagnostics: converted
+                    .diagnostics
+                    .into_iter()
+                    .map(PyMathConversionDiagnostic::from)
+                    .collect(),
+            },
+        )?;
+        let location = self.validate(py)?;
+        let mut document = self.document.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        location
+            .edit(&mut candidate, |p| p.add_equation(equation))
+            .map_err(|e| crate::rdocx_to_pyerr(py, e))?;
+        let prepared = document
+            .revisions
+            .prepare_scopes("Paragraph.add_equation", &[], &[])
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document.inner = candidate;
+        Ok(result)
+    }
+
     /// Replace literal text within this paragraph, retaining run formatting.
     #[pyo3(signature = (old, new, *, expect = None))]
     fn replace_text(

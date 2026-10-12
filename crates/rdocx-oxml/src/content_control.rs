@@ -1,6 +1,9 @@
 //! WordprocessingML structured document tags (`w:sdt`).
 
 use std::io::Write;
+use std::ops::Range;
+
+use quick_xml::reader::NsReader;
 
 use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer, XmlVersion};
@@ -158,11 +161,200 @@ pub struct CT_SdtPr {
 #[derive(Debug, Clone, PartialEq)]
 struct TypeElement {
     control_type: SdtType,
+    name: String,
     attributes: Vec<(String, String)>,
     children: Vec<u8>,
+    namespace_bindings: Vec<(String, String)>,
+}
+
+struct CheckboxChild {
+    value: Option<Range<usize>>,
+    font: Option<Range<usize>>,
+    insert_attribute: usize,
 }
 
 impl CT_SdtPr {
+    /// The selected checkbox glyph and its physical state font travel together.
+    pub fn checkbox_state(&self, checked: bool) -> Result<(char, String)> {
+        let name = if checked {
+            b"checkedState".as_slice()
+        } else {
+            b"uncheckedState".as_slice()
+        };
+        let child = self.checkbox_child(name)?;
+        let element = self.type_element.as_ref().ok_or_else(|| {
+            OxmlError::InvalidValue("checkbox type payload is missing".to_owned())
+        })?;
+        let read = |range: &Range<usize>| -> Result<String> {
+            Ok(
+                quick_xml::escape::unescape(std::str::from_utf8(&element.children[range.clone()])?)
+                    .map_err(|error| {
+                        OxmlError::InvalidValue(format!("checkbox state decode failed: {error}"))
+                    })?
+                    .into_owned(),
+            )
+        };
+        let code = child
+            .as_ref()
+            .and_then(|child| child.value.as_ref())
+            .map(read)
+            .transpose()?
+            .unwrap_or_else(|| if checked { "2612" } else { "2610" }.to_owned());
+        let glyph = u32::from_str_radix(&code, 16)
+            .ok()
+            .and_then(char::from_u32)
+            .ok_or_else(|| {
+                OxmlError::InvalidValue(format!(
+                    "checkbox state glyph {code:?} is not a Unicode scalar"
+                ))
+            })?;
+        oxml_core::xml::reject_non_xml_characters("checkbox state glyph", &glyph.to_string())?;
+        let font = child
+            .as_ref()
+            .and_then(|child| child.font.as_ref())
+            .map(read)
+            .transpose()?
+            .unwrap_or_else(|| "MS Gothic".to_owned());
+        oxml_core::xml::reject_non_xml_characters("checkbox state font", &font)?;
+        if font.trim().is_empty() {
+            return Err(OxmlError::InvalidValue(
+                "checkbox state font is empty".to_owned(),
+            ));
+        }
+        Ok((glyph, font))
+    }
+
+    /// Change only the qualified checked value, preserving all other raw bytes.
+    pub fn set_checkbox_checked(&mut self, checked: bool) -> Result<()> {
+        let child = self.checkbox_child(b"checked")?;
+        let element = self.type_element.as_mut().ok_or_else(|| {
+            OxmlError::InvalidValue("checkbox type payload is missing".to_owned())
+        })?;
+        let value = if checked {
+            b"1".as_slice()
+        } else {
+            b"0".as_slice()
+        };
+        if let Some(child) = child {
+            if let Some(range) = child.value {
+                element.children.splice(range, value.iter().copied());
+            } else {
+                let mut prefix = "rdocxW14".to_owned();
+                let mut suffix = 0usize;
+                while element
+                    .namespace_bindings
+                    .iter()
+                    .any(|(bound, _)| bound == &prefix)
+                    || element
+                        .children
+                        .windows(prefix.len())
+                        .any(|bytes| bytes == prefix.as_bytes())
+                {
+                    suffix += 1;
+                    prefix = format!("rdocxW14{suffix}");
+                }
+                let attribute = format!(
+                    " xmlns:{prefix}=\"http://schemas.microsoft.com/office/word/2010/wordml\" {prefix}:val=\"{}\"",
+                    u8::from(checked)
+                );
+                element.children.splice(
+                    child.insert_attribute..child.insert_attribute,
+                    attribute.bytes(),
+                );
+            }
+        } else {
+            let checked_xml = format!(
+                "<rdocxW14:checked xmlns:rdocxW14=\"http://schemas.microsoft.com/office/word/2010/wordml\" rdocxW14:val=\"{}\"/>",
+                u8::from(checked)
+            );
+            element.children.splice(0..0, checked_xml.bytes());
+        }
+        Ok(())
+    }
+
+    fn checkbox_child(&self, wanted: &[u8]) -> Result<Option<CheckboxChild>> {
+        const W14: &[u8] = b"http://schemas.microsoft.com/office/word/2010/wordml";
+        if self.control_type != Some(SdtType::CheckBox) {
+            return Err(OxmlError::InvalidValue(
+                "only a checkbox has a checked state".to_owned(),
+            ));
+        }
+        let element = self.type_element.as_ref().ok_or_else(|| {
+            OxmlError::InvalidValue("checkbox type payload is missing".to_owned())
+        })?;
+        let mut start = BytesStart::new("scope");
+        for (prefix, namespace) in &element.namespace_bindings {
+            let name = if prefix.is_empty() {
+                "xmlns".to_owned()
+            } else {
+                format!("xmlns:{prefix}")
+            };
+            start.push_attribute((name.as_str(), namespace.as_str()));
+        }
+        let mut writer = Writer::new(Vec::new());
+        writer.write_event(Event::Start(start))?;
+        let offset = writer.get_ref().len();
+        writer.get_mut().extend_from_slice(&element.children);
+        writer.write_event(Event::End(BytesEnd::new("scope")))?;
+        let xml = writer.into_inner();
+        let mut reader = NsReader::from_reader(xml.as_slice());
+        let mut depth = 0usize;
+        let mut found = None;
+        loop {
+            let before = reader.buffer_position() as usize;
+            let (namespace, event) = reader.read_resolved_event()?;
+            let qualified = matches!(namespace, quick_xml::name::ResolveResult::Bound(ns) if ns.as_ref() == W14);
+            match event {
+                Event::Start(child) | Event::Empty(child) => {
+                    let empty = xml.get(reader.buffer_position() as usize - 2) == Some(&b'/');
+                    if depth == 1 && qualified && child.local_name().as_ref() == wanted {
+                        if found.is_some() {
+                            return Err(OxmlError::InvalidValue(
+                                "duplicate qualified checkbox state child".to_owned(),
+                            ));
+                        }
+                        let mut record = CheckboxChild {
+                            value: None,
+                            font: None,
+                            insert_attribute: reader.buffer_position() as usize
+                                - offset
+                                - if empty { 2 } else { 1 },
+                        };
+                        for attribute in child.attributes() {
+                            let attribute = attribute?;
+                            let (namespace, local) =
+                                reader.resolver().resolve_attribute(attribute.key);
+                            if !matches!(namespace, quick_xml::name::ResolveResult::Bound(ns) if ns.as_ref() == W14)
+                            {
+                                continue;
+                            }
+                            let destination = match local.as_ref() {
+                                b"val" => &mut record.value,
+                                b"font" => &mut record.font,
+                                _ => continue,
+                            };
+                            if destination.is_some() {
+                                return Err(OxmlError::InvalidValue(
+                                    "duplicate qualified checkbox state attribute".to_owned(),
+                                ));
+                            }
+                            let relative = attribute.value.as_ptr() as usize
+                                - child.as_ref().as_ptr() as usize;
+                            let begin = before + 1 + relative - offset;
+                            *destination = Some(begin..begin + attribute.value.len());
+                        }
+                        found = Some(record);
+                    }
+                    if !empty {
+                        depth += 1;
+                    }
+                }
+                Event::End(_) => depth = depth.saturating_sub(1),
+                Event::Eof => return Ok(found),
+                _ => {}
+            }
+        }
+    }
     fn from_xml_with_prefixes(
         reader: &mut Reader<&[u8]>,
         start: &BytesStart<'_>,
@@ -196,8 +388,18 @@ impl CT_SdtPr {
                                 })?;
                             properties.type_element = Some(TypeElement {
                                 control_type,
+                                name: if control_type == SdtType::CheckBox {
+                                    std::str::from_utf8(child.name().as_ref())?.to_owned()
+                                } else {
+                                    control_type.element_name().to_owned()
+                                },
                                 attributes: capture_attributes(&child, &child_prefixes, &[])?,
                                 children: children.to_vec(),
+                                namespace_bindings: if control_type == SdtType::CheckBox {
+                                    namespace_bindings(&child_prefixes)
+                                } else {
+                                    Vec::new()
+                                },
                             });
                         } else {
                             reader.read_to_end_into(child.name(), &mut Vec::new())?;
@@ -216,8 +418,18 @@ impl CT_SdtPr {
                         {
                             properties.type_element = Some(TypeElement {
                                 control_type,
+                                name: if control_type == SdtType::CheckBox {
+                                    std::str::from_utf8(child.name().as_ref())?.to_owned()
+                                } else {
+                                    control_type.element_name().to_owned()
+                                },
                                 attributes: capture_attributes(&child, &child_prefixes, &[])?,
                                 children: Vec::new(),
+                                namespace_bindings: if control_type == SdtType::CheckBox {
+                                    namespace_bindings(&child_prefixes)
+                                } else {
+                                    Vec::new()
+                                },
                             });
                         }
                     } else {
@@ -338,7 +550,14 @@ impl CT_SdtPr {
         let Some(control_type) = self.control_type else {
             return Ok(());
         };
-        let name = control_type.element_name();
+        let name = self
+            .type_element
+            .as_ref()
+            .filter(|element| element.control_type == control_type)
+            .map_or_else(
+                || control_type.element_name(),
+                |element| element.name.as_str(),
+            );
         let mut start = BytesStart::new(name);
         let children = match &self.type_element {
             Some(element) if element.control_type == control_type => {
@@ -1542,13 +1761,14 @@ fn is_word_attribute(key: &[u8], local: &[u8], prefixes: &[String]) -> bool {
 }
 
 fn is_supported_type_element(name: &[u8], local: &[u8], prefixes: &[String]) -> bool {
-    if is_word_element(name, local, prefixes) {
+    if local != b"checkbox" && is_word_element(name, local, prefixes) {
         return true;
     }
-    let Some(separator) = name.iter().position(|byte| *byte == b':') else {
-        return false;
+    let prefix = match name.iter().position(|byte| *byte == b':') {
+        Some(separator) => &name[..separator],
+        None if local == b"checkbox" => b"".as_slice(),
+        None => return false,
     };
-    let prefix = &name[..separator];
     prefixes.iter().any(|binding| {
         let Some(rest) = binding.strip_prefix('\0') else {
             return false;
@@ -1557,11 +1777,15 @@ fn is_supported_type_element(name: &[u8], local: &[u8], prefixes: &[String]) -> 
             return false;
         };
         bound_prefix.as_bytes() == prefix
-            && matches!(
-                namespace,
-                "http://schemas.microsoft.com/office/word/2010/wordml"
-                    | "http://schemas.microsoft.com/office/word/2012/wordml"
-            )
+            && if local == b"checkbox" {
+                namespace == "http://schemas.microsoft.com/office/word/2010/wordml"
+            } else {
+                matches!(
+                    namespace,
+                    "http://schemas.microsoft.com/office/word/2010/wordml"
+                        | "http://schemas.microsoft.com/office/word/2012/wordml"
+                )
+            }
     })
 }
 

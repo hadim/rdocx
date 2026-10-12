@@ -201,15 +201,11 @@ pub fn text(file: &Path, json_output: bool) -> Result<()> {
             "stories": stories,
         }))?;
     } else {
-        let mut stdout = io::stdout().lock();
-        write!(stdout, "{}", doc.text())?;
-        let stories = readable_stories(file, &doc).unwrap_or_default();
-        for (kind, part_name, texts) in story_parts(&stories) {
-            writeln!(stdout, "--- {} ({part_name}) ---", story_kind_name(kind))?;
-            for text in texts {
-                writeln!(stdout, "{text}")?;
-            }
+        let report = doc.text_report();
+        for diagnostic in &report.diagnostics {
+            eprintln!("Warning: {}", diagnostic.message);
         }
+        write!(io::stdout().lock(), "{}", report.text)?;
     }
     Ok(())
 }
@@ -2215,174 +2211,15 @@ fn validate_dpi(dpi: f64) -> Result<()> {
 /// Advisory findings (empty paragraphs, missing metadata) are reported but do
 /// not affect the exit status.
 pub fn validate(file: &Path) -> Result<bool> {
-    let mut errors: Vec<String> = Vec::new();
-    let mut warnings: Vec<String> = Vec::new();
-
-    // --- Structural errors ---
-
-    // Every relationship must point at a part that is actually in the package.
-    let package = oxml_opc::OpcPackage::open(file)?;
-    if let Some(doc_part) = package.main_document_part() {
-        if package.get_part(&doc_part).is_none() {
-            errors.push(format!("main document part {doc_part} is missing"));
-        }
-        if let Some(rels) = package.get_part_rels(&doc_part) {
-            for rel in &rels.items {
-                // External targets live outside the package by definition.
-                if rel.target_mode.as_deref() == Some("External") {
-                    continue;
-                }
-                let target = oxml_opc::OpcPackage::resolve_rel_target(&doc_part, &rel.target);
-                if package.get_part(&target).is_none() {
-                    errors.push(format!(
-                        "relationship {} points at missing part {target}",
-                        rel.id
-                    ));
-                }
-            }
-        }
-    } else {
-        errors.push("package declares no main document relationship".to_string());
-    }
-
-    // Every part needs a declared content type.
-    for part_name in package.parts.keys() {
-        if package.content_types.content_type_for(part_name).is_none() {
-            errors.push(format!("part {part_name} has no declared content type"));
+    let report = rdocx::validate_document_file(file)?;
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+    for finding in report.findings {
+        match finding.severity {
+            rdocx::ValidationSeverity::Error => errors.push(finding.message),
+            rdocx::ValidationSeverity::Warning => warnings.push(finding.message),
         }
     }
-
-    // Markup Compatibility requires every prefix that `mc:Ignorable` or
-    // `mc:MustUnderstand` lists to be declared, and a consumer may reject a
-    // part that breaks the rule. A part that does not parse as XML is
-    // outside this check.
-    let mut xml_parts = package
-        .parts
-        .iter()
-        .filter(|(part_name, _)| {
-            package
-                .content_types
-                .content_type_for(part_name)
-                .is_some_and(|content_type| content_type.ends_with("xml"))
-        })
-        .collect::<Vec<_>>();
-    xml_parts.sort();
-    for (part_name, xml) in xml_parts {
-        let Ok(findings) = rdocx_oxml::namespace::undeclared_compatibility_prefixes(xml) else {
-            continue;
-        };
-        for (attribute, prefix) in findings {
-            errors.push(format!(
-                "part {part_name} lists undeclared prefix `{prefix}` in mc:{attribute}"
-            ));
-        }
-    }
-
-    // Every XML part the main document relates to must be well formed. The
-    // style ids that its story parts name are checked once the document opens.
-    let mut style_references = Vec::new();
-    if let Some(doc_part) = package.main_document_part() {
-        let mut parts = vec![(doc_part.clone(), true)];
-        for rel in package
-            .get_part_rels(&doc_part)
-            .iter()
-            .flat_map(|rels| &rels.items)
-        {
-            if rel.target_mode.as_deref() == Some("External") {
-                continue;
-            }
-            let target = oxml_opc::OpcPackage::resolve_rel_target(&doc_part, &rel.target);
-            let story = STORY_RELATIONSHIPS.contains(&rel.rel_type.as_str());
-            if !parts.iter().any(|(known, _)| *known == target) {
-                parts.push((target, story));
-            }
-        }
-        for (part_name, story) in parts {
-            let is_xml = package
-                .content_types
-                .content_type_for(&part_name)
-                .is_some_and(|content_type| {
-                    content_type.ends_with("+xml") || content_type.ends_with("/xml")
-                });
-            let Some(xml) = package.get_part(&part_name).filter(|_| is_xml) else {
-                continue;
-            };
-            match xml_style_references(xml) {
-                Err(detail) => {
-                    errors.push(format!("part {part_name} is not well-formed XML: {detail}"));
-                }
-                Ok(references) if story => style_references.extend(
-                    references
-                        .into_iter()
-                        .map(|(kind, style_id)| (kind, style_id, part_name.clone())),
-                ),
-                Ok(_) => {}
-            }
-        }
-    }
-
-    // A malformed part can keep the document from opening. The errors found
-    // so far explain why, so they are reported together with the failure.
-    let doc = match Document::open(file) {
-        Ok(doc) => doc,
-        Err(error) if !errors.is_empty() => {
-            errors.push(format!("the document does not open: {error}"));
-            return report_validation(file, &errors, &warnings);
-        }
-        Err(error) => return Err(error.into()),
-    };
-
-    // Word falls back to the default style for a style id that no style
-    // defines, so the style that the document names is silently lost.
-    for (kind, style_id, part_name) in style_references {
-        let issue = format!("{kind} style {style_id:?} used in {part_name} is not defined");
-        if doc.style(&style_id).is_none() && !errors.contains(&issue) {
-            errors.push(issue);
-        }
-    }
-
-    if let Err(error) = doc.validate_comment_ownership() {
-        errors.push(format!("invalid comment ownership: {error}"));
-    }
-
-    // --- Advisory findings ---
-
-    if doc.content_count() == 0 {
-        warnings.push("Document has no content (no paragraphs or tables)".to_string());
-    }
-
-    match doc.paragraph_visibility() {
-        Ok(visibility) => {
-            let empty_count = visibility.iter().filter(|visible| !**visible).count();
-            if empty_count > 0 {
-                warnings.push(format!("{empty_count} empty paragraph(s) found"));
-            }
-        }
-        Err(error) if !errors.is_empty() => warnings.push(format!(
-            "Paragraph visibility could not be determined: {error}"
-        )),
-        Err(error) => return Err(error.into()),
-    }
-
-    let mut prev_level: Option<u32> = None;
-    for (level, _) in doc.headings() {
-        if let Some(prev) = prev_level
-            && level > prev + 1
-        {
-            warnings.push(format!(
-                "Heading level gap: Heading{prev} -> Heading{level} (skipped level(s))"
-            ));
-        }
-        prev_level = Some(level);
-    }
-
-    if doc.title().is_none() {
-        warnings.push("Missing document title".to_string());
-    }
-    if doc.author().is_none() {
-        warnings.push("Missing document author".to_string());
-    }
-
     report_validation(file, &errors, &warnings)
 }
 

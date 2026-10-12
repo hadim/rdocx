@@ -71,9 +71,11 @@ pub use document::{
     NumberingDefinition, NumberingDefinitionLevel, NumberingFormat, NumberingInstance,
     NumberingLevel, NumberingLevelOverride, OutlineNode, PictureAnchor, PictureCrop,
     PictureOptions, RenderOptions, ReplacementCountMismatch, Section, SectionRef, SectionStory,
-    StoryError, StoryId, StoryItemKind, StoryItemRef, StoryItemSnapshot, StoryKind,
-    TextBoxDirection, TextBoxOptions, TextWatermarkOptions, UnsupportedXmlRef, ValidationFinding,
-    ValidationReport, ValidationSeverity, WordCreationProfile, WordPackageClass,
+    StoryError, StoryId, StoryItemKind, StoryItemRef, StoryItemSnapshot, StoryKind, StoryText,
+    StoryTextItem, TextBoxDirection, TextBoxOptions, TextDiagnostic, TextReport,
+    TextWatermarkOptions, UnsupportedXmlRef, ValidationFinding, ValidationReport,
+    ValidationSeverity, WordCreationProfile, WordPackageClass, validate_document_bytes,
+    validate_document_file,
 };
 pub use embedded::{
     EmbeddedContentInfo, EmbeddedContentKind, EmbeddedMutationPolicy, EmbeddedSignatureState,

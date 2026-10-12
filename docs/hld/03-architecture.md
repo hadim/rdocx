@@ -2036,3 +2036,9 @@ Every consuming formatting builder on `Paragraph`, `Run`, `Table`, `Row`, and
 cannot back a Python property setter. The 61 consuming builders delegate to
 their setter twins, so Rust callers retain chaining while borrowed handles and
 Python properties use in-place mutation.
+
+## Shared Word document operations
+
+The native Word facade owns accepted-view text presentation and advisory package validation. Python and CLI callers consume the same TextReport and ValidationReport. The native crate has no CLI dependency. Plain text presentation groups readable related stories in physical inventory order and retains main text with one ordered omission diagnostic if extraction fails. Body counts use accepted content rather than presentation labels.
+
+Python template conversion admits explicit JSON scalar and container types before native mutation. Its existing workspace serde_json dependency edge introduces no separate converter model. Checked fragment publication and property mutation stage complete candidates, preserve the original on refusal and invalidate live handles only after changed publication. Markdown requests recursive physical-owner boundaries from the existing accepted projection. The default accepted view remains unchanged for its other consumers.

@@ -6975,6 +6975,8 @@ Namespace aliases/defaults/rebinding, simple/complex field break parity,
 all-story ownership, repeat/reopen and late atomic refusal are required.
 Complete cross-paragraph field graphs remain coordinated with F-X211.
 
+Qualified checkbox updates admit default or aliased Word2010 roots, preflight the selected XML-safe scalar and font, preserve foreign source and publish all selected controls atomically. Typed export diagnostics, immutable equation snapshots, live metadata and checked physical fragment boundaries share the native operation providers. Strict installed typing and complete provenance qualify the public surfaces.
+
 **Depends on**: F-X196, F-X201, F-X212.
 **Test gate**: regression. Reproduce each missing operation or reported defect
 through the installed public API on the claimed Base before implementation.

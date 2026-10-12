@@ -135,6 +135,32 @@ pub(crate) fn rdocx_to_pyerr(py: Python<'_>, error: rdocx::Error) -> PyErr {
 #[pymodule]
 fn _rdocx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyDocument>()?;
+    module.add_class::<document::PyOdtDiagnostic>()?;
+    module.add_class::<document::PyRtfDiagnostic>()?;
+    module.add_class::<document::PyEpubDiagnostic>()?;
+    module.add_class::<document::PyTextDiagnostic>()?;
+    module.add_class::<document::PyValidationFinding>()?;
+    module.add_class::<document::PyOdtExportResult>()?;
+    module.add_class::<document::PyRtfExportResult>()?;
+    module.add_class::<document::PyEpubExportResult>()?;
+    module.add_class::<document::PyTextReport>()?;
+    module.add_class::<paragraph::PyMathConversionDiagnostic>()?;
+    module.add_class::<paragraph::PyMathConversionResult>()?;
+    module.add_class::<paragraph::PyEquationConversionResult>()?;
+    module.add_class::<paragraph::PyEquation>()?;
+    module.add_class::<paragraph::PyEquationInsertResult>()?;
+    module.add_class::<document::PyFragmentConflictPolicy>()?;
+    module.add_class::<document::PyContentLocation>()?;
+    module.add_class::<document::PyDocumentFragment>()?;
+    module.add_class::<document::PyContentControl>()?;
+    module.add_class::<document::PyCustomFileTime>()?;
+    module.add_class::<document::PyCustomProperty>()?;
+    module.add_class::<document::PyCustomProperties>()?;
+    module.add_class::<document::PyAppProperties>()?;
+    module.add_class::<document::PyValidationReport>()?;
+    module.add_function(wrap_pyfunction!(document::validate_bytes, module)?)?;
+    module.add_function(wrap_pyfunction!(document::validate_file, module)?)?;
+
     module.add_class::<PyRunPosition>()?;
     module.add_class::<PyRunRange>()?;
     module.add_class::<PyBookmark>()?;

@@ -26,9 +26,9 @@ pub(crate) fn emit_body(
     let mut out = String::new();
     let mut list_stack: Vec<ListState> = Vec::new();
 
-    for block in body_blocks(body) {
+    for block in body_blocks(body, false) {
         match block {
-            Block::Paragraph(p) => {
+            Block::Paragraph(p, _) => {
                 let list_info = detect_list(&p, numbering);
 
                 // Close lists that are no longer active
@@ -567,7 +567,7 @@ fn emit_table(
 
             for block in cell_blocks(cell) {
                 match block {
-                    Block::Paragraph(p) => {
+                    Block::Paragraph(p, _) => {
                         emit_paragraph(out, &p, styles, images, hyperlink_urls, options);
                     }
                     Block::Table(nested) => {

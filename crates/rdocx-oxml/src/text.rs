@@ -6034,6 +6034,94 @@ fn append_tracked_cell_runs<'a>(cell: &'a CT_Tc, output: &mut Vec<&'a CT_R>) {
     }
 }
 
+// Markdown's accepted projection carries physical scope boundaries separately
+// from the typed runs. Default accepted-view readers keep their existing walk.
+fn append_accepted_inline_paragraph(
+    paragraph: &CT_P,
+    runs: &mut Vec<CT_R>,
+    boundaries: &mut Vec<usize>,
+) {
+    let (view, inner) = paragraph.accepted_view_projection(true);
+    let offset = runs.len();
+    let view = view.into_owned();
+    if !view.runs.is_empty() {
+        boundaries.push(offset);
+        boundaries.extend(inner.into_iter().map(|at| offset + at));
+        boundaries.push(offset + view.runs.len());
+        runs.extend(view.runs);
+    }
+}
+
+fn append_accepted_inline_revision(
+    revision: &CT_Revision,
+    runs: &mut Vec<CT_R>,
+    boundaries: &mut Vec<usize>,
+) {
+    if matches!(
+        revision.kind(),
+        RevisionKind::Insertion | RevisionKind::MoveTo
+    ) && let Some(paragraph) = revision.content_paragraph()
+    {
+        append_accepted_inline_paragraph(paragraph, runs, boundaries);
+    }
+}
+
+fn append_accepted_inline_control(
+    control: &CT_Sdt,
+    runs: &mut Vec<CT_R>,
+    boundaries: &mut Vec<usize>,
+) {
+    let start = runs.len();
+    let boundary_start = boundaries.len();
+    boundaries.push(start);
+    for boundary in 0..=control.content.len() {
+        for (_, revision) in control.revisions().iter().filter(|(at, _)| *at == boundary) {
+            append_accepted_inline_revision(revision, runs, boundaries);
+        }
+        let Some(content) = control.content.get(boundary) else {
+            continue;
+        };
+        match content {
+            SdtContent::Run(run) => runs.push(run.clone()),
+            SdtContent::ContentControl(nested) => {
+                append_accepted_inline_control(nested, runs, boundaries)
+            }
+            SdtContent::Paragraph(paragraph) => {
+                append_accepted_inline_paragraph(paragraph, runs, boundaries)
+            }
+            // Block carriers are emitted separately by Markdown. Retain the
+            // accepted typed projection if encountered in a synthetic inline model.
+            SdtContent::Table(table) => {
+                let mut owned = Vec::new();
+                append_accepted_table_runs(table, &mut owned);
+                boundaries.push(runs.len());
+                runs.extend(owned.into_iter().cloned());
+                boundaries.push(runs.len());
+            }
+            SdtContent::Row(row) => {
+                let mut owned = Vec::new();
+                append_accepted_row_runs(row, &mut owned);
+                boundaries.push(runs.len());
+                runs.extend(owned.into_iter().cloned());
+                boundaries.push(runs.len());
+            }
+            SdtContent::Cell(cell) => {
+                let mut owned = Vec::new();
+                append_accepted_cell_runs(cell, &mut owned);
+                boundaries.push(runs.len());
+                runs.extend(owned.into_iter().cloned());
+                boundaries.push(runs.len());
+            }
+            SdtContent::RawXml(_) => {}
+        }
+    }
+    if runs.len() == start {
+        boundaries.truncate(boundary_start);
+    } else {
+        boundaries.push(runs.len());
+    }
+}
+
 fn append_accepted_revision_runs<'a>(revision: &'a CT_Revision, output: &mut Vec<&'a CT_R>) {
     if !matches!(
         revision.kind(),
@@ -6238,6 +6326,17 @@ impl CT_P {
     /// the paragraph holds none of them, since its runs are then the view.
     #[doc(hidden)]
     pub fn accepted_view(&self) -> Cow<'_, CT_P> {
+        self.accepted_view_projection(false).0
+    }
+
+    /// Read accepted content while retaining physical simple-field boundaries.
+    /// Markdown uses these boundaries to keep independent formatting spans.
+    #[doc(hidden)]
+    pub fn accepted_view_with_field_owners(&self) -> (Cow<'_, CT_P>, Vec<usize>) {
+        self.accepted_view_projection(true)
+    }
+
+    fn accepted_view_projection(&self, preserve_field_owners: bool) -> (Cow<'_, CT_P>, Vec<usize>) {
         if self.content_controls.is_empty()
             && self.revisions.is_empty()
             && !self.extra_xml.iter().any(|(_, raw)| is_run_wrapper(raw))
@@ -6246,9 +6345,10 @@ impl CT_P {
                 .iter()
                 .any(|run| simple_field_source(run).is_some())
         {
-            return Cow::Borrowed(self);
+            return (Cow::Borrowed(self), Vec::new());
         }
         let mut runs = Vec::new();
+        let mut inline_boundaries = Vec::new();
         // The index into `self.hyperlinks` of the hyperlink each run is in.
         let mut links = Vec::new();
         for boundary in 0..=self.runs.len() {
@@ -6256,11 +6356,34 @@ impl CT_P {
                 let mut owned = Vec::new();
                 let link = match owner {
                     BoundaryOwner::ContentControl(index) => {
+                        if preserve_field_owners {
+                            let offset = runs.len();
+                            append_accepted_inline_control(
+                                &self.content_controls[index].3,
+                                &mut runs,
+                                &mut inline_boundaries,
+                            );
+                            links.extend(std::iter::repeat_n(None, runs.len() - offset));
+                            continue;
+                        }
                         append_accepted_control_runs(&self.content_controls[index].3, &mut owned);
                         None
                     }
                     BoundaryOwner::Revision(index) => {
                         let (_, slot, revision) = &self.revisions[index];
+                        if preserve_field_owners {
+                            let offset = runs.len();
+                            append_accepted_inline_revision(
+                                revision,
+                                &mut runs,
+                                &mut inline_boundaries,
+                            );
+                            links.extend(std::iter::repeat_n(
+                                hyperlink_revision_index(*slot),
+                                runs.len() - offset,
+                            ));
+                            continue;
+                        }
                         append_accepted_revision_runs(revision, &mut owned);
                         hyperlink_revision_index(*slot)
                     }
@@ -6268,13 +6391,26 @@ impl CT_P {
                         if let Some(content) =
                             run_wrapper_paragraph(&self.extra_xml[index].1, &["w".to_owned()])
                         {
-                            let view = content.accepted_view().into_owned();
+                            let (view, boundaries) =
+                                content.accepted_view_projection(preserve_field_owners);
+                            let offset = runs.len();
+                            let view = view.into_owned();
+                            if preserve_field_owners && !view.runs.is_empty() {
+                                inline_boundaries.push(offset);
+                                inline_boundaries
+                                    .extend(boundaries.into_iter().map(|at| offset + at));
+                                inline_boundaries.push(offset + view.runs.len());
+                            }
                             links.extend(std::iter::repeat_n(None, view.runs.len()));
                             runs.extend(view.runs);
                         }
                         continue;
                     }
                 };
+                if preserve_field_owners && !owned.is_empty() {
+                    inline_boundaries.push(runs.len());
+                    inline_boundaries.push(runs.len() + owned.len());
+                }
                 links.extend(std::iter::repeat_n(link, owned.len()));
                 runs.extend(owned.into_iter().cloned());
             }
@@ -6288,7 +6424,15 @@ impl CT_P {
                     .and_then(|(raw, prefixes)| run_wrapper_paragraph(raw, prefixes));
                 match field {
                     Some(content) => {
-                        let view = content.accepted_view().into_owned();
+                        let (view, boundaries) =
+                            content.accepted_view_projection(preserve_field_owners);
+                        let offset = runs.len();
+                        let view = view.into_owned();
+                        if preserve_field_owners && !view.runs.is_empty() {
+                            inline_boundaries.push(offset);
+                            inline_boundaries.extend(boundaries.into_iter().map(|at| offset + at));
+                            inline_boundaries.push(offset + view.runs.len());
+                        }
                         links.extend(std::iter::repeat_n(link, view.runs.len()));
                         runs.extend(view.runs);
                     }
@@ -6315,12 +6459,15 @@ impl CT_P {
             }
             start = end;
         }
-        Cow::Owned(CT_P {
-            properties: self.properties.clone(),
-            runs,
-            hyperlinks,
-            ..CT_P::new()
-        })
+        (
+            Cow::Owned(CT_P {
+                properties: self.properties.clone(),
+                runs,
+                hyperlinks,
+                ..CT_P::new()
+            }),
+            inline_boundaries,
+        )
     }
 
     /// Return the content of a preserved smart tag or inline custom XML
@@ -14211,7 +14358,7 @@ mod tests {
         // fallback. The block has to come back out verbatim, exactly once,
         // while still being visible to layout.
         let src = concat!(
-            r#"<w:r xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><mc:AlternateContent><mc:Choice Requires="wps">"#,
+            r#"<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><mc:AlternateContent><mc:Choice Requires="wps">"#,
             r#"<w:drawing><wp:anchor behindDoc="0">"#,
             r#"<wp:positionH relativeFrom="column"><wp:posOffset>914400</wp:posOffset></wp:positionH>"#,
             r#"<wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV>"#,
@@ -17486,7 +17633,7 @@ mod tests {
     #[test]
     fn split_run_partitions_zero_width_mixed_content_without_reordering() {
         let mut paragraph = parse_paragraph(concat!(
-            r#"<w:r xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><w:t>ab</w:t><w:tab/><w:br/><w:fldChar w:fldCharType="begin"/><w:instrText> PAGE </w:instrText>"#,
+            r#"<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><w:t>ab</w:t><w:tab/><w:br/><w:fldChar w:fldCharType="begin"/><w:instrText> PAGE </w:instrText>"#,
             r#"<mc:AlternateContent><mc:Choice Requires="wps">"#,
             r#"<w:drawing><wp:anchor behindDoc="0">"#,
             r#"<wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH>"#,

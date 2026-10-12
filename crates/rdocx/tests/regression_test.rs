@@ -7129,7 +7129,7 @@ fn complex_field_cached_snapshot_namespace_and_literal_text_matrix() {
         ("", ""),
         (
             r#"<w:r><w:t>A&amp;&lt;</w:t></w:r><w:r><w:t><![CDATA[B>]]></w:t><w:tab/><w:br/><w:cr/><w:t>C</w:t></w:r>"#,
-            "A&<B>C",
+            "A&<B>\t\n\nC",
         ),
         (
             r#"<w:r><w:t xml:space="preserve"> 7 </w:t></w:r><w:r><w:t>8</w:t></w:r>"#,
@@ -7207,8 +7207,11 @@ fn complex_field_cached_snapshot_nested_instructions_and_hyperlink_ancestors() {
             .iter()
             .map(|(_, link)| link.text.as_str())
             .collect::<Vec<_>>(),
-        ["7yes", "neighbor"]
+        ["yes", "neighbor"]
     );
+    // The instruction part of the IF field, the nested PAGE result included,
+    // stays out of the link text, as in the typed paragraph model.
+    assert_eq!(document.links()[0].text, "yes");
     assert_eq!(links[0].1.url.as_deref(), Some("https://own.example/"));
 }
 
@@ -44620,7 +44623,14 @@ mod tab_stop_regressions {
                 &["T", "I12"],
             ),
         ];
-        let document_2010 = document(&paragraphs);
+        let mut document_2010 = document(&paragraphs);
+        document_2010
+            .set_compatibility_setting(
+                "compatibilityMode",
+                "http://schemas.microsoft.com/office/word",
+                "14",
+            )
+            .unwrap();
         assert_at(run(&document_2010, "M12").1, 590.0, "Word 2010");
         assert_at(run(&document_2010, "I12").1, 540.0, "Word 2010 indented");
         let mut document_2013 = document(&paragraphs);
@@ -50730,6 +50740,11 @@ fn identical_text_boxes_keep_distinct_physical_owners_across_pages_and_inline_co
 // Exact replay of generator SHA-256 0335394fffe04039c4b194bd74546f80808f211ddf505a1d3405c877e32fb1d2.
 fn f279_continuous_oracle(case: &str) -> Document {
     let mut d = Document::new();
+    d.remove_compatibility_setting(
+        "compatibilityMode",
+        "http://schemas.microsoft.com/office/word",
+    )
+    .unwrap();
     d.set_update_fields_on_open(Some(false)).unwrap();
     let body = StoryId::body();
     f279_oracle_append(
@@ -400348,4 +400363,703 @@ fn fx201_explicit_picture_dimensions_keep_qualified_vector_input() {
         Document::from_bytes(&saved).unwrap().to_bytes().unwrap(),
         saved
     );
+}
+
+#[test]
+fn fx203_fresh_word_compatible_profiles_name_mode15_without_promoting_minimal() {
+    for class in [
+        WordPackageClass::Document,
+        WordPackageClass::MacroEnabledDocument,
+        WordPackageClass::Template,
+        WordPackageClass::MacroEnabledTemplate,
+    ] {
+        let minimal = Document::new_with_profile(WordCreationProfile::Minimal(class));
+        assert!(minimal.compatibility_settings().is_empty());
+        let mut document = Document::new_with_profile(WordCreationProfile::WordCompatible(class));
+        let modes: Vec<_> = document
+            .compatibility_settings()
+            .iter()
+            .filter(|setting| {
+                setting.name == "compatibilityMode"
+                    && setting.uri == "http://schemas.microsoft.com/office/word"
+            })
+            .collect();
+        assert_eq!(
+            modes.len(),
+            1,
+            "fresh compatible profile must declare exactly one modern mode"
+        );
+        assert_eq!(modes[0].value, "15");
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            reopened.compatibility_settings(),
+            document.compatibility_settings()
+        );
+    }
+}
+
+#[test]
+fn fx203_markdown_reuses_emphasis_across_equal_runs() {
+    let document = Document::from_html("<p><b>Quar</b><b>terly</b> report</p>")
+        .unwrap()
+        .document;
+    assert_eq!(document.to_markdown(), "**Quarterly** report\n\n");
+}
+
+#[test]
+fn fx203_markdown_keeps_edge_whitespace_outside_owned_emphasis() {
+    let document = Document::from_html("<p>Sales <b>rose</b> by <i>ten</i> percent.</p>")
+        .unwrap()
+        .document;
+    assert_eq!(
+        document.to_markdown(),
+        "Sales **rose** by *ten* percent.\n\n"
+    );
+}
+
+#[test]
+fn fx203_markdown_simple_field_keeps_accepted_revisions_and_owner_boundaries() {
+    let mut document = Document::new();
+    document.add_paragraph("placeholder");
+    let mut package =
+        oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+            .unwrap();
+    let xml = String::from_utf8(package.get_part("/word/document.xml").unwrap().to_vec()).unwrap();
+    let start = xml.find("<w:body>").unwrap() + "<w:body>".len();
+    let end = xml.find("<w:sectPr").unwrap();
+    let paragraph = r#"<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>left</w:t></w:r><w:fldSimple w:instr=" AUTHOR "><w:ins w:id="1" w:author="Ada"><w:r><w:rPr><w:b/></w:rPr><w:t>field</w:t></w:r></w:ins><w:del w:id="2" w:author="Ada"><w:r><w:delText>hidden</w:delText></w:r></w:del></w:fldSimple><w:r><w:rPr><w:b/></w:rPr><w:t>right</w:t></w:r></w:p>"#;
+    package.set_part(
+        "/word/document.xml",
+        format!("{}{paragraph}{}", &xml[..start], &xml[end..]).into_bytes(),
+    );
+    let mut bytes = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut bytes).unwrap();
+    let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+    let before = document.to_bytes().unwrap();
+    assert_eq!(document.text(), "leftfieldright\n");
+    assert_eq!(document.to_markdown(), "**left****field****right**\n\n");
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let mut reopened = Document::from_bytes(&before).unwrap();
+    assert_eq!(reopened.text(), document.text());
+    assert_eq!(reopened.to_markdown(), document.to_markdown());
+    assert_eq!(reopened.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn fx203_markdown_nonempty_table_ends_the_previous_list() {
+    let document =
+        Document::from_html("<ul><li>North</li></ul><table><tr><td>a</td><td>b</td></tr></table>")
+            .unwrap()
+            .document;
+    assert_eq!(
+        document.to_markdown(),
+        "- North\n\n| a | b |\n| --- | --- |\n\n"
+    );
+}
+
+#[test]
+fn fx203_fresh_compatibility_keeps_explicit_removal_and_imported_modes() {
+    let office = "http://schemas.microsoft.com/office/word";
+    let mut html = Document::from_html("<p>Fresh</p>").unwrap().document;
+    assert_eq!(
+        html.compatibility_settings()
+            .iter()
+            .find(|s| s.name == "compatibilityMode" && s.uri == office)
+            .unwrap()
+            .value,
+        "15"
+    );
+    html.remove_compatibility_setting("compatibilityMode", office)
+        .unwrap();
+    assert!(
+        Document::from_bytes(&html.to_bytes().unwrap())
+            .unwrap()
+            .compatibility_settings()
+            .iter()
+            .all(|s| s.name != "compatibilityMode")
+    );
+    for mode in ["14", "15", "16"] {
+        let mut document = Document::new();
+        document
+            .set_compatibility_setting("compatibilityMode", office, mode)
+            .unwrap();
+        document
+            .set_compatibility_setting("opaqueProducerPolicy", "urn:opaque", "retained")
+            .unwrap();
+        let bytes = document.to_bytes().unwrap();
+        let mut reopened = Document::from_bytes(&bytes).unwrap();
+        assert_eq!(
+            reopened.compatibility_settings(),
+            document.compatibility_settings()
+        );
+        assert_eq!(reopened.to_bytes().unwrap(), bytes);
+    }
+}
+
+#[test]
+fn fx203_text_report_has_cli_story_order_and_body_only_counts() {
+    let mut document = Document::new();
+    document.add_paragraph("A\tB\u{00a0}😀e\u{0301}");
+    document.try_set_header("head text").unwrap();
+    let header = document
+        .section_story(0, HeaderFooterKind::Header, HdrFtrType::Default)
+        .unwrap()
+        .unwrap()
+        .story()
+        .part_name()
+        .to_owned();
+    let before = document.to_bytes().unwrap();
+    let report = document.text_report();
+    assert_eq!(
+        report.text,
+        format!("A\tB\u{00a0}😀e\u{0301}\n--- header ({header}) ---\nhead text\n")
+    );
+    assert_eq!(report.scope, "all-supported-stories");
+    assert_eq!(report.revision_view, "accepted");
+    assert!(report.diagnostics.is_empty());
+    assert_eq!(document.word_count(), 3);
+    assert_eq!(document.character_count(true), 7);
+    assert_eq!(document.character_count(false), 5);
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn fx203_validation_snapshot_keeps_source_and_typed_findings() {
+    let mut document = Document::new();
+    document.add_paragraph("visible");
+    let before = document.to_bytes().unwrap();
+    let report = document.validate().unwrap();
+    assert!(report.is_valid());
+    assert_eq!(report, rdocx::validate_document_bytes(&before).unwrap());
+    assert_eq!(
+        report
+            .findings
+            .iter()
+            .map(|finding| finding.message.as_str())
+            .collect::<Vec<_>>(),
+        ["Missing document title", "Missing document author"]
+    );
+    assert!(
+        report
+            .findings
+            .iter()
+            .all(|finding| finding.severity == rdocx::ValidationSeverity::Warning)
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    assert_eq!(document.paragraph(0).unwrap().text(), "visible");
+    assert!(rdocx::validate_document_bytes(b"not a ZIP").is_err());
+}
+
+/// #339: run tabs and breaks read in every story item as they do in
+/// `Paragraph::text`, a field's instruction part stays out of the text, and
+/// `set_story_text` replaces the tabs and breaks along with the text.
+mod story_text_reads_run_tabs_and_breaks {
+    use rdocx::{Document, StoryItemKind, StoryKind};
+
+    use super::{document_with_content_controls, document_xml, wrap_word_body};
+
+    /// Write "left", the runs `between`, and "right" in the body, the default
+    /// header, and the default footer.
+    fn document_with_runs(between: &str) -> Document {
+        let mut document = Document::new();
+        document.add_paragraph("left");
+        document.set_header("left");
+        document.set_footer("left");
+        let mut package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap()))
+                .unwrap();
+        let mut parts = package
+            .parts
+            .keys()
+            .filter(|name| {
+                name.as_str() == "/word/document.xml"
+                    || name.starts_with("/word/header")
+                    || name.starts_with("/word/footer")
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        parts.sort();
+        assert_eq!(parts.len(), 3, "{parts:?}");
+        for part in parts {
+            let xml = String::from_utf8(package.get_part(&part).unwrap().to_vec()).unwrap();
+            assert_eq!(xml.matches(">left</w:t></w:r>").count(), 1, "{part}");
+            let xml = xml.replace(
+                ">left</w:t></w:r>",
+                &format!(">left</w:t></w:r>{between}<w:r><w:t>right</w:t></w:r>"),
+            );
+            package.set_part(&part, xml.into_bytes());
+        }
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(bytes.get_ref()).unwrap()
+    }
+
+    /// The kind and text of every paragraph item, in story order.
+    fn paragraph_texts(document: &Document) -> Vec<(StoryKind, Option<String>)> {
+        document
+            .story_item_snapshots()
+            .unwrap()
+            .into_iter()
+            .filter(|item| item.location().item_kind() == StoryItemKind::Paragraph)
+            .map(|item| {
+                (
+                    item.location().story().kind(),
+                    item.text().map(str::to_owned),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn story_items_of_the_body_header_and_footer_keep_run_tabs_and_breaks() {
+        for (between, expected) in [
+            ("<w:r><w:tab/></w:r>", "left\tright"),
+            ("<w:r><w:br/></w:r>", "left\nright"),
+            (r#"<w:r><w:br w:type="page"/></w:r>"#, "left\nright"),
+            ("<w:r><w:cr/></w:r>", "left\nright"),
+        ] {
+            let document = document_with_runs(between);
+            assert_eq!(document.paragraphs()[0].text(), expected, "{between}");
+            let expected = Some(expected.to_owned());
+            assert_eq!(
+                paragraph_texts(&document),
+                [
+                    (StoryKind::Body, expected.clone()),
+                    (StoryKind::Header, expected.clone()),
+                    (StoryKind::Footer, expected.clone()),
+                ],
+                "{between}"
+            );
+            for story in document.stories().unwrap() {
+                for item in document.story_items(&story).unwrap() {
+                    if item.kind() == StoryItemKind::Paragraph {
+                        assert_eq!(item.text().unwrap(), expected, "{story:?}");
+                    }
+                }
+            }
+        }
+    }
+
+    fn field(instruction: &str, result: &str) -> String {
+        format!(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>{instruction}<w:r><w:fldChar w:fldCharType="separate"/></w:r>{result}<w:r><w:fldChar w:fldCharType="end"/></w:r>"#
+        )
+    }
+
+    /// Every body paragraph reads the same as a story item as through
+    /// `Paragraph::text`, with the instruction part of a field left out and
+    /// the breaks of a field result read as its cached result reads them.
+    #[test]
+    fn story_item_text_matches_paragraph_text_around_fields_and_breaks() {
+        let instruction = r#"<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>"#;
+        let seven = "<w:r><w:t>7</w:t></w:r>";
+        let nested = format!(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText> IF </w:instrText></w:r>{}<w:r><w:instrText> = 7 yes no </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>yes</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+            field(instruction, seven)
+        );
+        let cases = [
+            (
+                r#"<w:r><w:t>a</w:t><w:br/><w:t>b</w:t><w:br w:type="page"/><w:t>c</w:t><w:br w:type="column"/><w:t>d</w:t><w:cr/><w:t>e</w:t></w:r>"#.to_owned(),
+                "a\nb\nc\nd\ne",
+            ),
+            (
+                format!(
+                    "<w:r><w:t>x</w:t></w:r>{}",
+                    field(
+                        r#"<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText><w:tab/></w:r>"#,
+                        seven
+                    )
+                ),
+                "x7",
+            ),
+            (
+                field(
+                    r#"<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText><w:t>X</w:t></w:r>"#,
+                    seven,
+                ),
+                "7",
+            ),
+            (
+                field(
+                    instruction,
+                    r#"<w:r><w:t>A</w:t><w:tab/><w:br/><w:br w:type="page"/><w:br w:type="column"/><w:cr/><w:t>B</w:t></w:r>"#,
+                ),
+                "A\t\n\u{000c}\u{000b}\nB",
+            ),
+            (
+                r#"<w:fldSimple w:instr="PAGE"><w:r><w:t>S</w:t><w:tab/><w:br/><w:br w:type="page"/><w:br w:type="column"/><w:cr/><w:t>T</w:t></w:r></w:fldSimple>"#.to_owned(),
+                "S\t\n\n\n\nT",
+            ),
+            (
+                r#"<q:fldSimple xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" q:instr="PAGE"><q:r><q:t>S</q:t><q:br q:type="page"/><q:br q:type="column"/><q:cr/><q:t>T</q:t></q:r></q:fldSimple>"#.to_owned(),
+                "S\n\n\nT",
+            ),
+            (
+                field(
+                    r#"<w:r><w:instrText> PAGE </w:instrText><w:br w:type="page"/><w:br w:type="column"/><w:cr/></w:r>"#,
+                    r#"<w:r><w:t>visible</w:t></w:r>"#,
+                ),
+                "visible",
+            ),
+            (
+                field(
+                    instruction,
+                    r#"<w:r><w:t>L</w:t><f:br xmlns:f="urn:foreign" f:type="page"/><f:cr xmlns:f="urn:foreign"/><w:cr xmlns:w="urn:foreign"/><w:t>R</w:t></w:r>"#,
+                ),
+                "LR",
+            ),
+            (
+                field(
+                    instruction,
+                    r#"<w:r><w:t>L</w:t><w:br xmlns:f="urn:foreign" f:type="page"/><w:t>R</w:t></w:r>"#,
+                ),
+                "L\nR",
+            ),
+            (
+                field(
+                    instruction,
+                    r#"<w:r><w:t>L</w:t></w:r><w:del w:id="20" w:author="Ada"><w:r><w:delText>hidden</w:delText><w:cr/><w:br w:type="page"/></w:r></w:del><w:moveFrom w:id="21" w:author="Ada"><w:r><w:t>hidden</w:t><w:cr/><w:br w:type="column"/></w:r></w:moveFrom><f:opaque xmlns:f="urn:foreign"><w:r><w:t>hidden</w:t><w:cr/></w:r></f:opaque><w:r><w:t>R</w:t></w:r>"#,
+                ),
+                "LR",
+            ),
+            (nested, "yes"),
+            // A field that ends in a later paragraph, as a table of contents
+            // does, reads as plain runs in each paragraph.
+            (
+                format!(
+                    r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>{instruction}<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>e1</w:t><w:br w:type="page"/></w:r>"#
+                ),
+                "e1\n",
+            ),
+            (
+                r#"<w:r><w:t>e2</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>"#
+                    .to_owned(),
+                "e2",
+            ),
+            (UNCLOSED_FIELD.to_owned(), "ab"),
+            (DELETED_FIELD_START.to_owned(), "kept"),
+        ];
+        let body = cases
+            .iter()
+            .map(|(content, _)| format!("<w:p>{content}</w:p>"))
+            .collect::<String>();
+        let mut document = document_with_content_controls(&wrap_word_body(&body));
+        let source_before = document_xml(&mut document);
+        let paragraphs = document.paragraphs();
+        let texts = paragraph_texts(&document);
+        assert_eq!(texts.len(), cases.len());
+        for (index, (_, expected)) in cases.iter().enumerate() {
+            assert_eq!(paragraphs[index].text(), *expected, "paragraph {index}");
+            assert_eq!(
+                texts[index],
+                (StoryKind::Body, Some((*expected).to_owned())),
+                "story item {index}"
+            );
+        }
+        assert_eq!(document_xml(&mut document), source_before);
+        for opaque in [
+            r#"<f:cr xmlns:f="urn:foreign"/>"#,
+            r#"<w:cr xmlns:w="urn:foreign"/>"#,
+            r#"<f:opaque xmlns:f="urn:foreign"><w:r><w:t>hidden</w:t><w:cr/></w:r></f:opaque>"#,
+        ] {
+            assert!(source_before.contains(opaque), "{opaque}");
+        }
+    }
+
+    #[test]
+    fn set_story_text_replaces_visible_tabs_and_breaks_only() {
+        let mut document = document_with_runs("<w:r><w:tab/><w:br/><w:cr/></w:r>");
+        for item in document.story_item_snapshots().unwrap() {
+            if item.location().item_kind() == StoryItemKind::Paragraph {
+                document.set_story_text(item.location(), "new").unwrap();
+            }
+        }
+        let expected = Some("new".to_owned());
+        assert_eq!(
+            paragraph_texts(&document),
+            [
+                (StoryKind::Body, expected.clone()),
+                (StoryKind::Header, expected.clone()),
+                (StoryKind::Footer, expected),
+            ]
+        );
+        assert_eq!(document.paragraphs()[0].text(), "new");
+
+        // A tab stop, a deleted tab and a tab in a field's instruction part
+        // are not visible text, so they stay. The visible tab goes.
+        let body = format!(
+            r#"<w:p><w:pPr><w:tabs><w:tab w:val="left" w:pos="100"/></w:tabs></w:pPr><w:r><w:t>left</w:t></w:r><w:del w:id="1" w:author="A"><w:r><w:tab/></w:r></w:del><w:r><w:tab/><w:t>right</w:t></w:r>{}</w:p>"#,
+            field(
+                r#"<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText><w:tab/></w:r>"#,
+                "<w:r><w:t>7</w:t></w:r>"
+            )
+        );
+        let mut document = document_with_content_controls(&wrap_word_body(&body));
+        assert_eq!(document.paragraphs()[0].text(), "left\tright7");
+        assert_eq!(document_xml(&mut document).matches("<w:tab/>").count(), 3);
+        let item = document.story_item_snapshots().unwrap().remove(0);
+        document.set_story_text(item.location(), "new").unwrap();
+        assert_eq!(document.paragraphs()[0].text(), "new");
+        let xml = document_xml(&mut document);
+        assert_eq!(xml.matches("<w:tab/>").count(), 2, "{xml}");
+        assert!(
+            xml.contains(r#"<w:tab w:val="left" w:pos="100"/>"#),
+            "{xml}"
+        );
+        assert!(xml.contains("<w:r><w:tab/></w:r></w:del>"), "{xml}");
+        assert!(xml.contains("</w:instrText><w:tab/>"), "{xml}");
+    }
+
+    /// A field that does not close in the paragraph reads as plain runs.
+    const UNCLOSED_FIELD: &str = r#"<w:r><w:t>a</w:t></w:r><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r><w:r><w:t>b</w:t></w:r>"#;
+
+    /// The field characters of a deleted field are not in the accepted view.
+    const DELETED_FIELD_START: &str = r#"<w:del w:id="2" w:author="A"><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:delInstrText xml:space="preserve"> PAGE </w:delInstrText></w:r></w:del><w:r><w:t>kept</w:t></w:r>"#;
+
+    #[test]
+    fn set_story_text_replaces_the_text_of_unclosed_and_deleted_fields() {
+        for content in [UNCLOSED_FIELD, DELETED_FIELD_START] {
+            let mut document =
+                document_with_content_controls(&wrap_word_body(&format!("<w:p>{content}</w:p>")));
+            let item = document.story_item_snapshots().unwrap().remove(0);
+            document.set_story_text(item.location(), "n\tm").unwrap();
+            assert_eq!(document.paragraphs()[0].text(), "n\tm", "{content}");
+            assert_eq!(
+                paragraph_texts(&document),
+                [(StoryKind::Body, Some("n\tm".to_owned()))],
+                "{content}"
+            );
+        }
+    }
+
+    /// New text with a tab or a line break writes `w:tab` and `w:br`, as
+    /// `Paragraph::set_text` does, and reads back the same.
+    #[test]
+    fn set_story_text_writes_tabs_and_breaks_as_run_content() {
+        for value in ["a\tb\nc", " a \t b ", "\tx\n"] {
+            let mut document = document_with_runs("<w:r><w:tab/></w:r>");
+            let mut empty = Document::new();
+            empty.add_paragraph("");
+            for item in document.story_item_snapshots().unwrap() {
+                if item.location().item_kind() == StoryItemKind::Paragraph {
+                    document.set_story_text(item.location(), value).unwrap();
+                }
+            }
+            let item = empty.story_item_snapshots().unwrap().remove(0);
+            empty.set_story_text(item.location(), value).unwrap();
+
+            let expected = Some(value.to_owned());
+            assert!(
+                paragraph_texts(&document)
+                    .iter()
+                    .all(|(_, text)| *text == expected),
+                "{value:?}: {:?}",
+                paragraph_texts(&document)
+            );
+            assert_eq!(document.paragraphs()[0].text(), value);
+            assert_eq!(empty.paragraphs()[0].text(), value);
+            assert_eq!(paragraph_texts(&empty)[0].1, expected);
+            let xml = document_xml(&mut document);
+            assert!(!xml.contains('\t'), "{xml}");
+        }
+    }
+}
+
+#[test]
+fn fx203_checkbox_state_binds_custom_scalar_and_font_without_foreign_loss() {
+    let xml = wrap_word_body(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="check"/><w14:checkbox xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:f="urn:foreign"><f:checked f:val="opaque"/><w14:checked w14:val="0" f:keep="yes"/><w14:checkedState w14:val="0041" w14:font="Carlito"/><w14:uncheckedState w14:val="0042" w14:font="Selawik"/><f:tail/></w14:checkbox></w:sdtPr><w:sdtContent><w:p><w:r><w:t>B</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let mut document = document_with_content_controls(&xml);
+    assert_eq!(
+        document
+            .set_content_control_value_by_tag("check", "true")
+            .unwrap(),
+        1
+    );
+    assert_eq!(document.content_controls()[0].text(), "A");
+    let first = document_xml(&mut document);
+    assert_eq!(
+        document
+            .set_content_control_value_by_tag("check", "true")
+            .unwrap(),
+        1
+    );
+    assert_eq!(document_xml(&mut document), first);
+    let output = document_xml(&mut document);
+    assert!(
+        output.contains(r#"<f:checked f:val="opaque"/>"#),
+        "{output}"
+    );
+    assert!(output.contains(r#"f:keep="yes""#), "{output}");
+    assert!(output.contains(r#"w14:val="1""#), "{output}");
+    let body = body_from_document(&mut document);
+    let run = body.paragraphs().next().unwrap().runs.first().unwrap();
+    assert_eq!(
+        run.properties.as_ref().unwrap().font_ascii.as_deref(),
+        Some("Carlito")
+    );
+    assert_eq!(
+        run.properties.as_ref().unwrap().font_hansi.as_deref(),
+        Some("Carlito")
+    );
+    assert_eq!(
+        document
+            .set_content_control_value_by_tag("check", "false")
+            .unwrap(),
+        1
+    );
+    assert_eq!(document.content_controls()[0].text(), "B");
+    let body = body_from_document(&mut document);
+    assert_eq!(
+        body.paragraphs().next().unwrap().runs[0]
+            .properties
+            .as_ref()
+            .unwrap()
+            .font_ascii
+            .as_deref(),
+        Some("Selawik")
+    );
+    let bytes = document.to_bytes().unwrap();
+    assert_eq!(
+        Document::from_bytes(&bytes).unwrap().content_controls()[0].text(),
+        "B"
+    );
+}
+
+#[test]
+fn fx203_checkbox_late_invalid_glyph_refuses_all_selected_changes() {
+    let xml = wrap_word_body(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="check"/><w14:checkbox xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w14:checkedState w14:val="0041" w14:font="Carlito"/></w14:checkbox></w:sdtPr><w:sdtContent><w:p><w:r><w:t>first</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sdt><w:sdtPr><w:tag w:val="check"/><w14:checkbox xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w14:checkedState w14:val="D800" w14:font="Selawik"/></w14:checkbox></w:sdtPr><w:sdtContent><w:p><w:r><w:t>second</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    for invalid in ["D800", "0000"] {
+        let xml = xml.replace("D800", invalid);
+        let mut document = document_with_content_controls(&xml);
+        let before = document_xml(&mut document);
+        let error = document
+            .set_content_control_value_by_tag("check", "true")
+            .unwrap_err();
+        assert!(error.to_string().contains("glyph"), "{error}");
+        assert_eq!(document_xml(&mut document), before);
+        assert_eq!(document.content_controls()[0].text(), "first");
+        assert_eq!(document.content_controls()[1].text(), "second");
+    }
+}
+
+#[test]
+fn fx203_checkbox_aliases_rebindings_and_foreign_type_owners_are_distinct() {
+    let xml = wrap_word_body(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="alias"/><x:checkbox xmlns:x="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:w14="urn:foreign"><x:checked xmlns:x="urn:foreign" x:val="opaque"/><x:checked x:val="0"/><x:checkedState w14:val="D800" x:val="0043" x:font="Carlito"/><w14:checkedState w14:val="D800"/></x:checkbox></w:sdtPr><w:sdtContent><w:p><w:r><w:t>before</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sdt><w:sdtPr><w:tag w:val="foreign"/><w:checkbox><w:checked w:val="1"/></w:checkbox></w:sdtPr><w:sdtContent><w:p><w:r><w:t>foreign</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let mut document = document_with_content_controls(&xml);
+    assert_eq!(
+        document.content_controls()[0].control_type(),
+        Some(rdocx_oxml::content_control::SdtType::CheckBox)
+    );
+    assert_eq!(document.content_controls()[1].control_type(), None);
+    assert_eq!(
+        document
+            .set_content_control_value_by_tag("alias", "true")
+            .unwrap(),
+        1
+    );
+    assert_eq!(document.content_controls()[0].text(), "C");
+    let output = document_xml(&mut document);
+    for opaque in [
+        r#"<x:checked xmlns:x="urn:foreign" x:val="opaque"/>"#,
+        r#"<w14:checkedState w14:val="D800"/>"#,
+        r#"<w:checkbox><w:checked w:val="1"/></w:checkbox>"#,
+    ] {
+        assert!(output.contains(opaque), "{opaque}: {output}");
+    }
+    assert!(output.contains(r#"<x:checked x:val="1"/>"#), "{output}");
+    assert_eq!(document.content_controls()[1].text(), "foreign");
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(
+        reopened.content_controls()[0].control_type(),
+        Some(rdocx_oxml::content_control::SdtType::CheckBox)
+    );
+    assert_eq!(reopened.content_controls()[0].text(), "C");
+}
+
+#[test]
+fn fx203_checkbox_missing_checked_value_keeps_foreign_prefix_attributes() {
+    let xml = wrap_word_body(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="check"/><x:checkbox xmlns:x="http://schemas.microsoft.com/office/word/2010/wordml"><x:checked xmlns:rdocxW14="urn:foreign" rdocxW14:val="opaque"/><x:checkedState x:val="0041" x:font="Carlito"/></x:checkbox></w:sdtPr><w:sdtContent><w:p><w:r><w:t>B</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let mut document = document_with_content_controls(&xml);
+    assert_eq!(
+        document
+            .set_content_control_value_by_tag("check", "true")
+            .unwrap(),
+        1
+    );
+    let bytes = document.to_bytes().unwrap();
+    let output = document_xml(&mut document);
+    assert!(
+        output.contains(r#"xmlns:rdocxW14="urn:foreign" rdocxW14:val="opaque""#),
+        "{output}"
+    );
+    let mut reopened = Document::from_bytes(&bytes).unwrap();
+    assert_eq!(reopened.content_controls()[0].text(), "A");
+    assert_eq!(
+        reopened
+            .set_content_control_value_by_tag("check", "true")
+            .unwrap(),
+        1
+    );
+    assert_eq!(document_xml(&mut reopened), output);
+}
+
+#[test]
+fn fx203_checkbox_default_namespace_selects_glyph_font_and_keeps_foreign_owner() {
+    let xml = wrap_word_body(
+        r#"<w:sdt><w:sdtPr><w:tag w:val="check"/><checkbox xmlns="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:q="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:f="urn:foreign"><checked xmlns="urn:foreign" f:val="opaque"/><checked q:val="0"/><checkedState q:val="0044" q:font="Carlito"/><f:tail/></checkbox></w:sdtPr><w:sdtContent><w:p><w:r><w:t>old</w:t></w:r></w:p></w:sdtContent></w:sdt><w:sdt><w:sdtPr><w:tag w:val="foreign"/><checkbox xmlns="urn:foreign"><checked val="opaque"/></checkbox></w:sdtPr><w:sdtContent><w:p><w:r><w:t>foreign</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+    );
+    let mut document = document_with_content_controls(&xml);
+    assert_eq!(
+        document.content_controls()[0].control_type(),
+        Some(rdocx_oxml::content_control::SdtType::CheckBox)
+    );
+    assert_eq!(document.content_controls()[1].control_type(), None);
+    assert_eq!(
+        document
+            .set_content_control_value_by_tag("check", "true")
+            .unwrap(),
+        1
+    );
+    assert_eq!(document.content_controls()[0].text(), "D");
+    let output = document_xml(&mut document);
+    assert!(output.contains(r#"<checked q:val="1"/>"#), "{output}");
+    for raw in [
+        r#"<checked xmlns="urn:foreign" f:val="opaque"/>"#,
+        r#"<f:tail/>"#,
+        r#"<checkbox xmlns="urn:foreign"><checked val="opaque"/></checkbox>"#,
+    ] {
+        assert!(output.contains(raw), "{raw}: {output}");
+    }
+    let body = body_from_document(&mut document);
+    assert_eq!(
+        body.paragraphs().next().unwrap().runs[0]
+            .properties
+            .as_ref()
+            .unwrap()
+            .font_ascii
+            .as_deref(),
+        Some("Carlito")
+    );
+    assert_eq!(
+        document
+            .set_content_control_value_by_tag("check", "true")
+            .unwrap(),
+        1
+    );
+    assert_eq!(document_xml(&mut document), output);
+    let mut reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(
+        reopened.content_controls()[0].control_type(),
+        Some(rdocx_oxml::content_control::SdtType::CheckBox)
+    );
+    assert_eq!(reopened.content_controls()[0].text(), "D");
+    assert_eq!(document_xml(&mut reopened), output);
 }

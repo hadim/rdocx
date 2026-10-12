@@ -2550,3 +2550,9 @@ Ordinary character spacing survives directional and multilingual reshaping.
 JPEG quality applies only to JPEG, transparency only to PNG, and slide indices
 and DPI validate before layout. Caller fonts supply one deterministic bundle
 to slide, archival, notes and handout exports.
+
+## Word document-operation layout boundaries
+
+Calculated Python page_count uses deterministic native layout and the existing caller-font options. Producer app-properties page counts remain cached metadata. Word and character counts use accepted body content and exclude related-story presentation labels. Equation insertion converts before candidate publication. Inline and display snapshots preserve occurrence boundaries, and display conversion returns one ordered result per native equation child plus wrapper diagnostics. Conversion does not infer display intent from whitespace.
+
+Checkbox display runs bind the selected checkedState or uncheckedState scalar and font together. Genuine caller faces retain the qualified font provider precedence. Original source scalar and state-font facts remain unchanged by semantic font fallback. PDF and raster acceptance must distinguish actual painted glyph selection from mere resource presence.
