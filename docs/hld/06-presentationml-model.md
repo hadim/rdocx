@@ -464,6 +464,19 @@ reduction. `TextParagraphMut::set_bullet` removes the preserved picture or
 follow-text bullet part that the new value replaces, so the paragraph keeps one
 choice per bullet group.
 
+Explicit fitting is a package-level operation, separate from these direct
+property setters. `Presentation::refresh_autofit` stages every flagged physical
+owner and publishes only after all contexts fit. `text_frame_location` returns
+a checked owner part, descendant path and optional cell coordinate with a
+source fingerprint. `fit_text_at` refuses a stale location and publishes one
+uniform-size change. Field text, breaks, hyperlinks and unrelated formatting
+remain owned by their original elements. Refresh does not run during save.
+Imported autofit choices with opaque attributes or comments retain their lexical
+XML and original text-body wrapper attribute scope. Owned choice-name and scale
+edits preserve foreign payload, quoting and entities. Fully modeled choices keep
+canonical serialization. Conflicting retained canonical namespace bindings
+refuse before writer output.
+
 Whole-frame replacement creates a minimal body when needed and always retains
 one paragraph. It preserves existing body properties, list style,
 first-paragraph formatting, end properties, and placeholder metadata. Existing

@@ -637,10 +637,11 @@ pub(super) struct StackedText {
     pub(super) elements: Vec<PositionedElement>,
     /// One entry per laid-out line, anchored like `elements`.
     pub(super) lines: Vec<TextLineLayout>,
+    line_ranges: Vec<(usize, usize)>,
     pub(super) width: f64,
     pub(super) height: f64,
     pub(super) font_scale: f64,
-    width_fits: bool,
+    pub(super) width_fits: bool,
     pub(super) diagnostics: Vec<String>,
 }
 
@@ -648,6 +649,64 @@ impl StackedText {
     /// Applies the fit test that normal autofit uses to accept a candidate.
     pub(super) fn fits(&self, content: Rect) -> bool {
         self.width_fits && self.height <= content.height + 0.01
+    }
+
+    /// Explicit authoring measures unanchored physical participating segments.
+    /// Ordinary rendering continues using summed line advances in `fits`.
+    pub(super) fn authoring_extent(
+        &self,
+        fonts: &mut FontManager,
+        text: &ResolvedTextBody,
+        content: Rect,
+    ) -> Result<(f64, bool), LayoutError> {
+        let mut bottom = content.y;
+        for (index, (line, &(start, end))) in self.lines.iter().zip(&self.line_ranges).enumerate() {
+            let mut line_bottom = line.baseline;
+            let mut physical = false;
+            for element in &self.elements[start..end] {
+                match element {
+                    PositionedElement::Text(run) => {
+                        physical = true;
+                        line_bottom = line_bottom
+                            .max(run.origin.y + fonts.metrics(run.font_id, run.font_size)?.descent);
+                    }
+                    PositionedElement::MultilingualText(run) => {
+                        physical = true;
+                        let descent = fonts.metrics(run.font_id, run.font_size)?.descent;
+                        let mut pen_y = 0.0;
+                        for (offset, advance) in run.y_offsets.iter().zip(&run.y_advances) {
+                            line_bottom = line_bottom.max(run.origin.y - pen_y - offset + descent);
+                            pen_y += advance;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if !physical {
+                let style = &text.paragraphs[line.paragraph_index].end_style;
+                let id = fonts.resolve_font_for_metrics(
+                    style.latin_typeface.as_deref(),
+                    style.bold,
+                    style.italic,
+                )?;
+                line_bottom = line.baseline + fonts.metrics(id, line.font_size)?.descent;
+            }
+            if index + 1 == self.lines.len() && text.space_first_last_paragraph {
+                let paragraph = &text.paragraphs[line.paragraph_index];
+                line_bottom += paragraph_spacing(
+                    paragraph.space_after.as_ref(),
+                    first_run_font_size(paragraph) * self.font_scale,
+                );
+            }
+            bottom = bottom.max(line_bottom);
+        }
+        let extent = (bottom - content.y).max(0.0);
+        if !extent.is_finite() {
+            return Err(LayoutError::Layout(
+                "autofit physical extent is non-finite".to_owned(),
+            ));
+        }
+        Ok((extent, self.width_fits && extent <= content.height + 0.01))
     }
 }
 
@@ -989,6 +1048,7 @@ fn stack_shaped_text(
     Ok(StackedText {
         elements,
         lines: laid_out_lines,
+        line_ranges,
         width,
         height,
         font_scale,
@@ -4767,6 +4827,114 @@ mod tests {
             }
         }
         baselines
+    }
+
+    #[test]
+    fn fx207_physical_extent_uses_selected_face_descent_markers_and_shifted_runs() {
+        let mono = include_bytes!("../../oxml-layout/fonts/LiberationMono-Regular.ttf").as_slice();
+        let serif =
+            include_bytes!("../../oxml-layout/fonts/LiberationSerif-Regular.ttf").as_slice();
+        // Decode static hhea/head metrics independently from the original SFNT.
+        fn descent(bytes: &[u8], size: f64) -> f64 {
+            let table = |tag: &[u8]| {
+                let count = u16::from_be_bytes(bytes[4..6].try_into().unwrap()) as usize;
+                let record = (0..count)
+                    .map(|i| &bytes[12 + i * 16..28 + i * 16])
+                    .find(|r| &r[..4] == tag)
+                    .unwrap();
+                u32::from_be_bytes(record[8..12].try_into().unwrap()) as usize
+            };
+            let hhea = table(b"hhea");
+            let head = table(b"head");
+            let os2 = table(b"OS/2");
+            assert_eq!(
+                u16::from_be_bytes(bytes[os2 + 62..os2 + 64].try_into().unwrap()) & 128,
+                0,
+                "this source control deliberately uses static hhea metrics"
+            );
+            let units = u16::from_be_bytes(bytes[head + 18..head + 20].try_into().unwrap());
+            -f64::from(i16::from_be_bytes(
+                bytes[hhea + 6..hhea + 8].try_into().unwrap(),
+            )) * size
+                / f64::from(units)
+        }
+        let mut fonts = FontManager::new_deterministic().unwrap();
+        let mut paragraph = bullet_paragraph(
+            0,
+            Some(ResolvedBullet::Character {
+                character: "M".to_owned(),
+                font: Some("Liberation Mono".to_owned()),
+                color: None,
+                size: Some(ResolvedBulletSize::Points(32.0)),
+            }),
+            "body",
+        );
+        paragraph.left_margin = 50.0;
+        paragraph.indent = -45.0;
+        paragraph.runs = vec![
+            ResolvedTextRun::Text {
+                text: "Mixed ".to_owned(),
+                style: ResolvedRunStyle {
+                    font_size: Some(11.0),
+                    latin_typeface: Some("Liberation Mono".to_owned()),
+                    baseline: Some(-0.3),
+                    ..Default::default()
+                },
+            },
+            ResolvedTextRun::Text {
+                text: "face".to_owned(),
+                style: ResolvedRunStyle {
+                    font_size: Some(24.0),
+                    latin_typeface: Some("Liberation Serif".to_owned()),
+                    ..Default::default()
+                },
+            },
+        ];
+        let body = ResolvedTextBody {
+            paragraphs: vec![paragraph],
+            ..text_body(TextInsets::default())
+        };
+        let content = test_content_box(400.0);
+        let stacked = stack_text(&mut fonts, content, &body).unwrap();
+        let mut expected = content.y;
+        let mut marker = false;
+        let mut shifted = false;
+        for element in &stacked.elements {
+            let PositionedElement::Text(run) = element else {
+                continue;
+            };
+            let selected = fonts.font_data(run.font_id).unwrap();
+            let original = if selected.family == "Liberation Mono" {
+                mono
+            } else {
+                assert_eq!(selected.family, "Liberation Serif");
+                serif
+            };
+            assert_eq!(selected.data.as_ref(), original);
+            expected = expected.max(run.origin.y + descent(original, run.font_size));
+            marker |= run.text == "M" && run.font_size == 32.0;
+            shifted |= run.text.contains("Mixed") && run.origin.y > stacked.lines[0].baseline;
+        }
+        assert!(marker && shifted);
+        let (height, fits) = stacked
+            .authoring_extent(&mut fonts, &body, content)
+            .unwrap();
+        assert_close(height, expected - content.y);
+        assert!(fits);
+        assert!(
+            (height - stacked.height).abs() > 0.01,
+            "physical and line-advance facts must stay distinct"
+        );
+        let insufficient = Rect {
+            height: height - 0.02,
+            ..content
+        };
+        assert!(
+            !stacked
+                .authoring_extent(&mut fonts, &body, insufficient)
+                .unwrap()
+                .1
+        );
     }
 
     fn assert_close(actual: f64, expected: f64) {

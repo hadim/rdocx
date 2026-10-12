@@ -28944,3 +28944,1138 @@ fn fx206_owned_xml_assertions_reject_foreign_lookalikes_and_wrong_values() {
     )));
     assert!(facts[0].offset < facts[1].offset);
 }
+
+#[test]
+#[cfg(feature = "render")]
+fn fx207_native_bare_normal_render_preserves_owned_xml() {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide
+            .add_textbox(Emu(914_400), Emu(914_400), Emu(3_657_600), Emu(457_200))
+            .unwrap();
+        shape
+            .set_text("First line\nSecond line\nThird line")
+            .unwrap();
+        shape
+            .text_frame()
+            .unwrap()
+            .set_autofit_mode(Some(rpptx::AutofitMode::Normal));
+    }
+    let before = presentation.to_bytes().unwrap();
+    assert!(saved_slide_xml(&presentation).contains("<a:normAutofit/>"));
+    let (_, layout) = presentation.render_deterministic().unwrap();
+    assert_eq!(layout.pages.len(), 1);
+    let frames = presentation.text_layout_deterministic(1.0).unwrap();
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0].autofit, rpptx::AutofitMode::Normal);
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+    let reopened = Presentation::from_bytes(&before).unwrap();
+    assert!(saved_slide_xml(&reopened).contains("<a:normAutofit/>"));
+}
+
+#[test]
+#[cfg(feature = "render")]
+fn fx207_native_shape_autofit_render_preserves_stored_extent() {
+    let mut presentation = Presentation::new().unwrap();
+    presentation.add_slide(6).unwrap();
+    {
+        let mut slide = presentation.slide_mut(0).unwrap();
+        let mut shape = slide
+            .add_textbox(Emu(914_400), Emu(914_400), Emu(3_657_600), Emu(457_200))
+            .unwrap();
+        shape
+            .set_text("First line\nSecond line\nThird line")
+            .unwrap();
+        shape
+            .text_frame()
+            .unwrap()
+            .set_autofit_mode(Some(rpptx::AutofitMode::Shape));
+    }
+    let before = presentation.to_bytes().unwrap();
+    let before_xml = saved_slide_xml(&presentation);
+    assert!(before_xml.contains("<a:spAutoFit/>"));
+    assert!(before_xml.contains(r#"<a:ext cx="3657600" cy="457200"/>"#));
+    let (_, layout) = presentation.render_deterministic().unwrap();
+    assert_eq!(layout.pages.len(), 1);
+    let frames = presentation.text_layout_deterministic(1.0).unwrap();
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0].autofit, rpptx::AutofitMode::Shape);
+    assert_eq!(saved_slide_xml(&presentation), before_xml);
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+}
+
+#[test]
+#[cfg(feature = "render")]
+fn fx207_explicit_refresh_fit_is_atomic_repeatable_and_preserves_handles() {
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    {
+        let mut slide = deck.slide_mut(0).unwrap();
+        let mut shape = slide
+            .add_textbox(Emu(914400), Emu(914400), Emu(3657600), Emu(457200))
+            .unwrap();
+        shape
+            .set_text("First line\nSecond line\nThird line")
+            .unwrap();
+        shape
+            .text_frame()
+            .unwrap()
+            .set_autofit_mode(Some(rpptx::AutofitMode::Normal));
+    }
+    let source = deck.to_bytes().unwrap();
+    let report = deck.fit_report(&[]).unwrap();
+    assert!(!report.frames.is_empty());
+    assert_eq!(deck.to_bytes().unwrap(), source);
+    let result = deck.refresh_autofit(&[]).unwrap();
+    assert!(result.changed);
+    let update = result
+        .updates
+        .iter()
+        .find(|u| u.location.owner_part == "/ppt/slides/slide1.xml" && u.shape_id == Some(2))
+        .unwrap();
+    assert!(update.changed);
+    assert!(update.font_scale.unwrap() < 100000);
+    let refreshed = deck.to_bytes().unwrap();
+    let again = deck.refresh_autofit(&[]).unwrap();
+    assert!(!again.changed);
+    assert_eq!(deck.to_bytes().unwrap(), refreshed);
+    let location = deck.text_frame_location(0, &[0], None).unwrap();
+    let fit = deck.fit_text_at(&location, None, 18, &[]).unwrap();
+    assert!(fit.point_size.is_some());
+    assert!(fit.point_size.unwrap() <= 18);
+    assert!(saved_slide_xml(&deck).contains("<a:noAutofit/>"));
+    assert_eq!(
+        deck.slide(0).unwrap().shape(0).unwrap().text().unwrap(),
+        "First line\nSecond line\nThird line"
+    );
+    let fitted = deck.to_bytes().unwrap();
+    let location = deck.text_frame_location(0, &[0], None).unwrap();
+    assert!(!deck.fit_text_at(&location, None, 18, &[]).unwrap().changed);
+    assert_eq!(deck.to_bytes().unwrap(), fitted);
+    let reopened = Presentation::from_bytes(&fitted).unwrap();
+    assert_eq!(reopened.to_bytes().unwrap(), fitted);
+}
+
+#[test]
+#[cfg(feature = "render")]
+fn fx207_shape_refresh_preserves_top_anchor_and_measures_overflow() {
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    {
+        let mut slide = deck.slide_mut(0).unwrap();
+        let mut shape = slide
+            .add_textbox(Emu(914400), Emu(914400), Emu(3657600), Emu(457200))
+            .unwrap();
+        shape
+            .set_text("First line\nSecond line\nThird line")
+            .unwrap();
+        shape
+            .text_frame()
+            .unwrap()
+            .set_autofit_mode(Some(rpptx::AutofitMode::Shape));
+    }
+    let result = deck.refresh_autofit(&[]).unwrap();
+    let update = result
+        .updates
+        .iter()
+        .find(|u| u.location.owner_part == "/ppt/slides/slide1.xml" && u.shape_id == Some(2))
+        .unwrap();
+    assert_eq!(update.old_bounds.0, update.new_bounds.0);
+    assert_eq!(update.old_bounds.1, update.new_bounds.1);
+    assert_eq!(update.old_bounds.2, update.new_bounds.2);
+    assert!(update.new_bounds.3 > update.old_bounds.3);
+    assert!(
+        !deck.text_layout_deterministic(1.0).unwrap()[0]
+            .layout
+            .overflow
+    );
+    let before = deck.to_bytes().unwrap();
+    assert!(!deck.refresh_autofit(&[]).unwrap().changed);
+    assert_eq!(deck.to_bytes().unwrap(), before);
+}
+
+/// Mandatory scoped F207 oracle gate, invoked by its coordinator with --ignored.
+/// These 22 source-authenticated controls qualify only the recorded uniform
+/// Arial policy, not arbitrary native mixed-font or anchored-resize parity.
+#[test]
+#[ignore = "requires retained authenticated F207 native controls and private Arial face"]
+#[cfg(feature = "render")]
+fn fx207_native_22_quantized_and_stored_trials_match_owned_authority() {
+    let path = Path::new("/private/tmp/S91-F-X207-source-measurement/inputs-quantized-22.json");
+    assert_eq!(
+        sha256(path),
+        "f45a2a2f8b4b8f3ff6656d0f8af3d9d766838b583e3a543f23a8ba3f2a24d229"
+    );
+    let font_path =
+        Path::new("/Applications/Microsoft PowerPoint.app/Contents/Resources/DFonts/arial.ttf");
+    assert_eq!(
+        sha256(font_path),
+        "15663c7e8495594c6136eb51b11983eb8f5bbcdd07bb2c327e0d1e83415b0f06"
+    );
+    let font = fs::read(font_path).unwrap();
+    assert_eq!(font.len(), 369780);
+    // Literal operands are the independently captured native authority, bound
+    // by the manifest hash above. Missing scale/reduction are schema 100000/0.
+    // Production code never reads this table.
+    let cases = [
+        (
+            "S91-F-X207-native-autofit/coupled-autofit-after-reopen/A100",
+            "/private/tmp/S91-F-X207-native-autofit/coupled-autofit-after-reopen.pptx",
+            "438f65214a485dd9dbe6e7978be0120ca9b0f43e05573b19938e0488f2f6debf",
+            "ppt/slides/slide1.xml",
+            "295348d016df2da33d6ca9c568a4243d7b8f3e48063212083bef489bcbb06757",
+            2,
+            Some((77500, 20000)),
+        ),
+        (
+            "S91-F-X207-native-autofit/coupled-autofit-after-reopen/BExact28",
+            "/private/tmp/S91-F-X207-native-autofit/coupled-autofit-after-reopen.pptx",
+            "438f65214a485dd9dbe6e7978be0120ca9b0f43e05573b19938e0488f2f6debf",
+            "ppt/slides/slide1.xml",
+            "295348d016df2da33d6ca9c568a4243d7b8f3e48063212083bef489bcbb06757",
+            3,
+            None,
+        ),
+        (
+            "S91-F-X207-native-autofit/coupled-autofit-after-reopen/C150",
+            "/private/tmp/S91-F-X207-native-autofit/coupled-autofit-after-reopen.pptx",
+            "438f65214a485dd9dbe6e7978be0120ca9b0f43e05573b19938e0488f2f6debf",
+            "ppt/slides/slide1.xml",
+            "295348d016df2da33d6ca9c568a4243d7b8f3e48063212083bef489bcbb06757",
+            4,
+            Some((47500, 20000)),
+        ),
+        (
+            "S91-F-X207-native-autofit/coupled-autofit-after-reopen/DParagraph",
+            "/private/tmp/S91-F-X207-native-autofit/coupled-autofit-after-reopen.pptx",
+            "438f65214a485dd9dbe6e7978be0120ca9b0f43e05573b19938e0488f2f6debf",
+            "ppt/slides/slide1.xml",
+            "295348d016df2da33d6ca9c568a4243d7b8f3e48063212083bef489bcbb06757",
+            5,
+            Some((40000, 20000)),
+        ),
+        (
+            "S91-F-X207-native-autofit/height-step-after-reopen/AHeight260",
+            "/private/tmp/S91-F-X207-native-autofit/height-step-after-reopen.pptx",
+            "ef964f47e2e45de03e26769909bd023848ec3c7d1654262a7d7dc1a645305710",
+            "ppt/slides/slide1.xml",
+            "cee49363c676dc8a840340f35b575fcd285222687db60d638bc3c56b17aa600d",
+            2,
+            Some((92500, 20000)),
+        ),
+        (
+            "S91-F-X207-native-autofit/height-step-after-reopen/AHeight290",
+            "/private/tmp/S91-F-X207-native-autofit/height-step-after-reopen.pptx",
+            "ef964f47e2e45de03e26769909bd023848ec3c7d1654262a7d7dc1a645305710",
+            "ppt/slides/slide1.xml",
+            "cee49363c676dc8a840340f35b575fcd285222687db60d638bc3c56b17aa600d",
+            3,
+            Some((92500, 10000)),
+        ),
+        (
+            "S91-F-X207-native-threshold/threshold-after-reopen/AHeight320",
+            "/private/tmp/S91-F-X207-native-threshold/threshold-after-reopen.pptx",
+            "b987208321be321278a8997527b00eca360734c809227f68dae854a5994df8ea",
+            "ppt/slides/slide1.xml",
+            "29ec8b6ee91fd753c837efce7c544dc996ec29405ce57d4bf8b800710e83691f",
+            2,
+            Some((100000, 10000)),
+        ),
+        (
+            "S91-F-X207-native-threshold/threshold-after-reopen/AHeight330",
+            "/private/tmp/S91-F-X207-native-threshold/threshold-after-reopen.pptx",
+            "b987208321be321278a8997527b00eca360734c809227f68dae854a5994df8ea",
+            "ppt/slides/slide1.xml",
+            "29ec8b6ee91fd753c837efce7c544dc996ec29405ce57d4bf8b800710e83691f",
+            3,
+            Some((100000, 10000)),
+        ),
+        (
+            "S91-F-X207-native-threshold/threshold-after-reopen/AHeight340",
+            "/private/tmp/S91-F-X207-native-threshold/threshold-after-reopen.pptx",
+            "b987208321be321278a8997527b00eca360734c809227f68dae854a5994df8ea",
+            "ppt/slides/slide1.xml",
+            "29ec8b6ee91fd753c837efce7c544dc996ec29405ce57d4bf8b800710e83691f",
+            4,
+            Some((100000, 0)),
+        ),
+        (
+            "S91-F-X207-native-threshold150-tall/H435-after-reopen/AHeight320",
+            "/private/tmp/S91-F-X207-native-threshold150-tall/H435-after-reopen.pptx",
+            "f6e1d9ef8cf3a062e1530308e7d35d81d4752d81105be3a5797effa6baf83d8d",
+            "ppt/slides/slide1.xml",
+            "da27e0321f280e469caf7bf9d460bb400262f756f52411cd76053f709cfb6147",
+            2,
+            Some((92500, 10000)),
+        ),
+        (
+            "S91-F-X207-native-threshold150-tall/H450-after-reopen/AHeight320",
+            "/private/tmp/S91-F-X207-native-threshold150-tall/H450-after-reopen.pptx",
+            "b185baa1b8ec2b226bd1da190ffe99305fa1df7751d2fb6d4fc136bc163c7a52",
+            "ppt/slides/slide1.xml",
+            "0a8b303dc5099cb28a54e886f82aa39602c4b8190eac1c6560f47e871b8ec53c",
+            2,
+            Some((92500, 10000)),
+        ),
+        (
+            "S91-F-X207-native-threshold150-tall/H465-after-reopen/AHeight320",
+            "/private/tmp/S91-F-X207-native-threshold150-tall/H465-after-reopen.pptx",
+            "0c69d13a0b9434ab4555fd977717c640e7edbcba84dda9307d13144ef59d38d8",
+            "ppt/slides/slide1.xml",
+            "530985bfcf68747cf7e944f5028db6d0f7043d19707b972cdeeb78b79f8b06ee",
+            2,
+            Some((100000, 10000)),
+        ),
+        (
+            "S91-F-X207-native-threshold150/threshold-after-reopen/AHeight320",
+            "/private/tmp/S91-F-X207-native-threshold150/threshold-after-reopen.pptx",
+            "9fedb92df166afdcc482354c4617afd93a499ddc85d8efef5f4d8e0214b646d7",
+            "ppt/slides/slide1.xml",
+            "311c63b1f02aa683a7be99aede5957fd3760fd28d4f0858df7d5d423fb0e327b",
+            2,
+            Some((70000, 20000)),
+        ),
+        (
+            "S91-F-X207-native-threshold150/threshold-after-reopen/AHeight330",
+            "/private/tmp/S91-F-X207-native-threshold150/threshold-after-reopen.pptx",
+            "9fedb92df166afdcc482354c4617afd93a499ddc85d8efef5f4d8e0214b646d7",
+            "ppt/slides/slide1.xml",
+            "311c63b1f02aa683a7be99aede5957fd3760fd28d4f0858df7d5d423fb0e327b",
+            3,
+            Some((70000, 20000)),
+        ),
+        (
+            "S91-F-X207-native-threshold150/threshold-after-reopen/AHeight340",
+            "/private/tmp/S91-F-X207-native-threshold150/threshold-after-reopen.pptx",
+            "9fedb92df166afdcc482354c4617afd93a499ddc85d8efef5f4d8e0214b646d7",
+            "ppt/slides/slide1.xml",
+            "311c63b1f02aa683a7be99aede5957fd3760fd28d4f0858df7d5d423fb0e327b",
+            4,
+            Some((77500, 20000)),
+        ),
+        (
+            "S91-F-X207-native-threshold150-boundary/H453-after-reopen/AHeight320",
+            "/private/tmp/S91-F-X207-native-threshold150-boundary/H453-after-reopen.pptx",
+            "1c7ecff17f82a0853245dc8b8dcfc5f08297152e86634b58c814e43fd2dabd03",
+            "ppt/slides/slide1.xml",
+            "725e768fb59dad5d8800917e90e57d81318f04de4ebf1750d746c072ea75d511",
+            2,
+            Some((92500, 10000)),
+        ),
+        (
+            "S91-F-X207-native-threshold150-boundary/H457-after-reopen/AHeight320",
+            "/private/tmp/S91-F-X207-native-threshold150-boundary/H457-after-reopen.pptx",
+            "87019335de226d780ffd4ec41e0d9a4428b110ee42476f89dc5846fe091c008d",
+            "ppt/slides/slide1.xml",
+            "72606dd520e916c42c2be248beae08f987e0837d98e45f4f2b6dd55945924697",
+            2,
+            Some((92500, 0)),
+        ),
+        (
+            "S91-F-X207-native-threshold150-boundary/H461-after-reopen/AHeight320",
+            "/private/tmp/S91-F-X207-native-threshold150-boundary/H461-after-reopen.pptx",
+            "881ef27b4ce4c452d5a64f73143f552bf7ed64a739a1dda4178e8b42b7f9b300",
+            "ppt/slides/slide1.xml",
+            "ed7263890390d45796ba095c779b8995c8ae9a9542931177ca8b430376006d70",
+            2,
+            Some((100000, 10000)),
+        ),
+        (
+            "native-four-control/Size28Reference",
+            "/private/tmp/S91-F-X207-next-bounded-control/minimal-after-reopen.pptx",
+            "22849e9b4b5c1aa0a8b39a98f246ebb2d8aeb8452ec924c651dd9eb05275fcc3",
+            "ppt/slides/slide1.xml",
+            "1c38258d8f19da15809ede4bcca5ac3a1e975ada5404a2ecf8aab0a93eba969d",
+            2,
+            Some((92500, 0)),
+        ),
+        (
+            "native-four-control/Size20Proportional",
+            "/private/tmp/S91-F-X207-next-bounded-control/minimal-after-reopen.pptx",
+            "22849e9b4b5c1aa0a8b39a98f246ebb2d8aeb8452ec924c651dd9eb05275fcc3",
+            "ppt/slides/slide1.xml",
+            "1c38258d8f19da15809ede4bcca5ac3a1e975ada5404a2ecf8aab0a93eba969d",
+            3,
+            Some((92500, 10000)),
+        ),
+        (
+            "native-four-control/TerminalDescenders28",
+            "/private/tmp/S91-F-X207-next-bounded-control/diagnostic-slide2-first.pptx",
+            "30a91bf2e41032aa47cf075dc112551b25122b7a423b761f732f35fc8d771edd",
+            "ppt/slides/slide1.xml",
+            "83a218b13ec63b939a410f379e9dd15b8c0e71289bbb8e1f1558fb50a3ea5e83",
+            2,
+            Some((92500, 0)),
+        ),
+        (
+            "native-four-control/TerminalAfter8pt28",
+            "/private/tmp/S91-F-X207-next-bounded-control/diagnostic-slide2-first.pptx",
+            "30a91bf2e41032aa47cf075dc112551b25122b7a423b761f732f35fc8d771edd",
+            "ppt/slides/slide1.xml",
+            "83a218b13ec63b939a410f379e9dd15b8c0e71289bbb8e1f1558fb50a3ea5e83",
+            3,
+            Some((92500, 0)),
+        ),
+    ];
+    let mut matches = 0;
+    let mut unfit = 0;
+    for (name, deck_path, deck_sha, slide_part, slide_sha, id, expected) in cases {
+        let deck_path = Path::new(deck_path);
+        assert_eq!(sha256(deck_path), deck_sha);
+        let bytes = fs::read(deck_path).unwrap();
+        let package = oxml_opc::OpcPackage::from_reader(Cursor::new(&bytes)).unwrap();
+        let part = format!("/{}", slide_part.trim_start_matches('/'));
+        assert_eq!(sha256_bytes(package.get_part(&part).unwrap()), slide_sha);
+        let deck = Presentation::from_bytes(&bytes).unwrap();
+        let before = deck.to_bytes().unwrap();
+        let report = deck.fit_report(&[("Arial", font.as_slice())]).unwrap();
+        let selected = report
+            .frames
+            .iter()
+            .filter(|r| r.update.location.owner_part == part && r.update.shape_id == Some(id))
+            .collect::<Vec<_>>();
+        assert_eq!(selected.len(), 1, "{name}");
+        let measured = selected[0];
+        if let Some((scale, reduction)) = expected {
+            assert_eq!(measured.needed_scale, Some(scale), "{name}");
+            assert_eq!(measured.needed_reduction, Some(reduction), "{name}");
+            matches += 1;
+        } else {
+            assert_eq!(measured.needed_scale, None);
+            assert_eq!(measured.needed_reduction, None);
+            assert!(measured.overflow);
+            assert_eq!(measured.update.status, "unfit");
+            unfit += 1;
+        }
+        assert_eq!(deck.to_bytes().unwrap(), before);
+    }
+    assert_eq!((matches, unfit), (21, 1));
+}
+
+#[test]
+#[cfg(feature = "render")]
+fn fx207_late_unfit_and_stale_location_refuse_without_publication() {
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    for text in [
+        "First\nSecond\nThird".to_owned(),
+        "Unfit line\n".repeat(500),
+    ] {
+        let mut slide = deck.slide_mut(0).unwrap();
+        let mut shape = slide
+            .add_textbox(Emu(914400), Emu(914400), Emu(3657600), Emu(457200))
+            .unwrap();
+        shape.set_text(&text).unwrap();
+        shape
+            .text_frame()
+            .unwrap()
+            .set_autofit_mode(Some(rpptx::AutofitMode::Normal));
+    }
+    let before = deck.to_bytes().unwrap();
+    let error = deck.refresh_autofit(&[]).unwrap_err().to_string();
+    assert!(
+        error.contains("slide1.xml") && error.contains("floor"),
+        "{error}"
+    );
+    assert_eq!(deck.to_bytes().unwrap(), before);
+    let report = deck.fit_report(&[]).unwrap();
+    let failed = report
+        .frames
+        .iter()
+        .find(|f| {
+            f.update.location.owner_part == "/ppt/slides/slide1.xml" && f.update.shape_id == Some(3)
+        })
+        .unwrap();
+    assert_eq!(failed.update.status, "unfit");
+    assert!(failed.overflow && failed.needed_scale.is_none());
+    assert_eq!(deck.to_bytes().unwrap(), before);
+    let location = deck.text_frame_location(0, &[0], None).unwrap();
+    deck.slide_mut(0)
+        .unwrap()
+        .shape_mut(0)
+        .unwrap()
+        .set_text("Changed source")
+        .unwrap();
+    let changed = deck.to_bytes().unwrap();
+    assert!(deck.fit_text_at(&location, None, 18, &[]).is_err());
+    assert_eq!(deck.to_bytes().unwrap(), changed);
+    let location = deck.text_frame_location(0, &[0], None).unwrap();
+    assert!(deck.fit_text_at(&location, None, 0, &[]).is_err());
+    assert!(deck.fit_text_at(&location, None, 4001, &[]).is_err());
+    assert_eq!(deck.to_bytes().unwrap(), changed);
+}
+
+#[test]
+#[cfg(feature = "render")]
+fn fx207_table_cells_fit_and_shape_mode_refuses_atomically() {
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    {
+        let mut slide = deck.slide_mut(0).unwrap();
+        let mut table = slide
+            .add_table(2, 2, Emu(914400), Emu(914400), Emu(3657600), Emu(914400))
+            .unwrap();
+        let mut table = table.table_mut().unwrap();
+        let mut cell = table.cell_mut(0, 0).unwrap();
+        cell.set_text("Cell first\nCell second\nCell third");
+        let mut frame = cell.text_frame();
+        frame.set_autofit_mode(Some(rpptx::AutofitMode::Normal));
+        for index in 0..frame.paragraph_count() {
+            let mut properties = rpptx::CT_TextCharacterProperties::default();
+            properties.font_size = Some(2000);
+            properties.latin = Some(rpptx::TextFont::new("Carlito").unwrap());
+            frame
+                .paragraph_mut(index)
+                .unwrap()
+                .run_mut(0)
+                .unwrap()
+                .set_properties(properties);
+        }
+    }
+    let refresh = deck.refresh_autofit(&[]).unwrap();
+    let cell = refresh
+        .updates
+        .iter()
+        .find(|u| {
+            u.location.owner_part == "/ppt/slides/slide1.xml" && u.location.cell == Some((0, 0))
+        })
+        .unwrap();
+    assert!(cell.font_scale.unwrap() < 100000);
+    assert_eq!(
+        refresh
+            .updates
+            .iter()
+            .filter(
+                |u| u.location.owner_part == "/ppt/slides/slide1.xml" && u.location.cell.is_some()
+            )
+            .count(),
+        4
+    );
+    let stored_scale = cell.font_scale.unwrap() as f64 / 100000.0;
+    fn cell_sizes(elements: &[oxml_layout::PositionedElement], sizes: &mut Vec<f64>) {
+        for element in elements {
+            match element {
+                oxml_layout::PositionedElement::Text(run) if run.text.contains("Cell") => {
+                    sizes.push(run.font_size)
+                }
+                oxml_layout::PositionedElement::MultilingualText(run)
+                    if run.logical_text.contains("Cell") =>
+                {
+                    sizes.push(run.font_size)
+                }
+                oxml_layout::PositionedElement::Group(group) => cell_sizes(&group.children, sizes),
+                _ => {}
+            }
+        }
+    }
+    let reopened = Presentation::from_bytes(&deck.to_bytes().unwrap()).unwrap();
+    let (_, rendered) = reopened.render_deterministic().unwrap();
+    let mut sizes = Vec::new();
+    cell_sizes(&rendered.pages[0].elements, &mut sizes);
+    assert_eq!(sizes.len(), 3);
+    assert!(
+        sizes
+            .iter()
+            .all(|size| (*size - 20.0 * stored_scale).abs() < 1e-9)
+    );
+    let location = deck.text_frame_location(0, &[0], Some((0, 0))).unwrap();
+    let fitted = deck
+        .fit_text_at(&location, Some("Carlito"), 18, &[])
+        .unwrap();
+    assert!(fitted.point_size.unwrap() < 18);
+    assert!(saved_slide_xml(&deck).contains("<a:noAutofit/>"));
+    {
+        let mut slide = deck.slide_mut(0).unwrap();
+        let mut table = slide.shape_mut(0).unwrap();
+        table
+            .table_mut()
+            .unwrap()
+            .cell_mut(0, 0)
+            .unwrap()
+            .text_frame()
+            .set_autofit_mode(Some(rpptx::AutofitMode::Shape));
+    }
+    let before = deck.to_bytes().unwrap();
+    let error = deck.refresh_autofit(&[]).unwrap_err().to_string();
+    assert!(
+        error.contains("table-cell") && error.contains("slide1.xml"),
+        "{error}"
+    );
+    assert_eq!(deck.to_bytes().unwrap(), before);
+}
+
+#[test]
+#[cfg(feature = "render")]
+fn fx207_shape_refresh_preserves_rotated_top_center_bottom_anchors() {
+    // Independent affine anchor equation from source rectangle and rotation.
+    for anchor in [
+        rpptx::TextAnchor::Top,
+        rpptx::TextAnchor::Center,
+        rpptx::TextAnchor::Bottom,
+    ] {
+        for degrees in [0.0_f64, 37.0, 90.0] {
+            let mut deck = Presentation::new().unwrap();
+            deck.add_slide(6).unwrap();
+            {
+                let mut slide = deck.slide_mut(0).unwrap();
+                let mut shape = slide
+                    .add_textbox(Emu(914400), Emu(914400), Emu(3657600), Emu(457200))
+                    .unwrap();
+                shape
+                    .set_text("First line\nSecond line\nThird line")
+                    .unwrap();
+                shape
+                    .set_rotation(rpptx::Angle::from_degrees(degrees))
+                    .unwrap();
+                let mut frame = shape.text_frame().unwrap();
+                frame.set_vertical_anchor(Some(anchor));
+                frame.set_autofit_mode(Some(rpptx::AutofitMode::Shape));
+            }
+            let result = deck.refresh_autofit(&[]).unwrap();
+            let update = result
+                .updates
+                .iter()
+                .find(|u| {
+                    u.location.owner_part == "/ppt/slides/slide1.xml" && u.shape_id == Some(2)
+                })
+                .unwrap();
+            let fraction = match anchor {
+                rpptx::TextAnchor::Top => 0.0,
+                rpptx::TextAnchor::Center => 0.5,
+                _ => 1.0,
+            };
+            let angle = degrees.to_radians();
+            let physical_anchor = |(x, y, w, h): (i64, i64, i64, i64)| {
+                let dy = (fraction - 0.5) * h as f64;
+                (
+                    x as f64 + w as f64 / 2.0 - dy * angle.sin(),
+                    y as f64 + h as f64 / 2.0 + dy * angle.cos(),
+                )
+            };
+            let old = physical_anchor(update.old_bounds);
+            let new = physical_anchor(update.new_bounds);
+            assert!(
+                (old.0 - new.0).abs() <= 1.0 && (old.1 - new.1).abs() <= 1.0,
+                "{degrees:?} {anchor:?}: {old:?} {new:?}"
+            );
+            assert!(update.new_bounds.3 > update.old_bounds.3);
+            let before = deck.to_bytes().unwrap();
+            assert!(!deck.refresh_autofit(&[]).unwrap().changed);
+            assert_eq!(deck.to_bytes().unwrap(), before);
+        }
+    }
+}
+
+#[test]
+#[cfg(feature = "render")]
+fn fx207_opaque_foreign_flags_are_not_owned_and_chart_flags_are_atomic_refusals() {
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    // Establish unchanged stock-master values before the namespace intervention.
+    deck.refresh_autofit(&[]).unwrap();
+    let mut package = open_opc(&deck.to_bytes().unwrap(), "F207 foreign owner");
+    let part = "/custom/opaque.xml";
+    let prefix = r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:foreign">"#;
+    let foreign = format!(
+        "{prefix}<x:payload><a:txBody><a:bodyPr><a:spAutoFit/></a:bodyPr><a:p><a:r><a:t>Foreign</a:t></a:r></a:p></a:txBody></x:payload></c:chartSpace>"
+    );
+    package.content_types.add_override(
+        part,
+        "application/vnd.openxmlformats-officedocument.drawingml.chart+xml",
+    );
+    package.set_part(part, foreign.as_bytes().to_vec());
+    let mut deck = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let before = deck.to_bytes().unwrap();
+    assert!(!deck.refresh_autofit(&[]).unwrap().changed);
+    assert_eq!(deck.to_bytes().unwrap(), before);
+    let mut package = open_opc(&before, "F207 owned unsupported owner");
+    package.set_part(part, format!("{prefix}<c:txPr><a:bodyPr><a:normAutofit/></a:bodyPr><a:p><a:r><a:t>Owned opaque</a:t></a:r></a:p></c:txPr></c:chartSpace>").into_bytes());
+    let mut deck = Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let before = deck.to_bytes().unwrap();
+    let error = deck.refresh_autofit(&[]).unwrap_err().to_string();
+    assert!(error.contains(part) && error.contains("opaque"), "{error}");
+    assert_eq!(deck.to_bytes().unwrap(), before);
+}
+
+#[test]
+#[cfg(feature = "render")]
+fn fx207_uniform_fit_keeps_families_styles_links_and_rejects_next_size() {
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    {
+        let mut slide = deck.slide_mut(0).unwrap();
+        let mut shape = slide
+            .add_textbox(Emu(914400), Emu(914400), Emu(3657600), Emu(457200))
+            .unwrap();
+        shape
+            .set_text("First styled line\nSecond styled line\nThird styled line")
+            .unwrap();
+        let mut frame = shape.text_frame().unwrap();
+        for index in 0..frame.paragraph_count() {
+            let mut properties = rpptx::CT_TextCharacterProperties::default();
+            properties.latin = Some(
+                rpptx::TextFont::new(if index == 0 {
+                    "Liberation Mono"
+                } else {
+                    "Carlito"
+                })
+                .unwrap(),
+            );
+            properties.bold = Some(index == 0);
+            properties.italic = Some(index == 1);
+            properties.font_size = Some(2000);
+            frame
+                .paragraph_mut(index)
+                .unwrap()
+                .run_mut(0)
+                .unwrap()
+                .set_properties(properties);
+        }
+    }
+    deck.set_run_hyperlink(0, 2, 0, 0, Some("https://example.invalid/F207"))
+        .unwrap();
+    let before = open_opc(&deck.to_bytes().unwrap(), "F207 hyperlink before");
+    let relation = before
+        .get_part_rels("/ppt/slides/slide1.xml")
+        .unwrap()
+        .clone();
+    let location = deck.text_frame_location(0, &[0], None).unwrap();
+    let fit = deck.fit_text_at(&location, None, 18, &[]).unwrap();
+    let chosen = fit.point_size.unwrap();
+    assert!(chosen < 18);
+    let saved = deck.to_bytes().unwrap();
+    let after = open_opc(&saved, "F207 hyperlink after");
+    assert_eq!(
+        relation.to_xml().unwrap(),
+        after
+            .get_part_rels("/ppt/slides/slide1.xml")
+            .unwrap()
+            .to_xml()
+            .unwrap()
+    );
+    let mut larger = Presentation::from_bytes(&saved).unwrap();
+    {
+        let mut slide = larger.slide_mut(0).unwrap();
+        let mut shape = slide.shape_mut(0).unwrap();
+        let mut frame = shape.text_frame().unwrap();
+        for index in 0..frame.paragraph_count() {
+            let mut paragraph = frame.paragraph_mut(index).unwrap();
+            let mut run = paragraph.run_mut(0).unwrap();
+            let mut properties = run.properties().unwrap().clone();
+            assert_eq!(properties.font_size, Some(i32::from(chosen) * 100));
+            assert_eq!(properties.bold, Some(index == 0));
+            assert_eq!(properties.italic, Some(index == 1));
+            assert_eq!(
+                properties.latin.as_ref().unwrap().typeface,
+                if index == 0 {
+                    "Liberation Mono"
+                } else {
+                    "Carlito"
+                }
+            );
+            properties.font_size = Some(i32::from(chosen + 1) * 100);
+            run.set_properties(properties);
+        }
+    }
+    let report = larger.fit_report(&[]).unwrap();
+    let frame = report
+        .frames
+        .iter()
+        .find(|f| {
+            f.update.location.owner_part == "/ppt/slides/slide1.xml" && f.update.shape_id == Some(2)
+        })
+        .unwrap();
+    assert!(
+        frame.overflow,
+        "candidate plus one must fail physical containment"
+    );
+    let current = deck.fit_report(&[]).unwrap();
+    let frame = current
+        .frames
+        .iter()
+        .find(|f| {
+            f.update.location.owner_part == "/ppt/slides/slide1.xml" && f.update.shape_id == Some(2)
+        })
+        .unwrap();
+    assert!(!frame.overflow);
+    assert_eq!(frame.measured_font_scale, Some(1.0));
+    assert!(
+        frame.quantized_trial.as_ref().unwrap().fits
+            && frame.persisted_trial.as_ref().unwrap().fits
+    );
+    assert_eq!(deck.to_bytes().unwrap(), saved);
+}
+
+#[test]
+#[cfg(feature = "render")]
+fn fx207_shape_nowrap_late_width_failure_preserves_all_owners() {
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    for (index, text, width) in [
+        (0, "First line\nSecond line\nThird line", 3657600),
+        (
+            1,
+            "Long explicit unwrapped Arial text must not claim it fits inside this narrow fixed-width frame",
+            635000,
+        ),
+    ] {
+        let mut slide = deck.slide_mut(0).unwrap();
+        let mut shape = slide
+            .add_textbox(
+                Emu(914400),
+                Emu(914400 + index * 914400),
+                Emu(width),
+                Emu(457200),
+            )
+            .unwrap();
+        shape.set_text(text).unwrap();
+        let mut frame = shape.text_frame().unwrap();
+        frame.set_word_wrap(Some(false));
+        frame.set_autofit_mode(Some(rpptx::AutofitMode::Shape));
+        for paragraph in 0..frame.paragraph_count() {
+            let mut properties = rpptx::CT_TextCharacterProperties::default();
+            properties.font_size = Some(2000);
+            properties.latin = Some(rpptx::TextFont::new("Arial").unwrap());
+            frame
+                .paragraph_mut(paragraph)
+                .unwrap()
+                .run_mut(0)
+                .unwrap()
+                .set_properties(properties);
+        }
+    }
+    let source = deck.to_bytes().unwrap();
+    let location = deck.text_frame_location(0, &[0], None).unwrap();
+    let report = deck.fit_report(&[]).unwrap();
+    assert!(
+        report
+            .frames
+            .iter()
+            .any(|frame| frame.update.shape_id == Some(3) && frame.overflow)
+    );
+    let error = deck.refresh_autofit(&[]).unwrap_err().to_string();
+    assert!(
+        error.contains("fixed usable width") && error.contains("slide1.xml"),
+        "{error}"
+    );
+    assert_eq!(deck.to_bytes().unwrap(), source);
+    assert_eq!(deck.text_frame_location(0, &[0], None).unwrap(), location);
+    let mut reopened = Presentation::from_bytes(&source).unwrap();
+    assert!(reopened.refresh_autofit(&[]).is_err());
+    assert_eq!(reopened.to_bytes().unwrap(), source);
+}
+
+#[test]
+#[cfg(feature = "render")]
+fn fx207_shape_growth_and_shrink_remeasure_every_anchor() {
+    for anchor in [
+        rpptx::TextAnchor::Top,
+        rpptx::TextAnchor::Center,
+        rpptx::TextAnchor::Bottom,
+    ] {
+        for old_height in [457200, 3657600] {
+            let mut deck = Presentation::new().unwrap();
+            deck.add_slide(6).unwrap();
+            {
+                let mut slide = deck.slide_mut(0).unwrap();
+                let mut shape = slide
+                    .add_textbox(Emu(914400), Emu(3657600), Emu(3657600), Emu(old_height))
+                    .unwrap();
+                shape
+                    .set_text("First line\nSecond line\nThird line")
+                    .unwrap();
+                let mut frame = shape.text_frame().unwrap();
+                frame.set_vertical_anchor(Some(anchor));
+                frame.set_autofit_mode(Some(rpptx::AutofitMode::Shape));
+            }
+            let result = deck.refresh_autofit(&[]).unwrap();
+            let update = result
+                .updates
+                .iter()
+                .find(|update| update.location.owner_part == "/ppt/slides/slide1.xml")
+                .unwrap();
+            assert_eq!(update.new_bounds.2, update.old_bounds.2);
+            assert_eq!(
+                update.new_bounds.3 > update.old_bounds.3,
+                old_height == 457200
+            );
+            let fraction = match anchor {
+                rpptx::TextAnchor::Top => 0.0,
+                rpptx::TextAnchor::Center => 0.5,
+                _ => 1.0,
+            };
+            assert!(
+                (update.old_bounds.1 as f64 + fraction * update.old_bounds.3 as f64
+                    - update.new_bounds.1 as f64
+                    - fraction * update.new_bounds.3 as f64)
+                    .abs()
+                    <= 1.0
+            );
+            let bytes = deck.to_bytes().unwrap();
+            let mut reopened = Presentation::from_bytes(&bytes).unwrap();
+            assert!(
+                !reopened
+                    .fit_report(&[])
+                    .unwrap()
+                    .frames
+                    .iter()
+                    .any(
+                        |frame| frame.update.location.owner_part == "/ppt/slides/slide1.xml"
+                            && frame.overflow
+                    )
+            );
+            assert!(!reopened.refresh_autofit(&[]).unwrap().changed);
+            assert_eq!(reopened.to_bytes().unwrap(), bytes);
+        }
+    }
+}
+
+#[test]
+#[cfg(feature = "render")]
+fn fx207_owned_operations_cover_wrapped_rich_vertical_and_edge_spacing() {
+    let original = include_bytes!("../../oxml-layout/fonts/LiberationMono-Regular.ttf");
+    let fonts = [("F207 gap mono", original.as_slice())];
+    let paragraphs = r#"<a:p><a:pPr><a:lnSpc><a:spcPct val="100000"/></a:lnSpc><a:spcBef><a:spcPts val="400"/></a:spcBef><a:spcAft><a:spcPts val="600"/></a:spcAft><a:buSzPts val="2800"/><a:buFont typeface="F207 gap mono"/><a:buChar char="•"/><a:defRPr sz="1600"><a:latin typeface="F207 gap mono"/></a:defRPr></a:pPr><a:r><a:rPr sz="2000" baseline="10000" x:keep="direct"><a:latin typeface="F207 gap mono"/></a:rPr><a:t>Mixed source words wrap across the fixed frame </a:t></a:r><a:fld id="{00000000-0000-0000-0000-000000000001}" type="slidenum"><a:rPr sz="1800" x:keep="field"><a:latin typeface="F207 gap mono"/></a:rPr><a:t>1</a:t></a:fld><a:br/><a:r><a:rPr sz="1600"><a:latin typeface="F207 gap mono"/></a:rPr><a:t>Last line</a:t></a:r><a:endParaRPr sz="1600" x:keep="end"><a:latin typeface="F207 gap mono"/></a:endParaRPr></a:p><a:p><a:pPr><a:spcAft><a:spcPts val="600"/></a:spcAft></a:pPr><a:endParaRPr sz="1800"><a:latin typeface="F207 gap mono"/></a:endParaRPr></a:p>"#;
+    for vertical in [false, true] {
+        for shape_mode in [false, true] {
+            let flags = if shape_mode {
+                "<a:spAutoFit/>"
+            } else {
+                "<a:normAutofit/>"
+            };
+            let direction = if vertical { "vert" } else { "horz" };
+            let bp = format!(
+                r#"<a:bodyPr wrap="square" anchor="ctr" vert="{direction}" spcFirstLastPara="1" lIns="45720" rIns="45720" tIns="45720" bIns="45720">{flags}</a:bodyPr>"#
+            );
+            let bounds = if vertical {
+                (914400, 914400, 762000, 2743200)
+            } else {
+                (914400, 914400, 2743200, 762000)
+            };
+            let xml = text_layout_shape(2, "F207 rich generalized", bounds, &bp, paragraphs)
+                .replacen("<p:sp>", "<p:sp xmlns:x=\"urn:fx207-gap\">", 1);
+            let mut deck = text_layout_deck(&xml, "");
+            let source = deck.to_bytes().unwrap();
+            let location = deck.text_frame_location(0, &[0], None).unwrap();
+            let first = deck.fit_report(&fonts).unwrap();
+            assert_eq!(source, deck.to_bytes().unwrap());
+            assert_eq!(
+                first
+                    .frames
+                    .iter()
+                    .filter(|f| f.update.shape_id == Some(2)
+                        && f.update.location.owner_part == "/ppt/slides/slide1.xml")
+                    .count(),
+                1
+            );
+            let refresh = deck.refresh_autofit(&fonts).unwrap();
+            let update = refresh
+                .updates
+                .iter()
+                .find(|u| {
+                    u.shape_id == Some(2) && u.location.owner_part == "/ppt/slides/slide1.xml"
+                })
+                .unwrap();
+            assert_eq!(update.location, location);
+            if shape_mode {
+                assert_ne!(update.old_bounds, update.new_bounds);
+                if vertical {
+                    assert_eq!(update.old_bounds.3, update.new_bounds.3);
+                } else {
+                    assert_eq!(update.old_bounds.2, update.new_bounds.2);
+                }
+            } else {
+                assert_eq!(update.old_bounds, update.new_bounds);
+                assert!(update.font_scale.is_some() && update.line_spacing_reduction.is_some());
+            }
+            let measured = deck.fit_report(&fonts).unwrap();
+            let frame = measured
+                .frames
+                .iter()
+                .find(|f| {
+                    f.update.shape_id == Some(2)
+                        && f.update.location.owner_part == "/ppt/slides/slide1.xml"
+                })
+                .unwrap();
+            assert!(!frame.overflow, "{vertical} {shape_mode}: {frame:?}");
+            assert!(frame.persisted_trial.as_ref().unwrap().fits);
+            let saved = deck.to_bytes().unwrap();
+            let repeated = deck.refresh_autofit(&fonts).unwrap();
+            assert!(
+                !repeated.changed,
+                "vertical={vertical} shape_mode={shape_mode}; first={:?}; repeat={:?}",
+                refresh
+                    .updates
+                    .iter()
+                    .map(|u| (
+                        &u.location.owner_part,
+                        &u.location.child_path,
+                        u.mode,
+                        u.changed,
+                        u.old_bounds,
+                        u.new_bounds,
+                        u.font_scale,
+                        u.line_spacing_reduction,
+                    ))
+                    .collect::<Vec<_>>(),
+                repeated
+                    .updates
+                    .iter()
+                    .map(|u| (
+                        &u.location.owner_part,
+                        &u.location.child_path,
+                        u.mode,
+                        u.changed,
+                        u.old_bounds,
+                        u.new_bounds,
+                        u.font_scale,
+                        u.line_spacing_reduction,
+                    ))
+                    .collect::<Vec<_>>(),
+            );
+            assert_eq!(deck.to_bytes().unwrap(), saved);
+            let mut reopened = Presentation::from_bytes(&saved).unwrap();
+            let current_location = reopened.text_frame_location(0, &[0], None).unwrap();
+            let fitted = reopened
+                .fit_text_at(&current_location, None, 18, &fonts)
+                .unwrap();
+            assert!(fitted.point_size.is_some_and(|size| size > 0 && size <= 18));
+            let bytes = reopened.to_bytes().unwrap();
+            let package = open_opc(&bytes, "F207 generalized fitted owner");
+            let xml =
+                std::str::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap()).unwrap();
+            for token in [
+                "urn:fx207-gap",
+                "x:keep=\"direct\"",
+                "x:keep=\"field\"",
+                "x:keep=\"end\"",
+                "type=\"slidenum\"",
+                "Mixed source words wrap across the fixed frame ",
+                "Last line",
+                "spcFirstLastPara=\"1\"",
+                "baseline=\"10000\"",
+            ] {
+                assert!(xml.contains(token), "lost {token}: {xml}");
+            }
+            let final_report = reopened.fit_report(&fonts).unwrap();
+            assert!(
+                !final_report
+                    .frames
+                    .iter()
+                    .find(|f| f.update.shape_id == Some(2)
+                        && f.update.location.owner_part == "/ppt/slides/slide1.xml")
+                    .unwrap()
+                    .overflow
+            );
+            assert_eq!(
+                Presentation::from_bytes(&bytes)
+                    .unwrap()
+                    .to_bytes()
+                    .unwrap(),
+                bytes
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "mandatory F207 pinned python-pptx1.0.2 structural fit oracle requires uv and authenticated Arial6.80i"]
+#[cfg(feature = "render")]
+fn fx207_explicit_capped_fit_matches_pinned_python_pptx_structure() {
+    let path =
+        std::env::var("F_X207_STATIC_ORACLE_FONT").expect("mandatory exact Arial font source");
+    let original = fs::read(&path).unwrap();
+    // Full source SHA is checked by the external scoped admission, not by a filename.
+    let paragraphs = r#"<a:p><a:r><a:rPr sz="2000"><a:latin typeface="Arial"/></a:rPr><a:t>Explicit static fit</a:t></a:r><a:endParaRPr sz="2000"><a:latin typeface="Arial"/></a:endParaRPr></a:p>"#;
+    let xml = text_layout_shape(
+        2,
+        "F207 pinned structural",
+        (914400, 914400, 3657600, 914400),
+        "<a:bodyPr wrap=\"none\"><a:normAutofit/></a:bodyPr>",
+        paragraphs,
+    );
+    let mut deck = text_layout_deck(&xml, "");
+    let source = deck.to_bytes().unwrap();
+    let location = deck.text_frame_location(0, &[0], None).unwrap();
+    let result = deck
+        .fit_text_at(
+            &location,
+            Some("Arial"),
+            12,
+            &[("Arial", original.as_slice())],
+        )
+        .unwrap();
+    assert_eq!(result.point_size, Some(12));
+    let script = format!(
+        r#"
+import pptx,sys,zipfile
+from lxml import etree
+assert pptx.__version__=='1.0.2',pptx.__version__
+p=pptx.Presentation(sys.argv[1]);shape=p.slides[0].shapes[0]
+shape.text_frame.fit_text(font_family='Arial',max_size=12,bold=False,italic=False,font_file={path:?})
+a='{{http://schemas.openxmlformats.org/drawingml/2006/main}}'
+b=shape.text_frame._txBody
+assert b.find(a+'bodyPr').get('wrap')=='square'
+assert len(b.findall(a+'bodyPr/'+a+'noAutofit'))==1
+assert not b.findall(a+'bodyPr/'+a+'normAutofit')
+assert not b.findall(a+'bodyPr/'+a+'spAutoFit')
+assert {{x.get('sz') for x in b.iter(a+'rPr')}}=={{'1200'}}
+assert {{x.find(a+'latin').get('typeface') for x in b.iter(a+'rPr')}}=={{'Arial'}}
+assert ''.join(x.text or '' for x in b.iter(a+'t'))=='Explicit static fit'
+print('FX207_STRUCTURAL_FIT Arial 1200 square noAutofit source-text-exact')
+"#
+    );
+    assert_eq!(
+        python_pptx_1_0_2_reads(&source, "fx207-structural-fit", &script).trim(),
+        "FX207_STRUCTURAL_FIT Arial 1200 square noAutofit source-text-exact"
+    );
+    let saved = deck.to_bytes().unwrap();
+    let package = open_opc(&saved, "F207 structural fitted");
+    let slide = CT_Slide::from_xml(package.get_part("/ppt/slides/slide1.xml").unwrap()).unwrap();
+    let rpptx_oxml::shape_tree::ShapeTreeChild::Shape(shape) =
+        &slide.common_slide_data.shape_tree.children[0]
+    else {
+        panic!("source textbox");
+    };
+    let body = shape.text_body.as_ref().unwrap();
+    assert!(matches!(
+        body.body_properties.autofit,
+        Some(oxml_drawing::text::TextAutofit::NoAutofit)
+    ));
+    assert_eq!(
+        body.body_properties.wrap,
+        Some(oxml_drawing::text::TextWrap::Square)
+    );
+    assert_eq!(body.paragraph_count(), 1);
+    let paragraph = &body.paragraphs()[0];
+    assert_eq!(paragraph.runs.len(), 1);
+    let oxml_drawing::text::TextRun::Run(run) = &paragraph.runs[0] else {
+        panic!("original regular run remains regular");
+    };
+    assert_eq!(run.text.value, "Explicit static fit");
+    let direct = run.properties.as_ref().expect("persisted direct font");
+    let default = paragraph
+        .properties
+        .as_ref()
+        .unwrap()
+        .default_run_properties
+        .as_ref()
+        .expect("persisted paragraph default font");
+    let end = paragraph
+        .end_properties
+        .as_ref()
+        .expect("persisted end font");
+    for properties in [direct, default, end] {
+        assert_eq!(properties.font_size, Some(1200));
+        assert_eq!(properties.latin.as_ref().unwrap().typeface, "Arial");
+    }
+    assert_eq!(
+        Presentation::from_bytes(&saved)
+            .unwrap()
+            .to_bytes()
+            .unwrap(),
+        saved
+    );
+}

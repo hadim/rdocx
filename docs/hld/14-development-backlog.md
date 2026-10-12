@@ -7056,6 +7056,13 @@ Resolve [Issue310](https://github.com/tensorbee/rdocx/issues/310) in S91,
 part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
 coverage checklist. Persist computed normAutofit fontScale and line-space reduction, resize spAutoFit frames while keeping the anchor, implement fit_text and deck-wide refresh_autofit. Measure with the same caller fonts as rendering and expose fallback diagnostics. Compare stored values with pinned PowerPoint ground truth and verify rendered containment. F-X204 consumes this API for CLI fit.
 
+Explicit refresh inventories slide, layout, master and notes owners and
+intersects shared-owner contexts before staged publication. Normal fitting
+requires separately reshaped Q and persisted S trials. Uniform fit uses the
+largest permitted integer size without resetting unspecified run families.
+Stored fractional rendering remains read-only. Shape-to-fit table cells and
+unrepresentable anchors refuse atomically rather than claiming partial fit.
+
 **Depends on**: F-X194, F-X195.
 **Test gate**: regression. Reproduce each missing operation or reported defect
 through the installed public API on the claimed Base before implementation.

@@ -451,9 +451,21 @@ impl CT_TextBody {
             list_style: self.list_style.clone(),
             paragraphs: vec![paragraph],
             raw_children: OrderedRawChildren::default(),
-            source_root: Vec::new(),
-            source_tag: String::new(),
-            source_body_properties: None,
+            source_root: if self.body_properties.autofit_source.is_some() {
+                self.source_root.clone()
+            } else {
+                Vec::new()
+            },
+            source_tag: if self.body_properties.autofit_source.is_some() {
+                self.source_tag.clone()
+            } else {
+                String::new()
+            },
+            source_body_properties: if self.body_properties.autofit_source.is_some() {
+                self.source_body_properties.clone()
+            } else {
+                None
+            },
         }
     }
 
@@ -543,6 +555,47 @@ mod tests {
     use std::panic;
 
     use super::{CT_TextBody, CT_TextListStyle};
+
+    #[test]
+    fn autofit_opaque_choice_keeps_inherited_wrapper_namespace_scope() {
+        let xml = br#"<q:txBody xmlns:q='http://schemas.openxmlformats.org/drawingml/2006/main' xmlns:e='urn:example'><q:bodyPr><q:normAutofit e:proof='keep&amp;exact'/></q:bodyPr><q:p/></q:txBody>"#;
+        let mut body = CT_TextBody::from_xml(xml).unwrap();
+        body.body_properties.autofit = Some(super::TextAutofit::NoAutofit);
+        let saved = body.to_xml().unwrap();
+        let saved = String::from_utf8(saved).unwrap();
+        assert!(saved.starts_with("<q:txBody xmlns:q='http://schemas.openxmlformats.org/drawingml/2006/main' xmlns:e='urn:example'>"));
+        assert!(saved.contains("<q:noAutofit e:proof='keep&amp;exact'/>"));
+        let empty = String::from_utf8(body.empty_like().to_xml().unwrap()).unwrap();
+        assert!(empty.contains("xmlns:q='http://schemas.openxmlformats.org/drawingml/2006/main'"));
+        assert!(empty.contains("xmlns:e='urn:example'"));
+        assert!(empty.contains("<q:noAutofit e:proof='keep&amp;exact'/>"));
+        assert_eq!(
+            CT_TextBody::from_xml(saved.as_bytes())
+                .unwrap()
+                .to_xml()
+                .unwrap(),
+            saved.as_bytes()
+        );
+
+        // The retained owner spelling remains qualified even when a is foreign.
+        // Generated canonical descendants close their own DrawingML binding.
+        let conflicting = String::from_utf8(xml.to_vec())
+            .unwrap()
+            .replace("xmlns:e=", "xmlns:a='urn:foreign' xmlns:e=");
+        let mut body = CT_TextBody::from_xml(conflicting.as_bytes()).unwrap();
+        body.body_properties.autofit = Some(super::TextAutofit::NoAutofit);
+        let saved = String::from_utf8(body.to_xml().unwrap()).unwrap();
+        assert!(saved.starts_with("<q:txBody"));
+        assert!(saved.contains("xmlns:a='urn:foreign'"));
+        assert!(saved.contains("<q:noAutofit e:proof='keep&amp;exact'/>"));
+        assert_eq!(
+            CT_TextBody::from_xml(saved.as_bytes())
+                .unwrap()
+                .to_xml()
+                .unwrap(),
+            saved.as_bytes()
+        );
+    }
 
     #[test]
     fn text_body_reads_any_prefix_and_writes_the_fixed_a_prefix() {

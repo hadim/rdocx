@@ -8180,3 +8180,259 @@ def test_fx206_picture_placeholder_opaque_empty_body_refuses_without_package_mut
     assert _package_parts(actual.to_bytes()) == before_parts
     assert [s.shape_id for s in slide.shapes] == ids
     assert owner.shape_id == ident
+
+
+# F-X207 Base controls use existing public construction and measurement first.
+# The missing explicit operation is the deciding Base assertion, not save-time
+# mutation. The persisted-result assertions remain mandatory after adoption.
+def _fx207_fixture(tmp_path, text, mode):
+    from pathlib import Path
+    import rpptx
+
+    font_path = Path(__file__).resolve().parents[2] / "oxml-layout/fonts/Carlito-Regular.ttf"
+    font = font_path.read_bytes()
+    assert font[:4] == b"\x00\x01\x00\x00"
+    presentation = _text_layout_deck(tmp_path, rpptx.Inches(4), text)
+    shape = presentation.slides[0].shapes[0]
+    frame = shape.text_frame
+    frame.word_wrap = True
+    frame.auto_size = mode
+    for paragraph in frame.paragraphs:
+        paragraph.font.name = "Carlito"
+        paragraph.font.size = rpptx.Pt(20)
+        for run in paragraph.runs:
+            run.font.name = "Carlito"
+            run.font.size = rpptx.Pt(20)
+    return presentation, [("Carlito", font)]
+
+
+def _fx207_slide_xml(presentation):
+    import xml.etree.ElementTree as ET
+
+    with zipfile.ZipFile(io.BytesIO(presentation.to_bytes())) as archive:
+        return ET.fromstring(archive.read("ppt/slides/slide1.xml"))
+
+
+def _fx207_shape_xml(presentation, shape_id):
+    ns = {"p": "http://schemas.openxmlformats.org/presentationml/2006/main"}
+    for shape in _fx207_slide_xml(presentation).findall(".//p:sp", ns):
+        if shape.find("p:nvSpPr/p:cNvPr", ns).get("id") == str(shape_id):
+            return shape
+    raise AssertionError("F-X207 source-owned shape is absent")
+
+
+def _fx207_update(result, shape_id):
+    updates = [u for u in result.updates if u.owner_part == "/ppt/slides/slide1.xml"
+               and u.shape_id == shape_id and u.cell is None]
+    assert len(updates) == 1
+    return updates[0]
+
+
+def test_fx207_explicit_normal_refresh_persists_owned_scale_pair(tmp_path):
+    import rpptx
+
+    presentation, fonts = _fx207_fixture(
+        tmp_path, "First line\nSecond line\nThird line",
+        rpptx.MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE,
+    )
+    shape = presentation.slides[0].shapes[0]
+    ns = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
+    before = presentation.to_bytes()
+    normal = _fx207_shape_xml(presentation, shape.shape_id).find(".//a:normAutofit", ns)
+    assert normal is not None and normal.attrib == {}
+    (measured,) = presentation.text_layout(fonts=fonts)
+    assert measured.autofit == "normal" and measured.font_scale < 1.0
+    assert presentation.to_bytes() == before
+    refresh = getattr(presentation, "refresh_autofit", None)
+    assert callable(refresh), "F-X207 missing explicit normal refresh persistence"
+    result = refresh(fonts=fonts)
+    update = _fx207_update(result, shape.shape_id)
+    assert update.mode == "normal" and update.changed and result.changed
+    assert update.status == "updated"
+    pair = (update.font_scale, update.line_spacing_reduction)
+    assert pair in ((100000, 0), (100000, 10000), (92500, 0), (92500, 10000),
+                    (92500, 20000), (85000, 20000), (77500, 20000),
+                    (70000, 20000), (62500, 20000), (55000, 20000),
+                    (47500, 20000), (40000, 20000), (32500, 20000), (25000, 20000))
+    normal = _fx207_shape_xml(presentation, shape.shape_id).find(".//a:normAutofit", ns)
+    assert normal.attrib == {"fontScale": str(pair[0]), "lnSpcReduction": str(pair[1])}
+    saved = presentation.to_bytes()
+    assert saved != before
+    assert not presentation.text_layout(fonts=fonts)[0].overflow
+    assert presentation.to_bytes() == saved
+    assert not refresh(fonts=fonts).changed
+    assert presentation.to_bytes() == saved
+    reopened = rpptx.Presentation.from_bytes(saved)
+    assert _fx207_shape_xml(reopened, shape.shape_id).find(".//a:normAutofit", ns).attrib == normal.attrib
+
+
+def test_fx207_explicit_shape_refresh_persists_changed_bounds(tmp_path):
+    import rpptx
+
+    presentation, fonts = _fx207_fixture(
+        tmp_path, "First line\nSecond line\nThird line",
+        rpptx.MSO_AUTO_SIZE.SHAPE_TO_FIT_TEXT,
+    )
+    shape = presentation.slides[0].shapes[0]
+    old = (shape.left, shape.top, shape.width, shape.height)
+    before = presentation.to_bytes()
+    assert old[3] == rpptx.Pt(36)
+    (measured,) = presentation.text_layout(fonts=fonts)
+    assert measured.autofit == "shape" and measured.overflow
+    assert (shape.left, shape.top, shape.width, shape.height) == old
+    assert presentation.to_bytes() == before
+    refresh = getattr(presentation, "refresh_autofit", None)
+    assert callable(refresh), "F-X207 missing explicit shape refresh persistence"
+    result = refresh(fonts=fonts)
+    update = _fx207_update(result, shape.shape_id)
+    current = presentation.slides[0].shapes[0]
+    new = (current.left, current.top, current.width, current.height)
+    assert update.mode == "shape" and update.status == "updated"
+    assert update.old_bounds == old and update.new_bounds == new
+    assert new[:3] == old[:3] and new[3] > old[3]
+    assert update.changed and result.changed
+    saved = presentation.to_bytes()
+    assert not presentation.text_layout(fonts=fonts)[0].overflow
+    assert not refresh(fonts=fonts).changed
+    assert presentation.to_bytes() == saved
+    reopened = rpptx.Presentation.from_bytes(saved).slides[0].shapes[0]
+    assert (reopened.left, reopened.top, reopened.width, reopened.height) == new
+
+
+def test_fx207_fit_text_persists_uniform_size_without_autofit(tmp_path):
+    import rpptx
+
+    presentation, fonts = _fx207_fixture(
+        tmp_path, "First line\nSecond line\nThird line",
+        rpptx.MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE,
+    )
+    frame = presentation.slides[0].shapes[0].text_frame
+    original = frame.text
+    before = presentation.to_bytes()
+    fit = getattr(frame, "fit_text", None)
+    assert callable(fit), "F-X207 missing explicit checked TextFrame.fit_text"
+    update = fit(font_family=None, max_size=12, fonts=fonts)
+    assert isinstance(update.diagnostics, tuple)
+    assert update.mode == "none" and update.status == "updated" and update.changed
+    assert isinstance(update.point_size, int) and 1 <= update.point_size <= 12
+    current = presentation.slides[0].shapes[0].text_frame
+    assert current.text == original and current.word_wrap is True
+    assert current.auto_size == rpptx.MSO_AUTO_SIZE.NONE
+    for paragraph in current.paragraphs:
+        for run in paragraph.runs:
+            assert run.font.name == "Carlito"
+            assert run.font.size == rpptx.Pt(update.point_size)
+    ns = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
+    source = _fx207_shape_xml(presentation, update.shape_id)
+    assert len(source.findall(".//a:noAutofit", ns)) == 1
+    assert not source.findall(".//a:normAutofit", ns)
+    assert {r.get("sz") for r in source.findall(".//a:rPr", ns)} == {str(update.point_size * 100)}
+    saved = presentation.to_bytes()
+    assert saved != before
+    assert not presentation.text_layout(fonts=fonts)[0].overflow
+    reopened = rpptx.Presentation.from_bytes(saved)
+    assert reopened.slides[0].shapes[0].text_frame.text == original
+
+
+def test_fx207_refresh_accounts_for_flagged_empty_frames_and_is_explicit(tmp_path):
+    import rpptx
+
+    presentation, fonts = _fx207_fixture(
+        tmp_path, "Short text", rpptx.MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE,
+    )
+    slide = presentation.slides[0]
+    first = slide.shapes[0]
+    first_id = first.shape_id
+    empty = slide.shapes.add_textbox(rpptx.Inches(1), rpptx.Inches(2), rpptx.Inches(4), rpptx.Pt(36))
+    empty.text_frame.auto_size = rpptx.MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
+    before = presentation.to_bytes()
+    empty_before = _fx207_shape_xml(presentation, empty.shape_id)
+    import xml.etree.ElementTree as ET
+    empty_bytes = ET.tostring(empty_before)
+    assert len(presentation.text_layout(fonts=fonts)) == 1
+    assert presentation.to_bytes() == before
+    refresh = getattr(presentation, "refresh_autofit", None)
+    assert callable(refresh), "F-X207 missing explicit complete flagged-owner refresh"
+    result = refresh(fonts=fonts)
+    # The stock deck also has flagged master owners. Account for this slide
+    # without excluding the complete physical-owner inventory.
+    slide_updates = [u for u in result.updates if u.owner_part == "/ppt/slides/slide1.xml"]
+    assert len(slide_updates) == 2
+    assert [u.shape_id for u in slide_updates] == [first_id, empty.shape_id]
+    nonempty = _fx207_update(result, first_id)
+    assert (nonempty.font_scale, nonempty.line_spacing_reduction) == (100000, 0)
+    empty_update = _fx207_update(result, empty.shape_id)
+    assert empty_update.status == "empty" and not empty_update.changed
+    assert empty_update.font_scale is None and empty_update.point_size is None
+    assert ET.tostring(_fx207_shape_xml(presentation, empty.shape_id)) == empty_bytes
+    saved = presentation.to_bytes()
+    assert not refresh(fonts=fonts).changed
+    assert presentation.to_bytes() == saved
+
+
+@pytest.mark.parametrize("bad_size", [True, False, 0, -1, 1.5, 4001, 2**100])
+def test_fx207_fit_size_validation_is_strict_and_atomic(tmp_path, bad_size):
+    import rpptx
+
+    presentation, fonts = _fx207_fixture(tmp_path, "Strict size", rpptx.MSO_AUTO_SIZE.NONE)
+    frame = presentation.slides[0].shapes[0].text_frame
+    before = presentation.to_bytes()
+    expected = TypeError if isinstance(bad_size, bool) or isinstance(bad_size, float) else ValueError
+    with pytest.raises(expected, match="max_size"):
+        frame.fit_text(max_size=bad_size, fonts=fonts)
+    assert presentation.to_bytes() == before
+    assert frame.text == "Strict size"
+
+
+def test_fx207_snapshots_and_existing_handles_remain_owned_and_read_only(tmp_path):
+    import rpptx
+
+    presentation, fonts = _fx207_fixture(
+        tmp_path, "First line\nSecond line\nThird line", rpptx.MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE,
+    )
+    slide = presentation.slides[0]
+    shape = slide.shapes[0]
+    frame = shape.text_frame
+    paragraph = frame.paragraphs[0]
+    run = paragraph.runs[0]
+    result = presentation.refresh_autofit(fonts=fonts)
+    update = _fx207_update(result, shape.shape_id)
+    assert isinstance(result.updates, tuple) and isinstance(result.diagnostics, tuple)
+    assert isinstance(update.diagnostics, tuple)
+    old_pair = (update.font_scale, update.line_spacing_reduction)
+    for owner, field, value in [(result, "changed", False), (update, "font_scale", 1),
+                                (update, "old_bounds", (0, 0, 1, 1))]:
+        with pytest.raises(AttributeError):
+            setattr(owner, field, value)
+    assert frame.text == "First line\nSecond line\nThird line"
+    assert paragraph.text == "First line" and run.text == "First line"
+    fitted = frame.fit_text(max_size=12, fonts=fonts)
+    assert fitted.mode == "none" and run.font.size == rpptx.Pt(fitted.point_size)
+    assert shape.shape_id == update.shape_id and slide.shapes[0].shape_id == shape.shape_id
+    assert (update.font_scale, update.line_spacing_reduction) == old_pair
+    assert not frame.fit_text(max_size=12, fonts=fonts).changed
+    assert frame.text == "First line\nSecond line\nThird line"
+
+
+def test_fx207_invalid_font_directory_and_late_unfit_preserve_the_complete_deck(tmp_path):
+    import rpptx
+
+    presentation, fonts = _fx207_fixture(
+        tmp_path, "First line\nSecond line\nThird line", rpptx.MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE,
+    )
+    before = presentation.to_bytes()
+    missing = tmp_path / "missing-caller-directory"
+    with pytest.raises(OSError, match="missing-caller-directory"):
+        presentation.refresh_autofit(fonts=fonts, font_dirs=[missing])
+    assert presentation.to_bytes() == before
+    late = presentation.slides[0].shapes.add_textbox(
+        rpptx.Inches(1), rpptx.Inches(3), rpptx.Inches(4), rpptx.Pt(36),
+    )
+    late.text_frame.text = "Unfit line\n" * 500
+    late = presentation.slides[0].shapes[1]
+    late.text_frame.auto_size = rpptx.MSO_AUTO_SIZE.TEXT_TO_FIT_SHAPE
+    before = presentation.to_bytes()
+    with pytest.raises(rpptx.RpptxError, match="slide1.xml.*floor"):
+        presentation.refresh_autofit(fonts=fonts)
+    assert presentation.to_bytes() == before
+    assert presentation.slides[0].shapes[0].text_frame.text == "First line\nSecond line\nThird line"

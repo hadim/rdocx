@@ -902,7 +902,9 @@ direction.
 A table style's background (`a:tblBg`) fills the whole table box first. Each
 table origin draws its fill over it, before its text. The table's unique
 border segments draw after all cell fills and text so a neighbouring fill
-cannot cover them. Table cells do not use the shape autofit algorithm.
+cannot cover them. Table cells retain stored normal-autofit scale and line
+spacing reduction in their resolved text. Shape-to-fit cannot resize an
+independently owned cell extent and is not applied to cell rendering.
 
 **Vertical Word text.** `w:tcPr/w:textDirection` and `w:sectPr/w:textDirection`
 lower onto the same transposed box and `Group` rotation the shape path uses.
@@ -1215,6 +1217,64 @@ shape of each slide's own shape tree with its slide index, shape id, name, and
 effective autofit mode. Layout and master shapes, SmartArt, table cells, and
 text bodies that draw no visible character are left out, since an empty
 paragraph taller than a thin divider would otherwise read as overflow.
+
+### Explicit stored text fitting
+
+Ordinary rendering and saving trust existing fractional stored normal-autofit
+values and do not publish new scales or bounds. Explicit authoring uses the
+same resolved text, selected caller font faces and line stacking, with a
+separate physical containment predicate. Each emitted line uses its actual
+baseline, selected-face descent and shifted spans. Bullets, empty-line end
+properties and enabled edge paragraph spacing contribute to the extent.
+Every line must fit its available width and the physical stack must fit the
+usable reading-frame height within 0.01 point.
+
+Authoring measures physical extent in a zero-origin reading frame while
+returning the original usable bounds. Changing an owner width must not change
+height merely through cancellation of absolute transformed coordinates.
+Allocated source shape height and painted baseline or glyph extent are
+separate quantities. Explicit authoring preserves the ordinary renderer's
+baseline policy and measures the last participating baseline plus the
+selected face descent, baseline shifts and source insets. Native allocation
+alone does not replace the physical containment predicate. A native allocated
+extent difference is classified separately only when original-source owner
+geometry, fonts, anchors and transforms establish the physical extent and
+independent PDF and native PNG comparisons establish painted containment.
+This distinction does not relax stored scale, reduction, refusal or owner
+preservation requirements.
+
+Normal refresh tests the approved fourteen scale/reduction pairs in order.
+For each pair it reshapes both Q, positive half-up whole-point run sizes, and
+S, original nominal sizes with the persisted fractional pair. Both trials
+must fit. An unfit final pair is an atomic error, not a successful floor.
+Uniform fit tests every integer point size from the caller maximum down to
+one. It retains run families unless a family is explicitly supplied, writes
+the chosen size to run, paragraph-default and end properties, enables wrapping
+and removes autofit. Empty frames are accounted for without fabricated lines.
+
+Refresh inventories physical slide, layout, master and notes text owners,
+including nested shapes and table cells. Shared owners must satisfy every
+instantiated context. Unused shared owners, unsupported opaque text owners,
+ambiguous IDs and unsupported transforms refuse before publication. A shape
+resize preserves its source top, centre or bottom anchor through its own
+rotation and flips and the checked parent affine scale. Vertical reading
+resizes the corresponding local dimension. Distributed and justified anchors
+have no single preserved anchor and refuse. Table-cell Normal refresh and
+uniform fit use the existing cell box. Shape-to-fit cells refuse atomically.
+
+Authoring preflight resolves source namespaces for body properties and autofit
+choices. Explicit foreign or rebound lookalikes refuse refresh and uniform fit
+before typed flag inventory. Ordinary import, unchanged save and rendering
+remain available. Known choices retain opaque lexical attributes and inherited
+wrapper scope through owned changes. A no-op planned result leaves its source
+part untouched.
+
+All changes are planned on a staged package before any owner is written.
+Successful publication invalidates native completed-layout caches once.
+Formatting and extent changes preserve existing logical Python handles.
+Reports carry the operation's owned font contribution diagnostics and separate
+accepted Q/S trial facts from the actual current persisted trial. A report is
+read-only and never refreshes an owner implicitly.
 
 ## Performance
 

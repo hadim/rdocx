@@ -7,6 +7,8 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyBoundingBox>()?;
     module.add_class::<PyTextLineLayout>()?;
     module.add_class::<PyTextFrameLayout>()?;
+    module.add_class::<PyAutofitUpdate>()?;
+    module.add_class::<PyAutofitRefreshResult>()?;
     Ok(())
 }
 
@@ -180,5 +182,114 @@ impl PyTextFrameLayout {
     #[getter]
     fn lines<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
         PyTuple::new(py, self.lines.iter().cloned())
+    }
+}
+
+/// Historical snapshot, never a mutable native owner selector.
+#[pyclass(name = "AutofitUpdate", frozen, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq)]
+pub struct PyAutofitUpdate {
+    #[pyo3(get)]
+    owner_part: String,
+    #[pyo3(get)]
+    owner_kind: String,
+    #[pyo3(get)]
+    slide_index: Option<usize>,
+    #[pyo3(get)]
+    shape_id: Option<u32>,
+    #[pyo3(get)]
+    cell: Option<(usize, usize)>,
+    #[pyo3(get)]
+    mode: &'static str,
+    #[pyo3(get)]
+    status: String,
+    #[pyo3(get)]
+    font_scale: Option<u32>,
+    #[pyo3(get)]
+    line_spacing_reduction: Option<u32>,
+    #[pyo3(get)]
+    point_size: Option<u16>,
+    #[pyo3(get)]
+    old_bounds: (i64, i64, i64, i64),
+    #[pyo3(get)]
+    new_bounds: (i64, i64, i64, i64),
+    #[pyo3(get)]
+    changed: bool,
+
+    diagnostics: Vec<String>,
+}
+
+impl From<&rpptx::AutofitUpdate> for PyAutofitUpdate {
+    fn from(update: &rpptx::AutofitUpdate) -> Self {
+        Self {
+            owner_part: update.location.owner_part.clone(),
+            owner_kind: update.owner_kind.clone(),
+            slide_index: update.slide_index,
+            shape_id: update.shape_id,
+            cell: update.location.cell,
+            mode: match update.mode {
+                rpptx::AutofitMode::None => "none",
+                rpptx::AutofitMode::Normal => "normal",
+                rpptx::AutofitMode::Shape => "shape",
+            },
+            status: update.status.clone(),
+            font_scale: update.font_scale,
+            line_spacing_reduction: update.line_spacing_reduction,
+            point_size: update.point_size,
+            old_bounds: update.old_bounds,
+            new_bounds: update.new_bounds,
+            changed: update.changed,
+            diagnostics: update
+                .diagnostics
+                .iter()
+                .map(|d| d.message.clone())
+                .collect(),
+        }
+    }
+}
+
+#[pymethods]
+impl PyAutofitUpdate {
+    #[getter]
+    fn diagnostics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, &self.diagnostics)
+    }
+}
+
+#[pyclass(name = "AutofitRefreshResult", frozen, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq)]
+pub struct PyAutofitRefreshResult {
+    updates: Vec<PyAutofitUpdate>,
+    diagnostics: Vec<String>,
+    changed: bool,
+}
+
+impl From<&rpptx::AutofitRefreshResult> for PyAutofitRefreshResult {
+    fn from(result: &rpptx::AutofitRefreshResult) -> Self {
+        Self {
+            updates: result.updates.iter().map(PyAutofitUpdate::from).collect(),
+            diagnostics: result
+                .diagnostics
+                .iter()
+                .map(|d| d.message.clone())
+                .collect(),
+            changed: result.changed,
+        }
+    }
+}
+
+#[pymethods]
+impl PyAutofitRefreshResult {
+    #[getter]
+    fn updates<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, self.updates.iter().cloned())
+    }
+    #[getter]
+    fn diagnostics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, &self.diagnostics)
+    }
+    #[getter]
+    fn changed(&self) -> bool {
+        self.changed
     }
 }

@@ -4,6 +4,8 @@ from typing import TYPE_CHECKING, Callable, assert_type
 
 from rpptx import (
     BoundingBox,
+    AutofitRefreshResult,
+    AutofitUpdate,
     Comment,
     CommentAuthor,
     CommentReply,
@@ -102,6 +104,13 @@ def exercise_rpptx_types(path: Path) -> None:
         frame.margin_top,
         frame.margin_bottom,
     )
+    autofit_result: AutofitRefreshResult = presentation.refresh_autofit(fonts=[], font_dirs=[])
+    autofit_updates: tuple[AutofitUpdate, ...] = autofit_result.updates
+    autofit_diagnostics: tuple[str, ...] = autofit_result.diagnostics
+    fitted: AutofitUpdate = frame.fit_text(None, 18, fonts=[], font_dirs=[])
+    fit_bounds: tuple[int, int, int, int] = fitted.new_bounds
+    fit_point_size: int | None = fitted.point_size
+    fit_diagnostics: tuple[str, ...] = fitted.diagnostics
     frame.vertical_anchor = MSO_ANCHOR.MIDDLE
     anchor: MSO_ANCHOR | None = frame.vertical_anchor
     frame.word_wrap = True

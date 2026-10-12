@@ -1,6 +1,6 @@
 # F-X207, Persist PowerPoint autofit and implement fit_text
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X194, F-X195
@@ -130,15 +130,15 @@ Ordinary rendering and save without explicit refresh should remain unchanged. Au
 
 ## Implementation checklist
 
-- [ ] Align explicit refresh route, location/owner policy and fit_text None-family semantics.
-- [ ] Pin and capture native scale/reduction/anchor ground truth before choosing the missing algorithm.
-- [ ] Prove all public Base failures and retain positive render controls.
-- [ ] Reuse caller-font and owner infrastructure from prerequisites.
-- [ ] Implement shared fitting results, atomic materialization and anchored resizing.
-- [ ] Add installed Python methods and exact typing/runtime snapshot surfaces.
-- [ ] Verify all approved location classes, refusal controls and save/reopen preservation.
-- [ ] Complete scoped/oracle/packaging/WASM gates and independent zero-finding review.
-- [ ] Declare actual harness behavior and update HLD impact files.
+- [x] Align explicit refresh route, location/owner policy and fit_text None-family semantics.
+- [x] Pin and capture native scale/reduction/anchor ground truth before choosing the missing algorithm.
+- [x] Prove all public Base failures and retain positive render controls.
+- [x] Reuse caller-font and owner infrastructure from prerequisites.
+- [x] Implement shared fitting results, atomic materialization and anchored resizing.
+- [x] Add installed Python methods and exact typing/runtime snapshot surfaces.
+- [x] Verify all approved location classes, refusal controls and save/reopen preservation.
+- [x] Complete scoped/oracle/packaging/WASM gates and independent zero-finding review.
+- [x] Declare actual harness behavior and update HLD impact files.
 
 ## Open questions
 
@@ -686,3 +686,12 @@ Shape resizing, mixed-font or bullet paint, installed implementation gates
 or whole-feature completion. The selected physical-segment contract and
 all remaining plan gates still apply. Additional sizing policy must follow
 actual provider and paint evidence, not a fitted constant.
+
+
+## Final scoped qualification
+
+The implementation checklist is earned by the original meaningful public Base, native22 and physical-font authorities plus the independently reviewed final preservation/provider composition. The completed F206 provider remains intact, including owner routing, flip-then-rotate, diagnostic vectors and namespace-root provenance. Its combined nested affine anchor and inherited namespace controls pass on the actual composed source. The approved9823EMU allocated-versus-physical distinction follows original source/font geometry and painted containment, with no allocation-equality claim or baseline correction.
+
+Current fresh PPT build, exact installed15, two opaque/inherited successes, three foreign-element atomic refusals, strict typing and stubtest pass. All current Word members remain exact. Four affected current verified package archives pass with the full local patch graph and source/member proofs. Current metadata remeasurement, affected policy, prose, adapter synchronization, formatting, focused Clippy and both WASM checks pass. The actual deterministic harness matches all49 entries against unchanged baseline2bd99ae6. Final qualification pass15 records the independent review chain and retained-source boundaries. No integrated whole-sprint gate is claimed.
+
+Evidence and original failed receipts are retained under /private/tmp/S91-F-X207-completed206-localized-rebind-1 and the existing F207 progress/source authority paths. Ordinary output remains unchanged. Explicit refresh and fit intentionally write only approved owned values, sizes and anchored bounds. The implementation commit is labelled for that deliberate authoring behavior and does not blend it into a move or borrowed provider change.

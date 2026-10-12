@@ -222,6 +222,85 @@ pub struct TextFrameLayout {
     /// Ordered facts from this exact shape measurement, not another render.
     pub diagnostics: Vec<oxml_layout::Diagnostic>,
 }
+/// A checked physical text owner. Shape IDs are metadata, not selectors.
+#[cfg(feature = "render")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextFrameLocation {
+    pub owner_part: String,
+    pub child_path: Vec<usize>,
+    pub cell: Option<(usize, usize)>,
+    fingerprint: Vec<u8>,
+}
+
+/// Immutable facts from one explicit text authoring operation.
+#[cfg(feature = "render")]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AutofitUpdate {
+    pub location: TextFrameLocation,
+    pub owner_kind: String,
+    pub slide_index: Option<usize>,
+    pub shape_id: Option<u32>,
+    pub name: Option<String>,
+    pub mode: AutofitMode,
+    pub status: String,
+    pub font_scale: Option<u32>,
+    pub line_spacing_reduction: Option<u32>,
+    pub point_size: Option<u16>,
+    pub old_bounds: (i64, i64, i64, i64),
+    pub new_bounds: (i64, i64, i64, i64),
+    pub changed: bool,
+    pub diagnostics: Vec<oxml_layout::Diagnostic>,
+}
+
+/// Physical-owner ordered updates from one atomic publication.
+#[cfg(feature = "render")]
+#[derive(Clone, Debug, PartialEq)]
+pub struct AutofitRefreshResult {
+    pub updates: Vec<AutofitUpdate>,
+    pub diagnostics: Vec<oxml_layout::Diagnostic>,
+    pub changed: bool,
+}
+
+/// Read-only measurement in one instantiated slide or notes context.
+#[cfg(feature = "render")]
+#[derive(Clone, Debug, PartialEq)]
+pub struct FitFrameReport {
+    pub update: AutofitUpdate,
+    pub context: String,
+    pub overflow: bool,
+    pub needed_scale: Option<u32>,
+    pub needed_reduction: Option<u32>,
+    pub measured_font_scale: Option<f64>,
+    pub current_line_spacing_reduction: Option<f64>,
+    pub quantized_trial: Option<rpptx_render::AutofitMeasurement>,
+    pub persisted_trial: Option<rpptx_render::AutofitMeasurement>,
+}
+
+/// The explicit authoring solver's read-only results.
+#[cfg(feature = "render")]
+#[derive(Clone, Debug, PartialEq)]
+pub struct FitReport {
+    pub frames: Vec<FitFrameReport>,
+    pub diagnostics: Vec<oxml_layout::Diagnostic>,
+}
+
+#[cfg(feature = "render")]
+struct AutofitContext {
+    slide_index: usize,
+    context: String,
+    shape: rpptx_layout::ResolvedShape,
+    text: rpptx_layout::ResolvedTextBody,
+    directions: Vec<Vec<oxml_layout::TextDirection>>,
+}
+
+#[cfg(feature = "render")]
+struct AutofitOwner {
+    update: AutofitUpdate,
+    empty: bool,
+    unsupported: Option<String>,
+    contexts: Vec<AutofitContext>,
+}
+
 const DEFAULT_POWERPOINT_AUTHORS_PART: &str = "/ppt/authors.xml";
 const DEFAULT_POWERPOINT_COMMENTS_PART: &str = "/ppt/comments/comment1.xml";
 const MAX_SMARTART_TRANSFER_DIAGRAM_PARTS: usize = 128;
@@ -1424,6 +1503,455 @@ impl Presentation {
             self.slides.len(),
             false,
         )
+    }
+
+    /// Recomputes explicitly flagged physical text owners and publishes once.
+    /// Ordinary render and save never invoke this operation.
+    #[cfg(feature = "render")]
+    pub fn refresh_autofit(
+        &mut self,
+        font_files: &[(&str, &[u8])],
+    ) -> Result<AutofitRefreshResult> {
+        let mut package = self.staged_package(true)?;
+        for (part, xml) in &package.parts {
+            if matches!(
+                package.content_types.content_type_for(part),
+                Some(
+                    content_types::SLIDE
+                        | content_types::SLIDE_LAYOUT
+                        | content_types::SLIDE_MASTER
+                        | content_types::NOTES_SLIDE
+                        | content_types::NOTES_MASTER
+                )
+            ) {
+                validate_autofit_authoring_namespaces(xml, part)?;
+            }
+        }
+        let mut owners = autofit_inventory(self, &package)?;
+        let mut fonts = authoring_fonts(font_files)?;
+        let mut plans = Vec::new();
+        for owner in &mut owners {
+            if owner.update.mode == AutofitMode::None {
+                continue;
+            }
+            if owner.empty {
+                continue;
+            }
+            if let Some(reason) = &owner.unsupported {
+                return Err(autofit_failure(&owner.update.location, reason));
+            }
+            if owner.contexts.is_empty() {
+                return Err(autofit_failure(
+                    &owner.update.location,
+                    "shared flagged owner has no measured context",
+                ));
+            }
+            match owner.update.mode {
+                AutofitMode::Normal => {
+                    let pair = select_autofit_pair(owner, &mut fonts)?.ok_or_else(|| {
+                        autofit_failure(
+                            &owner.update.location,
+                            "text does not fit at the admitted floor",
+                        )
+                    })?;
+                    owner.update.font_scale = Some(pair.0);
+                    owner.update.line_spacing_reduction = Some(pair.1);
+                    plans.push((owner.update.location.clone(), AuthoringChange::Normal(pair)));
+                }
+                AutofitMode::Shape => {
+                    let mut bounds = None;
+                    for context in &owner.contexts {
+                        let next = shape_autofit_bounds(owner, context, &mut fonts)?;
+                        if bounds.is_some_and(|old| old != next) {
+                            return Err(autofit_failure(
+                                &owner.update.location,
+                                "shared contexts require different local bounds",
+                            ));
+                        }
+                        bounds = Some(next);
+                    }
+                    owner.update.new_bounds = bounds.expect("nonempty contexts");
+                    plans.push((
+                        owner.update.location.clone(),
+                        AuthoringChange::Shape(owner.update.new_bounds),
+                    ));
+                }
+                AutofitMode::None => {}
+            }
+        }
+        for (location, change) in &plans {
+            let owner = owners
+                .iter_mut()
+                .find(|o| o.update.location == *location)
+                .expect("planned owner");
+            let diagnostics = authoring_font_diagnostics(owner, &mut fonts, Some(change))?;
+            owner.update.diagnostics.extend(diagnostics);
+        }
+        // No part is touched until all owners and contexts admit their answers.
+        for (location, change) in &plans {
+            let changed = apply_authoring_change(&mut package, location, change)?;
+            let owner = owners
+                .iter_mut()
+                .find(|owner| owner.update.location == *location)
+                .expect("planned owner");
+            owner.update.changed = changed;
+            if changed {
+                owner.update.status = "updated".to_owned();
+            }
+        }
+        if plans
+            .iter()
+            .any(|(_, change)| matches!(change, AuthoringChange::Shape(_)))
+        {
+            // Reopen the complete staged source, including every other planned
+            // owner. Cached pre-change slide records cannot validate new bounds.
+            let mut bytes = Cursor::new(Vec::new());
+            package.write_to(&mut bytes)?;
+            let candidate = Self::from_bytes(bytes.get_ref())?;
+            let proposed = autofit_inventory(&candidate, &package)?;
+            for (location, change) in &plans {
+                if !matches!(change, AuthoringChange::Shape(_)) {
+                    continue;
+                }
+                let original = owners
+                    .iter()
+                    .find(|owner| owner.update.location == *location)
+                    .expect("planned physical owner");
+                let current = proposed
+                    .iter()
+                    .find(|owner| {
+                        owner.update.location.owner_part == location.owner_part
+                            && owner.update.location.child_path == location.child_path
+                            && owner.update.location.cell == location.cell
+                    })
+                    .ok_or_else(|| {
+                        autofit_failure(location, "proposed physical owner is missing")
+                    })?;
+                if current.unsupported.is_some()
+                    || current
+                        .contexts
+                        .iter()
+                        .map(|context| &context.context)
+                        .collect::<Vec<_>>()
+                        != original
+                            .contexts
+                            .iter()
+                            .map(|context| &context.context)
+                            .collect::<Vec<_>>()
+                {
+                    return Err(autofit_failure(location, "proposed owner contexts changed"));
+                }
+                for context in &current.contexts {
+                    if !rpptx_render::authoring_text_fits_at_anchor(
+                        &context.shape,
+                        &context.text,
+                        &mut fonts,
+                        context.slide_index + 1,
+                        &context.directions,
+                    )
+                    .map_err(|error| autofit_failure(location, error))?
+                    {
+                        return Err(autofit_failure(
+                            location,
+                            "proposed shape bounds do not contain the physical text",
+                        ));
+                    }
+                }
+            }
+        }
+        let changed = owners.iter().any(|owner| owner.update.changed);
+        if changed {
+            self.publish_authoring_package(package)?;
+        }
+        let diagnostics = owners
+            .iter()
+            .flat_map(|owner| owner.update.diagnostics.iter().cloned())
+            .collect();
+        Ok(AutofitRefreshResult {
+            updates: owners.into_iter().map(|owner| owner.update).collect(),
+            diagnostics,
+            changed,
+        })
+    }
+
+    /// Returns all instantiated authoring contexts without changing the package.
+    #[cfg(feature = "render")]
+    pub fn fit_report(&self, font_files: &[(&str, &[u8])]) -> Result<FitReport> {
+        let package = self.staged_package(false)?;
+        let owners = autofit_inventory(self, &package)?;
+        let mut fonts = authoring_fonts(font_files)?;
+        let mut frames = Vec::new();
+        let mut diagnostics = Vec::new();
+        for mut owner in owners {
+            let pair = if owner.empty || owner.unsupported.is_some() {
+                None
+            } else {
+                select_autofit_pair(&owner, &mut fonts)?
+            };
+            if !owner.empty && owner.unsupported.is_none() {
+                owner.update.diagnostics = authoring_font_diagnostics(&owner, &mut fonts, None)?;
+                diagnostics.extend(owner.update.diagnostics.iter().cloned());
+            }
+            for context in &owner.contexts {
+                if owner.empty {
+                    frames.push(FitFrameReport {
+                        update: owner.update.clone(),
+                        context: context.context.clone(),
+                        overflow: false,
+                        needed_scale: None,
+                        needed_reduction: None,
+                        measured_font_scale: None,
+                        current_line_spacing_reduction: None,
+                        quantized_trial: None,
+                        persisted_trial: None,
+                    });
+                    continue;
+                }
+                if owner.unsupported.is_some() {
+                    let mut update = owner.update.clone();
+                    update.status = "unsupported".to_owned();
+                    frames.push(FitFrameReport {
+                        update,
+                        context: context.context.clone(),
+                        overflow: true,
+                        needed_scale: None,
+                        needed_reduction: None,
+                        measured_font_scale: None,
+                        current_line_spacing_reduction: None,
+                        quantized_trial: None,
+                        persisted_trial: None,
+                    });
+                    continue;
+                }
+                let measured = rpptx_render::measure_authoring_text(
+                    &context.shape,
+                    &context.text,
+                    &mut fonts,
+                    context.slide_index + 1,
+                    &context.directions,
+                )
+                .map_err(|e| autofit_failure(&owner.update.location, e))?;
+                let mut update = owner.update.clone();
+                if owner.unsupported.is_some() {
+                    update.status = "unsupported".to_owned();
+                } else if !owner.empty && pair.is_none() {
+                    update.status = "unfit".to_owned();
+                }
+                let trials = pair
+                    .map(|pair| {
+                        rpptx_render::measure_autofit_candidate(
+                            &context.shape,
+                            &context.text,
+                            &mut fonts,
+                            context.slide_index + 1,
+                            &context.directions,
+                            pair,
+                        )
+                    })
+                    .transpose()
+                    .map_err(|e| autofit_failure(&owner.update.location, e))?;
+                frames.push(FitFrameReport {
+                    update,
+                    context: context.context.clone(),
+                    quantized_trial: trials.as_ref().map(|(q, _)| q.clone()),
+                    persisted_trial: trials.map(|(_, s)| s),
+                    overflow: !measured.fits,
+                    needed_scale: pair.map(|p| p.0),
+                    needed_reduction: pair.map(|p| p.1),
+                    measured_font_scale: Some(measured.font_scale),
+                    current_line_spacing_reduction: Some(match context.text.autofit {
+                        ResolvedAutofit::Normal {
+                            line_spacing_reduction,
+                            ..
+                        } => line_spacing_reduction.unwrap_or(0.0),
+                        _ => 0.0,
+                    }),
+                });
+            }
+            if owner.contexts.is_empty() {
+                let mut update = owner.update;
+                update.status = if owner.empty { "empty" } else { "unsupported" }.to_owned();
+                frames.push(FitFrameReport {
+                    update,
+                    context: "uninstantiated".to_owned(),
+                    overflow: !owner.empty,
+                    needed_scale: None,
+                    needed_reduction: None,
+                    measured_font_scale: None,
+                    current_line_spacing_reduction: None,
+                    quantized_trial: None,
+                    persisted_trial: None,
+                });
+            }
+        }
+        frames.sort_by_key(|frame| {
+            let context_index = self
+                .slides
+                .iter()
+                .position(|record| {
+                    frame.context == record.part_name
+                        || frame.context == format!("{}:notes", record.part_name)
+                        || record
+                            .notes
+                            .as_ref()
+                            .is_some_and(|notes| frame.context == notes.part_name)
+                })
+                .unwrap_or(usize::MAX);
+            let notes = frame.update.owner_kind.starts_with("notes-");
+            (
+                context_index,
+                notes,
+                frame.update.location.owner_part.clone(),
+                frame.update.location.child_path.clone(),
+                frame.update.location.cell,
+            )
+        });
+        Ok(FitReport {
+            frames,
+            diagnostics,
+        })
+    }
+
+    /// Fits one checked physical owner at the largest admitted whole point size.
+    #[cfg(feature = "render")]
+    pub fn fit_text_at(
+        &mut self,
+        location: &TextFrameLocation,
+        font_family: Option<&str>,
+        max_size: u16,
+        font_files: &[(&str, &[u8])],
+    ) -> Result<AutofitUpdate> {
+        if max_size == 0 || max_size > 4000 {
+            return Err(autofit_failure(
+                location,
+                "max_size must be an integer from 1 through 4000",
+            ));
+        }
+        if font_family.is_some_and(|family| family.is_empty()) {
+            return Err(autofit_failure(location, "font family must not be empty"));
+        }
+        let mut package = self.staged_package(true)?;
+        validate_autofit_authoring_namespaces(
+            required_part(&package, &location.owner_part)?,
+            &location.owner_part,
+        )?;
+        let mut owner = autofit_inventory(self, &package)?
+            .into_iter()
+            .find(|owner| owner.update.location == *location)
+            .ok_or_else(|| autofit_failure(location, "stale or foreign physical owner"))?;
+        if let Some(reason) = &owner.unsupported {
+            return Err(autofit_failure(location, reason));
+        }
+        if owner.empty {
+            return Ok(owner.update);
+        }
+        if owner.contexts.is_empty() {
+            return Err(autofit_failure(
+                location,
+                "physical owner has no measured context",
+            ));
+        }
+        let mut fonts = authoring_fonts(font_files)?;
+        let mut chosen = None;
+        for size in (1..=max_size).rev() {
+            let mut fits = true;
+            for context in &owner.contexts {
+                let mut text = context.text.clone();
+                restyle_authoring_text(&mut text, font_family, size);
+                let trial = rpptx_render::measure_authoring_text(
+                    &context.shape,
+                    &text,
+                    &mut fonts,
+                    context.slide_index + 1,
+                    &context.directions,
+                )
+                .map_err(|e| autofit_failure(location, e))?;
+                if !trial.fits {
+                    fits = false;
+                    break;
+                }
+            }
+            if fits {
+                chosen = Some(size);
+                break;
+            }
+        }
+        let chosen =
+            chosen.ok_or_else(|| autofit_failure(location, "text does not fit at one point"))?;
+        let diagnostics = authoring_font_diagnostics(
+            &owner,
+            &mut fonts,
+            Some(&AuthoringChange::Fit {
+                size: chosen,
+                family: font_family.map(str::to_owned),
+            }),
+        )?;
+        owner.update.diagnostics.extend(diagnostics);
+        owner.update.point_size = Some(chosen);
+        owner.update.mode = AutofitMode::None;
+        owner.update.changed = apply_authoring_change(
+            &mut package,
+            location,
+            &AuthoringChange::Fit {
+                size: chosen,
+                family: font_family.map(str::to_owned),
+            },
+        )?;
+        if owner.update.changed {
+            owner.update.status = "updated".to_owned();
+            self.publish_authoring_package(package)?;
+        }
+        Ok(owner.update)
+    }
+
+    /// Resolves an existing native or Python content path to a checked owner.
+    #[cfg(feature = "render")]
+    pub fn text_frame_location(
+        &self,
+        slide_index: usize,
+        child_path: &[usize],
+        cell: Option<(usize, usize)>,
+    ) -> Result<TextFrameLocation> {
+        let slide = self
+            .slides
+            .get(slide_index)
+            .ok_or(Error::UnknownSlideIndex {
+                index: slide_index,
+                slide_count: self.slides.len(),
+            })?;
+        let child = owned_child(
+            &slide.slide.common_slide_data.shape_tree.children,
+            child_path,
+        )
+        .ok_or_else(|| render_failure("text frame path is stale"))?;
+        if owned_text(child, cell).is_none() {
+            return Err(render_failure("content path does not own a text body"));
+        }
+        Ok(TextFrameLocation {
+            owner_part: slide.part_name.clone(),
+            child_path: child_path.to_vec(),
+            cell,
+            fingerprint: shape_ref(child).xml()?,
+        })
+    }
+
+    #[cfg(feature = "render")]
+    fn publish_authoring_package(&mut self, mut package: OpcPackage) -> Result<()> {
+        let invalidated = self.package_signatures_invalidated
+            || package
+                .package_rels
+                .get_by_type(rel_types::DIGITAL_SIGNATURE_ORIGIN)
+                .is_some();
+        embedded::persist_invalidated_package_signature(&mut package, invalidated)?;
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes)?;
+        let mut candidate = Self::from_bytes(bytes.get_ref())?;
+        candidate.embedded_invalidated_signatures = self.embedded_invalidated_signatures.clone();
+        candidate.package_signatures_invalidated = invalidated;
+        // The loaded candidate has already validated all changed model roots.
+        // Publication happens once, after complete package serialization/reopen.
+        *self = candidate;
+        Ok(())
     }
 
     /// Renders the current presentation to a complete deterministic PDF.
@@ -12146,6 +12674,1238 @@ struct TimelineRequest {
 }
 
 #[cfg(feature = "render")]
+enum AuthoringChange {
+    Normal((u32, u32)),
+    Shape((i64, i64, i64, i64)),
+    Fit { size: u16, family: Option<String> },
+}
+
+#[cfg(feature = "render")]
+fn authoring_fonts(files: &[(&str, &[u8])]) -> Result<FontManager> {
+    let mut fonts = FontManager::new_deterministic().map_err(|e| render_failure(e.to_string()))?;
+    fonts.load_additional_fonts(&caller_font_files(files));
+    fonts.begin_layout();
+    Ok(fonts)
+}
+
+#[cfg(feature = "render")]
+fn authoring_font_diagnostics(
+    owner: &AutofitOwner,
+    fonts: &mut FontManager,
+    change: Option<&AuthoringChange>,
+) -> Result<Vec<oxml_layout::Diagnostic>> {
+    let mut diagnostics = Vec::new();
+    let mut seen = HashSet::new();
+    for context in &owner.contexts {
+        let mut text = context.text.clone();
+        match change {
+            Some(AuthoringChange::Normal((scale, reduction))) => {
+                text.autofit = ResolvedAutofit::Normal {
+                    font_scale: Some(f64::from(*scale) / 100000.0),
+                    line_spacing_reduction: Some(f64::from(*reduction) / 100000.0),
+                }
+            }
+            Some(AuthoringChange::Fit { size, family }) => {
+                restyle_authoring_text(&mut text, family.as_deref(), *size)
+            }
+            Some(AuthoringChange::Shape(_)) => text.autofit = ResolvedAutofit::None,
+            None => {}
+        }
+        let scope = fonts.begin_font_contribution_scope().ok_or_else(|| {
+            autofit_failure(
+                &owner.update.location,
+                "font contribution capture unavailable",
+            )
+        })?;
+        let trial = rpptx_render::measure_authoring_text(
+            &context.shape,
+            &text,
+            fonts,
+            context.slide_index + 1,
+            &context.directions,
+        );
+        let events = fonts
+            .finish_font_contribution_scope(scope)
+            .map_err(|e| autofit_failure(&owner.update.location, e))?
+            .ok_or_else(|| {
+                autofit_failure(
+                    &owner.update.location,
+                    "font contribution capture exceeded its bound",
+                )
+            })?;
+        trial.map_err(|e| autofit_failure(&owner.update.location, e))?;
+        for event in events {
+            let oxml_layout::FontTraceEvent::Contribution(contribution) = event else {
+                continue;
+            };
+            let Some(requested) = contribution.requested_family else {
+                continue;
+            };
+            let actual = fonts
+                .font_data(contribution.font_id)
+                .map_err(|e| autofit_failure(&owner.update.location, e))?
+                .family;
+            if !requested.eq_ignore_ascii_case(&actual)
+                && seen.insert((requested.clone(), actual.clone()))
+            {
+                diagnostics.push(oxml_layout::Diagnostic {
+                    message: format!(
+                        "{} {:?}: requested font {requested:?} measured with {actual:?}",
+                        owner.update.location.owner_part, owner.update.location.child_path
+                    ),
+                });
+            }
+        }
+    }
+    Ok(diagnostics)
+}
+
+#[cfg(feature = "render")]
+fn select_autofit_pair(
+    owner: &AutofitOwner,
+    fonts: &mut FontManager,
+) -> Result<Option<(u32, u32)>> {
+    for pair in rpptx_render::AUTOFIT_CANDIDATES {
+        let mut fits = true;
+        for context in &owner.contexts {
+            let (q, s) = rpptx_render::measure_autofit_candidate(
+                &context.shape,
+                &context.text,
+                fonts,
+                context.slide_index + 1,
+                &context.directions,
+                pair,
+            )
+            .map_err(|e| autofit_failure(&owner.update.location, e))?;
+            if !q.fits || !s.fits {
+                fits = false;
+                break;
+            }
+        }
+        if fits {
+            return Ok(Some(pair));
+        }
+    }
+    Ok(None)
+}
+
+#[cfg(feature = "render")]
+fn restyle_authoring_text(
+    text: &mut rpptx_layout::ResolvedTextBody,
+    family: Option<&str>,
+    size: u16,
+) {
+    text.autofit = ResolvedAutofit::None;
+    text.wrap = true;
+    let apply = |style: &mut rpptx_layout::ResolvedRunStyle| {
+        style.font_size = Some(f64::from(size));
+        if let Some(family) = family {
+            style.latin_typeface = Some(family.to_owned());
+            style.east_asian_typeface = Some(family.to_owned());
+            style.complex_script_typeface = Some(family.to_owned());
+        }
+    };
+    for paragraph in &mut text.paragraphs {
+        apply(&mut paragraph.end_style);
+        for run in &mut paragraph.runs {
+            if let rpptx_layout::ResolvedTextRun::Text { style, .. }
+            | rpptx_layout::ResolvedTextRun::Field { style, .. } = run
+            {
+                apply(style);
+            }
+        }
+    }
+}
+
+#[cfg(feature = "render")]
+fn shape_autofit_bounds(
+    owner: &AutofitOwner,
+    context: &AutofitContext,
+    fonts: &mut FontManager,
+) -> Result<(i64, i64, i64, i64)> {
+    let mut text = context.text.clone();
+    text.autofit = ResolvedAutofit::None;
+    let trial = rpptx_render::measure_authoring_text(
+        &context.shape,
+        &text,
+        fonts,
+        context.slide_index + 1,
+        &context.directions,
+    )
+    .map_err(|e| autofit_failure(&owner.update.location, e))?;
+    if !trial.width_fits {
+        return Err(autofit_failure(
+            &owner.update.location,
+            "shape text exceeds its fixed usable width",
+        ));
+    }
+    let vertical = text.vertical != rpptx_layout::TextDirection::Horizontal;
+    let scaled_dimension = if vertical {
+        context.shape.bounds.width
+    } else {
+        context.shape.bounds.height
+    };
+    let old_dimension = if vertical {
+        owner.update.old_bounds.2
+    } else {
+        owner.update.old_bounds.3
+    };
+    if old_dimension <= 0 || scaled_dimension <= 0.0 {
+        return Err(autofit_failure(
+            &owner.update.location,
+            "missing direct shape extent",
+        ));
+    }
+    let scale = scaled_dimension / (old_dimension as f64 / 12700.0);
+    let insets = if vertical {
+        text.insets.left + text.insets.right
+    } else {
+        text.insets.top + text.insets.bottom
+    };
+    let needed = (trial.physical_height + insets) / scale;
+    let needed_emu = checked_authoring_emu(needed, &owner.update.location)?;
+    if needed_emu <= 0 {
+        return Err(autofit_failure(
+            &owner.update.location,
+            "nonpositive resized extent",
+        ));
+    }
+    let (x, y, w, h) = owner.update.old_bounds;
+    let (nw, nh) = if vertical {
+        (needed_emu, h)
+    } else {
+        (w, needed_emu)
+    };
+    let fraction = match text.anchor {
+        rpptx_layout::TextAnchor::Top => 0.0,
+        rpptx_layout::TextAnchor::Center => 0.5,
+        rpptx_layout::TextAnchor::Bottom => 1.0,
+        rpptx_layout::TextAnchor::Justified | rpptx_layout::TextAnchor::Distributed => {
+            return Err(autofit_failure(
+                &owner.update.location,
+                "distributed or justified shape anchor has no single preserved anchor",
+            ));
+        }
+    };
+    let reading_sign = if matches!(
+        text.vertical,
+        rpptx_layout::TextDirection::Vertical
+            | rpptx_layout::TextDirection::EastAsianVertical
+            | rpptx_layout::TextDirection::WordArtVertical
+    ) {
+        -1.0
+    } else {
+        1.0
+    };
+    let scale_x = context.shape.bounds.width / (w as f64 / 12700.0);
+    let scale_y = context.shape.bounds.height / (h as f64 / 12700.0);
+    let mut resized = context.shape.clone();
+    resized.bounds.width = nw as f64 / 12700.0 * scale_x;
+    resized.bounds.height = nh as f64 / 12700.0 * scale_y;
+    let anchor = |shape: &rpptx_layout::ResolvedShape| {
+        let local = if vertical {
+            Point {
+                x: (0.5 + (fraction - 0.5) * reading_sign) * shape.bounds.width,
+                y: shape.bounds.height / 2.0,
+            }
+        } else {
+            Point {
+                x: shape.bounds.width / 2.0,
+                y: fraction * shape.bounds.height,
+            }
+        };
+        rpptx_render::shape_transform(shape).apply(local)
+    };
+    let old_anchor = anchor(&context.shape);
+    let resized_anchor = anchor(&resized);
+    // Offsets are stored before the parent scale and affine group transform.
+    // Invert that actual mapping rather than treating painted displacements
+    // as unscaled coordinates or reconstructing a separate transform order.
+    let group = context.shape.group_transform;
+    let a = group.a * scale_x;
+    let b = group.b * scale_x;
+    let c = group.c * scale_y;
+    let d = group.d * scale_y;
+    let determinant = a * d - b * c;
+    if ![
+        a,
+        b,
+        c,
+        d,
+        determinant,
+        old_anchor.x,
+        old_anchor.y,
+        resized_anchor.x,
+        resized_anchor.y,
+    ]
+    .into_iter()
+    .all(f64::is_finite)
+        || determinant.abs() <= f64::EPSILON
+    {
+        return Err(autofit_failure(
+            &owner.update.location,
+            "noninvertible painted anchor mapping",
+        ));
+    }
+    let dx = old_anchor.x - resized_anchor.x;
+    let dy = old_anchor.y - resized_anchor.y;
+    let nx = x as f64 + (d * dx - c * dy) / determinant * 12700.0;
+    let ny = y as f64 + (-b * dx + a * dy) / determinant * 12700.0;
+    let quantize = |value: f64| -> Result<i64> {
+        if !value.is_finite() || !(-27_273_042_329_600.0..=27_273_042_316_900.0).contains(&value) {
+            Err(autofit_failure(
+                &owner.update.location,
+                "unrepresentable anchored coordinate",
+            ))
+        } else {
+            Ok(value.trunc() as i64)
+        }
+    };
+    Ok((quantize(nx)?, quantize(ny)?, nw, nh))
+}
+
+#[cfg(feature = "render")]
+fn checked_authoring_emu(points: f64, location: &TextFrameLocation) -> Result<i64> {
+    let value = points * 12700.0;
+    if !value.is_finite() || !(0.0..=27_273_042_316_900.0).contains(&value) {
+        return Err(autofit_failure(location, "unrepresentable measured extent"));
+    }
+    Ok(value.trunc() as i64)
+}
+
+#[cfg(feature = "render")]
+fn validate_autofit_authoring_namespaces(xml: &[u8], part: &str) -> Result<()> {
+    // Ordinary import, exact source save and rendering remain permissive.
+    // Only authoring refuses explicit foreign/rebound modeled lookalikes,
+    // before local-name parsing could treat their payload as an autofit flag.
+    let mut reader = NsReader::from_reader(xml);
+    let mut depth = 0usize;
+    let mut body_depth = None;
+    let mut text_body_depth = None;
+    loop {
+        let (namespace, event) = reader.read_resolved_event().map_err(|error| {
+            render_failure(format!(
+                "autofit authoring namespace preflight in {part}: {error}"
+            ))
+        })?;
+        let empty = matches!(&event, XmlEvent::Empty(_));
+        match event {
+            XmlEvent::Start(start) | XmlEvent::Empty(start) => {
+                let name = start.name();
+                let local = xml_local_name(name.as_ref());
+                let text_body = local == b"txBody"
+                    && (xml_is(
+                        &namespace,
+                        "http://schemas.openxmlformats.org/drawingml/2006/main",
+                    ) || xml_is(
+                        &namespace,
+                        "http://schemas.openxmlformats.org/presentationml/2006/main",
+                    ));
+                let body = text_body_depth == Some(depth) && local == b"bodyPr";
+                let choice = body_depth == Some(depth)
+                    && matches!(local, b"normAutofit" | b"noAutofit" | b"spAutoFit");
+                if (body || choice)
+                    && !xml_is(
+                        &namespace,
+                        "http://schemas.openxmlformats.org/drawingml/2006/main",
+                    )
+                {
+                    return Err(render_failure(format!(
+                        "autofit authoring refuses foreign or unbound owner/choice namespace in {part}: {}",
+                        String::from_utf8_lossy(name.as_ref())
+                    )));
+                }
+                if text_body && !empty && text_body_depth.is_none() {
+                    text_body_depth = Some(depth + 1);
+                }
+                if body && !empty {
+                    body_depth = Some(depth + 1);
+                }
+                if !empty {
+                    depth += 1;
+                }
+            }
+            XmlEvent::End(_) => {
+                if body_depth == Some(depth) {
+                    body_depth = None;
+                }
+                if text_body_depth == Some(depth) {
+                    text_body_depth = None;
+                }
+                depth = depth.saturating_sub(1);
+            }
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "render")]
+fn apply_authoring_change(
+    package: &mut OpcPackage,
+    location: &TextFrameLocation,
+    change: &AuthoringChange,
+) -> Result<bool> {
+    let original = required_part(package, &location.owner_part)?.to_vec();
+    let content_type = package
+        .content_types
+        .content_type_for(&location.owner_part)
+        .unwrap_or_default();
+    macro_rules! update_root {
+        ($root:ty) => {{
+            let mut root =
+                <$root>::from_xml(&original).map_err(|e| autofit_failure(location, e))?;
+            let child = owned_child_mut(
+                &mut root.common_slide_data.shape_tree.children,
+                &location.child_path,
+            )
+            .ok_or_else(|| autofit_failure(location, "owner path disappeared"))?;
+            // Each plan is tied to its own original source child. Multiple cell
+            // plans may share a frame, so check them once in inventory/preflight.
+            let original_child = child.clone();
+            apply_owned_change(child, location, change)?;
+            // A planned pair can already be stored. Keep its source part exact
+            // instead of publishing unrelated canonical serialization changes.
+            if *child == original_child {
+                return Ok(false);
+            }
+            root.to_xml().map_err(|e| autofit_failure(location, e))?
+        }};
+    }
+    let updated = match content_type {
+        content_types::SLIDE => update_root!(CT_Slide),
+        content_types::SLIDE_LAYOUT => update_root!(CT_SlideLayout),
+        content_types::SLIDE_MASTER => update_root!(CT_SlideMaster),
+        content_types::NOTES_SLIDE => update_root!(CT_NotesSlide),
+        content_types::NOTES_MASTER => update_root!(CT_NotesMaster),
+        _ => return Err(autofit_failure(location, "unsupported physical part kind")),
+    };
+    let changed = updated != original;
+    if changed {
+        package.set_part(&location.owner_part, updated);
+    }
+    Ok(changed)
+}
+
+#[cfg(feature = "render")]
+fn apply_owned_change(
+    child: &mut ShapeTreeChild,
+    location: &TextFrameLocation,
+    change: &AuthoringChange,
+) -> Result<()> {
+    if let AuthoringChange::Shape((x, y, w, h)) = change {
+        let ShapeTreeChild::Shape(shape) = child else {
+            return Err(autofit_failure(location, "resize owner is not a shape"));
+        };
+        let transform = shape
+            .shape_properties
+            .transform
+            .get_or_insert_with(CT_Transform2D::default);
+        transform.offset = Some(CT_Point2D {
+            x: Emu(*x),
+            y: Emu(*y),
+        });
+        transform.extent = Some(CT_PositiveSize2D {
+            cx: Emu(*w),
+            cy: Emu(*h),
+        });
+        return Ok(());
+    }
+    let body = match (child, location.cell) {
+        (ShapeTreeChild::Shape(shape), None) => shape.text_body.as_mut(),
+        (ShapeTreeChild::GraphicFrame(frame), Some((r, c))) => frame
+            .graphic_data
+            .table_mut()
+            .and_then(|t| t.rows.get_mut(r))
+            .and_then(|r| r.cells.get_mut(c))
+            .and_then(|c| c.text_body.as_mut()),
+        _ => None,
+    }
+    .ok_or_else(|| autofit_failure(location, "text owner disappeared"))?;
+    match change {
+        AuthoringChange::Normal((scale, reduction)) => {
+            body.body_properties.autofit = Some(TextAutofit::Normal(NormalAutofit {
+                font_scale: Some(scale.to_string()),
+                line_spacing_reduction: Some(reduction.to_string()),
+            }))
+        }
+        AuthoringChange::Fit { size, family } => {
+            body.body_properties.wrap = Some(TextWrap::Square);
+            body.body_properties.autofit = Some(TextAutofit::NoAutofit);
+            let apply = |properties: &mut CT_TextCharacterProperties| {
+                properties.font_size = Some(i32::from(*size) * 100);
+                if let Some(family) = family {
+                    for slot in [
+                        &mut properties.latin,
+                        &mut properties.east_asian,
+                        &mut properties.complex_script,
+                    ] {
+                        if let Some(font) = slot {
+                            font.typeface = family.clone();
+                        } else {
+                            *slot = Some(TextFont::new(family).expect("validated family"));
+                        }
+                    }
+                }
+            };
+            for index in 0..body.paragraph_count() {
+                let paragraph = body.paragraph_mut(index).expect("bounded paragraph");
+                apply(
+                    paragraph
+                        .properties_mut()
+                        .default_run_properties
+                        .get_or_insert_with(CT_TextCharacterProperties::default),
+                );
+                apply(
+                    paragraph
+                        .end_properties
+                        .get_or_insert_with(CT_TextCharacterProperties::default),
+                );
+                for run in &mut paragraph.runs {
+                    match run {
+                        TextRun::Run(run) => apply(
+                            run.properties
+                                .get_or_insert_with(CT_TextCharacterProperties::default),
+                        ),
+                        TextRun::Field(field) => apply(
+                            field
+                                .run_properties
+                                .get_or_insert_with(CT_TextCharacterProperties::default),
+                        ),
+                        TextRun::Break(br) => apply(
+                            br.properties
+                                .get_or_insert_with(CT_TextCharacterProperties::default),
+                        ),
+                    }
+                }
+            }
+        }
+        AuthoringChange::Shape(_) => unreachable!(),
+    }
+    Ok(())
+}
+
+#[cfg(feature = "render")]
+fn autofit_failure(location: &TextFrameLocation, detail: impl std::fmt::Display) -> Error {
+    render_failure(format!(
+        "autofit {} {:?} cell {:?}: {detail}",
+        location.owner_part, location.child_path, location.cell
+    ))
+}
+
+#[cfg(feature = "render")]
+fn owned_child<'a>(children: &'a [ShapeTreeChild], path: &[usize]) -> Option<&'a ShapeTreeChild> {
+    let (&index, rest) = path.split_first()?;
+    let child = children.get(index)?;
+    if rest.is_empty() {
+        return Some(child);
+    }
+    let ShapeTreeChild::GroupShape(group) = child else {
+        return None;
+    };
+    owned_child(&group.children, rest)
+}
+
+#[cfg(feature = "render")]
+fn owned_child_mut<'a>(
+    children: &'a mut [ShapeTreeChild],
+    path: &[usize],
+) -> Option<&'a mut ShapeTreeChild> {
+    let (&index, rest) = path.split_first()?;
+    let child = children.get_mut(index)?;
+    if rest.is_empty() {
+        return Some(child);
+    }
+    let ShapeTreeChild::GroupShape(group) = child else {
+        return None;
+    };
+    owned_child_mut(&mut group.children, rest)
+}
+
+#[cfg(feature = "render")]
+fn owned_text(child: &ShapeTreeChild, cell: Option<(usize, usize)>) -> Option<&CT_TextBody> {
+    match (child, cell) {
+        (ShapeTreeChild::Shape(shape), None) => shape.text_body.as_ref(),
+        (ShapeTreeChild::GraphicFrame(frame), Some((row, column))) => {
+            let GraphicDataPayload::Table(table) = frame.graphic_data.payload() else {
+                return None;
+            };
+            table
+                .rows
+                .get(row)?
+                .cells
+                .get(column)
+                .and_then(|cell| cell.text_body.as_ref())
+        }
+        _ => None,
+    }
+}
+
+#[cfg(feature = "render")]
+fn append_autofit_context(
+    owners: &mut Vec<AutofitOwner>,
+    ctx: &ResolveCtx<'_>,
+    source: FlattenedSource,
+    owner_identity: (&str, &str),
+    consuming_context: (usize, &str),
+    size: (f64, f64),
+    hyperlinks: &ScopedHyperlinkTargets,
+) -> Result<()> {
+    let (part, kind) = owner_identity;
+    let (slide_index, context_name) = consuming_context;
+    let mut ids = HashSet::new();
+    for (path, item) in ctx.owned_items(source) {
+        let FlattenedItem::Shape {
+            child,
+            group_issues,
+            ..
+        } = &item
+        else {
+            continue;
+        };
+        if let Some(id) = child.non_visual_id()
+            && !ids.insert(id)
+        {
+            return Err(render_failure(format!(
+                "autofit {part}: duplicate shape ID {id}"
+            )));
+        }
+        let cells: Vec<Option<(usize, usize)>> = match child {
+            ShapeTreeChild::Shape(shape) if shape.text_body.is_some() => vec![None],
+            ShapeTreeChild::GraphicFrame(frame) => match frame.graphic_data.payload() {
+                GraphicDataPayload::Table(table) => table
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(r, row)| {
+                        row.cells.iter().enumerate().map(move |(c, _)| Some((r, c)))
+                    })
+                    .collect(),
+                GraphicDataPayload::SmartArt(_) => {
+                    // Diagram text does not belong to this graphic frame's XML.
+                    // It must remain an explicit unsupported owner in the report.
+                    vec![None]
+                }
+                _ => Vec::new(),
+            },
+            ShapeTreeChild::AlternateContent(_) => vec![None],
+            _ => Vec::new(),
+        };
+        if cells.is_empty() {
+            continue;
+        }
+        let fingerprint = shape_ref(child).xml()?;
+        let resolved = ctx.resolve_owned_text_shape(item, size, hyperlinks);
+        for cell in cells {
+            let location = TextFrameLocation {
+                owner_part: part.to_owned(),
+                child_path: path.clone(),
+                cell,
+                fingerprint: fingerprint.clone(),
+            };
+            let body = owned_text(child, cell);
+            let mut empty = body.is_some_and(|body| body.plain_text().is_empty());
+            let mut unsupported = if *group_issues != 0 {
+                Some("noninvertible or sheared group transform".to_owned())
+            } else {
+                None
+            };
+            let projection = match &resolved {
+                Ok((slide, directions)) => {
+                    slide
+                        .shapes
+                        .first()
+                        .and_then(|shape| match (&shape.content, cell) {
+                            (ResolvedContent::Text(text), None) => Some(Ok((
+                                shape.clone(),
+                                text.clone(),
+                                directions.first().cloned().unwrap_or_default(),
+                            ))),
+                            (ResolvedContent::Table(table), Some((row, column))) => {
+                                let ordinal = table
+                                    .rows
+                                    .iter()
+                                    .take(row)
+                                    .map(|r| r.cells.len())
+                                    .sum::<usize>()
+                                    + column;
+                                Some(
+                                    rpptx_render::authoring_table_cell(shape, table, row, column)
+                                        .map(|(shape, text)| {
+                                            (
+                                                shape,
+                                                text,
+                                                vec![
+                                                    directions
+                                                        .first()
+                                                        .and_then(|d| d.get(ordinal))
+                                                        .cloned()
+                                                        .unwrap_or_default(),
+                                                ],
+                                            )
+                                        })
+                                        .map_err(|e| e.to_string()),
+                                )
+                            }
+                            _ => None,
+                        })
+                }
+                Err(error) => Some(Err(error.to_string())),
+            };
+            let mut contexts = Vec::new();
+            let mut mode = body
+                .and_then(|b| b.body_properties.autofit.as_ref())
+                .map_or(AutofitMode::None, |a| match a {
+                    TextAutofit::Normal(_) => AutofitMode::Normal,
+                    TextAutofit::ShapeAutofit => AutofitMode::Shape,
+                    _ => AutofitMode::None,
+                });
+            if body.is_none() {
+                mode = opaque_autofit_modes(&fingerprint)?
+                    .into_iter()
+                    .find(|m| *m != AutofitMode::None)
+                    .unwrap_or(AutofitMode::None);
+            }
+            if let Some(Ok((shape, text, directions))) = projection {
+                empty = !text
+                    .paragraphs
+                    .iter()
+                    .flat_map(|p| &p.runs)
+                    .any(|run| match run {
+                        rpptx_layout::ResolvedTextRun::Text { text, .. }
+                        | rpptx_layout::ResolvedTextRun::Field { text, .. } => !text.is_empty(),
+                        rpptx_layout::ResolvedTextRun::Break => true,
+                    });
+                if cell.is_none() {
+                    mode = match text.autofit {
+                        ResolvedAutofit::Normal { .. } => AutofitMode::Normal,
+                        ResolvedAutofit::Shape => AutofitMode::Shape,
+                        ResolvedAutofit::None => AutofitMode::None,
+                    };
+                }
+                contexts.push(AutofitContext {
+                    slide_index,
+                    context: context_name.to_owned(),
+                    shape,
+                    text,
+                    directions,
+                });
+            } else {
+                unsupported = Some(match projection {
+                    Some(Err(detail)) => detail,
+                    _ => "opaque or unresolved text owner".to_owned(),
+                });
+            }
+            if cell.is_some() && mode == AutofitMode::Shape {
+                unsupported =
+                    Some("table-cell shape autofit has no independently owned extent".to_owned());
+            }
+            let effective_xfrm = match child {
+                ShapeTreeChild::Shape(shape) => ctx.effective_xfrm(shape),
+                _ => shape_transform(child).cloned(),
+            };
+            let xfrm = effective_xfrm.as_ref();
+            let bounds = xfrm
+                .and_then(|x| Some((x.offset?.x.0, x.offset?.y.0, x.extent?.cx.0, x.extent?.cy.0)))
+                .unwrap_or((0, 0, 0, 0));
+            if let Some(existing) = owners
+                .iter_mut()
+                .find(|owner| owner.update.location == location)
+            {
+                if existing.update.mode != mode {
+                    return Err(autofit_failure(
+                        &location,
+                        "inconsistent inherited autofit mode across contexts",
+                    ));
+                }
+                existing.contexts.extend(contexts);
+                if unsupported.is_some() {
+                    existing.unsupported = unsupported;
+                }
+            } else {
+                owners.push(AutofitOwner {
+                    update: AutofitUpdate {
+                        location,
+                        owner_kind: kind.to_owned(),
+                        slide_index: (source == FlattenedSource::Slide
+                            && matches!(kind, "slide" | "notes-slide"))
+                        .then_some(slide_index),
+                        shape_id: child.non_visual_id(),
+                        name: child.non_visual_name(),
+                        mode,
+                        status: if empty { "empty" } else { "unchanged" }.to_owned(),
+                        font_scale: None,
+                        line_spacing_reduction: None,
+                        point_size: None,
+                        old_bounds: bounds,
+                        new_bounds: bounds,
+                        changed: false,
+                        diagnostics: Vec::new(),
+                    },
+                    empty,
+                    unsupported,
+                    contexts,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "render")]
+fn autofit_inventory(
+    presentation: &Presentation,
+    package: &OpcPackage,
+) -> Result<Vec<AutofitOwner>> {
+    let default_style = presentation
+        .presentation
+        .default_text_style
+        .clone()
+        .unwrap_or_default();
+    let size = presentation.slide_size().map_or((720.0, 540.0), |(w, h)| {
+        (w.0 as f64 / 12700.0, h.0 as f64 / 12700.0)
+    });
+    let mut owners = Vec::new();
+    let table_styles = render_table_styles(package, &presentation.presentation_part)?;
+    for (index, record) in presentation.slides.iter().enumerate() {
+        let layout_part = render_related_part(package, &record.part_name, rel_types::SLIDE_LAYOUT)?;
+        let master_part = render_related_part(package, &layout_part, rel_types::SLIDE_MASTER)?;
+        let theme_part = render_related_part(package, &master_part, rel_types::THEME)?;
+        let layout = CT_SlideLayout::from_xml(required_part(package, &layout_part)?)
+            .map_err(|e| render_failure(format!("{layout_part}: {e}")))?;
+        let master = CT_SlideMaster::from_xml(required_part(package, &master_part)?)
+            .map_err(|e| render_failure(format!("{master_part}: {e}")))?;
+        let theme = CT_OfficeStyleSheet::from_xml(required_part(package, &theme_part)?)
+            .map_err(|e| render_failure(format!("{theme_part}: {e}")))?;
+        let mut ctx = ResolveCtx::new(
+            &theme,
+            render_effective_color_map(&master, &layout, &record.slide),
+            &master,
+            &layout,
+            &record.slide,
+            &default_style,
+        );
+        if let Some(styles) = table_styles.as_ref() {
+            ctx = ctx.with_table_styles(styles);
+        }
+        let links = ScopedHyperlinkTargets::default();
+        for (source, part, kind) in [
+            (FlattenedSource::Master, master_part.as_str(), "master"),
+            (FlattenedSource::Layout, layout_part.as_str(), "layout"),
+            (FlattenedSource::Slide, record.part_name.as_str(), "slide"),
+        ] {
+            append_autofit_context(
+                &mut owners,
+                &ctx,
+                source,
+                (part, kind),
+                (index, &record.part_name),
+                size,
+                &links,
+            )?;
+        }
+    }
+    // Notes use their own theme, notes page dimensions and notesStyle. The
+    // ordinary export overlays complete owned text bodies, not slide textStyle.
+    if let Some(notes_master_part) = &presentation.notes_master_part {
+        let notes_master = CT_NotesMaster::from_xml(required_part(package, notes_master_part)?)
+            .map_err(|e| render_failure(format!("{notes_master_part}: {e}")))?;
+        let theme_part = render_related_part(package, notes_master_part, rel_types::THEME)?;
+        let theme = CT_OfficeStyleSheet::from_xml(required_part(package, &theme_part)?)
+            .map_err(|e| render_failure(format!("{theme_part}: {e}")))?;
+        let style = notes_master
+            .notes_style
+            .clone()
+            .or(presentation.presentation.default_text_style.clone())
+            .unwrap_or_default();
+        if let Some(first) = presentation.slides.first() {
+            let layout_part =
+                render_related_part(package, &first.part_name, rel_types::SLIDE_LAYOUT)?;
+            let master_part = render_related_part(package, &layout_part, rel_types::SLIDE_MASTER)?;
+            let mut shell_layout = CT_SlideLayout::from_xml(required_part(package, &layout_part)?)
+                .map_err(|e| render_failure(e.to_string()))?;
+            shell_layout.common_slide_data.shape_tree = CT_ShapeTree::new();
+            let mut shell_master = CT_SlideMaster::from_xml(required_part(package, &master_part)?)
+                .map_err(|e| render_failure(e.to_string()))?;
+            // Notes export resolves already composed complete text bodies with
+            // empty inheritance trees. Do not merge notes-master bodyPr into
+            // an overlaid physical notes-slide text body during measurement.
+            shell_master.common_slide_data.shape_tree = CT_ShapeTree::new();
+            shell_master.color_map = notes_master.color_map.clone();
+            shell_master.text_styles = None;
+            for (index, record) in presentation.slides.iter().enumerate() {
+                let mut slide = CT_Slide::new(CT_ShapeTree::new());
+                if let Some(notes) = &record.notes {
+                    slide.common_slide_data = notes.notes.common_slide_data.clone();
+                }
+                // Geometry inheritance follows the existing notes overlay's
+                // matched placeholder, but text remains the physical body.
+                materialize_notes_measurement_bounds(
+                    &mut slide.common_slide_data.shape_tree.children,
+                    &notes_master.common_slide_data.shape_tree.children,
+                )?;
+                let ctx = ResolveCtx::new(
+                    &theme,
+                    notes_master.color_map.clone(),
+                    &shell_master,
+                    &shell_layout,
+                    &slide,
+                    &style,
+                );
+                let links = ScopedHyperlinkTargets::default();
+                let mut master_slide = CT_Slide::new(CT_ShapeTree::new());
+                master_slide.common_slide_data = notes_master.common_slide_data.clone();
+                let master_ctx = ResolveCtx::new(
+                    &theme,
+                    notes_master.color_map.clone(),
+                    &shell_master,
+                    &shell_layout,
+                    &master_slide,
+                    &style,
+                );
+                append_autofit_context(
+                    &mut owners,
+                    &master_ctx,
+                    FlattenedSource::Slide,
+                    (notes_master_part, "notes-master"),
+                    (index, &format!("{}:notes", record.part_name)),
+                    export_page_size(&presentation.presentation),
+                    &links,
+                )?;
+                if let Some(notes) = &record.notes {
+                    append_autofit_context(
+                        &mut owners,
+                        &ctx,
+                        FlattenedSource::Slide,
+                        (&notes.part_name, "notes-slide"),
+                        (index, &notes.part_name),
+                        export_page_size(&presentation.presentation),
+                        &links,
+                    )?;
+                    // Measurement clones materialized inherited geometry. Bind
+                    // mutation selectors to the original physical child bytes.
+                    for owner in owners
+                        .iter_mut()
+                        .filter(|o| o.update.location.owner_part == notes.part_name)
+                    {
+                        if let Some(child) = owned_child(
+                            &notes.notes.common_slide_data.shape_tree.children,
+                            &owner.update.location.child_path,
+                        ) {
+                            owner.update.location.fingerprint = shape_ref(child).xml()?;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Scan unused shared parts too. Without an instantiated context no answer
+    // is earned, so a flagged owner is retained as an explicit refusal.
+    let mut part_names = package.parts.keys().collect::<Vec<_>>();
+    part_names.sort();
+    for part in part_names {
+        let common = match package.content_types.content_type_for(part) {
+            Some(content_types::SLIDE_MASTER) => Some(
+                CT_SlideMaster::from_xml(required_part(package, part)?)
+                    .map_err(|e| render_failure(e.to_string()))?
+                    .common_slide_data,
+            ),
+            Some(content_types::SLIDE_LAYOUT) => Some(
+                CT_SlideLayout::from_xml(required_part(package, part)?)
+                    .map_err(|e| render_failure(e.to_string()))?
+                    .common_slide_data,
+            ),
+            Some(content_types::NOTES_MASTER) => Some(
+                CT_NotesMaster::from_xml(required_part(package, part)?)
+                    .map_err(|e| render_failure(e.to_string()))?
+                    .common_slide_data,
+            ),
+            _ => None,
+        };
+        if let Some(common) = common {
+            append_uninstantiated_owners(&mut owners, part, &common.shape_tree.children, &[])?;
+        } else if package
+            .content_types
+            .content_type_for(part)
+            .is_some_and(|t| {
+                t.ends_with("+xml")
+                    && !matches!(t, content_types::SLIDE | content_types::NOTES_SLIDE)
+            })
+        {
+            // Text in opaque diagram/chart owners has no writable facade body.
+            // Retain each qualified body as unmeasured, not as a visible frame.
+            let bytes = required_part(package, part)?;
+            for (ordinal, mode) in opaque_autofit_modes(bytes)?.into_iter().enumerate() {
+                if mode == AutofitMode::None {
+                    continue;
+                }
+                let location = TextFrameLocation {
+                    owner_part: part.to_owned(),
+                    child_path: vec![ordinal],
+                    cell: None,
+                    fingerprint: bytes.to_vec(),
+                };
+                owners.push(AutofitOwner {
+                    update: AutofitUpdate {
+                        location,
+                        owner_kind: "opaque-text".to_owned(),
+                        slide_index: None,
+                        shape_id: None,
+                        name: Some(format!("opaque qualified body {ordinal}")),
+                        mode,
+                        status: "unsupported".to_owned(),
+                        font_scale: None,
+                        line_spacing_reduction: None,
+                        point_size: None,
+                        old_bounds: (0, 0, 0, 0),
+                        new_bounds: (0, 0, 0, 0),
+                        changed: false,
+                        diagnostics: Vec::new(),
+                    },
+                    empty: false,
+                    unsupported: Some(
+                        "opaque text owner has no supported authoring projection".to_owned(),
+                    ),
+                    contexts: Vec::new(),
+                });
+            }
+        }
+    }
+    owners.sort_by(|left, right| {
+        (
+            &left.update.location.owner_part,
+            &left.update.location.child_path,
+            left.update.location.cell,
+        )
+            .cmp(&(
+                &right.update.location.owner_part,
+                &right.update.location.child_path,
+                right.update.location.cell,
+            ))
+    });
+    Ok(owners)
+}
+
+#[cfg(feature = "render")]
+fn opaque_autofit_modes(xml: &[u8]) -> Result<Vec<AutofitMode>> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let mut ancestors = Vec::<(bool, bool)>::new();
+    let mut body = None;
+    let mut modes = Vec::new();
+    loop {
+        let depth = ancestors.len();
+        let (is_a, known_namespace, text_body_namespace, event) = {
+            let (ns, event) = reader
+                .read_resolved_event_into(&mut buffer)
+                .map_err(|e| render_failure(format!("autofit owner XML: {e}")))?;
+            let is_a = xml_is(&ns, A_NS);
+            let is_p = xml_is(&ns, P_NS);
+            let is_chart = xml_is(
+                &ns,
+                "http://schemas.openxmlformats.org/drawingml/2006/chart",
+            );
+            let is_drawing = xml_is(
+                &ns,
+                "http://schemas.microsoft.com/office/drawing/2008/diagram",
+            );
+            let known = is_a
+                || is_p
+                || is_chart
+                || is_drawing
+                || xml_is(
+                    &ns,
+                    "http://schemas.openxmlformats.org/drawingml/2006/diagram",
+                )
+                || xml_is(
+                    &ns,
+                    "http://schemas.openxmlformats.org/markup-compatibility/2006",
+                );
+            (is_a, known, (is_a || is_p || is_drawing, is_chart), event)
+        };
+        match event {
+            XmlEvent::Start(start) => {
+                let name = start.name();
+                let local = xml_local_name(name.as_ref());
+                let owned_parent = ancestors.last().is_some_and(|(_, text_body)| *text_body)
+                    && ancestors.iter().all(|(known, _)| *known);
+                if is_a && local == b"bodyPr" && owned_parent {
+                    modes.push(AutofitMode::None);
+                    body = Some((depth, modes.len() - 1));
+                } else if let Some((parent, index)) = body
+                    && depth == parent + 1
+                    && is_a
+                {
+                    match xml_local_name(start.name().as_ref()) {
+                        b"normAutofit" => modes[index] = AutofitMode::Normal,
+                        b"spAutoFit" => modes[index] = AutofitMode::Shape,
+                        _ => {}
+                    }
+                }
+                let text_body = (text_body_namespace.0 && local == b"txBody")
+                    || (text_body_namespace.1 && matches!(local, b"txPr" | b"rich"));
+                ancestors.push((known_namespace, text_body));
+            }
+            XmlEvent::Empty(start) => {
+                let name = start.name();
+                let local = xml_local_name(name.as_ref());
+                let owned_parent = ancestors.last().is_some_and(|(_, text_body)| *text_body)
+                    && ancestors.iter().all(|(known, _)| *known);
+                if is_a && local == b"bodyPr" && owned_parent {
+                    modes.push(AutofitMode::None);
+                } else if let Some((parent, index)) = body
+                    && depth == parent + 1
+                    && is_a
+                {
+                    match xml_local_name(start.name().as_ref()) {
+                        b"normAutofit" => modes[index] = AutofitMode::Normal,
+                        b"spAutoFit" => modes[index] = AutofitMode::Shape,
+                        _ => {}
+                    }
+                }
+            }
+            XmlEvent::End(_) => {
+                ancestors
+                    .pop()
+                    .ok_or_else(|| render_failure("unbalanced autofit owner XML"))?;
+                if body.is_some_and(|(parent, _)| parent == ancestors.len()) {
+                    body = None;
+                }
+            }
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    Ok(modes)
+}
+
+#[cfg(feature = "render")]
+fn materialize_notes_measurement_bounds(
+    children: &mut [ShapeTreeChild],
+    master: &[ShapeTreeChild],
+) -> Result<()> {
+    let mut placeholders = Vec::new();
+    collect_export_placeholder_shapes(master, &mut placeholders)?;
+    for child in children {
+        match child {
+            ShapeTreeChild::GroupShape(group) => {
+                materialize_notes_measurement_bounds(&mut group.children, master)?
+            }
+            ShapeTreeChild::Shape(shape) if shape.shape_properties.transform.is_none() => {
+                if let Some(ph) = &shape.placeholder {
+                    let mut matching = placeholders
+                        .iter()
+                        .filter(|(key, _)| key.matches(&ph.key()));
+                    if let Some((_, parent)) = matching.next() {
+                        if matching.next().is_some() {
+                            return Err(render_failure("ambiguous notes placeholder geometry"));
+                        }
+                        shape.shape_properties.transform =
+                            parent.shape_properties.transform.clone();
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "render")]
+fn append_uninstantiated_owners(
+    owners: &mut Vec<AutofitOwner>,
+    part: &str,
+    children: &[ShapeTreeChild],
+    parent: &[usize],
+) -> Result<()> {
+    for (index, child) in children.iter().enumerate() {
+        let mut path = parent.to_vec();
+        path.push(index);
+        if let ShapeTreeChild::GroupShape(group) = child {
+            append_uninstantiated_owners(owners, part, &group.children, &path)?;
+            continue;
+        }
+        let cells: Vec<Option<(usize, usize)>> = match child {
+            ShapeTreeChild::GraphicFrame(frame) => match frame.graphic_data.payload() {
+                GraphicDataPayload::Table(table) => table
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(row, value)| {
+                        value
+                            .cells
+                            .iter()
+                            .enumerate()
+                            .map(move |(column, _)| Some((row, column)))
+                    })
+                    .collect(),
+                _ => Vec::new(),
+            },
+            _ => vec![None],
+        };
+        for cell in cells {
+            if owners.iter().any(|owner| {
+                owner.update.location.owner_part == part
+                    && owner.update.location.child_path == path
+                    && owner.update.location.cell == cell
+            }) {
+                continue;
+            }
+            let body = owned_text(child, cell);
+            let fingerprint = shape_ref(child).xml()?;
+            let mode = if let Some(body) = body {
+                match body.body_properties.autofit {
+                    Some(TextAutofit::Normal(_)) => AutofitMode::Normal,
+                    Some(TextAutofit::ShapeAutofit) => AutofitMode::Shape,
+                    _ => AutofitMode::None,
+                }
+            } else {
+                // Retain the physical opaque child as unsupported, never as a
+                // writable fallback. Use the same qualified scan as active owners.
+                opaque_autofit_modes(&fingerprint)?
+                    .into_iter()
+                    .find(|mode| *mode != AutofitMode::None)
+                    .unwrap_or(AutofitMode::None)
+            };
+            let empty = body.is_some_and(|body| body.plain_text().is_empty());
+            if mode == AutofitMode::None {
+                continue;
+            }
+            let location = TextFrameLocation {
+                owner_part: part.to_owned(),
+                child_path: path.clone(),
+                cell,
+                fingerprint,
+            };
+            owners.push(AutofitOwner {
+                update: AutofitUpdate {
+                    location,
+                    owner_kind: "uninstantiated-shared".to_owned(),
+                    slide_index: None,
+                    shape_id: child.non_visual_id(),
+                    name: child.non_visual_name(),
+                    mode,
+                    status: if empty { "empty" } else { "unsupported" }.to_owned(),
+                    font_scale: None,
+                    line_spacing_reduction: None,
+                    point_size: None,
+                    old_bounds: (0, 0, 0, 0),
+                    new_bounds: (0, 0, 0, 0),
+                    changed: false,
+                    diagnostics: Vec::new(),
+                },
+                empty,
+                unsupported: Some("shared flagged owner has no instantiated context".to_owned()),
+                contexts: Vec::new(),
+            });
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "render")]
 struct PreparedSlideAssembly {
     slide_part: String,
     slide: CT_Slide,
@@ -13365,6 +15125,1056 @@ mod write_tests {
     use rpptx_oxml::placeholder::PhType;
 
     use super::*;
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn fx207_refresh_preserves_unknown_autofit_on_selected_and_unrelated_owners() {
+        let assert_namespace_scope = |xml: &[u8]| {
+            let mut reader = NsReader::from_reader(xml);
+            let mut buffer = Vec::new();
+            loop {
+                let (namespace, event) = reader.read_resolved_event_into(&mut buffer).unwrap();
+                assert!(
+                    !matches!(namespace, quick_xml::name::ResolveResult::Unknown(_)),
+                    "unbound element prefix at {}: {:?}\n{}",
+                    reader.buffer_position(),
+                    event,
+                    String::from_utf8_lossy(xml)
+                );
+                if let quick_xml::events::Event::Start(start)
+                | quick_xml::events::Event::Empty(start) = &event
+                {
+                    if matches!(
+                        start.name().as_ref(),
+                        b"q:bodyPr" | b"q:normAutofit" | b"q:noAutofit"
+                    ) {
+                        assert!(
+                            xml_is(
+                                &namespace,
+                                "http://schemas.openxmlformats.org/drawingml/2006/main"
+                            ),
+                            "F207_INHERITED_DRAWINGML_SCOPE"
+                        );
+                    }
+                    for attribute in start.attributes() {
+                        let attribute = attribute.unwrap();
+                        let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
+                        assert!(
+                            !matches!(namespace, quick_xml::name::ResolveResult::Unknown(_)),
+                            "unbound attribute prefix"
+                        );
+                        if attribute.key.as_ref() == b"e:proof" {
+                            assert_eq!(local.as_ref(), b"proof");
+                            assert!(
+                                xml_is(&namespace, "urn:example"),
+                                "F207_INHERITED_OPAQUE_SCOPE"
+                            );
+                        }
+                    }
+                }
+                if matches!(event, quick_xml::events::Event::Eof) {
+                    break;
+                }
+                buffer.clear();
+            }
+        };
+        for inherited in [false, true] {
+            let mut deck = Presentation::new().unwrap();
+            for index in 0..2 {
+                deck.add_slide(6).unwrap();
+                let mut slide = deck.slide_mut(index).unwrap();
+                let mut shape = slide
+                    .add_textbox(
+                        Emu(914400),
+                        Emu(914400),
+                        Emu(if index == 0 { 583000 } else { 1270000 }),
+                        Emu(1270000),
+                    )
+                    .unwrap();
+                shape
+                    .set_text(if index == 0 { "MMMM" } else { "X" })
+                    .unwrap();
+                let mut frame = shape.text_frame().unwrap();
+                frame.set_word_wrap(Some(false));
+                frame.body.body_properties.left_inset = Some(Coordinate32Value::Emu(0));
+                frame.body.body_properties.right_inset = Some(Coordinate32Value::Emu(0));
+                frame.body.body_properties.top_inset = Some(Coordinate32Value::Emu(0));
+                frame.body.body_properties.bottom_inset = Some(Coordinate32Value::Emu(0));
+                frame.set_autofit_mode(Some(AutofitMode::Normal));
+                let mut properties = CT_TextCharacterProperties::default();
+                properties.font_size = Some(if index == 0 { 2080 } else { 2000 });
+                properties.latin = Some(TextFont::new("F207 preservation mono").unwrap());
+                frame
+                    .paragraph_mut(0)
+                    .unwrap()
+                    .run_mut(0)
+                    .unwrap()
+                    .set_properties(properties);
+            }
+            // A nonflagged owner in the changed slide has independent opaque facts.
+            deck.slide_mut(0)
+                .unwrap()
+                .add_textbox(Emu(0), Emu(0), Emu(1270000), Emu(1270000))
+                .unwrap()
+                .set_text("Unrelated")
+                .unwrap();
+            let mut package = deck.staged_package(true).unwrap();
+            let selected = "xmlns:e='urn:example' xmlns:mc='http://schemas.openxmlformats.org/markup-compatibility/2006' mc:Ignorable='e' e:proof='selected&amp;keep'";
+            let other = "xmlns:e='urn:example' xmlns:mc='http://schemas.openxmlformats.org/markup-compatibility/2006' mc:Ignorable='e' e:proof='other&#x21;keep'";
+            for (part, marker) in [
+                ("/ppt/slides/slide1.xml", selected),
+                ("/ppt/slides/slide2.xml", other),
+            ] {
+                let xml = String::from_utf8(package.parts[part].clone()).unwrap();
+                assert_eq!(xml.matches("<a:normAutofit/>").count(), 1);
+                let numeric = if part.ends_with("slide2.xml") {
+                    " fontScale=\"100000\" lnSpcReduction=\"0\""
+                } else {
+                    ""
+                };
+                let xml = xml.replace(
+                    "<a:normAutofit/>",
+                    &format!("<a:normAutofit{numeric} {marker}/>"),
+                );
+                package.set_part(part, xml.into_bytes());
+            }
+            let part = "/ppt/slides/slide1.xml";
+            let xml = String::from_utf8(package.parts[part].clone()).unwrap();
+            assert_eq!(xml.matches("<a:bodyPr/>").count(), 1);
+            package.set_part(
+                part,
+                xml.replace(
+                    "<a:bodyPr/>",
+                    &format!("<a:bodyPr><a:noAutofit {other}/></a:bodyPr>"),
+                )
+                .into_bytes(),
+            );
+            if inherited {
+                for part in ["/ppt/slides/slide1.xml", "/ppt/slides/slide2.xml"] {
+                    let xml = String::from_utf8(package.parts[part].clone()).unwrap();
+                    let namespace_scope = " xmlns:q='http://schemas.openxmlformats.org/drawingml/2006/main' xmlns:e='urn:example' xmlns:mc='http://schemas.openxmlformats.org/markup-compatibility/2006' mc:Ignorable='e'";
+                    // Imported provider bodies can already carry local canonical
+                    // declarations. Move only the fixture choice declarations first,
+                    // then add its inherited scope without deleting that new scope.
+                    let xml = xml
+                    .replace("xmlns:e='urn:example' xmlns:mc='http://schemas.openxmlformats.org/markup-compatibility/2006' mc:Ignorable='e' ", "")
+                    .replace("<p:txBody", &format!("<p:txBody{namespace_scope}"))
+                    .replace("a:bodyPr", "q:bodyPr").replace("a:normAutofit", "q:normAutofit")
+                    .replace("a:noAutofit", "q:noAutofit");
+                    package.set_part(part, xml.into_bytes());
+                }
+            }
+            assert_namespace_scope(package.parts[part].as_slice());
+            let unrelated_part = package.parts["/ppt/slides/slide2.xml"].clone();
+            let mut bytes = Cursor::new(Vec::new());
+            package.write_to(&mut bytes).unwrap();
+            let mut deck = Presentation::from_bytes(bytes.get_ref()).unwrap();
+            assert_eq!(
+                deck.to_bytes().unwrap(),
+                *bytes.get_ref(),
+                "initial source save is exact"
+            );
+            let fonts = [(
+                "F207 preservation mono",
+                include_bytes!("../../oxml-layout/fonts/LiberationMono-Regular.ttf").as_slice(),
+            )];
+            let result = deck.refresh_autofit(&fonts).unwrap();
+            assert!(
+                result.changed,
+                "positive refresh really writes the selected pair"
+            );
+            let saved = deck.to_bytes().unwrap();
+            let reopened = Presentation::from_bytes(&saved).unwrap();
+            let after = reopened.staged_package(true).unwrap();
+            let changed_xml = String::from_utf8(after.parts[part].clone()).unwrap();
+            assert!(
+                changed_xml.contains(if inherited {
+                    "e:proof='selected&amp;keep'"
+                } else {
+                    selected
+                }),
+                "F207_OPAQUE_AUTOFIT_SELECTED_PRESERVED"
+            );
+            assert!(
+                changed_xml.contains(if inherited {
+                    "e:proof='other&#x21;keep'"
+                } else {
+                    other
+                }),
+                "F207_OPAQUE_AUTOFIT_SAME_PART_PRESERVED"
+            );
+            assert_namespace_scope(after.parts[part].as_slice());
+            assert_eq!(
+                after.parts["/ppt/slides/slide2.xml"], unrelated_part,
+                "F207_OPAQUE_AUTOFIT_UNRELATED_PART_EXACT"
+            );
+            assert_eq!(saved, reopened.to_bytes().unwrap());
+            assert!(!deck.refresh_autofit(&fonts).unwrap().changed);
+            assert_eq!(saved, deck.to_bytes().unwrap());
+            let mut late = Presentation::from_bytes(&saved).unwrap();
+            late.add_slide(6).unwrap();
+            {
+                let mut slide = late.slide_mut(2).unwrap();
+                let mut shape = slide
+                    .add_textbox(Emu(0), Emu(0), Emu(1270000), Emu(12700))
+                    .unwrap();
+                shape.set_text(&"Late unfit\n".repeat(300)).unwrap();
+                let mut frame = shape.text_frame().unwrap();
+                frame.body.body_properties.left_inset = Some(Coordinate32Value::Emu(0));
+                frame.body.body_properties.right_inset = Some(Coordinate32Value::Emu(0));
+                frame.body.body_properties.top_inset = Some(Coordinate32Value::Emu(0));
+                frame.body.body_properties.bottom_inset = Some(Coordinate32Value::Emu(0));
+                frame.set_autofit_mode(Some(AutofitMode::Normal));
+            }
+            let before_late = late.to_bytes().unwrap();
+            assert!(
+                late.refresh_autofit(&fonts)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("admitted floor")
+            );
+            assert_eq!(
+                before_late,
+                late.to_bytes().unwrap(),
+                "late refusal preserves every source part"
+            );
+            let location = deck.text_frame_location(0, &[0], None).unwrap();
+            let before_error = deck.to_bytes().unwrap();
+            assert!(deck.fit_text_at(&location, None, 0, &fonts).is_err());
+            assert_eq!(
+                before_error,
+                deck.to_bytes().unwrap(),
+                "atomic refusal preserves source"
+            );
+            let location = deck.text_frame_location(0, &[0], None).unwrap();
+            deck.fit_text_at(&location, None, 20, &fonts).unwrap();
+            let fitted = deck.to_bytes().unwrap();
+            let fitted_deck = Presentation::from_bytes(&fitted).unwrap();
+            let fitted_xml =
+                String::from_utf8(fitted_deck.staged_package(true).unwrap().parts[part].clone())
+                    .unwrap();
+            assert!(
+                fitted_xml.contains(if inherited {
+                    "e:proof='selected&amp;keep'"
+                } else {
+                    selected
+                }),
+                "F207_OPAQUE_AUTOFIT_FIT_PRESERVED"
+            );
+            assert!(fitted_xml.contains(if inherited {
+                "e:proof='other&#x21;keep'"
+            } else {
+                other
+            }));
+            assert_namespace_scope(fitted_xml.as_bytes());
+            assert_eq!(fitted, fitted_deck.to_bytes().unwrap());
+        }
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn fx207_foreign_autofit_children_refuse_authoring_without_changing_source() {
+        for choice in [
+            "<f:normAutofit xmlns:f='urn:foreign' fontScale='100000'/>",
+            "<q:normAutofit xmlns:q='urn:foreign' fontScale='100000'/>",
+            "<normAutofit xmlns='urn:foreign' fontScale='100000'/>",
+        ] {
+            let mut deck = Presentation::new().unwrap();
+            deck.add_slide(6).unwrap();
+            deck.slide_mut(0)
+                .unwrap()
+                .add_textbox(Emu(0), Emu(0), Emu(1270000), Emu(1270000))
+                .unwrap()
+                .set_text("X")
+                .unwrap();
+            let mut package = deck.staged_package(true).unwrap();
+            let part = "/ppt/slides/slide1.xml";
+            let xml = String::from_utf8(package.parts[part].clone()).unwrap();
+            assert_eq!(xml.matches("<a:bodyPr/>").count(), 1);
+            let xml = xml
+                .replace(
+                    "<p:txBody>",
+                    "<p:txBody xmlns:q='http://schemas.openxmlformats.org/drawingml/2006/main'>",
+                )
+                .replace("<a:bodyPr/>", &format!("<a:bodyPr>{choice}</a:bodyPr>"));
+            package.set_part(part, xml.into_bytes());
+            let mut bytes = Cursor::new(Vec::new());
+            package.write_to(&mut bytes).unwrap();
+            let mut deck = Presentation::from_bytes(bytes.get_ref()).unwrap();
+            assert_eq!(*bytes.get_ref(), deck.to_bytes().unwrap());
+            let fonts = [(
+                "F207 preservation mono",
+                include_bytes!("../../oxml-layout/fonts/LiberationMono-Regular.ttf").as_slice(),
+            )];
+            assert!(
+                deck.render_deterministic_with_fonts(&fonts).is_ok(),
+                "ordinary rendering remains available"
+            );
+            let location = deck.text_frame_location(0, &[0], None).unwrap();
+            let before = deck.to_bytes().unwrap();
+            assert!(
+                deck.refresh_autofit(&fonts)
+                    .unwrap_err()
+                    .to_string()
+                    .contains(
+                        "autofit authoring refuses foreign or unbound owner/choice namespace"
+                    )
+            );
+            assert_eq!(
+                before,
+                deck.to_bytes().unwrap(),
+                "F207_FOREIGN_AUTOFIT_REFRESH_ATOMIC"
+            );
+            assert!(
+                deck.fit_text_at(&location, None, 20, &fonts)
+                    .unwrap_err()
+                    .to_string()
+                    .contains(
+                        "autofit authoring refuses foreign or unbound owner/choice namespace"
+                    )
+            );
+            assert_eq!(
+                before,
+                deck.to_bytes().unwrap(),
+                "F207_FOREIGN_AUTOFIT_FIT_ATOMIC"
+            );
+            assert_eq!(
+                before,
+                Presentation::from_bytes(&before)
+                    .unwrap()
+                    .to_bytes()
+                    .unwrap()
+            );
+        }
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn fx207_q_only_width_candidate_is_not_published() {
+        // Original Liberation Mono hmtx: M advances1229/2048 em.
+        // Four M at Q19pt =45.607421875pt, S19.24pt =46.183515625pt.
+        // Declared width583000EMU =45.905511811pt, no inferred pixel origin.
+        let original = include_bytes!("../../oxml-layout/fonts/LiberationMono-Regular.ttf");
+        let files = [("F207 gap mono", original.as_slice())];
+        let mut deck = Presentation::new().unwrap();
+        deck.add_slide(6).unwrap();
+        {
+            let mut slide = deck.slide_mut(0).unwrap();
+            let mut shape = slide
+                .add_textbox(Emu(914400), Emu(914400), Emu(583000), Emu(1270000))
+                .unwrap();
+            shape.set_text("MMMM").unwrap();
+            let mut frame = shape.text_frame().unwrap();
+            frame.set_word_wrap(Some(false));
+            frame.body.body_properties.left_inset = Some(Coordinate32Value::Emu(0));
+            frame.body.body_properties.right_inset = Some(Coordinate32Value::Emu(0));
+            frame.body.body_properties.top_inset = Some(Coordinate32Value::Emu(0));
+            frame.body.body_properties.bottom_inset = Some(Coordinate32Value::Emu(0));
+            frame.set_autofit_mode(Some(AutofitMode::Normal));
+            let mut p = CT_TextCharacterProperties::default();
+            p.font_size = Some(2080);
+            p.latin = Some(TextFont::new("F207 gap mono").unwrap());
+            frame
+                .paragraph_mut(0)
+                .unwrap()
+                .run_mut(0)
+                .unwrap()
+                .set_properties(p);
+        }
+        let before = deck.to_bytes().unwrap();
+        let owners = autofit_inventory(&deck, &deck.staged_package(false).unwrap()).unwrap();
+        let owner = owners
+            .iter()
+            .find(|o| {
+                o.update.shape_id == Some(2)
+                    && o.update.location.owner_part == "/ppt/slides/slide1.xml"
+            })
+            .unwrap();
+        assert_eq!(owner.contexts.len(), 1);
+        let c = &owner.contexts[0];
+        let mut fonts = authoring_fonts(&files).unwrap();
+        let (q, s) = rpptx_render::measure_autofit_candidate(
+            &c.shape,
+            &c.text,
+            &mut fonts,
+            c.slide_index + 1,
+            &c.directions,
+            (92500, 0),
+        )
+        .unwrap();
+        assert!(q.width_fits && q.fits, "Q precondition: {q:?}");
+        assert!(!s.width_fits && !s.fits, "S precondition: {s:?}");
+        assert_eq!(deck.to_bytes().unwrap(), before);
+        let result = deck.refresh_autofit(&files).unwrap();
+        let update = result
+            .updates
+            .iter()
+            .find(|u| u.shape_id == Some(2) && u.location.owner_part == "/ppt/slides/slide1.xml")
+            .unwrap();
+        assert_eq!(
+            (update.font_scale, update.line_spacing_reduction),
+            (Some(85000), Some(20000))
+        );
+        let report = deck.fit_report(&files).unwrap();
+        let f = report
+            .frames
+            .iter()
+            .find(|f| {
+                f.update.shape_id == Some(2)
+                    && f.update.location.owner_part == "/ppt/slides/slide1.xml"
+            })
+            .unwrap();
+        assert!(
+            f.quantized_trial.as_ref().unwrap().fits && f.persisted_trial.as_ref().unwrap().fits
+        );
+        let saved = deck.to_bytes().unwrap();
+        assert!(!deck.refresh_autofit(&files).unwrap().changed);
+        assert_eq!(saved, deck.to_bytes().unwrap());
+        assert_eq!(
+            Presentation::from_bytes(&saved)
+                .unwrap()
+                .to_bytes()
+                .unwrap(),
+            saved
+        );
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn fx207_shared_master_field_intersects_distinct_consuming_contexts() {
+        let mut deck = Presentation::new().unwrap();
+        for _ in 0..10 {
+            deck.add_slide(6).unwrap();
+        }
+        let mut package = deck.staged_package(false).unwrap();
+        let layout_part =
+            render_related_part(&package, &deck.slides[0].part_name, rel_types::SLIDE_LAYOUT)
+                .unwrap();
+        let master_part =
+            render_related_part(&package, &layout_part, rel_types::SLIDE_MASTER).unwrap();
+        let mut master =
+            CT_SlideMaster::from_xml(required_part(&package, &master_part).unwrap()).unwrap();
+        let mut transform = CT_Transform2D::default();
+        transform.offset = Some(CT_Point2D {
+            x: Emu(914400),
+            y: Emu(914400),
+        });
+        transform.extent = Some(CT_PositiveSize2D {
+            cx: Emu(228600),
+            cy: Emu(1270000),
+        });
+        let mut owner = CT_Shape::new_textbox(100, "Shared fit owner", transform).unwrap();
+        owner.text_body = Some(CT_TextBody::from_xml(br#"<p:txBody xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:bodyPr wrap="none" lIns="0" rIns="0" tIns="0" bIns="0"><a:normAutofit/></a:bodyPr><a:lstStyle/><a:p><a:fld id="{00000000-0000-0000-0000-000000000002}" type="slidenum"><a:rPr sz="2000"><a:latin typeface="F207 gap mono"/></a:rPr><a:t>1</a:t></a:fld><a:endParaRPr sz="2000"><a:latin typeface="F207 gap mono"/></a:endParaRPr></a:p></p:txBody>"#).unwrap());
+        master
+            .common_slide_data
+            .shape_tree
+            .children
+            .push(ShapeTreeChild::Shape(owner));
+        package.set_part(&master_part, master.to_xml().unwrap());
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut deck = Presentation::from_bytes(bytes.get_ref()).unwrap();
+        let before = deck.staged_package(false).unwrap();
+        let original = include_bytes!("../../oxml-layout/fonts/LiberationMono-Regular.ttf");
+        let fonts = [("F207 gap mono", original.as_slice())];
+        let report = deck.fit_report(&fonts).unwrap();
+        let frames = report
+            .frames
+            .iter()
+            .filter(|f| {
+                f.update.location.owner_part == master_part && f.update.shape_id == Some(100)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(frames.len(), 10);
+        assert_ne!(frames[0].context, frames[1].context);
+        let inventory = autofit_inventory(&deck, &before).unwrap();
+        let physical = inventory
+            .iter()
+            .find(|o| o.update.location.owner_part == master_part && o.update.shape_id == Some(100))
+            .unwrap();
+        let mut measuring_fonts = authoring_fonts(&fonts).unwrap();
+        for (slide_index, expected_fit) in [(0, true), (9, false)] {
+            let context = physical
+                .contexts
+                .iter()
+                .find(|c| c.slide_index == slide_index)
+                .unwrap();
+            let (q, s) = rpptx_render::measure_autofit_candidate(
+                &context.shape,
+                &context.text,
+                &mut measuring_fonts,
+                slide_index + 1,
+                &context.directions,
+                (100000, 0),
+            )
+            .unwrap();
+            assert_eq!(q.fits, expected_fit);
+            assert_eq!(s.fits, expected_fit);
+        }
+        assert_eq!(frames[0].needed_scale, frames[9].needed_scale);
+        assert!(frames[0].needed_scale.unwrap() < 100000);
+        let result = deck.refresh_autofit(&fonts).unwrap();
+        let owners = result
+            .updates
+            .iter()
+            .filter(|u| u.location.owner_part == master_part && u.shape_id == Some(100))
+            .collect::<Vec<_>>();
+        assert_eq!(owners.len(), 1);
+        assert!(owners[0].changed && owners[0].font_scale.unwrap() < 100000);
+        let after_report = deck.fit_report(&fonts).unwrap();
+        let shared_frames = after_report
+            .frames
+            .iter()
+            .filter(|f| {
+                f.update.location.owner_part == master_part && f.update.shape_id == Some(100)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(shared_frames.len(), 10);
+        assert!(shared_frames.iter().all(|f| !f.overflow
+            && f.quantized_trial.as_ref().unwrap().fits
+            && f.persisted_trial.as_ref().unwrap().fits));
+        let after = deck.staged_package(false).unwrap();
+        for record in &deck.slides {
+            assert_eq!(
+                before.get_part(&record.part_name),
+                after.get_part(&record.part_name)
+            );
+        }
+        let saved = deck.to_bytes().unwrap();
+        assert!(!deck.refresh_autofit(&fonts).unwrap().changed);
+        assert_eq!(saved, deck.to_bytes().unwrap());
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn fx207_shape_refresh_preserves_nested_scaled_flipped_painter_anchors() {
+        for anchor in [TextAnchor::Top, TextAnchor::Center, TextAnchor::Bottom] {
+            for (flip_h, flip_v) in [(true, false), (false, true), (true, true)] {
+                let mut deck = Presentation::new().unwrap();
+                deck.add_slide(6).unwrap();
+                {
+                    let mut slide = deck.slide_mut(0).unwrap();
+                    let mut shape = slide
+                        .add_textbox(Emu(914400), Emu(914400), Emu(3657600), Emu(457200))
+                        .unwrap();
+                    shape
+                        .set_text("First line\nSecond line\nThird line")
+                        .unwrap();
+                    shape.set_rotation(Angle::from_degrees(30.0)).unwrap();
+                    let mut frame = shape.text_frame().unwrap();
+                    frame.set_vertical_anchor(Some(anchor));
+                    frame.set_autofit_mode(Some(AutofitMode::Shape));
+                }
+                let mut package = deck.staged_package(false).unwrap();
+                let part = deck.slides[0].part_name.clone();
+                let mut slide =
+                    CT_Slide::from_xml(required_part(&package, &part).unwrap()).unwrap();
+                let ShapeTreeChild::Shape(shape) =
+                    &mut slide.common_slide_data.shape_tree.children[0]
+                else {
+                    panic!("textbox")
+                };
+                let transform = shape.shape_properties.transform.as_mut().unwrap();
+                transform.flip_horizontal = flip_h;
+                transform.flip_vertical = flip_v;
+                let child = shape_ref(&slide.common_slide_data.shape_tree.children[0])
+                    .xml()
+                    .unwrap();
+                let inner = format!(
+                    r#"<p:grpSp><p:nvGrpSpPr><p:cNvPr id="100" name="Inner"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="5486400" cy="2743200"/><a:chOff x="0" y="0"/><a:chExt cx="3657600" cy="3657600"/></a:xfrm></p:grpSpPr>{}</p:grpSp>"#,
+                    std::str::from_utf8(&child).unwrap()
+                );
+                let outer = format!(
+                    r#"<p:grpSp xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:nvGrpSpPr><p:cNvPr id="101" name="Outer"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm rot="1020000"><a:off x="457200" y="457200"/><a:ext cx="7315200" cy="3657600"/><a:chOff x="0" y="0"/><a:chExt cx="3657600" cy="3657600"/></a:xfrm></p:grpSpPr>{inner}</p:grpSp>"#
+                );
+                slide.common_slide_data.shape_tree.children =
+                    vec![ShapeTreeChild::GroupShape(Box::new(
+                        rpptx_oxml::shape_tree::CT_GroupShape::from_xml(outer.as_bytes()).unwrap(),
+                    ))];
+                package.set_part(&part, slide.to_xml().unwrap());
+                let mut bytes = Cursor::new(Vec::new());
+                package.write_to(&mut bytes).unwrap();
+                let mut deck = Presentation::from_bytes(bytes.get_ref()).unwrap();
+                let old = autofit_inventory(&deck, &deck.staged_package(false).unwrap()).unwrap();
+                let old = old
+                    .iter()
+                    .find(|o| o.update.shape_id == Some(2) && o.update.location.owner_part == part)
+                    .unwrap();
+                assert_eq!(old.update.location.child_path, vec![0, 0, 0]);
+                let fraction = match anchor {
+                    TextAnchor::Top => 0.0,
+                    TextAnchor::Center => 0.5,
+                    _ => 1.0,
+                };
+                let painted_anchor = |context: &AutofitContext| {
+                    rpptx_render::shape_transform(&context.shape).apply(Point {
+                        x: context.shape.bounds.width / 2.0,
+                        y: fraction * context.shape.bounds.height,
+                    })
+                };
+                let before = painted_anchor(&old.contexts[0]);
+                let result = deck.refresh_autofit(&[]).unwrap();
+                assert!(result.changed);
+                let new = autofit_inventory(&deck, &deck.staged_package(false).unwrap()).unwrap();
+                let new = new
+                    .iter()
+                    .find(|o| o.update.shape_id == Some(2) && o.update.location.owner_part == part)
+                    .unwrap();
+                let after = painted_anchor(&new.contexts[0]);
+                assert!(
+                    (before.x - after.x).abs() <= 3.0 / 12700.0
+                        && (before.y - after.y).abs() <= 3.0 / 12700.0,
+                    "{anchor:?} {flip_h} {flip_v}: {before:?} {after:?}"
+                );
+                let saved = deck.to_bytes().unwrap();
+                assert!(!deck.refresh_autofit(&[]).unwrap().changed);
+                assert_eq!(deck.to_bytes().unwrap(), saved);
+            }
+        }
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn fx207_explicit_family_preserves_all_existing_font_owner_attributes() {
+        let mut deck = Presentation::new().unwrap();
+        deck.add_slide(6).unwrap();
+        deck.slide_mut(0)
+            .unwrap()
+            .add_textbox(Emu(914400), Emu(914400), Emu(5486400), Emu(2743200))
+            .unwrap()
+            .set_text("source")
+            .unwrap();
+        let mut package = deck.staged_package(false).unwrap();
+        let part = deck.slides[0].part_name.clone();
+        let mut slide = CT_Slide::from_xml(required_part(&package, &part).unwrap()).unwrap();
+        let fonts = r#"<a:latin typeface="Old" pitchFamily="34" charset="0" x:keep="latin"/><a:ea typeface="Old" pitchFamily="35" charset="1" x:keep="ea"/><a:cs typeface="Old" pitchFamily="36" charset="2" x:keep="cs"/>"#;
+        let xml = format!(
+            r#"<p:txBody xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:font-owner"><a:bodyPr/><a:lstStyle/><a:p><a:pPr><a:defRPr>{fonts}</a:defRPr></a:pPr><a:r><a:rPr>{fonts}</a:rPr><a:t>direct</a:t></a:r><a:fld id="{{00000000-0000-0000-0000-000000000001}}" type="slidenum"><a:rPr>{fonts}</a:rPr><a:t>field</a:t></a:fld><a:endParaRPr>{fonts}</a:endParaRPr></a:p></p:txBody>"#
+        );
+        let ShapeTreeChild::Shape(shape) = &mut slide.common_slide_data.shape_tree.children[0]
+        else {
+            panic!("textbox")
+        };
+        shape.text_body = Some(CT_TextBody::from_xml_as(xml.as_bytes(), b"txBody").unwrap());
+        package.set_part(&part, slide.to_xml().unwrap());
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut deck = Presentation::from_bytes(bytes.get_ref()).unwrap();
+        let location = deck.text_frame_location(0, &[0], None).unwrap();
+        deck.fit_text_at(&location, Some("Carlito"), 20, &[])
+            .unwrap();
+        let saved = deck.to_bytes().unwrap();
+        let reopened = Presentation::from_bytes(&saved).unwrap();
+        let after = reopened.staged_package(false).unwrap();
+        let xml = std::str::from_utf8(required_part(&after, &part).unwrap()).unwrap();
+        for (slot, pitch, charset) in [("latin", 34, 0), ("ea", 35, 1), ("cs", 36, 2)] {
+            assert_eq!(xml.matches(&format!("typeface=\"Carlito\" pitchFamily=\"{pitch}\" charset=\"{charset}\" x:keep=\"{slot}\"")).count(),4,"{xml}");
+        }
+        assert!(!xml.contains("typeface=\"Old\""));
+        assert_eq!(reopened.to_bytes().unwrap(), saved);
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn fx207_unused_shared_table_cells_are_reported_and_refuse_atomically() {
+        for kind in [
+            content_types::SLIDE_LAYOUT,
+            content_types::SLIDE_MASTER,
+            content_types::NOTES_MASTER,
+        ] {
+            let mut deck = Presentation::new().unwrap();
+            deck.add_slide(6).unwrap();
+            if deck.notes_master.is_none() {
+                deck.add_default_notes_master_in_place().unwrap();
+            }
+            let mut package = deck.staged_package(false).unwrap();
+            let source = package
+                .parts
+                .keys()
+                .find(|part| package.content_types.content_type_for(part) == Some(kind))
+                .unwrap()
+                .clone();
+            let mut table = CT_Table::new(1, 2, Emu(3657600), Emu(914400)).unwrap();
+            for (column, cell) in table.rows[0].cells.iter_mut().enumerate() {
+                let body = cell.text_body.as_mut().unwrap();
+                body.set_text(&format!("Unused cell {column}"));
+                body.body_properties.autofit = Some(TextAutofit::Normal(NormalAutofit::default()));
+            }
+            let frame = CT_GraphicFrame::new_table(
+                200,
+                "Unused table",
+                positioned_transform(Emu(0), Emu(0), Emu(3657600), Emu(914400)),
+                table,
+            )
+            .unwrap();
+            let member = ShapeTreeChild::GraphicFrame(Box::new(frame));
+            let output = match kind {
+                content_types::SLIDE_LAYOUT => {
+                    let mut v = CT_SlideLayout::from_xml(required_part(&package, &source).unwrap())
+                        .unwrap();
+                    v.common_slide_data.shape_tree.children.push(member);
+                    v.to_xml().unwrap()
+                }
+                content_types::SLIDE_MASTER => {
+                    let mut v = CT_SlideMaster::from_xml(required_part(&package, &source).unwrap())
+                        .unwrap();
+                    v.common_slide_data.shape_tree.children.push(member);
+                    v.to_xml().unwrap()
+                }
+                _ => {
+                    let mut v = CT_NotesMaster::from_xml(required_part(&package, &source).unwrap())
+                        .unwrap();
+                    v.common_slide_data.shape_tree.children.push(member);
+                    v.to_xml().unwrap()
+                }
+            };
+            let part = format!("{}/fx207-unused.xml", source.rsplit_once('/').unwrap().0);
+            if let Some(relationships) = package.get_part_rels(&source) {
+                let relationships = relationships.clone();
+                package.set_part_rels(&part, relationships);
+            }
+            package.set_part(&part, output);
+            package.content_types.add_override(&part, kind);
+            let mut bytes = Cursor::new(Vec::new());
+            package.write_to(&mut bytes).unwrap();
+            let mut deck = Presentation::from_bytes(bytes.get_ref()).unwrap();
+            let before = deck.to_bytes().unwrap();
+            let report = deck.fit_report(&[]).unwrap();
+            let cells = report
+                .frames
+                .iter()
+                .filter(|f| f.update.location.owner_part == part && f.update.shape_id == Some(200))
+                .collect::<Vec<_>>();
+            assert_eq!(cells.len(), 2);
+            for (column, f) in cells.iter().enumerate() {
+                assert_eq!(f.update.location.cell, Some((0, column)));
+                assert_eq!(f.update.status, "unsupported");
+                assert_eq!(f.context, "uninstantiated");
+            }
+            let error = deck.refresh_autofit(&[]).unwrap_err().to_string();
+            assert!(
+                error.contains(&part) && error.contains("no instantiated context"),
+                "{error}"
+            );
+            assert_eq!(deck.to_bytes().unwrap(), before);
+            assert_eq!(
+                Presentation::from_bytes(&before)
+                    .unwrap()
+                    .to_bytes()
+                    .unwrap(),
+                before
+            );
+        }
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn fx207_unused_shared_opaque_owners_are_qualified_and_refuse_atomically() {
+        for kind in [
+            content_types::SLIDE_LAYOUT,
+            content_types::SLIDE_MASTER,
+            content_types::NOTES_MASTER,
+        ] {
+            let mut deck = Presentation::new().unwrap();
+            deck.add_slide(6).unwrap();
+            if deck.notes_master.is_none() {
+                deck.add_default_notes_master_in_place().unwrap();
+            }
+            let mut package = deck.staged_package(false).unwrap();
+            let source = package
+                .parts
+                .keys()
+                .find(|part| package.content_types.content_type_for(part) == Some(kind))
+                .unwrap()
+                .clone();
+            let raw = format!(
+                r#"<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:p="{P_NS}" xmlns:a="{A_NS}"><mc:Choice Requires="p"><p:sp><p:nvSpPr><p:cNvPr id="200" name="Opaque owner"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr><a:normAutofit/></a:bodyPr><a:lstStyle/><a:p><a:r><a:t>Opaque text</a:t></a:r></a:p></p:txBody></p:sp></mc:Choice></mc:AlternateContent>"#
+            );
+            let original =
+                String::from_utf8(required_part(&package, &source).unwrap().to_vec()).unwrap();
+            assert!(original.contains("</p:spTree>"));
+            let output = original
+                .replace("</p:spTree>", &format!("{raw}</p:spTree>"))
+                .into_bytes();
+            let part = format!("{}/fx207-unused.xml", source.rsplit_once('/').unwrap().0);
+            if let Some(relationships) = package.get_part_rels(&source) {
+                let relationships = relationships.clone();
+                package.set_part_rels(&part, relationships);
+            }
+            package.set_part(&part, output);
+            package.content_types.add_override(&part, kind);
+            let mut bytes = Cursor::new(Vec::new());
+            package.write_to(&mut bytes).unwrap();
+            let mut deck = Presentation::from_bytes(bytes.get_ref()).unwrap();
+            let before = deck.to_bytes().unwrap();
+            let report = deck.fit_report(&[]).unwrap();
+            let frames = report
+                .frames
+                .iter()
+                .filter(|frame| {
+                    frame.update.location.owner_part == part
+                        && frame.update.location.fingerprint == raw.as_bytes()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(frames.len(), 1);
+            let frame = frames[0];
+            assert_eq!(frame.update.location.cell, None);
+            assert_eq!(frame.update.mode, AutofitMode::Normal);
+            assert_eq!(frame.update.status, "unsupported");
+            assert_eq!(frame.context, "uninstantiated");
+            assert_eq!(frame.update.location.fingerprint, raw.as_bytes());
+            assert_eq!(deck.fit_report(&[]).unwrap(), report);
+            let error = deck.refresh_autofit(&[]).unwrap_err().to_string();
+            assert!(
+                error.contains(&part) && error.contains("no instantiated context"),
+                "{error}"
+            );
+            assert_eq!(deck.to_bytes().unwrap(), before);
+            assert_eq!(
+                Presentation::from_bytes(&before)
+                    .unwrap()
+                    .to_bytes()
+                    .unwrap(),
+                before
+            );
+            let foreign = raw.replace(A_NS, "urn:foreign-drawing");
+            assert!(opaque_autofit_modes(foreign.as_bytes()).unwrap().is_empty());
+            let mut foreign_package = deck.staged_package(false).unwrap();
+            foreign_package.set_part(
+                &part,
+                original
+                    .replace("</p:spTree>", &format!("{foreign}</p:spTree>"))
+                    .into_bytes(),
+            );
+            let mut foreign_bytes = Cursor::new(Vec::new());
+            foreign_package.write_to(&mut foreign_bytes).unwrap();
+            let foreign_deck = Presentation::from_bytes(foreign_bytes.get_ref()).unwrap();
+            assert!(
+                foreign_deck
+                    .fit_report(&[])
+                    .unwrap()
+                    .frames
+                    .iter()
+                    .all(|frame| frame.update.location.owner_part != part
+                        || frame.update.location.child_path
+                            != frames[0].update.location.child_path)
+            );
+            assert!(
+                String::from_utf8(foreign_deck.staged_package(false).unwrap().parts[&part].clone())
+                    .unwrap()
+                    .contains(&foreign)
+            );
+        }
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn fx207_shared_master_owner_intersects_contexts_without_slide_mutation() {
+        let mut deck = Presentation::new().unwrap();
+        deck.add_slide(6).unwrap();
+        deck.add_slide(6).unwrap();
+        let mut package = deck.staged_package(false).unwrap();
+        let layout_part =
+            render_related_part(&package, &deck.slides[0].part_name, rel_types::SLIDE_LAYOUT)
+                .unwrap();
+        let master_part =
+            render_related_part(&package, &layout_part, rel_types::SLIDE_MASTER).unwrap();
+        let mut master =
+            CT_SlideMaster::from_xml(required_part(&package, &master_part).unwrap()).unwrap();
+        let mut transform = CT_Transform2D::default();
+        transform.offset = Some(CT_Point2D {
+            x: Emu(914400),
+            y: Emu(914400),
+        });
+        transform.extent = Some(CT_PositiveSize2D {
+            cx: Emu(3657600),
+            cy: Emu(457200),
+        });
+        let mut owner = CT_Shape::new_textbox(100, "Shared fit owner", transform).unwrap();
+        let body = owner.text_body.as_mut().unwrap();
+        body.set_text("Shared first\nShared second\nShared third");
+        body.body_properties.autofit = Some(TextAutofit::Normal(NormalAutofit::default()));
+        master
+            .common_slide_data
+            .shape_tree
+            .children
+            .push(ShapeTreeChild::Shape(owner));
+        package.set_part(&master_part, master.to_xml().unwrap());
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut deck = Presentation::from_bytes(bytes.get_ref()).unwrap();
+        let before = deck.staged_package(false).unwrap();
+        let report = deck.fit_report(&[]).unwrap();
+        let frames = report
+            .frames
+            .iter()
+            .filter(|f| {
+                f.update.location.owner_part == master_part && f.update.shape_id == Some(100)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(frames.len(), 2);
+        assert_ne!(frames[0].context, frames[1].context);
+        assert_eq!(frames[0].needed_scale, frames[1].needed_scale);
+        let result = deck.refresh_autofit(&[]).unwrap();
+        let owners = result
+            .updates
+            .iter()
+            .filter(|u| u.location.owner_part == master_part && u.shape_id == Some(100))
+            .collect::<Vec<_>>();
+        assert_eq!(owners.len(), 1);
+        assert!(owners[0].changed && owners[0].font_scale.unwrap() < 100000);
+        let after = deck.staged_package(false).unwrap();
+        for record in &deck.slides {
+            assert_eq!(
+                before.get_part(&record.part_name),
+                after.get_part(&record.part_name)
+            );
+        }
+        let saved = deck.to_bytes().unwrap();
+        assert!(!deck.refresh_autofit(&[]).unwrap().changed);
+        assert_eq!(saved, deck.to_bytes().unwrap());
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn fx207_notes_shape_owner_uses_notes_geometry_and_caller_fonts() {
+        let mut deck = Presentation::new().unwrap();
+        deck.add_slide(6).unwrap();
+        deck.set_notes_text(0, "iiiiWWWW\nSecond notes\nThird notes")
+            .unwrap();
+        let part = deck.slides[0].notes.as_ref().unwrap().part_name.clone();
+        let body = first_notes_body_mut(
+            &mut deck.slides[0]
+                .notes
+                .as_mut()
+                .unwrap()
+                .notes
+                .common_slide_data
+                .shape_tree
+                .children,
+        )
+        .unwrap();
+        body.body_properties.autofit = Some(TextAutofit::ShapeAutofit);
+        for index in 0..body.paragraph_count() {
+            let paragraph = body.paragraph_mut(index).unwrap();
+            for run in &mut paragraph.runs {
+                if let TextRun::Run(run) = run {
+                    let props = run
+                        .properties
+                        .get_or_insert_with(CT_TextCharacterProperties::default);
+                    props.font_size = Some(2000);
+                    props.latin = Some(TextFont::new("F207 caller notes").unwrap());
+                }
+            }
+        }
+        let source = deck.to_bytes().unwrap();
+        let caller = include_bytes!("../../oxml-layout/fonts/LiberationMono-Regular.ttf");
+        let fonts = [("F207 caller notes", caller.as_slice())];
+        let report = deck.fit_report(&fonts).unwrap();
+        let frame = report
+            .frames
+            .iter()
+            .find(|f| f.update.location.owner_part == part && f.update.mode == AutofitMode::Shape)
+            .unwrap();
+        assert!(frame.update.old_bounds.2 > 0 && frame.update.old_bounds.3 > 0);
+        assert_eq!(frame.update.slide_index, Some(0));
+        assert!(
+            report
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("Liberation Mono"))
+        );
+        assert_eq!(source, deck.to_bytes().unwrap());
+        let result = deck.refresh_autofit(&fonts).unwrap();
+        let update = result
+            .updates
+            .iter()
+            .find(|u| u.location.owner_part == part && u.mode == AutofitMode::Shape)
+            .unwrap();
+        assert!(update.changed && update.new_bounds.3 < update.old_bounds.3);
+        assert!(
+            update
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("Liberation Mono"))
+        );
+        let saved = deck.to_bytes().unwrap();
+        assert!(!deck.refresh_autofit(&fonts).unwrap().changed);
+        assert_eq!(saved, deck.to_bytes().unwrap());
+        assert_eq!(
+            deck.slide(0).unwrap().notes_text().as_deref(),
+            Some("iiiiWWWW\nSecond notes\nThird notes")
+        );
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn fx207_variable_caller_refresh_and_persisted_paint_keep_selected_700_instance() {
+        let mut deck = Presentation::new().unwrap();
+        deck.add_slide(6).unwrap();
+        {
+            let mut slide = deck.slide_mut(0).unwrap();
+            let mut shape = slide
+                .add_textbox(Emu(914400), Emu(914400), Emu(3657600), Emu(457200))
+                .unwrap();
+            shape.set_text("你好世界\n你好世界\n你好世界").unwrap();
+            let mut frame = shape.text_frame().unwrap();
+            frame.set_autofit_mode(Some(AutofitMode::Normal));
+            for index in 0..frame.paragraph_count() {
+                let mut properties = CT_TextCharacterProperties::default();
+                properties.font_size = Some(2000);
+                properties.bold = Some(true);
+                properties.latin = Some(TextFont::new("F207 variable caller").unwrap());
+                properties.east_asian = properties.latin.clone();
+                frame
+                    .paragraph_mut(index)
+                    .unwrap()
+                    .run_mut(0)
+                    .unwrap()
+                    .set_properties(properties);
+            }
+        }
+        let original =
+            include_bytes!("../../oxml-layout/fonts/NotoSansSC-FX058-subset.ttf").as_slice();
+        let fonts = [("F207 variable caller", original)];
+        let before = deck.to_bytes().unwrap();
+        let report = deck.fit_report(&fonts).unwrap();
+        assert_eq!(before, deck.to_bytes().unwrap());
+        let expected = report
+            .frames
+            .iter()
+            .find(|f| {
+                f.update.location.owner_part == "/ppt/slides/slide1.xml"
+                    && f.update.shape_id == Some(2)
+            })
+            .unwrap()
+            .needed_scale
+            .unwrap();
+        let result = deck.refresh_autofit(&fonts).unwrap();
+        let update = result
+            .updates
+            .iter()
+            .find(|u| u.location.owner_part == "/ppt/slides/slide1.xml" && u.shape_id == Some(2))
+            .unwrap();
+        assert_eq!(update.font_scale, Some(expected));
+        let (_, layout) = deck.render_deterministic_with_fonts(&fonts).unwrap();
+        let selected = layout
+            .fonts
+            .iter()
+            .filter(|f| f.data.as_ref() == original && f.bold)
+            .collect::<Vec<_>>();
+        assert_eq!(selected.len(), 1);
+        assert!(selected[0].variations.contains(&(*b"wght", 700.0)));
+        assert!(!selected[0].synthetic_bold);
+        assert!(
+            deck.to_pdf_deterministic_with_fonts(&fonts)
+                .unwrap()
+                .starts_with(b"%PDF-")
+        );
+        let saved = deck.to_bytes().unwrap();
+        assert!(!deck.refresh_autofit(&fonts).unwrap().changed);
+        assert_eq!(deck.to_bytes().unwrap(), saved);
+    }
 
     #[test]
     fn fx206_native_accessibility_all_physical_owners_save_reparse_and_refuse_bad_text() {

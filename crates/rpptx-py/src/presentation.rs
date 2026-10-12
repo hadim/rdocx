@@ -401,6 +401,26 @@ impl PyPresentation {
         PyTuple::new(py, frames.iter().map(PyTextFrameLayout::from))
     }
 
+    /// Explicit authoring transaction. Existing content handles keep their paths.
+    #[pyo3(signature=(*,fonts=None,font_dir=None,font_dirs=None))]
+    fn refresh_autofit<'py>(
+        &mut self,
+        py: Python<'py>,
+        fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
+        font_dir: Option<PathBuf>,
+        font_dirs: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<crate::layout::PyAutofitRefreshResult> {
+        let files = collect_caller_fonts(py, fonts, font_dir, font_dirs)?.unwrap_or_default();
+        let refs = files
+            .iter()
+            .map(|f| (f.family.as_str(), f.data.as_slice()))
+            .collect::<Vec<_>>();
+        let result = py
+            .detach(|| self.inner.refresh_autofit(&refs))
+            .map_err(|e| rpptx_to_pyerr(py, e))?;
+        Ok(crate::layout::PyAutofitRefreshResult::from(&result))
+    }
+
     #[pyo3(signature = (*, fonts = None, font_dir = None, font_dirs = None))]
     fn to_notes_pdf<'py>(
         &self,
@@ -1677,7 +1697,7 @@ impl PyPresentation {
     }
 }
 
-fn collect_caller_fonts<'py>(
+pub(crate) fn collect_caller_fonts<'py>(
     py: Python<'py>,
     fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
     font_dir: Option<PathBuf>,

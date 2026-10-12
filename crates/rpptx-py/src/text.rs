@@ -201,6 +201,23 @@ pub struct PyTextFrame {
     pub(crate) path: ContentPath,
 }
 
+fn fit_point_size(value: &Bound<'_, PyAny>) -> PyResult<u16> {
+    if value.is_instance_of::<PyBool>() || !value.is_instance_of::<pyo3::types::PyInt>() {
+        return Err(pyo3::exceptions::PyTypeError::new_err(
+            "max_size must be a positive integer",
+        ));
+    }
+    let size = value
+        .extract::<u16>()
+        .map_err(|_| PyValueError::new_err("max_size must be from 1 through 4000"))?;
+    if size == 0 || size > 4000 {
+        return Err(PyValueError::new_err(
+            "max_size must be from 1 through 4000",
+        ));
+    }
+    Ok(size)
+}
+
 impl PyTextFrame {
     pub(crate) fn new(presentation: Py<PyPresentation>, path: ContentPath) -> Self {
         Self { presentation, path }
@@ -304,6 +321,64 @@ impl PyTextFrame {
         )?;
         presentation.publish_owners(candidate, prepared)?;
         Ok(())
+    }
+
+    /// Formats one checked owner without changing text topology.
+    #[pyo3(signature=(font_family=None,max_size=18,*,fonts=None,font_dir=None,font_dirs=None))]
+    fn fit_text<'py>(
+        &self,
+        py: Python<'py>,
+        font_family: Option<String>,
+        #[pyo3(from_py_with=fit_point_size)] max_size: u16,
+        fonts: Option<Vec<(String, Bound<'py, pyo3::types::PyBytes>)>>,
+        font_dir: Option<std::path::PathBuf>,
+        font_dirs: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<crate::layout::PyAutofitUpdate> {
+        self.validate(py)?;
+        let size = max_size;
+        let files = crate::presentation::collect_caller_fonts(py, fonts, font_dir, font_dirs)?
+            .unwrap_or_default();
+        let refs = files
+            .iter()
+            .map(|f| (f.family.as_str(), f.data.as_slice()))
+            .collect::<Vec<_>>();
+        let mut presentation = self.presentation.borrow_mut(py);
+        let slide = slide_index(&self.path)?;
+        let children = self
+            .path
+            .segs
+            .iter()
+            .filter_map(|s| {
+                if let PathSeg::Shape(i) = s {
+                    Some(*i)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        let row = self.path.segs.iter().find_map(|s| {
+            if let PathSeg::Row(i) = s {
+                Some(*i)
+            } else {
+                None
+            }
+        });
+        let column = self.path.segs.iter().find_map(|s| {
+            if let PathSeg::Cell(i) = s {
+                Some(*i)
+            } else {
+                None
+            }
+        });
+        let location = presentation
+            .inner
+            .text_frame_location(slide, &children, row.zip(column))
+            .map_err(|e| rpptx_to_pyerr(py, e))?;
+        let inner = &mut presentation.inner;
+        let result = py
+            .detach(|| inner.fit_text_at(&location, font_family.as_deref(), size, &refs))
+            .map_err(|e| rpptx_to_pyerr(py, e))?;
+        Ok(crate::layout::PyAutofitUpdate::from(&result))
     }
 
     #[getter]

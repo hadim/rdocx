@@ -2753,6 +2753,35 @@ additive semver change for `rpptx` and `rpptx-render`. It adds no production
 dependency, feature flag, trait, dynamic dispatch, generic parameter, or
 builder.
 
+## Explicit PowerPoint text fitting
+
+The render-feature facade provides `refresh_autofit(&mut self, font_files)`,
+`fit_report(&self, font_files)` and `fit_text_at(&mut self, location,
+font_family, max_size, font_files)`. Locations come from the checked existing
+physical text owner. The input font slice follows the shared caller-font
+selection rules. Refresh and fit prepare one font manager and publish one
+staged package only after every relevant context succeeds. Reports do not
+mutate or imply refresh.
+
+Python `Presentation.refresh_autofit(*, fonts=None, font_dir=None,
+font_dirs=None)` returns a frozen `AutofitRefreshResult`. Its `updates` and
+`diagnostics` are tuples and `changed` is a boolean. Checked
+`TextFrame.fit_text(font_family=None, max_size=18, *, fonts=None,
+font_dir=None, font_dirs=None)` returns one frozen `AutofitUpdate`. The maximum
+is an integer from one through4000, with boolean and noninteger refusal.
+Caller bytes are copied before detached work and directory validation follows
+the existing shared font rules.
+
+Updates expose physical owner part/kind, optional slide index and shape id,
+optional cell coordinates, mode/status, optional saved integer scale and
+reduction, optional integer point size, old/new four-integer EMU bounds,
+changed and owned diagnostics. Empty frames leave fitting values absent.
+Native reports additionally retain typed locations and accepted Q/S versus
+current persisted-trial measurements. Snapshot values do not select a future
+mutation. Existing formatting-only operations keep live logical handles.
+These concrete additive APIs do not add a public text-segment field or a new
+layout trait.
+
 ## Native PowerPoint executable-content inventory
 
 The published pre-1.0 `rpptx` facade exposes concrete `EmbeddedContentKind`,

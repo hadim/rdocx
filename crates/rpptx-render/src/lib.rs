@@ -437,6 +437,228 @@ pub fn layout_shape_text(
     })
 }
 
+/// Ordered, bounded native-informed authoring candidates, in OOXML units.
+/// Ordinary render-time autofit does not use this authoring policy.
+pub const AUTOFIT_CANDIDATES: [(u32, u32); 14] = [
+    (100000, 0),
+    (100000, 10000),
+    (92500, 0),
+    (92500, 10000),
+    (92500, 20000),
+    (85000, 20000),
+    (77500, 20000),
+    (70000, 20000),
+    (62500, 20000),
+    (55000, 20000),
+    (47500, 20000),
+    (40000, 20000),
+    (32500, 20000),
+    (25000, 20000),
+];
+
+/// One real authoring layout trial before vertical anchoring.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AutofitMeasurement {
+    pub usable: Rect,
+    pub physical_height: f64,
+    pub line_advance_height: f64,
+    pub font_scale: f64,
+    /// Whether actual shaped lines fit the fixed available width.
+    pub width_fits: bool,
+    pub fits: bool,
+}
+
+/// Measures actual selected-face segments with the shared line breaker.
+/// This is used by explicit mutation and its read-only report, not by ordinary
+/// rendering. The provided body may already own stored Normal values.
+pub fn measure_authoring_text(
+    shape: &ResolvedShape,
+    text: &ResolvedTextBody,
+    fonts: &mut FontManager,
+    page_number: usize,
+    directions: &[Vec<oxml_layout::TextDirection>],
+) -> Result<AutofitMeasurement, RenderInputError> {
+    let mut unanchored = text.clone();
+    unanchored.anchor = rpptx_layout::TextAnchor::Top;
+    let (usable, _) =
+        text::oriented_content_box(text::content_box(shape, &unanchored), unanchored.vertical);
+    if !usable.x.is_finite()
+        || !usable.y.is_finite()
+        || !usable.width.is_finite()
+        || !usable.height.is_finite()
+        || usable.width <= 0.0
+        || usable.height <= 0.0
+    {
+        return Err(RenderInputError::TextLayout {
+            detail: "autofit usable bounds must be finite and positive".to_owned(),
+        });
+    }
+    // Extent is relative to the reading frame. Accumulating absolute vertical
+    // origins makes changing the fitted extent change floating cancellation.
+    // Keep public usable bounds, but shape and measure at one stable origin.
+    let measurement_box = Rect {
+        x: 0.0,
+        y: 0.0,
+        ..usable
+    };
+    let stacked = text::stack_text_for_page_with_directions(
+        fonts,
+        measurement_box,
+        &unanchored,
+        page_number,
+        directions.first().map(Vec::as_slice).unwrap_or(&[]),
+    )
+    .map_err(|error| RenderInputError::TextLayout {
+        detail: error.to_string(),
+    })?;
+    let (physical_height, fits) = stacked
+        .authoring_extent(fonts, &unanchored, measurement_box)
+        .map_err(|error| RenderInputError::TextLayout {
+            detail: error.to_string(),
+        })?;
+    Ok(AutofitMeasurement {
+        usable,
+        physical_height,
+        line_advance_height: stacked.height,
+        font_scale: stacked.font_scale,
+        width_fits: stacked.width_fits,
+        fits,
+    })
+}
+
+/// Checks a proposed frame using its actual persisted anchor and provider.
+/// Unlike the unanchored sizing trial, this validates the published placement.
+pub fn authoring_text_fits_at_anchor(
+    shape: &ResolvedShape,
+    text: &ResolvedTextBody,
+    fonts: &mut FontManager,
+    page_number: usize,
+    directions: &[Vec<oxml_layout::TextDirection>],
+) -> Result<bool, RenderInputError> {
+    let (usable, _, stacked) = stack_shape_text(shape, text, fonts, page_number, directions, 1.0)?;
+    let (_, fits) = stacked
+        .authoring_extent(fonts, text, usable)
+        .map_err(|error| RenderInputError::TextLayout {
+            detail: error.to_string(),
+        })?;
+    Ok(usable.width.is_finite()
+        && usable.height.is_finite()
+        && usable.width > 0.0
+        && usable.height > 0.0
+        && fits)
+}
+
+/// Projects the exact merged cell box used by table lowering for authoring.
+/// Continuation cells have no independently sized text owner.
+pub fn authoring_table_cell(
+    shape: &ResolvedShape,
+    table: &ResolvedTable,
+    row_index: usize,
+    column_index: usize,
+) -> Result<(ResolvedShape, ResolvedTextBody), RenderInputError> {
+    let fail = || RenderInputError::TextLayout {
+        detail: "autofit table cell is missing or a merge continuation".to_owned(),
+    };
+    let row = table.rows.get(row_index).ok_or_else(fail)?;
+    let cell = row.cells.get(column_index).ok_or_else(fail)?;
+    if cell.horizontal_merge || cell.vertical_merge || column_index >= table.column_widths.len() {
+        return Err(fail());
+    }
+    let rows = usize::try_from(cell.row_span)
+        .unwrap_or(usize::MAX)
+        .max(1)
+        .min(table.rows.len() - row_index);
+    let columns = usize::try_from(cell.grid_span)
+        .unwrap_or(usize::MAX)
+        .max(1)
+        .min(table.column_widths.len() - column_index);
+    let mut widths = table.column_widths.clone();
+    if table.right_to_left {
+        widths.reverse();
+    }
+    let column_offsets = cumulative_offsets(&widths);
+    let row_offsets =
+        cumulative_offsets(&table.rows.iter().map(|row| row.height).collect::<Vec<_>>());
+    let visual_column = if table.right_to_left {
+        table.column_widths.len() - column_index - columns
+    } else {
+        column_index
+    };
+    let mut text = cell.text.clone().ok_or_else(fail)?;
+    text.insets = cell.margins;
+    let mut cell_shape = shape.clone();
+    cell_shape.bounds = Rect {
+        x: column_offsets[visual_column],
+        y: row_offsets[row_index],
+        width: column_offsets[visual_column + columns] - column_offsets[visual_column],
+        height: row_offsets[row_index + rows] - row_offsets[row_index],
+    };
+    cell_shape.geometry = rpptx_layout::ResolvedGeometry::Rectangle;
+    cell_shape.content = ResolvedContent::Text(text.clone());
+    Ok((cell_shape, text))
+}
+
+/// Runs independent Q native-informed and S persisted-render trials for one
+/// candidate. Every invocation re-shapes its own source clone. Q's rounding
+/// never changes the original nominal values or ordinary fractional rendering.
+pub fn measure_autofit_candidate(
+    shape: &ResolvedShape,
+    text: &ResolvedTextBody,
+    fonts: &mut FontManager,
+    page_number: usize,
+    directions: &[Vec<oxml_layout::TextDirection>],
+    pair: (u32, u32),
+) -> Result<(AutofitMeasurement, AutofitMeasurement), RenderInputError> {
+    if !AUTOFIT_CANDIDATES.contains(&pair) {
+        return Err(RenderInputError::TextLayout {
+            detail: "autofit pair is outside the admitted policy".to_owned(),
+        });
+    }
+    let scale = f64::from(pair.0) / 100000.0;
+    let reduction = f64::from(pair.1) / 100000.0;
+    let round = |size: Option<f64>| -> Result<Option<f64>, RenderInputError> {
+        let nominal = size.unwrap_or(18.0);
+        let rounded = (nominal * scale + 0.5).floor();
+        if !nominal.is_finite() || nominal <= 0.0 || rounded <= 0.0 {
+            return Err(RenderInputError::TextLayout {
+                detail: "autofit quantized point size is not positive and representable".to_owned(),
+            });
+        }
+        Ok(Some(rounded))
+    };
+    let mut quantized = text.clone();
+    quantized.autofit = rpptx_layout::ResolvedAutofit::Normal {
+        font_scale: Some(1.0),
+        line_spacing_reduction: Some(reduction),
+    };
+    for paragraph in &mut quantized.paragraphs {
+        paragraph.end_style.font_size = round(paragraph.end_style.font_size)?;
+        for run in &mut paragraph.runs {
+            if let rpptx_layout::ResolvedTextRun::Text { style, .. }
+            | rpptx_layout::ResolvedTextRun::Field { style, .. } = run
+            {
+                style.font_size = round(style.font_size)?;
+            }
+        }
+        if let Some(
+            rpptx_layout::ResolvedBullet::Character { size, .. }
+            | rpptx_layout::ResolvedBullet::AutoNumber { size, .. },
+        ) = &mut paragraph.bullet
+            && let Some(rpptx_layout::ResolvedBulletSize::Points(points)) = size
+        {
+            *points = round(Some(*points))?.expect("validated positive point size");
+        }
+    }
+    let q = measure_authoring_text(shape, &quantized, fonts, page_number, directions)?;
+    let mut stored = text.clone();
+    stored.autofit = rpptx_layout::ResolvedAutofit::Normal {
+        font_scale: Some(scale),
+        line_spacing_reduction: Some(reduction),
+    };
+    let s = measure_authoring_text(shape, &stored, fonts, page_number, directions)?;
+    Ok((q, s))
+}
+
 fn layout_slide_with_fonts(
     input: &RenderInput,
     index: usize,
@@ -1718,7 +1940,9 @@ fn filled_line_end(path: Path, paint: &Paint) -> PositionedElement {
     })
 }
 
-fn shape_transform(shape: &ResolvedShape) -> Transform {
+/// The complete painter transform used by explicit authoring to preserve a
+/// resized shape's physical anchor, including parent-group contributions.
+pub fn shape_transform(shape: &ResolvedShape) -> Transform {
     let center_x = shape.bounds.width / 2.0;
     let center_y = shape.bounds.height / 2.0;
     let rotation = Transform::rotate_about(shape.rotation_deg, center_x, center_y);
@@ -1877,6 +2101,43 @@ mod tests {
                 }],
                 ..ResolvedParagraph::default()
             }],
+        }
+    }
+
+    #[test]
+    fn fx207_authoring_vertical_extent_is_independent_of_reading_origin() {
+        let mut fonts = FontManager::new_deterministic().unwrap();
+        let mut body = table_text("Physical text extent");
+        body.vertical = TextDirection::Vertical;
+        body.insets = TextInsets {
+            left: 3.6,
+            right: 3.6,
+            top: 3.6,
+            bottom: 3.6,
+        };
+        let mut physical = None;
+        for width in [60.0, 1727199.0 / 12700.0, 136.0] {
+            let owner = shape(
+                Rect {
+                    x: 72.0,
+                    y: 72.0,
+                    width,
+                    height: 216.0,
+                },
+                ResolvedGeometry::Rectangle,
+                None,
+                None,
+            );
+            let measured = measure_authoring_text(&owner, &body, &mut fonts, 1, &[]).unwrap();
+            let (expected_usable, _) =
+                text::oriented_content_box(text::content_box(&owner, &body), body.vertical);
+            assert_eq!(measured.usable, expected_usable);
+            if let Some(expected) = physical {
+                assert_eq!(measured.physical_height, expected);
+            } else {
+                physical = Some(measured.physical_height);
+            }
+            assert!(measured.width_fits);
         }
     }
 

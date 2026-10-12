@@ -36,11 +36,13 @@ class ReplacementCountError(RpptxError):
 
 
 from ._rpptx import Comment, CommentAuthor, CommentReply, Presentation
-from ._rpptx import BoundingBox, TextFrameLayout, TextLineLayout, ValidationIssue
+from ._rpptx import AutofitRefreshResult, AutofitUpdate, BoundingBox, TextFrameLayout, TextLineLayout, ValidationIssue
 
 __all__ = [
     "MSO_THEME_COLOR",
     "BoundingBox",
+    "AutofitRefreshResult",
+    "AutofitUpdate",
     "Inches",
     "Length",
     "MSO_ANCHOR",

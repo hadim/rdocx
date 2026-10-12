@@ -328,6 +328,21 @@ impl<'a> ResolveCtx<'a> {
         flattened
     }
 
+    /// Enumerates physical leaves without visibility or placeholder filtering.
+    /// Child paths retain source ordinals, including nested groups. Opaque
+    /// alternate content stays an explicit leaf rather than a writable fallback.
+    pub fn owned_items(&self, source: FlattenedSource) -> Vec<(Vec<usize>, FlattenedItem<'_>)> {
+        let children = match source {
+            FlattenedSource::Slide => &self.slide.common_slide_data.shape_tree.children,
+            FlattenedSource::Layout => &self.layout.common_slide_data.shape_tree.children,
+            FlattenedSource::Master => &self.master.common_slide_data.shape_tree.children,
+            FlattenedSource::Background => return Vec::new(),
+        };
+        let mut output = Vec::new();
+        collect_owned_items(children, source, Transform::IDENTITY, 0, &[], &mut output);
+        output
+    }
+
     /// Resolves one owned renderer-facing slide at the supplied point size.
     pub fn resolve_slide(&self, size: (f64, f64)) -> Result<ResolvedSlide, ResolveError> {
         self.resolve_slide_inner(size, None, None, None, None)
@@ -415,6 +430,55 @@ impl<'a> ResolveCtx<'a> {
             Some(charts),
             Some(fonts),
         )
+    }
+
+    /// Resolve a physically owned text shape even when draw flattening hides
+    /// its placeholder. Explicit autofit inventory and its read-only report
+    /// need the same producing scope and inheritance as visible rendering.
+    pub fn resolve_owned_text_shape(
+        &self,
+        item: FlattenedItem<'_>,
+        size: (f64, f64),
+        hyperlinks: &ScopedHyperlinkTargets,
+    ) -> Result<(ResolvedSlide, ResolvedSlideTextDirections), ResolveError> {
+        let FlattenedItem::Shape {
+            source,
+            child,
+            group_scale,
+            group_transform,
+            group_issues,
+        } = item
+        else {
+            return Err(ResolveError::ConcreteValue {
+                kind: "autofit owner",
+                detail: "not a physically owned shape".to_owned(),
+            });
+        };
+        let mut resolved = ResolvedSlide {
+            unresolved_member_count: 0,
+            size,
+            background: None,
+            shapes: Vec::new(),
+            diagnostics: Vec::new(),
+        };
+        push_group_diagnostics(group_issues, &mut resolved.diagnostics);
+        let mut directions = Vec::new();
+        let shape = self.resolve_flattened_shape(
+            ShapePlacement {
+                source,
+                group_scale,
+                group_transform,
+            },
+            child,
+            None,
+            (Some(hyperlinks), None),
+            None,
+            (&mut resolved.diagnostics, &mut directions),
+        )?;
+        if let Some(shape) = shape {
+            resolved.shapes.push(shape);
+        }
+        Ok((resolved, vec![directions]))
     }
 
     /// Resolves one timestamped slide while retaining text directions and target identity.
@@ -2585,7 +2649,7 @@ impl ResolveCtx<'_> {
                             body.anchor = resolved_anchor(anchor);
                         }
                         if let Some(body) = text.as_mut()
-                            && body.autofit != ResolvedAutofit::None
+                            && body.autofit == ResolvedAutofit::Shape
                         {
                             body.autofit = ResolvedAutofit::None;
                             let message = "table cell autofit is unsupported and was ignored";
@@ -3799,6 +3863,38 @@ fn intersect_optional_rect(left: Option<Rect>, right: Option<Rect>) -> Option<Re
         (None, None) => None,
         (Some(rect), None) | (None, Some(rect)) => Some(rect),
         (Some(left), Some(right)) => Some(intersect_rect(left, right)),
+    }
+}
+
+fn collect_owned_items<'a>(
+    children: &'a [ShapeTreeChild],
+    source: FlattenedSource,
+    parent: Transform,
+    issues: u8,
+    path: &[usize],
+    output: &mut Vec<(Vec<usize>, FlattenedItem<'a>)>,
+) {
+    for (ordinal, child) in children.iter().enumerate() {
+        let mut path = path.to_vec();
+        path.push(ordinal);
+        if let ShapeTreeChild::GroupShape(group) = child {
+            let (transform, own_issues) = group
+                .group_transform()
+                .and_then(group_affine)
+                .unwrap_or((Transform::IDENTITY, GROUP_ZERO_X | GROUP_ZERO_Y));
+            collect_owned_items(
+                &group.children,
+                source,
+                transform.then(parent),
+                issues | own_issues,
+                &path,
+                output,
+            );
+        } else {
+            let mut leaf = Vec::new();
+            push_flattened_shape(&mut leaf, source, child, parent, issues);
+            output.push((path, leaf.remove(0)));
+        }
     }
 }
 
@@ -7067,7 +7163,7 @@ mod tests {
     }
 
     #[test]
-    fn table_cell_autofit_is_ignored_and_records_a_diagnostic() {
+    fn table_cell_shape_autofit_is_ignored_but_normal_values_are_retained() {
         let frame = r#"<p:graphicFrame><p:nvGraphicFramePr/><p:xfrm><a:off x="0" y="0"/><a:ext cx="127000" cy="127000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblGrid><a:gridCol w="127000"/></a:tblGrid><a:tr h="127000"><a:tc><a:txBody><a:bodyPr><a:spAutoFit/></a:bodyPr><a:p><a:r><a:t>cell</a:t></a:r></a:p></a:txBody><a:tcPr/></a:tc></a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>"#;
         let fixture = Fixture::new(frame, "", "");
 
@@ -7086,6 +7182,28 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.message
                     == "table cell autofit is unsupported and was ignored")
+        );
+        let normal = frame.replace(
+            "<a:spAutoFit/>",
+            "<a:normAutofit fontScale=\"62500\" lnSpcReduction=\"20000\"/>",
+        );
+        let fixture = Fixture::new(&normal, "", "");
+        let resolved = fixture.context().resolve_slide((10.0, 10.0)).unwrap();
+        let ResolvedContent::Table(table) = &resolved.shapes[0].content else {
+            panic!("expected table")
+        };
+        assert_eq!(
+            table.rows[0].cells[0].text.as_ref().unwrap().autofit,
+            ResolvedAutofit::Normal {
+                font_scale: Some(0.625),
+                line_spacing_reduction: Some(0.2)
+            }
+        );
+        assert!(
+            !resolved
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("autofit"))
         );
     }
 
