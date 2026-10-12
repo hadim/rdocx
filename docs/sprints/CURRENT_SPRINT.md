@@ -6,7 +6,7 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 now contains twenty-six active stories, fifteen completed, two running,
+S91 now contains twenty-six active stories, sixteen completed, one running,
 nine approved pending implementation. Contribution intake is closed at the user's latest instruction.
 
 ## Spec references
@@ -35,7 +35,7 @@ nine approved pending implementation. Contribution intake is closed at the user'
 | F-X202 | Complete Word tables pictures and internal links | L | pending | - |
 | F-X203 | Complete Python Word document operations and validation | L | in-progress | codex |
 | F-X204 | Complete shared CLI one-shot editing commands | L | pending | - |
-| F-X205 | Complete Python PowerPoint text fill and export parity | L | in-progress | codex |
+| F-X205 | Complete Python PowerPoint text fill and export parity | L | done | - |
 | F-X206 | Complete PowerPoint shape authoring and live handles | L | done | - |
 | F-X207 | Persist PowerPoint autofit and implement fit_text | L | done | - |
 | F-X208 | Author PowerPoint footer fields themes and transitions | L | done | - |
