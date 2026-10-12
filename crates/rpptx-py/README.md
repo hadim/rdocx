@@ -61,6 +61,8 @@ with open("review.pdf", "wb") as output:
 - Master, layout, placeholder, theme, shape, chart, media, and relationship
   state remains inside the native presentation engine during package edits.
 - Read speaker-note text and inspect or mutate modern comment threads.
+- Embed, list, and remove font faces, with an explicit license and
+  authorization, and set the presentation font flags.
 - Python collections with negative indexes, slices, iteration, and explicit
   stale-handle errors after structural changes.
 - Table cell merge and split, cell fills, margins, and borders, and row

@@ -2429,6 +2429,47 @@ models. This is an additive semver change for the published pre-1.0
 flag. Unsupported modern comment XML and all legacy comment parts remain
 preserved, so consumers do not need a parallel raw authoring API.
 
+## Native PowerPoint font embedding
+
+The native pre-1.0 `rpptx::Presentation` facade embeds, lists, and removes
+fonts. `EmbeddedFont` carries the face kind, the caller's TrueType or OpenType
+bytes, and a `FontEmbeddingLicense` with an explicit `authorized` flag and an
+exact license identity. `embed_font` refuses an unauthorized embedding, an
+empty identity, a font collection, and bytes without an sfnt table directory
+or without the `OS/2`, `head`, and `name` tables, before anything changes.
+PresentationML has no place for the license, so it is a call-time guard and is
+not written. `EmbeddedFontKind` is the `rpptx-oxml` face slot, re-exported.
+
+A face is stored as uncompressed Embedded OpenType 2.1 in
+`/ppt/fonts/fontN.fntdata`, with the `application/x-fontdata` default content
+type, a font relationship from the presentation part, the face in
+`p:embeddedFontLst`, and `embedTrueTypeFonts="1"`. The header keeps the font's
+own `fsType`. PowerPoint for Mac, probed on 2026-10-12 with a font no machine
+had installed, used the face only in this form and only with the flag set. It
+ignored a bare TrueType part. A new entry derives `panose`, `pitchFamily`, and
+`charset` from the font. Embedding an existing face rewrites its part when
+nothing else references it, and otherwise allocates a new part.
+`embedded_fonts` returns `EmbeddedTypeface` values with `EmbeddedFontFace`
+entries that state the relationship id, part, `EmbeddedFontFormat`, stored
+length, and decoded sfnt bytes. PowerPoint itself writes MicroType Express
+compressed EOT. Such a face lists as `CompressedEot` without bytes, and its part
+stays byte-identical. A bare sfnt part, as other producers write, lists as
+`Sfnt`. `remove_embedded_font` removes one face, and the entry once it has no
+face left. `remove_font` removes the whole entry. Both drop a relationship that
+no face and no preserved presentation XML still references, and prune its part
+when nothing reaches it. `set_embed_true_type_fonts` and
+`set_save_subset_fonts` write `1` or remove the attribute.
+
+Python exposes the same surface as `Presentation.embedded_fonts`,
+`embed_font(typeface, font, kind="regular", *, license, authorized)` with a
+path, bytes, or binary file, `remove_embedded_font(typeface, kind)`,
+`remove_font(typeface)`, and the read-write `embed_true_type_fonts` and
+`save_subset_fonts` properties. Face kinds are `regular`, `bold`, `italic`,
+and `bold_italic`. `rpptx font` exposes it on the command line, as described
+under CLIs. WASM consumers gain no font methods and preserve embedded fonts
+through their existing `Presentation` owner. The change adds no dependency,
+feature, trait, or crate.
+
 ## Native PowerPoint SmartArt model
 
 The published pre-1.0 `rpptx` facade exposes concrete `SmartArtInfo` and
@@ -2911,7 +2952,8 @@ or tag authority.
 
 `rpptx-cli` extends the seven-command `rdocx-cli` surface with `inspect`,
 `text`, `convert`, `diff`, `replace`, `validate`, `render`, `thumbnail`,
-`outline`, and `comment`. It uses clap derive and `serde_json` for `--json`.
+`outline`, `comment`, and `font`. It uses clap derive and `serde_json` for
+`--json`.
 
 `inspect` reports the file, slide and layout counts, slide size, core metadata,
 and each slide's identity, hidden state, and shape count. Its JSON form uses the
@@ -2977,6 +3019,18 @@ output set. Its schema-1 record states the action, comment id, one-based
 slide, and output path. The commands use the additive
 `Presentation::resolve_comment` and `Presentation::remove_comment` facade
 methods, which rest on the new `Comment::remove_reply`.
+
+`font` lists, embeds, and removes embedded fonts and sets the presentation font
+flags. `list` prints one line per face with the typeface, the face, the stored
+format, the stored byte count, and the part, and its JSON adds the panose,
+pitch family, character set, relationship id, and both flags. `embed` takes a
+font file with one face, `--typeface`, `--face` (`regular` by default, `bold`,
+`italic`, or `bold_italic`), the license identity in `--license`, and the
+`--authorized` flag, without which it fails. `remove` takes `--typeface` and
+removes one `--face` or, without it, the whole font. `set-flags` takes
+`--embed-true-type-fonts` and `--save-subset-fonts` as `true` or `false`, at
+least one of them. Every mutation requires an explicit output, refuses an
+existing one, and publishes through the shared staged output set.
 
 Shared range parsing, output-path defaulting, and JSON envelope rules live in
 `oxml-cli-support`. Ranges are positive, one-based, comma-separated values and

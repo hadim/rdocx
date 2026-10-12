@@ -831,6 +831,16 @@ It replaces only `p:sldSz/@cx` and `@cy`, preserving the producer size kind,
 unmodelled attributes, unmodelled children, and schema position. An absent
 `p:sldSz` is materialized with only the validated dimensions.
 
+`CT_Presentation` types `p:embeddedFontLst`. Each `p:embeddedFont` keeps the
+`p:font` typeface, `panose`, `pitchFamily`, and `charset`, and the
+relationship ids of its `p:regular`, `p:bold`, `p:italic`, and `p:boldItalic`
+faces. Unknown attributes and children keep their position, and an entry the
+model cannot represent stays raw in place. A list written for the first time
+goes after `p:smartTags` and before `p:custShowLst`. The
+`embedTrueTypeFonts` and `saveSubsetFonts` root attributes are read as
+`xsd:boolean` and written in place. A deck nobody edits keeps its
+`presentation.xml` and font parts byte-identical.
+
 **`p:sldIdLst` order is slide order.** There is no separate ordering mechanism.
 `CT_Presentation` records the original relationship-id order and reconciles raw
 list boundaries against surviving relationship ids during serialization.
