@@ -19143,3 +19143,23 @@ push, main merge, tag or publication is claimed.
 **Spec sections touched.** Exactly HLD02,05,06,08,10,12 and14, covering bounded capabilities, source-qualified text and fields, policy ownership, layout and transition rendering, bindings and acceptance.
 
 **Notes for future sessions.** Keep work/f-x208-codex through final sprint review and close. Clean integrated worktree removed without force after integration is recorded. Required scratch and native inputs retain original absolute paths through the preserved evidence link. Warm PPT cache is reserved for transfer to the next worker to avoid repeating compilation. No GitHub closure, push, main merge, tag or publication is claimed.
+
+
+### F-X201, Complete Python section stories and page authoring
+
+**Completed.** 2026-10-12, S91 scoped dependency-prefix checkpoint
+**Size.** L, estimated4 to5 days, actual not recorded
+
+**What was built.** Live sections and six physical header and footer stories expose rich paragraphs, runs, tables, fields and images. Checked notes, section geometry, even-story policy, page borders and backgrounds preserve opaque source XML. Raster insertion validates before publication. DrawingML text and image watermarks use qualified native representations. Styled notes apply superscripting once.
+
+**Non-obvious choices.** Labelled commits separate geometry and even-story changes from note superscripting and inherited completed DrawingML providers. HLD composition preserves completed F-X208 and deferred F-X219.
+
+**Deviations from the design plan.** The user approved restricting new DrawingML text watermarks to50 percent opacity. Other values return a named error before mutation. Existing VML and image opacity retain their full range. Full-range text interoperability is deferred to F-X219 in S92.
+
+**Tests.** Authenticated scoped evidence retains actual native Word open, save, reopen and local PDF, plus independent LibreOffice paint. Whole affected suites, installed24 controls, current typing and stub checks, WASM, no-default142 unit and3 doc controls, and three verified archives remain explicitly source-qualified composites. Metadata-only successors grant no renewed publication credit. Independent integration review23 is clean. Integration16113a06 preserves all24 owned product and test carriers and consumes the validated handoff. Actual composed receipt0334c55344ebce3589d9227f13b77b49ec3ac497880f2fba02ccec90460b4027 records combined five-crate all-target compilation, eleven focused Word regressions, hash49, prose, adapters and diff checks. Policy coverage combines138 original passes and two skips with one corrected package-path retry, giving139 passes and two existing skips. It is not a fresh full-suite replay. Original failed receipts remain retained.
+
+**Hash harness.** All49 integrated entries match the approved baseline. No new delta is adopted. Final full sprint verification and review remain due.
+
+**Spec sections touched.** HLD02,07,08,10,12 and14, matching the approved impact list and preserving completed shared contracts.
+
+**Notes for future sessions.** Implementationc29ef66c and handoff-only tipc2305905 retain claim ancestry. Keep work/f-x201-codex through final review and close. Required scratch and samples remain under /private/tmp/S91-F-X201-integration-checkpoint/retained-worker. Transfer the warm cache for the next Word worker. No GitHub closure, push, main merge, tag or publication is claimed.

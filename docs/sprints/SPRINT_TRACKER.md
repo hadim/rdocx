@@ -952,3 +952,5 @@ Issues264 and281 remain excluded and open.
 | F-X207 | S91 | L | 4 | not recorded | 2026-10-12 | Scoped completion, PowerPoint explicit autofit and fit_text, genuine Base and scoped current gates, clean independent reviews, exact source/archive composition and seven actual integrated checks including49 approved hashes. Full sprint gate remains due |
 
 | F-X208 | S91 | L | 4 | not recorded | 2026-10-12 | Scoped completion, legal footer/field/theme/transition authoring, genuine Base and qualified native/installed/archive gates, clean integration review14, nine actual integrated checks including49 approved hashes. Original stalled attempts remain failed. Full sprint gate remains due |
+
+| F-X201 | S91 | L | 4 | not recorded | 2026-10-12 | Scoped completion, live section stories and checked page authoring, native Word and LibreOffice evidence, clean integration review23, integrated11 regressions and49 matching hashes. Composite policy139 passes and2 existing skips. Full sprint gate remains due |

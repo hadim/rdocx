@@ -6,7 +6,7 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 now contains twenty-six active stories, fourteen completed, two running,
+S91 now contains twenty-six active stories, fifteen completed, one running,
 ten approved pending implementation. Contribution intake is closed at the user's latest instruction.
 
 ## Spec references
@@ -31,7 +31,7 @@ ten approved pending implementation. Contribution intake is closed at the user's
 | F-X198 | Preserve alternate text-box copies during scoped replacement | M | done | - |
 | F-X199 | Model namespace-qualified empty table cell margins | S | done | - |
 | F-X200 | Complete Python Word formatting and list parity | L | done | - |
-| F-X201 | Complete Python section stories and page authoring | L | in-progress | codex |
+| F-X201 | Complete Python section stories and page authoring | L | done | - |
 | F-X202 | Complete Word tables pictures and internal links | L | pending | - |
 | F-X203 | Complete Python Word document operations and validation | L | pending | - |
 | F-X204 | Complete shared CLI one-shot editing commands | L | pending | - |
@@ -1104,3 +1104,8 @@ to 0.5 on 2026-10-12. Unsupported values refuse before mutation. Existing
 VML compatibility support retains its full range. Full-range text watermark
 interoperability moves to F-X219 in S92. Other frozen issue and PR acceptance
 remains in S91. Intake stays closed.
+
+
+## F-X201 integrated dependency checkpoint, 2026-10-12
+
+Fifteen of26 active stories are complete. F-X201 integrates at16113a06 after clean independent integration review23. Eleven focused Word regressions, combined native and binding compilation, all49 approved hashes, prose and adapter checks pass. Policy coverage is composite139 passes and two existing skips after correcting the stale shared package path. Original failures remain retained. F-X205 is running and ten approved stories await implementation. Final full sprint verification, sprint review and close preflight remain due. Intake remains closed at38 included issues and28 PRs, excluding discussion Issues264 and281.
