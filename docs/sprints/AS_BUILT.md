@@ -19287,3 +19287,23 @@ push, main merge, tag or publication is claimed.
 **Spec sections touched.** HLD02,04,08,10 and14. Conditional HLD03 remains unchanged because operation ownership and dependency direction did not change.
 
 **Notes for future sessions.** Keep work/f-x204-codex through final verification and close. Preserve required evidence before clean worktree retirement. The canonical target currently points to the worker cache and must be transferred before retirement. Bibliography remains S92. No GitHub closure, push, main merge, tag or publication is claimed.
+
+
+### F-X222, Restore Word story range inventory scaling and empty owners
+
+**Completed.** 2026-10-12, S91 scoped dependency-prefix checkpoint
+**Size.** M, actual not recorded
+
+**What was built.** Issue362 and adapted PR363 use one operation-owned physical source inventory, checked ranges and shared paragraph scopes. Valid qualified self-closing comments remain readable and byte-preserved through no-op fields and save/reopen. Public APIs and stable owner identity remain unchanged.
+
+**Non-obvious choices.** One evaluator shares names and paragraph pairs with independent failure fallback. Source allocations and namespace scans occur once per physical owner. No global cache or model change is introduced. Eighteen measured input/output packages remain byte-identical. Largest field and inventory cases improve by358.74 and365.46 times. Whole TOC work retains separate nonlinear costs, including an observed2.51 doubling ratio and1.3815 fixed-input two-TOC cost ratio.
+
+**Tests.** Genuine Base failures and setup failures remain retained. Current native composites qualify567 library and371 integration passes, with existing ignores uncredited. Four exact unattended LibreOffice successors and2396 Word regressions pass. A fresh authenticated Word wheel passes the new public empty-comment/no-op-field case and typing. Source-built CLI fields and TOC outputs preserve exact package members. Existing complete-report and allocation-failure controls pass separately. Strict Clippy, both WASM graphs, formatting and49 hashes pass. A verified current Word archive qualifies37 members and51,495,139 normalized member bytes, compressed to3,656,660 bytes. Policy141 passes with2 existing platform skips.
+
+**Integrated evidence.** Implementatione3bcf050 and prepared tipa4d711cc integrate in53d7ea33ade2daf727787c4e6c793520762e2505. Independent full microscope pass1 reports zero defects and smells. All reviewed product, HLD and archive carriers equal the integrated prefix. Six actual focused integrated checks pass for all-target Word compilation, inventory controls,49 hashes, prose, adapters and formatting. Required receipts remain in the canonical F-X222 integration scratch directory.
+
+**Hash harness.** All49 deterministic outputs remain unchanged. Final full sprint verification and review remain due.
+
+**Spec sections touched.** Exactly HLD03,04,10,12 and14.
+
+**Notes for future sessions.** Keep work/f-x222-codex through sprint verification and close. Preserve required evidence before clean worker retirement. Bibliography remains S92. No GitHub closure, push, main merge, tag or publication is claimed.

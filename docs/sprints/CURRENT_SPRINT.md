@@ -6,7 +6,7 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 now contains twenty-nine active stories, twenty-one completed, six running,
+S91 now contains twenty-nine active stories, twenty-two completed, five running,
 two approved pending implementation. The latest bounded intake includes40 issues and30 PRs, plus final minor-release preparation.
 
 ## Spec references
@@ -51,7 +51,7 @@ two approved pending implementation. The latest bounded intake includes40 issues
 | F-X218 | Export presentations as semantic HTML and Markdown | L | in-progress | codex |
 | F-X220 | Embed fonts through both native and public package families | L | in-progress | codex |
 | F-X221 | Prepare Word 0.17.0 and PowerPoint 0.15.0 minor releases | L | pending | - |
-| F-X222 | Restore linear Word story range inventory and empty owners | M | in-progress | codex |
+| F-X222 | Restore linear Word story range inventory and empty owners | M | done | - |
 
 ## Carried to S92, user scope decision
 
@@ -1163,3 +1163,8 @@ F-X218 is claimed after completed dependencies. Initial exclusive leases: crates
 ## F-X211 isolated native phase, 2026-10-12
 
 F-X211 is claimed after completed dependencies. Initial exclusive leases: crates/rdocx-oxml/src/text.rs, qualified paragraph/run XML admission only, crates/rdocx/src/document.rs, checked selected-owner transaction glue only. The approved full acceptance remains unchanged. Existing font, chart and Word inventory providers stay under their current owners. Public bindings, CLI and shared HLD changes require explicit phased handover.
+
+
+## F-X222 scoped completion, 2026-10-12
+
+Issue362 and PR363 are resolved locally by the reviewed story inventory and empty-owner repair, integrated at53d7ea33. Six focused integrated checks pass with unchanged49 deterministic hashes. Twenty-two of29 stories are now complete, with five running and two approved pending implementation. Scope remains40 admitted issues and30 PRs, excluding discussion264/281. Final full verification, sprint review and release preparation remain due. Bibliography remains S92.
