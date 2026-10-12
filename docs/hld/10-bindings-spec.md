@@ -995,7 +995,43 @@ Native Rust re-exports `CT_OfficeStyleSheet` and adds the concrete
 `remove_embedded_font` form the additive pre-1.0 authoring surface. Embedding
 requires caller bytes, an explicit authorization value, a nonempty exact
 license identity without XML-normalized whitespace, and a valid OOXML font
-key. Python, WASM, and CLI gain no new binding in this story.
+key. `EmbeddedFont::derive_font_key` derives that key deterministically from
+the first 16 bytes of the SHA-256 of the font bytes, written as an uppercase
+braced GUID, so the same font always produces the same package bytes.
+`embed_font` creates a missing font-table record bare, with no alternate name,
+family, or pitch, and turns on `w:embedTrueTypeFonts` in the same staged
+mutation. Word uses an embedded face whether or not that toggle is set, but
+the toggle is what makes Word keep embedding fonts when it saves the document
+again. `Document::embed_true_type_fonts`, `embed_system_fonts`, and
+`save_subset_fonts`, each with a setter and a remover, read and write the three
+font embedding toggles of the settings part, so a caller can turn the toggle
+back off after embedding. Removing the last embedded face leaves the toggle as
+it is.
+
+Python exposes the same surface on `Document`. The `fonts` property returns
+`FontDefinition` snapshots whose `embedded_fonts` are `EmbeddedFont` values
+with the face `kind` (`regular`, `bold`, `italic`, or `bold_italic`), the
+deobfuscated `data`, the `font_key`, `subsetted`, and a `FontEmbeddingLicense`.
+`set_font(name, *, alternate_name, family, pitch)` adds or replaces a record
+and keeps its embedded faces. `remove_font(name)` and
+`remove_embedded_font(font_name, kind="regular")` return the removed snapshot
+or `None`. `embed_font(font_name, font, kind="regular", *, license, font_key=None,
+subsetted=False)` takes the font bytes or a path, and `license` is a
+`FontEmbeddingLicense(authorized=..., identity=...)` with no default for either
+field, so authorization is always an explicit argument. The three settings
+toggles are `bool | None` properties where `None` removes the toggle. None of
+these calls invalidates content handles.
+
+The CLI gains a `font` command group. `font list FILE [--json]` lists each
+record with its embedded faces and the three settings, reporting a face's
+byte count rather than its bytes. `font embed FILE FONT_FILE --name NAME
+[--face FACE] --license-authorized --license-identity IDENTITY [--font-key KEY]
+[--subsetted] -o OUTPUT [--json]` embeds one face, and omitting
+`--license-authorized` reaches the same authorization refusal as the native
+call. `font remove FILE --name NAME [--face FACE] -o OUTPUT [--json]` removes
+one face, or the whole record without `--face`. `font settings FILE
+[--embed-true-type-fonts BOOL] [--embed-system-fonts BOOL] [--save-subset-fonts
+BOOL] -o OUTPUT [--json]` sets the toggles. WASM gains no font binding.
 
 Native Rust re-exports `CoreProperties`, `AppProperties`, `CustomProperty`,
 `CustomPropertyValue`, `Twips`, and the bounded settings value types. `Document`
