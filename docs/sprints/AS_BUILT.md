@@ -19227,3 +19227,23 @@ push, main merge, tag or publication is claimed.
 **Spec sections touched.** Exactly HLD02,05,06,08,10,12 and14, matching the approved impact list and preserving completed F-X203.
 
 **Notes for future sessions.** Keep work/f-x209-codex through final verification and close. Preserve required evidence before clean worktree retirement and transfer the warm PowerPoint cache to F-X214. No GitHub closure, sprint push, main merge, tag or publication is claimed.
+
+
+### F-X202, Complete Word tables pictures and internal links
+
+**Completed.** 2026-10-12, S91 scoped dependency-prefix checkpoint
+**Size.** L, estimated4 to5 days, actual not recorded
+
+**What was built.** Issue305 and adapted PR322 complete logical table topology, empty rows, split preservation, style/look/layout, physical pictures and occurrence sizing, owned run/cell imports and internal links. Issue301 and PR317 follow-through synchronize admitted alternate text-box counterparts atomically.
+
+**Non-obvious choices.** Pictures retain document, revision and source identity. Relationship-wide Python sizing has an explicit compatibility name. Original merge members retain content and producer identities once. Supported physical heading destinations stage bookmark and source link together. Labelled worker commits1caa1ff5 and834d3db5 own paired success and sizing migration, with unchanged ordinary output expected.
+
+**Tests.** Genuine Base and original failures remain retained. Current51 pytest nodes plus28 additional public controls pass with strict typing, stubtest and unchanged complete PowerPoint distribution. Qualified native composites cover673 OXML,555 facade and375 integration passes, with existing7 and8 ignores uncredited. Original regression2394 passes retains its exact failed-selector successor. Actual native Word topology, genuine paired copies, current cropped pictures and merge splitting pass normal open/save/reopen. Pinned unattended LibreOffice successors, Clippy, WASM, formatting and49 hashes pass. Two verified patched archive dry runs abort upload. Metadata-only successors retain exact inventories. Policy qualifies139 passes and2 existing skips, including27 READMEs and21 compiled Rust README cases.
+
+**Integrated evidence.** Implementationfc8eadfb and handoff tipd2e66769 integrate into 8fb50226. All20 changed crate carriers equal the worker. Independent composition review14 is clean, SHAb6a504f0648fbb8d5d24af77d83db6e14f3e2a032d781a7056ca6e96248fd852. Both Word and completed F-X209 HLD contracts and measurement tuples remain exact. Actual combined six-crate all-target/all-feature check,49 hashes, prose, adapters and staged diff pass. Receipts remain in /private/tmp/S91-F-X202-integration-checkpoint and retained worker evidence. No failed whole run is relabelled all green.
+
+**Hash harness.** All49 deterministic entries match unchanged baseline342d09cd. Final full sprint verification and sprint review remain due.
+
+**Spec sections touched.** Exactly HLD08,10,12 and14, preserving completed PowerPoint contracts.
+
+**Notes for future sessions.** Keep work/f-x202-codex through final verification and close. Preserve required scratch, samples and corpus before clean worktree retirement. Bibliography remains F-X192 in S92. No GitHub closure, push, main merge, tag, publication or whole-fixture font/pixel parity is claimed.
