@@ -28530,6 +28530,30 @@ fn renders_draw_the_faces_the_deck_embeds() {
         fallback_png
     );
 
+    // An XOR-obfuscated EOT part draws the same face.
+    let mut package = open_opc(&source.to_bytes().unwrap(), "#360 XOR EOT");
+    let mut xor = package
+        .get_part("/ppt/fonts/font1.fntdata")
+        .unwrap()
+        .to_vec();
+    let flags = u32_le_at(&xor, 12) | 0x1000_0000;
+    xor[12..16].copy_from_slice(&flags.to_le_bytes());
+    let eot_size = u32_le_at(&xor, 0) as usize;
+    let font_data_size = u32_le_at(&xor, 4) as usize;
+    for byte in &mut xor[eot_size - font_data_size..eot_size] {
+        *byte ^= 0x50;
+    }
+    package.set_part("/ppt/fonts/font1.fntdata", xor);
+    let xor = Presentation::from_bytes(&write_package(&package, "#360 XOR EOT", "write")).unwrap();
+    assert_eq!(
+        xor.embedded_fonts()[0].faces[0].format,
+        rpptx::EmbeddedFontFormat::Eot
+    );
+    assert!(pdf_has_name(
+        &xor.to_pdf_deterministic().unwrap(),
+        b"Embedia"
+    ));
+
     // A raw sfnt part, as other producers write, draws the same face.
     let mut package = open_opc(&source.to_bytes().unwrap(), "#360 raw sfnt");
     package.set_part(
@@ -28590,6 +28614,8 @@ fn hostile_embedded_font_parts_and_lists_fail_cleanly() {
     huge_font_data[4..8].copy_from_slice(&0xFFFF_FFF0_u32.to_le_bytes());
     let mut huge_eot = eot.clone();
     huge_eot[0..4].copy_from_slice(&u32::MAX.to_le_bytes());
+    let mut compressed = eot.clone();
+    compressed[12..16].copy_from_slice(&0x4_u32.to_le_bytes());
     let mut xor_garbage = eot.clone();
     xor_garbage[12..16].copy_from_slice(&0x1000_0000_u32.to_le_bytes());
     let mut many_tables = caladea_face("Regular");
@@ -28605,6 +28631,11 @@ fn hostile_embedded_font_parts_and_lists_fail_cleanly() {
             EmbeddedFontFormat::Unknown,
         ),
         ("huge EOTSize", huge_eot, EmbeddedFontFormat::Unknown),
+        (
+            "MicroType Express",
+            compressed,
+            EmbeddedFontFormat::CompressedEot,
+        ),
         ("XOR garbage", xor_garbage, EmbeddedFontFormat::Eot),
         ("numTables 0xFFFF", many_tables, EmbeddedFontFormat::Unknown),
         ("numTables 0", no_tables, EmbeddedFontFormat::Unknown),

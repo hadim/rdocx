@@ -665,9 +665,10 @@ class Document:
 
         ``fonts`` gives ``(family, font bytes)`` pairs and ``font_dir`` a
         directory whose ``.ttf``, ``.otf`` and ``.ttc`` files are named after
-        their family. When either is given, layout uses only those fonts, as
-        ``rdocx convert --font-dir`` does, so a family they do not provide
-        raises ``LayoutError``. A missing ``font_dir`` raises
+        their family. When either is given, layout uses only those fonts and
+        the faces the document embeds, as ``rdocx convert --font-dir`` does,
+        so a family neither provides raises ``LayoutError``. A caller font
+        wins over an embedded face of the same family. A missing ``font_dir`` raises
         ``FileNotFoundError``.
         """
     def to_pdfa_deterministic(
