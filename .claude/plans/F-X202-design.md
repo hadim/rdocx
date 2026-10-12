@@ -1,6 +1,6 @@
 # F-X202, Complete Word tables pictures and internal links
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X194, F-X198, F-X206
@@ -304,14 +304,14 @@ dependency prefix, and update this draft's citations at the actual claim Base.
 
 ## Implementation checklist
 
-- [ ] Integrate reviewed X194/X198 and settle explicit API transition decisions.
-- [ ] Pin native topology/row/picture controls and define unsupported admissions.
-- [ ] Freeze full API/stub/source inventory and prove genuine public Base failures.
-- [ ] Implement checked tables, picture identity/options, links and paired edits.
-- [ ] Prove all criteria through reopen, render and full atomic/opaque controls.
-- [ ] Run declared scoped, binding, WASM, package and hash riders.
-- [ ] Complete independent zero-defect, zero-smell review and declared HLD work.
-- [ ] Prepare validated worker handoff without sprint-ledger writes.
+- [x] Integrate reviewed X194/X198 and settle explicit API transition decisions.
+- [x] Pin native topology/row/picture controls and define unsupported admissions.
+- [x] Freeze full API/stub/source inventory and prove genuine public Base failures.
+- [x] Implement checked tables, picture identity/options, links and paired edits.
+- [x] Prove all criteria through reopen, render and full atomic/opaque controls.
+- [x] Run declared scoped, binding, WASM, package and hash riders.
+- [x] Complete independent zero-defect, zero-smell review and declared HLD work.
+- [x] Prepare validated worker handoff without sprint-ledger writes.
 
 ## Open questions
 

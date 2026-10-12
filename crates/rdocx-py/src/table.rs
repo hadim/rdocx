@@ -1,4 +1,4 @@
-use oxml_py_support::{ContentPath, PathSeg};
+use oxml_py_support::{ContentPath, PathSeg, revision_to_pyerr};
 use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyList, PySlice, PyTuple};
@@ -401,6 +401,30 @@ impl PyTable {
             .read(&self.document.borrow(py).inner, read)
             .map_err(|error| rdocx_to_pyerr(py, error))
     }
+    pub(crate) fn direct_body_index(&self, py: Python<'_>) -> PyResult<usize> {
+        let index = self.validate(py)?;
+        let document = self.document.borrow(py);
+        if let Some(location) = &self.related {
+            let location = TableLocation::refreshed(&document.inner, location)
+                .map_err(|error| rdocx_to_pyerr(py, error))?;
+            return document
+                .inner
+                .story_item_snapshots()
+                .map_err(|error| rdocx_to_pyerr(py, error))?
+                .into_iter()
+                .find(|item| {
+                    item.location() == &location
+                        && item.is_direct_child()
+                        && location.story().kind() == rdocx::StoryKind::Body
+                })
+                .and_then(|item| item.direct_body_index())
+                .ok_or_else(|| PyValueError::new_err("content handle is not a direct body child"));
+        }
+        document
+            .inner
+            .content_index_of_table(index)
+            .ok_or_else(|| PyValueError::new_err("content handle is not a direct body child"))
+    }
     pub(crate) fn validate(&self, py: Python<'_>) -> PyResult<usize> {
         let document = self.document.borrow(py);
         self.path
@@ -483,8 +507,230 @@ impl PyTable {
 
     #[setter]
     fn set_style(&self, py: Python<'_>, value: &str) -> PyResult<()> {
+        self.validate(py)?;
+        let style_id = {
+            let document = self.document.borrow(py);
+            let styles = document.inner.styles();
+            let exact_id = styles.iter().any(|style| {
+                style.style_id() == value && style.style_type() == rdocx::StyleType::Table
+            });
+            if !exact_id {
+                let matching = styles
+                    .iter()
+                    .filter(|style| {
+                        style.style_type() == rdocx::StyleType::Table
+                            && style
+                                .name()
+                                .is_some_and(|name| name.eq_ignore_ascii_case(value))
+                    })
+                    .count();
+                if matching > 1 {
+                    return Err(PyValueError::new_err("table style name is ambiguous"));
+                }
+            }
+            crate::paragraph::style_id_of_type(&document.inner, value, rdocx::StyleType::Table)?
+        };
         self.edit(py, |table| {
-            table.set_style(value);
+            table.set_style(&style_id);
+            Ok(())
+        })
+    }
+
+    #[getter]
+    fn autofit(&self, py: Python<'_>) -> PyResult<bool> {
+        self.read(py, |table| {
+            table.layout() != Some(rdocx::TableLayout::Fixed)
+        })
+    }
+
+    #[setter]
+    fn set_autofit(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        self.edit(py, |table| {
+            table.set_layout(if value {
+                rdocx::TableLayout::AutoFit
+            } else {
+                rdocx::TableLayout::Fixed
+            });
+            Ok(())
+        })
+    }
+
+    #[getter]
+    fn first_row(&self, py: Python<'_>) -> PyResult<bool> {
+        self.read(py, |table| {
+            table
+                .look()
+                .unwrap_or(rdocx::TableLook {
+                    horizontal_banding: true,
+                    vertical_banding: true,
+                    ..rdocx::TableLook::default()
+                })
+                .first_row
+        })
+    }
+
+    #[setter]
+    fn set_first_row(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        let mut look = self.read(py, |table| {
+            table.look().unwrap_or(rdocx::TableLook {
+                horizontal_banding: true,
+                vertical_banding: true,
+                ..rdocx::TableLook::default()
+            })
+        })?;
+        look.first_row = value;
+        self.edit(py, |table| {
+            table.set_look(look);
+            Ok(())
+        })
+    }
+
+    #[getter]
+    fn last_row(&self, py: Python<'_>) -> PyResult<bool> {
+        self.read(py, |table| {
+            table
+                .look()
+                .unwrap_or(rdocx::TableLook {
+                    horizontal_banding: true,
+                    vertical_banding: true,
+                    ..rdocx::TableLook::default()
+                })
+                .last_row
+        })
+    }
+
+    #[setter]
+    fn set_last_row(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        let mut look = self.read(py, |table| {
+            table.look().unwrap_or(rdocx::TableLook {
+                horizontal_banding: true,
+                vertical_banding: true,
+                ..rdocx::TableLook::default()
+            })
+        })?;
+        look.last_row = value;
+        self.edit(py, |table| {
+            table.set_look(look);
+            Ok(())
+        })
+    }
+
+    #[getter]
+    fn first_column(&self, py: Python<'_>) -> PyResult<bool> {
+        self.read(py, |table| {
+            table
+                .look()
+                .unwrap_or(rdocx::TableLook {
+                    horizontal_banding: true,
+                    vertical_banding: true,
+                    ..rdocx::TableLook::default()
+                })
+                .first_column
+        })
+    }
+
+    #[setter]
+    fn set_first_column(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        let mut look = self.read(py, |table| {
+            table.look().unwrap_or(rdocx::TableLook {
+                horizontal_banding: true,
+                vertical_banding: true,
+                ..rdocx::TableLook::default()
+            })
+        })?;
+        look.first_column = value;
+        self.edit(py, |table| {
+            table.set_look(look);
+            Ok(())
+        })
+    }
+
+    #[getter]
+    fn last_column(&self, py: Python<'_>) -> PyResult<bool> {
+        self.read(py, |table| {
+            table
+                .look()
+                .unwrap_or(rdocx::TableLook {
+                    horizontal_banding: true,
+                    vertical_banding: true,
+                    ..rdocx::TableLook::default()
+                })
+                .last_column
+        })
+    }
+
+    #[setter]
+    fn set_last_column(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        let mut look = self.read(py, |table| {
+            table.look().unwrap_or(rdocx::TableLook {
+                horizontal_banding: true,
+                vertical_banding: true,
+                ..rdocx::TableLook::default()
+            })
+        })?;
+        look.last_column = value;
+        self.edit(py, |table| {
+            table.set_look(look);
+            Ok(())
+        })
+    }
+
+    #[getter]
+    fn banded_rows(&self, py: Python<'_>) -> PyResult<bool> {
+        self.read(py, |table| {
+            table
+                .look()
+                .unwrap_or(rdocx::TableLook {
+                    horizontal_banding: true,
+                    vertical_banding: true,
+                    ..rdocx::TableLook::default()
+                })
+                .horizontal_banding
+        })
+    }
+
+    #[setter]
+    fn set_banded_rows(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        let mut look = self.read(py, |table| {
+            table.look().unwrap_or(rdocx::TableLook {
+                horizontal_banding: true,
+                vertical_banding: true,
+                ..rdocx::TableLook::default()
+            })
+        })?;
+        look.horizontal_banding = value;
+        self.edit(py, |table| {
+            table.set_look(look);
+            Ok(())
+        })
+    }
+
+    #[getter]
+    fn banded_columns(&self, py: Python<'_>) -> PyResult<bool> {
+        self.read(py, |table| {
+            table
+                .look()
+                .unwrap_or(rdocx::TableLook {
+                    horizontal_banding: true,
+                    vertical_banding: true,
+                    ..rdocx::TableLook::default()
+                })
+                .vertical_banding
+        })
+    }
+
+    #[setter]
+    fn set_banded_columns(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        let mut look = self.read(py, |table| {
+            table.look().unwrap_or(rdocx::TableLook {
+                horizontal_banding: true,
+                vertical_banding: true,
+                ..rdocx::TableLook::default()
+            })
+        })?;
+        look.vertical_banding = value;
+        self.edit(py, |table| {
+            table.set_look(look);
             Ok(())
         })
     }
@@ -680,6 +926,102 @@ impl PyTable {
         let merge = vertical_merge_from_name(merge)?;
         let (row, col) = self.cell_coordinates(py, row, col)?;
         self.edit(py, |table| table.set_cell_vertical_merge(row, col, merge))
+    }
+
+    fn add_row(&self, py: Python<'_>) -> PyResult<Py<PyRow>> {
+        let index = self.validate(py)?;
+        let mut document = self.document.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        let inserted = match &self.related {
+            None => candidate.add_empty_table_row(index),
+            Some(location) => {
+                let location = TableLocation::refreshed(&candidate, location)
+                    .map_err(|error| rdocx_to_pyerr(py, error))?;
+                candidate.edit_story_table(&location, |table| {
+                    let index = table.row_count();
+                    table.add_row()?;
+                    Ok(index)
+                })
+            }
+        }
+        .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let prepared = document
+            .revisions
+            .prepare_scopes("Table.add_row", &[], &[])
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        let mut segments = self.path.segs.clone();
+        segments.push(PathSeg::Row(inserted));
+        let path = document
+            .revisions
+            .capture_prepared(&prepared, segments)
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        let result = Py::new(
+            py,
+            PyRow::new(self.document.clone_ref(py), path, self.related.clone()),
+        )?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document.inner = candidate;
+        Ok(result)
+    }
+
+    #[pyo3(signature = (index, *, before = true))]
+    fn insert_column(&self, py: Python<'_>, index: usize, before: bool) -> PyResult<()> {
+        let table_index = self.validate(py)?;
+        if index >= self.read(py, |table| table.column_count())? {
+            return Err(PyIndexError::new_err(
+                "column insertion index is out of range",
+            ));
+        }
+        let mut document = self.document.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        match &self.related {
+            None => candidate.insert_table_column(table_index, index, before),
+            Some(location) => {
+                let location = TableLocation::refreshed(&candidate, location)
+                    .map_err(|error| rdocx_to_pyerr(py, error))?;
+                candidate
+                    .edit_story_table(&location, |table| table.insert_column(index, before, None))
+            }
+        }
+        .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let prepared = document
+            .revisions
+            .prepare_scopes("Table.insert_column", &[], &[])
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document.inner = candidate;
+        Ok(())
+    }
+
+    fn delete_column(&self, py: Python<'_>, index: usize) -> PyResult<()> {
+        let table_index = self.validate(py)?;
+        let mut document = self.document.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        match &self.related {
+            None => candidate.delete_table_column(table_index, index),
+            Some(location) => candidate.delete_story_table_column(
+                &TableLocation::refreshed(&candidate, location)
+                    .map_err(|error| rdocx_to_pyerr(py, error))?,
+                index,
+            ),
+        }
+        .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let prepared = document
+            .revisions
+            .prepare_scopes("Table.delete_column", &[], &[])
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document.inner = candidate;
+        Ok(())
     }
 
     #[pyo3(signature = (index, at = None))]
@@ -1244,6 +1586,64 @@ impl PyCell {
 
 #[pymethods]
 impl PyCell {
+    #[pyo3(signature = (data, filename=None, width=None, height=None, *, options=None))]
+    fn add_picture(
+        &self,
+        py: Python<'_>,
+        data: &Bound<'_, PyAny>,
+        filename: Option<&str>,
+        width: Option<&Bound<'_, PyAny>>,
+        height: Option<&Bound<'_, PyAny>>,
+        options: Option<PyRef<'_, crate::document::PyPictureOptions>>,
+    ) -> PyResult<Py<crate::document::PyPicture>> {
+        let (table, row, cell) = self.validate(py)?;
+        let (data, filename) = crate::document::picture_input(data, filename)?;
+        let width = crate::document::checked_section_length(width, "picture width")?
+            .map(rdocx::Length::emu);
+        let height = crate::document::checked_section_length(height, "picture height")?
+            .map(rdocx::Length::emu);
+        let mut document = self.document.borrow_mut(py);
+        let story = self.physical_story(py, &document.inner, table, row, cell)?;
+        let mut candidate = document.inner.clone_for_staging();
+        let location = candidate
+            .insert_picture_to_story_with_options(
+                &story,
+                None,
+                &data,
+                &filename,
+                width,
+                height,
+                options.map(|o| o.inner.clone()),
+            )
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let picture = candidate
+            .pictures()
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .into_iter()
+            .find(|p| p.location == location)
+            .ok_or_else(|| PyIndexError::new_err("inserted cell picture was not inventoried"))?;
+        let prepared = document
+            .revisions
+            .prepare_scopes("Cell.add_picture", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        let result = Py::new(
+            py,
+            crate::document::PyPicture {
+                inner: picture,
+                binding: document
+                    .revisions
+                    .capture_prepared(&prepared, smallvec![])
+                    .map_err(revision_to_pyerr)?,
+            },
+        )?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        document.inner = candidate;
+        Ok(result)
+    }
+
     /// Replace literal text in this cell and its supported nested descendants.
     #[pyo3(signature = (old, new, *, expect = None))]
     fn replace_text(
@@ -1276,6 +1676,61 @@ impl PyCell {
                     document.try_replace_text_in_cell((table, row, cell), None, old, new, expect)
                 }
             })
+    }
+
+    fn split(&self, py: Python<'_>) -> PyResult<()> {
+        let (table, row, cell) = self.validate(py)?;
+        let noop = self.read(py, |cell| {
+            cell.grid_span().unwrap_or(1) == 1
+                && cell.v_merge().is_none()
+                && !cell.has_horizontal_merge()
+        })?;
+        if noop {
+            return Ok(());
+        }
+        let mut document = self.document.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        match &self.related {
+            Some(location) => {
+                let location = TableLocation::refreshed(&candidate, location)
+                    .map_err(|error| rdocx_to_pyerr(py, error))?;
+                candidate.edit_story_table(&location, |table| {
+                    table.split_cell(row, cell)?;
+                    Ok(())
+                })
+            }
+            None => {
+                let logical_column = candidate
+                    .table(table)
+                    .and_then(|table| {
+                        let row = table.row(row)?;
+                        (0..cell).try_fold(
+                            row.grid_before().unwrap_or(0) as usize,
+                            |column, index| {
+                                column
+                                    .checked_add(row.cell(index)?.grid_span().unwrap_or(1) as usize)
+                            },
+                        )
+                    })
+                    .ok_or_else(|| {
+                        PyValueError::new_err("cell has no checked logical grid position")
+                    })?;
+                candidate
+                    .split_table_cell(table, row, logical_column)
+                    .map(|_| ())
+            }
+        }
+        .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let prepared = document
+            .revisions
+            .prepare_scopes("Cell.split", &[], &[])
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document.inner = candidate;
+        Ok(())
     }
 
     #[getter]

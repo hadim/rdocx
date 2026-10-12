@@ -3857,19 +3857,16 @@ handles, zero no-op and positive publication. Typed call shapes independently
 cover Paragraph, Cell and detached StoryItem operations. All 49 deterministic
 hash entries remain unchanged. These controls require no external native oracle.
 
-`scoped_text_box_replacement_refuses_alternate_copies_atomically` authors the
-paired DrawingML/VML box through the public API and proves explicit refusal
-with complete byte preservation, retained comment threads and an unchanged
-live story. Controls distinguish namespace aliases, shadows, opaque children,
-multiple identical boxes, unequal alternates and multiple Choices by physical
-ownership. Standalone and single-representation boxes retain scoped edits.
-`scoped_cell_inside_alternate_text_box_refuses_without_mutation` inserts an
-actual table through the public story API and covers its descendant cell.
-Count mismatch, zero no-op, invalid text and stale locations remain atomic.
-Document-wide replacement still edits both copies with count one through
-save/reopen. The installed Python control verifies `RdocxError`, byte equality
-and usable existing handles after refusal. These controls leave all 49 hash
-entries unchanged and require no external native oracle.
+The paired DrawingML/VML scoped controls prove logical count one and exact
+publication to both source copies, including a descendant table cell. They
+retain comment threads, unselected owners and reopened selected text.
+Independent controls distinguish aliases, shadows, opaque children, multiple
+identical boxes, unequal run formatting, asymmetric alternates and multiple
+Choices by physical ownership. Count mismatch, zero no-op, invalid text and
+stale locations remain atomic. Installed controls verify the complete source
+copy result and retained opaque bytes, rather than accepting a selected-only
+projection or weakening an expected refusal. Unsupported mappings still
+require RdocxError and byte equality with usable existing handles.
 
 
 ### Whole-story comment ownership and glossary transfer
@@ -3970,3 +3967,11 @@ source. Deterministic PDF/PNG, actual native repair-free open and pinned
 LibreOffice round-trip accompany appearance claims. Current wheel member/origin
 proofs, strict typing, stubtest, WASM, hashes and affected verified archives are
 separate required gates.
+
+## Word table, picture and paired-owner controls
+
+Table controls distinguish logical grid columns from physical cell vectors, reference-before and reference-after insertion, omitted boundaries, unequal widths, rectangular merges, empty vertical-merge rows and unmerged split no-ops. Invalid topology, opaque formatting cloning and late owner failures require exact whole-package rollback. Native and installed controls preserve source properties, bookmarks, related owners and reopen behavior.
+
+Physical picture controls distinguish two occurrences sharing one relationship, preserve actual bytes and content type, and prove owner-local import and extent changes in body, cells, headers and text boxes. Options, aliases, foreign namespace lookalikes, source fingerprints, crop and anchors have positive and refusal controls. Internal links inspect actual anchors, tooltips, bookmark uniqueness, related source parts and absence of external link relationships. Current installed wheels require strict typing and stubtest with unchanged PowerPoint provenance. Native Word and pinned unattended LibreOffice captures remain independent evidence.
+
+Paired text-box controls inspect every physical counterpart, unequal typed run formatting, descendant cells, unselected owners and comment closure. Genuine logical counts, zero matches, asymmetric mapping, foreign MC and late failure determine atomicity. Passing a substring assertion or one selected branch never substitutes for complete physical-copy evidence.

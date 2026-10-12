@@ -97,16 +97,18 @@ impl PyRun {
         self.edit(py, |run| run.set_text(text))
     }
 
-    #[pyo3(signature = (data, filename, width = None, height = None))]
+    #[pyo3(signature = (data, filename=None, width=None, height=None, *, options=None))]
     fn add_picture(
         &self,
         py: Python<'_>,
-        data: &[u8],
-        filename: &str,
+        data: &Bound<'_, PyAny>,
+        filename: Option<&str>,
         width: Option<&Bound<'_, PyAny>>,
         height: Option<&Bound<'_, PyAny>>,
-    ) -> PyResult<()> {
+        options: Option<PyRef<'_, crate::document::PyPictureOptions>>,
+    ) -> PyResult<Py<crate::document::PyPicture>> {
         let (location, index) = self.validate(py)?;
+        let (data, filename) = crate::document::picture_input(data, filename)?;
         let width = crate::document::checked_section_length(width, "picture width")?
             .map(rdocx::Length::emu);
         let height = crate::document::checked_section_length(height, "picture height")?
@@ -119,19 +121,36 @@ impl PyRun {
             run_index: index + 1,
         };
         let mut candidate = document.inner.clone_for_staging();
-        candidate
-            .insert_picture_at(&position, data, filename, width, height)
+        let picture = candidate
+            .insert_picture_with_options_at(
+                &position,
+                &data,
+                &filename,
+                width,
+                height,
+                options.map(|o| o.inner.clone()),
+            )
             .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
         let prepared = document
             .revisions
             .prepare_scopes("Run.add_picture", &[], &[])
             .map_err(oxml_py_support::revision_to_pyerr)?;
+        let result = Py::new(
+            py,
+            crate::document::PyPicture {
+                inner: picture,
+                binding: document
+                    .revisions
+                    .capture_prepared(&prepared, smallvec::smallvec![])
+                    .map_err(oxml_py_support::revision_to_pyerr)?,
+            },
+        )?;
         document
             .revisions
             .commit_scopes(prepared)
             .map_err(oxml_py_support::revision_to_pyerr)?;
         document.inner = candidate;
-        Ok(())
+        Ok(result)
     }
 
     // A tab is appended inside this run, so no run index moves and live

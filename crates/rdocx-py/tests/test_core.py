@@ -600,7 +600,8 @@ def test_add_picture_beside_a_content_control_ignores_an_unused_root_default():
         size = {"width": rdocx.Inches(1), "height": rdocx.Inches(1)}
         after = document.add_picture(_one_pixel_png(), "x.png", after=control, **size)
         appended = document.add_picture(_one_pixel_png(), "x.png", **size)
-        assert after.kind == appended.kind == "paragraph"
+        assert isinstance(after, rdocx.Picture) and isinstance(appended, rdocx.Picture)
+        assert after.location.item_kind == appended.location.item_kind == "paragraph"
 
         xml = _document_xml(rdocx.Document.from_bytes(document.to_bytes()))
         assert xml.count(b"<w:drawing>") == 2
@@ -884,14 +885,14 @@ def test_set_picture_size_resizes_every_drawing_of_a_relationship():
     ).group(1).decode()
     # Both pictures share one image relationship, so both are resized.
     assert (
-        document.set_picture_size(
+        document.set_picture_sizes_for_relationship(
             relationship_id, width=rdocx.Inches(1), height=rdocx.Inches(1)
         )
         == 2
     )
     before = document.to_bytes()
     with pytest.raises(rdocx.RdocxError):
-        document.set_picture_size("rIdMissing", width=1, height=1)
+        document.set_picture_sizes_for_relationship("rIdMissing", width=1, height=1)
     assert document.to_bytes() == before
     saved = docx.Document(io.BytesIO(document.to_bytes()))
     assert [(shape.width, shape.height) for shape in saved.inline_shapes] == [
@@ -3363,8 +3364,10 @@ def test_python_round_three_authoring_and_inspection_is_typed_and_lossless():
     picture = document.add_picture(
         _one_pixel_png(), "pixel.png", rdocx.Inches(1), rdocx.Inches(1), after=anchor
     )
-    assert picture.kind == "paragraph"
-    assert b"<w:drawing>" in picture.xml
+    assert isinstance(picture, rdocx.Picture)
+    assert picture.location.item_kind == "paragraph"
+    owner = next(item for item in document.story_items if item.story.kind == picture.story.kind and item.index_path == picture.location.index_path)
+    assert b"<w:drawing>" in owner.xml
     before_bad_picture = document.to_bytes()
     with pytest.raises(rdocx.RdocxError):
         document.add_picture(
@@ -5266,3 +5269,199 @@ def test_fx203_exports_keep_owned_payload_and_full_loss_records():
         for diagnostic in result.diagnostics:
             assert isinstance(diagnostic.message, str) and diagnostic.message
     assert document.to_bytes() == before
+
+
+@pytest.mark.parametrize("operation", ["inventory", "options", "cell", "heading_link"])
+def test_fx202_picture_and_heading_surface_on_installed_base(operation):
+    from rdocx import Document
+    document = Document()
+    if operation == "inventory":
+        document.add_picture(_one_pixel_png(), "pixel.png", width=127000, height=127000)
+        pictures = document.pictures()
+        assert len(pictures) == 1
+        document.set_picture_size(pictures[0], 254000, 254000)
+        assert len(Document.from_bytes(document.to_bytes()).pictures()) == 1
+    elif operation == "options":
+        from rdocx import PictureOptions
+        picture = document.add_picture(_one_pixel_png(), "pixel.png", width=127000, height=127000,
+                                       options=PictureOptions(description="owned description", title="owned title"))
+        assert picture.description == "owned description"
+        assert picture.title == "owned title"
+    elif operation == "cell":
+        cell = document.add_table(rows=1, cols=1).cell(0, 0)
+        picture = cell.add_picture(_one_pixel_png(), width=127000, height=127000)
+        assert picture.content_type == "image/png"
+    else:
+        document.add_paragraph("Target").style = "Heading1"
+        document.add_paragraph("See ")
+        document.add_heading_hyperlink(document.paragraphs[1], document.paragraphs[0], "target", tooltip="owned tip")
+        xml = _document_xml(document)
+        assert b'anchor="Heading_' in xml and b'owned tip' in xml
+
+@pytest.mark.parametrize("host", ("body", "header", "body-cell", "header-cell"))
+def test_fx202_configured_physical_picture_owner_and_frozen_mutation(host):
+    import rdocx
+    document = rdocx.Document()
+    document.add_paragraph("body retained")
+    if host == "body":
+        paragraph = document.paragraphs[0]
+    elif host == "header":
+        paragraph = document.section(0).header.add_paragraph("owner text")
+    elif host == "body-cell":
+        document.add_table(1, 1).cell(0, 0).text = "owner text"
+        paragraph = document.tables[0].cell(0, 0).paragraphs[0]
+    else:
+        document.section(0).header.add_table(1, 1).cell(0, 0).text = "owner text"
+        paragraph = document.section(0).header.tables[0].cell(0, 0).paragraphs[0]
+    run = paragraph.runs[0]
+    options = rdocx.PictureOptions(name="owned picture", title="literal <title>", description="owned & description", decorative=True, crop=(.1, 0., .2, 0.))
+    image = _one_pixel_png(b"\xff\x00\x00")
+    picture = run.add_picture(image, width=254000, height=127000, options=options)
+    assert isinstance(picture, rdocx.Picture)
+    assert (picture.width, picture.height) == (254000, 127000)
+    assert picture.bytes == image and picture.content_type == "image/png"
+    assert picture.title == "literal <title>" and picture.decorative
+    assert not picture.anchored
+    assert len(document.pictures()) == 1
+    saved = document.to_bytes()
+    with pytest.raises(rdocx.StaleElementError, match="different document"):
+        rdocx.Document().set_picture_size(picture, 1, 1)
+    assert document.to_bytes() == saved
+    document.set_picture_size(picture, 508000, 254000)
+    current = document.pictures()[0]
+    assert (current.width, current.height) == (508000, 254000)
+    assert current.bytes == image and current.title == picture.title
+    before = document.to_bytes()
+    with pytest.raises(rdocx.StaleElementError):
+        document.set_picture_size(picture, 1, 1)
+    assert document.to_bytes() == before
+    reopened = rdocx.Document.from_bytes(before)
+    assert reopened.pictures()[0].bytes == image
+    assert b"body retained" in _document_xml(reopened)
+
+@pytest.mark.parametrize("kwargs", [dict(crop=(float("nan"),0.,0.,0.)), dict(crop=(True,0.,0.,0.)), dict(placement="through"), dict(horizontal_offset=True), dict(placement="inline", horizontal_offset=1), dict(placement="square", horizontal_offset=1, horizontal_alignment="left")])
+def test_fx202_picture_options_reject_unsupported_operands(kwargs):
+    import rdocx
+    with pytest.raises((TypeError, ValueError, rdocx.RdocxError)):
+        rdocx.PictureOptions(**kwargs)
+
+def test_fx202_heading_links_reuse_bookmark_and_reject_foreign_stale_targets():
+    import rdocx
+    document = rdocx.Document()
+    document.add_paragraph("Target").style = "Heading1"
+    document.add_paragraph("See ")
+    heading, source = document.paragraphs[0], document.paragraphs[1]
+    inserted = document.add_heading_hyperlink(source, heading, "target", tooltip="owned tip")
+    assert inserted.text == "target"
+    with pytest.raises(rdocx.StaleElementError):
+        document.add_heading_hyperlink(source, heading, "stale")
+    document.add_heading_hyperlink(document.paragraphs[1], document.paragraphs[0], "again")
+    assert len(document.bookmarks) == 1
+    source = document.paragraphs[1]
+    name = document.bookmarks[0].name
+    source.add_hyperlink("anchor", "#" + name, tooltip="internal tip")
+    xml = _document_xml(document)
+    assert xml.count(b'w:anchor="Heading_1"') == 3
+    assert b"owned tip" in xml and b"internal tip" in xml
+    before = document.to_bytes()
+    foreign = rdocx.Document().add_paragraph("foreign")
+    with pytest.raises(ValueError, match="different document"):
+        document.add_heading_hyperlink(document.paragraphs[1], foreign, "bad")
+    assert document.to_bytes() == before
+    reopened = rdocx.Document.from_bytes(before)
+    assert reopened.paragraphs[1].text == "See targetagainanchor"
+
+@pytest.mark.parametrize("host", ("header", "footer", "body-cell", "header-cell"))
+def test_fx202_related_source_heading_and_internal_links_publish_once(host):
+    import rdocx
+    from xml.etree import ElementTree
+    document = rdocx.Document()
+    document.add_paragraph("Target").style = "Heading1"
+    if host == "header":
+        source = document.section(0).header.add_paragraph("See ")
+    elif host == "footer":
+        source = document.section(0).footer.add_paragraph("See ")
+    elif host == "body-cell":
+        document.add_table(1, 1).cell(0, 0).text = "See "
+        source = document.tables[0].cell(0, 0).paragraphs[0]
+    else:
+        document.section(0).header.add_table(1, 1).cell(0, 0).text = "See "
+        source = document.section(0).header.tables[0].cell(0, 0).paragraphs[0]
+    inserted = document.add_heading_hyperlink(source, document.paragraphs[0], "target", tooltip="related tip")
+    assert inserted.text == "target"
+    assert len(document.bookmarks) == 1
+    saved = document.to_bytes()
+    with zipfile.ZipFile(io.BytesIO(saved)) as archive:
+        owner = "word/document.xml" if host == "body-cell" else next(n for n in archive.namelist() if re.fullmatch("word/" + ("footer" if host == "footer" else "header") + r"\d+\.xml", n))
+        root = ElementTree.fromstring(archive.read(owner))
+        links = root.findall(".//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}hyperlink")
+        assert len(links) == 1
+        assert links[0].get("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}anchor") == document.bookmarks[0].name
+        assert links[0].get("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}tooltip") == "related tip"
+    assert rdocx.Document.from_bytes(saved).bookmarks[0].name == document.bookmarks[0].name
+
+def test_fx202_picture_snapshot_has_no_public_constructor():
+    import rdocx
+    with pytest.raises(TypeError):
+        rdocx.Picture()
+
+@pytest.mark.parametrize("host", ("header", "body-cell", "footer-cell"))
+def test_fx202_heading_destination_uses_supported_physical_owner(host):
+    import rdocx
+    document = rdocx.Document()
+    document.add_paragraph("Source ")
+    if host == "header":
+        target = document.section(0).header.add_paragraph("Related target")
+    elif host == "body-cell":
+        document.add_table(1, 1).cell(0, 0).text = "Related target"
+        target = document.tables[0].cell(0, 0).paragraphs[0]
+    else:
+        document.section(0).footer.add_table(1, 1).cell(0, 0).text = "Related target"
+        target = document.section(0).footer.tables[0].cell(0, 0).paragraphs[0]
+    target.style = "Heading1"
+    if host == "header":
+        target = document.section(0).header.paragraphs[-1]
+    elif host == "body-cell":
+        target = document.tables[0].cell(0, 0).paragraphs[0]
+    else:
+        target = document.section(0).footer.tables[0].cell(0, 0).paragraphs[0]
+    inserted = document.add_heading_hyperlink(document.paragraphs[0], target, "target", tooltip="supported owner")
+    assert inserted.text == "target"
+    assert rdocx.Document.from_bytes(document.to_bytes()).paragraphs[0].text == "Source target"
+
+@pytest.mark.parametrize("host", ("body", "header"))
+def test_fx202_external_tooltip_xml_refusal_preserves_package_and_handle(host):
+    import rdocx
+    document = rdocx.Document()
+    document.add_paragraph("Source ")
+    paragraph = document.paragraphs[0] if host == "body" else document.section(0).header.add_paragraph("Related ")
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError):
+        paragraph.add_hyperlink("invalid", "https://example.com/#fragment", tooltip="invalid\x00tooltip")
+    assert document.to_bytes() == before
+    assert paragraph.text in ("Source ", "Related ")
+    paragraph.add_hyperlink("valid", "https://example.com/#fragment", tooltip="valid & tooltip")
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert (reopened.paragraphs[0].text if host == "body" else reopened.section(0).header.paragraphs[-1].text).endswith("valid")
+
+@pytest.mark.parametrize("host", ("document", "run", "cell"))
+def test_fx202_malformed_explicit_size_picture_preserves_held_owner(host):
+    import rdocx
+    document = rdocx.Document()
+    document.add_paragraph("retained")
+    if host == "run":
+        owner = document.paragraphs[0].runs[0]
+    elif host == "cell":
+        document.add_table(1, 1)
+        owner = document.tables[0].cell(0, 0)
+    else:
+        owner = document
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError):
+        owner.add_picture(b"not an image", width=127000, height=127000)
+    assert document.to_bytes() == before
+    assert len(document.pictures()) == 0
+    if host == "run":
+        assert owner.text == "retained"
+    elif host == "cell":
+        assert owner.text == ""

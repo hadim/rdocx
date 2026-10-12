@@ -1986,3 +1986,98 @@ def test_fx200_checked_list_helpers_start_overrides_and_fresh_returned_handles()
     for _ in range(2):
         reopened = Document.from_bytes(reopened.to_bytes())
         assert len(reopened.paragraphs) == 19
+
+
+@pytest.mark.parametrize("operation", ["add_row", "insert_column", "delete_column", "split"])
+def test_fx202_issue305_table_surface_on_installed_base(operation):
+    from rdocx import Document
+
+    document = Document()
+    table = document.add_table(rows=2, cols=2)
+    table.cell(0, 0).text = "retained"
+    table = document.tables[0]
+    if operation == "add_row":
+        row = table.add_row()
+        assert len(row.cells) == 2
+        assert [cell.text for cell in row.cells] == ["", ""]
+        assert len(document.tables[0].rows) == 3
+    elif operation == "insert_column":
+        table.insert_column(0, before=True)
+        assert len(document.tables[0].rows[0].cells) == 3
+        assert document.tables[0].cell(0, 1).text == "retained"
+    elif operation == "delete_column":
+        table.delete_column(1)
+        assert len(document.tables[0].rows[0].cells) == 1
+        assert document.tables[0].cell(0, 0).text == "retained"
+    else:
+        before = document.to_bytes()
+        table.cell(0, 0).split()
+        assert document.to_bytes() == before
+        assert table.cell(0, 0).text == "retained"
+    assert Document.from_bytes(document.to_bytes()).tables[0].cell(0, 0).text in (
+        "retained", ""
+    )
+
+
+@pytest.mark.parametrize("property_name", [
+    "autofit", "first_row", "last_row", "first_column", "last_column", "banded_rows", "banded_columns"
+])
+def test_fx202_table_look_and_layout_on_installed_base(property_name):
+    from rdocx import Document
+
+    document = Document()
+    table = document.add_table(rows=1, cols=1)
+    setattr(table, property_name, True)
+    assert getattr(table, property_name) is True
+    assert getattr(Document.from_bytes(document.to_bytes()).tables[0], property_name) is True
+    setattr(table, property_name, False)
+    assert getattr(table, property_name) is False
+
+
+def test_fx202_table_style_rejects_undefined_without_publication():
+    from rdocx import Document
+
+    document = Document()
+    table = document.add_table(rows=1, cols=1)
+    before = document.to_bytes()
+    with pytest.raises(KeyError):
+        table.style = "X202UndefinedTableStyle"
+    assert document.to_bytes() == before
+
+
+def test_fx202_completed_nested_table_provider_remains_available():
+    from rdocx import Document
+
+    document = Document()
+    table = document.add_table(rows=1, cols=1)
+    nested = table.cell(0, 0).add_table(rows=1, cols=1)
+    nested.cell(0, 0).text = "nested retained"
+    reopened = Document.from_bytes(document.to_bytes())
+    assert reopened.tables[0].cell(0, 0).tables[0].cell(0, 0).text == "nested retained"
+
+
+def test_fx202_direct_table_after_nested_owner_does_not_edit_the_nested_table():
+    from rdocx import Document
+    document = Document()
+    nested = document.add_table(rows=1, cols=1).cell(0, 0).add_table(rows=1, cols=1)
+    nested.cell(0, 0).text = "nested retained"
+    document.add_table(rows=1, cols=1)
+    assert len(document.tables) == 2
+    document.tables[1].cell(0, 0).text = "second direct retained"
+    assert document.tables[0].cell(0, 0).tables[0].cell(0, 0).text == "nested retained"
+    assert document.tables[1].cell(0, 0).text == "second direct retained"
+    reopened = Document.from_bytes(document.to_bytes())
+    assert reopened.tables[0].cell(0, 0).tables[0].cell(0, 0).text == "nested retained"
+    assert reopened.tables[1].cell(0, 0).text == "second direct retained"
+
+
+def test_fx202_table_look_setter_preserves_default_banding():
+    import rdocx
+    document = rdocx.Document()
+    table = document.add_table(1, 1)
+    assert table.banded_rows is True
+    assert table.banded_columns is True
+    table.first_row = True
+    assert table.first_row is True
+    assert table.banded_rows is True
+    assert table.banded_columns is True

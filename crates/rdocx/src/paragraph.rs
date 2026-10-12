@@ -1133,6 +1133,7 @@ impl<'a> Paragraph<'a> {
     /// other run.
     pub fn add_hyperlink(&mut self, text: &str, relationship_id: &str) -> Run<'_> {
         self.add_hyperlink_with_tooltip(text, relationship_id, None)
+            .expect("an absent tooltip contains no invalid XML characters")
     }
 
     /// Add a hyperlink run and optionally set its user-facing hover tooltip.
@@ -1141,12 +1142,44 @@ impl<'a> Paragraph<'a> {
         text: &str,
         relationship_id: &str,
         tooltip: Option<&str>,
-    ) -> Run<'_> {
+    ) -> crate::Result<Run<'_>> {
+        if let Some(tooltip) = tooltip {
+            oxml_core::xml::reject_non_xml_characters("hyperlink tooltip", tooltip)?;
+        }
         let run_start = self.inner.runs.len();
         self.inner.runs.push(CT_R::new(text));
         self.inner.hyperlinks.push(HyperlinkSpan {
             rel_id: Some(relationship_id.to_string()),
             anchor: None,
+            tooltip: tooltip.map(str::to_owned),
+            doc_location: None,
+            run_start,
+            run_end: run_start + 1,
+            extra_attributes: Vec::new(),
+            extra_xml: Vec::new(),
+            preserved_raw_before: None,
+        });
+        Ok(Run {
+            inner: self.inner.runs.last_mut().unwrap(),
+        })
+    }
+
+    /// Add a run wrapped in a hyperlink to bookmark `anchor` of the same
+    /// document (`w:hyperlink w:anchor`), with an optional hover tooltip.
+    ///
+    /// No relationship is written, so the link stays inside the document.
+    /// Checked document authoring validates the destination bookmark.
+    pub fn add_internal_hyperlink(
+        &mut self,
+        text: &str,
+        anchor: &str,
+        tooltip: Option<&str>,
+    ) -> Run<'_> {
+        let run_start = self.inner.runs.len();
+        self.inner.runs.push(CT_R::new(text));
+        self.inner.hyperlinks.push(HyperlinkSpan {
+            rel_id: None,
+            anchor: Some(anchor.to_owned()),
             tooltip: tooltip.map(str::to_owned),
             doc_location: None,
             run_start,

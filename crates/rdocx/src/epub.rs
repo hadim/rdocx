@@ -2686,6 +2686,22 @@ fn render_drawing_projection(drawing: &CT_Drawing) -> CT_Drawing {
         link_id: None,
         chart_rel_id: chart_rel_id.cloned(),
         description: description.cloned(),
+        title: drawing
+            .inline
+            .as_ref()
+            .and_then(|inline| inline.title.clone())
+            .or_else(|| {
+                drawing
+                    .anchor
+                    .as_ref()
+                    .and_then(|anchor| anchor.title.clone())
+            }),
+        decorative: drawing
+            .inline
+            .as_ref()
+            .map(|inline| inline.decorative)
+            .or_else(|| drawing.anchor.as_ref().map(|anchor| anchor.decorative))
+            .unwrap_or(false),
         name: None,
         source_rect: None,
         raw_xml: None,

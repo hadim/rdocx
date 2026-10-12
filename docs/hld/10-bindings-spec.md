@@ -1397,8 +1397,10 @@ of `pic:spPr/a:xfrm`, scales `wp:effectExtent` with the extent on each axis,
 and leaves anchor positions alone. It rejects a zero size. A VML `w:pict`
 picture on the relationship is not resized, the relationship of an SVG blip
 extension is not matched, and a picture inside a group is not resized. Python
-exposes `Document.set_picture_size` with EMU sizes, and it keeps live handles
-valid too.
+exposes this compatibility operation as `Document.set_picture_sizes_for_relationship`
+with EMU sizes. The distinct `Document.set_picture_size` takes a frozen physical
+Picture snapshot and changes one occurrence, invalidating affected handles after
+publication.
 
 Native Rust also exposes concrete borrowed `SectionRef` and `Section` handles.
 Each handle reports its zero-based document ordinal, schema-final ownership,
@@ -1788,16 +1790,15 @@ A story edit of such a text box changes the Choice only, see
 `03-architecture.md`. `redact_text` removes the literal from every copy and
 still counts each copy.
 
-A positive checked scoped replacement refuses when its physical owner lies
-inside a qualified text box with another Choice or Fallback text-box
-representation in the same MC AlternateContent. This includes a selected
-table cell inside that text box. Rust returns an explicit error and Python
-raises `RdocxError`, preserving the live model, revision and complete package
-bytes. Expected-count mismatches and zero-match no-ops retain their existing
-outcomes before this guard. Invalid replacement text and stale locations still
-fail without publication. Single-representation text boxes and cells outside
-text boxes retain their supported scoped edits. Foreign namespace lookalikes
-and opaque extension children cannot establish alternate ownership.
+A positive checked scoped replacement in a qualified alternate text box maps
+its selected paragraph or descendant cell to every admitted counterpart.
+Physical signatures, topology and independent occurrence counts must agree
+before all original source ranges are spliced. Each representation retains
+its run formatting and opaque source, and unselected owners remain exact.
+Asymmetric, ambiguous or unsupported mapping refuses the whole package.
+Expected-count mismatch and zero-match behavior precede alternate-copy
+admission. Invalid replacement text and stale locations fail without
+publication. Foreign namespace lookalikes cannot establish alternate ownership.
 
 `Document::try_replace_all_expected` takes ordered `(placeholder, replacement,
 expected)` pairs and returns the count of each pair. Each pair runs over the
@@ -3547,3 +3548,13 @@ qualified drawing owner's explicit true or 1 flag without changing retained
 source XML or public struct fields. Picture rendering honors that flag when
 Office saves master visibility into layout-owned pictures. Foreign or rebound
 lookalikes do not supply the flag. This adds no Python hidden property.
+
+## Word tables, physical pictures and internal links
+
+Table exposes signed removable indent, autofit, actual table style ID or display-name resolution, six look flags and checked empty-row, logical-column and complete-cell-split operations. Undefined, ambiguous and wrong-type styles refuse without publication. Existing nested Cell.add_table uses the checked physical owner provider. Structural edits invalidate held rows and cells, while a no-op split preserves their revision.
+
+PictureOptions exposes checked metadata, crop and the supported inline and floating placement vocabulary. Document.add_picture, Run.add_picture and Cell.add_picture import path or bytes and return frozen factory-created Picture snapshots. Document.pictures returns physical source order across admitted stories. Snapshots carry document origin, revision, physical owner and unchanged source identity. Document.set_picture_size accepts one snapshot and resizes that occurrence only. The former relationship-wide Python operation is explicitly named set_picture_sizes_for_relationship. Native relationship-wide sizing and replace_image retain their separate compatibility contracts. Foreign, stale, malformed and unsupported inputs refuse before publication.
+
+Paragraph.add_internal_hyperlink and first-character # URLs use the same checked bookmark provider. Ordinary URL fragments remain external links. Tooltips retain native hyperlink formatting. Document.add_heading_hyperlink stages a suitable existing or unique valid supported heading bookmark and its source link together. Supported related-story source paragraphs use their actual owner. Bookmark grammar, owner origin and revision are validated before mutation. No external relationship is allocated for internal links.
+
+Scoped alternate text-box replacement maps each selected logical paragraph or descendant cell to every admitted physical Choice and Fallback counterpart. Independent occurrence counts, formatting and source ranges decide publication. Unselected owners and opaque XML remain exact. Ambiguous or asymmetric mapping refuses the whole operation, while logical zero-match and count behavior retain the existing provider contract.

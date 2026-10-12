@@ -442,9 +442,62 @@ impl PyParagraph {
         self.document.bind(py).is(document.bind(py))
     }
 
+    fn append_internal_run(
+        &self,
+        py: Python<'_>,
+        text: &str,
+        bookmark: &str,
+        tooltip: Option<&str>,
+    ) -> PyResult<Py<PyRun>> {
+        let location = self.validate(py)?;
+        let mut document = self.document.borrow_mut(py);
+        let native = location
+            .native(&document.inner)
+            .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
+        let mut candidate = document.inner.clone_for_staging();
+        let position = candidate
+            .add_internal_hyperlink_at(&native, text, bookmark, tooltip)
+            .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
+        let run_path = candidate
+            .read_story_paragraph(&position.location, |p| p.run_path(position.run_index))
+            .map_err(|error| crate::rdocx_to_pyerr(py, error))?
+            .ok_or_else(|| PyIndexError::new_err("inserted link run was not found"))?;
+        let prepared = document
+            .revisions
+            .prepare_scopes("Paragraph.add_internal_hyperlink", &[], &[])
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        let mut segments = self.path.segs.clone();
+        segments.push(PathSeg::Run(position.run_index));
+        let path = document
+            .revisions
+            .capture_prepared(&prepared, segments)
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        let result = Py::new(
+            py,
+            PyRun::new(
+                self.document.clone_ref(py),
+                path,
+                run_path,
+                Some(position.location),
+            ),
+        )?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document.inner = candidate;
+        Ok(result)
+    }
+
     /// Append one run, or one external hyperlink run when `url` is given, and
     /// return its handle.
-    fn append_run(&self, py: Python<'_>, text: &str, url: Option<&str>) -> PyResult<Py<PyRun>> {
+    fn append_run(
+        &self,
+        py: Python<'_>,
+        text: &str,
+        url: Option<&str>,
+        tooltip: Option<&str>,
+    ) -> PyResult<Py<PyRun>> {
         let location = self.validate(py)?;
         let result = {
             let mut document = self.document.borrow_mut(py);
@@ -473,7 +526,7 @@ impl PyParagraph {
                 let run_index = paragraph.run_count();
                 match &relationship_id {
                     Some(relationship_id) => {
-                        paragraph.add_hyperlink(text, relationship_id);
+                        paragraph.add_hyperlink_with_tooltip(text, relationship_id, tooltip)?;
                     }
                     None => {
                         paragraph.add_run(text);
@@ -482,10 +535,10 @@ impl PyParagraph {
                 let run_path = paragraph
                     .run_path(run_index)
                     .expect("the appended run has an accepted source path");
-                (run_index, run_path)
+                Ok((run_index, run_path))
             };
             let (run_index, run_path) = location
-                .edit(&mut candidate, |paragraph| Ok(append(paragraph)))
+                .edit(&mut candidate, append)
                 .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
             let operation = if url.is_some() {
                 "Paragraph.add_hyperlink"
@@ -718,11 +771,33 @@ impl PyParagraph {
     }
 
     fn add_run(&self, py: Python<'_>, text: &str) -> PyResult<Py<PyRun>> {
-        self.append_run(py, text, None)
+        self.append_run(py, text, None, None)
     }
 
-    fn add_hyperlink(&self, py: Python<'_>, text: &str, url: &str) -> PyResult<Py<PyRun>> {
-        self.append_run(py, text, Some(url))
+    #[pyo3(signature = (text, url, *, tooltip=None))]
+    fn add_hyperlink(
+        &self,
+        py: Python<'_>,
+        text: &str,
+        url: &str,
+        tooltip: Option<&str>,
+    ) -> PyResult<Py<PyRun>> {
+        if let Some(bookmark) = url.strip_prefix('#') {
+            self.append_internal_run(py, text, bookmark, tooltip)
+        } else {
+            self.append_run(py, text, Some(url), tooltip)
+        }
+    }
+
+    #[pyo3(signature = (text, bookmark, *, tooltip=None))]
+    fn add_internal_hyperlink(
+        &self,
+        py: Python<'_>,
+        text: &str,
+        bookmark: &str,
+        tooltip: Option<&str>,
+    ) -> PyResult<Py<PyRun>> {
+        self.append_internal_run(py, text, bookmark, tooltip)
     }
 
     #[getter]

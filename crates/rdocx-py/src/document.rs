@@ -18,6 +18,300 @@ use crate::paragraph::{
 use crate::rdocx_to_pyerr;
 use crate::table::{PyTable, PyTableCollection};
 
+#[pyclass(name = "PictureOptions", frozen, skip_from_py_object)]
+#[derive(Clone)]
+pub struct PyPictureOptions {
+    pub(crate) inner: rdocx::PictureOptions,
+}
+
+#[pymethods]
+impl PyPictureOptions {
+    #[new]
+    #[pyo3(signature = (*, name=None, description=None, title=None, decorative=false, crop=None, placement="inline", horizontal_relative_from="page", vertical_relative_from="page", horizontal_offset=None, vertical_offset=None, horizontal_alignment=None, vertical_alignment=None, distances=None, relative_height=0))]
+    #[allow(clippy::too_many_arguments)] // Explicit operands match the native picture vocabulary.
+    fn new(
+        name: Option<String>,
+        description: Option<String>,
+        title: Option<String>,
+        decorative: bool,
+        crop: Option<&Bound<'_, PyAny>>,
+        placement: &str,
+        horizontal_relative_from: &str,
+        vertical_relative_from: &str,
+        horizontal_offset: Option<&Bound<'_, PyAny>>,
+        vertical_offset: Option<&Bound<'_, PyAny>>,
+        horizontal_alignment: Option<&str>,
+        vertical_alignment: Option<&str>,
+        distances: Option<&Bound<'_, PyAny>>,
+        relative_height: u32,
+    ) -> PyResult<Self> {
+        let horizontal =
+            checked_section_length(horizontal_offset, "picture horizontal offset")?.unwrap_or(0);
+        let vertical =
+            checked_section_length(vertical_offset, "picture vertical offset")?.unwrap_or(0);
+        let crop = crop
+            .map(|crop| {
+                let values = crop.cast::<PyTuple>().map_err(|_| {
+                    PyTypeError::new_err("picture crop must be a four-number tuple")
+                })?;
+                if values.len() != 4 {
+                    return Err(PyValueError::new_err("picture crop must have four values"));
+                }
+                let mut out = [0; 4];
+                for (index, value) in values.iter().enumerate() {
+                    if value.is_instance_of::<PyBool>() {
+                        return Err(PyTypeError::new_err(
+                            "picture crop values must be numbers, not bool",
+                        ));
+                    }
+                    let value = value.extract::<f64>()?;
+                    if !value.is_finite() || !(0.0..1.0).contains(&value) {
+                        return Err(PyValueError::new_err(
+                            "picture crop values must be finite fractions from zero up to one",
+                        ));
+                    }
+                    out[index] = (value * 100_000.0).trunc() as i32;
+                }
+                if out[0] + out[2] >= 100_000 || out[1] + out[3] >= 100_000 {
+                    return Err(PyValueError::new_err(
+                        "picture crop must leave a visible rectangle",
+                    ));
+                }
+                Ok(rdocx::PictureCrop {
+                    left: out[0],
+                    top: out[1],
+                    right: out[2],
+                    bottom: out[3],
+                })
+            })
+            .transpose()?;
+        let mut distance = [0; 4];
+        if let Some(distances) = distances {
+            let values = distances.cast::<PyTuple>().map_err(|_| {
+                PyTypeError::new_err("picture distances must be a four-length tuple")
+            })?;
+            if values.len() != 4 {
+                return Err(PyValueError::new_err(
+                    "picture distances must have four lengths",
+                ));
+            }
+            for (index, value) in values.iter().enumerate() {
+                distance[index] =
+                    checked_section_length(Some(&value), "picture wrap distance")?.unwrap();
+                if distance[index] < 0 {
+                    return Err(PyValueError::new_err(
+                        "picture wrap distances cannot be negative",
+                    ));
+                }
+            }
+        }
+        let h = match horizontal_relative_from {
+            "page" => rdocx::DrawingHorizontalRelativeFrom::Page,
+            "margin" => rdocx::DrawingHorizontalRelativeFrom::Margin,
+            "column" => rdocx::DrawingHorizontalRelativeFrom::Column,
+            "character" => rdocx::DrawingHorizontalRelativeFrom::Character,
+            "left_margin" => rdocx::DrawingHorizontalRelativeFrom::LeftMargin,
+            "right_margin" => rdocx::DrawingHorizontalRelativeFrom::RightMargin,
+            "inside_margin" => rdocx::DrawingHorizontalRelativeFrom::InsideMargin,
+            "outside_margin" => rdocx::DrawingHorizontalRelativeFrom::OutsideMargin,
+            _ => {
+                return Err(PyValueError::new_err(
+                    "unsupported horizontal picture frame",
+                ));
+            }
+        };
+        let v = match vertical_relative_from {
+            "page" => rdocx::DrawingVerticalRelativeFrom::Page,
+            "margin" => rdocx::DrawingVerticalRelativeFrom::Margin,
+            "paragraph" => rdocx::DrawingVerticalRelativeFrom::Paragraph,
+            "line" => rdocx::DrawingVerticalRelativeFrom::Line,
+            "top_margin" => rdocx::DrawingVerticalRelativeFrom::TopMargin,
+            "bottom_margin" => rdocx::DrawingVerticalRelativeFrom::BottomMargin,
+            "inside_margin" => rdocx::DrawingVerticalRelativeFrom::InsideMargin,
+            "outside_margin" => rdocx::DrawingVerticalRelativeFrom::OutsideMargin,
+            _ => return Err(PyValueError::new_err("unsupported vertical picture frame")),
+        };
+        let ha = horizontal_alignment
+            .map(|value| match value {
+                "left" => Ok(rdocx::DrawingHorizontalAlignment::Left),
+                "center" => Ok(rdocx::DrawingHorizontalAlignment::Center),
+                "right" => Ok(rdocx::DrawingHorizontalAlignment::Right),
+                "inside" => Ok(rdocx::DrawingHorizontalAlignment::Inside),
+                "outside" => Ok(rdocx::DrawingHorizontalAlignment::Outside),
+                _ => Err(PyValueError::new_err(
+                    "unsupported horizontal picture alignment",
+                )),
+            })
+            .transpose()?;
+        let va = vertical_alignment
+            .map(|value| match value {
+                "top" => Ok(rdocx::DrawingVerticalAlignment::Top),
+                "center" => Ok(rdocx::DrawingVerticalAlignment::Center),
+                "bottom" => Ok(rdocx::DrawingVerticalAlignment::Bottom),
+                "inside" => Ok(rdocx::DrawingVerticalAlignment::Inside),
+                "outside" => Ok(rdocx::DrawingVerticalAlignment::Outside),
+                _ => Err(PyValueError::new_err(
+                    "unsupported vertical picture alignment",
+                )),
+            })
+            .transpose()?;
+        if (ha.is_some() && horizontal != 0) || (va.is_some() && vertical != 0) {
+            return Err(PyValueError::new_err(
+                "picture alignment and offset conflict",
+            ));
+        }
+        let anchor = if placement == "inline" {
+            if horizontal != 0
+                || vertical != 0
+                || ha.is_some()
+                || va.is_some()
+                || distance != [0; 4]
+                || relative_height != 0
+                || horizontal_relative_from != "page"
+                || vertical_relative_from != "page"
+            {
+                return Err(PyValueError::new_err(
+                    "inline pictures cannot have anchor placement operands",
+                ));
+            }
+            None
+        } else {
+            let wrap = match placement {
+                "square" => rdocx::DrawingWrap::Square,
+                "tight" => rdocx::DrawingWrap::Tight,
+                "top_and_bottom" => rdocx::DrawingWrap::TopAndBottom,
+                "behind" | "in_front" => rdocx::DrawingWrap::None,
+                _ => return Err(PyValueError::new_err("unsupported picture placement")),
+            };
+            Some(rdocx::PictureAnchor {
+                horizontal_relative_from: h,
+                horizontal_offset: rdocx::Length::emu(horizontal),
+                horizontal_alignment: ha,
+                vertical_relative_from: v,
+                vertical_offset: rdocx::Length::emu(vertical),
+                vertical_alignment: va,
+                wrap,
+                distance_top: rdocx::Length::emu(distance[0]),
+                distance_right: rdocx::Length::emu(distance[1]),
+                distance_bottom: rdocx::Length::emu(distance[2]),
+                distance_left: rdocx::Length::emu(distance[3]),
+                relative_height,
+                behind_text: placement == "behind",
+            })
+        };
+        Ok(Self {
+            inner: rdocx::PictureOptions {
+                width: rdocx::Length::emu(1),
+                height: rdocx::Length::emu(1),
+                crop,
+                anchor,
+                name,
+                description,
+                title,
+                decorative,
+            },
+        })
+    }
+}
+
+pub(crate) fn picture_input(
+    image: &Bound<'_, PyAny>,
+    filename: Option<&str>,
+) -> PyResult<(Vec<u8>, String)> {
+    if let Ok(bytes) = image.cast::<PyBytes>() {
+        return Ok((
+            bytes.as_bytes().to_vec(),
+            filename.unwrap_or("picture").to_owned(),
+        ));
+    }
+    let path = image
+        .extract::<PathBuf>()
+        .map_err(|_| PyTypeError::new_err("picture must be bytes or a filesystem path"))?;
+    let bytes = std::fs::read(&path)
+        .map_err(|error| pyo3::exceptions::PyOSError::new_err(error.to_string()))?;
+    Ok((
+        bytes,
+        filename.map(str::to_owned).unwrap_or_else(|| {
+            path.file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned()
+        }),
+    ))
+}
+
+/// A frozen physical picture, bound to one document and captured revision.
+#[pyclass(name = "Picture", frozen, skip_from_py_object)]
+pub struct PyPicture {
+    pub(crate) inner: rdocx::PictureOccurrence,
+    pub(crate) binding: oxml_py_support::ContentPath,
+}
+
+#[pymethods]
+impl PyPicture {
+    #[getter]
+    fn width(&self) -> i64 {
+        self.inner.width
+    }
+    #[getter]
+    fn height(&self) -> i64 {
+        self.inner.height
+    }
+    #[getter]
+    fn relationship_id(&self) -> &str {
+        &self.inner.relationship_id
+    }
+    #[getter]
+    fn content_type(&self) -> &str {
+        &self.inner.content_type
+    }
+    #[getter]
+    fn description(&self) -> Option<&str> {
+        self.inner.description.as_deref()
+    }
+    #[getter]
+    fn title(&self) -> Option<&str> {
+        self.inner.title.as_deref()
+    }
+    #[getter]
+    fn name(&self) -> Option<&str> {
+        self.inner.name.as_deref()
+    }
+    #[getter]
+    fn decorative(&self) -> bool {
+        self.inner.decorative
+    }
+    #[getter]
+    fn anchored(&self) -> bool {
+        self.inner.anchored
+    }
+    #[getter]
+    fn bytes<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.inner.bytes)
+    }
+    #[getter]
+    fn story(&self) -> PyStory {
+        let mut story = story_snapshot(self.inner.location.story());
+        story.binding = Some(self.binding.clone());
+        story
+    }
+    #[getter]
+    fn location(&self) -> PyContentLocation {
+        let mut story = story_snapshot(self.inner.location.story());
+        story.binding = Some(self.binding.clone());
+        PyContentLocation {
+            story,
+            kind: "paragraph".into(),
+            index_path: self.inner.location.index_path().to_vec(),
+            is_end: false,
+        }
+    }
+    #[getter]
+    fn occurrence(&self) -> usize {
+        self.inner.ordinal
+    }
+}
+
 #[pyclass(name = "RunPosition", frozen, get_all, eq, skip_from_py_object)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PyRunPosition {
@@ -3941,12 +4235,7 @@ impl PyDocument {
                     "content handle belongs to a different document",
                 ));
             }
-            let table_index = table.validate(py)?;
-            return slf
-                .borrow(py)
-                .inner
-                .content_index_of_table(table_index)
-                .ok_or_else(|| PyValueError::new_err("content handle is not a direct body child"));
+            return table.direct_body_index(py);
         }
         Err(PyTypeError::new_err(format!(
             "{argument} must be a Paragraph or Table handle"
@@ -4596,7 +4885,134 @@ impl PyDocument {
             .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
+    #[pyo3(signature = (paragraph, heading, text, *, tooltip=None))]
+    fn add_heading_hyperlink(
+        slf: Py<Self>,
+        py: Python<'_>,
+        paragraph: PyRef<'_, PyParagraph>,
+        heading: PyRef<'_, PyParagraph>,
+        text: &str,
+        tooltip: Option<&str>,
+    ) -> PyResult<Py<crate::run::PyRun>> {
+        if !paragraph.belongs_to(py, &slf) || !heading.belongs_to(py, &slf) {
+            return Err(PyValueError::new_err(
+                "heading hyperlink paragraphs belong to a different document",
+            ));
+        }
+        let source = paragraph.validate(py)?;
+        let destination = heading.validate(py)?;
+        let mut document = slf.borrow_mut(py);
+        let source = source
+            .native(&document.inner)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let destination = destination
+            .native(&document.inner)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let mut candidate = document.inner.clone_for_staging();
+        let position = candidate
+            .add_heading_hyperlink_at(&source, &destination, text, tooltip)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let run_path = candidate
+            .read_story_paragraph(&position.location, |p| p.run_path(position.run_index))
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .ok_or_else(|| PyIndexError::new_err("heading link run was not found"))?;
+        let prepared = document
+            .revisions
+            .prepare_scopes("Document.add_heading_hyperlink", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        let path = document
+            .revisions
+            .capture_prepared(
+                &prepared,
+                smallvec![
+                    PathSeg::Para(*position.location.index_path().last().unwrap_or(&0)),
+                    PathSeg::Run(position.run_index)
+                ],
+            )
+            .map_err(revision_to_pyerr)?;
+        let result = Py::new(
+            py,
+            crate::run::PyRun::new(slf.clone_ref(py), path, run_path, Some(position.location)),
+        )?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        document.inner = candidate;
+        Ok(result)
+    }
+
+    /// Frozen snapshots distinguish physical drawings of the same media.
+    fn pictures<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let values = self
+            .inner
+            .pictures()
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .into_iter()
+            .map(|inner| {
+                Py::new(
+                    py,
+                    PyPicture {
+                        inner,
+                        binding: self.revisions.capture(smallvec![]),
+                    },
+                )
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        PyTuple::new(py, values)
+    }
+
     fn set_picture_size(
+        &mut self,
+        py: Python<'_>,
+        picture: PyRef<'_, PyPicture>,
+        width: &Bound<'_, PyAny>,
+        height: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        picture
+            .binding
+            .validate_scopes(
+                &self.revisions,
+                "picture",
+                "Re-fetch it with document.pictures().",
+            )
+            .map_err(|error| crate::stale_to_pyerr(py, error))?;
+        if picture.binding.revision != self.revisions.current() {
+            return Err(crate::stale_to_pyerr(
+                py,
+                StaleElementError {
+                    element_kind: "picture".into(),
+                    captured_revision: picture.binding.revision,
+                    current_revision: self.revisions.current(),
+                    recovery_hint: "Re-fetch it with document.pictures().".into(),
+                },
+            ));
+        }
+        let width = checked_section_length(Some(width), "picture width")?.unwrap();
+        let height = checked_section_length(Some(height), "picture height")?.unwrap();
+        let mut candidate = self.inner.clone_for_staging();
+        candidate
+            .set_picture_size_at(
+                &picture.inner,
+                rdocx::Length::emu(width),
+                rdocx::Length::emu(height),
+            )
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        if (width, height) == (picture.inner.width, picture.inner.height) {
+            return Ok(());
+        }
+        let prepared = self
+            .revisions
+            .prepare_scopes("Document.set_picture_size", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        self.revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        self.inner = candidate;
+        Ok(())
+    }
+
+    fn set_picture_sizes_for_relationship(
         &mut self,
         py: Python<'_>,
         relationship_id: &str,
@@ -6260,64 +6676,81 @@ impl PyDocument {
         Ok(())
     }
 
-    #[pyo3(signature = (data, filename, width=None, height=None, *, after=None))]
+    #[allow(clippy::too_many_arguments)] // Preserve explicit checked public picture operands.
+    #[pyo3(signature = (data, filename=None, width=None, height=None, *, after=None, options=None))]
     fn add_picture(
         &mut self,
         py: Python<'_>,
-        data: &[u8],
-        filename: &str,
-        width: Option<i64>,
-        height: Option<i64>,
-        after: Option<PyRef<'_, PyStoryItem>>,
-    ) -> PyResult<Py<PyStoryItem>> {
-        let mut candidate = self.inner.clone_for_staging();
+        data: &Bound<'_, PyAny>,
+        filename: Option<&str>,
+        width: Option<&Bound<'_, PyAny>>,
+        height: Option<&Bound<'_, PyAny>>,
+        after: Option<&Bound<'_, PyAny>>,
+        options: Option<PyRef<'_, PyPictureOptions>>,
+    ) -> PyResult<Py<PyPicture>> {
+        let (data, filename) = picture_input(data, filename)?;
+        let width = checked_section_length(width, "picture width")?.map(rdocx::Length::emu);
+        let height = checked_section_length(height, "picture height")?.map(rdocx::Length::emu);
         let after = after
-            .as_deref()
-            .map(|item| self.native_location(py, item))
+            .map(|value| -> PyResult<rdocx::ContentLocation> {
+                if let Ok(item) = value.extract::<PyRef<'_, PyStoryItem>>() {
+                    return self.native_location(py, &item);
+                }
+                if let Ok(picture) = value.extract::<PyRef<'_, PyPicture>>() {
+                    picture
+                        .binding
+                        .validate_scopes(
+                            &self.revisions,
+                            "picture",
+                            "Re-fetch it with document.pictures().",
+                        )
+                        .map_err(|error| crate::stale_to_pyerr(py, error))?;
+                    let current = self
+                        .inner
+                        .pictures()
+                        .map_err(|error| rdocx_to_pyerr(py, error))?;
+                    if !current.contains(&picture.inner) {
+                        return Err(PyValueError::new_err("picture placement source changed"));
+                    }
+                    return Ok(picture.inner.location.clone());
+                }
+                Err(PyTypeError::new_err("after must be a StoryItem or Picture"))
+            })
             .transpose()?;
-        let story = match after.as_ref() {
+        let story = match &after {
             Some(location) => location.story().clone(),
             None => self.body_story(py)?,
         };
-        let location = py
-            .detach(|| {
-                candidate.insert_picture_to_story(
-                    &story,
-                    after.as_ref(),
-                    data,
-                    filename,
-                    width.map(rdocx::Length::emu),
-                    height.map(rdocx::Length::emu),
-                )
-            })
+        let mut candidate = self.inner.clone_for_staging();
+        let location = candidate
+            .insert_picture_to_story_with_options(
+                &story,
+                after.as_ref(),
+                &data,
+                &filename,
+                width,
+                height,
+                options.map(|options| options.inner.clone()),
+            )
             .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let picture = candidate
+            .pictures()
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .into_iter()
+            .find(|picture| picture.location == location)
+            .ok_or_else(|| PyIndexError::new_err("inserted picture was not inventoried"))?;
         let prepared = self
             .revisions
             .prepare_scopes("Document.add_picture", &[], &[])
             .map_err(revision_to_pyerr)?;
-        let item = candidate
-            .story_item_snapshots()
-            .map_err(|error| rdocx_to_pyerr(py, error))?
-            .into_iter()
-            .find(|item| item.location() == &location)
-            .ok_or_else(|| PyIndexError::new_err("inserted story item was not found"))?;
-        let binding = self
-            .revisions
-            .capture_prepared(&prepared, smallvec![])
-            .map_err(revision_to_pyerr)?;
-        let mut story = story_snapshot(item.location().story());
-        story.binding = Some(binding.clone());
         let result = Py::new(
             py,
-            PyStoryItem {
-                story,
-                kind: story_item_kind_name(item.location().item_kind()).to_owned(),
-                index_path: item.location().index_path().to_vec(),
-                direct_body_index: item.direct_body_index(),
-                text: item.text().map(str::to_owned),
-                xml: item.xml().to_vec(),
-                revision: prepared.committed_serial(),
-                binding: Some(binding),
+            PyPicture {
+                inner: picture,
+                binding: self
+                    .revisions
+                    .capture_prepared(&prepared, smallvec![])
+                    .map_err(revision_to_pyerr)?,
             },
         )?;
         self.revisions
@@ -7113,8 +7546,7 @@ impl PyDocument {
                 return Err(PyIndexError::new_err("content index out of range"));
             }
             candidate.insert_table(index, rows, cols);
-            // Table handles count every table in document order, including
-            // those inside block content controls, so find the new one.
+            // Preserve the direct body table ordinal while capturing its physical owner.
             let table = (0..candidate.table_count())
                 .find(|table| candidate.content_index_of_table(*table) == Some(index))
                 .expect("an inserted body table has a table index");

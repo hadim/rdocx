@@ -1886,7 +1886,7 @@ fn comment_text_paragraphs(
     Ok((paragraphs, paragraph_ids, para_id))
 }
 
-fn validate_bookmark_name(name: &str) -> Result<()> {
+pub(crate) fn validate_bookmark_name(name: &str) -> Result<()> {
     if name.is_empty() {
         return Err(Error::Other("bookmark name must not be empty".to_owned()));
     }

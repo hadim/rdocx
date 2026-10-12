@@ -142,6 +142,124 @@ impl WrapType {
     }
 }
 
+/// The extension URI Word writes around `adec:decorative`.
+const DECORATIVE_EXTENSION_URI: &str = "{C183D7F6-B498-43B3-948B-1728B52AA6E4}";
+/// The namespace of Word's decorative-drawing marker.
+const DECORATIVE_NAMESPACE: &str = "http://schemas.microsoft.com/office/drawing/2017/decorative";
+
+/// Read the rest of a `wp:docPr` element and report whether its extension
+/// list marks the drawing decorative, as Word writes it.
+fn read_doc_pr_decorative(reader: &mut NsReader<&[u8]>) -> Result<bool> {
+    let mut path = Vec::<bool>::new();
+    let mut decorative = false;
+    let mut buffer = Vec::new();
+    loop {
+        let event = reader.read_event_into(&mut buffer)?;
+        let is_start = matches!(event, Event::Start(_));
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                let (namespace, local) = reader.resolver().resolve_element(element.name());
+                let admitted = match path.len() {
+                    0 => {
+                        matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == drawing_ns::A.as_bytes())
+                            && local.as_ref() == b"extLst"
+                    }
+                    1 => {
+                        path[0]
+                            && matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == drawing_ns::A.as_bytes())
+                            && local.as_ref() == b"ext"
+                            && element
+                                .try_get_attribute("uri")?
+                                .map(|attr| {
+                                    attr.decoded_and_normalized_value(
+                                        XmlVersion::Implicit1_0,
+                                        reader.decoder(),
+                                    )
+                                    .map(|value| value == DECORATIVE_EXTENSION_URI)
+                                })
+                                .transpose()?
+                                .unwrap_or(false)
+                    }
+                    2 => {
+                        path[1]
+                            && matches!(namespace, ResolveResult::Bound(Namespace(uri)) if uri == DECORATIVE_NAMESPACE.as_bytes())
+                            && local.as_ref() == b"decorative"
+                    }
+                    _ => false,
+                };
+                if path.len() == 2 && admitted {
+                    for attr in element.attributes() {
+                        let attr = attr?;
+                        if attr.key.as_ref() == b"val" {
+                            let value = attr.decoded_and_normalized_value(
+                                XmlVersion::Implicit1_0,
+                                reader.decoder(),
+                            )?;
+                            decorative |= matches!(value.as_ref(), "1" | "true" | "on");
+                        }
+                    }
+                }
+                if is_start {
+                    path.push(admitted);
+                }
+            }
+            Event::End(_) if path.is_empty() => break,
+            Event::End(_) => {
+                path.pop();
+            }
+            Event::Eof => {
+                return Err(crate::OxmlError::MissingElement(
+                    "wp:docPr closing element".into(),
+                ));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+    Ok(decorative)
+}
+
+/// Write `wp:docPr` with its accessibility attributes, and the decorative
+/// marker as Word writes it when the drawing is decorative.
+fn write_doc_pr<W: std::io::Write>(
+    writer: &mut Writer<W>,
+    id: u32,
+    name: Option<&str>,
+    description: Option<&str>,
+    title: Option<&str>,
+    decorative: bool,
+) -> Result<()> {
+    let mut buf = itoa::Buffer::new();
+    let mut doc_pr = BytesStart::new("wp:docPr");
+    doc_pr.push_attribute(("id", buf.format(id)));
+    doc_pr.push_attribute(("name", name.unwrap_or("Picture")));
+    if let Some(description) = description {
+        doc_pr.push_attribute(("descr", description));
+    }
+    if let Some(title) = title {
+        doc_pr.push_attribute(("title", title));
+    }
+    if !decorative {
+        writer.write_event(Event::Empty(doc_pr))?;
+        return Ok(());
+    }
+    writer.write_event(Event::Start(doc_pr))?;
+    let mut list = BytesStart::new("a:extLst");
+    list.push_attribute(("xmlns:a", drawing_ns::A));
+    writer.write_event(Event::Start(list))?;
+    let mut extension = BytesStart::new("a:ext");
+    extension.push_attribute(("uri", DECORATIVE_EXTENSION_URI));
+    writer.write_event(Event::Start(extension))?;
+    let mut marker = BytesStart::new("adec:decorative");
+    marker.push_attribute(("xmlns:adec", DECORATIVE_NAMESPACE));
+    marker.push_attribute(("val", "1"));
+    writer.write_event(Event::Empty(marker))?;
+    writer.write_event(Event::End(BytesEnd::new("a:ext")))?;
+    writer.write_event(Event::End(BytesEnd::new("a:extLst")))?;
+    writer.write_event(Event::End(BytesEnd::new("wp:docPr")))?;
+    Ok(())
+}
+
 fn write_wrap_element<W: std::io::Write>(writer: &mut Writer<W>, wrap: WrapType) -> Result<()> {
     match wrap {
         WrapType::None | WrapType::TopAndBottom => {
@@ -307,6 +425,10 @@ pub struct CT_Anchor {
     pub relative_height: u32,
     /// Optional description/alt text.
     pub description: Option<String>,
+    /// Optional accessibility title.
+    pub title: Option<String>,
+    /// Whether the qualified decorative extension marks this drawing.
+    pub decorative: bool,
     /// Optional name.
     pub name: Option<String>,
     /// Optional crop rectangle applied before scaling the picture.
@@ -783,6 +905,8 @@ impl CT_Anchor {
             chart_rel_id: None,
             relative_height: 0,
             description: Some("Background".to_string()),
+            title: None,
+            decorative: false,
             name: Some("Background".to_string()),
             source_rect: None,
             raw_xml: None,
@@ -840,6 +964,8 @@ impl CT_Anchor {
         let mut extent_cy = Emu(0);
         let mut shape: Option<CT_Shape> = None;
         let mut description = None;
+        let mut title = None;
+        let mut decorative = false;
         let mut name = None;
         let mut source_rect = None;
         let mut doc_pr_id = None;
@@ -873,6 +999,8 @@ impl CT_Anchor {
                             )?;
                             if key == b"descr" {
                                 description = Some(val.to_string());
+                            } else if key == b"title" {
+                                title = Some(val.to_string());
                             } else if key == b"name" {
                                 name = Some(val.to_string());
                             } else if key == b"id" {
@@ -1009,13 +1137,15 @@ impl CT_Anchor {
                             )?;
                             if key == b"descr" {
                                 description = Some(val.to_string());
+                            } else if key == b"title" {
+                                title = Some(val.to_string());
                             } else if key == b"name" {
                                 name = Some(val.to_string());
                             } else if key == b"id" {
                                 doc_pr_id = Some(val.parse()?);
                             }
                         }
-                        reader.read_to_end_into(ename, &mut Vec::new())?;
+                        decorative = read_doc_pr_decorative(reader)?;
                     } else {
                         // Continue into nested elements (graphic, graphicData, pic, etc.)
                     }
@@ -1052,6 +1182,8 @@ impl CT_Anchor {
             chart_rel_id: None,
             relative_height,
             description,
+            title,
+            decorative,
             name,
             source_rect,
             raw_xml: None, // Will be set by CT_Drawing::from_xml
@@ -1150,13 +1282,14 @@ impl CT_Anchor {
         write_wrap_element(writer, self.wrap)?;
 
         // wp:docPr
-        let mut doc_pr = BytesStart::new("wp:docPr");
-        doc_pr.push_attribute(("id", buf.format(self.doc_pr_id)));
-        doc_pr.push_attribute(("name", self.name.as_deref().unwrap_or("Picture")));
-        if let Some(ref desc) = self.description {
-            doc_pr.push_attribute(("descr", desc.as_str()));
-        }
-        writer.write_event(Event::Empty(doc_pr))?;
+        write_doc_pr(
+            writer,
+            self.doc_pr_id,
+            self.name.as_deref(),
+            self.description.as_deref(),
+            self.title.as_deref(),
+            self.decorative,
+        )?;
 
         write_graphic_element(
             writer,
@@ -1189,6 +1322,10 @@ pub struct CT_Inline {
     pub chart_rel_id: Option<String>,
     /// Optional description/alt text
     pub description: Option<String>,
+    /// Optional accessibility title.
+    pub title: Option<String>,
+    /// Whether the qualified decorative extension marks this drawing.
+    pub decorative: bool,
     /// Optional name
     pub name: Option<String>,
     /// Optional crop rectangle applied before scaling the picture.
@@ -1208,6 +1345,8 @@ impl CT_Inline {
             link_id: None,
             chart_rel_id: None,
             description: None,
+            title: None,
+            decorative: false,
             name: None,
             source_rect: None,
             raw_xml: None,
@@ -1224,6 +1363,8 @@ impl CT_Inline {
             link_id: None,
             chart_rel_id: Some(chart_rel_id.to_owned()),
             description: None,
+            title: None,
+            decorative: false,
             name: Some("Chart".to_owned()),
             source_rect: None,
             raw_xml: None,
@@ -1234,6 +1375,8 @@ impl CT_Inline {
         let mut cx = Emu(0);
         let mut cy = Emu(0);
         let mut description = None;
+        let mut title = None;
+        let mut decorative = false;
         let mut name = None;
         let mut source_rect = None;
         let mut doc_pr_id = None;
@@ -1267,6 +1410,8 @@ impl CT_Inline {
                             )?;
                             if key == b"descr" {
                                 description = Some(val.to_string());
+                            } else if key == b"title" {
+                                title = Some(val.to_string());
                             } else if key == b"name" {
                                 name = Some(val.to_string());
                             } else if key == b"id" {
@@ -1294,13 +1439,15 @@ impl CT_Inline {
                             )?;
                             if key == b"descr" {
                                 description = Some(val.to_string());
+                            } else if key == b"title" {
+                                title = Some(val.to_string());
                             } else if key == b"name" {
                                 name = Some(val.to_string());
                             } else if key == b"id" {
                                 doc_pr_id = Some(val.parse()?);
                             }
                         }
-                        reader.read_to_end_into(ename, &mut Vec::new())?;
+                        decorative = read_doc_pr_decorative(reader)?;
                     } else if !matches_local_name(ename.as_ref(), b"inline") {
                         // Continue parsing nested elements (graphic, graphicData, pic, etc.)
                     }
@@ -1324,6 +1471,8 @@ impl CT_Inline {
             link_id: None,
             chart_rel_id: None,
             description,
+            title,
+            decorative,
             name,
             source_rect,
             raw_xml: None, // Will be set by CT_Drawing::from_xml
@@ -1356,13 +1505,14 @@ impl CT_Inline {
         writer.write_event(Event::Empty(extent))?;
 
         // wp:docPr
-        let mut doc_pr = BytesStart::new("wp:docPr");
-        doc_pr.push_attribute(("id", buf.format(self.doc_pr_id)));
-        doc_pr.push_attribute(("name", self.name.as_deref().unwrap_or("Picture")));
-        if let Some(ref desc) = self.description {
-            doc_pr.push_attribute(("descr", desc.as_str()));
-        }
-        writer.write_event(Event::Empty(doc_pr))?;
+        write_doc_pr(
+            writer,
+            self.doc_pr_id,
+            self.name.as_deref(),
+            self.description.as_deref(),
+            self.title.as_deref(),
+            self.decorative,
+        )?;
 
         // a:graphic
         write_graphic_element(
@@ -2125,6 +2275,8 @@ mod tests {
             link_id: None,
             chart_rel_id: None,
             description: Some("A test image".to_string()),
+            title: None,
+            decorative: false,
             name: Some("TestPic".to_string()),
             source_rect: Some(SourceRect {
                 left: 10_000,
@@ -2946,5 +3098,45 @@ mod tests {
                 .into_bytes(),
         );
         assert_eq!(anchor.picture_effects(), None);
+    }
+    #[test]
+    fn fx202_decorative_marker_decodes_owned_entities_and_preserves_foreign_source() {
+        let mut inline = CT_Inline::new("rId1", 1000, 2000);
+        inline.title = Some("literal title".into());
+        inline.decorative = true;
+        let mut writer = Writer::new(Vec::new());
+        CT_Drawing::inline(inline).to_xml(&mut writer).unwrap();
+        let xml = String::from_utf8(writer.into_inner()).unwrap();
+        let xml = xml.replace("<w:drawing>",&format!(r#"<w:drawing xmlns:w="{}" xmlns:wp="{}" xmlns:a="{}" xmlns:pic="{}" xmlns:r="{}">"#,
+            crate::namespace::W_NS,drawing_ns::WP,drawing_ns::A,drawing_ns::PIC,drawing_ns::R));
+        let source = xml
+            .replace("{C183D7F6", "&#123;C183D7F6")
+            .replace("val=\"1\"", "val=\"&#49;\"");
+        assert_ne!(source, xml);
+        for source in [
+            source.clone(),
+            source
+                .replace("adec:", "marker:")
+                .replace("xmlns:adec=", "xmlns:marker="),
+        ] {
+            let parsed = parse_drawing(&source).inline.unwrap();
+            assert!(parsed.decorative);
+            assert_eq!(parsed.title.as_deref(), Some("literal title"));
+            let mut out = Writer::new(Vec::new());
+            parsed.to_xml(&mut out).unwrap();
+            assert!(source.contains(std::str::from_utf8(&out.into_inner()).unwrap()));
+        }
+        let foreign = source.replace(DECORATIVE_NAMESPACE, "urn:foreign-decorative");
+        let parsed = parse_drawing(&foreign).inline.unwrap();
+        assert!(!parsed.decorative);
+        let mut out = Writer::new(Vec::new());
+        parsed.to_xml(&mut out).unwrap();
+        assert!(foreign.contains(std::str::from_utf8(&out.into_inner()).unwrap()));
+        let wrong_uri = source.replace("C183D7F6", "C183D7F7");
+        assert!(!parse_drawing(&wrong_uri).inline.unwrap().decorative);
+        let nested = source
+            .replace("<a:ext uri=", "<a:opaque><a:ext uri=")
+            .replace("</a:ext>", "</a:ext></a:opaque>");
+        assert!(!parse_drawing(&nested).inline.unwrap().decorative);
     }
 }

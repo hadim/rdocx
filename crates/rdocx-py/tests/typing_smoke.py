@@ -25,6 +25,8 @@ from rdocx import (
     RGBColor,
     ReplacementCountError,
     Paragraph,
+    Picture,
+    PictureOptions,
     ParagraphCollection,
     ParagraphFormat,
     Revision,
@@ -209,11 +211,21 @@ def exercise_rdocx_types(path: Path) -> None:
     image_data: bytes | None = document.image_data("rId1")
     document.replace_image("rId1", b"image")
     document.replace_image_for_story(stories[0], "rId1", b"image")
-    resized: int = document.set_picture_size("rId1", width=Inches(1), height=Inches(1))
+    resized: int = document.set_picture_sizes_for_relationship("rId1", width=Inches(1), height=Inches(1))
     story_items: tuple[StoryItem, ...] = document.story_items
-    inserted_picture: StoryItem = document.add_picture(
+    inserted_picture: Picture = document.add_picture(
         b"png", "image.png", Inches(1), Inches(1), after=story_items[0]
     )
+    assert_type(document.pictures(), tuple[Picture, ...])
+    assert_type(document.set_picture_size(inserted_picture, Inches(1), Inches(1)), None)
+    assert_type(inserted_picture.bytes, bytes)
+    assert_type(inserted_picture.title, str | None)
+    assert_type(inserted_picture.decorative, bool)
+    options = PictureOptions(title="owned", decorative=True, crop=(0.1, 0.0, 0.1, 0.0))
+    assert_type(document.paragraphs[0].runs[0].add_picture(path, width=Inches(1), height=Inches(1), options=options), Picture)
+    assert_type(document.tables[0].cell(0, 0).add_picture(b"png", width=Inches(1), height=Inches(1)), Picture)
+    assert_type(document.paragraphs[0].add_internal_hyperlink("jump", "Target", tooltip="tip"), Run)
+    assert_type(document.add_heading_hyperlink(document.paragraphs[0], document.paragraphs[1], "jump"), Run)
     story_position = StoryRunPosition(item=story_items[0], run_index=0)
     handle_position = StoryRunPosition(paragraph=document.paragraphs[0], run_index=0)
     story_range = StoryRunRange(start=story_position, end=handle_position)

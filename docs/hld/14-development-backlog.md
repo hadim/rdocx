@@ -6940,6 +6940,8 @@ Resolve [Issue305](https://github.com/tensorbee/rdocx/issues/305) in S91,
 part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
 coverage checklist. Reuse signed removable table indentation from F-X194. Add empty rows, nested tables, table look/style/layout, merge-aware column insertion/deletion and cell splitting. Expose picture options, run/cell pictures, identity-specific resize and picture inventory. Add bookmark/heading hyperlinks and tooltips. Complete synchronized scoped alternate text-box edits beyond F-X198's safe refusal, preserving physical owner identity and atomicity.
 
+Checked table operations use logical grid topology and selected reference-column formatting. Picture is a factory-created physical snapshot, and Python relationship-wide sizing is explicitly named set_picture_sizes_for_relationship. Internal links validate the existing bookmark grammar and support checked related-story source paragraphs. Paired scoped edits publish every admitted physical counterpart together or refuse atomically.
+
 **Depends on**: F-X194, F-X198, F-X206.
 **Test gate**: regression. Reproduce each missing operation or reported defect
 through the installed public API on the claimed Base before implementation.

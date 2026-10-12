@@ -398223,7 +398223,7 @@ fn fx198_authored_boxes(count: usize) -> Document {
 }
 
 #[test]
-fn scoped_text_box_replacement_refuses_alternate_copies_atomically() {
+fn scoped_text_box_replacement_updates_alternate_copies_and_preserves_comments() {
     let mut document = fx198_authored_boxes(1);
     let location = f254_item(&document, &f254_story(&document, StoryKind::TextBox), 0);
     let comment = document
@@ -398247,14 +398247,32 @@ fn scoped_text_box_replacement_refuses_alternate_copies_atomically() {
     let bytes = document.to_bytes().unwrap();
     let story = f254_story(&document, StoryKind::TextBox);
     let location = f254_item(&document, &story, 0);
-    let error = document
-        .try_replace_text_at(&location, "NEEDLE", "PIN", Some(1))
-        .expect_err("paired text box replacement must refuse before publishing Choice alone");
-    assert!(error.to_string().contains("alternate text-box"));
-    assert_eq!(document.to_bytes().unwrap(), bytes);
     assert_eq!(
-        document.story_items(&story).unwrap()[0].text().unwrap(),
-        Some("box NEEDLE".into())
+        document
+            .try_replace_text_at(&location, "NEEDLE", "PIN", Some(1))
+            .unwrap()
+            .unwrap(),
+        1
+    );
+    let updated = document.to_bytes().unwrap();
+    let before = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+    let after = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(updated.clone())).unwrap();
+    for (name, part) in &before.parts {
+        if name != "/word/document.xml" {
+            assert_eq!(after.get_part(name), Some(part.as_slice()), "{name}");
+        }
+    }
+    document.validate_comment_ownership().unwrap();
+    assert_eq!(document.comments().len(), 2);
+    let xml = document_xml(&mut document);
+    assert_eq!(xml.matches("box PIN").count(), 2);
+    assert_eq!(document.paragraphs()[0].text(), "host outside NEEDLE");
+    let reopened = Document::from_bytes(&updated).unwrap();
+    reopened.validate_comment_ownership().unwrap();
+    let story = f254_story(&reopened, StoryKind::TextBox);
+    assert_eq!(
+        reopened.story_items(&story).unwrap()[0].text().unwrap(),
+        Some("box PIN".into())
     );
 }
 
@@ -398359,7 +398377,7 @@ fn scoped_single_representation_text_boxes_keep_their_supported_edit() {
 }
 
 #[test]
-fn alternate_text_box_refusal_tracks_physical_owner_and_namespace() {
+fn alternate_text_box_updates_track_physical_owner_and_namespace() {
     let mut seed = fx198_authored_boxes(2);
     let xml = document_xml(&mut seed);
     let fallback_start = xml.find("<mc:Fallback>").unwrap();
@@ -398381,25 +398399,59 @@ fn alternate_text_box_refusal_tracks_physical_owner_and_namespace() {
         &xml[choice_start..choice_end],
         &xml[choice_end..]
     );
-    for source in [xml.clone(), unequal, alias, multiple_choices] {
-        let mut document = document_with_content_controls(&source);
-        let bytes = document.to_bytes().unwrap();
-        let boxes = document
-            .stories()
-            .unwrap()
-            .into_iter()
-            .filter(|s| s.kind() == StoryKind::TextBox)
-            .collect::<Vec<_>>();
-        assert_eq!(boxes.len(), 2);
-        for story in boxes {
-            let location = f254_item(&document, &story, 0);
-            let error = document
-                .try_replace_text_at(&location, "NEEDLE", "PIN", Some(1))
-                .unwrap_err();
-            assert!(error.to_string().contains("alternate text-box"));
-            assert_eq!(document.to_bytes().unwrap(), bytes);
+    for (source, selected_copies) in [(xml.clone(), 2), (alias, 2), (multiple_choices, 3)] {
+        for owner in 0..2 {
+            let mut document = document_with_content_controls(&source);
+            let boxes = document
+                .stories()
+                .unwrap()
+                .into_iter()
+                .filter(|s| s.kind() == StoryKind::TextBox)
+                .collect::<Vec<_>>();
+            assert_eq!(boxes.len(), 2);
+            let location = f254_item(&document, &boxes[owner], 0);
+            assert_eq!(
+                document
+                    .try_replace_text_at(&location, "NEEDLE", "PIN", Some(1))
+                    .unwrap()
+                    .unwrap(),
+                1
+            );
+            let output = document_xml(&mut document);
+            assert_eq!(
+                output.matches("box PIN").count(),
+                if owner == 0 { selected_copies } else { 2 }
+            );
+            let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+            let boxes = reopened
+                .stories()
+                .unwrap()
+                .into_iter()
+                .filter(|s| s.kind() == StoryKind::TextBox)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                reopened.story_items(&boxes[owner]).unwrap()[0]
+                    .text()
+                    .unwrap(),
+                Some("box PIN".into())
+            );
+            assert_eq!(
+                reopened.story_items(&boxes[1 - owner]).unwrap()[0]
+                    .text()
+                    .unwrap(),
+                Some("box NEEDLE".into())
+            );
         }
     }
+    let mut document = document_with_content_controls(&unequal);
+    let before = document.to_bytes().unwrap();
+    let first = f254_item(&document, &f254_story(&document, StoryKind::TextBox), 0);
+    assert!(
+        document
+            .try_replace_text_at(&first, "NEEDLE", "PIN", Some(1))
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
     // A later paired owner cannot make an unrelated single-copy owner refuse.
     let source = format!("{}{}", &xml[..fallback_start], &xml[fallback_end..]);
     let mut document = document_with_content_controls(&source);
@@ -398485,6 +398537,12 @@ fn scoped_cell_inside_alternate_text_box_refuses_without_mutation() {
     let mut document = fx198_authored_boxes(1);
     let story = f254_story(&document, StoryKind::TextBox);
     let mut table = rdocx_oxml::table::CT_Tbl::new();
+    table.grid = Some(rdocx_oxml::table::CT_TblGrid {
+        columns: vec![rdocx_oxml::table::CT_TblGridCol {
+            width: rdocx_oxml::units::Twips(1440),
+        }],
+        ..Default::default()
+    });
     let mut row = rdocx_oxml::table::CT_Row::new();
     let mut cell = rdocx_oxml::table::CT_Tc::new();
     cell.paragraphs_mut()[0].add_run("cell NEEDLE");
@@ -398511,13 +398569,11 @@ fn scoped_cell_inside_alternate_text_box_refuses_without_mutation() {
         .unwrap()
         .unwrap_err();
     assert_eq!((mismatch.expected, mismatch.found), (2, 1));
-    assert!(
-        document
-            .try_replace_text_at(&location, "NEEDLE", "PIN", Some(1))
-            .unwrap_err()
-            .to_string()
-            .contains("alternate text-box")
-    );
+    let error = document
+        .try_replace_text_at(&location, "NEEDLE", "PIN", Some(1))
+        .unwrap_err();
+    eprintln!("actual asymmetric paired-cell refusal: {error}");
+    assert!(error.to_string().contains("alternate text-box"), "{error}");
     assert_eq!(document.to_bytes().unwrap(), bytes);
 }
 
@@ -401061,5 +401117,669 @@ fn fx203_checkbox_default_namespace_selects_glyph_font_and_keeps_foreign_owner()
         Some(rdocx_oxml::content_control::SdtType::CheckBox)
     );
     assert_eq!(reopened.content_controls()[0].text(), "D");
+    assert_eq!(document_xml(&mut reopened), output);
+}
+
+#[test]
+fn fx202_scoped_paired_text_box_edits_publish_all_copies() {
+    let mut document = fx198_authored_boxes(1);
+    let location = f254_item(&document, &f254_story(&document, StoryKind::TextBox), 0);
+    assert_eq!(
+        document
+            .try_replace_text_at(&location, "NEEDLE", "PIN", Some(1))
+            .unwrap()
+            .unwrap(),
+        1
+    );
+    let bytes = document.to_bytes().unwrap();
+    assert_eq!(document_xml(&mut document).matches("box PIN").count(), 2);
+    let reopened = Document::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        reopened
+            .story_items(&f254_story(&reopened, StoryKind::TextBox))
+            .unwrap()[0]
+            .text()
+            .unwrap(),
+        Some("box PIN".into())
+    );
+}
+
+#[test]
+fn fx202_table_topology_empty_row_columns_and_noop_split() {
+    let mut document = Document::new();
+    document
+        .add_table(2, 2)
+        .cell(0, 0)
+        .unwrap()
+        .set_text("retained");
+    let before = document.to_bytes().unwrap();
+    assert!(!document.split_table_cell(0, 0, 0).unwrap());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    assert_eq!(document.add_empty_table_row(0).unwrap(), 2);
+    assert_eq!(document.table(0).unwrap().row_count(), 3);
+    assert_eq!(
+        document
+            .table(0)
+            .unwrap()
+            .row(2)
+            .unwrap()
+            .cell(0)
+            .unwrap()
+            .text(),
+        ""
+    );
+    document.insert_table_column(0, 0, true).unwrap();
+    assert_eq!(document.table(0).unwrap().column_count(), 3);
+    assert_eq!(
+        document
+            .table(0)
+            .unwrap()
+            .row(0)
+            .unwrap()
+            .cell(1)
+            .unwrap()
+            .text(),
+        "retained"
+    );
+    document.delete_table_column(0, 0).unwrap();
+    assert_eq!(document.table(0).unwrap().column_count(), 2);
+    let before = document.to_bytes().unwrap();
+    assert!(document.delete_table_column(0, 2).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let reopened = Document::from_bytes(&before).unwrap();
+    assert_eq!(
+        reopened
+            .table(0)
+            .unwrap()
+            .row(0)
+            .unwrap()
+            .cell(0)
+            .unwrap()
+            .text(),
+        "retained"
+    );
+}
+
+#[test]
+fn fx202_table_topology_vertical_merge_and_atomic_continuation() {
+    let mut document = Document::new();
+    document.add_table(2, 2);
+    {
+        let mut table = document.table_mut(0).unwrap();
+        table.set_cell_grid_span_checked(0, 0, Some(2)).unwrap();
+        table.set_cell_grid_span_checked(1, 0, Some(2)).unwrap();
+        table
+            .set_cell_vertical_merge(0, 0, Some(rdocx::VMerge::Restart))
+            .unwrap();
+        table
+            .set_cell_vertical_merge(1, 0, Some(rdocx::VMerge::Continue))
+            .unwrap();
+        table.cell(0, 0).unwrap().set_text("origin once");
+    }
+    let bytes = document.to_bytes().unwrap();
+    assert_eq!(document.add_empty_table_row(0).unwrap(), 2);
+    let table = document.table(0).unwrap();
+    let row = table.row(2).unwrap();
+    let new = row.cell(0).unwrap();
+    assert_eq!(new.grid_span(), Some(2));
+    assert!(new.v_merge().is_none());
+    assert_eq!(new.text(), "");
+    assert!(document.split_table_cell(0, 1, 1).unwrap());
+    for row in 0..2 {
+        assert_eq!(document.table(0).unwrap().row(row).unwrap().cell_count(), 2);
+        for cell in 0..2 {
+            let table = document.table(0).unwrap();
+            let selected_row = table.row(row).unwrap();
+            let selected = selected_row.cell(cell).unwrap();
+            assert!(selected.v_merge().is_none());
+            assert!(selected.grid_span().is_none());
+        }
+    }
+    assert_eq!(
+        document_xml(&mut document).matches("origin once").count(),
+        1
+    );
+    let mut ambiguous = Document::from_bytes(&bytes).unwrap();
+    ambiguous
+        .table_mut(0)
+        .unwrap()
+        .cell(1, 0)
+        .unwrap()
+        .set_text("distinct producer content");
+    assert!(ambiguous.split_table_cell(0, 1, 1).unwrap());
+    let output = document_xml(&mut ambiguous);
+    assert_eq!(output.matches("distinct producer content").count(), 1);
+    assert_eq!(output.matches("origin once").count(), 1);
+    let table = ambiguous.table(0).unwrap();
+    assert_eq!(
+        table.row(1).unwrap().cell(0).unwrap().text(),
+        "distinct producer content"
+    );
+    assert_eq!(table.row(1).unwrap().cell(1).unwrap().text(), "");
+    let bytes = ambiguous.to_bytes().unwrap();
+    assert_eq!(
+        Document::from_bytes(&bytes)
+            .unwrap()
+            .table(0)
+            .unwrap()
+            .row(1)
+            .unwrap()
+            .cell(0)
+            .unwrap()
+            .text(),
+        "distinct producer content"
+    );
+}
+
+#[test]
+fn fx202_table_topology_omissions_spans_and_opaque_boundaries() {
+    let xml = r#"<q:document xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:fx202"><q:body><q:tbl><q:tblPr><q:tblW q:type="dxa" q:w="3000"/></q:tblPr><q:tblGrid><q:gridCol q:w="1000"/><q:gridCol q:w="1000"/><q:gridCol q:w="1000"/></q:tblGrid><q:tr><q:trPr><q:gridBefore q:val="1"/><q:wBefore q:type="dxa" q:w="1000"/></q:trPr><q:tc><q:tcPr><q:tcW q:type="dxa" q:w="1000"/></q:tcPr><q:p><q:r><q:t>first</q:t></q:r></q:p></q:tc><x:keep x:flag="exact"><x:child/></x:keep><q:tc><q:tcPr><q:tcW q:type="dxa" q:w="1000"/></q:tcPr><q:p><q:r><q:t>last</q:t></q:r></q:p></q:tc></q:tr><q:tr><q:tc><q:tcPr><q:tcW q:type="dxa" q:w="2000"/><q:gridSpan q:val="2"/></q:tcPr><q:p><q:r><q:t>span</q:t></q:r></q:p></q:tc><q:tc><q:p/></q:tc></q:tr></q:tbl></q:body></q:document>"#;
+    let mut document = document_with_content_controls(xml);
+    let before = document_xml(&mut document);
+    let start = before.find("<x:keep").unwrap();
+    let end = before.find("</x:keep>").unwrap() + "</x:keep>".len();
+    let opaque = before[start..end].to_owned();
+    document.insert_table_column(0, 0, true).unwrap();
+    assert_eq!(
+        document.table(0).unwrap().row(0).unwrap().grid_before(),
+        Some(2)
+    );
+    assert_eq!(document.table(0).unwrap().row(0).unwrap().cell_count(), 2);
+    document.delete_table_column(0, 0).unwrap();
+    assert_eq!(
+        document.table(0).unwrap().row(0).unwrap().grid_before(),
+        Some(1)
+    );
+    document.insert_table_column(0, 1, true).unwrap();
+    assert_eq!(
+        document
+            .table(0)
+            .unwrap()
+            .row(1)
+            .unwrap()
+            .cell(0)
+            .unwrap()
+            .grid_span(),
+        Some(3)
+    );
+    assert!(document_xml(&mut document).contains(&opaque));
+    document.delete_table_column(0, 1).unwrap();
+    assert_eq!(
+        document
+            .table(0)
+            .unwrap()
+            .row(1)
+            .unwrap()
+            .cell(0)
+            .unwrap()
+            .grid_span(),
+        Some(2)
+    );
+    assert!(document_xml(&mut document).contains(&opaque));
+}
+
+#[test]
+fn fx202_table_topology_column_removal_reconciles_cut_bookmark() {
+    let xml = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:tbl><w:tblGrid><w:gridCol w:w="1000"/><w:gridCol w:w="1000"/></w:tblGrid><w:tr><w:tc><w:p><w:bookmarkStart w:id="7" w:name="cut"/><w:r><w:t>removed</w:t></w:r></w:p></w:tc><w:tc><w:p><w:bookmarkEnd w:id="7"/><w:bookmarkStart w:id="9" w:name="retained"/><w:r><w:t>kept</w:t></w:r><w:bookmarkEnd w:id="9"/><x:opaque xmlns:x="urn:fx202"><w:bookmarkEnd w:id="7"/><x:keep/></x:opaque><f:bookmarkEnd xmlns:f="urn:foreign" f:id="7"/></w:p></w:tc></w:tr></w:tbl></w:body></w:document>"#;
+    let mut document = document_with_content_controls(xml);
+    let before = document_xml(&mut document);
+    let opaque_start = before.find("<x:opaque").unwrap();
+    let opaque_end = before.find("</x:opaque>").unwrap() + "</x:opaque>".len();
+    let opaque = before[opaque_start..opaque_end].to_owned();
+    let foreign_start = before.find("<f:bookmarkEnd").unwrap();
+    let foreign_end = foreign_start + before[foreign_start..].find("/>").unwrap() + 2;
+    let foreign = before[foreign_start..foreign_end].to_owned();
+    document.delete_table_column(0, 0).unwrap();
+    let xml = document_xml(&mut document);
+    assert!(xml.contains(&opaque), "{xml}");
+    assert!(xml.contains(&foreign), "{xml}");
+    assert_eq!(xml.matches("w:id=\"7\"").count(), 1, "{xml}");
+    assert_eq!(xml.matches("w:id=\"9\"").count(), 2);
+    assert_eq!(
+        document
+            .table(0)
+            .unwrap()
+            .row(0)
+            .unwrap()
+            .cell(0)
+            .unwrap()
+            .text(),
+        "kept"
+    );
+}
+
+#[test]
+fn fx202_table_topology_nested_checked_location_is_physical() {
+    let mut document = Document::new();
+    document
+        .add_table(1, 1)
+        .cell(0, 0)
+        .unwrap()
+        .add_table_checked(2, 2)
+        .unwrap();
+    assert_eq!(document.table_count(), 1);
+    let story = f254_story(&document, StoryKind::TableCell);
+    let location = document
+        .story_items(&story)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::Table)
+        .unwrap()
+        .location()
+        .clone();
+    document
+        .edit_story_table(&location, |table| {
+            table.add_row()?;
+            Ok(())
+        })
+        .unwrap();
+    let story = f254_story(&document, StoryKind::TableCell);
+    let location = document
+        .story_items(&story)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::Table)
+        .unwrap()
+        .location()
+        .clone();
+    document
+        .edit_story_table(&location, |table| table.insert_column(0, true, None))
+        .unwrap();
+    assert_eq!(document.table(0).unwrap().row_count(), 1);
+    assert_eq!(document.table(0).unwrap().column_count(), 1);
+    let story = f254_story(&document, StoryKind::TableCell);
+    let location = document
+        .story_items(&story)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::Table)
+        .unwrap()
+        .location()
+        .clone();
+    assert_eq!(
+        document
+            .read_story_table(&location, |table| table.row_count())
+            .unwrap(),
+        3
+    );
+    assert_eq!(
+        document
+            .read_story_table(&location, |table| table.column_count())
+            .unwrap(),
+        3
+    );
+    document.delete_story_table_column(&location, 2).unwrap();
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(reopened.table_count(), 1);
+    let story = f254_story(&reopened, StoryKind::TableCell);
+    let location = reopened
+        .story_items(&story)
+        .unwrap()
+        .into_iter()
+        .find(|item| item.kind() == StoryItemKind::Table)
+        .unwrap()
+        .location()
+        .clone();
+    assert_eq!(
+        reopened
+            .read_story_table(&location, |table| table.column_count())
+            .unwrap(),
+        2
+    );
+}
+
+#[test]
+fn fx202_table_topology_direct_owner_after_content_control_is_preserved() {
+    let xml = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:sdt><w:sdtPr><w:id w:val="91"/></w:sdtPr><w:sdtContent><w:tbl><w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>wrapped</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:sdtContent></w:sdt><w:tbl><w:tblGrid><w:gridCol w:w="1000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>direct</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>"#;
+    let mut document = document_with_content_controls(xml);
+    assert_eq!(document.table_count(), 2);
+    assert_eq!(
+        document.table(1).unwrap().cell(0, 0).unwrap().text(),
+        "direct"
+    );
+    let before = document
+        .story_item_snapshots()
+        .unwrap()
+        .into_iter()
+        .find(|item| item.location().item_kind() == StoryItemKind::ContentControl)
+        .unwrap()
+        .xml()
+        .to_vec();
+    document.add_empty_table_row(1).unwrap();
+    document.insert_table_column(1, 0, true).unwrap();
+    document.delete_table_column(1, 1).unwrap();
+    assert_eq!(document.table(1).unwrap().row_count(), 2);
+    assert_eq!(document.table(1).unwrap().column_count(), 1);
+    let after = document
+        .story_item_snapshots()
+        .unwrap()
+        .into_iter()
+        .find(|item| item.location().item_kind() == StoryItemKind::ContentControl)
+        .unwrap()
+        .xml()
+        .to_vec();
+    assert_eq!(before, after);
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(reopened.table(1).unwrap().row_count(), 2);
+}
+
+#[test]
+fn fx202_table_topology_legacy_horizontal_merge_refuses_atomically() {
+    let xml = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:tbl><w:tblGrid><w:gridCol w:w="1000"/><w:gridCol w:w="1000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:hMerge w:val="restart"/></w:tcPr><w:p/></w:tc><w:tc><w:tcPr><w:hMerge/></w:tcPr><w:p/></w:tc></w:tr></w:tbl></w:body></w:document>"#;
+    let mut document = document_with_content_controls(xml);
+    let before = document.to_bytes().unwrap();
+    assert!(document.insert_table_column(0, 0, true).is_err());
+    assert!(document.delete_table_column(0, 0).is_err());
+    assert!(document.split_table_cell(0, 0, 0).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn fx202_table_topology_opaque_formatting_copy_refuses_without_source_loss() {
+    let xml = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:fx202"><w:body><w:tbl><w:tblGrid><w:gridCol w:w="1000"/><w:gridCol w:w="1000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:gridSpan w:val="2"/><x:identity x:id="preserve"/></w:tcPr><w:p><w:r><w:t>origin</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>"#;
+    let mut document = document_with_content_controls(xml);
+    let before = document.to_bytes().unwrap();
+    assert!(document.add_empty_table_row(0).is_err());
+    assert!(document.split_table_cell(0, 0, 0).is_err());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    document.insert_table_column(0, 1, true).unwrap();
+    let saved = document_xml(&mut document);
+    assert!(saved.contains("x:identity"));
+    assert!(saved.contains("preserve"));
+}
+
+#[test]
+fn fx202_table_topology_insertion_copies_referenced_width_format_and_omissions() {
+    let xml = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:tbl><w:tblPr><w:tblW w:type="dxa" w:w="6000"/></w:tblPr><w:tblGrid><w:gridCol w:w="1000"/><w:gridCol w:w="2000"/><w:gridCol w:w="3000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcW w:type="dxa" w:w="1000"/><w:shd w:fill="FF0000"/></w:tcPr><w:p><w:r><w:t>left</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:tcW w:type="dxa" w:w="2000"/><w:shd w:fill="00FF00"/></w:tcPr><w:p><w:r><w:t>reference</w:t></w:r></w:p></w:tc><w:tc><w:tcPr><w:tcW w:type="dxa" w:w="3000"/><w:shd w:fill="0000FF"/></w:tcPr><w:p><w:r><w:t>right</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>"#;
+    for before in [true, false] {
+        let mut document = document_with_content_controls(xml);
+        document.insert_table_column(0, 1, before).unwrap();
+        let body = body_from_document(&mut document);
+        let table = body.tables().next().unwrap();
+        let index = 1 + usize::from(!before);
+        assert_eq!(table.grid.as_ref().unwrap().columns[index].width.0, 2000);
+        let added = &table.rows[0].cells[index];
+        assert_eq!(
+            added.properties.as_ref().unwrap().width.as_ref().unwrap().w,
+            2000
+        );
+        assert_eq!(
+            added
+                .properties
+                .as_ref()
+                .unwrap()
+                .shading
+                .as_ref()
+                .unwrap()
+                .fill
+                .as_deref(),
+            Some("00FF00")
+        );
+        assert_eq!(
+            added.content,
+            vec![rdocx_oxml::table::CellContent::Paragraph(
+                rdocx_oxml::text::CT_P::new()
+            )]
+        );
+        let rdocx_oxml::table::CellContent::Paragraph(paragraph) =
+            &table.rows[0].cells[1 + usize::from(before)].content[0]
+        else {
+            panic!("reference paragraph retained");
+        };
+        assert_eq!(paragraph.accepted_text(), "reference");
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.table(0).unwrap().column_count(), 4);
+    }
+    let omitted = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:tbl><w:tblGrid><w:gridCol w:w="1000"/><w:gridCol w:w="2000"/><w:gridCol w:w="3000"/></w:tblGrid><w:tr><w:trPr><w:gridBefore w:val="1"/><w:wBefore w:type="dxa" w:w="1000"/><w:gridAfter w:val="1"/><w:wAfter w:type="dxa" w:w="3000"/></w:trPr><w:tc><w:tcPr><w:tcW w:type="dxa" w:w="2000"/></w:tcPr><w:p><w:r><w:t>only cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>"#;
+    for (reference, before) in [(0, false), (2, true)] {
+        let mut document = document_with_content_controls(omitted);
+        let raw_before = document.to_bytes().unwrap();
+        assert!(document.insert_table_column(0, 3, before).is_err());
+        assert_eq!(document.to_bytes().unwrap(), raw_before);
+        document.insert_table_column(0, reference, before).unwrap();
+        let selected_table = document.table(0).unwrap();
+        let row = selected_table.row(0).unwrap();
+        assert_eq!(row.cell_count(), 1);
+        assert_eq!(row.cell(0).unwrap().text(), "only cell");
+        assert_eq!(row.grid_before(), Some(if reference == 0 { 2 } else { 1 }));
+        assert_eq!(row.grid_after(), Some(if reference == 2 { 2 } else { 1 }));
+        let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        assert_eq!(reopened.table(0).unwrap().row(0).unwrap().cell_count(), 1);
+    }
+}
+
+fn fx202_pair_branches(choice_text: &[&str], fallback_text: &[&str]) -> Document {
+    let mut seed = fx198_authored_boxes(1);
+    let xml = document_xml(&mut seed);
+    let choice_start = xml.find("<mc:Choice").unwrap();
+    let choice_content = choice_start + xml[choice_start..].find('>').unwrap() + 1;
+    let choice_end = xml.find("</mc:Choice>").unwrap();
+    let fallback_start = xml.find("<mc:Fallback>").unwrap() + "<mc:Fallback>".len();
+    let fallback_end = xml.find("</mc:Fallback>").unwrap();
+    let choice = choice_text
+        .iter()
+        .map(|text| xml[choice_content..choice_end].replace("box NEEDLE", text))
+        .collect::<String>();
+    let fallback = fallback_text
+        .iter()
+        .map(|text| xml[fallback_start..fallback_end].replace("box NEEDLE", text))
+        .collect::<String>();
+    let source = format!(
+        "{}{}{}{}{}",
+        &xml[..choice_content],
+        choice,
+        &xml[choice_end..fallback_start],
+        fallback,
+        &xml[fallback_end..]
+    );
+    document_with_content_controls(&source)
+}
+
+#[test]
+fn fx202_paired_distinct_siblings_three_branches_and_unequal_runs() {
+    let mut seed = fx202_pair_branches(
+        &["first NEEDLE", "second NEEDLE"],
+        &["first NEEDLE", "second NEEDLE"],
+    );
+    let xml = document_xml(&mut seed);
+    let choice_start = xml.find("<mc:Choice").unwrap();
+    let choice_end = xml.find("</mc:Choice>").unwrap() + "</mc:Choice>".len();
+    let source = format!(
+        "{}{}{}",
+        &xml[..choice_end],
+        &xml[choice_start..choice_end],
+        &xml[choice_end..]
+    );
+    let source = source
+        .replace("mc:", "compat:")
+        .replace("xmlns:mc=", "xmlns:compat=");
+    let mut document = document_with_content_controls(&source);
+    let story = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::TextBox)
+        .unwrap();
+    let location = f254_item(&document, &story, 0);
+    assert_eq!(
+        document
+            .try_replace_text_at(&location, "NEEDLE", "PIN", Some(1))
+            .unwrap()
+            .unwrap(),
+        1
+    );
+    let output = document_xml(&mut document);
+    assert_eq!(output.matches("first PIN").count(), 3);
+    assert_eq!(output.matches("second NEEDLE").count(), 3);
+    assert_eq!(document.paragraphs()[0].text(), "host outside NEEDLE");
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    assert_eq!(
+        reopened
+            .stories()
+            .unwrap()
+            .into_iter()
+            .filter(|story| story.kind() == StoryKind::TextBox)
+            .count(),
+        2
+    );
+
+    let mut seed = fx198_authored_boxes(1);
+    let xml = document_xml(&mut seed);
+    let start = xml.find("<mc:Fallback>").unwrap();
+    let source_run = r#"<w:r><w:t xml:space="preserve">box NEEDLE</w:t></w:r>"#;
+    assert_eq!(xml[start..].matches(source_run).count(), 1);
+    let fallback = xml[start..].replace(
+        source_run,
+        "<w:r><w:rPr><w:b/></w:rPr><w:t>box </w:t></w:r><w:r><w:t>NEEDLE</w:t></w:r>",
+    );
+    let mut document = document_with_content_controls(&format!("{}{}", &xml[..start], fallback));
+    let location = f254_item(&document, &f254_story(&document, StoryKind::TextBox), 0);
+    assert_eq!(
+        document
+            .try_replace_text_at(&location, "NEEDLE", "PIN", Some(1))
+            .unwrap()
+            .unwrap(),
+        1
+    );
+    let output = document_xml(&mut document);
+    assert_eq!(output.matches("<w:b/>").count(), 1);
+    let fallback_start = output.find("<mc:Fallback>").unwrap();
+    let paragraph_start = regex::Regex::new(r"<w:p(?:\s[^>]*)?>").unwrap();
+    let text_start = fallback_start
+        + paragraph_start
+            .find(&output[fallback_start..])
+            .unwrap()
+            .start();
+    let text_end = text_start + output[text_start..].find("</w:p>").unwrap() + "</w:p>".len();
+    let paragraph =
+        rdocx_oxml::text::CT_P::from_xml_fragment(&output.as_bytes()[text_start..text_end])
+            .unwrap();
+    assert_eq!(paragraph.runs.len(), 2);
+    assert_eq!(
+        paragraph.runs[0]
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.bold),
+        Some(true)
+    );
+    assert_eq!(paragraph.runs[0].text(), "box ");
+    assert_eq!(paragraph.runs[1].text(), "PIN");
+    assert_eq!(output.matches("PIN").count(), 2);
+}
+
+#[test]
+fn fx202_paired_ambiguity_asymmetry_and_count_order_are_atomic() {
+    for (choice, fallback) in [
+        (
+            vec!["same NEEDLE", "same NEEDLE"],
+            vec!["same NEEDLE", "same NEEDLE"],
+        ),
+        (
+            vec!["first NEEDLE", "second NEEDLE"],
+            vec!["second NEEDLE", "first NEEDLE"],
+        ),
+        (vec!["first NEEDLE", "second NEEDLE"], vec!["first NEEDLE"]),
+        (
+            vec!["first NEEDLE", "unselected"],
+            vec!["first NEEDLE", "changed unselected"],
+        ),
+    ] {
+        let mut document = fx202_pair_branches(&choice, &fallback);
+        let location = f254_item(&document, &f254_story(&document, StoryKind::TextBox), 0);
+        let before = document.to_bytes().unwrap();
+        assert!(
+            document
+                .try_replace_text_at(&location, "NEEDLE", "PIN", Some(2))
+                .unwrap()
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+        assert_eq!(
+            document
+                .try_replace_text_at(&location, "absent", "PIN", Some(0))
+                .unwrap()
+                .unwrap(),
+            0
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+        assert!(
+            document
+                .try_replace_text_at(&location, "NEEDLE", "PIN", Some(1))
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+}
+
+#[test]
+fn fx202_paired_descendant_cell_keeps_unselected_content_and_comment_owners() {
+    let mut seed = fx198_authored_boxes(1);
+    let xml = document_xml(&mut seed);
+    let original = r#"<w:p><w:r><w:t xml:space="preserve">box NEEDLE</w:t></w:r></w:p>"#;
+    let table = r#"<w:tbl><w:tblGrid><w:gridCol w:w="1000"/><w:gridCol w:w="1000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>cell NEEDLE</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>unselected</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/>"#;
+    assert_eq!(xml.matches(original).count(), 2);
+    let mut document = document_with_content_controls(&xml.replace(original, table));
+    let story = document
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::TableCell)
+        .unwrap();
+    let location = f254_item(&document, &story, 0);
+    assert_eq!(
+        document
+            .try_replace_text_at(&location, "NEEDLE", "PIN", Some(1))
+            .unwrap()
+            .unwrap(),
+        1
+    );
+    let output = document_xml(&mut document);
+    assert_eq!(output.matches("cell PIN").count(), 2);
+    assert_eq!(output.matches("unselected").count(), 2);
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let story = reopened
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::TableCell)
+        .unwrap();
+    assert_eq!(
+        reopened.story_items(&story).unwrap()[0].text().unwrap(),
+        Some("cell PIN".into())
+    );
+}
+
+#[test]
+fn fx202_split_retains_each_continuation_owner_without_cloning_payloads() {
+    let xml = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:x="urn:fx202-owner"><w:body><w:tbl><w:tblGrid><w:gridCol w:w="1000"/><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:gridSpan w:val="2"/><w:vMerge w:val="restart"/></w:tcPr><w:p><w:r><w:t>origin once</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:tcPr><w:gridSpan w:val="2"/><w:vMerge/></w:tcPr><w:p><w:bookmarkStart w:id="27" w:name="Continuation"/><w:sdt><w:sdtPr><w:id w:val="91"/><w:tag w:val="owned"/></w:sdtPr><w:sdtContent><w:r><w:t>control once</w:t></w:r></w:sdtContent></w:sdt><x:payload x:id="producer-identity"><x:child/></x:payload><w:bookmarkEnd w:id="27"/></w:p></w:tc></w:tr></w:tbl></w:body></w:document>"#;
+    let mut document = document_with_content_controls(xml);
+    let original = document_xml(&mut document);
+    assert_eq!(original.matches("producer-identity").count(), 1);
+    assert!(document.split_table_cell(0, 1, 1).unwrap());
+    let output = document_xml(&mut document);
+    for value in [
+        "origin once",
+        "control once",
+        "producer-identity",
+        "w:name=\"Continuation\"",
+        "w:val=\"91\"",
+    ] {
+        assert_eq!(output.matches(value).count(), 1, "{value}: {output}");
+    }
+    assert_eq!(
+        document
+            .table(0)
+            .unwrap()
+            .row(1)
+            .unwrap()
+            .cell(1)
+            .unwrap()
+            .text(),
+        ""
+    );
+    let before = document.to_bytes().unwrap();
+    assert!(!document.split_table_cell(0, 1, 0).unwrap());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let mut reopened = Document::from_bytes(&before).unwrap();
     assert_eq!(document_xml(&mut reopened), output);
 }
