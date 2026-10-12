@@ -49,7 +49,7 @@ five approved pending implementation. The latest bounded intake includes39 issue
 | F-X216 | Import complete slides and merge decks with source formatting | L | pending | - |
 | F-X217 | Import HTML and Markdown through public Word surfaces | L | in-progress | codex |
 | F-X218 | Export presentations as semantic HTML and Markdown | L | pending | - |
-| F-X220 | Embed fonts through both native and public package families | L | pending | - |
+| F-X220 | Embed fonts through both native and public package families | L | in-progress | codex |
 | F-X221 | Prepare Word 0.17.0 and PowerPoint 0.15.0 minor releases | L | pending | - |
 
 ## Carried to S92, user scope decision
@@ -1140,4 +1140,4 @@ F-X220 owns font embedding across native Word/PowerPoint, both Python packages a
 
 F-X221 prepares both next minor families after all27 repair stories complete: Word crates/Python0.17.0 and shared/PowerPoint crates/Python0.15.0. Fresh registry/tag receipt verifies published0.16.0/0.14.0 and absent next versions/tags. Preparation uses existing exact7/15 crate allowlists, new matching wheels/metadata, meaningful authenticated family notes and reviewed-SHA build-only rehearsal. No versions are changed yet and no publication is claimed. Final full sprint verification, clean sprint review and close remain due. Publication follows the exact reviewed main merge through separate release approval for each family, shared/PowerPoint first.
 
-Twenty of28 active stories are complete. F-X204, F-X215 and F-X217 are running in isolated worktrees with disjoint file leases. F-X211, F-X216, F-X218, F-X220 and F-X221 remain approved and pending. Bibliography, navigation, standalone authoring and full-range text watermark work remain deferred to S92. Required evidence and carried dirty work are retained.
+Twenty of28 active stories are complete. F-X204, F-X215, F-X217 and the low-level F-X220 model phase are running in isolated worktrees with disjoint file leases. F-X211, F-X216, F-X218 and F-X221 remain approved and pending. Bibliography, navigation, standalone authoring and full-range text watermark work remain deferred to S92. Required evidence and carried dirty work are retained.
