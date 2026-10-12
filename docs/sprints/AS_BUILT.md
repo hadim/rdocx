@@ -19163,3 +19163,23 @@ push, main merge, tag or publication is claimed.
 **Spec sections touched.** HLD02,04,08,10,12 and14, matching the approved impact list and preserving completed shared contracts.
 
 **Notes for future sessions.** Implementationc29ef66c and handoff-only tipc2305905 retain claim ancestry. Keep work/f-x201-codex through final review and close. Required scratch and samples remain under /private/tmp/S91-F-X201-integration-checkpoint/retained-worker. Transfer the warm cache for the next Word worker. No GitHub closure, push, main merge, tag or publication is claimed.
+
+
+### F-X205, Complete Python PowerPoint text fill and export parity
+
+**Completed.** 2026-10-12, S91 scoped dependency-prefix checkpoint
+**Size.** L, estimated4 to5 days, actual not recorded
+
+**What was built.** Issue308 and adapted PR318 slices provide run script properties, independent bullet attributes, bounded fills and checked gradient stops, table style and banding, properties, sections and media lifecycle. Python exposes native raster, archival, notes, handout and ODP exports. Fresh template metadata is neutral and master/layout rectangles match authenticated native widescreen geometry.
+
+**Non-obvious choices.** Labelled commits separate parity, PowerPoint channel-directed interpolation, fresh core metadata and native geometry. Concrete sampled Grid paint serves PDF, raster and SVG. Word interpolation remains unchanged. Pattern palette and geometry are qualified independently from raster phase. The inherited paragraph-owner discrepancy retains its F-X211 acceptance home.
+
+**Tests.** Genuine Base failures and source-qualified successors remain retained. Forty installed controls, strict typing and stubtest pass with installed Word members preserved. Eight changed native crate scopes, native paint authorities, both WASM graphs, no-default layout and public docs are qualified. Seven verified archive dry runs abort upload. Final measurement-only archives authenticate source members, normalized sizes and counts. Workflow141 tests pass with2 existing skips. Whole review12 and bounded corrections through19 are clean.
+
+**Integrated evidence.** Validated implementatione71fdfed and handoff-onlyda639bbe squash into36b57d19. Integration review20 is clean, SHA b2208653650b6188376c83299f82b14d9f2f3f7e5ddfea64f0fdffc39ca438b2. The composition retains completed F-X201 source and both HLD contracts. The source-derived chart expectation reaches unchanged exact zero-pixel equality. Actual combined native/binding all-target/all-feature compilation, pixel comparison, archive measurements, formatting, prose, adapters, diff and README/package policy pass. Ten qualified rows form receipt90e1e8ead7dea1cbfc0f76cf9217bc1b69cc727c68117b1bf57c61d9eb83cb1c. Source guards stay exact and process groups are naturally reaped. Original golden, restricted-DNS and cache-path policy failures remain failed and receive no gate credit.
+
+**Hash harness.** All49 approved deterministic outputs match unchanged baseline342d09cd. Final full sprint verification and review remain due.
+
+**Spec sections touched.** Exactly HLD02,05,06,07,08,10,14 and15, including template authority, checked parity, paint and export ownership.
+
+**Notes for future sessions.** Keep work/f-x205-codex through final verification and close. Required evidence and warm cache remain available for clean worktree retirement and transfer to the next PowerPoint owner. No GitHub closure, sprint push, main merge, tag or publication is claimed.
