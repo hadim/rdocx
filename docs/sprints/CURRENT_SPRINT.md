@@ -6,8 +6,8 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 now contains twenty-six active stories, twenty completed, one running,
-five approved pending implementation. Contribution intake is closed at the user's latest instruction.
+S91 now contains twenty-six active stories, twenty completed, two running,
+four approved pending implementation. Contribution intake is closed at the user's latest instruction.
 
 ## Spec references
 
@@ -45,7 +45,7 @@ five approved pending implementation. Contribution intake is closed at the user'
 | F-X212 | Align native accessibility with visible paragraph content | M | done | - |
 | F-X213 | Preserve TOC entry boundary paragraphs during rebuild | M | done | - |
 | F-X214 | Bound recursive PowerPoint parsing and traversal | L | done | - |
-| F-X215 | Create charts in Python and replace existing chart data | L | pending | - |
+| F-X215 | Create charts in Python and replace existing chart data | L | in-progress | codex |
 | F-X216 | Import complete slides and merge decks with source formatting | L | pending | - |
 | F-X217 | Import HTML and Markdown through public Word surfaces | L | pending | - |
 | F-X218 | Export presentations as semantic HTML and Markdown | L | pending | - |
@@ -1118,3 +1118,8 @@ Twenty of26 included stories are completed. Issue344 and PR355 complete the dept
 The scoped native composite qualifies956 passes and34 existing ignores. Original failing runs and exact successors remain retained. Fresh installed PowerPoint controls, typing and stubtest pass with the complete Word distribution unchanged. A legal eight-group deck passes native PowerPoint open/save/reopen. Four verified patched archive dry runs abort upload. Policy qualifies139 passes and2 existing skips using the exact registry-only successor. Actual combined six-crate check and49 unchanged deterministic hashes pass. No full workspace or full sprint acceptance is claimed.
 
 F-X204 remains running, with F-X211 and F-X215 through F-X218 approved pending implementation. Intake stays closed at38 included issues and28 PRs. Discussion Issues264 and281 remain open. Bibliography, navigation and separate authoring carryovers stay in S92. Final integrated verification and sprint review remain due.
+
+
+## F-X215 isolated chart phase, 2026-10-12
+
+F-X215 is claimed for parallel work after completed F-X197 and F-X206. Its first exclusive file lease is only oxml-chart/src/lib.rs and oxml-sml/src/lib.rs with existing inline tests. F-X204 retains facade, binding, CLI and shared HLD ownership. Further chart phases wait for explicit source handover. This file boundary does not reduce the approved chart contract or its full scoped acceptance. Existing warm target is moved from the completed F-X214 worker, with required evidence and branch retained.
