@@ -177,6 +177,69 @@ fn html_import_keeps_the_space_around_an_emphasised_span_outside_it() {
     );
 }
 
+#[test]
+#[cfg(feature = "default-template")]
+fn html_import_collapses_spaces_on_both_sides_of_a_span_edge_into_one() {
+    const PLAIN: [bool; 4] = [false; 4];
+    const U: [bool; 4] = [true, false, false, false];
+    const S: [bool; 4] = [false, true, false, false];
+    const B: [bool; 4] = [false, false, true, false];
+    const I: [bool; 4] = [false, false, false, true];
+    const BI: [bool; 4] = [false, false, true, true];
+    let deck = |bodies: &[&str]| {
+        let boxes = bodies
+            .iter()
+            .enumerate()
+            .map(|(index, body)| {
+                format!(
+                    "<div style='position:absolute;left:10px;top:{}px;width:400px;height:40px'><p>{body}</p></div>",
+                    10 + 50 * index
+                )
+            })
+            .collect::<String>();
+        html_marked_runs(&format!("<section data-slide>{boxes}</section>"))
+    };
+    let runs = |items: &[(&str, [bool; 4])]| {
+        items
+            .iter()
+            .map(|(text, marks)| ((*text).to_owned(), *marks))
+            .collect::<Vec<_>>()
+    };
+    // The one space stays where the whitespace sequence starts: at the end
+    // of the span when it ends one, before the span when it starts one.
+    for (tag, mark) in [("u", U), ("s", S), ("b", B), ("i", I)] {
+        assert_eq!(
+            deck(&[
+                &format!("a <{tag}>b </{tag}> c"),
+                &format!("and <{tag}> that</{tag}>"),
+            ]),
+            [
+                runs(&[("a ", PLAIN), ("b ", mark), ("c", PLAIN)]),
+                runs(&[("and ", PLAIN), ("that", mark)]),
+            ],
+            "{tag}"
+        );
+    }
+    // Nested spans, a span that holds only whitespace between two edges, and
+    // a link, whose properties differ from the text around it.
+    assert_eq!(
+        deck(&[
+            "a <b>b <i> c</i></b> d",
+            "<b>x <i>y </i></b> z",
+            "a <s>b </s><i> </i> c",
+            "a <a href='https://example.test/'>b </a> c",
+            "a <a href='https://example.test/'> b</a>",
+        ]),
+        [
+            runs(&[("a ", PLAIN), ("b ", B), ("c", BI), (" d", PLAIN)]),
+            runs(&[("x ", B), ("y ", BI), ("z", PLAIN)]),
+            runs(&[("a ", PLAIN), ("b ", S), ("c", PLAIN)]),
+            runs(&[("a ", PLAIN), ("b ", PLAIN), ("c", PLAIN)]),
+            runs(&[("a ", PLAIN), ("b", PLAIN)]),
+        ]
+    );
+}
+
 #[cfg(feature = "render")]
 fn source_built_pdf_for_import() -> Vec<u8> {
     use lopdf::content::{Content, Operation};

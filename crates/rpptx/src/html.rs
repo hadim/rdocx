@@ -1183,7 +1183,10 @@ fn write_paragraphs(frame: &mut TextFrame<'_>, paragraphs: &[ParagraphModel]) ->
                     // A collapsed space before differently formatted text
                     // stays with the text it was written in, as a browser
                     // lays it out, rather than becoming the first character
-                    // of an underlined, struck or linked run.
+                    // of an underlined, struck or linked run. The whitespace
+                    // this text starts with continues the same sequence, so
+                    // it adds no second space.
+                    let mut text = text.as_str();
                     if pending_space
                         && emitted
                         && let Some(space) = space_properties.take_if(|space| {
@@ -1203,6 +1206,7 @@ fn write_paragraphs(frame: &mut TextFrame<'_>, paragraphs: &[ParagraphModel]) ->
                             paragraph.runs.push(TextRun::Run(run));
                         }
                         pending_space = false;
+                        text = text.trim_start_matches(char::is_whitespace);
                     }
                     let was_pending = pending_space;
                     let text = collapse_text(text, &mut pending_space, emitted);

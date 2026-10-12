@@ -4078,6 +4078,9 @@ impl Importer<'_> {
                         // stays with the text it was written in, as a browser
                         // lays it out, rather than becoming the first
                         // character of an underlined, struck or linked run.
+                        // The whitespace this text starts with continues the
+                        // same sequence, so it adds no second space.
+                        let mut text = text.as_str();
                         if pending_space
                             && emitted
                             && let Some(space) = space_style.take_if(|space| {
@@ -4101,9 +4104,10 @@ impl Importer<'_> {
                                 apply_run_style(&mut run, &space);
                             }
                             pending_space = false;
+                            text = text.trim_start_matches(char::is_whitespace);
                         }
                         let was_pending = pending_space;
-                        let normalized = collapse_text(&text, &mut pending_space, emitted);
+                        let normalized = collapse_text(text, &mut pending_space, emitted);
                         if !normalized.is_empty() {
                             self.bump_runs()?;
                             let mut run = if let Some(url) = &style.hyperlink {
