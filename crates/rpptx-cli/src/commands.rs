@@ -1182,7 +1182,7 @@ fn font_face_json(face: &EmbeddedFontFace) -> Value {
         "relationship_id": face.relationship_id,
         "part": face.part_name,
         "format": font_format_label(face.format),
-        "byte_count": face.data.as_ref().map(Vec::len),
+        "byte_count": face.data.as_ref().map(|data| data.len()),
         "stored_byte_count": face.stored_len,
     })
 }

@@ -28543,6 +28543,97 @@ fn renders_draw_the_faces_the_deck_embeds() {
     ));
 }
 
+/// GitHub issue #360. A hostile font list or font part fails cleanly: a part
+/// that many faces repeat decodes once for the listing and once for the
+/// render, and headers whose sizes overrun the part decode to nothing.
+#[test]
+#[cfg(all(feature = "render", feature = "default-template"))]
+fn hostile_embedded_font_parts_and_lists_fail_cleanly() {
+    use rpptx::{EmbeddedFontFormat, EmbeddedFontKind};
+
+    let mut presentation = caladea_deck(&[EmbeddedFontKind::Regular]);
+    presentation.add_slide(0).unwrap();
+    let source = presentation.to_bytes().unwrap();
+    let mut package = open_opc(&source, "#360 repeated part");
+    let xml =
+        String::from_utf8(package.get_part("/ppt/presentation.xml").unwrap().to_vec()).unwrap();
+    let start = xml.find("<p:embeddedFont>").unwrap();
+    let end = xml.find("</p:embeddedFontLst>").unwrap();
+    let entry = &xml[start..end];
+    let repeated = (0..2_000)
+        .map(|index| entry.replace("typeface=\"Caladea\"", &format!("typeface=\"T{index}\"")))
+        .collect::<String>();
+    package.set_part(
+        "/ppt/presentation.xml",
+        format!("{}{repeated}{}", &xml[..start], &xml[end..]).into_bytes(),
+    );
+    let repeated =
+        Presentation::from_bytes(&write_package(&package, "#360 repeated", "write")).unwrap();
+    let fonts = repeated.embedded_fonts();
+    assert_eq!(fonts.len(), 2_000);
+    let first = fonts[0].faces[0].data.clone().unwrap();
+    assert!(fonts.iter().all(|font| {
+        font.faces[0]
+            .data
+            .as_ref()
+            .is_some_and(|data| std::sync::Arc::ptr_eq(data, &first))
+    }));
+    let (input, _) = repeated.render_deterministic().unwrap();
+    assert_eq!(input.fonts.len(), 1, "one part, one decoded face");
+    assert_eq!(input.fonts[0].family, "T0");
+
+    let eot = open_opc(&source, "#360 eot")
+        .get_part("/ppt/fonts/font1.fntdata")
+        .unwrap()
+        .to_vec();
+    let mut huge_font_data = eot.clone();
+    huge_font_data[4..8].copy_from_slice(&0xFFFF_FFF0_u32.to_le_bytes());
+    let mut huge_eot = eot.clone();
+    huge_eot[0..4].copy_from_slice(&u32::MAX.to_le_bytes());
+    let mut xor_garbage = eot.clone();
+    xor_garbage[12..16].copy_from_slice(&0x1000_0000_u32.to_le_bytes());
+    let mut many_tables = caladea_face("Regular");
+    many_tables[4..6].copy_from_slice(&0xFFFF_u16.to_le_bytes());
+    let mut no_tables = caladea_face("Regular");
+    no_tables[4..6].copy_from_slice(&0_u16.to_be_bytes());
+    let mut directory_overrun = caladea_face("Regular");
+    directory_overrun.truncate(64);
+    for (label, part, format) in [
+        (
+            "huge FontDataSize",
+            huge_font_data,
+            EmbeddedFontFormat::Unknown,
+        ),
+        ("huge EOTSize", huge_eot, EmbeddedFontFormat::Unknown),
+        ("XOR garbage", xor_garbage, EmbeddedFontFormat::Eot),
+        ("numTables 0xFFFF", many_tables, EmbeddedFontFormat::Unknown),
+        ("numTables 0", no_tables, EmbeddedFontFormat::Unknown),
+        (
+            "truncated sfnt",
+            directory_overrun,
+            EmbeddedFontFormat::Unknown,
+        ),
+        (
+            "truncated EOT",
+            eot[..30].to_vec(),
+            EmbeddedFontFormat::Unknown,
+        ),
+        ("empty part", Vec::new(), EmbeddedFontFormat::Unknown),
+    ] {
+        let mut package = open_opc(&source, label);
+        package.set_part("/ppt/fonts/font1.fntdata", part);
+        let hostile = Presentation::from_bytes(&write_package(&package, label, "write")).unwrap();
+        let face = &hostile.embedded_fonts()[0].faces[0];
+        assert_eq!(
+            (face.format, face.data.is_none()),
+            (format, true),
+            "{label}"
+        );
+        let (input, _) = hostile.render_deterministic().unwrap();
+        assert!(input.fonts.is_empty(), "{label}");
+    }
+}
+
 type DeckFontPartState = (
     String,
     String,
