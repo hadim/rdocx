@@ -19183,3 +19183,25 @@ push, main merge, tag or publication is claimed.
 **Spec sections touched.** Exactly HLD02,05,06,07,08,10,14 and15, including template authority, checked parity, paint and export ownership.
 
 **Notes for future sessions.** Keep work/f-x205-codex through final verification and close. Required evidence and warm cache remain available for clean worktree retirement and transfer to the next PowerPoint owner. No GitHub closure, sprint push, main merge, tag or publication is claimed.
+
+
+### F-X203, Complete Python Word document operations and validation
+
+**Completed.** 2026-10-12, S91 scoped dependency-prefix checkpoint
+**Size.** L, estimated4 to5 days, actual not recorded
+
+**What was built.** Shared native text and validation reports serve Python and CLI. Typed exports, checked template JSON and fragment assembly, immutable property/equation snapshots, live metadata/settings and atomic qualified content-control updates extend the public Word surface. Adapted frozen PR325, PR342 and PR354 repair Markdown whitespace and physical boundaries, mode15 for fresh compatible documents, and accepted all-story tabs and cached breaks. The native PR330 checkbox slice binds source glyph and font atomically.
+
+**Non-obvious choices.** Separate labelled worker commits own fresh compatibility, Markdown, story breaks and checkbox behavior. Bare HTML/Markdown retain the native subset. Corpus checks compare Python/native bare output and independently source-authored CLI related-story appendices. Unsupported equation conversion retains explicit loss diagnostics. JSON conversion uses the existing workspace dependency and rejects unsafe values before publication.
+
+**Tests.** Genuine claimed Base failures and original scoped failures remain retained with exact reviewed successors. Installed31 is an explicit source-qualified composite with strict mypy and stubtest and complete PowerPoint distribution preservation. Native integration qualifies367 passed and8 ignored. Declared native/CLI, WASM, hash, paint, corpus, package and policy riders pass. Native Word normal open/save/reopen and real equation/checkbox paint and isolated LibreOffice controls remain qualified. Four actual patched publish dry runs verify archives and abort upload. Whole review11 and bounded corrections through16 are clean.
+
+**Integrated evidence.** Validated implementationaad51849 and handoff-only tip16fedcd6 integrate into4d992a37. Independent review17 is clean, SHA890e7f00cbcd95abee4ce7c790ee215ab77beda3e25f8812306f9870d0ff31ab. Composition preserves completed F201 and F205 contracts and the accepted79354125 chart constant. Five changed native/binding crates pass actual all-target/all-feature checks. Exact chart paint,49 hashes, formatting, prose, adapters and diff pass. Current source-qualified facade tuple3625517/51304824/37 uses the same22 local patches as policy. Its final observed compressed size3625518 is within the unchanged64-byte tolerance. Only metadata changes receive measurement credit, with no renewed verified-publication claim.
+
+**Policy qualification.** The original full141 run and exact successful successor form139 exercised passes with2 existing skips. All21 Rust README cases containing24 snippets compile and27 distinct READMEs/22 publishable package inventories validate. Receipt730d4b68c64233fad56dd3512e721ad40c1794e214d33f8c4b9840ceca2e87b2 has exact source guards and naturally reaped processes. Incorrect unpatched archive attribution and three proven stale layout cache variants remain failed evidence. Only their exact fingerprints were invalidated. Product code, acceptance assertions and baseline were unchanged by cache remediation.
+
+**Hash harness.** All49 approved deterministic outputs match unchanged baseline342d09cd. Final full sprint verification and sprint review remain due.
+
+**Spec sections touched.** Exactly HLD03,04,08,10,12 and14, preserving the completed PowerPoint and watermark contracts.
+
+**Notes for future sessions.** Keep work/f-x203-codex through final verification and close. Required worker scratch and samples remain available for clean worktree retirement and warm-cache transfer to F-X202. Evidence is retained at /private/tmp/S91-F-X203-integration-checkpoint. No GitHub closure, sprint push, main merge, tag or publication is claimed.
