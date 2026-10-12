@@ -314,6 +314,25 @@ properties. The reader accepts any prefix, and the writer emits `a:defPPr`
 before the ascending level properties with fixed `a:` prefixes. Unmodelled
 siblings remain in their original positions around those typed children.
 
+### Character-owner source and caps
+
+`a:rPr`, default character properties and terminal paragraph properties model
+`cap="all"`, `cap="small"` and `cap="none"`. Setting either caps mode to a
+boolean selects that direct mode and clears the opposite direct mode. Clearing
+one mode leaves the other mode intact. Parsed conflicting direct modes are
+rejected by checked authoring. Highlight owns a direct DrawingML colour choice.
+Its live colour view retains source attributes, opaque children and existing
+transform payloads. An edit that cannot retain an unmodelled transform
+attribute refuses before changing the owner.
+
+Imported character properties and click links interpret owned elements and
+relationship attributes by namespace URI, including ancestor declarations,
+aliases and local rebinding. Foreign lookalikes and unqualified opaque `id`
+attributes stay lexical source payload. Source-aware changes keep the original
+qualified root, declarations, attributes and sibling order. Newly generated
+owned descendants locally close their required DrawingML and relationship
+namespaces rather than inheriting a foreign fixed-prefix binding.
+
 ## Tables
 
 `CT_Table` models optional table properties, the required column grid, and one
@@ -392,6 +411,12 @@ child order for the modelled subset. Table writers emit `a:tblPr`,
 extracts `a:tbl` from a larger XML part passes the ancestor namespace bindings
 to `from_xml_with_inherited_namespaces`, which keeps opaque producer-prefixed
 content namespace-complete in standalone output.
+
+A direct cell anchor parses and writes the namespace-owned `a:tcPr/@anchor`
+without rewriting the text body's `a:bodyPr`. Aliased element owners and rebound
+foreign lookalikes remain distinct. Getter reads and absent clears create no
+property node. Changed cell-property owners retain unrelated attributes,
+children and source order.
 
 ## Theme
 

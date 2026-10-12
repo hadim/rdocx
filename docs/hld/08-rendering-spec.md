@@ -666,9 +666,21 @@ An empty paragraph shapes a zero-width metrics carrier from its resolved
 `a:endParaRPr` style. Its line height and font-relative paragraph spacing use
 that resolved font and size. Nonempty paragraphs continue to use their first
 effective run. `cap="all"` transforms run and field text to Unicode uppercase
-before script-specific font selection and shaping. `cap="small"` has no render
-projection and remains preserved as unmodelled XML. A paragraph with no visible
-text or field emits no bullet, but it retains its empty line metrics.
+before script-specific font selection and shaping. Small caps applies the
+selected physical face's `smcp` feature when an applicable substitution exists.
+Otherwise lowercase graphemes use an explicit 80 percent uppercase fallback
+with a diagnostic, while original logical text and cluster ownership remain
+available to selection and extraction. A paragraph with no visible text or
+field emits no bullet, but it retains its empty line metrics.
+
+Highlight paints the resolved owned colour behind its actual text spans.
+Caps projection preserves selected physical bytes, face index, variation
+coordinates, synthesis and contribution-aware font traces through both family
+caches. It changes neither source text nor the caller-font selection contract.
+Group paint applies child-coordinate scale, flips and rotation in DrawingML
+order to text, paths, pictures and connectors. Unsupported affine composition
+is diagnostic or a checked authoring refusal, never claimed native parity.
+
 
 `a:bodyPr/@spcFirstLastPara` controls only the text body's edge spacing. When
 false, including when absent, the first paragraph's `spcBef` and the last

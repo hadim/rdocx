@@ -13583,7 +13583,7 @@ impl Document {
     }
 
     /// Clone all package and typed state while discarding derived layout caches.
-    pub(crate) fn clone_for_staging(&self) -> Self {
+    pub fn clone_for_staging(&self) -> Self {
         Self {
             package: self.package.clone(),
             document: self.document.clone(),

@@ -161,6 +161,9 @@ def exercise_rpptx_types(path: Path) -> None:
     column: Column = table.columns[0]
     column.width = Inches(2)
     cell: Cell = table.cell(0, 0)
+    cell_anchor: MSO_ANCHOR | None = cell.vertical_anchor
+    cell.vertical_anchor = MSO_ANCHOR.MIDDLE
+    cell.vertical_anchor = None
     cell.text = paragraph.text
     shapes: list[Shape] = presentation.slides[0].shapes[:]
     for current_slide in presentation.slides:
@@ -575,6 +578,12 @@ def fx195_caller_font_render_signatures(presentation: Presentation, directory: P
     assert_type(presentation.render_all_notes(fonts=fonts, font_dirs=dirs), list[bytes])
     assert_type(presentation.to_pdf(font_dir=directory), bytes)
 
+
+def _fx206_run_target_types(presentation: Presentation, slide: Slide) -> None:
+    link = slide.shapes[0].text_frame.paragraphs[0].runs[0].hyperlink
+    assert_type(link.target_slide, Slide | None)
+    link.target_slide = slide
+    link.target_slide = None
 
 def fx210_notes_diagnostic_companion_signatures(presentation: Presentation, directory: Path) -> None:
     fonts: list[tuple[str, bytes]] = [("Aptos", b"font")]

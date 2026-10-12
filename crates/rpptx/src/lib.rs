@@ -43,7 +43,7 @@ use oxml_drawing::table::{CT_Table, CT_TableCell, CT_TableCellProperties, CT_Tab
 use oxml_drawing::text::CT_TextListStyle;
 use oxml_drawing::text::{
     CT_RegularTextRun, CT_TextBody, CT_TextParagraph, Coordinate32Value, NormalAutofit,
-    TextAutofit, TextHyperlink, TextRun, TextWrap,
+    TextAutofit, TextRun, TextWrap,
 };
 pub use oxml_drawing::text::{
     CT_TextCharacterProperties, CT_TextParagraphProperties, TextAlignment, TextAnchor, TextBullet,
@@ -123,7 +123,7 @@ use rpptx_oxml::timing::{CT_Timing, MediaCommandKind, MediaDisplayPolicy};
 use rpptx_oxml::timing::{TimingNode, TimingTarget};
 #[cfg(feature = "render")]
 use rpptx_render::timeline::{
-    compose_morph_transition, compose_transition, layout_timeline_slide_with_font_manager,
+    compose_morph_transition, compose_transition, layout_timeline_slide_with_diagnostics,
 };
 #[cfg(feature = "render")]
 use rpptx_render::{
@@ -968,10 +968,28 @@ impl Presentation {
         })
     }
 
+    // Imported ambiguous shape identities remain readable and source-preserved.
+    // They cannot be newly created or edited past a checked structural boundary.
+    // Every other validation issue keeps the existing save assertion.
+    fn save_invariants_preserved(&self) -> bool {
+        self.validate().iter().all(|issue| {
+            let ValidationIssue::DuplicateShapeId { slide, .. } = issue else {
+                return false;
+            };
+            self.slides.get(*slide).is_some_and(|record| {
+                self.package
+                    .get_part(&record.part_name)
+                    .and_then(|xml| CT_Slide::from_xml(xml).ok())
+                    .as_ref()
+                    == Some(&record.slide)
+            })
+        })
+    }
+
     /// Serialises the package through the deterministic OPC writer.
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
         debug_assert!(
-            self.validate().is_empty(),
+            self.save_invariants_preserved(),
             "invalid presentation at byte save boundary: {:?}",
             self.validate()
         );
@@ -1004,7 +1022,7 @@ impl Presentation {
     /// byte-preserved. The live presentation keeps its original class.
     pub fn to_bytes_as(&self, class: PresentationPackageClass) -> Result<Vec<u8>> {
         debug_assert!(
-            self.validate().is_empty(),
+            self.save_invariants_preserved(),
             "invalid presentation at package-class save boundary: {:?}",
             self.validate()
         );
@@ -1767,7 +1785,7 @@ impl Presentation {
     /// explicitly and keeps the VBA part.
     pub fn save<P: AsRef<Path>>(&self, path: P) -> Result<()> {
         debug_assert!(
-            self.validate().is_empty(),
+            self.save_invariants_preserved(),
             "invalid presentation at path save boundary: {:?}",
             self.validate()
         );
@@ -2053,7 +2071,8 @@ impl Presentation {
 
     /// Returns one slide for in-place mutation by zero-based index.
     pub fn slide_mut(&mut self, index: usize) -> Option<SlideMut<'_>> {
-        self.slides.get_mut(index).map(slide_mut)
+        self.slides.get(index)?;
+        Some(slide_mut(self, index))
     }
 
     /// Returns the shapes of one slide, or of one group on it, for adding
@@ -2195,6 +2214,13 @@ impl Presentation {
         self.layouts.len()
     }
 
+    /// Returns the originating package identity of a reachable layout.
+    pub fn layout_part_name(&self, index: usize) -> Option<&str> {
+        self.layouts
+            .get(index)
+            .map(|record| record.part_name.as_str())
+    }
+
     /// Returns a layout's optional `p:cSld` name by zero-based index.
     pub fn layout_name(&self, index: usize) -> Option<&str> {
         self.layouts
@@ -2281,7 +2307,7 @@ impl Presentation {
         let mut indices = shape_path.iter();
         let mut shape = indices
             .next()
-            .and_then(|index| slide_mut(&mut self.slides[slide_index]).into_shape_mut(*index));
+            .and_then(|index| slide_mut(self, slide_index).into_shape_mut(*index));
         for index in indices {
             shape = shape.and_then(|shape| shape.into_child_mut(*index));
         }
@@ -2871,11 +2897,11 @@ impl Presentation {
     pub fn set_notes_text(&mut self, slide_index: usize, text: &str) -> Result<()> {
         self.require_slide_index(slide_index)?;
         if self.slides[slide_index].notes.is_some() {
-            return slide_mut(&mut self.slides[slide_index]).set_notes_text(text);
+            return slide_mut(self, slide_index).set_notes_text(text);
         }
         let mut staged = self.clone();
         staged.add_notes_slide_in_place(slide_index)?;
-        slide_mut(&mut staged.slides[slide_index]).set_notes_text(text)?;
+        slide_mut(&mut staged, slide_index).set_notes_text(text)?;
         self.commit_candidate(staged)
     }
 
@@ -3525,18 +3551,23 @@ impl Presentation {
                 _ => None,
             })
             .filter(|placeholder| !is_latent_placeholder(placeholder))
-            .map(|placeholder| (placeholder.ph_type.clone(), placeholder.idx))
+            .cloned()
             .collect::<Vec<_>>();
 
         let mut shape_tree = CT_ShapeTree::new();
         let mut shape_ids = ShapeIdAllocator::scan(&shape_tree);
-        for (ph_type, idx) in placeholders {
-            let shape =
-                CT_Shape::new_placeholder(shape_ids.allocate(), CT_Placeholder::new(ph_type, idx))
-                    .map_err(|error| Error::MalformedPart {
-                        part_name: "new slide".to_owned(),
-                        message: error.to_string(),
-                    })?;
+        for placeholder in placeholders {
+            let id = shape_ids.allocate();
+            let name = generated_placeholder_name(&shape_tree, &placeholder, id)?;
+            let mut shape = CT_Shape::new_placeholder(id, placeholder).map_err(|error| {
+                Error::MalformedPart {
+                    part_name: "new slide".to_owned(),
+                    message: error.to_string(),
+                }
+            })?;
+            shape
+                .set_name(&name)
+                .map_err(|error| invalid_slide_mutation("add slide", error.to_string()))?;
             shape_tree.children.push(ShapeTreeChild::Shape(shape));
         }
 
@@ -3695,6 +3726,141 @@ impl Presentation {
         self.media_store = media_store;
         let tree = &mut self.slides[slide_index].slide.common_slide_data.shape_tree;
         Ok(append_member(tree, group, ShapeTreeChild::Picture(picture)))
+    }
+
+    /// Fills one selected picture placeholder in place, preserving its owner order.
+    /// An unsupported metadata conversion leaves both package and tree unchanged.
+    #[cfg(feature = "render")]
+    pub fn fill_picture_placeholder(
+        &mut self,
+        slide_index: usize,
+        shape_path: &[usize],
+        image_data: &[u8],
+        image_filename: &str,
+    ) -> Result<()> {
+        const OPERATION: &str = "fill picture placeholder";
+        self.require_slide_index(slide_index)?;
+        let child = child_at(
+            &self.slides[slide_index]
+                .slide
+                .common_slide_data
+                .shape_tree
+                .children,
+            shape_path,
+        )
+        .ok_or_else(|| invalid_shape_mutation(OPERATION, "placeholder owner is absent"))?;
+        let ShapeTreeChild::Shape(source) = child else {
+            return Err(invalid_shape_mutation(
+                OPERATION,
+                "owner is not an unfilled picture placeholder",
+            ));
+        };
+        if source.placeholder.as_ref().map(|ph| ph.effective_type()) != Some(PhType::Picture) {
+            return Err(invalid_shape_mutation(
+                OPERATION,
+                "owner is not a picture placeholder",
+            ));
+        }
+        let mut candidate = self.clone();
+        candidate.materialize_geometry(slide_index, shape_path)?;
+        let transform = shape_transform(
+            candidate
+                .shape_at(slide_index, shape_path, OPERATION)?
+                .child,
+        )
+        .cloned()
+        .ok_or_else(|| {
+            invalid_shape_mutation(OPERATION, "placeholder has no inherited rectangle")
+        })?;
+        let extent = transform.extent.ok_or_else(|| {
+            invalid_shape_mutation(OPERATION, "placeholder has no inherited rectangle")
+        })?;
+        if extent.cx.0 <= 0 || extent.cy.0 <= 0 {
+            return Err(invalid_shape_mutation(
+                OPERATION,
+                "placeholder rectangle must be positive",
+            ));
+        }
+        if ImageFormat::sniff(image_data).is_none() {
+            return Err(Error::UnsupportedPicture {
+                filename: image_filename.to_owned(),
+            });
+        }
+        let info = probe(image_data).ok_or_else(|| Error::UnavailablePictureDimensions {
+            filename: image_filename.to_owned(),
+        })?;
+        if info.width_px == 0 || info.height_px == 0 {
+            return Err(Error::UnavailablePictureDimensions {
+                filename: image_filename.to_owned(),
+            });
+        }
+        let slide_part = candidate.slides[slide_index].part_name.clone();
+        let media_part =
+            candidate
+                .media_store
+                .insert(&mut candidate.package, image_data, image_filename);
+        let mut rels = candidate
+            .package
+            .get_part_rels(&slide_part)
+            .cloned()
+            .unwrap_or_default();
+        let relationship_id = rels
+            .items
+            .iter()
+            .find(|rel| {
+                rel.rel_type == rel_types::IMAGE
+                    && !relationship_is_external(rel)
+                    && OpcPackage::resolve_rel_target(&slide_part, &rel.target) == media_part
+            })
+            .map(|rel| rel.id.clone())
+            .unwrap_or_else(|| {
+                rels.add(
+                    rel_types::IMAGE,
+                    &relative_part_target(&slide_part, &media_part),
+                )
+            });
+        let mut picture = source
+            .fill_picture(&relationship_id, transform)
+            .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()))?;
+        // Center-crop by decoded pixels, independent of the image's DPI metadata.
+        let image_aspect = f64::from(info.width_px) / f64::from(info.height_px);
+        let box_aspect = extent.cx.0 as f64 / extent.cy.0 as f64;
+        let horizontal = image_aspect > box_aspect;
+        let edge = if horizontal {
+            (1.0 - box_aspect / image_aspect) * 50_000.0
+        } else {
+            (1.0 - image_aspect / box_aspect) * 50_000.0
+        };
+        let edge = Percent1000(edge.round() as i32);
+        let mut rect = RelativeRect::default();
+        if horizontal {
+            rect.left = Some(edge);
+            rect.right = Some(edge);
+        } else {
+            rect.top = Some(edge);
+            rect.bottom = Some(edge);
+        }
+        if edge.0 != 0 {
+            picture
+                .blip_fill
+                .as_mut()
+                .ok_or_else(|| invalid_shape_mutation(OPERATION, "picture has no image fill"))?
+                .source_rect = Some(rect);
+        }
+        candidate.package.set_part_rels(&slide_part, rels);
+        *child_at_mut(
+            &mut candidate.slides[slide_index]
+                .slide
+                .common_slide_data
+                .shape_tree
+                .children,
+            shape_path,
+        )
+        .ok_or_else(|| invalid_shape_mutation(OPERATION, "placeholder owner changed"))? =
+            ShapeTreeChild::Picture(picture);
+        candidate.to_bytes()?;
+        *self = candidate;
+        Ok(())
     }
 
     /// Returns the embedded image one picture shows, found by shape id.
@@ -3996,18 +4162,30 @@ impl Presentation {
     /// python-pptx raises `ValueError`.
     pub fn shape_target_slide(&self, slide_index: usize, shape_id: u32) -> Result<Option<usize>> {
         let (_, location) = self.locate_shape_click("shape target slide", slide_index, shape_id)?;
-        let Some(action) = location.action.as_deref() else {
-            return Ok(None);
-        };
+        Ok(self.click_target_slide(
+            slide_index,
+            location.action.as_deref(),
+            location.relationship_id.as_deref(),
+        ))
+    }
+
+    fn click_target_slide(
+        &self,
+        slide_index: usize,
+        action: Option<&str>,
+        relationship_id: Option<&str>,
+    ) -> Option<usize> {
+        let action = action?;
         let (verb, query) = action.split_once('?').unwrap_or((action, ""));
-        Ok(match verb {
+        match verb {
             SLIDE_JUMP_ACTION => {
                 let part_name = &self.slides[slide_index].part_name;
-                location
-                    .relationship_id
-                    .as_deref()
+                relationship_id
                     .and_then(|id| self.package.get_part_rels(part_name)?.get_by_id(id))
-                    .filter(|relationship| !relationship_is_external(relationship))
+                    .filter(|relationship| {
+                        relationship.rel_type == rel_types::SLIDE
+                            && !relationship_is_external(relationship)
+                    })
                     .and_then(|relationship| {
                         let target =
                             OpcPackage::resolve_rel_target(part_name, &relationship.target);
@@ -4031,7 +4209,7 @@ impl Presentation {
                 }
             }
             _ => None,
-        })
+        }
     }
 
     /// Sets or clears the external click hyperlink of one slide shape atomically.
@@ -4199,11 +4377,26 @@ impl Presentation {
             .map_err(|error| invalid_shape_mutation(operation, error.to_string()))?;
         let before = slide_relationship_ids(&self.slides[slide_index].slide)?;
         let after = slide_relationship_ids(&slide)?;
+        let removed_parts = relationships
+            .items
+            .iter()
+            .filter(|relationship| {
+                before.contains(&relationship.id)
+                    && !after.contains(&relationship.id)
+                    && !relationship_is_external(relationship)
+            })
+            .map(|relationship| OpcPackage::resolve_rel_target(&part_name, &relationship.target))
+            .collect::<HashSet<_>>();
         relationships.items.retain(|relationship| {
             !before.contains(&relationship.id) || after.contains(&relationship.id)
         });
+        let mut package = self.package.clone();
+        package.set_part_rels(&part_name, relationships);
+        prune_unreachable_parts(&mut package, &removed_parts);
+        let media = MediaStore::scan(&package);
         self.slides[slide_index].slide = slide;
-        self.package.set_part_rels(&part_name, relationships);
+        self.package = package;
+        self.media_store = media;
         Ok(())
     }
 
@@ -4214,9 +4407,9 @@ impl Presentation {
     /// shape whose `p:cNvPr/@id` is `shape_id`, inside groups too. It gets an
     /// `a:hlinkClick` naming the slide's external hyperlink relationship to
     /// `address`, which is reused when the slide has one. Assigning the
-    /// current address changes nothing. Every relationship that only the old
-    /// hyperlink named, its target or a click sound, is removed, so no
-    /// relationship is left unreferenced. An empty address, one with a
+    /// current address with no action changes nothing. Retargeting preserves
+    /// the other click attributes and opaque children. Clearing removes the
+    /// click, and relationships it alone referenced are pruned. An empty address, one with a
     /// control character, or a shape id that is missing, shared, or not an
     /// ordinary shape with that run is rejected without change.
     pub fn set_run_hyperlink(
@@ -4240,6 +4433,98 @@ impl Presentation {
                 "a hyperlink address must be non-empty text without control characters",
             ));
         }
+        self.set_run_click(
+            OPERATION,
+            slide_index,
+            (shape_id, paragraph_index, run_index),
+            address.map(ShapeClickTarget::Address),
+        )
+    }
+
+    /// Sets or clears one regular run named slide jump after validating both owners.
+    pub fn set_run_target_slide(
+        &mut self,
+        slide_index: usize,
+        shape_id: u32,
+        paragraph_index: usize,
+        run_index: usize,
+        target_slide_index: Option<usize>,
+    ) -> Result<()> {
+        self.require_slide_index(slide_index)?;
+        if let Some(target) = target_slide_index {
+            self.require_slide_index(target)?;
+        }
+        self.set_run_click(
+            "set run target slide",
+            slide_index,
+            (shape_id, paragraph_index, run_index),
+            target_slide_index.map(ShapeClickTarget::Slide),
+        )
+    }
+
+    /// Returns a regular run slide target after validating the unique physical shape.
+    pub fn run_target_slide(
+        &self,
+        slide_index: usize,
+        shape_id: u32,
+        paragraph_index: usize,
+        run_index: usize,
+    ) -> Result<Option<usize>> {
+        self.require_slide_index(slide_index)?;
+        if shape_id_count(
+            &self.slides[slide_index]
+                .slide
+                .common_slide_data
+                .shape_tree
+                .children,
+            shape_id,
+        ) != 1
+        {
+            return Err(invalid_shape_mutation(
+                "read run target slide",
+                "shape id is missing or ambiguous",
+            ));
+        }
+        let missing = || {
+            invalid_shape_mutation(
+                "read run target slide",
+                format!(
+                    "shape id {shape_id} has no ordinary shape run {run_index} in paragraph {paragraph_index}"
+                ),
+            )
+        };
+        let body = find_shape(
+            &self.slides[slide_index]
+                .slide
+                .common_slide_data
+                .shape_tree
+                .children,
+            shape_id,
+        )
+        .and_then(|shape| shape.text_body.as_ref())
+        .ok_or_else(missing)?;
+        let hyperlink = TextFrameRef { body }
+            .paragraph(paragraph_index)
+            .and_then(|paragraph| paragraph.run(run_index))
+            .ok_or_else(missing)?
+            .properties()
+            .and_then(|properties| properties.hyperlink_click.clone());
+        Ok(hyperlink.and_then(|hyperlink| {
+            self.click_target_slide(
+                slide_index,
+                hyperlink.action.as_deref(),
+                hyperlink.relationship_id.as_deref(),
+            )
+        }))
+    }
+
+    fn set_run_click(
+        &mut self,
+        operation: &'static str,
+        slide_index: usize,
+        (shape_id, paragraph_index, run_index): (u32, usize, usize),
+        target: Option<ShapeClickTarget<'_>>,
+    ) -> Result<()> {
         let record = &self.slides[slide_index];
         let part_name = record.part_name.clone();
         if shape_id_count(
@@ -4248,20 +4533,24 @@ impl Presentation {
         ) > 1
         {
             return Err(invalid_shape_mutation(
-                OPERATION,
+                operation,
                 format!("shape id {shape_id} is not unique on the slide"),
             ));
         }
+        let target_part = match target {
+            Some(ShapeClickTarget::Slide(index)) => Some(self.slides[index].part_name.clone()),
+            _ => None,
+        };
         let mut slide = record.slide.clone();
         let mut relationships = self
             .package
             .get_part_rels(&part_name)
             .cloned()
             .unwrap_or_default();
-        let (old, new) = {
+        let had_click = {
             let missing = || {
                 invalid_shape_mutation(
-                    OPERATION,
+                    operation,
                     format!(
                         "shape id {shape_id} has no ordinary shape run {run_index} in paragraph {paragraph_index}"
                     ),
@@ -4275,58 +4564,116 @@ impl Presentation {
                 .ok_or_else(missing)?;
             let mut run = paragraph.run_mut(run_index).ok_or_else(missing)?;
             let mut properties = run.properties().cloned().unwrap_or_default();
+            let had_click = properties.hyperlink_click.is_some();
             let old = properties
                 .hyperlink_click
                 .as_ref()
                 .and_then(|hyperlink| hyperlink.relationship_id.clone())
                 .filter(|id| !id.is_empty());
-            let current = old
-                .as_deref()
-                .and_then(|id| relationships.get_by_id(id))
-                .filter(|relationship| {
-                    relationship.rel_type == rel_types::HYPERLINK
-                        && relationship_is_external(relationship)
-                })
-                .map(|relationship| relationship.target.as_str());
-            let unchanged = match address {
-                None => properties.hyperlink_click.is_none(),
-                Some(address) => current == Some(address),
+            let action = properties
+                .hyperlink_click
+                .as_ref()
+                .and_then(|hyperlink| hyperlink.action.as_deref());
+            let current = old.as_deref().and_then(|id| relationships.get_by_id(id));
+            let is_address = |relationship: &Relationship, address: &str| {
+                relationship.rel_type == rel_types::HYPERLINK
+                    && relationship_is_external(relationship)
+                    && relationship.target == address
+            };
+            let is_slide = |relationship: &Relationship, target_part: &str| {
+                relationship.rel_type == rel_types::SLIDE
+                    && !relationship_is_external(relationship)
+                    && OpcPackage::resolve_rel_target(&part_name, &relationship.target)
+                        == target_part
+            };
+            let unchanged = match (target, target_part.as_deref()) {
+                (None, _) => properties.hyperlink_click.is_none(),
+                (Some(ShapeClickTarget::Address(address)), _) => {
+                    action.is_none()
+                        && current.is_some_and(|relationship| is_address(relationship, address))
+                }
+                (Some(ShapeClickTarget::Slide(_)), Some(target_part)) => {
+                    action == Some(SLIDE_JUMP_ACTION)
+                        && current.is_some_and(|relationship| is_slide(relationship, target_part))
+                }
+                (Some(ShapeClickTarget::Slide(_)), None) => unreachable!("the part was read"),
             };
             if unchanged {
                 return Ok(());
             }
-            let new = address.map(|address| {
-                relationships
-                    .items
-                    .iter()
-                    .find(|relationship| {
-                        relationship.rel_type == rel_types::HYPERLINK
-                            && relationship_is_external(relationship)
-                            && relationship.target == address
-                    })
-                    .map(|relationship| relationship.id.clone())
-                    .unwrap_or_else(|| relationships.add_external(rel_types::HYPERLINK, address))
-            });
-            properties.hyperlink_click = new.clone().map(|id| {
-                let mut hyperlink = TextHyperlink::default();
+            let new = match (target, target_part.as_deref()) {
+                (None, _) => None,
+                (Some(ShapeClickTarget::Address(address)), _) => Some((
+                    relationships
+                        .items
+                        .iter()
+                        .find(|relationship| is_address(relationship, address))
+                        .map(|relationship| relationship.id.clone())
+                        .unwrap_or_else(|| {
+                            relationships.add_external(rel_types::HYPERLINK, address)
+                        }),
+                    None,
+                )),
+                (Some(ShapeClickTarget::Slide(_)), Some(target_part)) => Some((
+                    relationships
+                        .items
+                        .iter()
+                        .find(|relationship| is_slide(relationship, target_part))
+                        .map(|relationship| relationship.id.clone())
+                        .unwrap_or_else(|| {
+                            relationships.add(
+                                rel_types::SLIDE,
+                                &relative_part_target(&part_name, target_part),
+                            )
+                        }),
+                    Some(SLIDE_JUMP_ACTION),
+                )),
+                (Some(ShapeClickTarget::Slide(_)), None) => unreachable!("the part was read"),
+            };
+            let retained = properties.hyperlink_click.clone();
+            properties.hyperlink_click = new.map(|(id, action)| {
+                let mut hyperlink = retained.clone().unwrap_or_default();
                 hyperlink.relationship_id = Some(id);
+                hyperlink.action = action.map(str::to_owned);
                 hyperlink
             });
             run.set_properties(properties);
-            (old, new)
+            had_click
         };
-        if old.is_some_and(|old| Some(&old) != new.as_ref()) {
+        // Validate the staged serialization even when this creates the first
+        // click. An author-supplied invalid modeled value must fail before
+        // either the slide or its relationship graph is published.
+        let after = slide_relationship_ids(&slide)?;
+        let mut removed_parts = HashSet::new();
+        if had_click {
             // The old a:hlinkClick can carry more than its r:id, such as an
             // a:snd click sound naming an audio relationship. Remove every
             // relationship this edit left without a reference.
             let before = slide_relationship_ids(&self.slides[slide_index].slide)?;
-            let after = slide_relationship_ids(&slide)?;
+            removed_parts.extend(
+                relationships
+                    .items
+                    .iter()
+                    .filter(|relationship| {
+                        before.contains(&relationship.id)
+                            && !after.contains(&relationship.id)
+                            && !relationship_is_external(relationship)
+                    })
+                    .map(|relationship| {
+                        OpcPackage::resolve_rel_target(&part_name, &relationship.target)
+                    }),
+            );
             relationships.items.retain(|relationship| {
                 !before.contains(&relationship.id) || after.contains(&relationship.id)
             });
         }
+        let mut package = self.package.clone();
+        package.set_part_rels(&part_name, relationships);
+        prune_unreachable_parts(&mut package, &removed_parts);
+        let media = MediaStore::scan(&package);
         self.slides[slide_index].slide = slide;
-        self.package.set_part_rels(&part_name, relationships);
+        self.package = package;
+        self.media_store = media;
         Ok(())
     }
 
@@ -4974,7 +5321,8 @@ fn render_prepared_timeline_request(
             (Some(timeline), Some(directions))
         }
     };
-    let mut incoming_page = layout_timeline_slide_with_font_manager(
+    let mut layout_diagnostics = Vec::new();
+    let incoming_frame = layout_timeline_slide_with_diagnostics(
         &assembly.input,
         request.slide_index,
         &incoming,
@@ -4982,6 +5330,17 @@ fn render_prepared_timeline_request(
         font_manager,
     )
     .map_err(|error| render_failure(error.to_string()))?;
+    let mut incoming_diagnostics = incoming_frame.diagnostics.into_iter();
+    let incoming_owner_diagnostics = incoming_diagnostics
+        .by_ref()
+        .take(
+            incoming.slide.diagnostics.len()
+                + usize::from(incoming.slide.unresolved_member_count > 0),
+        )
+        .collect::<Vec<_>>();
+    layout_diagnostics.extend(incoming_diagnostics);
+    let mut outgoing_owner_diagnostics = Vec::new();
+    let mut incoming_page = incoming_frame.page;
     apply_smartart_clips(
         &mut incoming_page,
         &incoming.slide,
@@ -4989,7 +5348,7 @@ fn render_prepared_timeline_request(
     )?;
     let outgoing_page = match (request.outgoing_slide_index, outgoing.as_ref()) {
         (Some(index), Some(outgoing)) => {
-            let mut page = layout_timeline_slide_with_font_manager(
+            let frame = layout_timeline_slide_with_diagnostics(
                 &assembly.input,
                 index,
                 outgoing,
@@ -5001,6 +5360,13 @@ fn render_prepared_timeline_request(
                 .slides
                 .get(index)
                 .ok_or(Error::UnknownSlideIndex { index, slide_count })?;
+            let mut frame_diagnostics = frame.diagnostics.into_iter();
+            outgoing_owner_diagnostics.extend(frame_diagnostics.by_ref().take(
+                outgoing.slide.diagnostics.len()
+                    + usize::from(outgoing.slide.unresolved_member_count > 0),
+            ));
+            layout_diagnostics.extend(frame_diagnostics);
+            let mut page = frame.page;
             apply_smartart_clips(&mut page, &outgoing.slide, &source.smartart_clips)?;
             Some(page)
         }
@@ -5023,13 +5389,14 @@ fn render_prepared_timeline_request(
     } else {
         compose_transition(incoming_page, outgoing_page, transition)
     };
-    let mut diagnostics = incoming.slide.diagnostics.clone();
+    let mut diagnostics = incoming_owner_diagnostics;
     diagnostics.extend(incoming.state.diagnostics.clone());
     if let Some(outgoing) = outgoing.as_ref() {
-        diagnostics.extend(outgoing.slide.diagnostics.clone());
+        diagnostics.extend(outgoing_owner_diagnostics);
         diagnostics.extend(outgoing.state.diagnostics.clone());
     }
     diagnostics.extend(incoming_media_diagnostics);
+    diagnostics.extend(layout_diagnostics);
     diagnostics.extend(composed.diagnostics);
     diagnostics.extend(font_manager.current_font_diagnostics().iter().cloned());
     Ok((
@@ -5519,6 +5886,14 @@ fn comment_text_context_count(children: &[ShapeTreeChild], text: &str) -> usize 
             _ => 0,
         })
         .sum()
+}
+
+fn find_shape(children: &[ShapeTreeChild], shape_id: u32) -> Option<&CT_Shape> {
+    children.iter().find_map(|child| match child {
+        ShapeTreeChild::Shape(shape) if child.non_visual_id() == Some(shape_id) => Some(shape),
+        ShapeTreeChild::GroupShape(group) => find_shape(&group.children, shape_id),
+        _ => None,
+    })
 }
 
 fn find_shape_mut(children: &mut [ShapeTreeChild], shape_id: u32) -> Option<&mut CT_Shape> {
@@ -6955,6 +7330,57 @@ fn keep_unplaced_placeholder_transforms(
     }
 }
 
+fn generated_placeholder_name(
+    tree: &CT_ShapeTree,
+    placeholder: &CT_Placeholder,
+    id: u32,
+) -> Result<String> {
+    let base = match placeholder.ph_type.as_ref().unwrap_or(&PhType::Object) {
+        PhType::Title | PhType::CenteredTitle => "Title",
+        PhType::Subtitle => "Subtitle",
+        PhType::Body => "Text Placeholder",
+        PhType::Object => "Content Placeholder",
+        PhType::Picture => "Picture Placeholder",
+        PhType::Chart => "Chart Placeholder",
+        PhType::Table => "Table Placeholder",
+        PhType::Diagram => "SmartArt Placeholder",
+        PhType::Media => "Media Placeholder",
+        PhType::ClipArt => "ClipArt Placeholder",
+        PhType::DateTime => "Date Placeholder",
+        PhType::Footer => "Footer Placeholder",
+        PhType::SlideNumber => "Slide Number Placeholder",
+        PhType::Header => "Header Placeholder",
+        PhType::SlideImage => "Slide Image Placeholder",
+        PhType::VerticalTitle => "Vertical Title",
+        PhType::VerticalBody => "Vertical Text Placeholder",
+        PhType::VerticalObject => "Vertical Content Placeholder",
+        PhType::Other(_) => "Placeholder",
+    };
+    let vertical = placeholder.orientation() == Some("vert") && !base.starts_with("Vertical ");
+    // Unknown imported type naming keeps the existing generic ID convention.
+    let mut ordinal = if matches!(placeholder.ph_type, Some(PhType::Other(_))) {
+        id
+    } else {
+        id.saturating_sub(1)
+    };
+    loop {
+        let name = format!(
+            "{}{base} {ordinal}",
+            if vertical { "Vertical " } else { "" }
+        );
+        if !tree
+            .children
+            .iter()
+            .any(|child| child.non_visual_name().as_deref() == Some(name.as_str()))
+        {
+            return Ok(name);
+        }
+        ordinal = ordinal.checked_add(1).ok_or_else(|| {
+            invalid_slide_mutation("add slide", "placeholder name space exhausted")
+        })?;
+    }
+}
+
 fn is_latent_placeholder(placeholder: &CT_Placeholder) -> bool {
     matches!(
         placeholder.ph_type.as_ref(),
@@ -7257,22 +7683,28 @@ fn slide_ref(record: &SlideRecord) -> SlideRef<'_> {
 
 /// A mutably borrowed slide in presentation order.
 pub struct SlideMut<'a> {
-    record: &'a mut SlideRecord,
+    presentation: &'a mut Presentation,
+    index: usize,
 }
 
-fn slide_mut(record: &mut SlideRecord) -> SlideMut<'_> {
-    SlideMut { record }
+fn slide_mut(presentation: &mut Presentation, index: usize) -> SlideMut<'_> {
+    SlideMut {
+        presentation,
+        index,
+    }
 }
 
 impl<'a> SlideMut<'a> {
     /// Sets whether the slide is hidden from the slideshow.
     pub fn set_hidden(&mut self, hidden: bool) {
-        self.record.slide.set_hidden(hidden);
+        self.presentation.slides[self.index]
+            .slide
+            .set_hidden(hidden);
     }
 
     /// Sets a direct DrawingML fill without replacing a theme reference.
     pub fn set_background(&mut self, fill: Fill) -> Result<()> {
-        self.record
+        self.presentation.slides[self.index]
             .slide
             .set_background(fill)
             .map_err(|error| Error::InvalidSlideMutation {
@@ -7283,19 +7715,23 @@ impl<'a> SlideMut<'a> {
 
     /// Removes only a direct-fill background.
     pub fn clear_background(&mut self) {
-        self.record.slide.clear_background();
+        self.presentation.slides[self.index]
+            .slide
+            .clear_background();
     }
 
     /// Removes any slide background, direct fill or theme reference, so the
     /// slide follows its layout and master background.
     pub fn remove_background(&mut self) {
-        self.record.slide.common_slide_data.background = None;
+        self.presentation.slides[self.index]
+            .slide
+            .common_slide_data
+            .background = None;
     }
 
     /// Replaces speaker-note text while preserving its body placeholder.
     pub fn set_notes_text(&mut self, text: &str) -> Result<()> {
-        let notes = self
-            .record
+        let notes = self.presentation.slides[self.index]
             .notes
             .as_mut()
             .ok_or_else(|| Error::InvalidSlideMutation {
@@ -7329,9 +7765,7 @@ impl<'a> SlideMut<'a> {
         width: Emu,
         height: Emu,
     ) -> Result<ShapeMut<'_>> {
-        append_new_member(self.shape_tree(), &[], |id| {
-            table_member(id, rows, columns, left, top, width, height)
-        })
+        self.append_member(|id| table_member(id, rows, columns, left, top, width, height))
     }
 
     /// Appends a no-fill textbox at the top of the slide's z-order.
@@ -7342,9 +7776,7 @@ impl<'a> SlideMut<'a> {
         width: Emu,
         height: Emu,
     ) -> Result<ShapeMut<'_>> {
-        append_new_member(self.shape_tree(), &[], |id| {
-            textbox_member(id, left, top, width, height)
-        })
+        self.append_member(|id| textbox_member(id, left, top, width, height))
     }
 
     /// Appends an ordinary preset shape at the top of the slide's z-order.
@@ -7360,9 +7792,7 @@ impl<'a> SlideMut<'a> {
         width: Emu,
         height: Emu,
     ) -> Result<ShapeMut<'_>> {
-        append_new_member(self.shape_tree(), &[], |id| {
-            preset_member(id, preset, left, top, width, height)
-        })
+        self.append_member(|id| preset_member(id, preset, left, top, width, height))
     }
 
     /// Appends a preset shape without a theme style for HTML and ODP imports.
@@ -7374,9 +7804,7 @@ impl<'a> SlideMut<'a> {
         width: Emu,
         height: Emu,
     ) -> Result<ShapeMut<'_>> {
-        append_new_member(self.shape_tree(), &[], |id| {
-            unstyled_preset_member(id, preset, left, top, width, height)
-        })
+        self.append_member(|id| unstyled_preset_member(id, preset, left, top, width, height))
     }
 
     /// Appends a free-standing connector at the top of the slide's z-order.
@@ -7391,23 +7819,24 @@ impl<'a> SlideMut<'a> {
         end_x: Emu,
         end_y: Emu,
     ) -> Result<ShapeMut<'_>> {
-        append_new_member(self.shape_tree(), &[], |id| {
-            connector_member(id, connector, begin_x, begin_y, end_x, end_y)
-        })
+        self.append_member(|id| connector_member(id, connector, begin_x, begin_y, end_x, end_y))
     }
 
     /// Appends an empty group at the top of the slide's z-order.
     pub fn add_group_shape(&mut self) -> Result<ShapeMut<'_>> {
-        append_new_member(self.shape_tree(), &[], |id| Ok(group_member(id, false)))
+        self.append_member(|id| Ok(group_member(id, false)))
     }
 
     fn shape_tree(&mut self) -> &mut CT_ShapeTree {
-        &mut self.record.slide.common_slide_data.shape_tree
+        &mut self.presentation.slides[self.index]
+            .slide
+            .common_slide_data
+            .shape_tree
     }
 
     /// Returns one immediate z-order child as a read-only handle.
     pub fn shape(&self, index: usize) -> Option<ShapeRef<'_>> {
-        self.record
+        self.presentation.slides[self.index]
             .slide
             .common_slide_data
             .shape_tree
@@ -7418,24 +7847,40 @@ impl<'a> SlideMut<'a> {
 
     /// Returns one immediate z-order child for in-place mutation.
     pub fn shape_mut(&mut self, index: usize) -> Option<ShapeMut<'_>> {
-        self.record
-            .slide
-            .common_slide_data
-            .shape_tree
-            .children
-            .get_mut(index)
-            .map(shape_mut)
+        self.shape_tree().children.get(index)?;
+        Some(owned_shape_mut(self.presentation, self.index, vec![index]))
     }
 
     /// Consumes this handle and returns one immediate z-order child for mutation.
     pub fn into_shape_mut(self, index: usize) -> Option<ShapeMut<'a>> {
-        self.record
+        self.presentation.slides[self.index]
             .slide
             .common_slide_data
             .shape_tree
             .children
-            .get_mut(index)
-            .map(shape_mut)
+            .get(index)?;
+        Some(owned_shape_mut(self.presentation, self.index, vec![index]))
+    }
+    fn append_member(
+        &mut self,
+        build: impl FnOnce(u32) -> Result<ShapeTreeChild>,
+    ) -> Result<ShapeMut<'_>> {
+        let mut candidate = self.presentation.clone();
+        let tree = &mut candidate.slides[self.index]
+            .slide
+            .common_slide_data
+            .shape_tree;
+        let index = append_new_member(tree, &[], build)?;
+        candidate.refresh_connector_attachments(self.index, self.presentation, &HashSet::new())?;
+        candidate.slides[self.index]
+            .slide
+            .to_xml()
+            .map_err(|error| Error::MalformedPart {
+                part_name: candidate.slides[self.index].part_name.clone(),
+                message: error.to_string(),
+            })?;
+        *self.presentation = candidate;
+        Ok(owned_shape_mut(self.presentation, self.index, vec![index]))
     }
 }
 
@@ -7524,29 +7969,69 @@ impl ShapesMut<'_> {
         width: Option<Emu>,
         height: Option<Emu>,
     ) -> Result<ShapeMut<'_>> {
-        self.presentation
-            .append_picture(
-                self.slide_index,
-                &self.group,
-                image_data,
-                image_filename,
-                left,
-                top,
-                width,
-                height,
-            )
-            .map(shape_mut)
+        let mut candidate = self.presentation.clone();
+        let tree = &mut candidate.slides[self.slide_index]
+            .slide
+            .common_slide_data
+            .shape_tree;
+        let count = Members::at(tree, &self.group)
+            .ok_or_else(|| invalid_shape_mutation("add picture", "missing group"))?
+            .children()
+            .len();
+        candidate.append_picture(
+            self.slide_index,
+            &self.group,
+            image_data,
+            image_filename,
+            left,
+            top,
+            width,
+            height,
+        )?;
+        candidate.refresh_connector_attachments(
+            self.slide_index,
+            self.presentation,
+            &HashSet::new(),
+        )?;
+        candidate.slides[self.slide_index]
+            .slide
+            .to_xml()
+            .map_err(|error| Error::MalformedPart {
+                part_name: candidate.slides[self.slide_index].part_name.clone(),
+                message: error.to_string(),
+            })?;
+        let mut path = self.group.clone();
+        path.push(count);
+        *self.presentation = candidate;
+        Ok(owned_shape_mut(self.presentation, self.slide_index, path))
     }
 
     fn append(
         &mut self,
         build: impl FnOnce(u32) -> Result<ShapeTreeChild>,
     ) -> Result<ShapeMut<'_>> {
-        let tree = &mut self.presentation.slides[self.slide_index]
+        let mut candidate = self.presentation.clone();
+        let tree = &mut candidate.slides[self.slide_index]
             .slide
             .common_slide_data
             .shape_tree;
-        append_new_member(tree, &self.group, build)
+        let index = append_new_member(tree, &self.group, build)?;
+        candidate.refresh_connector_attachments(
+            self.slide_index,
+            self.presentation,
+            &HashSet::new(),
+        )?;
+        candidate.slides[self.slide_index]
+            .slide
+            .to_xml()
+            .map_err(|error| Error::MalformedPart {
+                part_name: candidate.slides[self.slide_index].part_name.clone(),
+                message: error.to_string(),
+            })?;
+        let mut path = self.group.clone();
+        path.push(index);
+        *self.presentation = candidate;
+        Ok(owned_shape_mut(self.presentation, self.slide_index, path))
     }
 }
 
@@ -7656,14 +8141,23 @@ fn table_member(
 }
 
 /// Appends a new member built with an id that is unused across the slide.
-fn append_new_member<'t>(
-    tree: &'t mut CT_ShapeTree,
+fn append_new_member(
+    tree: &mut CT_ShapeTree,
     group: &[usize],
     build: impl FnOnce(u32) -> Result<ShapeTreeChild>,
-) -> Result<ShapeMut<'t>> {
+) -> Result<usize> {
     let id = ShapeIdAllocator::scan(tree).allocate();
     let member = build(id)?;
-    Ok(shape_mut(append_member(tree, group, member)))
+    let count = if group.is_empty() {
+        tree.children.len()
+    } else {
+        group_at_mut(&mut tree.children, group)
+            .expect("validated group path")
+            .children
+            .len()
+    };
+    append_member(tree, group, member);
+    Ok(count)
 }
 
 /// Appends `member` to the slide's own shapes, for an empty `group`, or to
@@ -7818,8 +8312,7 @@ fn fit_group_to_members(group: &mut CT_GroupShape, occupied: bool) {
 ///
 /// PowerPoint flips, then rotates, so for that linear part `L` the shift is
 /// `(L - I)(dx, dy)`, which is zero without rotation and flips. The rpptx
-/// renderer rotates a group before it flips it, which agrees with
-/// PowerPoint unless a group is both rotated and flipped.
+/// renderer applies the same flip-then-rotation order for transformed groups.
 fn pivot_shift(transform: &CT_Transform2D, dx: f64, dy: f64) -> (i64, i64) {
     let (sin, cos) = (f64::from(transform.rotation.0) / 60_000.0)
         .to_radians()
@@ -8012,6 +8505,13 @@ impl<'a> SlideRef<'a> {
         text.join("\n")
     }
 
+    /// Compares the accepted notes model, including run distribution and retained XML.
+    /// Missing notes compare equal only to missing notes.
+    pub fn notes_text_matches(&self, other: &SlideRef<'_>) -> bool {
+        self.record.notes.as_ref().map(|record| &record.notes)
+            == other.record.notes.as_ref().map(|record| &record.notes)
+    }
+
     /// Returns speaker-note text, distinguishing no notes part from empty notes.
     pub fn notes_text(&self) -> Option<String> {
         self.record
@@ -8077,45 +8577,111 @@ fn shape_ref(child: &ShapeTreeChild) -> ShapeRef<'_> {
 
 /// A mutably borrowed shape-tree child.
 pub struct ShapeMut<'a> {
-    child: &'a mut ShapeTreeChild,
+    owner: ShapeMutOwner<'a>,
 }
-
+enum ShapeMutOwner<'a> {
+    Presentation {
+        presentation: &'a mut Presentation,
+        slide: usize,
+        path: Vec<usize>,
+    },
+    Child(&'a mut ShapeTreeChild),
+}
 fn shape_mut(child: &mut ShapeTreeChild) -> ShapeMut<'_> {
-    ShapeMut { child }
+    ShapeMut {
+        owner: ShapeMutOwner::Child(child),
+    }
 }
-
+fn owned_shape_mut(
+    presentation: &mut Presentation,
+    slide: usize,
+    path: Vec<usize>,
+) -> ShapeMut<'_> {
+    ShapeMut {
+        owner: ShapeMutOwner::Presentation {
+            presentation,
+            slide,
+            path,
+        },
+    }
+}
 impl<'a> ShapeMut<'a> {
     /// Returns the child's normalized structural kind.
     pub fn kind(&self) -> ShapeKind {
-        shape_kind(self.child)
+        shape_kind(self.leaf())
     }
 
     /// Returns one immediate group child for in-place mutation.
     ///
     /// `mc:AlternateContent` fallback children remain a read-only projection.
     pub fn child_mut(&mut self, index: usize) -> Option<ShapeMut<'_>> {
-        match self.child {
-            ShapeTreeChild::GroupShape(group) => group.children.get_mut(index).map(shape_mut),
-            _ => None,
+        match &mut self.owner {
+            ShapeMutOwner::Presentation {
+                presentation,
+                slide,
+                path,
+            } => {
+                let ShapeTreeChild::GroupShape(group) = child_at(
+                    &presentation.slides[*slide]
+                        .slide
+                        .common_slide_data
+                        .shape_tree
+                        .children,
+                    path,
+                )?
+                else {
+                    return None;
+                };
+                group.children.get(index)?;
+                let mut child_path = path.clone();
+                child_path.push(index);
+                Some(owned_shape_mut(presentation, *slide, child_path))
+            }
+            ShapeMutOwner::Child(child) => match child {
+                ShapeTreeChild::GroupShape(group) => group.children.get_mut(index).map(shape_mut),
+                _ => None,
+            },
         }
     }
 
     /// Consumes this handle and returns one immediate group child for mutation.
     pub fn into_child_mut(self, index: usize) -> Option<ShapeMut<'a>> {
-        match self.child {
-            ShapeTreeChild::GroupShape(group) => group.children.get_mut(index).map(shape_mut),
-            _ => None,
+        match self.owner {
+            ShapeMutOwner::Presentation {
+                presentation,
+                slide,
+                mut path,
+            } => {
+                let ShapeTreeChild::GroupShape(group) = child_at(
+                    &presentation.slides[slide]
+                        .slide
+                        .common_slide_data
+                        .shape_tree
+                        .children,
+                    &path,
+                )?
+                else {
+                    return None;
+                };
+                group.children.get(index)?;
+                path.push(index);
+                Some(owned_shape_mut(presentation, slide, path))
+            }
+            ShapeMutOwner::Child(child) => match child {
+                ShapeTreeChild::GroupShape(group) => group.children.get_mut(index).map(shape_mut),
+                _ => None,
+            },
         }
     }
 
     /// Changes the shape offset in EMU.
-    pub fn set_position(&mut self, left: Emu, top: Emu) -> Result<()> {
+    fn set_position_leaf(&mut self, left: Emu, top: Emu) -> Result<()> {
         self.transform_mut("set position")?.offset = Some(CT_Point2D { x: left, y: top });
         Ok(())
     }
 
     /// Changes the shape extent in EMU.
-    pub fn set_size(&mut self, width: Emu, height: Emu) -> Result<()> {
+    fn set_size_leaf(&mut self, width: Emu, height: Emu) -> Result<()> {
         self.transform_mut("set size")?.extent = Some(CT_PositiveSize2D {
             cx: width,
             cy: height,
@@ -8124,14 +8690,53 @@ impl<'a> ShapeMut<'a> {
     }
 
     /// Changes the clockwise DrawingML rotation.
-    pub fn set_rotation(&mut self, rotation: Angle) -> Result<()> {
+    fn set_rotation_leaf(&mut self, rotation: Angle) -> Result<()> {
         self.transform_mut("set rotation")?.rotation = rotation;
         Ok(())
     }
 
+    /// Changes the direct alt text on this physical owner.
+    pub fn set_alt_text(&mut self, text: Option<&str>) -> Result<()> {
+        let result = match self.leaf_mut() {
+            ShapeTreeChild::Shape(shape) => shape.set_alt_text(text),
+            ShapeTreeChild::Picture(picture) => picture.set_alt_text(text),
+            ShapeTreeChild::GraphicFrame(frame) => frame.set_alt_text(text),
+            ShapeTreeChild::GroupShape(group) => group.set_alt_text(text),
+            ShapeTreeChild::Connector(connector) => connector.set_alt_text(text),
+            ShapeTreeChild::AlternateContent(_) => return Err(self.unsupported("set alt text")),
+        };
+        result.map_err(|error| invalid_shape_mutation("set alt text", error.to_string()))
+    }
+
+    /// Changes the direct title on this physical owner.
+    pub fn set_title(&mut self, text: Option<&str>) -> Result<()> {
+        let result = match self.leaf_mut() {
+            ShapeTreeChild::Shape(shape) => shape.set_title(text),
+            ShapeTreeChild::Picture(picture) => picture.set_title(text),
+            ShapeTreeChild::GraphicFrame(frame) => frame.set_title(text),
+            ShapeTreeChild::GroupShape(group) => group.set_title(text),
+            ShapeTreeChild::Connector(connector) => connector.set_title(text),
+            ShapeTreeChild::AlternateContent(_) => return Err(self.unsupported("set title")),
+        };
+        result.map_err(|error| invalid_shape_mutation("set title", error.to_string()))
+    }
+
+    /// Changes the direct decorative on this physical owner.
+    pub fn set_decorative(&mut self, decorative: bool) -> Result<()> {
+        let result = match self.leaf_mut() {
+            ShapeTreeChild::Shape(shape) => shape.set_decorative(decorative),
+            ShapeTreeChild::Picture(picture) => picture.set_decorative(decorative),
+            ShapeTreeChild::GraphicFrame(frame) => frame.set_decorative(decorative),
+            ShapeTreeChild::GroupShape(group) => group.set_decorative(decorative),
+            ShapeTreeChild::Connector(connector) => connector.set_decorative(decorative),
+            ShapeTreeChild::AlternateContent(_) => return Err(self.unsupported("set decorative")),
+        };
+        result.map_err(|error| invalid_shape_mutation("set decorative", error.to_string()))
+    }
+
     /// Changes the producer-facing non-visual name.
     pub fn set_name(&mut self, name: &str) -> Result<()> {
-        let result = match self.child {
+        let result = match self.leaf_mut() {
             ShapeTreeChild::Shape(shape) => shape.set_name(name),
             ShapeTreeChild::Picture(picture) => picture.set_name(name),
             ShapeTreeChild::GraphicFrame(frame) => frame.set_name(name),
@@ -8174,8 +8779,8 @@ impl<'a> ShapeMut<'a> {
         bottom: Percent1000,
     ) -> Result<()> {
         const OPERATION: &str = "set crop";
-        let shape_kind = shape_kind(self.child);
-        let ShapeTreeChild::Picture(picture) = self.child else {
+        let shape_kind = shape_kind(self.leaf_mut());
+        let ShapeTreeChild::Picture(picture) = self.leaf_mut() else {
             return Err(Error::UnsupportedShapeMutation {
                 operation: OPERATION,
                 shape_kind,
@@ -8217,7 +8822,7 @@ impl<'a> ShapeMut<'a> {
             list.to_xml()
                 .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()))?;
         }
-        if let ShapeTreeChild::GroupShape(group) = self.child {
+        if let ShapeTreeChild::GroupShape(group) = self.leaf_mut() {
             return group
                 .set_effects(effects)
                 .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()));
@@ -8241,7 +8846,7 @@ impl<'a> ShapeMut<'a> {
     /// does not remove it in LibreOffice. Only an ordinary shape or a
     /// connector with a typed style has this reference.
     pub fn set_theme_effect_index(&mut self, index: u32) -> Result<()> {
-        let changed = match self.child {
+        let changed = match self.leaf_mut() {
             ShapeTreeChild::Shape(shape) => Ok(shape.set_effect_reference_index(index)),
             ShapeTreeChild::Connector(connector) => connector.set_effect_reference_index(index),
             _ => return Err(self.unsupported("set theme effect index")),
@@ -8260,13 +8865,13 @@ impl<'a> ShapeMut<'a> {
     }
 
     /// Inserts or replaces one finite preset-geometry adjustment.
-    pub fn set_adjust_value(&mut self, name: &str, value: f64) -> Result<()> {
+    fn set_adjust_value_leaf(&mut self, name: &str, value: f64) -> Result<()> {
         if !value.is_finite() {
             return Err(Error::NonFiniteAdjustmentValue {
                 name: name.to_owned(),
             });
         }
-        let shape_kind = shape_kind(self.child);
+        let shape_kind = shape_kind(self.leaf_mut());
         let properties = self.shape_properties_mut("set adjustment")?;
         let geometry =
             properties
@@ -8291,9 +8896,10 @@ impl<'a> ShapeMut<'a> {
     /// restart from the preset's defaults with an empty `a:avLst`. Text,
     /// fill, line, effects, identity and z-order are kept. A text box, a
     /// connector, a graphic frame, a group and alternate content are refused.
-    pub fn set_auto_shape_type(&mut self, preset: &str) -> Result<()> {
+    fn set_auto_shape_type_leaf(&mut self, preset: &str) -> Result<()> {
         const OPERATION: &str = "set auto shape type";
-        let properties = match self.child {
+        let shape_kind = self.kind();
+        let properties = match self.leaf_mut() {
             ShapeTreeChild::Shape(shape) if shape.is_textbox() => {
                 return Err(Error::InvalidShapeMutation {
                     operation: OPERATION,
@@ -8302,7 +8908,12 @@ impl<'a> ShapeMut<'a> {
             }
             ShapeTreeChild::Shape(shape) => &mut shape.shape_properties,
             ShapeTreeChild::Picture(picture) => &mut picture.shape_properties,
-            _ => return Err(self.unsupported(OPERATION)),
+            _ => {
+                return Err(Error::UnsupportedShapeMutation {
+                    operation: OPERATION,
+                    shape_kind,
+                });
+            }
         };
         let geometry =
             CT_PresetGeometry2D::new(preset).map_err(|error| Error::InvalidShapeMutation {
@@ -8317,8 +8928,8 @@ impl<'a> ShapeMut<'a> {
     /// Replaces ordinary shape text without changing placeholder identity,
     /// one paragraph per line as [`CT_TextBody::set_text`] describes.
     pub fn set_text(&mut self, text: &str) -> Result<()> {
-        let shape_kind = shape_kind(self.child);
-        let ShapeTreeChild::Shape(shape) = self.child else {
+        let shape_kind = shape_kind(self.leaf_mut());
+        let ShapeTreeChild::Shape(shape) = self.leaf_mut() else {
             return Err(Error::UnsupportedShapeMutation {
                 operation: "set text",
                 shape_kind,
@@ -8333,7 +8944,7 @@ impl<'a> ShapeMut<'a> {
 
     /// Returns the ordinary shape text body for in-place mutation.
     pub fn text_frame(&mut self) -> Option<TextFrame<'_>> {
-        match self.child {
+        match self.leaf_mut() {
             ShapeTreeChild::Shape(shape) => shape.text_body.as_mut().map(|body| TextFrame { body }),
             _ => None,
         }
@@ -8341,7 +8952,7 @@ impl<'a> ShapeMut<'a> {
 
     /// Consumes this handle and returns its ordinary-shape text body for mutation.
     pub fn into_text_frame(self) -> Option<TextFrame<'a>> {
-        match self.child {
+        match self.into_leaf() {
             ShapeTreeChild::Shape(shape) => shape.text_body.as_mut().map(|body| TextFrame { body }),
             _ => None,
         }
@@ -8349,30 +8960,27 @@ impl<'a> ShapeMut<'a> {
 
     /// Returns a behavior-bearing mutable handle for a table graphic frame.
     pub fn table_mut(&mut self) -> Option<TableMut<'_>> {
-        let ShapeTreeChild::GraphicFrame(frame) = self.child else {
+        if !matches!(self.leaf(),ShapeTreeChild::GraphicFrame(frame) if matches!(frame.graphic_data.payload(), GraphicDataPayload::Table(_)))
+        {
             return None;
-        };
-        let table = frame.graphic_data.table_mut()?;
+        }
         Some(TableMut {
-            table,
-            transform: &mut frame.transform,
+            shape: self.reborrow(),
         })
     }
 
     /// Consumes this handle and returns its table for mutation.
     pub fn into_table_mut(self) -> Option<TableMut<'a>> {
-        let ShapeTreeChild::GraphicFrame(frame) = self.child else {
+        if !matches!(self.leaf(),ShapeTreeChild::GraphicFrame(frame) if matches!(frame.graphic_data.payload(), GraphicDataPayload::Table(_)))
+        {
             return None;
-        };
-        let table = frame.graphic_data.table_mut()?;
-        Some(TableMut {
-            table,
-            transform: &mut frame.transform,
-        })
+        }
+        Some(TableMut { shape: self })
     }
 
     fn transform_mut(&mut self, operation: &'static str) -> Result<&mut CT_Transform2D> {
-        match self.child {
+        let shape_kind = self.kind();
+        match self.leaf_mut() {
             ShapeTreeChild::Shape(shape) => Ok(shape
                 .shape_properties
                 .transform
@@ -8387,24 +8995,124 @@ impl<'a> ShapeMut<'a> {
                 .shape_properties
                 .transform
                 .get_or_insert_with(CT_Transform2D::default)),
-            ShapeTreeChild::AlternateContent(_) => Err(self.unsupported(operation)),
+            ShapeTreeChild::AlternateContent(_) => Err(Error::UnsupportedShapeMutation {
+                operation,
+                shape_kind,
+            }),
         }
     }
 
     fn shape_properties_mut(&mut self, operation: &'static str) -> Result<&mut CT_ShapeProperties> {
-        match self.child {
+        let shape_kind = self.kind();
+        match self.leaf_mut() {
             ShapeTreeChild::Shape(shape) => Ok(&mut shape.shape_properties),
             ShapeTreeChild::Picture(picture) => Ok(&mut picture.shape_properties),
             ShapeTreeChild::Connector(connector) => Ok(&mut connector.shape_properties),
-            _ => Err(self.unsupported(operation)),
+            _ => Err(Error::UnsupportedShapeMutation {
+                operation,
+                shape_kind,
+            }),
         }
     }
 
     fn unsupported(&self, operation: &'static str) -> Error {
         Error::UnsupportedShapeMutation {
             operation,
-            shape_kind: shape_kind(self.child),
+            shape_kind: shape_kind(self.leaf()),
         }
+    }
+    fn leaf(&self) -> &ShapeTreeChild {
+        match &self.owner {
+            ShapeMutOwner::Child(child) => child,
+            ShapeMutOwner::Presentation {
+                presentation,
+                slide,
+                path,
+            } => child_at(
+                &presentation.slides[*slide]
+                    .slide
+                    .common_slide_data
+                    .shape_tree
+                    .children,
+                path,
+            )
+            .expect("exclusively borrowed owner path remains present"),
+        }
+    }
+    fn leaf_mut(&mut self) -> &mut ShapeTreeChild {
+        match &mut self.owner {
+            ShapeMutOwner::Child(child) => child,
+            ShapeMutOwner::Presentation {
+                presentation,
+                slide,
+                path,
+            } => child_at_mut(
+                &mut presentation.slides[*slide]
+                    .slide
+                    .common_slide_data
+                    .shape_tree
+                    .children,
+                path,
+            )
+            .expect("exclusively borrowed owner path remains present"),
+        }
+    }
+    fn into_leaf(self) -> &'a mut ShapeTreeChild {
+        match self.owner {
+            ShapeMutOwner::Child(child) => child,
+            ShapeMutOwner::Presentation {
+                presentation,
+                slide,
+                path,
+            } => child_at_mut(
+                &mut presentation.slides[slide]
+                    .slide
+                    .common_slide_data
+                    .shape_tree
+                    .children,
+                &path,
+            )
+            .expect("exclusively borrowed owner path remains present"),
+        }
+    }
+    fn reborrow(&mut self) -> ShapeMut<'_> {
+        match &mut self.owner {
+            ShapeMutOwner::Child(child) => shape_mut(child),
+            ShapeMutOwner::Presentation {
+                presentation,
+                slide,
+                path,
+            } => owned_shape_mut(presentation, *slide, path.clone()),
+        }
+    }
+    fn apply_geometry(&mut self, edit: GeometryEdit) -> Result<()> {
+        match &mut self.owner {
+            ShapeMutOwner::Presentation {
+                presentation,
+                slide,
+                path,
+            } => presentation.edit_shape_geometry(*slide, path, edit),
+            ShapeMutOwner::Child(child) => apply_leaf_geometry(child, edit),
+        }
+    }
+    pub fn set_position(&mut self, left: Emu, top: Emu) -> Result<()> {
+        self.apply_geometry(GeometryEdit::Position(left, top))
+    }
+    pub fn set_size(&mut self, width: Emu, height: Emu) -> Result<()> {
+        self.apply_geometry(GeometryEdit::Size(width, height))
+    }
+    pub fn set_rotation(&mut self, rotation: Angle) -> Result<()> {
+        self.apply_geometry(GeometryEdit::Rotation(rotation))
+    }
+    pub fn set_adjust_value(&mut self, name: &str, value: f64) -> Result<()> {
+        self.apply_geometry(GeometryEdit::Adjustment(name.to_owned(), value))
+    }
+    pub fn set_auto_shape_type(&mut self, preset: &str) -> Result<()> {
+        self.apply_geometry(GeometryEdit::Preset(preset.to_owned()))
+    }
+    /// Sets both direct DrawingML flip flags and stages incoming glue with the owner.
+    pub fn set_flips(&mut self, horizontal: bool, vertical: bool) -> Result<()> {
+        self.apply_geometry(GeometryEdit::Flips(horizontal, vertical))
     }
 }
 
@@ -8414,7 +9122,7 @@ pub struct TextFrame<'a> {
 }
 
 /// A borrowed ordinary-shape text body.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct TextFrameRef<'a> {
     body: &'a CT_TextBody,
 }
@@ -8514,31 +9222,30 @@ impl<'a> TableRef<'a> {
 
 /// A behavior-bearing mutable DrawingML table and its containing frame extent.
 pub struct TableMut<'a> {
-    table: &'a mut CT_Table,
-    transform: &'a mut CT_Transform2D,
+    shape: ShapeMut<'a>,
 }
 
 impl<'a> TableMut<'a> {
     /// Returns the number of explicit table rows.
     pub fn row_count(&self) -> usize {
-        self.table.rows.len()
+        self.table().rows.len()
     }
 
     /// Returns the number of grid columns.
     pub fn column_count(&self) -> usize {
-        self.table.grid.columns.len()
+        self.table().grid.columns.len()
     }
 
     /// Returns one explicit grid cell by zero-based row and column.
     pub fn cell(&self, row: usize, column: usize) -> Option<TableCellRef<'_>> {
-        table_cell(self.table, row, column).map(|cell| TableCellRef { cell })
+        table_cell(self.table(), row, column).map(|cell| TableCellRef { cell })
     }
 
     /// Returns one explicit grid cell for in-place mutation.
     pub fn cell_mut(&mut self, row: usize, column: usize) -> Option<TableCellMut<'_>> {
-        table_cell(self.table, row, column)?;
+        table_cell(self.table_mut_raw(), row, column)?;
         Some(TableCellMut {
-            table: self.table,
+            table: self.table_mut_raw(),
             row,
             column,
         })
@@ -8546,21 +9253,21 @@ impl<'a> TableMut<'a> {
 
     /// Consumes this handle and returns one explicit cell for mutation.
     pub fn into_cell_mut(self, row: usize, column: usize) -> Option<TableCellMut<'a>> {
-        table_cell(self.table, row, column)?;
-        Some(TableCellMut {
-            table: self.table,
-            row,
-            column,
-        })
+        let ShapeTreeChild::GraphicFrame(frame) = self.shape.into_leaf() else {
+            return None;
+        };
+        let table = frame.graphic_data.table_mut()?;
+        table_cell(table, row, column)?;
+        Some(TableCellMut { table, row, column })
     }
 
     /// Returns one grid-column width in EMU.
     pub fn column_width(&self, column: usize) -> Option<Emu> {
-        self.table.grid.columns.get(column).copied()
+        self.table().grid.columns.get(column).copied()
     }
 
     /// Changes one grid width and synchronizes the containing frame width.
-    pub fn set_column_width(&mut self, column: usize, width: Emu) -> Result<()> {
+    fn set_column_width_leaf(&mut self, column: usize, width: Emu) -> Result<()> {
         const OPERATION: &str = "set column width";
         if width.0 <= 0 {
             return Err(invalid_table_mutation(
@@ -8568,13 +9275,13 @@ impl<'a> TableMut<'a> {
                 "column width must be positive".to_owned(),
             ));
         }
-        if column >= self.table.grid.columns.len() {
+        if column >= self.table_mut_raw().grid.columns.len() {
             return Err(invalid_table_mutation(
                 OPERATION,
                 format!("column index {column} is out of range"),
             ));
         }
-        let mut staged = self.table.clone();
+        let mut staged = self.table_mut_raw().clone();
         staged
             .set_column_width(column, width)
             .map_err(|error| invalid_table_mutation(OPERATION, error.to_string()))?;
@@ -8582,12 +9289,12 @@ impl<'a> TableMut<'a> {
         staged
             .to_xml()
             .map_err(|error| invalid_table_mutation(OPERATION, error.to_string()))?;
-        *self.table = staged;
+        *self.table_mut_raw() = staged;
         let height = self
-            .transform
+            .transform_mut_raw()
             .extent
             .map_or(total_height, |extent| extent.cy);
-        self.transform.extent = Some(CT_PositiveSize2D {
+        self.transform_mut_raw().extent = Some(CT_PositiveSize2D {
             cx: total_width,
             cy: height,
         });
@@ -8596,14 +9303,14 @@ impl<'a> TableMut<'a> {
 
     /// Returns one stored row height in EMU.
     pub fn row_height(&self, row: usize) -> Option<Emu> {
-        self.table.rows.get(row).map(|row| row.height)
+        self.table().rows.get(row).map(|row| row.height)
     }
 
     /// Changes one row height and synchronizes the containing frame height.
     ///
     /// The stored height is a minimum, as in PowerPoint, which grows a row to
     /// fit its text when it lays the table out.
-    pub fn set_row_height(&mut self, row: usize, height: Emu) -> Result<()> {
+    fn set_row_height_leaf(&mut self, row: usize, height: Emu) -> Result<()> {
         const OPERATION: &str = "set row height";
         if height.0 <= 0 {
             return Err(invalid_table_mutation(
@@ -8611,24 +9318,24 @@ impl<'a> TableMut<'a> {
                 "row height must be positive".to_owned(),
             ));
         }
-        if row >= self.table.rows.len() {
+        if row >= self.table_mut_raw().rows.len() {
             return Err(invalid_table_mutation(
                 OPERATION,
                 format!("row index {row} is out of range"),
             ));
         }
-        let mut staged = self.table.clone();
+        let mut staged = self.table_mut_raw().clone();
         staged.rows[row].height = height;
         let (total_width, total_height) = table_extent(&staged, OPERATION)?;
         staged
             .to_xml()
             .map_err(|error| invalid_table_mutation(OPERATION, error.to_string()))?;
-        self.table.rows[row].height = height;
+        self.table_mut_raw().rows[row].height = height;
         let width = self
-            .transform
+            .transform_mut_raw()
             .extent
             .map_or(total_width, |extent| extent.cx);
-        self.transform.extent = Some(CT_PositiveSize2D {
+        self.transform_mut_raw().extent = Some(CT_PositiveSize2D {
             cx: width,
             cy: total_height,
         });
@@ -8642,7 +9349,7 @@ impl<'a> TableMut<'a> {
     /// when it becomes the first, and each new cell copies that row's cell
     /// properties and first-paragraph formatting without its text. A row
     /// inserted inside a merged cell extends the merge.
-    pub fn insert_row(&mut self, index: usize) -> Result<()> {
+    fn insert_row_leaf(&mut self, index: usize) -> Result<()> {
         self.restructure("insert row", |table| table.insert_row(index))
     }
 
@@ -8651,7 +9358,7 @@ impl<'a> TableMut<'a> {
     ///
     /// A merged cell across the row loses one row, and when the row holds the
     /// merge origin the row below takes it over with the origin's text.
-    pub fn remove_row(&mut self, index: usize) -> Result<()> {
+    fn remove_row_leaf(&mut self, index: usize) -> Result<()> {
         self.restructure("remove row", |table| table.remove_row(index))
     }
 
@@ -8662,7 +9369,7 @@ impl<'a> TableMut<'a> {
     /// first column when it becomes the first, and its cells copy that
     /// column's cells as `insert_row` does. A column inserted inside a merged
     /// cell extends the merge.
-    pub fn insert_column(&mut self, index: usize) -> Result<()> {
+    fn insert_column_leaf(&mut self, index: usize) -> Result<()> {
         self.restructure("insert column", |table| table.insert_column(index))
     }
 
@@ -8672,7 +9379,7 @@ impl<'a> TableMut<'a> {
     /// A merged cell across the column loses one column, and when the column
     /// holds the merge origin the column to its right takes it over with the
     /// origin's text.
-    pub fn remove_column(&mut self, index: usize) -> Result<()> {
+    fn remove_column_leaf(&mut self, index: usize) -> Result<()> {
         self.restructure("remove column", |table| table.remove_column(index))
     }
 
@@ -8687,29 +9394,32 @@ impl<'a> TableMut<'a> {
         operation: &'static str,
         edit: impl FnOnce(&mut CT_Table) -> std::result::Result<(), OxmlError>,
     ) -> Result<()> {
-        let (old_width, old_height) = table_extent(self.table, operation)?;
-        let mut staged = self.table.clone();
+        let (old_width, old_height) = table_extent(self.table_mut_raw(), operation)?;
+        let mut staged = self.table_mut_raw().clone();
         edit(&mut staged).map_err(|error| invalid_table_mutation(operation, error.to_string()))?;
         let (new_width, new_height) = table_extent(&staged, operation)?;
         staged
             .to_xml()
             .map_err(|error| invalid_table_mutation(operation, error.to_string()))?;
-        let frame = self.transform.extent.unwrap_or(CT_PositiveSize2D {
-            cx: old_width,
-            cy: old_height,
-        });
+        let frame = self
+            .transform_mut_raw()
+            .extent
+            .unwrap_or(CT_PositiveSize2D {
+                cx: old_width,
+                cy: old_height,
+            });
         let extent = CT_PositiveSize2D {
             cx: moved_frame_edge(frame.cx, old_width, new_width, operation)?,
             cy: moved_frame_edge(frame.cy, old_height, new_height, operation)?,
         };
-        *self.table = staged;
-        self.transform.extent = Some(extent);
+        *self.table_mut_raw() = staged;
+        self.transform_mut_raw().extent = Some(extent);
         Ok(())
     }
 
     /// Returns whether first-row table styling is enabled.
     pub fn first_row(&self) -> bool {
-        self.table
+        self.table()
             .properties
             .as_ref()
             .is_some_and(|properties| properties.first_row)
@@ -8717,12 +9427,12 @@ impl<'a> TableMut<'a> {
 
     /// Enables or disables first-row table styling.
     pub fn set_first_row(&mut self, value: bool) {
-        table_properties_mut(self.table).first_row = value;
+        table_properties_mut(self.table_mut_raw()).first_row = value;
     }
 
     /// Returns whether last-row table styling is enabled.
     pub fn last_row(&self) -> bool {
-        self.table
+        self.table()
             .properties
             .as_ref()
             .is_some_and(|properties| properties.last_row)
@@ -8730,12 +9440,12 @@ impl<'a> TableMut<'a> {
 
     /// Enables or disables last-row table styling.
     pub fn set_last_row(&mut self, value: bool) {
-        table_properties_mut(self.table).last_row = value;
+        table_properties_mut(self.table_mut_raw()).last_row = value;
     }
 
     /// Returns whether first-column table styling is enabled.
     pub fn first_column(&self) -> bool {
-        self.table
+        self.table()
             .properties
             .as_ref()
             .is_some_and(|properties| properties.first_column)
@@ -8743,12 +9453,12 @@ impl<'a> TableMut<'a> {
 
     /// Enables or disables first-column table styling.
     pub fn set_first_column(&mut self, value: bool) {
-        table_properties_mut(self.table).first_column = value;
+        table_properties_mut(self.table_mut_raw()).first_column = value;
     }
 
     /// Returns whether last-column table styling is enabled.
     pub fn last_column(&self) -> bool {
-        self.table
+        self.table()
             .properties
             .as_ref()
             .is_some_and(|properties| properties.last_column)
@@ -8756,12 +9466,12 @@ impl<'a> TableMut<'a> {
 
     /// Enables or disables last-column table styling.
     pub fn set_last_column(&mut self, value: bool) {
-        table_properties_mut(self.table).last_column = value;
+        table_properties_mut(self.table_mut_raw()).last_column = value;
     }
 
     /// Returns whether horizontal row banding is enabled.
     pub fn horizontal_banding(&self) -> bool {
-        self.table
+        self.table()
             .properties
             .as_ref()
             .is_some_and(|properties| properties.band_rows)
@@ -8769,12 +9479,12 @@ impl<'a> TableMut<'a> {
 
     /// Enables or disables horizontal row banding.
     pub fn set_horizontal_banding(&mut self, value: bool) {
-        table_properties_mut(self.table).band_rows = value;
+        table_properties_mut(self.table_mut_raw()).band_rows = value;
     }
 
     /// Returns whether vertical column banding is enabled.
     pub fn vertical_banding(&self) -> bool {
-        self.table
+        self.table()
             .properties
             .as_ref()
             .is_some_and(|properties| properties.band_columns)
@@ -8782,7 +9492,55 @@ impl<'a> TableMut<'a> {
 
     /// Enables or disables vertical column banding.
     pub fn set_vertical_banding(&mut self, value: bool) {
-        table_properties_mut(self.table).band_columns = value;
+        table_properties_mut(self.table_mut_raw()).band_columns = value;
+    }
+    fn table(&self) -> &CT_Table {
+        let ShapeTreeChild::GraphicFrame(frame) = self.shape.leaf() else {
+            unreachable!("checked table owner")
+        };
+        match frame.graphic_data.payload() {
+            GraphicDataPayload::Table(table) => table,
+            _ => unreachable!("checked table payload"),
+        }
+    }
+    fn table_mut_raw(&mut self) -> &mut CT_Table {
+        let ShapeTreeChild::GraphicFrame(frame) = self.shape.leaf_mut() else {
+            unreachable!("checked table owner")
+        };
+        frame
+            .graphic_data
+            .table_mut()
+            .expect("checked table payload")
+    }
+    fn transform_mut_raw(&mut self) -> &mut CT_Transform2D {
+        let ShapeTreeChild::GraphicFrame(frame) = self.shape.leaf_mut() else {
+            unreachable!("checked table owner")
+        };
+        &mut frame.transform
+    }
+    pub fn set_column_width(&mut self, column: usize, width: Emu) -> Result<()> {
+        self.shape
+            .apply_geometry(GeometryEdit::TableColumn(column, width))
+    }
+    pub fn set_row_height(&mut self, row: usize, height: Emu) -> Result<()> {
+        self.shape
+            .apply_geometry(GeometryEdit::TableRow(row, height))
+    }
+    pub fn insert_row(&mut self, index: usize) -> Result<()> {
+        self.shape
+            .apply_geometry(GeometryEdit::TableInsertRow(index))
+    }
+    pub fn remove_row(&mut self, index: usize) -> Result<()> {
+        self.shape
+            .apply_geometry(GeometryEdit::TableRemoveRow(index))
+    }
+    pub fn insert_column(&mut self, index: usize) -> Result<()> {
+        self.shape
+            .apply_geometry(GeometryEdit::TableInsertColumn(index))
+    }
+    pub fn remove_column(&mut self, index: usize) -> Result<()> {
+        self.shape
+            .apply_geometry(GeometryEdit::TableRemoveColumn(index))
     }
 }
 
@@ -8803,6 +9561,14 @@ pub struct TableCellRef<'a> {
 }
 
 impl<'a> TableCellRef<'a> {
+    /// Returns only the direct tcPr anchor, without creating properties.
+    pub fn vertical_anchor(&self) -> Option<TextAnchor> {
+        self.cell
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.anchor)
+    }
+
     /// Returns the cell's visible plain text.
     pub fn text(&self) -> String {
         self.cell
@@ -8882,6 +9648,24 @@ pub struct TableCellMut<'a> {
 }
 
 impl<'a> TableCellMut<'a> {
+    /// Returns only the direct cell anchor.
+    pub fn vertical_anchor(&self) -> Option<TextAnchor> {
+        self.cell_ref().vertical_anchor()
+    }
+
+    /// Updates ordinary cell formatting without replacing text or its owners.
+    /// Clearing an absent anchor never materializes tcPr.
+    pub fn set_vertical_anchor(&mut self, anchor: Option<TextAnchor>) {
+        if self.vertical_anchor() == anchor {
+            return;
+        }
+        if let Some(properties) = self.cell_mut().properties.as_mut() {
+            properties.anchor = anchor;
+        } else if anchor.is_some() {
+            self.properties_mut().anchor = anchor;
+        }
+    }
+
     /// Returns the cell's visible plain text.
     pub fn text(&self) -> String {
         self.cell_ref().text()
@@ -9698,6 +10482,43 @@ fn shape_properties(child: &ShapeTreeChild) -> Option<&CT_ShapeProperties> {
 }
 
 impl<'a> ShapeRef<'a> {
+    /// Returns one connector endpoint in its physical parent's coordinate system.
+    pub fn connector_endpoint(&self, end: ConnectorEnd) -> Result<(Emu, Emu)> {
+        let ShapeTreeChild::Connector(connector) = self.child else {
+            return Err(Error::UnsupportedShapeMutation {
+                operation: "read connector endpoint",
+                shape_kind: self.kind(),
+            });
+        };
+        let points = connector
+            .shape_properties
+            .transform
+            .as_ref()
+            .and_then(connector_endpoints)
+            .ok_or_else(|| {
+                invalid_shape_mutation(
+                    "read connector endpoint",
+                    "missing finite connector geometry",
+                )
+            })?;
+        let (x, y) = points[match end {
+            ConnectorEnd::Begin => 0,
+            ConnectorEnd::End => 1,
+        }];
+        Ok((checked_geometry_emu(x)?, checked_geometry_emu(y)?))
+    }
+
+    /// Returns direct flip flags, with false for an absent ordinary transform.
+    /// Opaque AlternateContent does not have a mutable physical transform.
+    pub fn flips(&self) -> Option<(bool, bool)> {
+        if matches!(self.child, ShapeTreeChild::AlternateContent(_)) {
+            return None;
+        }
+        Some(
+            shape_transform(self.child)
+                .map_or((false, false), |t| (t.flip_horizontal, t.flip_vertical)),
+        )
+    }
     /// Returns the child's normalized structural kind.
     pub fn kind(&self) -> ShapeKind {
         shape_kind(self.child)
@@ -9895,6 +10716,42 @@ impl<'a> ShapeRef<'a> {
     pub fn size(&self) -> Option<(Emu, Emu)> {
         let extent = shape_transform(self.child)?.extent?;
         Some((extent.cx, extent.cy))
+    }
+
+    /// Returns the direct alt text without modifying its owner.
+    pub fn alt_text(&self) -> Option<String> {
+        match self.child {
+            ShapeTreeChild::Shape(shape) => shape.alt_text(),
+            ShapeTreeChild::Picture(picture) => picture.alt_text(),
+            ShapeTreeChild::GraphicFrame(frame) => frame.alt_text(),
+            ShapeTreeChild::GroupShape(group) => group.alt_text(),
+            ShapeTreeChild::Connector(connector) => connector.alt_text(),
+            ShapeTreeChild::AlternateContent(_) => None,
+        }
+    }
+
+    /// Returns the direct title without modifying its owner.
+    pub fn title(&self) -> Option<String> {
+        match self.child {
+            ShapeTreeChild::Shape(shape) => shape.title(),
+            ShapeTreeChild::Picture(picture) => picture.title(),
+            ShapeTreeChild::GraphicFrame(frame) => frame.title(),
+            ShapeTreeChild::GroupShape(group) => group.title(),
+            ShapeTreeChild::Connector(connector) => connector.title(),
+            ShapeTreeChild::AlternateContent(_) => None,
+        }
+    }
+
+    /// Returns the direct decorative without modifying its owner.
+    pub fn decorative(&self) -> bool {
+        match self.child {
+            ShapeTreeChild::Shape(shape) => shape.decorative(),
+            ShapeTreeChild::Picture(picture) => picture.decorative(),
+            ShapeTreeChild::GraphicFrame(frame) => frame.decorative(),
+            ShapeTreeChild::GroupShape(group) => group.decorative(),
+            ShapeTreeChild::Connector(connector) => connector.decorative(),
+            ShapeTreeChild::AlternateContent(_) => false,
+        }
     }
 
     /// Returns the producer-facing non-visual shape id.
@@ -12509,6 +13366,129 @@ mod write_tests {
 
     use super::*;
 
+    #[test]
+    fn fx206_native_accessibility_all_physical_owners_save_reparse_and_refuse_bad_text() {
+        let mut owners = vec![
+            preset_member(2, "rect", Emu(1), Emu(2), Emu(300), Emu(200)).unwrap(),
+            ShapeTreeChild::Picture(
+                CT_Picture::new(
+                    3,
+                    "Picture",
+                    "rIdOpaque",
+                    positioned_transform(Emu(1), Emu(2), Emu(300), Emu(200)),
+                )
+                .unwrap(),
+            ),
+            group_member(4, false),
+            connector_member(
+                5,
+                ConnectorType::Straight,
+                Emu(1),
+                Emu(2),
+                Emu(300),
+                Emu(200),
+            )
+            .unwrap(),
+            table_member(6, 2, 2, Emu(1), Emu(2), Emu(300), Emu(200)).unwrap(),
+        ];
+        let parse_owner = |child: &ShapeTreeChild, xml: &[u8]| match child {
+            ShapeTreeChild::Shape(_) => ShapeTreeChild::Shape(CT_Shape::from_xml(xml).unwrap()),
+            ShapeTreeChild::Picture(_) => {
+                ShapeTreeChild::Picture(CT_Picture::from_xml(xml).unwrap())
+            }
+            ShapeTreeChild::GroupShape(_) => {
+                ShapeTreeChild::GroupShape(Box::new(CT_GroupShape::from_xml(xml).unwrap()))
+            }
+            ShapeTreeChild::Connector(_) => {
+                ShapeTreeChild::Connector(CT_ConnectionShape::from_xml(xml).unwrap())
+            }
+            ShapeTreeChild::GraphicFrame(_) => {
+                ShapeTreeChild::GraphicFrame(Box::new(CT_GraphicFrame::from_xml(xml).unwrap()))
+            }
+            ShapeTreeChild::AlternateContent(_) => unreachable!(),
+        };
+        let opaque_extension =
+            r#"<a:ext uri="opaque"><x:payload xmlns:x="urn:opaque" q='&#65;'/></a:ext>"#;
+        let opaque = format!("<a:extLst>{opaque_extension}</a:extLst><!--keep-->");
+        for child in &mut owners {
+            let initial = String::from_utf8(shape_ref(child).xml().unwrap()).unwrap();
+            let property_start = initial.find("<p:cNvPr").unwrap();
+            let property_end = initial[property_start..].find("/>").unwrap() + property_start;
+            let mut imported = initial.clone();
+            imported.replace_range(
+                property_end..property_end + 2,
+                &format!(">{opaque}</p:cNvPr>"),
+            );
+            *child = parse_owner(child, imported.as_bytes());
+            let id = shape_ref(child).non_visual_id();
+            let name = shape_ref(child).non_visual_name();
+            let original = shape_ref(child).xml().unwrap();
+            assert_eq!(shape_ref(child).alt_text(), None);
+            assert_eq!(shape_ref(child).title(), None);
+            assert!(!shape_ref(child).decorative());
+            assert_eq!(
+                shape_ref(child).xml().unwrap(),
+                original,
+                "getters must not promote source"
+            );
+            {
+                let mut shape = shape_mut(child);
+                shape
+                    .set_alt_text(Some("Description & \"quote\"\nnext\tline\r"))
+                    .unwrap();
+                shape.set_title(Some("")).unwrap();
+                shape.set_decorative(true).unwrap();
+            }
+            assert_eq!(
+                shape_ref(child).alt_text().as_deref(),
+                Some("Description & \"quote\"\nnext\tline\r")
+            );
+            assert_eq!(shape_ref(child).title(), Some(String::new()));
+            assert!(shape_ref(child).decorative());
+            assert_eq!(shape_ref(child).non_visual_id(), id);
+            assert_eq!(shape_ref(child).non_visual_name(), name);
+            let xml = shape_ref(child).xml().unwrap();
+            let reopened = parse_owner(child, &xml);
+            assert!(String::from_utf8_lossy(&xml).contains(opaque_extension));
+            assert_eq!(shape_ref(&reopened).alt_text(), shape_ref(child).alt_text());
+            assert_eq!(shape_ref(&reopened).title(), shape_ref(child).title());
+            assert!(shape_ref(&reopened).decorative());
+            assert_eq!(shape_ref(&reopened).xml().unwrap(), xml);
+            assert!(shape_mut(child).set_title(Some("bad\u{0}")).is_err());
+            assert_eq!(shape_ref(child).xml().unwrap(), xml);
+            shape_mut(child).set_alt_text(None).unwrap();
+            shape_mut(child).set_title(None).unwrap();
+            shape_mut(child).set_decorative(false).unwrap();
+            assert_eq!(shape_ref(child).alt_text(), None);
+            assert_eq!(shape_ref(child).title(), None);
+            assert!(!shape_ref(child).decorative());
+            assert!(
+                String::from_utf8_lossy(&shape_ref(child).xml().unwrap())
+                    .contains(opaque_extension)
+            );
+            assert_eq!(shape_ref(child).non_visual_id(), id);
+            assert_eq!(shape_ref(child).non_visual_name(), name);
+            if matches!(child, ShapeTreeChild::Picture(_)) {
+                assert!(
+                    String::from_utf8_lossy(&shape_ref(child).xml().unwrap()).contains("rIdOpaque")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fx206_native_accessibility_compatibility_projection_refuses_without_source_change() {
+        let input = br#"<p:spTree xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:x="urn:producer"><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><mc:AlternateContent><mc:Choice Requires="x"><x:opaque/></mc:Choice><mc:Fallback/></mc:AlternateContent></p:spTree>"#;
+        let mut tree = CT_ShapeTree::from_xml(input).unwrap();
+        let child = tree.children.first_mut().unwrap();
+        assert!(matches!(child, ShapeTreeChild::AlternateContent(_)));
+        let before = shape_ref(child).xml().unwrap();
+        assert!(shape_mut(child).set_alt_text(Some("description")).is_err());
+        assert!(shape_mut(child).set_title(Some("title")).is_err());
+        assert!(shape_mut(child).set_decorative(true).is_err());
+        assert_eq!(shape_ref(child).xml().unwrap(), before);
+    }
+
     #[cfg(feature = "render")]
     #[test]
     fn fx195_native_caller_font_bundle_reaches_slide_notes_handout_and_fit() {
@@ -13028,7 +14008,7 @@ mod write_tests {
         ];
         for (row_index, row) in expected.into_iter().enumerate() {
             for (column_index, expected_cell) in row.into_iter().enumerate() {
-                let cell = &table.table.rows[row_index].cells[column_index];
+                let cell = &table.table().rows[row_index].cells[column_index];
                 assert_eq!(
                     (
                         cell.row_span,
@@ -13042,7 +14022,7 @@ mod write_tests {
             }
         }
         for row in 0..3 {
-            let cell = &table.table.rows[row].cells[2];
+            let cell = &table.table().rows[row].cells[2];
             assert_eq!(
                 (
                     cell.row_span,
@@ -13085,7 +14065,7 @@ mod write_tests {
             table.cell(0, 0).unwrap().text(),
             "one\ntwo formatted\nthree\nfour"
         );
-        let origin = &table.table.rows[0].cells[0];
+        let origin = &table.table().rows[0].cells[0];
         let paragraphs = origin.text_body.as_ref().unwrap().paragraphs();
         assert_eq!(paragraphs[1].properties.as_ref().unwrap().level, Some(2));
         let oxml_drawing::text::TextRun::Run(run) = &paragraphs[1].runs[1] else {
@@ -13110,13 +14090,13 @@ mod write_tests {
             .expect("add table");
         let mut table = shape.table_mut().expect("table handle");
         for (row, column) in [(0, 1), (1, 0), (1, 1)] {
-            table.table.rows[row].cells[column].text_body = None;
+            table.table_mut_raw().rows[row].cells[column].text_body = None;
         }
 
         table.cell_mut(0, 0).unwrap().merge_to(1, 1).unwrap();
 
         for (row, column) in [(0, 1), (1, 0), (1, 1)] {
-            let body = table.table.rows[row].cells[column]
+            let body = table.table().rows[row].cells[column]
                 .text_body
                 .as_ref()
                 .expect("merge source receives a text body");
@@ -13414,6 +14394,72 @@ mod write_tests {
     }
 
     #[test]
+    fn fx206_unchanged_imported_duplicate_ids_preserve_source_and_save_invariants() {
+        let valid = presentation_with_slide();
+        assert!(valid.save_invariants_preserved());
+        let mut package = package_after_save(valid);
+        let part = "/ppt/slides/slide1.xml";
+        let original = String::from_utf8(package.get_part(part).unwrap().to_vec()).unwrap();
+        assert_eq!(original.matches("id=\"3\"").count(), 1);
+        let duplicate = original.replacen("id=\"3\"", "id=\"2\"", 1).into_bytes();
+        package.set_part(part, duplicate.clone());
+        let imported = Presentation::from_package(package).unwrap();
+        assert_eq!(
+            imported.validate(),
+            vec![ValidationIssue::DuplicateShapeId { slide: 0, id: 2 }]
+        );
+        assert!(imported.save_invariants_preserved());
+        let bytes = imported.to_bytes().unwrap();
+        assert_eq!(bytes, imported.to_bytes().unwrap());
+        let saved = OpcPackage::from_reader(Cursor::new(&bytes)).unwrap();
+        assert_eq!(saved.get_part(part).unwrap(), duplicate);
+        let reopened = Presentation::from_bytes(&bytes).unwrap();
+        assert_eq!(reopened.to_bytes().unwrap(), bytes);
+        let converted = imported
+            .to_bytes_as(PresentationPackageClass::Presentation)
+            .unwrap();
+        assert_eq!(
+            OpcPackage::from_reader(Cursor::new(converted))
+                .unwrap()
+                .get_part(part)
+                .unwrap(),
+            duplicate
+        );
+        let path = std::env::temp_dir().join(format!(
+            "fx206-duplicate-source-{}.pptx",
+            std::process::id()
+        ));
+        imported.save(&path).unwrap();
+        assert_eq!(
+            OpcPackage::from_reader(Cursor::new(std::fs::read(&path).unwrap()))
+                .unwrap()
+                .get_part(part)
+                .unwrap(),
+            duplicate
+        );
+        std::fs::remove_file(path).unwrap();
+
+        let mut generated = presentation_with_slide();
+        generated.slides[0].slide = imported.slides[0].slide.clone();
+        assert!(
+            !generated.save_invariants_preserved(),
+            "new duplicate identities stay invalid"
+        );
+        let mut unrelated_invalid = imported.clone();
+        unrelated_invalid
+            .package
+            .set_part("/ppt/media/orphan.png", b"orphan".to_vec());
+        unrelated_invalid
+            .package
+            .content_types
+            .add_default("png", "image/png");
+        assert!(
+            !unrelated_invalid.save_invariants_preserved(),
+            "other invariant failures stay invalid"
+        );
+    }
+
+    #[test]
     fn presentation_main_part_and_relationship_owner_resolve_case_equivalent_spelling() {
         let mut package = package_after_save(presentation_with_slide());
         let presentation_xml = package.parts.remove("/ppt/presentation.xml").unwrap();
@@ -13506,6 +14552,475 @@ mod write_tests {
             presentation.package.get_part("/ppt/slides/slide7.xml"),
             Some(sentinel.as_slice())
         );
+    }
+
+    #[test]
+    fn fx206_placeholder_names_match_all_authenticated_default_layouts() {
+        let expected: &[(&str, &[&str])] = &[
+            ("Title Slide", &["Title 1", "Subtitle 2"][..]),
+            (
+                "Title and Vertical Text",
+                &["Title 1", "Vertical Text Placeholder 2"][..],
+            ),
+            (
+                "Vertical Title and Text",
+                &["Vertical Title 1", "Vertical Text Placeholder 2"][..],
+            ),
+            (
+                "Title and Content",
+                &["Title 1", "Content Placeholder 2"][..],
+            ),
+            ("Section Header", &["Title 1", "Text Placeholder 2"][..]),
+            (
+                "Two Content",
+                &["Title 1", "Content Placeholder 2", "Content Placeholder 3"][..],
+            ),
+            (
+                "Comparison",
+                &[
+                    "Title 1",
+                    "Text Placeholder 2",
+                    "Content Placeholder 3",
+                    "Text Placeholder 4",
+                    "Content Placeholder 5",
+                ][..],
+            ),
+            ("Title Only", &["Title 1"][..]),
+            ("Blank", &[][..]),
+            (
+                "Content with Caption",
+                &["Title 1", "Content Placeholder 2", "Text Placeholder 3"][..],
+            ),
+            (
+                "Picture with Caption",
+                &["Title 1", "Picture Placeholder 2", "Text Placeholder 3"][..],
+            ),
+        ];
+        for (layout_name, names) in expected {
+            let mut deck = Presentation::new().unwrap();
+            let index = layout_index(&deck, layout_name);
+            let source_part = deck.layouts[index].part_name.clone();
+            let source_xml = deck.layouts[index].layout.to_xml().unwrap();
+            deck.add_slide(index).unwrap();
+            let actual = deck
+                .slide(0)
+                .unwrap()
+                .shapes()
+                .map(|s| s.non_visual_name().unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                actual, *names,
+                "authenticated template layout {layout_name}"
+            );
+            assert_eq!(deck.layouts[index].layout.to_xml().unwrap(), source_xml);
+            assert_eq!(deck.layouts[index].part_name, source_part);
+            let bytes = deck.to_bytes().unwrap();
+            let reopened = Presentation::from_bytes(&bytes).unwrap();
+            let saved = reopened
+                .slide(0)
+                .unwrap()
+                .shapes()
+                .map(|s| s.non_visual_name().unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(saved, actual);
+            assert_eq!(reopened.to_bytes().unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn fx206_placeholder_names_retain_layout_orientation_size_and_opaque_metadata() {
+        let mut deck = Presentation::new().unwrap();
+        let index = layout_index(&deck, "Title and Content");
+        let raw = br#"<p:ph xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:f="urn:foreign" idx="1" orient="vert" sz="half" f:orient="horz" f:keep="A &amp; B"><f:payload spelling="kept&#32;exact"/></p:ph>"#;
+        let replacement = CT_Placeholder::from_xml(raw).unwrap();
+        let expected_ph = replacement.to_xml().unwrap();
+        let child = &mut deck.layouts[index]
+            .layout
+            .common_slide_data
+            .shape_tree
+            .children[1];
+        let ShapeTreeChild::Shape(shape) = child else {
+            panic!("actual content placeholder");
+        };
+        shape.placeholder = Some(replacement);
+        shape.set_name("Imported custom layout name").unwrap();
+        let source_layout_part = deck.layouts[index].layout.to_xml().unwrap();
+        let layout_part = deck.layouts[index].part_name.clone();
+        // Import the edited layout as a real package part. The layout cache is
+        // read-only through the public API and is not a layout editing facade.
+        deck.package
+            .set_part(&layout_part, source_layout_part.clone());
+        deck = Presentation::from_package(deck.package.clone()).unwrap();
+        assert_eq!(
+            deck.package.get_part(&layout_part),
+            Some(source_layout_part.as_slice())
+        );
+        let source_layout = deck.layouts[index].layout.to_xml().unwrap();
+        deck.add_slide(index).unwrap();
+        assert_eq!(
+            deck.slide(0)
+                .unwrap()
+                .shape(1)
+                .unwrap()
+                .non_visual_name()
+                .as_deref(),
+            Some("Vertical Content Placeholder 2")
+        );
+        let ShapeTreeChild::Shape(created) =
+            &deck.slides[0].slide.common_slide_data.shape_tree.children[1]
+        else {
+            panic!("generated content placeholder");
+        };
+        assert_eq!(
+            created.placeholder.as_ref().unwrap().to_xml().unwrap(),
+            expected_ph
+        );
+        assert_eq!(deck.layouts[index].layout.to_xml().unwrap(), source_layout);
+        let bytes = deck.to_bytes().unwrap();
+        let mut reopened = Presentation::from_bytes(&bytes).unwrap();
+        let old_slide = reopened.slides[0].slide.to_xml().unwrap();
+        let reopened_layout = reopened.layouts[index].layout.to_xml().unwrap();
+        let ShapeTreeChild::Shape(imported) = &reopened.layouts[index]
+            .layout
+            .common_slide_data
+            .shape_tree
+            .children[1]
+        else {
+            panic!("reopened imported content placeholder");
+        };
+        assert_eq!(
+            reopened.layouts[index]
+                .layout
+                .common_slide_data
+                .shape_tree
+                .children[1]
+                .non_visual_name()
+                .unwrap(),
+            "Imported custom layout name"
+        );
+        assert_eq!(
+            imported.placeholder.as_ref().unwrap().to_xml().unwrap(),
+            expected_ph
+        );
+        reopened.add_slide(index).unwrap();
+        assert_eq!(reopened.slides[0].slide.to_xml().unwrap(), old_slide);
+        assert_eq!(
+            reopened.layouts[index].layout.to_xml().unwrap(),
+            reopened_layout
+        );
+        assert_eq!(
+            reopened.package.get_part(&layout_part),
+            Some(source_layout_part.as_slice())
+        );
+    }
+
+    #[test]
+    fn fx206_placeholder_names_cover_reference_types_vertical_and_collisions() {
+        let cases = [
+            (PhType::Title, "Title"),
+            (PhType::CenteredTitle, "Title"),
+            (PhType::Body, "Text Placeholder"),
+            (PhType::Subtitle, "Subtitle"),
+            (PhType::Object, "Content Placeholder"),
+            (PhType::Chart, "Chart Placeholder"),
+            (PhType::Table, "Table Placeholder"),
+            (PhType::ClipArt, "ClipArt Placeholder"),
+            (PhType::Diagram, "SmartArt Placeholder"),
+            (PhType::Media, "Media Placeholder"),
+            (PhType::DateTime, "Date Placeholder"),
+            (PhType::Footer, "Footer Placeholder"),
+            (PhType::Header, "Header Placeholder"),
+            (PhType::SlideNumber, "Slide Number Placeholder"),
+            (PhType::Picture, "Picture Placeholder"),
+            (PhType::SlideImage, "Slide Image Placeholder"),
+        ];
+        for (kind, base) in cases {
+            let mut tree = CT_ShapeTree::new();
+            let ph = CT_Placeholder::new(Some(kind), Some(7));
+            assert_eq!(
+                generated_placeholder_name(&tree, &ph, 2).unwrap(),
+                format!("{base} 1")
+            );
+            let mut existing = CT_Shape::new_placeholder(50, ph.clone()).unwrap();
+            existing.set_name(&format!("{base} 1")).unwrap();
+            tree.append_child(ShapeTreeChild::Shape(existing));
+            assert_eq!(
+                generated_placeholder_name(&tree, &ph, 2).unwrap(),
+                format!("{base} 2")
+            );
+            assert_eq!(tree.children[0].non_visual_id(), Some(50));
+            assert_eq!(
+                tree.children[0].non_visual_name().as_deref(),
+                Some(format!("{base} 1").as_str())
+            );
+        }
+        let tree = CT_ShapeTree::new();
+        let foreign = CT_Placeholder::from_xml(br#"<p:ph xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:f="urn:f" f:orient="vert"/>"#).unwrap();
+        assert_eq!(
+            generated_placeholder_name(&tree, &foreign, 2).unwrap(),
+            "Content Placeholder 1"
+        );
+        let vertical = CT_Placeholder::from_xml(br#"<p:ph xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" orient="vert"/>"#).unwrap();
+        assert_eq!(
+            generated_placeholder_name(&tree, &vertical, 2).unwrap(),
+            "Vertical Content Placeholder 1"
+        );
+        let unknown = CT_Placeholder::new(Some(PhType::Other("futureType".to_owned())), Some(8));
+        assert_eq!(
+            generated_placeholder_name(&tree, &unknown, 9).unwrap(),
+            "Placeholder 9"
+        );
+
+        // Imported duplicate names and IDs stay in the source layout. New owners use fresh IDs.
+        let mut deck = Presentation::new().unwrap();
+        let index = layout_index(&deck, "Title and Content");
+        for child in &mut deck.layouts[index]
+            .layout
+            .common_slide_data
+            .shape_tree
+            .children
+        {
+            let ShapeTreeChild::Shape(shape) = child else {
+                continue;
+            };
+            let Some(ph) = shape.placeholder.clone() else {
+                continue;
+            };
+            if is_latent_placeholder(&ph) {
+                continue;
+            }
+            let mut replacement = CT_Shape::new_placeholder(50, ph).unwrap();
+            replacement.set_name("Imported duplicate name").unwrap();
+            *shape = replacement;
+        }
+        let original_layout = deck.layouts[index].layout.to_xml().unwrap();
+        deck.add_slide(index).unwrap();
+        let created = deck.slide(0).unwrap();
+        assert_eq!(
+            created
+                .shapes()
+                .map(|shape| shape.non_visual_id().unwrap())
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        assert_eq!(
+            created
+                .shapes()
+                .map(|shape| shape.non_visual_name().unwrap())
+                .collect::<Vec<_>>(),
+            vec!["Title 1", "Content Placeholder 2"]
+        );
+        assert_eq!(
+            deck.layouts[index].layout.to_xml().unwrap(),
+            original_layout
+        );
+    }
+
+    #[test]
+    fn fx206_created_notes_keep_actual_notes_placeholder_names() {
+        let mut deck = presentation_with_slide();
+        deck.set_notes_text(0, "actual notes").unwrap();
+        let notes = deck.slides[0].notes.as_ref().unwrap();
+        let names = notes
+            .notes
+            .common_slide_data
+            .shape_tree
+            .children
+            .iter()
+            .filter_map(ShapeTreeChild::non_visual_name)
+            .collect::<Vec<_>>();
+        assert!(
+            names
+                .iter()
+                .any(|name| name.starts_with("Notes Placeholder "))
+        );
+        assert!(
+            names
+                .iter()
+                .any(|name| name.starts_with("Slide Image Placeholder "))
+        );
+        assert!(
+            names
+                .iter()
+                .any(|name| name.starts_with("Slide Number Placeholder "))
+        );
+        assert_eq!(
+            names.iter().collect::<std::collections::HashSet<_>>().len(),
+            names.len()
+        );
+        let bytes = deck.to_bytes().unwrap();
+        let reopened = Presentation::from_bytes(&bytes).unwrap();
+        assert_eq!(reopened.to_bytes().unwrap(), bytes);
+    }
+
+    #[test]
+    fn fx206_native_cell_anchor_clear_is_lazy_and_preserves_body() {
+        let mut table = CT_Table::new(1, 1, Emu(100), Emu(100)).unwrap();
+        table.rows[0].cells[0].properties = None;
+        let before = table.to_xml().unwrap();
+        {
+            let mut cell = TableCellMut {
+                table: &mut table,
+                row: 0,
+                column: 0,
+            };
+            assert_eq!(cell.vertical_anchor(), None);
+            cell.set_vertical_anchor(None);
+        }
+        assert_eq!(table.to_xml().unwrap(), before);
+        assert!(table.rows[0].cells[0].properties.is_none());
+        let original_body = table.rows[0].cells[0].text_body.clone().unwrap();
+        for value in [
+            Some(TextAnchor::Top),
+            Some(TextAnchor::Center),
+            Some(TextAnchor::Bottom),
+            None,
+        ] {
+            TableCellMut {
+                table: &mut table,
+                row: 0,
+                column: 0,
+            }
+            .set_vertical_anchor(value);
+            assert_eq!(
+                TableCellRef {
+                    cell: &table.rows[0].cells[0]
+                }
+                .vertical_anchor(),
+                value
+            );
+            assert_eq!(
+                table.rows[0].cells[0].text_body.as_ref().unwrap(),
+                &original_body
+            );
+            let saved = table.to_xml().unwrap();
+            let reopened = CT_Table::from_xml(&saved).unwrap();
+            assert_eq!(
+                TableCellRef {
+                    cell: &reopened.rows[0].cells[0]
+                }
+                .vertical_anchor(),
+                value
+            );
+            TableCellMut {
+                table: &mut table,
+                row: 0,
+                column: 0,
+            }
+            .set_vertical_anchor(value);
+            assert_eq!(table.to_xml().unwrap(), saved);
+        }
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn fx206_native_picture_placeholder_fill_preserves_order_relationship_and_crop() {
+        for (width, height, horizontal) in [(200, 100, true), (100, 200, false)] {
+            let mut presentation = presentation_with_slide();
+            let mut source =
+                CT_Shape::new_placeholder(99, CT_Placeholder::new(Some(PhType::Picture), Some(4)))
+                    .unwrap();
+            source.shape_properties.transform = Some(positioned_transform(
+                Emu(12700),
+                Emu(25400),
+                Emu(1270000),
+                Emu(1270000),
+            ));
+            let index = presentation.slides[0]
+                .slide
+                .common_slide_data
+                .shape_tree
+                .children
+                .len();
+            presentation.slides[0]
+                .slide
+                .common_slide_data
+                .shape_tree
+                .append_child(ShapeTreeChild::Shape(source));
+            let siblings = presentation.slides[0]
+                .slide
+                .common_slide_data
+                .shape_tree
+                .children[..index]
+                .to_vec();
+            let image = render_bound_png_header(width, height);
+            let before = presentation.to_bytes().unwrap();
+            assert!(
+                presentation
+                    .fill_picture_placeholder(0, &[index], b"bad image", "bad.png")
+                    .is_err()
+            );
+            assert_eq!(presentation.to_bytes().unwrap(), before);
+            presentation
+                .fill_picture_placeholder(0, &[index], &image, "image.png")
+                .unwrap();
+            assert_eq!(
+                presentation.slides[0]
+                    .slide
+                    .common_slide_data
+                    .shape_tree
+                    .children[..index],
+                siblings
+            );
+            let child = &presentation.slides[0]
+                .slide
+                .common_slide_data
+                .shape_tree
+                .children[index];
+            assert_eq!(child.non_visual_id(), Some(99));
+            let ShapeTreeChild::Picture(picture) = child else {
+                panic!("selected child must become a picture");
+            };
+            assert_eq!(picture.placeholder.as_ref().unwrap().idx, Some(4));
+            assert!(picture.shape_properties.custom_geometry.is_none());
+            assert_eq!(
+                picture
+                    .shape_properties
+                    .preset_geometry
+                    .as_ref()
+                    .unwrap()
+                    .preset,
+                "rect"
+            );
+            let saved_picture = String::from_utf8(picture.to_xml().unwrap()).unwrap();
+            assert_eq!(
+                saved_picture.matches("<a:prstGeom prst=\"rect\">").count(),
+                1
+            );
+            assert!(
+                saved_picture.find("<a:xfrm").unwrap() < saved_picture.find("<a:prstGeom").unwrap()
+            );
+            let crop = picture
+                .blip_fill
+                .as_ref()
+                .unwrap()
+                .source_rect
+                .as_ref()
+                .unwrap();
+            if horizontal {
+                assert_eq!(crop.left, Some(Percent1000(25000)));
+                assert_eq!(crop.right, crop.left);
+                assert_eq!(crop.top, None);
+            } else {
+                assert_eq!(crop.top, Some(Percent1000(25000)));
+                assert_eq!(crop.bottom, crop.top);
+                assert_eq!(crop.left, None);
+            }
+            assert_eq!(presentation.picture_image(0, 99).unwrap().bytes, image);
+            let saved = presentation.to_bytes().unwrap();
+            let reopened = Presentation::from_bytes(&saved).unwrap();
+            assert_eq!(reopened.picture_image(0, 99).unwrap().bytes, image);
+            assert_eq!(
+                reopened.effective_geometry(0, &[index]).unwrap(),
+                Some((Emu(12700), Emu(25400), Emu(1270000), Emu(1270000)))
+            );
+            assert!(
+                presentation
+                    .fill_picture_placeholder(0, &[index], &image, "image.png")
+                    .is_err()
+            );
+            assert_eq!(presentation.to_bytes().unwrap(), saved);
+        }
     }
 
     #[test]
@@ -13704,6 +15219,653 @@ mod write_tests {
         let part = media.insert(&mut package, png, "duplicate.png");
 
         assert_eq!(part, "/ppt/media/image1.png");
+    }
+    // Prospective controls added to existing lib.rs test scope, not new test binary.
+    #[test]
+    fn fx206_checked_decomposition_refuses_skew_without_changing_member() {
+        let mut group = CT_Transform2D::default();
+        group.offset = Some(CT_Point2D {
+            x: Emu(100),
+            y: Emu(200),
+        });
+        group.extent = Some(CT_PositiveSize2D {
+            cx: Emu(400),
+            cy: Emu(100),
+        });
+        group.child_offset = Some(CT_Point2D {
+            x: Emu(0),
+            y: Emu(0),
+        });
+        group.child_extent = Some(CT_PositiveSize2D {
+            cx: Emu(200),
+            cy: Emu(100),
+        });
+
+        let mut own = CT_Transform2D::default();
+        own.offset = Some(CT_Point2D {
+            x: Emu(20),
+            y: Emu(30),
+        });
+        own.extent = Some(CT_PositiveSize2D {
+            cx: Emu(60),
+            cy: Emu(40),
+        });
+        own.rotation = Angle(30 * 60_000);
+
+        let mut member =
+            ShapeTreeChild::Shape(CT_Shape::new_preset(2, "skew", "rect", own).unwrap());
+        let before = member.clone();
+        assert!(
+            place_in_parent(&mut member, &group)
+                .unwrap_err()
+                .contains("skew")
+        );
+        assert_eq!(member, before);
+    }
+    #[test]
+    fn fx206_decomposition_preserves_reflected_rotated_four_corners() {
+        let mut group = CT_Transform2D::default();
+        group.offset = Some(CT_Point2D {
+            x: Emu(100),
+            y: Emu(200),
+        });
+        group.extent = Some(CT_PositiveSize2D {
+            cx: Emu(400),
+            cy: Emu(200),
+        });
+        group.child_offset = Some(CT_Point2D {
+            x: Emu(0),
+            y: Emu(0),
+        });
+        group.child_extent = Some(CT_PositiveSize2D {
+            cx: Emu(200),
+            cy: Emu(100),
+        });
+        group.rotation = Angle(90 * 60_000);
+        group.flip_horizontal = true;
+
+        let mut own = CT_Transform2D::default();
+        own.offset = Some(CT_Point2D {
+            x: Emu(20),
+            y: Emu(30),
+        });
+        own.extent = Some(CT_PositiveSize2D {
+            cx: Emu(60),
+            cy: Emu(40),
+        });
+        own.rotation = Angle(30 * 60_000);
+
+        let mut member =
+            ShapeTreeChild::Shape(CT_Shape::new_preset(2, "member", "rect", own).unwrap());
+        let expected = box_to_parent(shape_transform(&member).unwrap())
+            .unwrap()
+            .then(members_to_parent(Some(&group)));
+        place_in_parent(&mut member, &group).unwrap();
+        let placed = shape_transform(&member).unwrap();
+        let actual = box_to_parent(placed).unwrap();
+        let extent = placed.extent.unwrap();
+        for (u, v) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
+            let e = expected.apply((u * 60.0, v * 40.0));
+            let a = actual.apply((u * extent.cx.0 as f64, v * extent.cy.0 as f64));
+            assert!((e.0 - a.0).hypot(e.1 - a.1) <= 2.0);
+        }
+    }
+    #[test]
+    fn fx206_signed_distribution_preserves_extrema_and_equal_negative_gaps() {
+        let mut p = Presentation::new().unwrap();
+        p.add_slide(6).unwrap();
+        for (x, w) in [(0, 100), (50, 120), (80, 100)] {
+            p.shapes_mut(0, &[])
+                .unwrap()
+                .add_shape("rect", Emu(x), Emu(0), Emu(w), Emu(20))
+                .unwrap();
+        }
+        p.shapes_mut(0, &[])
+            .unwrap()
+            .distribute(
+                &[0, 1, 2],
+                DistributeDirection::Horizontal,
+                ArrangeReference::Selection,
+            )
+            .unwrap();
+        let children = &p.slides[0].slide.common_slide_data.shape_tree.children;
+        let bounds: Vec<_> = children
+            .iter()
+            .map(|c| visual_bounds(shape_transform(c).unwrap()).unwrap())
+            .collect();
+        assert_eq!(bounds[0][0], 0.0);
+        assert_eq!(bounds[2][2], 180.0);
+        assert_eq!(bounds[1][0] - bounds[0][2], -70.0);
+        assert_eq!(bounds[2][0] - bounds[1][2], -70.0);
+    }
+    #[test]
+    fn fx206_group_refuses_noncontiguous_selection_atomically() {
+        let mut p = Presentation::new().unwrap();
+        p.add_slide(6).unwrap();
+        for x in [0, 100, 200] {
+            p.shapes_mut(0, &[])
+                .unwrap()
+                .add_shape("rect", Emu(x), Emu(0), Emu(80), Emu(40))
+                .unwrap();
+        }
+        let before = p.to_bytes().unwrap();
+        assert!(p.shapes_mut(0, &[]).unwrap().group(&[0, 2]).is_err());
+        assert_eq!(p.to_bytes().unwrap(), before);
+    }
+
+    // Existing native APIs make these semantic discriminators, not missing-API compile failures.
+    #[test]
+    fn fx206_borrowed_shape_handles_reroute_incoming_glue_through_both_child_factories() {
+        for factory in 0..4 {
+            let mut p = Presentation::new().unwrap();
+            p.add_slide(6).unwrap();
+            let nested = factory >= 2;
+            if nested {
+                p.slide_mut(0).unwrap().add_group_shape().unwrap();
+                p.shapes_mut(0, &[0])
+                    .unwrap()
+                    .add_shape("rect", Emu(100), Emu(200), Emu(100), Emu(80))
+                    .unwrap();
+            } else {
+                p.slide_mut(0)
+                    .unwrap()
+                    .add_shape("rect", Emu(100), Emu(200), Emu(100), Emu(80))
+                    .unwrap();
+            }
+            let target = if nested {
+                p.slide(0)
+                    .unwrap()
+                    .shape(0)
+                    .unwrap()
+                    .child(0)
+                    .unwrap()
+                    .non_visual_id()
+                    .unwrap()
+            } else {
+                p.slide(0)
+                    .unwrap()
+                    .shape(0)
+                    .unwrap()
+                    .non_visual_id()
+                    .unwrap()
+            };
+            p.slide_mut(0)
+                .unwrap()
+                .add_connector(
+                    ConnectorType::Straight,
+                    Emu(150),
+                    Emu(200),
+                    Emu(900),
+                    Emu(700),
+                )
+                .unwrap();
+            let ShapeTreeChild::Connector(connector) =
+                &mut p.slides[0].slide.common_slide_data.shape_tree.children[1]
+            else {
+                panic!("fixture connector");
+            };
+            connector.start_connection = Some(rpptx_oxml::connector::CT_Connection::new(target, 0));
+            // Independent rectangle preset cxnLst defines site0 at hc,t.
+            // Group refitting in the fixture makes its parent-to-slide map identity.
+            match factory {
+                0 => {
+                    p.slide_mut(0)
+                        .unwrap()
+                        .shape_mut(0)
+                        .unwrap()
+                        .set_position(Emu(300), Emu(400))
+                        .unwrap();
+                }
+                1 => {
+                    p.slide_mut(0)
+                        .unwrap()
+                        .into_shape_mut(0)
+                        .unwrap()
+                        .set_position(Emu(300), Emu(400))
+                        .unwrap();
+                }
+                2 => {
+                    p.slide_mut(0)
+                        .unwrap()
+                        .shape_mut(0)
+                        .unwrap()
+                        .child_mut(0)
+                        .unwrap()
+                        .set_position(Emu(300), Emu(400))
+                        .unwrap();
+                }
+                _ => {
+                    p.slide_mut(0)
+                        .unwrap()
+                        .into_shape_mut(0)
+                        .unwrap()
+                        .into_child_mut(0)
+                        .unwrap()
+                        .set_position(Emu(300), Emu(400))
+                        .unwrap();
+                }
+            }
+            let ShapeTreeChild::Connector(connector) =
+                &p.slides[0].slide.common_slide_data.shape_tree.children[1]
+            else {
+                panic!("fixture connector");
+            };
+            let transform = connector.shape_properties.transform.as_ref().unwrap();
+            assert_eq!(
+                transform.offset,
+                Some(CT_Point2D {
+                    x: Emu(350),
+                    y: Emu(400)
+                }),
+                "factory{factory}"
+            );
+            assert_eq!(
+                transform.extent,
+                Some(CT_PositiveSize2D {
+                    cx: Emu(550),
+                    cy: Emu(300)
+                })
+            );
+            assert_eq!(connector.start_connection.as_ref().unwrap().id, target);
+            assert!(connector.end_connection.is_none());
+            let bytes = p.to_bytes().unwrap();
+            let reopened = Presentation::from_bytes(&bytes).unwrap();
+            assert_eq!(reopened.to_bytes().unwrap(), bytes);
+        }
+    }
+    #[test]
+    fn fx206_unrelated_imported_zero_site_attachment_is_preserved_during_geometry_edit() {
+        let mut p = Presentation::new().unwrap();
+        p.add_slide(6).unwrap();
+        p.slide_mut(0)
+            .unwrap()
+            .add_shape("rect", Emu(100), Emu(200), Emu(100), Emu(80))
+            .unwrap();
+        p.slide_mut(0)
+            .unwrap()
+            .add_table(1, 1, Emu(1000), Emu(1000), Emu(100), Emu(80))
+            .unwrap();
+        let target = p
+            .slide(0)
+            .unwrap()
+            .shape(1)
+            .unwrap()
+            .non_visual_id()
+            .unwrap();
+        p.slide_mut(0)
+            .unwrap()
+            .add_connector(
+                ConnectorType::Straight,
+                Emu(1000),
+                Emu(1000),
+                Emu(900),
+                Emu(700),
+            )
+            .unwrap();
+        let ShapeTreeChild::Connector(connector) =
+            &mut p.slides[0].slide.common_slide_data.shape_tree.children[2]
+        else {
+            panic!("fixture connector");
+        };
+        connector.start_connection = Some(rpptx_oxml::connector::CT_Connection::new(target, 0));
+        let before = connector.clone();
+        p.slide_mut(0)
+            .unwrap()
+            .shape_mut(0)
+            .unwrap()
+            .set_position(Emu(300), Emu(400))
+            .unwrap();
+        let ShapeTreeChild::Connector(connector) =
+            &p.slides[0].slide.common_slide_data.shape_tree.children[2]
+        else {
+            panic!("fixture connector");
+        };
+        assert_eq!(*connector, before);
+    }
+    #[test]
+    fn fx206_borrowed_table_geometry_commits_whole_owner_or_refuses_atomically() {
+        let mut p = Presentation::new().unwrap();
+        p.add_slide(6).unwrap();
+        p.slide_mut(0)
+            .unwrap()
+            .add_table(1, 1, Emu(100), Emu(200), Emu(100), Emu(80))
+            .unwrap();
+        p.slide_mut(0)
+            .unwrap()
+            .into_shape_mut(0)
+            .unwrap()
+            .into_table_mut()
+            .unwrap()
+            .set_column_width(0, Emu(200))
+            .unwrap();
+        assert_eq!(
+            p.slide(0).unwrap().shape(0).unwrap().size(),
+            Some((Emu(200), Emu(80)))
+        );
+        let target = p
+            .slide(0)
+            .unwrap()
+            .shape(0)
+            .unwrap()
+            .non_visual_id()
+            .unwrap();
+        p.slide_mut(0)
+            .unwrap()
+            .add_connector(
+                ConnectorType::Straight,
+                Emu(200),
+                Emu(200),
+                Emu(900),
+                Emu(700),
+            )
+            .unwrap();
+        let ShapeTreeChild::Connector(connector) =
+            &mut p.slides[0].slide.common_slide_data.shape_tree.children[1]
+        else {
+            panic!("fixture connector");
+        };
+        connector.start_connection = Some(rpptx_oxml::connector::CT_Connection::new(target, 0));
+        let before = p.to_bytes().unwrap();
+        // A table has no modeled declared cxnLst. Do not guess a cardinal site.
+        assert!(
+            p.slide_mut(0)
+                .unwrap()
+                .shape_mut(0)
+                .unwrap()
+                .table_mut()
+                .unwrap()
+                .set_column_width(0, Emu(300))
+                .is_err()
+        );
+        assert_eq!(p.to_bytes().unwrap(), before);
+    }
+
+    fn fx206_raw_tree(contents: &str) -> CT_ShapeTree {
+        CT_ShapeTree::from_xml(format!(r#"<p:spTree xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:f="urn:outer"><p:nvGrpSpPr><p:cNvPr id="1"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>{contents}</p:spTree>"#).as_bytes()).unwrap()
+    }
+    fn fx206_raw_shape(id: u32, x: i64) -> String {
+        let mut transform = CT_Transform2D::default();
+        transform.offset = Some(CT_Point2D {
+            x: Emu(x),
+            y: Emu(200),
+        });
+        transform.extent = Some(CT_PositiveSize2D {
+            cx: Emu(100),
+            cy: Emu(80),
+        });
+        String::from_utf8(
+            CT_Shape::new_preset(id, &format!("member{id}"), "rect", transform)
+                .unwrap()
+                .to_xml()
+                .unwrap(),
+        )
+        .unwrap()
+    }
+    fn fx206_raw_group(id: u32, members: &str, extra: &str, scale: i64) -> String {
+        format!(
+            r#"<p:grpSp><p:nvGrpSpPr><p:cNvPr id="{id}"></p:cNvPr><p:cNvGrpSpPr></p:cNvGrpSpPr><p:nvPr></p:nvPr></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{scale}" cy="10000"/><a:chOff x="0" y="0"/><a:chExt cx="10000" cy="10000"/></a:xfrm></p:grpSpPr>{members}{extra}</p:grpSp>"#
+        )
+    }
+    fn fx206_raw_presentation(tree: CT_ShapeTree) -> Presentation {
+        let mut p = Presentation::new().unwrap();
+        p.add_slide(6).unwrap();
+        p.slides[0].slide.common_slide_data.shape_tree = tree;
+        p
+    }
+    fn fx206_assert_raw_order(xml: &[u8], markers: &[&str]) {
+        let text = std::str::from_utf8(xml).unwrap();
+        let mut previous = 0;
+        for marker in markers {
+            let at = text[previous..].find(marker).unwrap() + previous;
+            assert_eq!(text.matches(marker).count(), 1, "duplicate {marker}");
+            previous = at + marker.len();
+        }
+    }
+
+    #[test]
+    fn fx206_group_and_ungroup_preserve_interleaved_raw_member_order() {
+        let raw = r#"<f:payload keep="&#65;"><f:value>  unchanged  </f:value></f:payload>"#;
+        let tree = fx206_raw_tree(&format!(
+            r#"<f:before/>{}{}{}<f:after/>"#,
+            fx206_raw_shape(2, 100),
+            raw,
+            fx206_raw_shape(3, 500)
+        ));
+        let mut p = fx206_raw_presentation(tree);
+        p.shapes_mut(0, &[]).unwrap().group(&[0, 1]).unwrap();
+        let grouped = p.slides[0]
+            .slide
+            .common_slide_data
+            .shape_tree
+            .to_xml()
+            .unwrap();
+        fx206_assert_raw_order(
+            &grouped,
+            &[
+                "<f:before",
+                "<p:grpSp ",
+                "member2",
+                raw,
+                "member3",
+                "</p:grpSp>",
+                "<f:after",
+            ],
+        );
+        // An inserted namespace may appear on the group root. Check membership separately.
+        let ShapeTreeChild::GroupShape(group) =
+            &p.slides[0].slide.common_slide_data.shape_tree.children[0]
+        else {
+            panic!("group");
+        };
+        assert_eq!(group.children.len(), 2);
+        let saved = p.to_bytes().unwrap();
+        let mut reopened = Presentation::from_bytes(&saved).unwrap();
+        reopened.shapes_mut(0, &[]).unwrap().ungroup(0).unwrap();
+        let xml = reopened.slides[0]
+            .slide
+            .common_slide_data
+            .shape_tree
+            .to_xml()
+            .unwrap();
+        fx206_assert_raw_order(&xml, &["<f:before", "member2", raw, "member3", "<f:after"]);
+        let again = Presentation::from_bytes(&reopened.to_bytes().unwrap()).unwrap();
+        assert_eq!(
+            again
+                .slide(0)
+                .unwrap()
+                .shapes()
+                .map(|s| s.non_visual_id().unwrap())
+                .collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+    }
+
+    #[test]
+    fn fx206_identity_ungroup_preserves_all_raw_boundaries_and_lexical_payload() {
+        let body = format!(
+            r#"<f:before keep="&#65;"/>{}<f:middle>  unchanged  </f:middle>{}<f:after/>"#,
+            fx206_raw_shape(2, 100),
+            fx206_raw_shape(3, 500)
+        );
+        let mut p = fx206_raw_presentation(fx206_raw_tree(&fx206_raw_group(4, &body, "", 10000)));
+        p.shapes_mut(0, &[]).unwrap().ungroup(0).unwrap();
+        let xml = p.slides[0]
+            .slide
+            .common_slide_data
+            .shape_tree
+            .to_xml()
+            .unwrap();
+        fx206_assert_raw_order(
+            &xml,
+            &[
+                r#"<f:before keep="&#65;"/>"#,
+                "member2",
+                "<f:middle>  unchanged  </f:middle>",
+                "member3",
+                "<f:after/>",
+            ],
+        );
+        let again = Presentation::from_bytes(&p.to_bytes().unwrap()).unwrap();
+        let saved = again.slides[0]
+            .slide
+            .common_slide_data
+            .shape_tree
+            .to_xml()
+            .unwrap();
+        fx206_assert_raw_order(
+            &saved,
+            &[
+                r#"<f:before keep="&#65;"/>"#,
+                "member2",
+                "<f:middle>  unchanged  </f:middle>",
+                "member3",
+                "<f:after/>",
+            ],
+        );
+    }
+
+    #[test]
+    fn fx206_promoted_nested_group_keeps_ancestor_namespace_and_shadowing() {
+        for nested_prefix in ["", r#" xmlns:f="urn:inner""#] {
+            let inner = fx206_raw_group(
+                5,
+                &format!("{}<f:payload keep=\"&#65;\"/>", fx206_raw_shape(2, 100)),
+                "",
+                10000,
+            )
+            .replacen(
+                "<p:grpSp>",
+                &format!("<p:grpSp{nested_prefix} f:keep=\"value\">"),
+                1,
+            );
+            let outer = fx206_raw_group(4, &inner, "", 10000).replacen(
+                "<p:grpSp>",
+                "<p:grpSp xmlns:f=\"urn:ancestor\">",
+                1,
+            );
+            let mut p = fx206_raw_presentation(fx206_raw_tree(&outer));
+            p.shapes_mut(0, &[]).unwrap().ungroup(0).unwrap();
+            let xml = p.slides[0]
+                .slide
+                .common_slide_data
+                .shape_tree
+                .to_xml()
+                .unwrap();
+            let expected = if nested_prefix.is_empty() {
+                "urn:ancestor"
+            } else {
+                "urn:inner"
+            };
+            let mut reader = NsReader::from_reader(xml.as_slice());
+            let mut buffer = Vec::new();
+            let mut seen = 0;
+            loop {
+                let (namespace, event) = reader.read_resolved_event_into(&mut buffer).unwrap();
+                let payload = xml_is(&namespace, expected);
+                match event {
+                    XmlEvent::Start(start) | XmlEvent::Empty(start) => {
+                        if xml_local_name(start.name().as_ref()) == b"payload" {
+                            assert!(payload);
+                            seen += 1;
+                        }
+                        for attribute in start.attributes() {
+                            let attribute = attribute.unwrap();
+                            if attribute.key.as_ref() == b"f:keep" {
+                                let (binding, _) =
+                                    reader.resolver().resolve_attribute(attribute.key);
+                                assert!(xml_is(&binding, expected));
+                                seen += 1;
+                            }
+                        }
+                    }
+                    XmlEvent::Eof => break,
+                    _ => {}
+                }
+                buffer.clear();
+            }
+            assert_eq!(seen, 2);
+            Presentation::from_bytes(&p.to_bytes().unwrap()).unwrap();
+        }
+    }
+
+    #[test]
+    fn fx206_promoted_raw_roots_keep_foreign_and_default_namespace_context() {
+        for (binding, raw, expected) in [
+            (
+                r#" xmlns:f="urn:ancestor""#,
+                r#"<f:extLst f:keep="&#65;"/>"#,
+                "urn:ancestor",
+            ),
+            (
+                r#" xmlns="urn:default""#,
+                r#"<payload keep="&#65;">  unchanged  </payload>"#,
+                "urn:default",
+            ),
+        ] {
+            let body = format!("{}{raw}", fx206_raw_shape(2, 100));
+            let outer = fx206_raw_group(4, &body, "", 10000).replacen(
+                "<p:grpSp>",
+                &format!("<p:grpSp{binding}>"),
+                1,
+            );
+            let mut p = fx206_raw_presentation(fx206_raw_tree(&outer));
+            p.shapes_mut(0, &[]).unwrap().ungroup(0).unwrap();
+            let saved = p.to_bytes().unwrap();
+            let reopened = Presentation::from_bytes(&saved).unwrap();
+            let xml = reopened.slides[0]
+                .slide
+                .common_slide_data
+                .shape_tree
+                .to_xml()
+                .unwrap();
+            let mut reader = NsReader::from_reader(xml.as_slice());
+            let mut buffer = Vec::new();
+            let mut found = false;
+            loop {
+                let (namespace, event) = reader.read_resolved_event_into(&mut buffer).unwrap();
+                let correct = xml_is(&namespace, expected);
+                match event {
+                    XmlEvent::Start(start) | XmlEvent::Empty(start)
+                        if matches!(
+                            xml_local_name(start.name().as_ref()),
+                            b"extLst" | b"payload"
+                        ) =>
+                    {
+                        assert!(correct);
+                        found = true;
+                    }
+                    XmlEvent::Eof => break,
+                    _ => {}
+                }
+                buffer.clear();
+            }
+            assert!(found);
+            let text = std::str::from_utf8(&xml).unwrap();
+            assert!(text.contains("&#65;"));
+            if raw.contains("unchanged") {
+                assert!(text.contains("  unchanged  "));
+            }
+        }
+    }
+
+    #[test]
+    fn fx206_unsupported_opaque_composition_and_group_owned_metadata_refuse_atomically() {
+        for (scale, body, extra) in [
+            (20000, "<f:payload/>", ""),
+            (
+                10000,
+                "",
+                r#"<p:extLst><p:ext uri="unknown"><f:payload keep="&#65;"/></p:ext></p:extLst>"#,
+            ),
+        ] {
+            let contents = format!("{}{body}", fx206_raw_shape(2, 100));
+            let mut p = fx206_raw_presentation(fx206_raw_tree(&fx206_raw_group(
+                4, &contents, extra, scale,
+            )));
+            let before = p.to_bytes().unwrap();
+            assert!(p.shapes_mut(0, &[]).unwrap().ungroup(0).is_err());
+            assert_eq!(p.to_bytes().unwrap(), before);
+        }
     }
 
     #[cfg(feature = "render")]
@@ -14251,4 +16413,1443 @@ mod write_tests {
         );
         assert_eq!(presentation.to_bytes().unwrap(), combined_before);
     }
+}
+
+/// The edge or centre line [`ShapesMut::align`] lines shapes up on.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShapeAlignment {
+    Left,
+    Center,
+    Right,
+    Top,
+    Middle,
+    Bottom,
+}
+
+/// What [`ShapesMut::align`] and [`ShapesMut::distribute`] measure against:
+/// the bounding box of the shapes given, or the slide.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ArrangeReference {
+    Selection,
+    Slide,
+}
+
+/// The axis [`ShapesMut::distribute`] spaces shapes along.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DistributeDirection {
+    Horizontal,
+    Vertical,
+}
+
+/// One end of a connector, `a:stCxn` for `Begin` and `a:endCxn` for `End`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConnectorEnd {
+    Begin,
+    End,
+}
+
+/// An affine map in PDF order: `x' = a x + c y + e`, `y' = b x + d y + f`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Affine([f64; 6]);
+
+impl Affine {
+    const IDENTITY: Self = Self([1.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
+
+    const fn translate(x: f64, y: f64) -> Self {
+        Self([1.0, 0.0, 0.0, 1.0, x, y])
+    }
+
+    const fn scale(x: f64, y: f64) -> Self {
+        Self([x, 0.0, 0.0, y, 0.0, 0.0])
+    }
+
+    /// A clockwise rotation on the y-down slide plane.
+    fn rotate(degrees: f64) -> Self {
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        Self([cos, sin, -sin, cos, 0.0, 0.0])
+    }
+
+    /// Applies `self`, then `next`.
+    fn then(self, next: Self) -> Self {
+        let [a, b, c, d, e, f] = self.0;
+        let [na, nb, nc, nd, ne, nf] = next.0;
+        Self([
+            na * a + nc * b,
+            nb * a + nd * b,
+            na * c + nc * d,
+            nb * c + nd * d,
+            na * e + nc * f + ne,
+            nb * e + nd * f + nf,
+        ])
+    }
+
+    fn apply(self, (x, y): (f64, f64)) -> (f64, f64) {
+        let [a, b, c, d, e, f] = self.0;
+        (a * x + c * y + e, b * x + d * y + f)
+    }
+
+    fn inverse(self) -> Option<Self> {
+        let [a, b, c, d, e, f] = self.0;
+        let determinant = a * d - b * c;
+        if !self.0.into_iter().all(f64::is_finite)
+            || !determinant.is_finite()
+            || determinant.abs() < f64::EPSILON
+        {
+            return None;
+        }
+        let (ia, ib, ic, id) = (
+            d / determinant,
+            -b / determinant,
+            -c / determinant,
+            a / determinant,
+        );
+        Some(Self([
+            ia,
+            ib,
+            ic,
+            id,
+            -(ia * e + ic * f),
+            -(ib * e + id * f),
+        ]))
+    }
+}
+
+/// Flips about `centre`, then rotates about it, as PowerPoint orients a box.
+fn orientation_about(transform: &CT_Transform2D, (x, y): (f64, f64)) -> Affine {
+    let flip = |flipped: bool| if flipped { -1.0 } else { 1.0 };
+    Affine::translate(-x, -y)
+        .then(Affine::scale(
+            flip(transform.flip_horizontal),
+            flip(transform.flip_vertical),
+        ))
+        .then(Affine::rotate(transform.rotation.to_degrees()))
+        .then(Affine::translate(x, y))
+}
+
+fn box_centre(offset: CT_Point2D, extent: CT_PositiveSize2D) -> (f64, f64) {
+    (
+        offset.x.0 as f64 + extent.cx.0 as f64 / 2.0,
+        offset.y.0 as f64 + extent.cy.0 as f64 / 2.0,
+    )
+}
+
+/// Maps a shape's own box, from `(0, 0)` to its extent, to its parent.
+fn box_to_parent(transform: &CT_Transform2D) -> Option<Affine> {
+    let (offset, extent) = (transform.offset?, transform.extent?);
+    Some(
+        Affine::translate(offset.x.0 as f64, offset.y.0 as f64)
+            .then(orientation_about(transform, box_centre(offset, extent))),
+    )
+}
+
+/// The member-space scale of a group on each axis, one where the group has
+/// no child extent or a zero one, as the renderer reads it.
+fn group_scale(transform: &CT_Transform2D) -> (f64, f64) {
+    let ratio = |extent: Option<i64>, child: Option<i64>| match (extent, child) {
+        (Some(extent), Some(child)) if child != 0 => extent as f64 / child as f64,
+        _ => 1.0,
+    };
+    (
+        ratio(
+            transform.extent.map(|extent| extent.cx.0),
+            transform.child_extent.map(|extent| extent.cx.0),
+        ),
+        ratio(
+            transform.extent.map(|extent| extent.cy.0),
+            transform.child_extent.map(|extent| extent.cy.0),
+        ),
+    )
+}
+
+/// Maps a group's member space to the group's parent.
+fn members_to_parent(transform: Option<&CT_Transform2D>) -> Affine {
+    let Some(transform) = transform else {
+        return Affine::IDENTITY;
+    };
+    let (Some(offset), Some(extent)) = (transform.offset, transform.extent) else {
+        return Affine::IDENTITY;
+    };
+    let child_offset = transform.child_offset.unwrap_or(offset);
+    let (scale_x, scale_y) = group_scale(transform);
+    Affine::translate(-(child_offset.x.0 as f64), -(child_offset.y.0 as f64))
+        .then(Affine::scale(scale_x, scale_y))
+        .then(Affine::translate(offset.x.0 as f64, offset.y.0 as f64))
+        .then(orientation_about(transform, box_centre(offset, extent)))
+}
+
+/// Maps the member space of the group that `group_path` names, or of the
+/// slide for an empty path, to the slide.
+fn members_to_slide(children: &[ShapeTreeChild], group_path: &[usize]) -> Option<Affine> {
+    let mut maps = Vec::with_capacity(group_path.len());
+    let mut level = children;
+    for index in group_path {
+        let ShapeTreeChild::GroupShape(group) = level.get(*index)? else {
+            return None;
+        };
+        let transform = group.group_transform()?;
+        let child_extent = transform.child_extent?;
+        if child_extent.cx.0 <= 0 || child_extent.cy.0 <= 0 {
+            return None;
+        }
+        maps.push(members_to_parent(Some(transform)));
+        level = &group.children;
+    }
+    Some(
+        maps.into_iter()
+            .rev()
+            .fold(Affine::IDENTITY, |inner, outer| inner.then(outer)),
+    )
+}
+
+/// The box a shape covers in its parent, flips and rotation included, as
+/// left, top, right, and bottom.
+#[cfg(test)]
+fn visual_bounds(transform: &CT_Transform2D) -> Option<[f64; 4]> {
+    let map = box_to_parent(transform)?;
+    let extent = transform.extent?;
+    let (width, height) = (extent.cx.0 as f64, extent.cy.0 as f64);
+    let corners =
+        [(0.0, 0.0), (width, 0.0), (0.0, height), (width, height)].map(|corner| map.apply(corner));
+    Some(corners.iter().fold(
+        [
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        ],
+        |[left, top, right, bottom], (x, y)| {
+            [left.min(*x), top.min(*y), right.max(*x), bottom.max(*y)]
+        },
+    ))
+}
+
+fn checked_geometry_emu(value: f64) -> Result<Emu> {
+    let rounded = value.round();
+    if !rounded.is_finite() || rounded < i64::MIN as f64 || rounded >= -(i64::MIN as f64) {
+        return Err(invalid_shape_mutation(
+            "shape geometry",
+            "nonfinite or out of range EMU",
+        ));
+    }
+    Ok(Emu(rounded as i64))
+}
+
+/// The members of a slide's own shape tree or of one group on it.
+enum Members<'t> {
+    Tree(&'t mut CT_ShapeTree),
+    Group(&'t mut CT_GroupShape),
+}
+
+impl<'t> Members<'t> {
+    fn at(tree: &'t mut CT_ShapeTree, group: &[usize]) -> Option<Self> {
+        if group.is_empty() {
+            Some(Self::Tree(tree))
+        } else {
+            group_at_mut(&mut tree.children, group).map(Self::Group)
+        }
+    }
+
+    fn children(&self) -> &[ShapeTreeChild] {
+        match self {
+            Self::Tree(tree) => &tree.children,
+            Self::Group(group) => &group.children,
+        }
+    }
+
+    fn children_mut(&mut self) -> &mut Vec<ShapeTreeChild> {
+        match self {
+            Self::Tree(tree) => &mut tree.children,
+            Self::Group(group) => &mut group.children,
+        }
+    }
+
+    fn group_span(&mut self, start: usize, count: usize, id: u32, name: &str) -> Result<()> {
+        match self {
+            Self::Tree(tree) => tree
+                .group_member_span(start, count, id, name)
+                .map_err(|error| invalid_shape_construction("group shapes", error)),
+            Self::Group(group) => group
+                .group_member_span(start, count, id, name)
+                .map_err(|error| invalid_shape_construction("group shapes", error)),
+        }
+    }
+    fn replace_group(
+        &mut self,
+        index: usize,
+        placed: Vec<ShapeTreeChild>,
+        identity: bool,
+    ) -> Result<()> {
+        match self {
+            Self::Tree(tree) => tree
+                .replace_group_member(index, placed, identity)
+                .map_err(|error| invalid_shape_construction("ungroup shapes", error)),
+            Self::Group(group) => group
+                .replace_group_member(index, placed, identity)
+                .map_err(|error| invalid_shape_construction("ungroup shapes", error)),
+        }
+    }
+}
+
+/// Returns `indices` ascending, rejecting an empty list, a repeat, and an
+/// index outside the `count` members.
+fn sorted_indices(operation: &'static str, indices: &[usize], count: usize) -> Result<Vec<usize>> {
+    let mut sorted = indices.to_vec();
+    sorted.sort_unstable();
+    if sorted.is_empty() {
+        return Err(invalid_shape_mutation(operation, "no shapes were given"));
+    }
+    if let Some(index) = sorted.iter().find(|index| **index >= count) {
+        return Err(invalid_shape_mutation(
+            operation,
+            format!("shape index {index} is out of range for {count} shapes"),
+        ));
+    }
+    if let Some(pair) = sorted.windows(2).find(|pair| pair[0] == pair[1]) {
+        return Err(invalid_shape_mutation(
+            operation,
+            format!("shape index {} is given twice", pair[0]),
+        ));
+    }
+    Ok(sorted)
+}
+
+impl ShapesMut<'_> {
+    fn tree(&mut self) -> &mut CT_ShapeTree {
+        &mut self.presentation.slides[self.slide_index]
+            .slide
+            .common_slide_data
+            .shape_tree
+    }
+
+    /// Moves existing shapes of this collection into a new group and returns
+    /// the group, as python-pptx `add_group_shape(shapes)` does.
+    ///
+    /// `indices` name z-order positions in this collection, in any order.
+    /// The members keep their order among themselves and their place on the
+    /// slide: the group's `a:chOff` and `a:chExt` equal its `a:off` and
+    /// `a:ext`, the union of the members' boxes. The group takes the z-order
+    /// place of the selected source span. Interleaved opaque members move
+    /// inside its identity coordinate map, retaining source order against
+    /// selected members and unselected neighbors. Shape ids do not change, so animations
+    /// and glued connectors keep their targets. A placeholder, which
+    /// PowerPoint does not group, a shape without a position and size of its
+    /// own, and a repeated or missing index are rejected without change.
+    fn group_in_candidate(&mut self, indices: &[usize]) -> Result<ShapeMut<'_>> {
+        const OPERATION: &str = "group shapes";
+        let group_path = self.group.clone();
+        let tree = self.tree();
+        let id = ShapeIdAllocator::scan(tree).allocate();
+        let mut members = Members::at(tree, &group_path)
+            .ok_or_else(|| invalid_shape_mutation(OPERATION, "the collection is not a group"))?;
+        let sorted = sorted_indices(OPERATION, indices, members.children().len())?;
+        if sorted.windows(2).any(|pair| pair[1] != pair[0] + 1) {
+            return Err(invalid_shape_mutation(
+                OPERATION,
+                "group selection must be contiguous",
+            ));
+        }
+        for index in &sorted {
+            let child = &members.children()[*index];
+            if shape_placeholder(child).is_some() {
+                return Err(invalid_shape_mutation(
+                    OPERATION,
+                    format!(
+                        "shape {index} is a placeholder, which PowerPoint does not group; \
+                         remove it from the list"
+                    ),
+                ));
+            }
+            if member_box(child).is_none() {
+                return Err(invalid_shape_mutation(
+                    OPERATION,
+                    format!("shape {index} has no position and size of its own"),
+                ));
+            }
+        }
+        let place = sorted[0];
+        members.group_span(place, sorted.len(), id, &format!("Group {id}"))?;
+        let ShapeTreeChild::GroupShape(group) = &mut members.children_mut()[place] else {
+            unreachable!("checked model span creates one group");
+        };
+        fit_group_to_members(group, false);
+        let mut path = group_path;
+        path.push(place);
+        Ok(owned_shape_mut(self.presentation, self.slide_index, path))
+    }
+
+    /// Replaces the group at `index` by its members and returns their new
+    /// z-order range.
+    ///
+    /// Each member keeps its place on the slide: the group's scale, flips,
+    /// and rotation move into the member's own transform, as PowerPoint's
+    /// Ungroup does. A member that is scaled while rotated by other than a
+    /// multiple of 90 degrees is refused if the composition introduces
+    /// skew. Opaque members move unchanged under an identity map, while an
+    /// unsupported nonidentity opaque composition or nontransferable group
+    /// metadata refuses before publication. A table, chart, or other graphic frame
+    /// cannot rotate or flip, so a group holding one that is not merely
+    /// moved is refused, as is a group that slide animations target.
+    /// Connectors glued to the group itself are released, and connectors
+    /// glued to members stay glued.
+    fn ungroup_in_candidate(&mut self, index: usize) -> Result<std::ops::Range<usize>> {
+        const OPERATION: &str = "ungroup shapes";
+        let group_path = self.group.clone();
+        let slide = &mut self.presentation.slides[self.slide_index].slide;
+        let members = Members::at(&mut slide.common_slide_data.shape_tree, &group_path)
+            .ok_or_else(|| invalid_shape_mutation(OPERATION, "the collection is not a group"))?;
+        let count = members.children().len();
+        let child = members.children().get(index).ok_or_else(|| {
+            invalid_shape_mutation(
+                OPERATION,
+                format!("shape index {index} is out of range for {count} shapes"),
+            )
+        })?;
+        let ShapeTreeChild::GroupShape(group) = child else {
+            return Err(Error::UnsupportedShapeMutation {
+                operation: OPERATION,
+                shape_kind: shape_kind(child),
+            });
+        };
+        let group_id = child.non_visual_id();
+        if let (Some(timing), Some(id)) = (&slide.timing, group_id)
+            && timing.references_shape(id)
+        {
+            return Err(invalid_shape_mutation(
+                OPERATION,
+                format!("slide animations target group id {id}; remove them first"),
+            ));
+        }
+        let transform = group.group_transform().cloned().unwrap_or_default();
+        let mut placed = group.children.clone();
+        for (position, member) in placed.iter_mut().enumerate() {
+            place_in_parent(member, &transform).map_err(|message| {
+                invalid_shape_mutation(OPERATION, format!("member {position}: {message}"))
+            })?;
+        }
+        let range = index..index + placed.len();
+        let mut members = Members::at(&mut slide.common_slide_data.shape_tree, &group_path)
+            .expect("the group path was checked");
+        members.replace_group(
+            index,
+            placed,
+            members_to_parent(Some(&transform)) == Affine::IDENTITY,
+        )?;
+        if let Some(id) = group_id {
+            detach_connectors(
+                &mut slide.common_slide_data.shape_tree.children,
+                &HashSet::from([id]),
+            );
+        }
+        Ok(range)
+    }
+
+    /// Lines the shapes at `indices` up on one edge or centre line of their
+    /// bounding box, or of the slide, as PowerPoint's Align does.
+    ///
+    /// Boxes include flips and rotation, so a rotated shape lines up by what
+    /// is drawn. A placeholder that inherits its position first receives
+    /// that position. `ArrangeReference::Slide` measures in slide
+    /// coordinates, including nested same-parent group members through the
+    /// inverse parent map.
+    fn align_in_candidate(
+        &mut self,
+        indices: &[usize],
+        alignment: ShapeAlignment,
+        reference: ArrangeReference,
+    ) -> Result<()> {
+        const OPERATION: &str = "align shapes";
+        let (sorted, bounds, target) = self.arrangement(OPERATION, indices, reference)?;
+        let shifts = bounds
+            .iter()
+            .map(|[left, top, right, bottom]| match alignment {
+                ShapeAlignment::Left => (target[0] - left, 0.0),
+                ShapeAlignment::Center => ((target[0] + target[2] - left - right) / 2.0, 0.0),
+                ShapeAlignment::Right => (target[2] - right, 0.0),
+                ShapeAlignment::Top => (0.0, target[1] - top),
+                ShapeAlignment::Middle => (0.0, (target[1] + target[3] - top - bottom) / 2.0),
+                ShapeAlignment::Bottom => (0.0, target[3] - bottom),
+            })
+            .collect::<Vec<_>>();
+        self.shift(OPERATION, &sorted, &shifts)
+    }
+
+    /// Spaces the shapes at `indices` evenly along one axis, as PowerPoint's
+    /// Distribute does.
+    ///
+    /// Shapes are taken in their order along the axis. Relative to the
+    /// selection, the first and last stay and the others move so that the
+    /// gaps between boxes are equal, which needs three shapes. Relative to
+    /// the slide, the first box starts at the slide edge and the last ends
+    /// at the other, and a single shape is centred. Boxes include flips and
+    /// rotation, as for [`Self::align`].
+    fn distribute_in_candidate(
+        &mut self,
+        indices: &[usize],
+        direction: DistributeDirection,
+        reference: ArrangeReference,
+    ) -> Result<()> {
+        const OPERATION: &str = "distribute shapes";
+        let (sorted, bounds, target) = self.arrangement(OPERATION, indices, reference)?;
+        let (start, end) = match direction {
+            DistributeDirection::Horizontal => (0, 2),
+            DistributeDirection::Vertical => (1, 3),
+        };
+        let mut order = (0..sorted.len()).collect::<Vec<_>>();
+        order.sort_by(|left, right| bounds[*left][start].total_cmp(&bounds[*right][start]));
+        let lengths = bounds
+            .iter()
+            .map(|bound| bound[end] - bound[start])
+            .collect::<Vec<_>>();
+        let total = lengths.iter().sum::<f64>();
+        let span = target[end] - target[start];
+        let mut shifts = vec![(0.0, 0.0); sorted.len()];
+        let mut cursor = target[start];
+        let gap = if order.len() == 1 {
+            cursor += (span - total) / 2.0;
+            0.0
+        } else {
+            (span - total) / (order.len() - 1) as f64
+        };
+        for position in order {
+            let delta = cursor - bounds[position][start];
+            shifts[position] = match direction {
+                DistributeDirection::Horizontal => (delta, 0.0),
+                DistributeDirection::Vertical => (0.0, delta),
+            };
+            cursor += lengths[position] + gap;
+        }
+        self.shift(OPERATION, &sorted, &shifts)
+    }
+
+    /// Checks the shapes an arrangement moves and returns their sorted
+    /// indices, their drawn boxes, and the box they arrange against.
+    #[allow(clippy::type_complexity)]
+    fn arrangement(
+        &mut self,
+        operation: &'static str,
+        indices: &[usize],
+        reference: ArrangeReference,
+    ) -> Result<(Vec<usize>, Vec<[f64; 4]>, [f64; 4])> {
+        let group_path = self.group.clone();
+        let count =
+            Members::at(self.tree(), &group_path).map_or(0, |members| members.children().len());
+        let sorted = sorted_indices(operation, indices, count)?;
+        let minimum = match (operation, reference) {
+            ("align shapes", ArrangeReference::Selection) => 2,
+            ("distribute shapes", ArrangeReference::Selection) => 3,
+            _ => 1,
+        };
+        if sorted.len() < minimum {
+            return Err(invalid_shape_mutation(operation, "too few selected shapes"));
+        }
+        let parent = members_to_slide(
+            &self.presentation.slides[self.slide_index]
+                .slide
+                .common_slide_data
+                .shape_tree
+                .children,
+            &group_path,
+        )
+        .ok_or_else(|| invalid_shape_mutation(operation, "missing parent transform"))?;
+        if parent.inverse().is_none() {
+            return Err(invalid_shape_mutation(
+                operation,
+                "singular parent transform",
+            ));
+        }
+        #[cfg(feature = "render")]
+        for index in &sorted {
+            let mut path = self.group.clone();
+            path.push(*index);
+            self.presentation
+                .materialize_geometry(self.slide_index, &path)?;
+        }
+        let members = Members::at(self.tree(), &group_path).expect("the group path was checked");
+        let bounds = sorted
+            .iter()
+            .map(|index| {
+                let child = &members.children()[*index];
+                if matches!(shape_kind(child), ShapeKind::AlternateContent) {
+                    return Err(Error::UnsupportedShapeMutation {
+                        operation,
+                        shape_kind: ShapeKind::AlternateContent,
+                    });
+                }
+                shape_transform(child)
+                    .and_then(|t| {
+                        let map = box_to_parent(t)?.then(parent);
+                        let ext = t.extent?;
+                        let points = [
+                            (0.0, 0.0),
+                            (ext.cx.0 as f64, 0.0),
+                            (0.0, ext.cy.0 as f64),
+                            (ext.cx.0 as f64, ext.cy.0 as f64),
+                        ]
+                        .map(|p| map.apply(p));
+                        if !points.iter().all(|(x, y)| x.is_finite() && y.is_finite()) {
+                            return None;
+                        }
+                        Some(points.into_iter().fold(
+                            [
+                                f64::INFINITY,
+                                f64::INFINITY,
+                                f64::NEG_INFINITY,
+                                f64::NEG_INFINITY,
+                            ],
+                            |b, (x, y)| [b[0].min(x), b[1].min(y), b[2].max(x), b[3].max(y)],
+                        ))
+                    })
+                    .ok_or_else(|| {
+                        invalid_shape_mutation(
+                            operation,
+                            format!("shape {index} has no position and size"),
+                        )
+                    })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let target = match reference {
+            ArrangeReference::Selection => bounds.iter().fold(
+                [
+                    f64::INFINITY,
+                    f64::INFINITY,
+                    f64::NEG_INFINITY,
+                    f64::NEG_INFINITY,
+                ],
+                |[left, top, right, bottom], bound| {
+                    [
+                        left.min(bound[0]),
+                        top.min(bound[1]),
+                        right.max(bound[2]),
+                        bottom.max(bound[3]),
+                    ]
+                },
+            ),
+            ArrangeReference::Slide => {
+                let (width, height) = self.presentation.slide_size().ok_or_else(|| {
+                    invalid_shape_mutation(operation, "the presentation has no slide size")
+                })?;
+                [0.0, 0.0, width.0 as f64, height.0 as f64]
+            }
+        };
+        Ok((sorted, bounds, target))
+    }
+
+    /// Moves each shape at `sorted` by its `(dx, dy)`.
+    fn shift(
+        &mut self,
+        operation: &'static str,
+        sorted: &[usize],
+        shifts: &[(f64, f64)],
+    ) -> Result<()> {
+        let group_path = self.group.clone();
+        let inverse = members_to_slide(
+            &self.presentation.slides[self.slide_index]
+                .slide
+                .common_slide_data
+                .shape_tree
+                .children,
+            &group_path,
+        )
+        .and_then(Affine::inverse)
+        .ok_or_else(|| invalid_shape_mutation(operation, "singular parent transform"))?;
+        let mut members = Members::at(self.tree(), &group_path)
+            .ok_or_else(|| invalid_shape_mutation(operation, "missing group"))?;
+        let mut offsets = Vec::with_capacity(sorted.len());
+        for (index, (dx, dy)) in sorted.iter().zip(shifts) {
+            let offset = shape_transform(&members.children()[*index])
+                .and_then(|t| t.offset)
+                .ok_or_else(|| invalid_shape_mutation(operation, "missing offset"))?;
+            let origin = inverse.apply((0.0, 0.0));
+            let point = inverse.apply((*dx, *dy));
+            offsets.push(CT_Point2D {
+                x: checked_geometry_emu(offset.x.0 as f64 + point.0 - origin.0)?,
+                y: checked_geometry_emu(offset.y.0 as f64 + point.1 - origin.1)?,
+            });
+        }
+        for (index, offset) in sorted.iter().zip(offsets) {
+            shape_mut(&mut members.children_mut()[*index])
+                .transform_mut(operation)?
+                .offset = Some(offset);
+        }
+        Ok(())
+    }
+}
+
+/// Rewrites one member's transform so that it draws in its group's parent
+/// where it drew inside the group of `transform`.
+fn place_in_parent(
+    member: &mut ShapeTreeChild,
+    transform: &CT_Transform2D,
+) -> std::result::Result<(), String> {
+    let child_extent = transform
+        .child_extent
+        .ok_or_else(|| "missing group child extent".to_owned())?;
+    if child_extent.cx.0 <= 0
+        || child_extent.cy.0 <= 0
+        || transform.offset.is_none()
+        || transform.extent.is_none()
+        || transform.child_offset.is_none()
+    {
+        return Err("singular or incomplete group transform".to_owned());
+    }
+    let map = members_to_parent(Some(transform));
+    if map == Affine::IDENTITY {
+        return Ok(());
+    }
+    let kind = shape_kind(member);
+    let own = shape_transform(member)
+        .cloned()
+        .ok_or_else(|| "the member has no position and size of its own".to_owned())?;
+    let (Some(_offset), Some(extent)) = (own.offset, own.extent) else {
+        return Err("the member has no position and size of its own".to_owned());
+    };
+    let combined = box_to_parent(&own)
+        .ok_or_else(|| "missing transform".to_owned())?
+        .then(map);
+    let [a, b, c, d, _, _] = combined.0;
+    let sx = a.hypot(b);
+    let sy = c.hypot(d);
+    if !combined.0.into_iter().all(f64::is_finite)
+        || sx <= f64::EPSILON
+        || sy <= f64::EPSILON
+        || ((a * c + b * d) / (sx * sy)).abs() > 1e-9
+    {
+        return Err("singular or skew group composition".to_owned());
+    }
+    if kind == ShapeKind::GraphicFrame
+        && ((a / sx - 1.0).abs() > 1e-9
+            || (d / sy - 1.0).abs() > 1e-9
+            || b.abs() > 1e-9
+            || c.abs() > 1e-9)
+    {
+        return Err("graphic frame cannot represent rotated or reflected composition".to_owned());
+    }
+    let width = extent.cx.0 as f64 * sx;
+    let height = extent.cy.0 as f64 * sy;
+    let center = combined.apply((extent.cx.0 as f64 / 2.0, extent.cy.0 as f64 / 2.0));
+    let mut placed = own.clone();
+    placed.offset = Some(CT_Point2D {
+        x: checked_geometry_emu(center.0 - width / 2.0).map_err(|e| e.to_string())?,
+        y: checked_geometry_emu(center.1 - height / 2.0).map_err(|e| e.to_string())?,
+    });
+    placed.extent = Some(CT_PositiveSize2D {
+        cx: checked_geometry_emu(width).map_err(|e| e.to_string())?,
+        cy: checked_geometry_emu(height).map_err(|e| e.to_string())?,
+    });
+    if kind != ShapeKind::GraphicFrame {
+        placed.rotation = Angle(
+            (b.atan2(a).to_degrees().rem_euclid(360.0) * 60_000.0)
+                .round()
+                .rem_euclid(21_600_000.0) as i32,
+        );
+        placed.flip_horizontal = false;
+        placed.flip_vertical = a * d - b * c < 0.0;
+    }
+    let rebuilt =
+        box_to_parent(&placed).ok_or_else(|| "invalid decomposed transform".to_owned())?;
+    for (u, v) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
+        let expected = combined.apply((u * extent.cx.0 as f64, v * extent.cy.0 as f64));
+        let actual = rebuilt.apply((
+            u * placed.extent.unwrap().cx.0 as f64,
+            v * placed.extent.unwrap().cy.0 as f64,
+        ));
+        if (expected.0 - actual.0).hypot(expected.1 - actual.1) > 2.0 {
+            return Err("rounded transform cannot preserve four corners".to_owned());
+        }
+    }
+    *shape_mut(member)
+        .transform_mut("ungroup shapes")
+        .map_err(|e| e.to_string())? = placed;
+    Ok(())
+}
+
+/// Returns the z-order path of the only shape on a slide with `shape_id`.
+fn path_of_id(children: &[ShapeTreeChild], shape_id: u32) -> Option<Vec<usize>> {
+    for (index, child) in children.iter().enumerate() {
+        if child.non_visual_id() == Some(shape_id) {
+            return Some(vec![index]);
+        }
+        if let ShapeTreeChild::GroupShape(group) = child
+            && let Some(mut path) = path_of_id(&group.children, shape_id)
+        {
+            path.insert(0, index);
+            return Some(path);
+        }
+    }
+    None
+}
+
+fn child_at<'t>(children: &'t [ShapeTreeChild], path: &[usize]) -> Option<&'t ShapeTreeChild> {
+    let (last, groups) = path.split_last()?;
+    let mut level = children;
+    for index in groups {
+        let ShapeTreeChild::GroupShape(group) = level.get(*index)? else {
+            return None;
+        };
+        level = &group.children;
+    }
+    level.get(*last)
+}
+
+fn child_at_mut<'t>(
+    children: &'t mut [ShapeTreeChild],
+    path: &[usize],
+) -> Option<&'t mut ShapeTreeChild> {
+    let (last, groups) = path.split_last()?;
+    if groups.is_empty() {
+        return children.get_mut(*last);
+    }
+    group_at_mut(children, groups)?.children.get_mut(*last)
+}
+
+/// Rewrites a connector's transform so that it runs from `begin` to
+/// `finish`, in its parent's coordinates, without rotation.
+fn place_connector_ends(
+    connector: &mut rpptx_oxml::connector::CT_ConnectionShape,
+    begin: (f64, f64),
+    finish: (f64, f64),
+) -> Result<()> {
+    let offset = CT_Point2D {
+        x: checked_geometry_emu(begin.0.min(finish.0))?,
+        y: checked_geometry_emu(begin.1.min(finish.1))?,
+    };
+    let extent = CT_PositiveSize2D {
+        cx: checked_geometry_emu((begin.0 - finish.0).abs())?,
+        cy: checked_geometry_emu((begin.1 - finish.1).abs())?,
+    };
+    let transform = connector
+        .shape_properties
+        .transform
+        .get_or_insert_with(CT_Transform2D::default);
+    transform.offset = Some(offset);
+    transform.extent = Some(extent);
+    transform.rotation = Angle(0);
+    transform.flip_horizontal = begin.0 > finish.0;
+    transform.flip_vertical = begin.1 > finish.1;
+    Ok(())
+}
+
+impl ShapeMut<'_> {
+    /// Moves one end of a connector to `(x, y)` in its parent's
+    /// coordinates, as python-pptx `begin_x`, `begin_y`, `end_x`, and
+    /// `end_y` assignments do, and releases that end's glue, so PowerPoint
+    /// does not route it back to the shape it was glued to. The other end
+    /// stays where it is, and the connector's rotation resets to none.
+    /// Other shapes are rejected.
+    pub fn set_connector_endpoint(&mut self, end: ConnectorEnd, x: Emu, y: Emu) -> Result<()> {
+        self.apply_geometry(GeometryEdit::Endpoint(end, x, y))
+    }
+    fn set_connector_endpoint_leaf(&mut self, end: ConnectorEnd, x: Emu, y: Emu) -> Result<()> {
+        const OPERATION: &str = "set connector endpoint";
+        let kind = self.kind();
+        let ShapeTreeChild::Connector(connector) = self.leaf_mut() else {
+            return Err(Error::UnsupportedShapeMutation {
+                operation: OPERATION,
+                shape_kind: kind,
+            });
+        };
+        let point = (x.0 as f64, y.0 as f64);
+        let current = connector
+            .shape_properties
+            .transform
+            .as_ref()
+            .and_then(connector_endpoints)
+            .unwrap_or([point, point]);
+        match end {
+            ConnectorEnd::Begin => {
+                place_connector_ends(connector, point, current[1])?;
+                connector.start_connection = None;
+            }
+            ConnectorEnd::End => {
+                place_connector_ends(connector, current[0], point)?;
+                connector.end_connection = None;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The begin and end points of a connector in its parent's coordinates.
+pub(crate) fn connector_endpoints(transform: &CT_Transform2D) -> Option<[(f64, f64); 2]> {
+    let map = box_to_parent(transform)?;
+    let extent = transform.extent?;
+    Some([
+        map.apply((0.0, 0.0)),
+        map.apply((extent.cx.0 as f64, extent.cy.0 as f64)),
+    ])
+}
+
+impl Presentation {
+    /// Glues one end of the connector at `connector_path` to connection
+    /// site `site` of the shape whose `p:cNvPr/@id` is `shape_id`, as
+    /// python-pptx `begin_connect` and `end_connect` do.
+    ///
+    /// `connector_path` holds one z-order index per nesting level, as for
+    /// [`Self::effective_geometry`]. The end is recorded in `a:stCxn` or
+    /// `a:endCxn` and moves to the site: the preset geometry's own
+    /// connection sites with its adjustments, flips, and rotation, with no guessed cardinal-site fallback. The other end stays where it
+    /// is, and the connector's rotation resets to none. A site outside the
+    /// shape's sites, a missing or repeated shape id, and a path that names
+    /// no connector are rejected without change.
+    fn connect_connector_in_candidate(
+        &mut self,
+        slide_index: usize,
+        connector_path: &[usize],
+        end: ConnectorEnd,
+        shape_id: u32,
+        site: u32,
+    ) -> Result<()> {
+        const OPERATION: &str = "connect connector";
+        self.require_slide_index(slide_index)?;
+        let children = &self.slides[slide_index]
+            .slide
+            .common_slide_data
+            .shape_tree
+            .children;
+        let connector = child_at(children, connector_path).ok_or_else(|| {
+            invalid_shape_mutation(
+                OPERATION,
+                format!("slide {slide_index} has no shape at path {connector_path:?}"),
+            )
+        })?;
+        let ShapeTreeChild::Connector(connector) = connector else {
+            return Err(Error::UnsupportedShapeMutation {
+                operation: OPERATION,
+                shape_kind: shape_kind(connector),
+            });
+        };
+        if crate::shape_id_count(children, shape_id) != 1 {
+            return Err(invalid_shape_mutation(
+                OPERATION,
+                format!("shape id {shape_id} is missing or not unique on the slide"),
+            ));
+        }
+        let target_path = path_of_id(children, shape_id).ok_or_else(|| {
+            invalid_shape_mutation(
+                OPERATION,
+                format!("shape id {shape_id} is inside an mc:AlternateContent fallback"),
+            )
+        })?;
+        if target_path == connector_path {
+            return Err(invalid_shape_mutation(
+                OPERATION,
+                "a connector cannot connect to itself",
+            ));
+        }
+        let target = child_at(children, &target_path).expect("the path was found");
+        let target_transform = match shape_transform(target) {
+            Some(transform) if transform.offset.is_some() && transform.extent.is_some() => {
+                transform.clone()
+            }
+            _ => self.inherited_target_transform(slide_index, target, OPERATION)?,
+        };
+        let extent = target_transform
+            .extent
+            .expect("the transform has an extent");
+        let size = (extent.cx.0 as f64, extent.cy.0 as f64);
+        let sites = shape_properties(target)
+            .and_then(|p| p.preset_geometry.as_ref())
+            .ok_or_else(|| invalid_shape_mutation(OPERATION, "no modeled preset sites"))?
+            .connection_sites(size)
+            .map_err(|e| invalid_shape_mutation(OPERATION, e.to_string()))?
+            .filter(|sites| !sites.is_empty())
+            .ok_or_else(|| invalid_shape_mutation(OPERATION, "no modeled sites"))?;
+        let local = *sites.get(site as usize).ok_or_else(|| {
+            invalid_shape_mutation(
+                OPERATION,
+                format!(
+                    "shape id {shape_id} has {} connection sites, 0 to {}, not {site}",
+                    sites.len(),
+                    sites.len().saturating_sub(1)
+                ),
+            )
+        })?;
+        let on_slide = members_to_slide(children, &target_path[..target_path.len() - 1])
+            .zip(box_to_parent(&target_transform))
+            .map(|(parent, own)| own.then(parent).apply(local))
+            .ok_or_else(|| invalid_shape_mutation(OPERATION, "the shape has no position"))?;
+        let point = members_to_slide(children, &connector_path[..connector_path.len() - 1])
+            .and_then(Affine::inverse)
+            .map(|map| map.apply(on_slide))
+            .ok_or_else(|| {
+                invalid_shape_mutation(
+                    OPERATION,
+                    "the connector's group has no size, so no point maps into it",
+                )
+            })?;
+        let current = connector
+            .shape_properties
+            .transform
+            .as_ref()
+            .and_then(connector_endpoints)
+            .unwrap_or([point, point]);
+        let [begin, finish] = match end {
+            ConnectorEnd::Begin => [point, current[1]],
+            ConnectorEnd::End => [current[0], point],
+        };
+
+        let children = &mut self.slides[slide_index]
+            .slide
+            .common_slide_data
+            .shape_tree
+            .children;
+        let Some(ShapeTreeChild::Connector(connector)) = child_at_mut(children, connector_path)
+        else {
+            unreachable!("the connector was found above");
+        };
+        place_connector_ends(connector, begin, finish)?;
+        let connection = match end {
+            ConnectorEnd::Begin => &mut connector.start_connection,
+            ConnectorEnd::End => &mut connector.end_connection,
+        };
+        if let Some(connection) = connection {
+            connection.id = shape_id;
+            connection.idx = site;
+        } else {
+            *connection = Some(rpptx_oxml::connector::CT_Connection::new(shape_id, site));
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "render")]
+    fn inherited_target_transform(
+        &self,
+        slide_index: usize,
+        target: &ShapeTreeChild,
+        operation: &'static str,
+    ) -> Result<CT_Transform2D> {
+        let inherited = match shape_placeholder(target) {
+            Some(placeholder) => self.inherited_transform(slide_index, placeholder)?,
+            None => None,
+        };
+        inherited
+            .filter(|transform| transform.offset.is_some() && transform.extent.is_some())
+            .ok_or_else(|| invalid_shape_mutation(operation, "the shape has no position and size"))
+    }
+
+    #[cfg(not(feature = "render"))]
+    fn inherited_target_transform(
+        &self,
+        _slide_index: usize,
+        _target: &ShapeTreeChild,
+        operation: &'static str,
+    ) -> Result<CT_Transform2D> {
+        Err(invalid_shape_mutation(
+            operation,
+            "the shape has no position and size of its own",
+        ))
+    }
+}
+
+impl Presentation {
+    pub fn connect_connector(
+        &mut self,
+        slide: usize,
+        path: &[usize],
+        end: ConnectorEnd,
+        target: u32,
+        site: u32,
+    ) -> Result<()> {
+        let mut candidate = self.clone();
+        candidate.connect_connector_in_candidate(slide, path, end, target, site)?;
+        candidate.slides[slide]
+            .slide
+            .to_xml()
+            .map_err(|error| Error::MalformedPart {
+                part_name: candidate.slides[slide].part_name.clone(),
+                message: error.to_string(),
+            })?;
+        *self = candidate;
+        Ok(())
+    }
+    fn refresh_connector_attachments(
+        &mut self,
+        slide: usize,
+        previous: &Presentation,
+        removed: &HashSet<u32>,
+    ) -> Result<()> {
+        self.require_slide_index(slide)?;
+        let mut attachments = Vec::new();
+        collect_connector_attachments(
+            &self.slides[slide]
+                .slide
+                .common_slide_data
+                .shape_tree
+                .children,
+            &mut Vec::new(),
+            &mut attachments,
+        );
+        detach_connectors(
+            &mut self.slides[slide]
+                .slide
+                .common_slide_data
+                .shape_tree
+                .children,
+            removed,
+        );
+        for (path, end, id, site) in attachments {
+            if removed.contains(&id) {
+                continue;
+            }
+            let before = geometry_target_signature(
+                &previous.slides[slide]
+                    .slide
+                    .common_slide_data
+                    .shape_tree
+                    .children,
+                id,
+            );
+            // Never adopt a formerly dangling reference by incidental ID allocation.
+            if before.is_empty() {
+                continue;
+            }
+            let after = geometry_target_signature(
+                &self.slides[slide]
+                    .slide
+                    .common_slide_data
+                    .shape_tree
+                    .children,
+                id,
+            );
+            let connector_id = child_at(
+                &self.slides[slide]
+                    .slide
+                    .common_slide_data
+                    .shape_tree
+                    .children,
+                &path,
+            )
+            .and_then(ShapeTreeChild::non_visual_id);
+            let connector_changed = connector_id.is_some_and(|connector_id| {
+                geometry_target_signature(
+                    &previous.slides[slide]
+                        .slide
+                        .common_slide_data
+                        .shape_tree
+                        .children,
+                    connector_id,
+                ) != geometry_target_signature(
+                    &self.slides[slide]
+                        .slide
+                        .common_slide_data
+                        .shape_tree
+                        .children,
+                    connector_id,
+                )
+            });
+            if before != after || connector_changed {
+                self.connect_connector_in_candidate(slide, &path, end, id, site)?;
+            }
+        }
+        Ok(())
+    }
+    /// Path-aware mutation stages attached endpoints with the actual target edit.
+    pub fn set_shape_position(
+        &mut self,
+        slide: usize,
+        path: &[usize],
+        left: Emu,
+        top: Emu,
+    ) -> Result<()> {
+        self.edit_shape_geometry(slide, path, GeometryEdit::Position(left, top))
+    }
+    pub fn set_shape_size(
+        &mut self,
+        slide: usize,
+        path: &[usize],
+        width: Emu,
+        height: Emu,
+    ) -> Result<()> {
+        if width.0 < 0 || height.0 < 0 {
+            return Err(invalid_shape_mutation("set size", "negative extent"));
+        }
+        self.edit_shape_geometry(slide, path, GeometryEdit::Size(width, height))
+    }
+    pub fn set_shape_rotation(
+        &mut self,
+        slide: usize,
+        path: &[usize],
+        rotation: Angle,
+    ) -> Result<()> {
+        self.edit_shape_geometry(slide, path, GeometryEdit::Rotation(rotation))
+    }
+    pub fn set_shape_flips(
+        &mut self,
+        slide: usize,
+        path: &[usize],
+        horizontal: bool,
+        vertical: bool,
+    ) -> Result<()> {
+        self.edit_shape_geometry(slide, path, GeometryEdit::Flips(horizontal, vertical))
+    }
+    fn edit_shape_geometry(
+        &mut self,
+        slide: usize,
+        path: &[usize],
+        edit: GeometryEdit,
+    ) -> Result<()> {
+        self.require_slide_index(slide)?;
+        if let GeometryEdit::Size(width, height) = &edit
+            && (width.0 < 0 || height.0 < 0)
+        {
+            return Err(invalid_shape_mutation("set size", "negative extent"));
+        }
+        let mut candidate = self.clone();
+        #[cfg(feature = "render")]
+        candidate.materialize_geometry(slide, path)?;
+        let child = child_at_mut(
+            &mut candidate.slides[slide]
+                .slide
+                .common_slide_data
+                .shape_tree
+                .children,
+            path,
+        )
+        .ok_or_else(|| invalid_shape_mutation("shape geometry", "missing physical owner"))?;
+        apply_leaf_geometry(child, edit)?;
+        candidate.refresh_connector_attachments(slide, self, &HashSet::new())?;
+        candidate.slides[slide]
+            .slide
+            .to_xml()
+            .map_err(|error| Error::MalformedPart {
+                part_name: candidate.slides[slide].part_name.clone(),
+                message: error.to_string(),
+            })?;
+        *self = candidate;
+        Ok(())
+    }
+}
+enum GeometryEdit {
+    Position(Emu, Emu),
+    Size(Emu, Emu),
+    Rotation(Angle),
+    Flips(bool, bool),
+    Endpoint(ConnectorEnd, Emu, Emu),
+    Adjustment(String, f64),
+    Preset(String),
+    TableColumn(usize, Emu),
+    TableRow(usize, Emu),
+    TableInsertRow(usize),
+    TableRemoveRow(usize),
+    TableInsertColumn(usize),
+    TableRemoveColumn(usize),
+}
+fn collect_connector_attachments(
+    children: &[ShapeTreeChild],
+    path: &mut Vec<usize>,
+    out: &mut Vec<(Vec<usize>, ConnectorEnd, u32, u32)>,
+) {
+    for (index, child) in children.iter().enumerate() {
+        path.push(index);
+        match child {
+            ShapeTreeChild::Connector(connector) => {
+                if let Some(c) = &connector.start_connection {
+                    out.push((path.clone(), ConnectorEnd::Begin, c.id, c.idx));
+                }
+                if let Some(c) = &connector.end_connection {
+                    out.push((path.clone(), ConnectorEnd::End, c.id, c.idx));
+                }
+            }
+            ShapeTreeChild::GroupShape(group) => {
+                collect_connector_attachments(&group.children, path, out)
+            }
+            _ => (),
+        }
+        path.pop();
+    }
+}
+impl ShapesMut<'_> {
+    pub fn group(&mut self, indices: &[usize]) -> Result<ShapeMut<'_>> {
+        let mut candidate = self.presentation.clone();
+        let id = candidate
+            .shapes_mut(self.slide_index, &self.group)
+            .ok_or_else(|| invalid_shape_mutation("group shapes", "missing parent"))?
+            .group_in_candidate(indices)?
+            .leaf()
+            .non_visual_id()
+            .ok_or_else(|| invalid_shape_mutation("group shapes", "missing new group ID"))?;
+        candidate.refresh_connector_attachments(
+            self.slide_index,
+            self.presentation,
+            &HashSet::new(),
+        )?;
+        let path = path_of_id(
+            &candidate.slides[self.slide_index]
+                .slide
+                .common_slide_data
+                .shape_tree
+                .children,
+            id,
+        )
+        .ok_or_else(|| invalid_shape_mutation("group shapes", "new group missing"))?;
+        candidate.slides[self.slide_index]
+            .slide
+            .to_xml()
+            .map_err(|error| Error::MalformedPart {
+                part_name: candidate.slides[self.slide_index].part_name.clone(),
+                message: error.to_string(),
+            })?;
+        *self.presentation = candidate;
+        Ok(owned_shape_mut(self.presentation, self.slide_index, path))
+    }
+    pub fn ungroup(&mut self, index: usize) -> Result<std::ops::Range<usize>> {
+        let mut candidate = self.presentation.clone();
+        let mut path = self.group.clone();
+        path.push(index);
+        let id = child_at(
+            &candidate.slides[self.slide_index]
+                .slide
+                .common_slide_data
+                .shape_tree
+                .children,
+            &path,
+        )
+        .and_then(|c| c.non_visual_id())
+        .ok_or_else(|| invalid_shape_mutation("ungroup shapes", "missing group identity"))?;
+        let range = candidate
+            .shapes_mut(self.slide_index, &self.group)
+            .ok_or_else(|| invalid_shape_mutation("ungroup shapes", "missing parent"))?
+            .ungroup_in_candidate(index)?;
+        candidate.refresh_connector_attachments(
+            self.slide_index,
+            self.presentation,
+            &HashSet::from([id]),
+        )?;
+        candidate.slides[self.slide_index]
+            .slide
+            .to_xml()
+            .map_err(|error| Error::MalformedPart {
+                part_name: candidate.slides[self.slide_index].part_name.clone(),
+                message: error.to_string(),
+            })?;
+        *self.presentation = candidate;
+        Ok(range)
+    }
+    pub fn align(
+        &mut self,
+        indices: &[usize],
+        alignment: ShapeAlignment,
+        reference: ArrangeReference,
+    ) -> Result<()> {
+        let mut candidate = self.presentation.clone();
+        candidate
+            .shapes_mut(self.slide_index, &self.group)
+            .ok_or_else(|| invalid_shape_mutation("align shapes", "missing parent"))?
+            .align_in_candidate(indices, alignment, reference)?;
+        candidate.refresh_connector_attachments(
+            self.slide_index,
+            self.presentation,
+            &HashSet::new(),
+        )?;
+        candidate.slides[self.slide_index]
+            .slide
+            .to_xml()
+            .map_err(|error| Error::MalformedPart {
+                part_name: candidate.slides[self.slide_index].part_name.clone(),
+                message: error.to_string(),
+            })?;
+        *self.presentation = candidate;
+        Ok(())
+    }
+    pub fn distribute(
+        &mut self,
+        indices: &[usize],
+        direction: DistributeDirection,
+        reference: ArrangeReference,
+    ) -> Result<()> {
+        let mut candidate = self.presentation.clone();
+        candidate
+            .shapes_mut(self.slide_index, &self.group)
+            .ok_or_else(|| invalid_shape_mutation("distribute shapes", "missing parent"))?
+            .distribute_in_candidate(indices, direction, reference)?;
+        candidate.refresh_connector_attachments(
+            self.slide_index,
+            self.presentation,
+            &HashSet::new(),
+        )?;
+        candidate.slides[self.slide_index]
+            .slide
+            .to_xml()
+            .map_err(|error| Error::MalformedPart {
+                part_name: candidate.slides[self.slide_index].part_name.clone(),
+                message: error.to_string(),
+            })?;
+        *self.presentation = candidate;
+        Ok(())
+    }
+}
+
+fn apply_leaf_geometry(child: &mut ShapeTreeChild, edit: GeometryEdit) -> Result<()> {
+    let mut shape = shape_mut(child);
+    match edit {
+        GeometryEdit::Endpoint(end, x, y) => shape.set_connector_endpoint_leaf(end, x, y),
+        GeometryEdit::Position(x, y) => shape.set_position_leaf(x, y),
+        GeometryEdit::Size(w, h) => shape.set_size_leaf(w, h),
+        GeometryEdit::Rotation(r) => shape.set_rotation_leaf(r),
+        GeometryEdit::Flips(h, v) => {
+            let t = shape.transform_mut("set flips")?;
+            t.flip_horizontal = h;
+            t.flip_vertical = v;
+            Ok(())
+        }
+        GeometryEdit::Adjustment(name, value) => shape.set_adjust_value_leaf(&name, value),
+        GeometryEdit::Preset(name) => shape.set_auto_shape_type_leaf(&name),
+        GeometryEdit::TableColumn(index, width) => shape
+            .into_table_mut()
+            .ok_or_else(|| invalid_shape_mutation("set column width", "not a table"))?
+            .set_column_width_leaf(index, width),
+        GeometryEdit::TableRow(index, height) => shape
+            .into_table_mut()
+            .ok_or_else(|| invalid_shape_mutation("set row height", "not a table"))?
+            .set_row_height_leaf(index, height),
+        GeometryEdit::TableInsertRow(index) => shape
+            .into_table_mut()
+            .ok_or_else(|| invalid_shape_mutation("insert row", "not a table"))?
+            .insert_row_leaf(index),
+        GeometryEdit::TableRemoveRow(index) => shape
+            .into_table_mut()
+            .ok_or_else(|| invalid_shape_mutation("remove row", "not a table"))?
+            .remove_row_leaf(index),
+        GeometryEdit::TableInsertColumn(index) => shape
+            .into_table_mut()
+            .ok_or_else(|| invalid_shape_mutation("insert column", "not a table"))?
+            .insert_column_leaf(index),
+        GeometryEdit::TableRemoveColumn(index) => shape
+            .into_table_mut()
+            .ok_or_else(|| invalid_shape_mutation("remove column", "not a table"))?
+            .remove_column_leaf(index),
+    }
+}
+
+#[derive(PartialEq)]
+struct TargetGeometry {
+    transform: Option<CT_Transform2D>,
+    preset: Option<CT_PresetGeometry2D>,
+    parents: Vec<CT_Transform2D>,
+}
+fn geometry_target_signature(children: &[ShapeTreeChild], id: u32) -> Vec<TargetGeometry> {
+    fn visit(
+        children: &[ShapeTreeChild],
+        id: u32,
+        parents: &mut Vec<CT_Transform2D>,
+        out: &mut Vec<TargetGeometry>,
+    ) {
+        for child in children {
+            if child.non_visual_id() == Some(id) {
+                out.push(TargetGeometry {
+                    transform: shape_transform(child).cloned(),
+                    preset: shape_properties(child).and_then(|p| p.preset_geometry.clone()),
+                    parents: parents.clone(),
+                });
+            }
+            if let ShapeTreeChild::GroupShape(group) = child {
+                parents.push(group.group_transform().cloned().unwrap_or_default());
+                visit(&group.children, id, parents, out);
+                parents.pop();
+            }
+        }
+    }
+    let mut out = Vec::new();
+    visit(children, id, &mut Vec::new(), &mut out);
+    out
 }

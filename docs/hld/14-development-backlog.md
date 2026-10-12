@@ -7026,6 +7026,18 @@ coverage checklist. Resolve the rotated/flipped/scaled connector-group
 render defect without dropping resolvable siblings, with owner diagnostics.
 Expose alt text/title/decorative, flips, group/ungroup preserving rotated/flipped positions, glued connector endpoints, cropped picture placeholder insertion, cell vertical anchor, internal run slide links, highlight/small caps, alignment/distribution and native placeholder names. Keep layout handles across slide insertion and slide handles across title text changes without weakening stale-path safety.
 
+Native and Python operations use staged owner-scoped publication, prepared
+returned-handle capture and first causal retirement. Word retains conservative
+structural invalidation, while presentation items survive unrelated edits and
+supported relocation. Cell anchoring owns tcPr independently of bodyPr. Run
+slide links retain qualified source namespaces and prune only unused owned
+relationships. Picture placeholder replacement preserves physical identity,
+source metadata, rectangle geometry and crop. Grouping retains opaque member
+order and promoted namespace closure, with atomic unsupported-composition
+refusals. Caps/highlight use the selected physical font and owned colour source.
+Recoverable member diagnostics count actual fallback or omission without
+silently dropping siblings or hiding fatal setup failures.
+
 **Depends on**: F-X194, F-X197.
 **Test gate**: regression. Reproduce each missing operation or reported defect
 through the installed public API on the claimed Base before implementation.

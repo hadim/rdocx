@@ -95,29 +95,13 @@ pub(crate) fn validate_path(
     kind: &str,
     suffix: &str,
 ) -> PyResult<()> {
-    path.validate_revision(
-        presentation.revisions.current(),
-        kind,
-        &recovery_hint(path, suffix),
-    )
-    .map_err(|error| stale_to_pyerr(py, error))?;
-    if let Some(captured) = path.text_revision {
-        let current = presentation.text_revisions.current();
-        if captured != current {
-            return Err(stale_to_pyerr(
-                py,
-                StaleElementError {
-                    element_kind: kind.to_owned(),
-                    captured_revision: captured,
-                    current_revision: current,
-                    recovery_hint: format!(
-                        "Cell-text topology changed. {}",
-                        recovery_hint(path, suffix)
-                    ),
-                },
-            ));
-        }
+    if !path.belongs_to(&presentation.revisions) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "handle belongs to a different presentation",
+        ));
     }
+    path.validate_scopes(&presentation.revisions, kind, &recovery_hint(path, suffix))
+        .map_err(|error| stale_to_pyerr(py, error))?;
     Ok(())
 }
 

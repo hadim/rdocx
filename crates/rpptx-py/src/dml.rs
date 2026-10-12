@@ -61,7 +61,7 @@ impl FillTarget {
 
 /// Reads the shape line or cell border a line target names.
 fn current_line(
-    presentation: &rpptx::Presentation,
+    presentation: &PyPresentation,
     path: &ContentPath,
     target: FillTarget,
 ) -> PyResult<Option<rpptx::CT_LineProperties>> {
@@ -80,7 +80,7 @@ fn current_line(
 /// Replaces the shape line or cell border a line target names.
 fn write_line(
     py: Python<'_>,
-    presentation: &mut rpptx::Presentation,
+    presentation: &mut PyPresentation,
     path: &ContentPath,
     target: FillTarget,
     line: rpptx::CT_LineProperties,
@@ -100,7 +100,7 @@ fn write_line(
 }
 
 fn current_fill(
-    presentation: &rpptx::Presentation,
+    presentation: &PyPresentation,
     path: &ContentPath,
     target: FillTarget,
 ) -> PyResult<Option<rpptx::Fill>> {
@@ -114,7 +114,10 @@ fn current_fill(
             current_line(presentation, path, target)?.and_then(|line| line.fill)
         }
         FillTarget::Background => presentation
-            .slide(slide_index(path)?)
+            .inner
+            .slide(slide_index(&presentation.current_path(path).ok_or_else(
+                || PyIndexError::new_err("slide owner is absent"),
+            )?)?)
             .ok_or_else(|| PyIndexError::new_err("slide index out of range"))?
             .background_fill()
             .cloned(),
@@ -127,7 +130,7 @@ fn current_fill(
 
 fn write_fill(
     py: Python<'_>,
-    presentation: &mut rpptx::Presentation,
+    presentation: &mut PyPresentation,
     path: &ContentPath,
     target: FillTarget,
     fill: rpptx::Fill,
@@ -143,13 +146,18 @@ fn write_fill(
             return write_line(py, presentation, path, target, line);
         }
         FillTarget::Background => {
-            let index = slide_index(path)?;
+            let current = presentation
+                .current_path(path)
+                .ok_or_else(|| PyIndexError::new_err("slide owner is absent"))?;
+            let index = slide_index(&current)?;
             let direct = presentation
+                .inner
                 .slide(index)
                 .ok_or_else(|| PyIndexError::new_err("slide index out of range"))?
                 .background_fill()
                 .is_some();
             let mut slide = presentation
+                .inner
                 .slide_mut(index)
                 .ok_or_else(|| PyIndexError::new_err("slide index out of range"))?;
             if !direct {
@@ -171,7 +179,7 @@ fn write_fill(
 /// when `create` is set, so a removal never adds an empty line.
 fn update_line(
     py: Python<'_>,
-    presentation: &mut rpptx::Presentation,
+    presentation: &mut PyPresentation,
     path: &ContentPath,
     target: FillTarget,
     create: bool,
@@ -334,12 +342,12 @@ impl PyFillFormat {
     fn fill(&self, py: Python<'_>) -> PyResult<Option<rpptx::Fill>> {
         let presentation = self.presentation.borrow(py);
         validate_path(py, &presentation, &self.path, "fill", self.target.suffix())?;
-        current_fill(&presentation.inner, &self.path, self.target)
+        current_fill(&presentation, &self.path, self.target)
     }
 
     fn set(&self, py: Python<'_>, fill: rpptx::Fill) -> PyResult<()> {
         let mut presentation = self.presentation.borrow_mut(py);
-        write_fill(py, &mut presentation.inner, &self.path, self.target, fill)
+        write_fill(py, &mut presentation, &self.path, self.target, fill)
     }
 }
 
@@ -401,6 +409,8 @@ enum ColorSource {
     Shadow,
     /// Direct run or paragraph-default font colour, including table cells.
     Font,
+    /// Direct run or paragraph-default highlight colour.
+    FontHighlight,
 }
 
 impl ColorSource {
@@ -409,6 +419,7 @@ impl ColorSource {
             Self::Fill { target, .. } => target.suffix(),
             Self::Shadow => ".shadow.color",
             Self::Font => ".font.color",
+            Self::FontHighlight => ".font.highlight",
         }
     }
 }
@@ -422,6 +433,14 @@ pub struct PyColorFormat {
 }
 
 impl PyColorFormat {
+    pub(crate) fn font_highlight(presentation: Py<PyPresentation>, path: ContentPath) -> Self {
+        Self {
+            presentation,
+            path,
+            source: ColorSource::FontHighlight,
+        }
+    }
+
     pub(crate) fn font(presentation: Py<PyPresentation>, path: ContentPath) -> Self {
         Self {
             presentation,
@@ -434,20 +453,25 @@ impl PyColorFormat {
         if matches!(self.source, ColorSource::Font) {
             return crate::text::font_color_at(py, &self.presentation, &self.path);
         }
+        if matches!(self.source, ColorSource::FontHighlight) {
+            return crate::text::font_highlight_at(py, &self.presentation, &self.path);
+        }
         let presentation = self.presentation.borrow(py);
         validate_path(py, &presentation, &self.path, "color", self.source.suffix())?;
         Ok(match self.source {
             ColorSource::Fill { target, .. } => {
-                match current_fill(&presentation.inner, &self.path, target)? {
+                match current_fill(&presentation, &self.path, target)? {
                     Some(rpptx::Fill::Solid(fill)) => fill.color,
                     Some(rpptx::Fill::Pattern(fill)) => fill.foreground,
                     _ => None,
                 }
             }
             ColorSource::Shadow => {
-                current_shadow(&presentation.inner, &self.path)?.and_then(|shadow| shadow.color)
+                current_shadow(&presentation, &self.path)?.and_then(|shadow| shadow.color)
             }
-            ColorSource::Font => unreachable!("font owner was resolved above"),
+            ColorSource::Font | ColorSource::FontHighlight => {
+                unreachable!("font owner was resolved above")
+            }
         })
     }
 
@@ -457,13 +481,16 @@ impl PyColorFormat {
         }
         let presentation = self.presentation.borrow(py);
         validate_path(py, &presentation, &self.path, "color", self.source.suffix())?;
-        Ok(current_shadow(&presentation.inner, &self.path)?
+        Ok(current_shadow(&presentation, &self.path)?
             .map_or_else(|| default_outer_shadow().color, |shadow| shadow.color))
     }
 
     fn write_color(&self, py: Python<'_>, color: Option<rpptx::ColorChoice>) -> PyResult<()> {
         if matches!(self.source, ColorSource::Font) {
             return crate::text::write_font_color(py, &self.presentation, &self.path, color);
+        }
+        if matches!(self.source, ColorSource::FontHighlight) {
+            return crate::text::write_font_highlight(py, &self.presentation, &self.path, color);
         }
         let color = color.ok_or_else(|| {
             PyTypeError::new_err(
@@ -475,13 +502,15 @@ impl PyColorFormat {
         let (target, solidify) = match self.source {
             ColorSource::Fill { target, solidify } => (target, solidify),
             ColorSource::Shadow => {
-                return edit_shadow(py, &mut presentation.inner, &self.path, |shadow| {
+                return edit_shadow(py, &mut presentation, &self.path, |shadow| {
                     shadow.replace_color(color)
                 });
             }
-            ColorSource::Font => unreachable!("font owner was resolved above"),
+            ColorSource::Font | ColorSource::FontHighlight => {
+                unreachable!("font owner was resolved above")
+            }
         };
-        let fill = match current_fill(&presentation.inner, &self.path, target)? {
+        let fill = match current_fill(&presentation, &self.path, target)? {
             Some(rpptx::Fill::Solid(mut fill)) => {
                 fill.color = Some(color);
                 rpptx::Fill::Solid(fill)
@@ -497,12 +526,13 @@ impl PyColorFormat {
             }
             other => return Err(no_foreground(other.as_ref())),
         };
-        write_fill(py, &mut presentation.inner, &self.path, target, fill)
+        write_fill(py, &mut presentation, &self.path, target, fill)
     }
 
     fn parameter(&self, property: &str) -> String {
         let owner = match self.source {
             ColorSource::Font => "Font.color",
+            ColorSource::FontHighlight => "Font.highlight",
             ColorSource::Shadow => "ShadowFormat.color",
             ColorSource::Fill {
                 target: FillTarget::Line | FillTarget::CellBorder(_),
@@ -535,7 +565,8 @@ impl PyColorFormat {
 
     #[setter]
     fn set_rgb(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
-        if value.is_none() && matches!(self.source, ColorSource::Font) {
+        if value.is_none() && matches!(self.source, ColorSource::Font | ColorSource::FontHighlight)
+        {
             return self.write_color(py, None);
         }
         let (red, green, blue) = oxml_py_support::rgb_channels(value, &self.parameter("rgb"))?;
@@ -569,7 +600,8 @@ impl PyColorFormat {
 
     #[setter]
     fn set_theme_color(&self, py: Python<'_>, value: &Bound<'_, PyAny>) -> PyResult<()> {
-        if value.is_none() && matches!(self.source, ColorSource::Font) {
+        if value.is_none() && matches!(self.source, ColorSource::Font | ColorSource::FontHighlight)
+        {
             return self.write_color(py, None);
         }
         let parameter = self.parameter("theme_color");
@@ -780,7 +812,7 @@ impl PyLineFormat {
     #[getter]
     fn width(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         self.validate(py)?;
-        let width = current_line(&self.presentation.borrow(py).inner, &self.path, self.target)?
+        let width = current_line(&self.presentation.borrow(py), &self.path, self.target)?
             .and_then(|line| line.width)
             .unwrap_or(0);
         length(py, Some(rpptx::Emu(i64::from(width))))
@@ -796,17 +828,16 @@ impl PyLineFormat {
             )));
         }
         let mut presentation = self.presentation.borrow_mut(py);
-        let mut line =
-            current_line(&presentation.inner, &self.path, self.target)?.unwrap_or_default();
+        let mut line = current_line(&presentation, &self.path, self.target)?.unwrap_or_default();
         line.width = Some(width as u32);
-        write_line(py, &mut presentation.inner, &self.path, self.target, line)
+        write_line(py, &mut presentation, &self.path, self.target, line)
     }
 
     /// Returns the preset dash, or `None` without one or with a custom dash.
     #[getter]
     fn dash_style(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         self.validate(py)?;
-        let dash = current_line(&self.presentation.borrow(py).inner, &self.path, self.target)?
+        let dash = current_line(&self.presentation.borrow(py), &self.path, self.target)?
             .as_ref()
             .and_then(|line| match &line.dash {
                 Some(rpptx::LineDash::Preset(dash)) => Some(dash.value),
@@ -824,7 +855,7 @@ impl PyLineFormat {
         let mut presentation = self.presentation.borrow_mut(py);
         update_line(
             py,
-            &mut presentation.inner,
+            &mut presentation,
             &self.path,
             self.target,
             dash.is_some(),
@@ -893,7 +924,7 @@ impl PyLineEndFormat {
             ".line.head_end"
         };
         validate_path(py, &presentation, &self.path, "line end", suffix)?;
-        let line = current_line(&presentation.inner, &self.path, self.target)?;
+        let line = current_line(&presentation, &self.path, self.target)?;
         Ok(line.as_ref().and_then(|line| {
             if self.tail {
                 line.tail_end.clone()
@@ -914,7 +945,7 @@ impl PyLineEndFormat {
         let mut presentation = self.presentation.borrow_mut(py);
         update_line(
             py,
-            &mut presentation.inner,
+            &mut presentation,
             &self.path,
             self.target,
             create,
@@ -993,7 +1024,7 @@ const OPAQUE_ALPHA: f64 = 100_000.0;
 const RECT_ALIGNMENTS: &str = "tl, t, tr, l, ctr, r, bl, b, br";
 
 fn current_effects(
-    presentation: &rpptx::Presentation,
+    presentation: &PyPresentation,
     path: &ContentPath,
 ) -> PyResult<Option<rpptx::CT_EffectList>> {
     Ok(shape_ref_at(presentation, path)
@@ -1003,7 +1034,7 @@ fn current_effects(
 }
 
 fn current_shadow(
-    presentation: &rpptx::Presentation,
+    presentation: &PyPresentation,
     path: &ContentPath,
 ) -> PyResult<Option<rpptx::CT_OuterShadowEffect>> {
     Ok(current_effects(presentation, path)?.and_then(|effects| effects.outer_shadow))
@@ -1011,7 +1042,7 @@ fn current_shadow(
 
 fn write_effects(
     py: Python<'_>,
-    presentation: &mut rpptx::Presentation,
+    presentation: &mut PyPresentation,
     path: &ContentPath,
     effects: Option<rpptx::CT_EffectList>,
 ) -> PyResult<()> {
@@ -1045,7 +1076,7 @@ fn default_outer_shadow() -> rpptx::CT_OuterShadowEffect {
 /// shape has none. Sibling effects in the list are kept.
 fn edit_shadow(
     py: Python<'_>,
-    presentation: &mut rpptx::Presentation,
+    presentation: &mut PyPresentation,
     path: &ContentPath,
     change: impl FnOnce(&mut rpptx::CT_OuterShadowEffect),
 ) -> PyResult<()> {
@@ -1122,7 +1153,7 @@ impl PyShadowFormat {
     ) -> PyResult<T> {
         let presentation = self.presentation.borrow(py);
         validate_path(py, &presentation, &self.path, "shadow", ".shadow")?;
-        Ok(read(current_effects(&presentation.inner, &self.path)?))
+        Ok(read(current_effects(&presentation, &self.path)?))
     }
 
     fn read_shadow<T>(
@@ -1138,7 +1169,7 @@ impl PyShadowFormat {
     fn write(&self, py: Python<'_>, effects: Option<rpptx::CT_EffectList>) -> PyResult<()> {
         let mut presentation = self.presentation.borrow_mut(py);
         validate_path(py, &presentation, &self.path, "shadow", ".shadow")?;
-        write_effects(py, &mut presentation.inner, &self.path, effects)
+        write_effects(py, &mut presentation, &self.path, effects)
     }
 
     fn edit(
@@ -1148,7 +1179,7 @@ impl PyShadowFormat {
     ) -> PyResult<()> {
         let mut presentation = self.presentation.borrow_mut(py);
         validate_path(py, &presentation, &self.path, "shadow", ".shadow")?;
-        edit_shadow(py, &mut presentation.inner, &self.path, change)
+        edit_shadow(py, &mut presentation, &self.path, change)
     }
 }
 

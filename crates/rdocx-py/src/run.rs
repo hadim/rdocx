@@ -40,8 +40,8 @@ impl PyRun {
     pub(crate) fn validate(&self, py: Python<'_>) -> PyResult<(ParagraphLocation, usize)> {
         let document = self.document.borrow(py);
         self.path
-            .validate_revision(
-                document.revisions.current(),
+            .validate_scopes(
+                &document.revisions,
                 "run",
                 "Re-fetch it with paragraph.runs[i].",
             )
@@ -53,9 +53,9 @@ impl PyRun {
     fn edit(&self, py: Python<'_>, edit: impl FnOnce(&mut rdocx::run::Run<'_>)) -> PyResult<()> {
         let (location, _) = self.validate(py)?;
         let mut document = self.document.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
         match location {
-            ParagraphLocation::Body(index) => document
-                .inner
+            ParagraphLocation::Body(index) => candidate
                 .paragraph_mut(index)
                 .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
                 .edit_run(&self.run_path, edit),
@@ -65,8 +65,7 @@ impl PyRun {
                 cell,
                 paragraph,
             } => {
-                let mut table = document
-                    .inner
+                let mut table = candidate
                     .table_mut(table)
                     .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
                 let mut cell = table
@@ -77,7 +76,9 @@ impl PyRun {
                     .edit_run(&self.run_path, edit)
             }
         }
-        .map_err(|error| crate::rdocx_to_pyerr(py, error))
+        .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
+        document.inner = candidate;
+        Ok(())
     }
 }
 
@@ -119,12 +120,45 @@ impl PyRun {
 
     #[pyo3(signature = (instruction, cached_result = ""))]
     fn add_field(&self, py: Python<'_>, instruction: &str, cached_result: &str) -> PyResult<()> {
+        let (location, _) = self.validate(py)?;
+        let mut document = self.document.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
         let mut added = Ok(());
-        self.edit(py, |run| added = run.add_field(instruction, cached_result))?;
+        let edit =
+            |run: &mut rdocx::run::Run<'_>| added = run.add_field(instruction, cached_result);
+        match location {
+            ParagraphLocation::Body(index) => candidate
+                .paragraph_mut(index)
+                .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
+                .edit_run(&self.run_path, edit),
+            ParagraphLocation::Cell {
+                table,
+                row,
+                cell,
+                paragraph,
+            } => {
+                let mut table = candidate
+                    .table_mut(table)
+                    .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
+                let mut cell = table
+                    .cell(row, cell)
+                    .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?;
+                cell.paragraph_mut(paragraph)
+                    .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
+                    .edit_run(&self.run_path, edit)
+            }
+        }
+        .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
         added.map_err(|error| crate::rdocx_to_pyerr(py, error))?;
-        // The field becomes a story item of its own, which moves the index
-        // path of every later story item.
-        self.document.borrow_mut(py).revisions.bump();
+        let prepared = document
+            .revisions
+            .prepare_scopes("Run.add_field", &[], &[])
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document.inner = candidate;
         Ok(())
     }
 
@@ -132,9 +166,9 @@ impl PyRun {
     fn remove(&self, py: Python<'_>) -> PyResult<()> {
         let (location, run_index) = self.validate(py)?;
         let mut document = self.document.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
         let removed = match location {
-            ParagraphLocation::Body(index) => document
-                .inner
+            ParagraphLocation::Body(index) => candidate
                 .paragraph_mut(index)
                 .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
                 .remove_run(run_index),
@@ -144,8 +178,7 @@ impl PyRun {
                 cell,
                 paragraph,
             } => {
-                let mut table = document
-                    .inner
+                let mut table = candidate
                     .table_mut(table)
                     .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
                 let mut cell = table
@@ -157,7 +190,15 @@ impl PyRun {
             }
         };
         removed.map_err(|error| crate::rdocx_to_pyerr(py, error))?;
-        document.revisions.bump();
+        let prepared = document
+            .revisions
+            .prepare_scopes("Run.remove", &[], &[])
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document.inner = candidate;
         Ok(())
     }
 
@@ -210,8 +251,8 @@ impl PyRunCollection {
     fn validate(&self, py: Python<'_>) -> PyResult<ParagraphLocation> {
         let document = self.document.borrow(py);
         self.paragraph_path
-            .validate_revision(
-                document.revisions.current(),
+            .validate_scopes(
+                &document.revisions,
                 "run collection",
                 "Re-fetch it with paragraph.runs.",
             )

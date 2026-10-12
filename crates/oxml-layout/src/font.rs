@@ -2154,7 +2154,14 @@ impl FontManager {
         } else {
             multilingual_break_opportunities(&segment.text)
         };
-        self.shape_multilingual_with_levels(segment, language, &break_offsets, &levels, 0)
+        self.shape_multilingual_with_levels(
+            segment,
+            language,
+            &break_offsets,
+            &levels,
+            0,
+            (false, false, &mut Vec::new()),
+        )
     }
 
     /// Shape styled spans with one paragraph-wide bidi resolution.
@@ -2164,6 +2171,33 @@ impl FontManager {
         base_direction: TextDirection,
         no_wrap: bool,
     ) -> Result<Vec<MultilingualTextSegment>> {
+        let requests = vec![(false, false); segments.len()];
+        self.shape_multilingual_paragraph_with_caps(segments, base_direction, no_wrap, &requests)
+            .map(|(spans, _)| spans)
+    }
+
+    /// Shape PowerPoint small-caps requests in the same paragraph-wide bidi pass.
+    /// Requests correspond to input occurrences, including equal-text runs.
+    /// Logical text and source clusters remain the original input. Unsupported
+    /// selected faces use uppercase lowercase graphemes at 80 percent size.
+    pub fn shape_multilingual_paragraph_with_caps(
+        &mut self,
+        segments: Vec<(TextSegment, Option<String>)>,
+        base_direction: TextDirection,
+        no_wrap: bool,
+        requests: &[(bool, bool)],
+    ) -> Result<(Vec<MultilingualTextSegment>, Vec<String>)> {
+        if requests.iter().any(|(small, all)| *small && *all) {
+            return Err(LayoutError::Shaping(
+                "conflicting all-caps and small-caps request".to_owned(),
+            ));
+        }
+        if requests.len() != segments.len() {
+            return Err(LayoutError::Shaping(
+                "small-caps request count differs from styled runs".to_owned(),
+            ));
+        }
+        let mut diagnostics = Vec::new();
         let paragraph_text = segments
             .iter()
             .map(|(segment, _)| segment.text.as_str())
@@ -2178,7 +2212,7 @@ impl FontManager {
             })
             .collect::<Vec<_>>();
         if paragraph_text.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), diagnostics));
         }
         let paragraph_level = match base_direction {
             TextDirection::Auto => None,
@@ -2200,7 +2234,11 @@ impl FontManager {
         };
         let mut logical_index = 0usize;
         let mut shaped = Vec::new();
-        for ((segment, language), byte_offset) in segments.into_iter().zip(segment_starts) {
+        for (((segment, language), byte_offset), (small_caps, all_caps)) in segments
+            .into_iter()
+            .zip(segment_starts)
+            .zip(requests.iter().copied())
+        {
             let byte_end = byte_offset + segment.text.len();
             if !segment.text.is_empty() {
                 let forced_levels = (segment.direction != TextDirection::Auto)
@@ -2222,12 +2260,13 @@ impl FontManager {
                     &break_offsets,
                     levels,
                     logical_index,
+                    (small_caps, all_caps, &mut diagnostics),
                 )?;
                 logical_index += spans.len();
                 shaped.extend(spans);
             }
         }
-        Ok(shaped)
+        Ok((shaped, diagnostics))
     }
 
     /// `break_offsets` are the line break opportunities within the segment,
@@ -2239,7 +2278,9 @@ impl FontManager {
         break_offsets: &HashSet<usize>,
         levels: &[unicode_bidi::Level],
         logical_index_base: usize,
+        caps: (bool, bool, &mut Vec<String>),
     ) -> Result<Vec<MultilingualTextSegment>> {
+        let (small_caps, all_caps, diagnostics) = caps;
         let grapheme_boundaries = icu_segmenter::GraphemeClusterSegmenter::new()
             .segment_str(&segment.text)
             .collect::<Vec<_>>();
@@ -2311,25 +2352,155 @@ impl FontManager {
             }
         }
 
-        let mut logical = Vec::with_capacity(font_ranges.len());
-        for (logical_index, (start, end, script, level, font_id)) in
-            font_ranges.into_iter().enumerate()
-        {
-            let text = &segment.text[start..end];
-            let metrics = self.metrics(font_id, segment.font_size)?;
+        let mut cap_ranges = Vec::new();
+        for (start, end, script, level, font_id) in font_ranges {
             let direction = if level.is_rtl() {
                 TextDirection::RightToLeft
             } else {
                 TextDirection::LeftToRight
             };
-            let positioned = self.shape_explicit(
+            let text = &segment.text[start..end];
+            let lowercase = text.to_lowercase();
+            // Test actual feature application on this face, script and language.
+            // A global GSUB tag alone does not prove a reachable substitution.
+            let has_lowercase = text.chars().any(char::is_lowercase);
+            let feature_applies = if small_caps && has_lowercase {
+                let plain = self.shape_explicit(
+                    font_id,
+                    &lowercase,
+                    segment.font_size,
+                    script,
+                    language,
+                    direction,
+                )?;
+                let caps = self.shape_explicit_with_small_caps(
+                    font_id,
+                    &lowercase,
+                    segment.font_size,
+                    (script, language, direction),
+                    true,
+                )?;
+                plain.glyph_ids != caps.glyph_ids
+            } else {
+                false
+            };
+            if all_caps {
+                cap_ranges.push((
+                    start,
+                    end,
+                    script,
+                    level,
+                    font_id,
+                    segment.font_size,
+                    false,
+                    true,
+                ));
+            } else if !small_caps || !has_lowercase || feature_applies {
+                cap_ranges.push((
+                    start,
+                    end,
+                    script,
+                    level,
+                    font_id,
+                    segment.font_size,
+                    feature_applies,
+                    false,
+                ));
+            } else {
+                let font = self.get_font(font_id)?;
+                let message = format!(
+                    "small caps: selected face '{}' lacks an applicable smcp substitution for {:?}; using 80 percent uppercase fallback",
+                    font.family, script
+                );
+                if !diagnostics.contains(&message) {
+                    diagnostics.push(message);
+                }
+                // Keep every original grapheme together. An expanding uppercase
+                // mapping belongs to that original grapheme's logical cluster.
+                let boundaries = icu_segmenter::GraphemeClusterSegmenter::new()
+                    .segment_str(text)
+                    .collect::<Vec<_>>();
+                for window in boundaries.windows(2) {
+                    let lo = start + window[0];
+                    let hi = start + window[1];
+                    let lower = segment.text[lo..hi].chars().any(char::is_lowercase);
+                    cap_ranges.push((
+                        lo,
+                        hi,
+                        script,
+                        level,
+                        font_id,
+                        segment.font_size * if lower { 0.8 } else { 1.0 },
+                        false,
+                        lower,
+                    ));
+                }
+            }
+        }
+        let mut logical = Vec::with_capacity(cap_ranges.len());
+        for (
+            logical_index,
+            (start, end, script, level, font_id, size_pt, feature_applies, fallback),
+        ) in cap_ranges.into_iter().enumerate()
+        {
+            let text = &segment.text[start..end];
+            let metrics = self.metrics(font_id, size_pt)?;
+            let direction = if level.is_rtl() {
+                TextDirection::RightToLeft
+            } else {
+                TextDirection::LeftToRight
+            };
+            let rendered = if fallback {
+                text.to_uppercase()
+            } else {
+                text.to_owned()
+            };
+            let mut positioned = self.shape_explicit_with_small_caps(
                 font_id,
-                text,
-                segment.font_size,
-                script,
-                language,
-                direction,
+                &rendered,
+                size_pt,
+                (script, language, direction),
+                feature_applies,
             )?;
+            if fallback {
+                let mut owners = Vec::new();
+                for (index, character) in text.chars().enumerate() {
+                    owners.extend(character.to_uppercase().map(|_| index as u32));
+                }
+                for cluster in &mut positioned.clusters {
+                    let lo = cluster.char_start as usize;
+                    let hi = cluster.char_end as usize;
+                    cluster.char_start = *owners.get(lo).ok_or_else(|| {
+                        LayoutError::Shaping(
+                            "uppercase cluster starts outside its logical owner".to_owned(),
+                        )
+                    })?;
+                    cluster.char_end = owners
+                        .get(hi.checked_sub(1).ok_or_else(|| {
+                            LayoutError::Shaping("empty uppercase cluster".to_owned())
+                        })?)
+                        .ok_or_else(|| {
+                            LayoutError::Shaping(
+                                "uppercase cluster ends outside its logical owner".to_owned(),
+                            )
+                        })?
+                        + 1;
+                }
+                let mut merged: Vec<GlyphCluster> = Vec::new();
+                for cluster in positioned.clusters {
+                    if let Some(last) = merged.last_mut()
+                        && last.char_start < cluster.char_end
+                        && cluster.char_start < last.char_end
+                    {
+                        last.glyph_end = cluster.glyph_end;
+                        last.char_start = last.char_start.min(cluster.char_start);
+                        last.char_end = last.char_end.max(cluster.char_end);
+                    } else {
+                        merged.push(cluster);
+                    }
+                }
+                positioned.clusters = merged;
+            }
             let char_start = segment.text[..start].chars().count() as u32;
             let char_end = segment.text[..end].chars().count() as u32;
             let source = segment.source.map(|source| SourceSpan {
@@ -2341,6 +2512,7 @@ impl FontManager {
             base.text = text.to_owned();
             base.source = source;
             base.font_id = font_id;
+            base.font_size = size_pt;
             base.glyph_ids = positioned.glyph_ids;
             base.advances = positioned.x_advances.clone();
             base.width = positioned.x_advances.iter().sum();
@@ -2396,6 +2568,24 @@ impl FontManager {
         language: Option<&str>,
         direction: TextDirection,
     ) -> Result<PositionedShape> {
+        self.shape_explicit_with_small_caps(
+            font_id,
+            text,
+            size_pt,
+            (script, language, direction),
+            false,
+        )
+    }
+
+    fn shape_explicit_with_small_caps(
+        &self,
+        font_id: FontId,
+        text: &str,
+        size_pt: f64,
+        properties: (TextScript, Option<&str>, TextDirection),
+        small_caps: bool,
+    ) -> Result<PositionedShape> {
+        let (script, language, direction) = properties;
         let font = self.get_font(font_id)?;
         let face = harfrust::FontRef::from_index(&font.data, font.face_index)
             .map_err(|error| LayoutError::Shaping(format!("failed to read font face: {error}")))?;
@@ -2414,7 +2604,13 @@ impl FontManager {
         if let Some(language) = language.and_then(harfrust::Language::new) {
             buffer.set_language(language);
         }
-        let output = shaper.shape(buffer, harfrust::ShapeOptions::default());
+        let features = [harfrust::Feature::new(harfrust::Tag::new(b"smcp"), 1, ..)];
+        let options = if small_caps {
+            harfrust::ShapeOptions::default().features(&features)
+        } else {
+            harfrust::ShapeOptions::default()
+        };
+        let output = shaper.shape(buffer, options);
         let infos = output.glyph_infos();
         let positions = output.glyph_positions();
         let scale = size_pt / f64::from(font.units_per_em);
@@ -3017,6 +3213,177 @@ mod tests {
         ] {
             let id = fonts.resolve_font(Some("Carlito"), bold, italic).unwrap();
             assert_eq!(fonts.font_data(id).unwrap().data.as_ref(), expected);
+        }
+    }
+
+    #[test]
+    fn fx206_caps_requests_keep_occurrence_identity_expansion_and_default_projection() {
+        let mut fonts = FontManager::new_deterministic().unwrap();
+        let source = SourceSpan {
+            node: crate::SourceNodeId::new(7).unwrap(),
+            char_start: 40,
+            char_end: 43,
+        };
+        let first = multilingual_test_segment(&mut fonts, "aBß", 24.0, Some(source));
+        let second = first.clone();
+        let plain = fonts
+            .shape_multilingual_paragraph(
+                vec![(first.clone(), Some("en".to_owned()))],
+                TextDirection::Auto,
+                false,
+            )
+            .unwrap();
+        let (defaults, diagnostics) = fonts
+            .shape_multilingual_paragraph_with_caps(
+                vec![(first.clone(), Some("en".to_owned()))],
+                TextDirection::Auto,
+                false,
+                &[(false, false)],
+            )
+            .unwrap();
+        assert_eq!(defaults.len(), plain.len());
+        for (actual, expected) in defaults.iter().zip(&plain) {
+            assert_eq!(actual.text(), expected.text());
+            assert_eq!(actual.glyph_ids(), expected.glyph_ids());
+            assert_eq!(actual.x_advances(), expected.x_advances());
+            assert_eq!(actual.clusters(), expected.clusters());
+        }
+        assert!(diagnostics.is_empty());
+        let (caps, diagnostics) = fonts
+            .shape_multilingual_paragraph_with_caps(
+                vec![
+                    (first, Some("en".to_owned())),
+                    (second, Some("en".to_owned())),
+                ],
+                TextDirection::Auto,
+                false,
+                &[(true, false), (false, false)],
+            )
+            .unwrap();
+        assert!(!diagnostics.is_empty());
+        assert_eq!(
+            caps.iter()
+                .map(MultilingualTextSegment::text)
+                .collect::<String>(),
+            "aBßaBß"
+        );
+        let sharp = caps.iter().find(|span| span.text() == "ß").unwrap();
+        assert_eq!(sharp.glyph_ids().len(), 2);
+        assert_eq!(sharp.clusters().len(), 1);
+        assert_eq!(sharp.base().source.unwrap().char_start, 42);
+        assert_eq!(sharp.base().source.unwrap().char_end, 43);
+        assert!((sharp.base().font_size - 19.2).abs() < 1e-9);
+        assert!(
+            caps.iter()
+                .any(|span| span.text() == "aBß" && span.base().font_size == 24.0),
+            "equal text in a distinct occurrence retains its own request"
+        );
+        assert!(
+            fonts
+                .shape_multilingual_paragraph_with_caps(
+                    Vec::new(),
+                    TextDirection::Auto,
+                    false,
+                    &[(true, false)]
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    #[ignore = "required F206 physical host smcp oracle stage, run explicitly with pinned HB_SHAPE and FONT_ORACLE_PYTHON"]
+    fn fx206_selected_smcp_matches_independent_harfbuzz_and_original_clusters() {
+        let path = std::path::Path::new(
+            "/Applications/Microsoft PowerPoint.app/Contents/Resources/DFonts/calibri.ttf",
+        );
+        let data = std::fs::read(path).expect("authenticated private host oracle face must exist");
+        let mut fonts = FontManager::new_deterministic().unwrap();
+        fonts.load_additional_fonts(&[FontFile {
+            family: "F206 private smcp oracle".to_owned(),
+            data,
+        }]);
+        let text = "Small caps Straße";
+        let mut seed = multilingual_test_segment(&mut fonts, text, 24.0, None);
+        seed.font_id = fonts
+            .resolve_font_for_text(Some("F206 private smcp oracle"), false, false, text)
+            .unwrap();
+        let font = fonts.get_font(seed.font_id).unwrap();
+        assert_eq!(font.family, "Calibri");
+        let upem = font.units_per_em;
+        let script = r#"import json,subprocess,sys
+h,p,t,u=sys.argv[1:]
+for feature in ['smcp=0','smcp=1']:
+ d=json.loads(subprocess.check_output([h,p,t,'--no-glyph-names','--output-format=json','--script=latn','--language=en','--direction=ltr','--font-size='+u,'--features='+feature],text=True))
+ print(','.join(str(x['g']) for x in d))
+ print(','.join(str(x['ax']) for x in d))
+"#;
+        let output = std::process::Command::new(
+            std::env::var("FONT_ORACLE_PYTHON").expect("explicit pinned interpreter"),
+        )
+        .args([
+            "-c",
+            script,
+            &std::env::var("HB_SHAPE").expect("explicit pinned HarfBuzz"),
+            path.to_str().unwrap(),
+            text,
+            &upem.to_string(),
+        ])
+        .output()
+        .unwrap();
+        assert!(
+            output.status.success(),
+            "independent oracle precondition: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let rows = stdout.lines().collect::<Vec<_>>();
+        assert_eq!(rows.len(), 4);
+        let gids = |row: &str| {
+            row.split(',')
+                .map(|item| item.parse::<u16>().unwrap())
+                .collect::<Vec<_>>()
+        };
+        let advances = |row: &str| {
+            row.split(',')
+                .map(|item| item.parse::<f64>().unwrap() * 24.0 / f64::from(upem))
+                .collect::<Vec<_>>()
+        };
+        assert_ne!(
+            gids(rows[0]),
+            gids(rows[2]),
+            "real smcp application differs from features-off shape"
+        );
+        let (actual, diagnostics) = fonts
+            .shape_multilingual_paragraph_with_caps(
+                vec![(seed, Some("en".to_owned()))],
+                TextDirection::LeftToRight,
+                false,
+                &[(true, false)],
+            )
+            .unwrap();
+        assert!(diagnostics.is_empty());
+        assert_eq!(
+            actual
+                .iter()
+                .map(MultilingualTextSegment::text)
+                .collect::<String>(),
+            text
+        );
+        assert_eq!(
+            actual
+                .iter()
+                .flat_map(|span| span.glyph_ids().iter().copied())
+                .collect::<Vec<_>>(),
+            gids(rows[2])
+        );
+        let actual_advances = actual
+            .iter()
+            .flat_map(|span| span.x_advances().iter().copied())
+            .collect::<Vec<_>>();
+        let expected = advances(rows[3]);
+        assert_eq!(actual_advances.len(), expected.len());
+        for (actual, expected) in actual_advances.iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-9);
         }
     }
 

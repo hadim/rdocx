@@ -21,9 +21,10 @@ use quick_xml::{Reader, Writer, XmlVersion};
 use crate::connector::CT_ConnectionShape;
 use crate::graphic_frame::CT_GraphicFrame;
 use crate::namespace::{
-    FIXED_SHAPE_TREE_PREFIXES, MC_NS, NamespaceBindings, P_NS, R_NS, all_attributes,
-    non_visual_drawing_id, non_visual_drawing_name, root_attributes, self_contained_attributes,
-    set_non_visual_drawing_name,
+    FIXED_SHAPE_TREE_PREFIXES, MC_NS, NamespaceBindings, P_NS, R_NS, accessibility_parent_bindings,
+    all_attributes, non_visual_drawing_decorative, non_visual_drawing_id, non_visual_drawing_name,
+    non_visual_drawing_text, root_attributes, self_contained_attributes,
+    set_non_visual_drawing_decorative, set_non_visual_drawing_name, set_non_visual_drawing_text,
 };
 use crate::picture::CT_Picture;
 use crate::placeholder::{ApplicationProperties, CT_Placeholder, parse_application_properties};
@@ -976,6 +977,48 @@ impl CT_Shape {
         self.raw.non_visual_name.as_deref()
     }
 
+    /// Returns the direct accessibility description, including an explicit empty value.
+    pub fn alt_text(&self) -> Option<String> {
+        non_visual_drawing_text(&self.raw.non_visual_drawing_properties, "descr")
+    }
+
+    /// Returns the direct accessibility title.
+    pub fn title(&self) -> Option<String> {
+        non_visual_drawing_text(&self.raw.non_visual_drawing_properties, "title")
+    }
+
+    /// Replaces or clears the direct accessibility description.
+    pub fn set_alt_text(&mut self, text: Option<&str>) -> Result<()> {
+        set_non_visual_drawing_text(&mut self.raw.non_visual_drawing_properties, "descr", text)
+    }
+
+    /// Replaces or clears the direct accessibility title.
+    pub fn set_title(&mut self, text: Option<&str>) -> Result<()> {
+        set_non_visual_drawing_text(&mut self.raw.non_visual_drawing_properties, "title", text)
+    }
+
+    /// Returns the qualified decorative flag without promoting defaults.
+    pub fn decorative(&self) -> bool {
+        let bindings = accessibility_parent_bindings(
+            &self.raw.raw_attributes,
+            &self.raw.non_visual_attributes,
+        );
+        non_visual_drawing_decorative(&self.raw.non_visual_drawing_properties, &bindings)
+    }
+
+    /// Changes only the qualified decorative flag, retaining unrelated extensions.
+    pub fn set_decorative(&mut self, decorative: bool) -> Result<()> {
+        let bindings = accessibility_parent_bindings(
+            &self.raw.raw_attributes,
+            &self.raw.non_visual_attributes,
+        );
+        set_non_visual_drawing_decorative(
+            &mut self.raw.non_visual_drawing_properties,
+            decorative,
+            &bindings,
+        )
+    }
+
     /// Changes the producer-facing non-visual shape name.
     pub fn set_name(&mut self, name: &str) -> Result<()> {
         set_non_visual_drawing_name(&mut self.raw.non_visual_drawing_properties, name)?;
@@ -1001,7 +1044,7 @@ impl CT_Shape {
                     {
                         return Err(unexpected(&start));
                     }
-                    namespaces.reject_writer_conflicts(FIXED_SHAPE_TREE_PREFIXES)?;
+                    namespaces.reject_writer_conflicts(&["p", "a", "mc"])?;
                     return Self::from_reader(&mut reader, &start, &namespaces, inherited);
                 }
                 Event::Empty(start) => {
@@ -1152,6 +1195,196 @@ impl CT_Shape {
         }
     }
 
+    /// Converts the selected picture placeholder without replacing its identity.
+    /// The native owner stages image allocation and supplies inherited geometry.
+    pub fn fill_picture(
+        &self,
+        relationship_id: &str,
+        transform: CT_Transform2D,
+    ) -> Result<CT_Picture> {
+        if self.placeholder.as_ref().map(|ph| ph.effective_type())
+            != Some(crate::placeholder::PhType::Picture)
+        {
+            return Err(OxmlError::InvalidValue(
+                "fill picture requires a picture placeholder".to_owned(),
+            ));
+        }
+        // A new blip relationship uses the picture writer's fixed r prefix.
+        // Its root cannot also retain an imported foreign r owner. Refuse before
+        // conversion rather than discard that owner or emit duplicate bindings.
+        if self
+            .raw
+            .raw_attributes
+            .iter()
+            .any(|(name, uri)| name == "xmlns:r" && uri != R_NS)
+        {
+            return Err(OxmlError::InvalidValue(
+                "fill picture cannot preserve a foreign root relationship binding".to_owned(),
+            ));
+        }
+        let empty_body = CT_TextBody::from_xml(br#"<a:txBody xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:bodyPr/><a:lstStyle/><a:p/></a:txBody>"#).map_err(|e| OxmlError::InvalidValue(e.to_string()))?;
+        let unsupported_text_body = if let Some(body) = &self.text_body {
+            // Semantic text equality deliberately ignores the lexical root.
+            // A picture has no txBody owner, so even an otherwise empty body
+            // cannot surrender an imported root attribute during conversion.
+            let xml = body
+                .to_xml()
+                .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
+            let mut reader = Reader::from_reader(xml.as_slice());
+            let opaque_root = match reader.read_event()? {
+                Event::Start(start) => all_attributes(&start)?
+                    .iter()
+                    .any(|(name, _)| name != "xmlns" && !name.starts_with("xmlns:")),
+                _ => true,
+            };
+            opaque_root || (body != &empty_body && body != &CT_TextBody::new())
+        } else {
+            false
+        };
+        if unsupported_text_body {
+            return Err(OxmlError::InvalidValue(
+                "picture placeholder text body contains source that a picture cannot retain"
+                    .to_owned(),
+            ));
+        }
+        // cNvPr and nvPr remain lexical source. Only the owned type-specific
+        // container and the shared lock element change their schema names.
+        let raw = &self.raw.non_visual_shape_properties;
+        let fixed = NamespaceBindings::from_entries(&[
+            ("p".to_owned(), P_NS.to_owned()),
+            ("a".to_owned(), A_NS.to_owned()),
+            ("r".to_owned(), R_NS.to_owned()),
+        ]);
+        let mut source_root = BytesStart::new("p:sp");
+        push_attributes(&mut source_root, &self.raw.raw_attributes);
+        let mut source_non_visual = BytesStart::new("p:nvSpPr");
+        push_attributes(&mut source_non_visual, &self.raw.non_visual_attributes);
+        let mut scopes = vec![
+            fixed
+                .with_start(&source_root)?
+                .with_start(&source_non_visual)?,
+        ];
+        let mut reader = Reader::from_reader(raw.as_slice());
+        let mut edits = Vec::new();
+        let mut mapped = Vec::new();
+        loop {
+            let position = reader.buffer_position() as usize;
+            let event = reader.read_event()?;
+            match &event {
+                Event::Start(start) | Event::Empty(start) => {
+                    let scope = scopes.last().unwrap().with_start(start)?;
+                    let owned_root = mapped.is_empty()
+                        && scope.element_uri(start.name().as_ref()) == Some(P_NS)
+                        && local_name(start.name().as_ref()) == b"cNvSpPr";
+                    let owned_lock = mapped.len() == 1
+                        && scope.element_uri(start.name().as_ref()) == Some(A_NS)
+                        && local_name(start.name().as_ref()) == b"spLocks";
+                    if owned_root || owned_lock {
+                        for attribute in start.attributes() {
+                            let attribute = attribute.map_err(OxmlError::from)?;
+                            let key = attribute.key.as_ref();
+                            if key == b"xmlns" || key.starts_with(b"xmlns:") || key.contains(&b':')
+                            {
+                                continue;
+                            }
+                            let shared = owned_lock
+                                && matches!(
+                                    key,
+                                    b"noGrp"
+                                        | b"noSelect"
+                                        | b"noRot"
+                                        | b"noChangeAspect"
+                                        | b"noMove"
+                                        | b"noResize"
+                                );
+                            if !shared {
+                                return Err(OxmlError::InvalidValue(format!(
+                                    "picture placeholder has an unrepresentable owned attribute {}",
+                                    String::from_utf8_lossy(key)
+                                )));
+                            }
+                        }
+                        let name = start.name();
+                        let old = std::str::from_utf8(name.as_ref())?;
+                        let prefix = old.rsplit_once(':').map(|(prefix, _)| prefix);
+                        let local = if owned_root { "cNvPicPr" } else { "picLocks" };
+                        let new = prefix
+                            .map_or_else(|| local.to_owned(), |prefix| format!("{prefix}:{local}"));
+                        edits.push((position + 1..position + 1 + old.len(), new.clone()));
+                        if matches!(event, Event::Start(_)) {
+                            mapped.push(Some(new));
+                            scopes.push(scope);
+                        }
+                    } else if matches!(event, Event::Start(_)) {
+                        mapped.push(None);
+                        scopes.push(scope);
+                    }
+                }
+                Event::End(end) => {
+                    if let Some(Some(new)) = mapped.pop() {
+                        edits.push((position + 2..position + 2 + end.name().as_ref().len(), new));
+                    }
+                    scopes.pop();
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        let mut picture_properties = raw.to_vec();
+        for (range, replacement) in edits.into_iter().rev() {
+            picture_properties.splice(range, replacement.into_bytes());
+        }
+        let id = self
+            .non_visual_id()
+            .ok_or_else(|| OxmlError::InvalidValue("placeholder has no shape id".to_owned()))?;
+        let base = CT_Picture::new(
+            id,
+            self.non_visual_name().unwrap_or(""),
+            relationship_id,
+            transform.clone(),
+        )?;
+        let mut writer = Writer::new(Vec::new());
+        let mut start = BytesStart::new("p:pic");
+        for (prefix, uri) in [
+            ("xmlns:p", P_NS),
+            ("xmlns:a", A_NS),
+            ("xmlns:r", R_NS),
+            ("xmlns:mc", MC_NS),
+        ] {
+            start.push_attribute((prefix, uri));
+        }
+        push_attributes(&mut start, &self.raw.raw_attributes);
+        writer.write_event(Event::Start(start))?;
+        emit_raw(&mut writer, self.raw.raw_children.at(0))?;
+        self.write_non_visual_properties(&mut writer, Some(&picture_properties))?;
+        emit_raw(&mut writer, self.raw.raw_children.at(1))?;
+        base.blip_fill
+            .as_ref()
+            .ok_or_else(|| OxmlError::MissingElement("picture blip fill".to_owned()))?
+            .write_xml_as(&mut writer, "p:blipFill")
+            .map_err(|e| OxmlError::InvalidValue(e.to_string()))?;
+        let mut properties = (*self.shape_properties).clone();
+        properties.transform = Some(transform);
+        // A newly filled placeholder needs real picture geometry in the saved file.
+        // Retain imported geometry and its opaque payload rather than replacing it.
+        if properties.custom_geometry.is_none() && properties.preset_geometry.is_none() {
+            properties.preset_geometry = base.shape_properties.preset_geometry.clone();
+        }
+        properties
+            .write_xml_as(&mut writer, "p:spPr")
+            .map_err(|e| OxmlError::InvalidValue(e.to_string()))?;
+        for boundary in 2..=5 {
+            emit_raw(&mut writer, self.raw.raw_children.at(boundary))?;
+            if boundary == 2
+                && let Some(style) = &self.raw.style
+            {
+                style.write_xml(&mut writer)?;
+            }
+        }
+        writer.write_event(Event::End(BytesEnd::new("p:pic")))?;
+        CT_Picture::from_xml(&writer.into_inner())
+    }
+
     /// Serialises a self-contained shape with fixed modelled prefixes.
     pub fn to_xml(&self) -> Result<Vec<u8>> {
         let mut writer = Writer::new(Vec::new());
@@ -1168,14 +1401,21 @@ impl CT_Shape {
         if declare_namespaces {
             start.push_attribute(("xmlns:p", P_NS));
             start.push_attribute(("xmlns:a", A_NS));
-            start.push_attribute(("xmlns:r", R_NS));
+            if !self
+                .raw
+                .raw_attributes
+                .iter()
+                .any(|(name, _)| name == "xmlns:r")
+            {
+                start.push_attribute(("xmlns:r", R_NS));
+            }
             start.push_attribute(("xmlns:mc", MC_NS));
         }
         push_attributes(&mut start, &self.raw.raw_attributes);
         writer.write_event(Event::Start(start))?;
 
         emit_raw(writer, self.raw.raw_children.at(0))?;
-        self.write_non_visual_properties(writer)?;
+        self.write_non_visual_properties(writer, None)?;
         emit_raw(writer, self.raw.raw_children.at(1))?;
         self.shape_properties
             .write_xml_as(writer, "p:spPr")
@@ -1196,8 +1436,17 @@ impl CT_Shape {
         Ok(())
     }
 
-    fn write_non_visual_properties<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
-        let mut start = BytesStart::new("p:nvSpPr");
+    fn write_non_visual_properties<W: Write>(
+        &self,
+        writer: &mut Writer<W>,
+        picture_properties: Option<&[u8]>,
+    ) -> Result<()> {
+        let tag = if picture_properties.is_some() {
+            "p:nvPicPr"
+        } else {
+            "p:nvSpPr"
+        };
+        let mut start = BytesStart::new(tag);
         push_attributes(&mut start, &self.raw.non_visual_attributes);
         writer.write_event(Event::Start(start))?;
         emit_raw(writer, self.raw.non_visual_children.at(0))?;
@@ -1207,7 +1456,7 @@ impl CT_Shape {
         emit_raw(writer, self.raw.non_visual_children.at(1))?;
         writer
             .get_mut()
-            .write_all(&self.raw.non_visual_shape_properties)?;
+            .write_all(picture_properties.unwrap_or(&self.raw.non_visual_shape_properties))?;
         emit_raw(writer, self.raw.non_visual_children.at(2))?;
 
         let mut application = BytesStart::new("p:nvPr");
@@ -1228,7 +1477,7 @@ impl CT_Shape {
         }
 
         emit_raw(writer, self.raw.non_visual_children.at(3))?;
-        writer.write_event(Event::End(BytesEnd::new("p:nvSpPr")))?;
+        writer.write_event(Event::End(BytesEnd::new(tag)))?;
         Ok(())
     }
 }
@@ -1258,7 +1507,7 @@ fn capture_shape_child(
     boundary: &mut usize,
 ) -> Result<()> {
     if uri == Some(P_NS) && matches!(name, b"nvSpPr" | b"spPr" | b"style") {
-        namespaces.reject_writer_conflicts(FIXED_SHAPE_TREE_PREFIXES)?;
+        namespaces.reject_writer_conflicts(&["p", "a", "mc"])?;
     }
     match (uri, name) {
         (Some(P_NS), b"nvSpPr") => {
@@ -1297,9 +1546,9 @@ fn capture_shape_child(
                     "p:txBody must follow p:spPr and optional p:style".to_owned(),
                 ));
             }
-            namespaces.reject_writer_conflicts(FIXED_SHAPE_TREE_PREFIXES)?;
+            namespaces.reject_writer_conflicts(&["p", "a", "mc"])?;
             *text_body = Some(
-                CT_TextBody::from_xml(&raw)
+                CT_TextBody::from_xml_with_inherited_namespaces(&raw, &namespaces.entries())
                     .map_err(|error| OxmlError::InvalidValue(error.to_string()))?,
             );
             *boundary = 4;
@@ -1433,7 +1682,7 @@ fn capture_non_visual_shape_child(
     boundary: &mut usize,
 ) -> Result<()> {
     if uri == Some(P_NS) && matches!(name, b"cNvPr" | b"cNvSpPr" | b"nvPr") {
-        namespaces.reject_writer_conflicts(FIXED_SHAPE_TREE_PREFIXES)?;
+        namespaces.reject_writer_conflicts(&["p", "a", "mc"])?;
     }
     match (uri, name) {
         (Some(P_NS), b"cNvPr") if *boundary == 0 && drawing.is_none() => {
@@ -1771,6 +2020,63 @@ impl CT_GroupShape {
         Ok(())
     }
 
+    fn accessibility_xml(&self) -> Option<&[u8]> {
+        self.non_visual_group_properties
+            .raw_children
+            .get(self.non_visual_group_properties.drawing_properties_index?)
+            .map(Vec::as_slice)
+    }
+
+    fn accessibility_xml_mut(&mut self) -> Result<&mut Vec<u8>> {
+        let index = self
+            .non_visual_group_properties
+            .drawing_properties_index
+            .ok_or_else(|| OxmlError::MissingElement("p:cNvPr".to_owned()))?;
+        self.non_visual_group_properties
+            .raw_children
+            .get_mut(index)
+            .ok_or_else(|| OxmlError::MissingElement("p:cNvPr".to_owned()))
+    }
+
+    /// Returns the direct accessibility description.
+    pub fn alt_text(&self) -> Option<String> {
+        non_visual_drawing_text(self.accessibility_xml()?, "descr")
+    }
+
+    /// Returns the direct accessibility title.
+    pub fn title(&self) -> Option<String> {
+        non_visual_drawing_text(self.accessibility_xml()?, "title")
+    }
+
+    /// Replaces or clears the direct accessibility description.
+    pub fn set_alt_text(&mut self, text: Option<&str>) -> Result<()> {
+        set_non_visual_drawing_text(self.accessibility_xml_mut()?, "descr", text)
+    }
+
+    /// Replaces or clears the direct accessibility title.
+    pub fn set_title(&mut self, text: Option<&str>) -> Result<()> {
+        set_non_visual_drawing_text(self.accessibility_xml_mut()?, "title", text)
+    }
+
+    /// Returns the qualified decorative flag without promoting defaults.
+    pub fn decorative(&self) -> bool {
+        let bindings = accessibility_parent_bindings(
+            &self.raw_attributes,
+            &self.non_visual_group_properties.raw_attributes,
+        );
+        self.accessibility_xml()
+            .is_some_and(|xml| non_visual_drawing_decorative(xml, &bindings))
+    }
+
+    /// Changes only the qualified decorative flag, retaining unrelated extensions.
+    pub fn set_decorative(&mut self, decorative: bool) -> Result<()> {
+        let bindings = accessibility_parent_bindings(
+            &self.raw_attributes,
+            &self.non_visual_group_properties.raw_attributes,
+        );
+        set_non_visual_drawing_decorative(self.accessibility_xml_mut()?, decorative, &bindings)
+    }
+
     /// Changes the producer-facing non-visual group name.
     pub fn set_name(&mut self, name: &str) -> Result<()> {
         let drawing_properties = self
@@ -1824,7 +2130,7 @@ fn parse_group(xml: &[u8], inherited: &[(String, String)], kind: GroupKind) -> R
                 {
                     return Err(unexpected(&start));
                 }
-                namespaces.reject_writer_conflicts(FIXED_SHAPE_TREE_PREFIXES)?;
+                namespaces.reject_writer_conflicts(&["p", "a", "mc"])?;
                 return parse_group_children(&mut reader, &start, &namespaces, kind);
             }
             Event::Empty(start) => {
@@ -1852,7 +2158,8 @@ fn parse_group_children(
     namespaces: &NamespaceBindings,
     kind: GroupKind,
 ) -> Result<ParsedGroup> {
-    let raw_attributes = root_attributes(start, FIXED_SHAPE_TREE_PREFIXES)?;
+    let raw_attributes =
+        self_contained_attributes(start, FIXED_SHAPE_TREE_PREFIXES, &namespaces.entries())?;
     let mut non_visual = None;
     let mut group_properties = None;
     let mut children = Vec::new();
@@ -1925,7 +2232,7 @@ fn capture_group_child(
     state: &mut usize,
 ) -> Result<()> {
     if uri == Some(P_NS) && matches!(name, b"nvGrpSpPr" | b"grpSpPr" | b"grpSp") {
-        namespaces.reject_writer_conflicts(FIXED_SHAPE_TREE_PREFIXES)?;
+        namespaces.reject_writer_conflicts(&["p", "a", "mc"])?;
     }
     if *state == 0 {
         if uri == Some(P_NS) && name == b"nvGrpSpPr" {
@@ -2088,7 +2395,9 @@ fn write_group<W: Write>(
     if declare_namespaces {
         start.push_attribute(("xmlns:p", P_NS));
         start.push_attribute(("xmlns:a", A_NS));
-        start.push_attribute(("xmlns:r", R_NS));
+        if !attributes.iter().any(|(name, _)| name == "xmlns:r") {
+            start.push_attribute(("xmlns:r", R_NS));
+        }
         start.push_attribute(("xmlns:mc", MC_NS));
     }
     push_attributes(&mut start, attributes);
@@ -2349,7 +2658,7 @@ fn is_modelled_group_property(
     let modelled = child_namespaces.element_uri(child.name().as_ref()) == Some(A_NS)
         && matches!(local_name(child.name().as_ref()), b"xfrm" | b"effectLst");
     if modelled {
-        child_namespaces.reject_writer_conflicts(FIXED_SHAPE_TREE_PREFIXES)?;
+        child_namespaces.reject_writer_conflicts(&["p", "a", "mc"])?;
     }
     Ok(modelled)
 }
@@ -2382,6 +2691,436 @@ fn unexpected(element: &BytesStart<'_>) -> OxmlError {
     OxmlError::UnexpectedElement(String::from_utf8_lossy(element.name().as_ref()).into_owned())
 }
 
+impl CT_ShapeTree {
+    pub fn take_children(&mut self, indices: &[usize]) -> Result<Vec<ShapeTreeChild>> {
+        if indices.iter().any(|i| *i >= self.children.len())
+            || indices.windows(2).any(|p| p[0] >= p[1])
+        {
+            return Err(OxmlError::InvalidValue(
+                "selection indices are not ascending distinct members".to_owned(),
+            ));
+        }
+        Ok(take_members(
+            &mut self.children,
+            &mut self.raw_children,
+            indices,
+        ))
+    }
+    pub fn insert_children(&mut self, index: usize, members: Vec<ShapeTreeChild>) -> Result<()> {
+        if index > self.children.len() {
+            return Err(OxmlError::InvalidValue(
+                "member insertion is outside parent".to_owned(),
+            ));
+        }
+        insert_members(&mut self.children, &mut self.raw_children, index, members);
+        Ok(())
+    }
+}
+impl CT_GroupShape {
+    pub fn take_children(&mut self, indices: &[usize]) -> Result<Vec<ShapeTreeChild>> {
+        if indices.iter().any(|i| *i >= self.children.len())
+            || indices.windows(2).any(|p| p[0] >= p[1])
+        {
+            return Err(OxmlError::InvalidValue(
+                "selection indices are not ascending distinct members".to_owned(),
+            ));
+        }
+        Ok(take_members(
+            &mut self.children,
+            &mut self.raw_children,
+            indices,
+        ))
+    }
+    pub fn insert_children(&mut self, index: usize, members: Vec<ShapeTreeChild>) -> Result<()> {
+        if index > self.children.len() {
+            return Err(OxmlError::InvalidValue(
+                "member insertion is outside parent".to_owned(),
+            ));
+        }
+        insert_members(&mut self.children, &mut self.raw_children, index, members);
+        Ok(())
+    }
+}
+/// Removes typed members by ascending index. A raw child is recorded at the
+/// index of the typed member it precedes, so each removal folds the boundary
+/// after the member into the one before it.
+fn take_members(
+    children: &mut Vec<ShapeTreeChild>,
+    raw_children: &mut OrderedRawChildren,
+    indices: &[usize],
+) -> Vec<ShapeTreeChild> {
+    let mut taken = Vec::with_capacity(indices.len());
+    for index in indices.iter().rev() {
+        raw_children.close_boundary(index + 1);
+        taken.push(children.remove(*index));
+    }
+    taken.reverse();
+    taken
+}
+
+fn insert_members(
+    children: &mut Vec<ShapeTreeChild>,
+    raw_children: &mut OrderedRawChildren,
+    index: usize,
+    members: Vec<ShapeTreeChild>,
+) {
+    for (offset, member) in members.into_iter().enumerate() {
+        raw_children.shift_boundaries_from(index + offset);
+        children.insert(index + offset, member);
+    }
+}
+
+// Selection replacement retains the raw source boundaries, not just typed indices.
+impl CT_ShapeTree {
+    pub fn group_member_span(
+        &mut self,
+        start: usize,
+        count: usize,
+        id: u32,
+        name: &str,
+    ) -> Result<()> {
+        group_member_span(
+            &mut self.children,
+            &mut self.raw_children,
+            &self.raw_attributes,
+            start,
+            count,
+            id,
+            name,
+        )
+    }
+    pub fn replace_group_member(
+        &mut self,
+        index: usize,
+        placed: Vec<ShapeTreeChild>,
+        identity: bool,
+    ) -> Result<()> {
+        replace_group_member(
+            &mut self.children,
+            &mut self.raw_children,
+            &self.raw_attributes,
+            index,
+            placed,
+            identity,
+        )
+    }
+}
+impl CT_GroupShape {
+    pub fn group_member_span(
+        &mut self,
+        start: usize,
+        count: usize,
+        id: u32,
+        name: &str,
+    ) -> Result<()> {
+        group_member_span(
+            &mut self.children,
+            &mut self.raw_children,
+            &self.raw_attributes,
+            start,
+            count,
+            id,
+            name,
+        )
+    }
+    pub fn replace_group_member(
+        &mut self,
+        index: usize,
+        placed: Vec<ShapeTreeChild>,
+        identity: bool,
+    ) -> Result<()> {
+        replace_group_member(
+            &mut self.children,
+            &mut self.raw_children,
+            &self.raw_attributes,
+            index,
+            placed,
+            identity,
+        )
+    }
+}
+
+/// Add only inherited namespace declarations to a relocated raw root. All
+/// original root spelling, attributes, entity spellings and inner bytes remain.
+fn relocated_raw(
+    xml: &[u8],
+    attributes: &RawAttributes,
+    destination: &RawAttributes,
+) -> Result<Vec<u8>> {
+    let mut reader = Reader::from_reader(xml);
+    let mut buffer = Vec::new();
+    let (declared, end) = loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(start) | Event::Empty(start) => {
+                break (all_attributes(&start)?, reader.buffer_position() as usize);
+            }
+            Event::Eof => return Err(OxmlError::MissingElement("relocated raw root".to_owned())),
+            _ => {}
+        }
+        buffer.clear();
+    };
+    let mut declarations = String::new();
+    for (name, value) in attributes {
+        if (name == "xmlns" || name.starts_with("xmlns:"))
+            && !declared.iter().any(|(existing, _)| existing == name)
+            && !destination
+                .iter()
+                .any(|(existing, uri)| existing == name && uri == value)
+        {
+            declarations.push(' ');
+            declarations.push_str(name);
+            declarations.push_str("=\"");
+            declarations.push_str(&quick_xml::escape::escape(value));
+            declarations.push('"');
+        }
+    }
+    if declarations.is_empty() {
+        return Ok(xml.to_vec());
+    }
+    let close = end
+        .checked_sub(1)
+        .filter(|at| xml.get(*at) == Some(&b'>'))
+        .ok_or_else(|| OxmlError::InvalidValue("invalid relocated root span".to_owned()))?;
+    let insert = if close > 0 && xml[close - 1] == b'/' {
+        close - 1
+    } else {
+        close
+    };
+    let mut output = Vec::with_capacity(xml.len() + declarations.len());
+    output.extend_from_slice(&xml[..insert]);
+    output.extend_from_slice(declarations.as_bytes());
+    output.extend_from_slice(&xml[insert..]);
+    Ok(output)
+}
+
+fn replace_source_span(
+    children: &mut Vec<ShapeTreeChild>,
+    raw: &mut OrderedRawChildren,
+    start: usize,
+    count: usize,
+    inserted: Vec<ShapeTreeChild>,
+    inserted_raw: OrderedRawChildren,
+) -> Result<()> {
+    let end = start
+        .checked_add(count)
+        .filter(|end| *end <= children.len())
+        .ok_or_else(|| OxmlError::InvalidValue("replacement span outside parent".to_owned()))?;
+    let next_end = start
+        .checked_add(inserted.len())
+        .ok_or_else(|| OxmlError::InvalidValue("replacement boundary overflow".to_owned()))?;
+    let mut next_raw = OrderedRawChildren::default();
+    // The raw material preceding the replaced owner stays before its replacement.
+    for boundary in 0..=start {
+        for xml in raw.at(boundary) {
+            next_raw.push(boundary, xml.to_vec());
+        }
+    }
+    for boundary in 0..=inserted.len() {
+        for xml in inserted_raw.at(boundary) {
+            next_raw.push(start + boundary, xml.to_vec());
+        }
+    }
+    for boundary in end..=children.len() {
+        let destination = next_end
+            .checked_add(boundary - end)
+            .ok_or_else(|| OxmlError::InvalidValue("replacement boundary overflow".to_owned()))?;
+        for xml in raw.at(boundary) {
+            next_raw.push(destination, xml.to_vec());
+        }
+    }
+    children.splice(start..end, inserted);
+    *raw = next_raw;
+    Ok(())
+}
+
+fn group_member_span(
+    children: &mut Vec<ShapeTreeChild>,
+    raw: &mut OrderedRawChildren,
+    attributes: &RawAttributes,
+    start: usize,
+    count: usize,
+    id: u32,
+    name: &str,
+) -> Result<()> {
+    let end = start
+        .checked_add(count)
+        .filter(|end| count > 0 && *end <= children.len())
+        .ok_or_else(|| OxmlError::InvalidValue("group span outside parent".to_owned()))?;
+    let mut group = CT_GroupShape::new_empty(id, name);
+    group.children = children[start..end].to_vec();
+    group.raw_attributes = attributes
+        .iter()
+        .filter(|(name, _)| name == "xmlns" || name.starts_with("xmlns:"))
+        .cloned()
+        .collect();
+    // Only internal boundaries are enclosed. Outside neighbors stay outside.
+    for boundary in start + 1..end {
+        for xml in raw.at(boundary) {
+            group.raw_children.push(boundary - start, xml.to_vec());
+        }
+    }
+    replace_source_span(
+        children,
+        raw,
+        start,
+        count,
+        vec![ShapeTreeChild::GroupShape(Box::new(group))],
+        OrderedRawChildren::default(),
+    )
+}
+
+fn has_namespace_only(attributes: &RawAttributes) -> bool {
+    attributes
+        .iter()
+        .all(|(name, _)| name == "xmlns" || name.starts_with("xmlns:"))
+}
+
+fn retained_owner_shell_is_default(group: &CT_GroupShape) -> Result<bool> {
+    if !has_namespace_only(&group.raw_attributes)
+        || !has_namespace_only(&group.non_visual_group_properties.raw_attributes)
+        || !has_namespace_only(&group.group_properties.raw_attributes)
+        || group.group_properties.effects.is_some()
+        || !group.group_properties.raw_children.is_empty()
+    {
+        return Ok(false);
+    }
+    let mut inherited = vec![
+        ("p".to_owned(), P_NS.to_owned()),
+        ("a".to_owned(), A_NS.to_owned()),
+        ("r".to_owned(), R_NS.to_owned()),
+        ("mc".to_owned(), MC_NS.to_owned()),
+    ];
+    for (name, value) in group
+        .raw_attributes
+        .iter()
+        .chain(&group.non_visual_group_properties.raw_attributes)
+    {
+        if name == "xmlns" {
+            inherited.push((String::new(), value.clone()));
+        } else if let Some(prefix) = name.strip_prefix("xmlns:") {
+            inherited.push((prefix.to_owned(), value.clone()));
+        }
+    }
+    let bindings = NamespaceBindings::from_entries(&inherited);
+    for xml in &group.non_visual_group_properties.raw_children {
+        let mut reader = Reader::from_reader(xml.as_slice());
+        let mut buffer = Vec::new();
+        let mut root = None;
+        loop {
+            match reader.read_event_into(&mut buffer)? {
+                Event::Start(start) | Event::Empty(start) if root.is_none() => {
+                    if bindings
+                        .with_start(&start)?
+                        .element_uri(start.name().as_ref())
+                        != Some(P_NS)
+                    {
+                        return Ok(false);
+                    }
+                    let allowed: &[&str] = match local_name(start.name().as_ref()) {
+                        b"cNvPr" => &["id", "name", "descr", "title"],
+                        b"cNvGrpSpPr" | b"nvPr" => &[],
+                        _ => return Ok(false),
+                    };
+                    if !all_attributes(&start)?.iter().all(|(name, _)| {
+                        name == "xmlns"
+                            || name.starts_with("xmlns:")
+                            || allowed.contains(&name.as_str())
+                    }) {
+                        return Ok(false);
+                    }
+                    root = Some(start.name().as_ref().to_vec());
+                }
+                Event::End(end) if root.as_deref() == Some(end.name().as_ref()) => {}
+                Event::Text(text) if text.iter().all(u8::is_ascii_whitespace) => {}
+                Event::Eof => break,
+                // Unknown shell bodies belong to the removed group. They cannot
+                // be transplanted to its parent or silently discarded.
+                _ => return Ok(false),
+            }
+            buffer.clear();
+        }
+    }
+    Ok(true)
+}
+
+fn replace_group_member(
+    children: &mut Vec<ShapeTreeChild>,
+    raw: &mut OrderedRawChildren,
+    parent_attributes: &RawAttributes,
+    index: usize,
+    placed: Vec<ShapeTreeChild>,
+    identity: bool,
+) -> Result<()> {
+    let Some(ShapeTreeChild::GroupShape(group)) = children.get(index) else {
+        return Err(OxmlError::InvalidValue(
+            "ungroup owner is not a group".to_owned(),
+        ));
+    };
+    if placed.len() != group.children.len() {
+        return Err(OxmlError::InvalidValue(
+            "ungroup child count changed".to_owned(),
+        ));
+    }
+    if !retained_owner_shell_is_default(group)? {
+        return Err(OxmlError::InvalidValue("ungroup cannot preserve unsupported group-owned metadata or effects in a different schema owner".to_owned()));
+    }
+    let mut moved = OrderedRawChildren::default();
+    for boundary in 0..=group.children.len() {
+        for xml in group.raw_children.at(boundary) {
+            let mut reader = Reader::from_reader(xml);
+            let mut buffer = Vec::new();
+            let owner_only = loop {
+                match reader.read_event_into(&mut buffer)? {
+                    Event::Start(start) | Event::Empty(start) => {
+                        let mut inherited = vec![
+                            ("p".to_owned(), P_NS.to_owned()),
+                            ("a".to_owned(), A_NS.to_owned()),
+                            ("r".to_owned(), R_NS.to_owned()),
+                            ("mc".to_owned(), MC_NS.to_owned()),
+                        ];
+                        inherited.extend(group.raw_attributes.iter().filter_map(
+                            |(name, value)| {
+                                if name == "xmlns" {
+                                    Some((String::new(), value.clone()))
+                                } else {
+                                    name.strip_prefix("xmlns:")
+                                        .map(|prefix| (prefix.to_owned(), value.clone()))
+                                }
+                            },
+                        ));
+                        let bindings =
+                            NamespaceBindings::from_entries(&inherited).with_start(&start)?;
+                        break local_name(start.name().as_ref()) == b"extLst"
+                            && bindings.element_uri(start.name().as_ref()) == Some(P_NS);
+                    }
+                    Event::Eof => {
+                        return Err(OxmlError::MissingElement("raw group member".to_owned()));
+                    }
+                    _ => {}
+                }
+                buffer.clear();
+            };
+            if owner_only {
+                return Err(OxmlError::InvalidValue(
+                    "ungroup cannot relocate group-owned p:extLst to a different schema owner"
+                        .to_owned(),
+                ));
+            }
+            if !identity {
+                return Err(OxmlError::InvalidValue(
+                    "ungroup cannot transform an unmodeled member under a nonidentity group map"
+                        .to_owned(),
+                ));
+            }
+            moved.push(
+                boundary,
+                relocated_raw(xml, &group.raw_attributes, parent_attributes)?,
+            );
+        }
+    }
+    replace_source_span(children, raw, index, 1, placed, moved)
+}
+
 #[cfg(test)]
 mod style_tests {
     use oxml_core::units::Emu;
@@ -2391,6 +3130,22 @@ mod style_tests {
     use super::{CT_GroupShape, CT_Shape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild};
 
     const ALLOCATOR_TREE: &[u8] = br#"<p:spTree xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><p:nvGrpSpPr><p:cNvPr id="1" name="Root"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="2" name="Root shape"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/></p:sp><p:grpSp><p:nvGrpSpPr><p:cNvPr id="4" name="Group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:pic><p:nvPicPr><p:cNvPr id="6" name="Nested picture"/><p:cNvPicPr/><p:nvPr/></p:nvPicPr><p:blipFill/><p:spPr/></p:pic></p:grpSp><mc:AlternateContent><mc:Fallback><p:cxnSp><p:nvCxnSpPr><p:cNvPr id="8" name="Fallback connector"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr/></p:cxnSp></mc:Fallback></mc:AlternateContent></p:spTree>"#;
+
+    #[test]
+    fn fx206_shape_save_reread_keeps_drawing_text_under_presentation_owner() {
+        let mut shape = CT_Shape::new_textbox(2, "Body", CT_Transform2D::default()).unwrap();
+        shape.text_body = Some(oxml_drawing::text::CT_TextBody::from_xml(br#"<a:txBody xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>shape text survives</a:t></a:r></a:p></a:txBody>"#).unwrap());
+        let saved = shape.to_xml().unwrap();
+        let reopened = CT_Shape::from_xml(&saved).unwrap();
+        assert_eq!(
+            reopened.text_body.as_ref().unwrap().plain_text(),
+            "shape text survives"
+        );
+        assert_eq!(reopened.to_xml().unwrap(), saved);
+        let xml = std::str::from_utf8(&saved).unwrap();
+        assert!(xml.contains("<p:txBody"));
+        assert!(!xml.contains("<a:txBody"));
+    }
 
     #[test]
     fn ordinary_shape_and_textbox_constructors_emit_canonical_shells() {
@@ -2410,7 +3165,7 @@ mod style_tests {
         assert!(shape_xml.contains("<p:cNvPr id=\"2\" name=\"Shape &amp; 2\"/>"));
         assert!(shape_xml.contains("<p:cNvSpPr/>"));
         assert!(shape_xml.contains("<a:prstGeom prst=\"triangle\"><a:avLst/></a:prstGeom>"));
-        assert!(shape_xml.contains("<p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>"));
+        assert!(shape_xml.contains("<p:txBody xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\"><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>"));
         assert!(shape_xml.find("<p:nvSpPr").unwrap() < shape_xml.find("<p:spPr").unwrap());
         assert!(shape_xml.find("<p:spPr").unwrap() < shape_xml.find("<p:txBody").unwrap());
 
@@ -2418,7 +3173,7 @@ mod style_tests {
         assert!(textbox_xml.contains("<p:cNvSpPr txBox=\"1\"/>"));
         assert!(textbox_xml.contains("<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom>"));
         assert!(textbox_xml.contains("<a:noFill/>"));
-        assert!(textbox_xml.contains("<p:txBody><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>"));
+        assert!(textbox_xml.contains("<p:txBody xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:p=\"http://schemas.openxmlformats.org/presentationml/2006/main\"><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>"));
         assert_eq!(CT_Shape::from_xml(textbox_xml.as_bytes()).unwrap(), textbox);
         assert!(shape.style().is_none());
         assert!(textbox.style().is_none());
@@ -2438,7 +3193,7 @@ mod style_tests {
         let xml = shape.to_xml().unwrap();
         let text = String::from_utf8(xml.clone()).unwrap();
         assert!(text.contains(
-            r#"</p:spPr><p:style><a:lnRef idx="1"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="3"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="2"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"><a:schemeClr val="lt1"/></a:fontRef></p:style><p:txBody>"#
+            r#"</p:spPr><p:style><a:lnRef idx="1"><a:schemeClr val="accent1"/></a:lnRef><a:fillRef idx="3"><a:schemeClr val="accent1"/></a:fillRef><a:effectRef idx="2"><a:schemeClr val="accent1"/></a:effectRef><a:fontRef idx="minor"><a:schemeClr val="lt1"/></a:fontRef></p:style><p:txBody xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">"#
         ));
         assert_eq!(CT_Shape::from_xml(&xml).unwrap(), shape);
     }
@@ -2576,6 +3331,263 @@ mod style_tests {
         assert!(written.contains("<x:cNvPr id=\"99\" name=\"extension\"/>"));
         assert!(
             written.contains("<q:cNvPr id=\"4\" name=\"Changed &amp; safe\"><x:raw/></q:cNvPr>")
+        );
+    }
+
+    #[test]
+    fn fx206_foreign_relationship_shape_and_group_writers_keep_one_binding() {
+        fn foreign_payload_count(xml: &[u8]) -> usize {
+            let mut reader = quick_xml::reader::NsReader::from_reader(xml);
+            let mut buffer = Vec::new();
+            let mut count = 0;
+            loop {
+                let (namespace, event) = reader.read_resolved_event_into(&mut buffer).unwrap();
+                match event {
+                    quick_xml::events::Event::Start(start)
+                    | quick_xml::events::Event::Empty(start) => {
+                        // Duplicate namespace attributes are an invalid document,
+                        // even when the parser could otherwise choose one binding.
+                        for attribute in start.attributes() {
+                            attribute.unwrap();
+                        }
+                        if start.local_name().as_ref() == b"payload" {
+                            assert!(matches!(namespace,
+                                quick_xml::name::ResolveResult::Bound(uri)
+                                if uri.as_ref() == b"urn:foreign"));
+                            count += 1;
+                        }
+                    }
+                    quick_xml::events::Event::Eof => break,
+                    _ => {}
+                }
+                buffer.clear();
+            }
+            count
+        }
+
+        let raw = br#"<p:sp xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="urn:foreign"><p:nvSpPr><p:cNvPr id="19" name="Imported"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><r:payload value='&#65;'><r:opaque/></r:payload></p:sp>"#;
+        let shape = CT_Shape::from_xml(raw).unwrap();
+        let saved = shape.to_xml().unwrap();
+        assert_eq!(foreign_payload_count(&saved), 1);
+        assert!(String::from_utf8_lossy(&saved).contains("value='&#65;'"));
+        assert_eq!(CT_Shape::from_xml(&saved).unwrap().to_xml().unwrap(), saved);
+
+        // The child has no physical declaration. Its foreign r ownership comes
+        // from the group and must survive both embedded and standalone writes.
+        let raw = br#"<p:grpSp xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="urn:foreign"><p:nvGrpSpPr><p:cNvPr id="20" name="Group"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:sp><p:nvSpPr><p:cNvPr id="21" name="Child"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr/><r:payload value='&#66;'/></p:sp><r:payload value='&#67;'/></p:grpSp>"#;
+        let group = CT_GroupShape::from_xml(raw).unwrap();
+        let saved = group.to_xml().unwrap();
+        assert_eq!(foreign_payload_count(&saved), 2);
+        assert_eq!(
+            CT_GroupShape::from_xml(&saved).unwrap().to_xml().unwrap(),
+            saved
+        );
+        let ShapeTreeChild::Shape(child) = &group.children[0] else {
+            panic!("expected original child shape");
+        };
+        let child_saved = child.to_xml().unwrap();
+        assert_eq!(foreign_payload_count(&child_saved), 1);
+        assert_eq!(
+            CT_Shape::from_xml(&child_saved).unwrap().to_xml().unwrap(),
+            child_saved
+        );
+
+        // Only r is a preserved opaque owner. Genuine conflicting p/a/mc
+        // declarations are still rejected, rather than broadly admitted.
+        for prefix in ["p", "a", "mc"] {
+            let source = format!(
+                "<q:sp xmlns:q=\"http://schemas.openxmlformats.org/presentationml/2006/main\" xmlns:{prefix}=\"urn:foreign\"><q:nvSpPr><q:cNvPr id=\"22\" name=\"Conflict\"/><q:cNvSpPr/><q:nvPr/></q:nvSpPr><q:spPr/></q:sp>"
+            );
+            assert!(CT_Shape::from_xml(source.as_bytes()).is_err(), "{prefix}");
+        }
+    }
+
+    #[test]
+    fn fx206_foreign_relationship_picture_placeholder_refuses_without_source_loss() {
+        let raw = br#"<p:sp xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="urn:foreign"><p:nvSpPr><p:cNvPr id="23" name="Picture"/><p:cNvSpPr/><p:nvPr><p:ph type="pic" idx="4"/></p:nvPr></p:nvSpPr><p:spPr/><r:payload value='&#68;'/></p:sp>"#;
+        let shape = CT_Shape::from_xml(raw).unwrap();
+        let before = shape.to_xml().unwrap();
+        let error = shape
+            .fill_picture("rIdImage", CT_Transform2D::default())
+            .unwrap_err();
+        assert!(matches!(error, oxml_core::OxmlError::InvalidValue(message)
+            if message == "fill picture cannot preserve a foreign root relationship binding"));
+        assert_eq!(shape.to_xml().unwrap(), before);
+        assert_eq!(
+            CT_Shape::from_xml(&before).unwrap().to_xml().unwrap(),
+            before
+        );
+
+        let canonical = String::from_utf8(raw.to_vec()).unwrap().replace(
+            "xmlns:r=\"urn:foreign\"",
+            "xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"",
+        );
+        let shape = CT_Shape::from_xml(canonical.as_bytes()).unwrap();
+        let picture = shape
+            .fill_picture("rIdImage", CT_Transform2D::default())
+            .unwrap();
+        let saved = picture.to_xml().unwrap();
+        assert_eq!(
+            crate::picture::CT_Picture::from_xml(&saved)
+                .unwrap()
+                .to_xml()
+                .unwrap(),
+            saved
+        );
+    }
+
+    #[test]
+    fn fx206_picture_placeholder_opaque_empty_text_body_is_atomic() {
+        let raw = br#"<p:sp xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:nvSpPr><p:cNvPr id="19" name="Imported"/><p:cNvSpPr/><p:nvPr><p:ph type="pic" idx="4"/></p:nvPr></p:nvSpPr><p:spPr/><p:txBody xmlns:x="urn:producer" x:keep='&#65;'><a:bodyPr/><a:lstStyle/><a:p/></p:txBody></p:sp>"#;
+        let shape = CT_Shape::from_xml(raw).unwrap();
+        let before = shape.to_xml().unwrap();
+        assert!(
+            std::str::from_utf8(&before)
+                .unwrap()
+                .contains("x:keep='&#65;'")
+        );
+        assert_eq!(
+            CT_Shape::from_xml(&before).unwrap().to_xml().unwrap(),
+            before
+        );
+        assert!(
+            matches!(shape.fill_picture("rIdImage", CT_Transform2D::default()),
+            Err(oxml_core::OxmlError::InvalidValue(message)) if message == "picture placeholder text body contains source that a picture cannot retain"),
+            "FX206_OPAQUE_EMPTY_TEXT_BODY_MUST_REFUSE"
+        );
+        assert_eq!(shape.to_xml().unwrap(), before);
+        assert_eq!(shape.non_visual_id(), Some(19));
+    }
+
+    #[test]
+    fn fx206_picture_placeholder_empty_namespace_aliases_remain_supported() {
+        for body in [
+            "<p:txBody xmlns:a='http://schemas.openxmlformats.org/drawingml/2006/main'><a:bodyPr/><a:lstStyle/><a:p/></p:txBody>",
+            "<q:txBody xmlns:q='http://schemas.openxmlformats.org/presentationml/2006/main' xmlns:d='http://schemas.openxmlformats.org/drawingml/2006/main'><d:bodyPr/><d:lstStyle/><d:p/></q:txBody>",
+            "<txBody xmlns='http://schemas.openxmlformats.org/presentationml/2006/main'><a:bodyPr/><a:lstStyle/><a:p/></txBody>",
+        ] {
+            let raw = format!(
+                "<p:sp xmlns:p='http://schemas.openxmlformats.org/presentationml/2006/main' xmlns:a='http://schemas.openxmlformats.org/drawingml/2006/main'><p:nvSpPr><p:cNvPr id='19' name='Imported'/><p:cNvSpPr/><p:nvPr><p:ph type='pic' idx='4'/></p:nvPr></p:nvSpPr><p:spPr/>{body}</p:sp>"
+            );
+            let shape = CT_Shape::from_xml(raw.as_bytes()).unwrap();
+            let before = shape.to_xml().unwrap();
+            let converted = shape
+                .fill_picture("rIdImage", CT_Transform2D::default())
+                .unwrap_or_else(|error| panic!("{body}: {error}"));
+            assert_eq!(converted.non_visual_id(), Some(19));
+            assert_eq!(converted.placeholder, shape.placeholder);
+            assert_eq!(shape.to_xml().unwrap(), before);
+            let saved = converted.to_xml().unwrap();
+            assert_eq!(
+                super::CT_Picture::from_xml(&saved)
+                    .unwrap()
+                    .to_xml()
+                    .unwrap(),
+                saved
+            );
+        }
+    }
+
+    #[test]
+    fn fx206_picture_placeholder_conversion_preserves_shared_locks_and_foreign_metadata() {
+        let raw = br#"<p:sp xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:d="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:f="urn:foreign"><p:nvSpPr f:nv='kept'><p:cNvPr id='19' name='Imported' descr='&#65;'><f:meta data='&#66;'/></p:cNvPr><p:cNvSpPr f:keep='&#67;'><d:spLocks noGrp='1' noResize='true' f:keep='&#68;'><f:opaque/></d:spLocks><f:spLocks noTextEdit='1'/></p:cNvSpPr><p:nvPr f:app='kept'><f:before/><p:ph type='pic' idx='4'/><f:after/></p:nvPr></p:nvSpPr><p:spPr/><f:tail/></p:sp>"#;
+        let shape = CT_Shape::from_xml(raw).unwrap();
+        let before = shape.to_xml().unwrap();
+        let transform = CT_Transform2D::from_xml(
+            br#"<a:xfrm><a:off x="12700" y="25400"/><a:ext cx="1270000" cy="635000"/></a:xfrm>"#,
+        )
+        .unwrap();
+        let picture = shape.fill_picture("rIdImage", transform).unwrap();
+        assert_eq!(shape.to_xml().unwrap(), before);
+        assert_eq!(picture.placeholder, shape.placeholder);
+        assert_eq!(picture.non_visual_id(), Some(19));
+        assert_eq!(picture.non_visual_name(), Some("Imported"));
+        assert!(picture.shape_properties.custom_geometry.is_none());
+        assert_eq!(
+            picture
+                .shape_properties
+                .preset_geometry
+                .as_ref()
+                .unwrap()
+                .preset,
+            "rect"
+        );
+        let saved = picture.to_xml().unwrap();
+        let xml = std::str::from_utf8(&saved).unwrap();
+        for token in [
+            "<p:cNvPr id='19' name='Imported' descr='&#65;'><f:meta data='&#66;'/></p:cNvPr>",
+            "<d:picLocks noGrp='1' noResize='true' f:keep='&#68;'><f:opaque/></d:picLocks>",
+            "<f:spLocks noTextEdit='1'/>",
+            "<f:before/>",
+            "<f:after/>",
+            "<f:tail/>",
+        ] {
+            assert!(xml.contains(token), "{token}");
+        }
+        assert!(!xml.contains("<d:spLocks"));
+        assert!(xml.find("nvPicPr").unwrap() < xml.find("blipFill").unwrap());
+        assert!(xml.find("blipFill").unwrap() < xml.find("<p:spPr").unwrap());
+        assert_eq!(xml.matches("<a:prstGeom prst=\"rect\">").count(), 1);
+        assert!(xml.find("<a:xfrm").unwrap() < xml.find("<a:prstGeom").unwrap());
+        assert_eq!(
+            super::CT_Picture::from_xml(&saved)
+                .unwrap()
+                .to_xml()
+                .unwrap(),
+            saved
+        );
+        for geometry in [
+            "<a:prstGeom prst='trapezoid'><a:avLst/><f:geometry code='&#69;'/></a:prstGeom>",
+            "<a:custGeom><a:pathLst><a:path w='100' h='100'><a:moveTo><a:pt x='0' y='0'/></a:moveTo><a:lnTo><a:pt x='100' y='100'/></a:lnTo></a:path></a:pathLst><f:geometry code='&#69;'/></a:custGeom>",
+        ] {
+            let source = String::from_utf8(raw.to_vec()).unwrap().replace("<p:spPr/>", &format!("<p:spPr f:mode='kept'><f:before code='&#70;'/>{geometry}<f:after code='&#71;'/></p:spPr>"));
+            let imported = CT_Shape::from_xml(source.as_bytes()).unwrap();
+            let unchanged = imported.to_xml().unwrap();
+            let transform = picture.shape_properties.transform.clone().unwrap();
+            let mut expected = (*imported.shape_properties).clone();
+            expected.transform = Some(transform.clone());
+            let converted = imported.fill_picture("rIdImage", transform).unwrap();
+            assert_eq!(converted.shape_properties, expected);
+            assert_eq!(imported.to_xml().unwrap(), unchanged);
+            let saved = converted.to_xml().unwrap();
+            let xml = std::str::from_utf8(&saved).unwrap();
+            assert!(!xml.contains("prst=\"rect\""));
+            for raw in [
+                "<f:before code='&#70;'/>",
+                "<f:geometry code='&#69;'/>",
+                "<f:after code='&#71;'/>",
+            ] {
+                assert!(xml.contains(raw), "{raw}");
+            }
+            assert_eq!(
+                super::CT_Picture::from_xml(&saved)
+                    .unwrap()
+                    .to_xml()
+                    .unwrap(),
+                saved
+            );
+        }
+        for owned in ["txBox='1'", "txBox='0'"] {
+            let source = String::from_utf8(raw.to_vec())
+                .unwrap()
+                .replace("<p:cNvSpPr f:keep", &format!("<p:cNvSpPr {owned} f:keep"));
+            let refused = CT_Shape::from_xml(source.as_bytes()).unwrap();
+            let before = refused.to_xml().unwrap();
+            assert!(
+                refused
+                    .fill_picture("rIdImage", CT_Transform2D::default())
+                    .is_err()
+            );
+            assert_eq!(refused.to_xml().unwrap(), before);
+        }
+        let source = String::from_utf8(raw.to_vec())
+            .unwrap()
+            .replace("noResize='true'", "noTextEdit='true'");
+        let refused = CT_Shape::from_xml(source.as_bytes()).unwrap();
+        assert!(
+            refused
+                .fill_picture("rIdImage", CT_Transform2D::default())
+                .is_err()
         );
     }
 

@@ -151,7 +151,7 @@ impl PyParagraph {
         };
         let document = self.document.borrow(py);
         self.path
-            .validate_revision(document.revisions.current(), "paragraph", &recovery_hint)
+            .validate_scopes(&document.revisions, "paragraph", &recovery_hint)
             .map_err(|error| stale_to_pyerr(py, error))?;
         Ok(location)
     }
@@ -164,20 +164,21 @@ impl PyParagraph {
     /// return its handle.
     fn append_run(&self, py: Python<'_>, text: &str, url: Option<&str>) -> PyResult<Py<PyRun>> {
         let location = self.validate(py)?;
-        let (path, run_path) = {
+        let result = {
             let mut document = self.document.borrow_mut(py);
+            let mut candidate = document.inner.clone_for_staging();
             let relationship_id = match url {
                 Some(url) => {
                     // Check the paragraph first, so a failure leaves no
                     // orphaned relationship behind.
                     let exists = match location {
-                        ParagraphLocation::Body(index) => document.inner.paragraph(index).is_some(),
+                        ParagraphLocation::Body(index) => candidate.paragraph(index).is_some(),
                         ParagraphLocation::Cell {
                             table,
                             row,
                             cell,
                             paragraph,
-                        } => document.inner.table(table).is_some_and(|table| {
+                        } => candidate.table(table).is_some_and(|table| {
                             table
                                 .cell(row, cell)
                                 .is_some_and(|cell| cell.paragraph(paragraph).is_some())
@@ -186,7 +187,7 @@ impl PyParagraph {
                     if !exists {
                         return Err(PyIndexError::new_err("paragraph index out of range"));
                     }
-                    Some(document.inner.add_hyperlink_relationship(url))
+                    Some(candidate.add_hyperlink_relationship(url))
                 }
                 None => None,
             };
@@ -207,8 +208,7 @@ impl PyParagraph {
             };
             let (run_index, run_path) = match location {
                 ParagraphLocation::Body(index) => append(
-                    &mut document
-                        .inner
+                    &mut candidate
                         .paragraph_mut(index)
                         .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?,
                 ),
@@ -218,8 +218,7 @@ impl PyParagraph {
                     cell,
                     paragraph,
                 } => {
-                    let mut table = document
-                        .inner
+                    let mut table = candidate
                         .table_mut(table)
                         .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
                     let mut cell = table
@@ -232,12 +231,30 @@ impl PyParagraph {
                     )
                 }
             };
-            document.revisions.bump();
+            let operation = if url.is_some() {
+                "Paragraph.add_hyperlink"
+            } else {
+                "Paragraph.add_run"
+            };
+            let prepared = document
+                .revisions
+                .prepare_scopes(operation, &[], &[])
+                .map_err(oxml_py_support::revision_to_pyerr)?;
             let mut segments = self.path.segs.clone();
             segments.push(PathSeg::Run(run_index));
-            (document.revisions.capture(segments), run_path)
+            let path = document
+                .revisions
+                .capture_prepared(&prepared, segments)
+                .map_err(oxml_py_support::revision_to_pyerr)?;
+            let result = Py::new(py, PyRun::new(self.document.clone_ref(py), path, run_path))?;
+            document
+                .revisions
+                .commit_scopes(prepared)
+                .map_err(oxml_py_support::revision_to_pyerr)?;
+            document.inner = candidate;
+            result
         };
-        Py::new(py, PyRun::new(self.document.clone_ref(py), path, run_path))
+        Ok(result)
     }
 }
 
@@ -261,7 +278,7 @@ impl PyParagraph {
                     .paragraph_story_location(index)
                     .map_err(|error| crate::rdocx_to_pyerr(py, error))?
                     .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
-                document.scoped_replacement(py, |document| {
+                document.scoped_replacement(py, "Paragraph.replace_text", |document| {
                     document.try_replace_text_at(&location, old, new, expect)
                 })
             }
@@ -270,7 +287,7 @@ impl PyParagraph {
                 row,
                 cell,
                 paragraph,
-            } => document.scoped_replacement(py, |document| {
+            } => document.scoped_replacement(py, "Paragraph.replace_text", |document| {
                 document.try_replace_text_in_cell(
                     (table, row, cell),
                     Some(paragraph),
@@ -313,9 +330,9 @@ impl PyParagraph {
         let location = self.validate(py)?;
         let text = text.unwrap_or_default();
         let mut document = self.document.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
         let result = match location {
-            ParagraphLocation::Body(index) => document
-                .inner
+            ParagraphLocation::Body(index) => candidate
                 .paragraph_mut(index)
                 .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
                 .set_text(text),
@@ -325,8 +342,7 @@ impl PyParagraph {
                 cell,
                 paragraph,
             } => {
-                let mut table = document
-                    .inner
+                let mut table = candidate
                     .table_mut(table)
                     .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
                 let mut cell = table
@@ -338,7 +354,15 @@ impl PyParagraph {
             }
         };
         result.map_err(|error| crate::rdocx_to_pyerr(py, error))?;
-        document.revisions.bump();
+        let prepared = document
+            .revisions
+            .prepare_scopes("Paragraph.text", &[], &[])
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document.inner = candidate;
         Ok(())
     }
 

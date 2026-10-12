@@ -162,8 +162,8 @@ impl PyFont {
     fn validate(&self, py: Python<'_>) -> PyResult<(ParagraphLocation, usize)> {
         let document = self.document.borrow(py);
         self.path
-            .validate_revision(
-                document.revisions.current(),
+            .validate_scopes(
+                &document.revisions,
                 "font",
                 "Re-fetch it with paragraph.runs[i].font.",
             )
@@ -588,8 +588,8 @@ impl PyParagraphFormat {
     fn validate(&self, py: Python<'_>) -> PyResult<ParagraphLocation> {
         let document = self.document.borrow(py);
         self.path
-            .validate_revision(
-                document.revisions.current(),
+            .validate_scopes(
+                &document.revisions,
                 "paragraph format",
                 "Re-fetch it with paragraph.paragraph_format.",
             )

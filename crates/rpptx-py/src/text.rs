@@ -13,8 +13,9 @@ use crate::normalize_index;
 use crate::presentation::PyPresentation;
 use crate::replacement_count_to_pyerr;
 use crate::rpptx_to_pyerr;
-use crate::shape::{shape_mut_at, shape_ref_at, slide_index};
-use crate::table::{cell_mut_at, cell_ref_at};
+use crate::shape::{shape_ref_at, slide_index};
+use crate::slide::PySlide;
+use crate::table::cell_ref_at;
 use crate::validate_path;
 
 const EMU_PER_CENTIPOINT: i64 = 127;
@@ -33,6 +34,30 @@ fn length_object(py: Python<'_>, emu: i64) -> PyResult<Py<PyAny>> {
         .getattr("Length")?
         .call1((emu,))
         .map(Bound::unbind)
+}
+
+pub(crate) fn anchor_object(py: Python<'_>, anchor: TextAnchor) -> PyResult<Py<PyAny>> {
+    let value = match anchor {
+        TextAnchor::Top => 1,
+        TextAnchor::Center => 3,
+        TextAnchor::Bottom => 4,
+        TextAnchor::Justified => 6,
+        TextAnchor::Distributed => 7,
+    };
+    text_enum(py, "MSO_VERTICAL_ANCHOR", value)
+}
+
+pub(crate) fn anchor_from_value(value: i32) -> PyResult<TextAnchor> {
+    match value {
+        1 => Ok(TextAnchor::Top),
+        3 => Ok(TextAnchor::Center),
+        4 => Ok(TextAnchor::Bottom),
+        6 => Ok(TextAnchor::Justified),
+        7 => Ok(TextAnchor::Distributed),
+        _ => Err(PyValueError::new_err(
+            "vertical anchor must be an MSO_ANCHOR member",
+        )),
+    }
 }
 
 fn text_enum(py: Python<'_>, name: &str, value: i32) -> PyResult<Py<PyAny>> {
@@ -127,7 +152,7 @@ fn names_cell(path: &ContentPath) -> bool {
 }
 
 fn text_frame_ref_at<'a>(
-    presentation: &'a rpptx::Presentation,
+    presentation: &'a PyPresentation,
     path: &ContentPath,
 ) -> Option<rpptx::TextFrameRef<'a>> {
     if names_cell(path) {
@@ -138,26 +163,27 @@ fn text_frame_ref_at<'a>(
 }
 
 fn text_frame_mut_at<'a>(
+    presentation: &'a mut PyPresentation,
+    path: &ContentPath,
+) -> Option<rpptx::TextFrame<'a>> {
+    let current = presentation.current_path(path)?;
+    native_text_frame_mut_at(&mut presentation.inner, &current)
+}
+
+fn native_text_frame_mut_at<'a>(
     presentation: &'a mut rpptx::Presentation,
     path: &ContentPath,
 ) -> Option<rpptx::TextFrame<'a>> {
     if names_cell(path) {
-        cell_mut_at(presentation, path).map(rpptx::TableCellMut::into_text_frame)
+        crate::table::native_cell_mut_at(presentation, path)
+            .map(rpptx::TableCellMut::into_text_frame)
     } else {
-        shape_mut_at(presentation, path)?.into_text_frame()
-    }
-}
-
-fn advance_text_topology(presentation: &mut PyPresentation, path: &ContentPath) {
-    if path.text_revision.is_some() {
-        presentation.text_revisions.bump();
-    } else {
-        presentation.revisions.bump();
+        crate::shape::native_shape_mut_at(presentation, path)?.into_text_frame()
     }
 }
 
 fn font_properties(
-    presentation: &rpptx::Presentation,
+    presentation: &PyPresentation,
     path: &ContentPath,
 ) -> Option<rpptx::CT_TextCharacterProperties> {
     let paragraph = paragraph_index(path)?;
@@ -196,7 +222,7 @@ impl PyTextFrame {
         read: impl FnOnce(rpptx::TextFrameRef<'_>) -> T,
     ) -> PyResult<T> {
         self.validate(py)?;
-        text_frame_ref_at(&self.presentation.borrow(py).inner, &self.path)
+        text_frame_ref_at(&self.presentation.borrow(py), &self.path)
             .map(read)
             .ok_or_else(|| PyValueError::new_err("shape has no text frame"))
     }
@@ -208,7 +234,7 @@ impl PyTextFrame {
     ) -> PyResult<T> {
         self.validate(py)?;
         let mut presentation = self.presentation.borrow_mut(py);
-        text_frame_mut_at(&mut presentation.inner, &self.path)
+        text_frame_mut_at(&mut presentation, &self.path)
             .map(|mut frame| update(&mut frame))
             .ok_or_else(|| PyValueError::new_err("shape has no text frame"))
     }
@@ -251,7 +277,7 @@ impl PyTextFrame {
     #[getter]
     fn text(&self, py: Python<'_>) -> PyResult<String> {
         self.validate(py)?;
-        text_frame_ref_at(&self.presentation.borrow(py).inner, &self.path)
+        text_frame_ref_at(&self.presentation.borrow(py), &self.path)
             .map(|frame| frame.text())
             .ok_or_else(|| PyValueError::new_err("shape has no text frame"))
     }
@@ -260,10 +286,23 @@ impl PyTextFrame {
     fn set_text(&self, py: Python<'_>, value: &str) -> PyResult<()> {
         self.validate(py)?;
         let mut presentation = self.presentation.borrow_mut(py);
-        text_frame_mut_at(&mut presentation.inner, &self.path)
+        let current = presentation
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("owner is absent"))?;
+        let mut candidate = presentation.inner.clone();
+        native_text_frame_mut_at(&mut candidate, &current)
             .map(|mut frame| frame.set_text(value))
             .ok_or_else(|| PyValueError::new_err("shape has no text frame"))?;
-        advance_text_topology(&mut presentation, &self.path);
+        let survivors = presentation.text_changed_owners(&self.path)?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "TextFrame.text",
+            &survivors,
+            false,
+            false,
+            false,
+        )?;
+        presentation.publish_owners(candidate, prepared)?;
         Ok(())
     }
 
@@ -272,7 +311,17 @@ impl PyTextFrame {
         self.validate(py)?;
         Py::new(
             py,
-            PyParagraphCollection::new(self.presentation.clone_ref(py), self.path.clone()),
+            PyParagraphCollection::new(
+                self.presentation.clone_ref(py),
+                self.presentation.borrow(py).capture_path(
+                    self.presentation
+                        .borrow(py)
+                        .current_path(&self.path)
+                        .ok_or_else(|| PyIndexError::new_err("owner is absent"))?
+                        .segs,
+                    Some(oxml_py_support::RevisionScope::Text),
+                )?,
+            ),
         )
     }
 
@@ -293,8 +342,8 @@ impl PyTextFrame {
     ) -> PyResult<usize> {
         self.validate(py)?;
         let mut presentation = self.presentation.borrow_mut(py);
-        if names_cell(&self.path) && text_frame_ref_at(&presentation.inner, &self.path).is_none() {
-            cell_ref_at(&presentation.inner, &self.path)
+        if names_cell(&self.path) && text_frame_ref_at(&presentation, &self.path).is_none() {
+            cell_ref_at(&presentation, &self.path)
                 .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?;
             if placeholder.is_empty() {
                 return Err(rpptx_to_pyerr(
@@ -310,7 +359,11 @@ impl PyTextFrame {
             }
             return Ok(0);
         }
-        let count = text_frame_mut_at(&mut presentation.inner, &self.path)
+        let current = presentation
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("owner is absent"))?;
+        let mut candidate = presentation.inner.clone();
+        let count = native_text_frame_mut_at(&mut candidate, &current)
             .ok_or_else(|| PyValueError::new_err("shape has no text frame"))?
             .try_replace_text(placeholder, replacement, expect)
             .map_err(|error| rpptx_to_pyerr(py, error))?;
@@ -318,52 +371,65 @@ impl PyTextFrame {
             return Err(replacement_count_to_pyerr(py, placeholder, expected, count));
         }
         if count > 0 {
-            advance_text_topology(&mut presentation, &self.path);
+            let survivors = presentation.text_changed_owners(&self.path)?;
+            let prepared = presentation.prepare_owners(
+                &candidate,
+                "TextFrame.try_replace_text",
+                &survivors,
+                false,
+                false,
+                false,
+            )?;
+            presentation.publish_owners(candidate, prepared)?;
         }
         Ok(count)
     }
 
     fn add_paragraph(&self, py: Python<'_>) -> PyResult<Py<PyParagraph>> {
         self.validate(py)?;
-        let original_path = self.path.clone();
+        let mut presentation = self.presentation.borrow_mut(py);
+        let current = presentation
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("owner is absent"))?;
+        let mut candidate = presentation.inner.clone();
         let index = {
-            let mut presentation = self.presentation.borrow_mut(py);
-            let mut frame = text_frame_mut_at(&mut presentation.inner, &original_path)
+            let mut frame = native_text_frame_mut_at(&mut candidate, &current)
                 .ok_or_else(|| PyValueError::new_err("shape has no text frame"))?;
             let index = frame.paragraph_count();
             frame.add_paragraph();
             index
         };
-        let path = {
-            let mut presentation = self.presentation.borrow_mut(py);
-            advance_text_topology(&mut presentation, &self.path);
-            let mut segments = original_path.segs.clone();
-            segments.push(PathSeg::Para(index));
-            {
-                let mut path = self.path.clone();
-                path.segs = segments;
-                path.revision = presentation.revisions.current();
-                if path.text_revision.is_some() {
-                    path.text_revision = Some(presentation.text_revisions.current());
-                }
-                path
-            }
-        };
-        Py::new(py, PyParagraph::new(self.presentation.clone_ref(py), path))
+        let survivors = presentation.text_changed_owners(&self.path)?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "TextFrame.add_paragraph",
+            &survivors,
+            false,
+            false,
+            false,
+        )?;
+        let mut segments = current.segs;
+        segments.push(PathSeg::Para(index));
+        let path = presentation.capture_prepared_path(
+            &prepared,
+            segments,
+            Some(oxml_py_support::RevisionScope::Text),
+        )?;
+        let result = Py::new(py, PyParagraph::new(self.presentation.clone_ref(py), path))?;
+        presentation.publish_owners(candidate, prepared)?;
+        Ok(result)
     }
 
     #[getter]
     fn autofit(&self, py: Python<'_>) -> PyResult<Option<&'static str>> {
         self.validate(py)?;
-        Ok(
-            text_frame_ref_at(&self.presentation.borrow(py).inner, &self.path)
-                .and_then(|frame| frame.autofit_mode())
-                .map(|mode| match mode {
-                    rpptx::AutofitMode::None => "none",
-                    rpptx::AutofitMode::Normal => "normal",
-                    rpptx::AutofitMode::Shape => "shape",
-                }),
-        )
+        Ok(text_frame_ref_at(&self.presentation.borrow(py), &self.path)
+            .and_then(|frame| frame.autofit_mode())
+            .map(|mode| match mode {
+                rpptx::AutofitMode::None => "none",
+                rpptx::AutofitMode::Normal => "normal",
+                rpptx::AutofitMode::Shape => "shape",
+            }))
     }
 
     #[getter]
@@ -437,35 +503,14 @@ impl PyTextFrame {
 
     #[getter]
     fn vertical_anchor(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
-        let anchor = self.read(py, |frame| frame.vertical_anchor())?;
-        anchor
-            .map(|anchor| {
-                let value = match anchor {
-                    TextAnchor::Top => 1,
-                    TextAnchor::Center => 3,
-                    TextAnchor::Bottom => 4,
-                    TextAnchor::Justified => 6,
-                    TextAnchor::Distributed => 7,
-                };
-                text_enum(py, "MSO_VERTICAL_ANCHOR", value)
-            })
+        self.read(py, |frame| frame.vertical_anchor())?
+            .map(|anchor| anchor_object(py, anchor))
             .transpose()
     }
 
     #[setter]
     fn set_vertical_anchor(&self, py: Python<'_>, value: Option<i32>) -> PyResult<()> {
-        let anchor = value
-            .map(|value| match value {
-                1 => Ok(TextAnchor::Top),
-                3 => Ok(TextAnchor::Center),
-                4 => Ok(TextAnchor::Bottom),
-                6 => Ok(TextAnchor::Justified),
-                7 => Ok(TextAnchor::Distributed),
-                _ => Err(PyValueError::new_err(
-                    "vertical anchor must be an MSO_ANCHOR member",
-                )),
-            })
-            .transpose()?;
+        let anchor = value.map(anchor_from_value).transpose()?;
         self.update(py, |frame| frame.set_vertical_anchor(anchor))
     }
 
@@ -509,7 +554,7 @@ impl PyParagraph {
         read: impl FnOnce(Option<&CT_TextParagraphProperties>) -> T,
     ) -> PyResult<T> {
         let index = self.validate(py)?;
-        text_frame_ref_at(&self.presentation.borrow(py).inner, &self.path)
+        text_frame_ref_at(&self.presentation.borrow(py), &self.path)
             .and_then(|frame| frame.paragraph(index))
             .map(|paragraph| read(paragraph.properties()))
             .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))
@@ -524,7 +569,7 @@ impl PyParagraph {
     ) -> PyResult<()> {
         let index = self.validate(py)?;
         let mut presentation = self.presentation.borrow_mut(py);
-        let mut paragraph = text_frame_mut_at(&mut presentation.inner, &self.path)
+        let mut paragraph = text_frame_mut_at(&mut presentation, &self.path)
             .and_then(|frame| frame.into_paragraph_mut(index))
             .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
         let current = paragraph.properties().cloned().unwrap_or_default();
@@ -601,7 +646,7 @@ impl PyParagraph {
     #[getter]
     fn text(&self, py: Python<'_>) -> PyResult<String> {
         let index = self.validate(py)?;
-        text_frame_ref_at(&self.presentation.borrow(py).inner, &self.path)
+        text_frame_ref_at(&self.presentation.borrow(py), &self.path)
             .and_then(|frame| frame.paragraph(index))
             .map(|paragraph| paragraph.text())
             .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))
@@ -611,18 +656,31 @@ impl PyParagraph {
     fn set_text(&self, py: Python<'_>, value: &str) -> PyResult<()> {
         let index = self.validate(py)?;
         let mut presentation = self.presentation.borrow_mut(py);
-        text_frame_mut_at(&mut presentation.inner, &self.path)
+        let current = presentation
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("owner is absent"))?;
+        let mut candidate = presentation.inner.clone();
+        native_text_frame_mut_at(&mut candidate, &current)
             .and_then(|frame| frame.into_paragraph_mut(index))
             .map(|mut paragraph| paragraph.set_text(value))
             .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
-        advance_text_topology(&mut presentation, &self.path);
+        let survivors = presentation.text_changed_owners(&self.path)?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "Paragraph.text",
+            &survivors,
+            false,
+            false,
+            false,
+        )?;
+        presentation.publish_owners(candidate, prepared)?;
         Ok(())
     }
 
     #[getter]
     fn level(&self, py: Python<'_>) -> PyResult<u8> {
         let index = self.validate(py)?;
-        text_frame_ref_at(&self.presentation.borrow(py).inner, &self.path)
+        text_frame_ref_at(&self.presentation.borrow(py), &self.path)
             .and_then(|frame| frame.paragraph(index))
             .map(|paragraph| paragraph.level())
             .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))
@@ -631,7 +689,7 @@ impl PyParagraph {
     #[setter]
     fn set_level(&self, py: Python<'_>, value: u8) -> PyResult<()> {
         let index = self.validate(py)?;
-        let changed = text_frame_mut_at(&mut self.presentation.borrow_mut(py).inner, &self.path)
+        let changed = text_frame_mut_at(&mut self.presentation.borrow_mut(py), &self.path)
             .and_then(|frame| frame.into_paragraph_mut(index))
             .is_some_and(|mut paragraph| paragraph.set_level(value));
         if changed {
@@ -667,30 +725,40 @@ impl PyParagraph {
     #[pyo3(signature = (text = ""))]
     fn add_run(&self, py: Python<'_>, text: &str) -> PyResult<Py<PyRun>> {
         let index = self.validate(py)?;
-        let run = text_frame_ref_at(&self.presentation.borrow(py).inner, &self.path)
+        let mut presentation = self.presentation.borrow_mut(py);
+        let current = presentation
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("owner is absent"))?;
+        let run = text_frame_ref_at(&presentation, &self.path)
             .and_then(|frame| frame.paragraph(index))
             .map(|paragraph| paragraph.run_count())
             .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
-        let path = {
-            let mut presentation = self.presentation.borrow_mut(py);
-            text_frame_mut_at(&mut presentation.inner, &self.path)
+        let mut candidate = presentation.inner.clone();
+        {
+            let mut paragraph = native_text_frame_mut_at(&mut candidate, &current)
                 .and_then(|frame| frame.into_paragraph_mut(index))
-                .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
-                .add_run(text);
-            advance_text_topology(&mut presentation, &self.path);
-            let mut segments = self.path.segs.clone();
-            segments.push(PathSeg::Run(run));
-            {
-                let mut path = self.path.clone();
-                path.segs = segments;
-                path.revision = presentation.revisions.current();
-                if path.text_revision.is_some() {
-                    path.text_revision = Some(presentation.text_revisions.current());
-                }
-                path
-            }
-        };
-        Py::new(py, PyRun::new(self.presentation.clone_ref(py), path))
+                .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
+            paragraph.add_run(text);
+        }
+        let survivors = presentation.text_changed_owners(&self.path)?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "Paragraph.add_run",
+            &survivors,
+            false,
+            false,
+            false,
+        )?;
+        let mut segments = current.segs;
+        segments.push(PathSeg::Run(run));
+        let path = presentation.capture_prepared_path(
+            &prepared,
+            segments,
+            Some(oxml_py_support::RevisionScope::Text),
+        )?;
+        let result = Py::new(py, PyRun::new(self.presentation.clone_ref(py), path))?;
+        presentation.publish_owners(candidate, prepared)?;
+        Ok(result)
     }
 
     #[getter]
@@ -863,16 +931,23 @@ impl PyParagraphCollection {
             ".text_frame.paragraphs",
         )?;
         drop(presentation);
-        text_frame_ref_at(&self.presentation.borrow(py).inner, &self.path)
+        text_frame_ref_at(&self.presentation.borrow(py), &self.path)
             .map(|frame| frame.paragraph_count())
             .ok_or_else(|| PyValueError::new_err("shape has no text frame"))
     }
 
     fn item(&self, py: Python<'_>, index: usize) -> PyResult<Py<PyParagraph>> {
-        let mut segments = self.path.segs.clone();
+        let mut segments = self
+            .presentation
+            .borrow(py)
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("owner is absent"))?
+            .segs;
         segments.push(PathSeg::Para(index));
-        let mut path = self.path.clone();
-        path.segs = segments;
+        let path = self
+            .presentation
+            .borrow(py)
+            .capture_path(segments, Some(oxml_py_support::RevisionScope::Text))?;
         Py::new(py, PyParagraph::new(self.presentation.clone_ref(py), path))
     }
 }
@@ -948,7 +1023,7 @@ impl PyRun {
             .ok_or_else(|| PyIndexError::new_err("paragraph index is missing"))?;
         let run =
             run_index(&self.path).ok_or_else(|| PyIndexError::new_err("run index is missing"))?;
-        text_frame_ref_at(&self.presentation.borrow(py).inner, &self.path)
+        text_frame_ref_at(&self.presentation.borrow(py), &self.path)
             .and_then(|frame| frame.paragraph(paragraph))
             .and_then(|paragraph| paragraph.run(run))
             .map(|run| run.text().to_owned())
@@ -965,7 +1040,7 @@ impl PyRun {
         let run =
             run_index(&self.path).ok_or_else(|| PyIndexError::new_err("run index is missing"))?;
         let mut presentation = self.presentation.borrow_mut(py);
-        let frame = text_frame_mut_at(&mut presentation.inner, &self.path)
+        let frame = text_frame_mut_at(&mut presentation, &self.path)
             .ok_or_else(|| PyValueError::new_err("shape has no text frame"))?;
         let mut paragraph = frame
             .into_paragraph_mut(paragraph)
@@ -1010,23 +1085,54 @@ pub struct PyHyperlink {
 }
 
 impl PyHyperlink {
-    /// Returns the run's direct character properties, raising when the run
-    /// no longer exists.
+    /// Returns the current physical owner path and direct character properties,
+    /// raising when the run no longer exists.
     fn run_properties(
         &self,
         py: Python<'_>,
         presentation: &PyPresentation,
-    ) -> PyResult<Option<CT_TextCharacterProperties>> {
+    ) -> PyResult<(ContentPath, Option<CT_TextCharacterProperties>)> {
         validate_path(py, presentation, &self.path, "hyperlink", ".hyperlink")?;
-        let paragraph = paragraph_index(&self.path)
+        let current = presentation
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("run owner is absent"))?;
+        let paragraph = paragraph_index(&current)
             .ok_or_else(|| PyIndexError::new_err("paragraph index is missing"))?;
         let run =
-            run_index(&self.path).ok_or_else(|| PyIndexError::new_err("run index is missing"))?;
-        text_frame_ref_at(&presentation.inner, &self.path)
+            run_index(&current).ok_or_else(|| PyIndexError::new_err("run index is missing"))?;
+        let shape = crate::shape::native_shape_ref_at(&presentation.inner, &current)
+            .ok_or_else(|| PyIndexError::new_err("shape owner is absent"))?;
+        let frame = if names_cell(&current) {
+            let row = current
+                .segs
+                .iter()
+                .find_map(|segment| match segment {
+                    PathSeg::Row(index) => Some(*index),
+                    _ => None,
+                })
+                .ok_or_else(|| PyIndexError::new_err("row index is missing"))?;
+            let column = current
+                .segs
+                .iter()
+                .rev()
+                .find_map(|segment| match segment {
+                    PathSeg::Cell(index) => Some(*index),
+                    _ => None,
+                })
+                .ok_or_else(|| PyIndexError::new_err("column index is missing"))?;
+            shape
+                .table()
+                .and_then(|table| table.cell(row, column))
+                .and_then(|cell| cell.text_frame())
+        } else {
+            shape.text_frame()
+        };
+        let properties = frame
             .and_then(|frame| frame.paragraph(paragraph))
             .and_then(|paragraph| paragraph.run(run))
             .map(|run| run.properties().cloned())
-            .ok_or_else(|| PyIndexError::new_err("run index out of range"))
+            .ok_or_else(|| PyIndexError::new_err("run index out of range"))?;
+        Ok((current, properties))
     }
 }
 
@@ -1036,7 +1142,7 @@ impl PyHyperlink {
     #[getter]
     fn address(&self, py: Python<'_>) -> PyResult<Option<String>> {
         let presentation = self.presentation.borrow(py);
-        let properties = self.run_properties(py, &presentation)?;
+        let (current, properties) = self.run_properties(py, &presentation)?;
         let Some(relationship_id) = properties
             .as_ref()
             .and_then(|properties| properties.hyperlink_click.as_ref())
@@ -1047,8 +1153,66 @@ impl PyHyperlink {
         };
         Ok(presentation
             .inner
-            .hyperlink_address(slide_index(&self.path)?, relationship_id)
+            .hyperlink_address(slide_index(&current)?, relationship_id)
             .map(str::to_owned))
+    }
+
+    /// The checked named slide-jump target, or None for another click action.
+    #[getter]
+    fn target_slide(&self, py: Python<'_>) -> PyResult<Option<Py<PySlide>>> {
+        let presentation = self.presentation.borrow(py);
+        let (current, _) = self.run_properties(py, &presentation)?;
+        if names_cell(&current) {
+            return Err(PyValueError::new_err(
+                "cell hyperlink assignment is not supported",
+            ));
+        }
+        let paragraph = paragraph_index(&current)
+            .ok_or_else(|| PyIndexError::new_err("paragraph index is missing"))?;
+        let run =
+            run_index(&current).ok_or_else(|| PyIndexError::new_err("run index is missing"))?;
+        let shape_id = crate::shape::native_shape_ref_at(&presentation.inner, &current)
+            .and_then(|shape| shape.non_visual_id())
+            .ok_or_else(|| PyValueError::new_err("shape has no id"))?;
+        let Some(target) = presentation
+            .inner
+            .run_target_slide(slide_index(&current)?, shape_id, paragraph, run)
+            .map_err(|error| rpptx_to_pyerr(py, error))?
+        else {
+            return Ok(None);
+        };
+        let path = presentation.capture_path(smallvec::smallvec![PathSeg::Slide(target)], None)?;
+        Py::new(py, PySlide::new(self.presentation.clone_ref(py), path)).map(Some)
+    }
+
+    /// Replaces the click target with an owned slide, or clears it for None.
+    #[setter]
+    fn set_target_slide(&self, py: Python<'_>, slide: Option<PyRef<'_, PySlide>>) -> PyResult<()> {
+        let target = match slide {
+            Some(slide) if !slide.presentation.is(&self.presentation) => {
+                return Err(PyValueError::new_err("slide is not in this presentation"));
+            }
+            Some(slide) => Some(slide.validate(py)?),
+            None => None,
+        };
+        let mut presentation = self.presentation.borrow_mut(py);
+        let (current, _) = self.run_properties(py, &presentation)?;
+        if names_cell(&current) {
+            return Err(PyValueError::new_err(
+                "cell hyperlink assignment is not supported",
+            ));
+        }
+        let paragraph = paragraph_index(&current)
+            .ok_or_else(|| PyIndexError::new_err("paragraph index is missing"))?;
+        let run =
+            run_index(&current).ok_or_else(|| PyIndexError::new_err("run index is missing"))?;
+        let shape_id = crate::shape::native_shape_ref_at(&presentation.inner, &current)
+            .and_then(|shape| shape.non_visual_id())
+            .ok_or_else(|| PyValueError::new_err("shape has no id"))?;
+        presentation
+            .inner
+            .set_run_target_slide(slide_index(&current)?, shape_id, paragraph, run, target)
+            .map_err(|error| rpptx_to_pyerr(py, error))
     }
 
     /// Points the run's click hyperlink at `value`, or removes it for `None`
@@ -1057,23 +1221,23 @@ impl PyHyperlink {
     #[setter]
     fn set_address(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
         let mut presentation = self.presentation.borrow_mut(py);
-        self.run_properties(py, &presentation)?;
-        let paragraph = paragraph_index(&self.path)
+        let (current, _) = self.run_properties(py, &presentation)?;
+        let paragraph = paragraph_index(&current)
             .ok_or_else(|| PyIndexError::new_err("paragraph index is missing"))?;
         let run =
-            run_index(&self.path).ok_or_else(|| PyIndexError::new_err("run index is missing"))?;
-        if names_cell(&self.path) {
+            run_index(&current).ok_or_else(|| PyIndexError::new_err("run index is missing"))?;
+        if names_cell(&current) {
             return Err(PyValueError::new_err(
                 "cell hyperlink assignment is not supported",
             ));
         }
-        let shape_id = shape_ref_at(&presentation.inner, &self.path)
+        let shape_id = crate::shape::native_shape_ref_at(&presentation.inner, &current)
             .and_then(|shape| shape.non_visual_id())
             .ok_or_else(|| PyValueError::new_err("shape has no id"))?;
         presentation
             .inner
             .set_run_hyperlink(
-                slide_index(&self.path)?,
+                slide_index(&current)?,
                 shape_id,
                 paragraph,
                 run,
@@ -1104,17 +1268,24 @@ impl PyRunCollection {
         )?;
         let paragraph = paragraph_index(&self.path)
             .ok_or_else(|| PyIndexError::new_err("paragraph index is missing"))?;
-        text_frame_ref_at(&self.presentation.borrow(py).inner, &self.path)
+        text_frame_ref_at(&self.presentation.borrow(py), &self.path)
             .and_then(|frame| frame.paragraph(paragraph))
             .map(|paragraph| paragraph.run_count())
             .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))
     }
 
     fn item(&self, py: Python<'_>, index: usize) -> PyResult<Py<PyRun>> {
-        let mut segments = self.path.segs.clone();
+        let mut segments = self
+            .presentation
+            .borrow(py)
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("owner is absent"))?
+            .segs;
         segments.push(PathSeg::Run(index));
-        let mut path = self.path.clone();
-        path.segs = segments;
+        let path = self
+            .presentation
+            .borrow(py)
+            .capture_path(segments, Some(oxml_py_support::RevisionScope::Text))?;
         Py::new(py, PyRun::new(self.presentation.clone_ref(py), path))
     }
 }
@@ -1193,7 +1364,7 @@ impl PyFont {
         read: impl FnOnce(Option<&CT_TextCharacterProperties>) -> T,
     ) -> PyResult<T> {
         self.validate(py)?;
-        let properties = font_properties(&self.presentation.borrow(py).inner, &self.path);
+        let properties = font_properties(&self.presentation.borrow(py), &self.path);
         Ok(read(properties.as_ref()))
     }
 
@@ -1205,11 +1376,22 @@ impl PyFont {
         py: Python<'_>,
         update: impl FnOnce(&mut CT_TextCharacterProperties),
     ) -> PyResult<()> {
+        self.update_checked(py, |properties| {
+            update(properties);
+            Ok(())
+        })
+    }
+
+    fn update_checked(
+        &self,
+        py: Python<'_>,
+        update: impl FnOnce(&mut CT_TextCharacterProperties) -> PyResult<()>,
+    ) -> PyResult<()> {
         self.validate(py)?;
         let paragraph = paragraph_index(&self.path)
             .ok_or_else(|| PyIndexError::new_err("paragraph index is missing"))?;
         let mut presentation = self.presentation.borrow_mut(py);
-        let mut paragraph = text_frame_mut_at(&mut presentation.inner, &self.path)
+        let mut paragraph = text_frame_mut_at(&mut presentation, &self.path)
             .and_then(|frame| frame.into_paragraph_mut(paragraph))
             .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
         if let Some(run) = run_index(&self.path) {
@@ -1218,7 +1400,7 @@ impl PyFont {
                 .ok_or_else(|| PyIndexError::new_err("run index out of range"))?;
             let current = run.properties().cloned().unwrap_or_default();
             let mut properties = current.clone();
-            update(&mut properties);
+            update(&mut properties)?;
             if properties != current {
                 run.set_properties(properties);
             }
@@ -1228,7 +1410,7 @@ impl PyFont {
                 .and_then(|properties| properties.default_run_properties.clone())
                 .unwrap_or_default();
             let mut properties = current.clone();
-            update(&mut properties);
+            update(&mut properties)?;
             if properties != current {
                 *paragraph.default_run_properties_mut() = properties;
             }
@@ -1268,6 +1450,31 @@ pub(crate) fn write_font_color(
                 properties.fill = Some(Fill::Solid(fill));
             }
         }
+    })
+}
+
+/// Reads highlight through the same validated run or paragraph owner as Font.color.
+pub(crate) fn font_highlight_at(
+    py: Python<'_>,
+    presentation: &Py<PyPresentation>,
+    path: &ContentPath,
+) -> PyResult<Option<ColorChoice>> {
+    PyFont::new(presentation.clone_ref(py), path.clone()).read(py, |properties| {
+        properties.and_then(|properties| properties.highlight.clone())
+    })
+}
+
+/// Refuses unsupported source edits before publishing changed properties.
+pub(crate) fn write_font_highlight(
+    py: Python<'_>,
+    presentation: &Py<PyPresentation>,
+    path: &ContentPath,
+    color: Option<ColorChoice>,
+) -> PyResult<()> {
+    PyFont::new(presentation.clone_ref(py), path.clone()).update_checked(py, |properties| {
+        properties
+            .set_highlight(color)
+            .map_err(|error| PyValueError::new_err(format!("Font.highlight: {error}")))
     })
 }
 
@@ -1410,7 +1617,19 @@ impl PyFont {
 
     #[setter]
     fn set_all_caps(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
-        self.update(py, |properties| properties.all_caps = value)
+        self.update(py, |properties| properties.set_all_caps(value))
+    }
+
+    #[getter]
+    fn small_caps(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+        self.read(py, |properties| {
+            properties.and_then(|properties| properties.small_caps)
+        })
+    }
+
+    #[setter]
+    fn set_small_caps(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        self.update(py, |properties| properties.set_small_caps(value))
     }
 
     #[getter]
@@ -1457,6 +1676,32 @@ impl PyFont {
         let current = font_color_at(py, &self.presentation, &self.path)?;
         let color = color.map(|rgb| crate::dml::with_rgb(current, rgb));
         write_font_color(py, &self.presentation, &self.path, color)
+    }
+
+    #[getter]
+    fn highlight(&self, py: Python<'_>) -> PyResult<Py<crate::dml::PyColorFormat>> {
+        self.validate(py)?;
+        Py::new(
+            py,
+            crate::dml::PyColorFormat::font_highlight(
+                self.presentation.clone_ref(py),
+                self.path.clone(),
+            ),
+        )
+    }
+
+    #[setter]
+    fn set_highlight(&self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        let color = value
+            .filter(|value| !value.is_none())
+            .map(|value| {
+                let (red, green, blue) = oxml_py_support::rgb_channels(value, "Font.highlight")?;
+                Ok::<_, PyErr>(RgbColor::new(red, green, blue))
+            })
+            .transpose()?;
+        let current = font_highlight_at(py, &self.presentation, &self.path)?;
+        let color = color.map(|rgb| crate::dml::with_rgb(current, rgb));
+        write_font_highlight(py, &self.presentation, &self.path, color)
     }
 
     #[getter]

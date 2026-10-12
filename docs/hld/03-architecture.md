@@ -1,5 +1,23 @@
 # 03, Architecture
 
+## Owned publication and causal paths
+
+`oxml-py-support` owns captured path authority, owner scopes and prepared
+revision publication. It does not own native presentation objects or keep a
+second handle registry. Word bindings capture a conservative document scope.
+Presentation bindings capture concrete slide, shape, table-grid and text-owner
+scopes, then locate retained physical owners in their current source graph.
+Manual native snapshot constructors remain unbound and visible snapshot
+values retain their existing equality semantics.
+
+Bindings stage a native candidate and validate all conversions, source graph
+constraints and returned Python allocations before committing prepared scopes.
+The final native assignment cannot fail after publication. A rejected edit or
+an actual no-op leaves source, scope generations and live handles unchanged.
+First retirement records the exact public operation label for later stale
+errors. The native facades retain ownership of relationships, geometry and
+package authoring, while bindings reuse that publication protocol.
+
 ## Three families, one workspace
 
 ```

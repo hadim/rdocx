@@ -351,6 +351,21 @@ fn print_json(payload: Value) -> Result<()> {
     Ok(())
 }
 
+fn write_render_diagnostics(diagnostics: &[oxml_layout::Diagnostic]) -> Result<()> {
+    let mut stderr = io::stderr().lock();
+    for diagnostic in diagnostics {
+        let message = &diagnostic.message;
+        if message.starts_with("unresolved member ")
+            || (message.starts_with("slide ") && message.contains(" incomplete: "))
+        {
+            writeln!(stderr, "Warning: {message}")?;
+        } else {
+            writeln!(stderr, "{message}")?;
+        }
+    }
+    Ok(())
+}
+
 pub fn convert(
     file: &Path,
     format: &str,
@@ -391,9 +406,7 @@ pub fn convert(
         "pdf" => {
             let (bytes, diagnostics) = presentation.to_pdf_with_diagnostics(&font_refs)?;
             stage_and_publish(&[(output.clone(), bytes)], force)?;
-            for diagnostic in &diagnostics {
-                eprintln!("{}", diagnostic.message);
-            }
+            write_render_diagnostics(&diagnostics)?;
             writeln!(stdout, "Written to {}", output.display())?;
         }
         "png" | "jpg" | "jpeg" | "tif" | "tiff" => {
@@ -445,9 +458,7 @@ pub fn convert(
                     }
                 }
             }
-            for diagnostic in &layout.diagnostics {
-                eprintln!("{}", diagnostic.message);
-            }
+            write_render_diagnostics(&layout.diagnostics)?;
         }
         _ => unreachable!(),
     }
@@ -659,9 +670,7 @@ pub fn render(
             }
         }
     }
-    for diagnostic in &layout.diagnostics {
-        eprintln!("{}", diagnostic.message);
-    }
+    write_render_diagnostics(&layout.diagnostics)?;
 
     Ok(())
 }

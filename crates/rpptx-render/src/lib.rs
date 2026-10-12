@@ -7,8 +7,9 @@ use std::sync::Arc;
 
 use oxml_drawing::theme::CT_OfficeStyleSheet;
 use oxml_layout::{
-    Color, DocumentMetadata, FontFile, FontManager, GroupElement, LayoutResult, MediaId, PageFrame,
-    Paint, Path, PathCommand, PathElement, Point, PositionedElement, Rect, Stroke, Transform,
+    Color, Diagnostic, DocumentMetadata, FontFile, FontManager, GroupElement, LayoutResult,
+    MediaId, PageFrame, Paint, Path, PathCommand, PathElement, Point, PositionedElement, Rect,
+    Stroke, Transform,
 };
 use rpptx_layout::{
     CropRect, ResolvedBackground, ResolvedContent, ResolvedGeometry, ResolvedImage,
@@ -309,25 +310,44 @@ fn layout_presentation_with_font_manager_inner(
     text_directions: Option<&[ResolvedSlideTextDirections]>,
 ) -> Result<LayoutResult, RenderInputError> {
     font_manager.begin_layout();
+    let mut shaping_diagnostics = Vec::new();
     let pages = (0..input.slides.len())
         .map(|index| {
-            layout_slide_with_fonts_and_text_directions(
+            layout_resolved_slide_with_diagnostics(
                 input,
-                index,
+                &input.slides[index],
+                index + 1,
                 font_manager,
                 text_directions
                     .and_then(|directions| directions.get(index))
                     .map(Vec::as_slice),
+                None,
+                &mut shaping_diagnostics,
             )
             .map_err(|error| text_layout_context(error, &format!("slide {}, ", index + 1)))
             .map(Arc::new)
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let mut diagnostics: Vec<_> = input
+    let mut diagnostics: Vec<Diagnostic> = input
         .slides
         .iter()
-        .flat_map(|slide| slide.diagnostics.iter().cloned())
+        .enumerate()
+        .flat_map(|(index, slide)| {
+            let summary = (slide.unresolved_member_count > 0).then(|| Diagnostic {
+                message: format!(
+                    "slide {} incomplete: {} unresolved members",
+                    index + 1,
+                    slide.unresolved_member_count
+                ),
+            });
+            summary.into_iter().chain(slide.diagnostics.iter().cloned())
+        })
         .collect();
+    diagnostics.extend(
+        shaping_diagnostics
+            .into_iter()
+            .map(|message| Diagnostic { message }),
+    );
     let mut layout = LayoutResult::new(
         pages,
         font_manager.all_font_data(),
@@ -472,6 +492,26 @@ pub(crate) fn layout_resolved_slide_with_fonts_text_directions_and_states(
     text_directions: Option<&[Vec<Vec<oxml_layout::TextDirection>>]>,
     shape_states: Option<&[rpptx_layout::timeline::EvaluatedShapeState]>,
 ) -> Result<PageFrame, RenderInputError> {
+    layout_resolved_slide_with_diagnostics(
+        input,
+        slide,
+        page_number,
+        font_manager,
+        text_directions,
+        shape_states,
+        &mut Vec::new(),
+    )
+}
+
+pub(crate) fn layout_resolved_slide_with_diagnostics(
+    input: &RenderInput,
+    slide: &ResolvedSlide,
+    page_number: usize,
+    font_manager: &mut FontManager,
+    text_directions: Option<&[Vec<Vec<oxml_layout::TextDirection>>]>,
+    shape_states: Option<&[rpptx_layout::timeline::EvaluatedShapeState]>,
+    diagnostics: &mut Vec<String>,
+) -> Result<PageFrame, RenderInputError> {
     let mut elements = Vec::new();
     let mut background_paint = None;
     match slide.background.as_ref() {
@@ -523,6 +563,7 @@ pub(crate) fn layout_resolved_slide_with_fonts_text_directions_and_states(
                     text_directions
                         .and_then(|directions| directions.get(shape_index))
                         .map(Vec::as_slice),
+                    diagnostics,
                 )
                 .map_err(|error| {
                     text_layout_context(
@@ -573,6 +614,7 @@ fn lower_shape(
     font_manager: &mut FontManager,
     page_number: usize,
     text_directions: Option<&[Vec<oxml_layout::TextDirection>]>,
+    diagnostics: &mut Vec<String>,
 ) -> Result<PositionedElement, RenderInputError> {
     let paths = if matches!(shape.content, ResolvedContent::Table(_)) {
         Vec::new()
@@ -615,6 +657,7 @@ fn lower_shape(
                 text_directions.unwrap_or(&[]),
                 1.0,
             )?;
+            diagnostics.extend(stacked.diagnostics.iter().cloned());
             debug_assert!(stacked.width.is_finite() && stacked.height.is_finite());
             text_children = if let Some(transform) = text_transform {
                 vec![PositionedElement::Group(GroupElement {
@@ -634,6 +677,7 @@ fn lower_shape(
                 font_manager,
                 page_number,
                 text_directions.unwrap_or(&[]),
+                diagnostics,
             )?);
         }
         ResolvedContent::Group(group) => {
@@ -715,6 +759,7 @@ fn lower_table(
     font_manager: &mut FontManager,
     page_number: usize,
     text_directions: &[Vec<oxml_layout::TextDirection>],
+    diagnostics: &mut Vec<String>,
 ) -> Result<Vec<PositionedElement>, RenderInputError> {
     let mut physical_column_widths = table.column_widths.clone();
     if table.right_to_left {
@@ -804,6 +849,7 @@ fn lower_table(
                 .map_err(|error| RenderInputError::TextLayout {
                     detail: error.to_string(),
                 })?;
+                diagnostics.extend(stacked.diagnostics.iter().cloned());
                 if let Some(transform) = transform {
                     texts.push(PositionedElement::Group(GroupElement {
                         transform,
@@ -1697,8 +1743,7 @@ fn shape_transform(shape: &ResolvedShape) -> Transform {
         f: shape.bounds.y,
         ..Transform::IDENTITY
     };
-    rotation
-        .then(flip)
+    flip.then(rotation)
         .then(translation)
         .then(shape.group_transform)
 }
@@ -2255,6 +2300,7 @@ mod tests {
 
     fn slide(size: (f64, f64), shapes: Vec<ResolvedShape>) -> ResolvedSlide {
         ResolvedSlide {
+            unresolved_member_count: 0,
             size,
             background: None,
             shapes,
@@ -2500,13 +2546,24 @@ mod tests {
             .expect("lower nested shape");
         let transform = only_group(&page.elements[0]).transform;
 
+        // Flip around the local width before the 90-degree centre rotation.
+        // (0,0) -> (8,0) -> (6,6) -> (16,26) -> (37,85).
+        // (8,4) -> (0,4) -> (2,-2) -> (12,18) -> (29,61).
         assert_point_close(
             transform.apply(Point { x: 0.0, y: 0.0 }),
-            Point { x: 29.0, y: 61.0 },
+            Point { x: 37.0, y: 85.0 },
         );
         assert_point_close(
             transform.apply(Point { x: 8.0, y: 4.0 }),
-            Point { x: 37.0, y: 85.0 },
+            Point { x: 29.0, y: 61.0 },
+        );
+        assert_point_close(
+            transform.apply(Point { x: 8.0, y: 0.0 }),
+            Point { x: 37.0, y: 61.0 },
+        );
+        assert_point_close(
+            transform.apply(Point { x: 0.0, y: 4.0 }),
+            Point { x: 29.0, y: 85.0 },
         );
     }
 
@@ -3645,6 +3702,155 @@ mod tests {
         );
     }
 
+    fn fx206_caps_highlight_fixture(shape: &str) -> LayoutResult {
+        const P_NS: &str = "http://schemas.openxmlformats.org/presentationml/2006/main";
+        const A_NS: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+
+        let slide = CT_Slide::from_xml(
+            format!(
+                "<p:sld xmlns:p=\"{P_NS}\" xmlns:a=\"{A_NS}\"><p:cSld><p:spTree><p:nvGrpSpPr/><p:grpSpPr/>{shape}</p:spTree></p:cSld></p:sld>"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let empty_tree = "<p:spTree><p:nvGrpSpPr/><p:grpSpPr/></p:spTree>";
+        let layout = CT_SlideLayout::from_xml(
+            format!(
+                "<p:sldLayout xmlns:p=\"{P_NS}\" xmlns:a=\"{A_NS}\"><p:cSld>{empty_tree}</p:cSld></p:sldLayout>"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let master = CT_SlideMaster::from_xml(
+            format!(
+                "<p:sldMaster xmlns:p=\"{P_NS}\" xmlns:a=\"{A_NS}\"><p:cSld>{empty_tree}</p:cSld><p:clrMap bg1=\"lt1\" tx1=\"dk1\" bg2=\"lt2\" tx2=\"dk2\" accent1=\"accent1\" accent2=\"accent2\" accent3=\"accent3\" accent4=\"accent4\" accent5=\"accent5\" accent6=\"accent6\" hlink=\"hlink\" folHlink=\"folHlink\"/></p:sldMaster>"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let theme = CT_OfficeStyleSheet::office_default();
+        let default_text_style = CT_TextListStyle::default();
+        let media = rpptx_layout::ScopedMediaIds::default();
+        let hyperlinks = rpptx_layout::ScopedHyperlinkTargets::default();
+        let charts = rpptx_layout::ScopedChartResources::default();
+        let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
+        let (resolved, directions) = ResolveCtx::new(
+            &theme,
+            ColorMap::default(),
+            &master,
+            &layout,
+            &slide,
+            &default_text_style,
+        )
+        .resolve_slide_with_chart_resources_and_text_directions(
+            (720.0, 144.0),
+            &media,
+            &hyperlinks,
+            &charts,
+            &mut fonts,
+        )
+        .unwrap();
+        layout_presentation_with_font_manager_and_text_directions(
+            &render_input(vec![resolved]),
+            fonts,
+            &[directions],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn fx206_highlight_reaches_paint_with_alpha_and_raised_baseline() {
+        let rendered = fx206_caps_highlight_fixture(
+            r#"<p:sp><p:nvSpPr><p:cNvPr id="1" name="caps-highlight"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="9144000" cy="1828800"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr sz="2400" baseline="25000"><a:highlight><a:srgbClr val="FFFF00"><a:alpha val="50000"/></a:srgbClr></a:highlight><a:latin typeface="Carlito"/></a:rPr><a:t>Highlight</a:t></a:r></a:p></p:txBody></p:sp>"#,
+        );
+        let mut rectangles = Vec::new();
+        let mut runs = Vec::new();
+        walk(&rendered.pages[0].elements, &mut |element, _| {
+            if let PositionedElement::FilledRect { rect, color } = element {
+                rectangles.push((*rect, *color));
+            }
+            if let PositionedElement::Text(run) = element {
+                runs.push(run.clone());
+            }
+        });
+        assert_eq!(runs.len(), 1, "ordinary run is a real paint precondition");
+        assert_eq!(
+            rectangles.len(),
+            1,
+            "qualified highlight must paint exactly once"
+        );
+        let rect = &rectangles[0];
+        assert_eq!(
+            rect.1,
+            Color {
+                r: 1.0,
+                g: 1.0,
+                b: 0.0,
+                a: 128.0 / 255.0
+            }
+        );
+        assert!(rect.0.width > 0.0 && rect.0.height > 0.0);
+        assert!(rect.0.y < runs[0].origin.y);
+        let png = oxml_pdf::render_page_to_png(&rendered, 0, 144.0).unwrap();
+        let pixmap = tiny_skia::Pixmap::decode_png(&png).unwrap();
+        let yellow = pixmap
+            .pixels()
+            .iter()
+            .filter(|pixel| {
+                pixel.red() > 240 && pixel.green() > 240 && (110..=145).contains(&pixel.blue())
+            })
+            .count();
+        assert!(
+            yellow > 100,
+            "actual alpha-composited highlight pixels behind the glyph run"
+        );
+    }
+
+    #[test]
+    fn fx206_smallcaps_fallback_reaches_rich_paint_and_original_logical_clusters() {
+        let rendered = fx206_caps_highlight_fixture(
+            r#"<p:sp><p:nvSpPr><p:cNvPr id="1" name="caps-highlight"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="9144000" cy="1828800"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr sz="2400" cap="small"><a:latin typeface="Carlito"/></a:rPr><a:t>aBß</a:t></a:r></a:p></p:txBody></p:sp>"#,
+        );
+        let ordinary = fx206_caps_highlight_fixture(
+            r#"<p:sp><p:nvSpPr><p:cNvPr id="1" name="caps-highlight"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="9144000" cy="1828800"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr sz="2400" ><a:latin typeface="Carlito"/></a:rPr><a:t>aBß</a:t></a:r></a:p></p:txBody></p:sp>"#,
+        );
+        let mut rich = Vec::new();
+        walk(&rendered.pages[0].elements, &mut |element, _| {
+            if let PositionedElement::MultilingualText(run) = element {
+                rich.push(run.clone());
+            }
+        });
+        assert!(
+            !rich.is_empty(),
+            "caps request must survive the rich shaping path"
+        );
+        assert_eq!(
+            rich.iter()
+                .map(|run| run.logical_text.as_str())
+                .collect::<String>(),
+            "aBß"
+        );
+        assert!(rich.iter().any(|run| (run.font_size - 19.2).abs() < 1e-9));
+        assert!(rich.iter().any(|run| (run.font_size - 24.0).abs() < 1e-9));
+        assert!(rich.iter().any(|run| run.logical_text == "ß"
+            && run.glyph_ids.len() == 2
+            && run.clusters.len() == 1
+            && run.clusters[0].char_start == 0
+            && run.clusters[0].char_end == 1));
+        assert!(
+            rendered
+                .diagnostics
+                .iter()
+                .any(|item| item.message.contains("80 percent uppercase fallback"))
+        );
+        let actual = oxml_pdf::render_page_to_png(&rendered, 0, 144.0).unwrap();
+        let no_caps = oxml_pdf::render_page_to_png(&ordinary, 0, 144.0).unwrap();
+        assert_ne!(
+            actual, no_caps,
+            "actual painted geometry differs from ordinary mixed case"
+        );
+    }
+
     #[test]
     fn resolved_rtl_numeric_forced_breaks_reach_rich_line_layout() {
         const P_NS: &str = "http://schemas.openxmlformats.org/presentationml/2006/main";
@@ -4158,5 +4364,96 @@ mod tests {
         }
         assert!(manifest.contains("version = \"0.14.0\""));
         assert!(manifest.contains("publish = true"));
+    }
+    #[test]
+    fn fx206_recovery_paints_transformed_outline_and_valid_sibling_order() {
+        let red = shape(
+            Rect {
+                x: 30.0,
+                y: 10.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            ResolvedGeometry::Rectangle,
+            Some(Paint::Solid(Color::from_hex("FF0000"))),
+            None,
+        );
+        let mut failed = shape(
+            Rect {
+                x: 10.0,
+                y: 20.0,
+                width: 10.0,
+                height: 10.0,
+            },
+            ResolvedGeometry::BoundsFallback,
+            None,
+            None,
+        );
+        failed.group_transform = Transform {
+            a: 0.0,
+            b: 1.0,
+            c: -1.0,
+            d: 0.0,
+            e: 50.0,
+            f: 0.0,
+        };
+        failed.unsupported = Some("unresolved shape");
+        let green = shape(
+            Rect {
+                x: 30.0,
+                y: 10.0,
+                width: 3.0,
+                height: 10.0,
+            },
+            ResolvedGeometry::Rectangle,
+            Some(Paint::Solid(Color::from_hex("00FF00"))),
+            None,
+        );
+        let mut resolved = slide((60.0, 40.0), vec![red, failed, green]);
+        resolved.unresolved_member_count = 1;
+        resolved.diagnostics.push(Diagnostic {
+            message:
+                "unresolved member slide shape 2 \"bad\" retained as bounds: cannot resolve colour"
+                    .to_owned(),
+        });
+        let input = render_input(vec![resolved]);
+        let layout = layout_presentation(&input).unwrap();
+        assert!(
+            layout.diagnostics[0]
+                .message
+                .contains("slide 1 incomplete: 1 unresolved members")
+        );
+        let png = oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap();
+        let pixmap = tiny_skia::Pixmap::decode_png(&png).unwrap();
+        assert_eq!(rgb_at(&pixmap, 31, 15), (0, 255, 0));
+        assert_eq!(rgb_at(&pixmap, 35, 15), (255, 0, 0));
+        // Independent rotation maps (10,20)..(20,30) to x20..30,y10..20.
+        let (r, g, b) = rgb_at(&pixmap, 25, 10);
+        assert!(
+            r < 160 && g < 160 && b < 160,
+            "rotated outline not at the analytic edge"
+        );
+        assert_eq!(rgb_at(&pixmap, 25, 15), (255, 255, 255));
+        assert!(
+            oxml_pdf::render_page_to_png(&layout, 0, 0.0).is_none(),
+            "backend refusal must remain fatal"
+        );
+    }
+
+    #[test]
+    fn fx206_recovery_omission_reports_count_without_fabricating_paint() {
+        let mut resolved = slide((20.0, 20.0), Vec::new());
+        resolved.unresolved_member_count = 1;
+        resolved.diagnostics.push(Diagnostic { message: "unresolved member slide shape 9 \"missing\" omitted without trustworthy finite bounds: bad style".to_owned() });
+        let layout = layout_presentation(&render_input(vec![resolved])).unwrap();
+        let png = oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap();
+        let pixmap = tiny_skia::Pixmap::decode_png(&png).unwrap();
+        assert_eq!(rgb_at(&pixmap, 10, 10), (255, 255, 255));
+        assert_eq!(layout.diagnostics.len(), 2);
+        assert!(
+            layout.diagnostics[0]
+                .message
+                .contains("1 unresolved members")
+        );
     }
 }

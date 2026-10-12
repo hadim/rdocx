@@ -8,9 +8,7 @@ use rpptx_layout::timeline::{EvaluatedTransition, ResolvedTimelineSlide};
 use rpptx_layout::{ResolvedGeometry, ResolvedShape, ResolvedSlideTextDirections};
 use rpptx_oxml::timing::TransitionEffect;
 
-use crate::{
-    RenderInput, RenderInputError, layout_resolved_slide_with_fonts_text_directions_and_states,
-};
+use crate::{RenderInput, RenderInputError, layout_resolved_slide_with_diagnostics};
 
 /// One composed page plus stable approximation diagnostics.
 #[derive(Clone, Debug)]
@@ -47,20 +45,56 @@ pub fn layout_timeline_slide_with_font_manager(
     text_directions: Option<&ResolvedSlideTextDirections>,
     fonts: &mut FontManager,
 ) -> Result<PageFrame, RenderInputError> {
+    layout_timeline_slide_with_diagnostics(input, index, timeline, text_directions, fonts)
+        .map(|frame| frame.page)
+}
+
+/// Facade hook retaining text approximation diagnostics alongside the evaluated page.
+#[doc(hidden)]
+pub fn layout_timeline_slide_with_diagnostics(
+    input: &RenderInput,
+    index: usize,
+    timeline: &ResolvedTimelineSlide,
+    text_directions: Option<&ResolvedSlideTextDirections>,
+    fonts: &mut FontManager,
+) -> Result<TimelinePageFrame, RenderInputError> {
     if index >= input.slides.len() {
         return Err(RenderInputError::SlideIndexOutOfBounds {
             index,
             slide_count: input.slides.len(),
         });
     }
-    layout_resolved_slide_with_fonts_text_directions_and_states(
+    // Owner facts lead shaping diagnostics in the same order as static rendering.
+    let mut owner_diagnostics = Vec::new();
+    if timeline.slide.unresolved_member_count > 0 {
+        owner_diagnostics.push(Diagnostic {
+            message: format!(
+                "slide {} incomplete: {} unresolved members",
+                index + 1,
+                timeline.slide.unresolved_member_count
+            ),
+        });
+    }
+    owner_diagnostics.extend(timeline.slide.diagnostics.iter().cloned());
+    let mut diagnostics = Vec::new();
+    let page = layout_resolved_slide_with_diagnostics(
         input,
         &timeline.slide,
         index + 1,
         fonts,
         text_directions.map(Vec::as_slice),
         Some(&timeline.shape_states),
-    )
+        &mut diagnostics,
+    )?;
+    owner_diagnostics.extend(
+        diagnostics
+            .into_iter()
+            .map(|message| Diagnostic { message }),
+    );
+    Ok(TimelinePageFrame {
+        page,
+        diagnostics: owner_diagnostics,
+    })
 }
 
 /// Compose an evaluated incoming page with an optional outgoing page.
@@ -1057,6 +1091,7 @@ mod tests {
     fn timeline_slide(name: &str, x: f64) -> ResolvedTimelineSlide {
         ResolvedTimelineSlide {
             slide: ResolvedSlide {
+                unresolved_member_count: 0,
                 size: (100.0, 50.0),
                 background: None,
                 shapes: vec![ResolvedShape {
@@ -1127,5 +1162,75 @@ mod tests {
             children: Vec::new(),
         }));
         page
+    }
+
+    #[test]
+    fn fx206_recovery_timeline_companion_reports_count_and_owner_order_once() {
+        for placed in [false, true] {
+            let mut timeline = timeline_slide("failed", 0.0);
+            if placed {
+                timeline.slide.shapes[0].geometry = ResolvedGeometry::BoundsFallback;
+                timeline.slide.shapes[0].unsupported = Some("unresolved shape");
+            } else {
+                timeline.slide.shapes.clear();
+                timeline.identities.clear();
+                timeline.shape_states.clear();
+            }
+            timeline.slide.unresolved_member_count = 1;
+            timeline.slide.diagnostics = vec![
+                oxml_layout::Diagnostic {
+                    message: "valid sibling diagnostic".into(),
+                },
+                oxml_layout::Diagnostic {
+                    message: "unresolved member slide shape 2 \"failed\"".into(),
+                },
+            ];
+            let original = timeline.slide.diagnostics.clone();
+            let input = crate::RenderInput {
+                slides: vec![timeline.slide.clone(), timeline.slide.clone()],
+                media: std::collections::HashMap::new(),
+                fonts: Vec::new(),
+                metadata: None,
+            };
+            let mut fonts = oxml_layout::FontManager::new_deterministic().unwrap();
+            let frame = super::layout_timeline_slide_with_diagnostics(
+                &input, 1, &timeline, None, &mut fonts,
+            )
+            .unwrap();
+            assert_eq!(
+                frame
+                    .diagnostics
+                    .iter()
+                    .map(|d| d.message.as_str())
+                    .collect::<Vec<_>>(),
+                vec![
+                    "slide 2 incomplete: 1 unresolved members",
+                    "valid sibling diagnostic",
+                    "unresolved member slide shape 2 \"failed\""
+                ]
+            );
+            assert_eq!(timeline.slide.diagnostics, original);
+            assert_eq!(frame.page.elements.is_empty(), !placed);
+            assert!(
+                super::layout_timeline_slide_with_diagnostics(
+                    &input, 2, &timeline, None, &mut fonts
+                )
+                .is_err()
+            );
+        }
+        let timeline = timeline_slide("valid", 0.0);
+        let input = crate::RenderInput {
+            slides: vec![timeline.slide.clone()],
+            media: std::collections::HashMap::new(),
+            fonts: Vec::new(),
+            metadata: None,
+        };
+        let mut fonts = oxml_layout::FontManager::new_deterministic().unwrap();
+        assert!(
+            super::layout_timeline_slide_with_diagnostics(&input, 0, &timeline, None, &mut fonts)
+                .unwrap()
+                .diagnostics
+                .is_empty()
+        );
     }
 }

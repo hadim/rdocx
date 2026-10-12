@@ -934,6 +934,36 @@ Each included `p:txBody` contributes run and field text in document order.
 Empty bodies are skipped, and multiple nonempty body placeholders are joined
 with a newline.
 
+## Checked shape and relationship authoring
+
+Native shape handles retain their physical owner through group relocation.
+Grouping preserves contiguous typed selection order and interleaved opaque
+members. Identity-map ungrouping moves every retained raw child and closes the
+ancestor namespaces needed by promoted roots. Supported rotation, flips and
+scale compose before checked decomposition. Nonrepresentable shear, singular
+mapping or geometry-bearing opaque composition refuses atomically. Owner-only
+metadata is preserved where its legal source owner remains representable.
+Align and distribute use checked transformed bounds and signed gaps. Glue
+endpoints follow current target sites after move, regroup and deletion.
+
+Picture-placeholder insertion replaces the selected shape with a picture under
+the same physical identity, id, name, placeholder metadata and z-order. Its
+geometry is an explicit rectangle using the selected inherited or direct
+transform, with centred crop-to-fill from the actual image dimensions. The
+saved picture has valid schema geometry, owned image relationships and source
+metadata. Unknown properties that cannot legally move into a picture refuse
+before publication. Imported names remain unchanged, while generated names
+use placeholder type, orientation, size and collision rules.
+
+Run slide links use `ppaction://hlinksldjump` and owned slide relationships.
+Target lookup uses the current same-presentation slide owner. Clear and
+retarget preserve external-address semantics, opaque click payload and child
+order. Relationship pruning removes only unused owned references, including
+sound-only click relationships, and retains references shared elsewhere. Cell
+run assignments refuse before allocating slide relationships. Foreign owner,
+stale path, malformed action or source-namespace failure leaves the package
+and handle state unchanged.
+
 ## The shape tree
 
 ```

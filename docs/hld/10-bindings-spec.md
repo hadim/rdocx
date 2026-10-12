@@ -26,9 +26,9 @@ References are out, categorically. Four options were weighed:
 ```rust
 pub enum PathSeg { Slide(usize), Shape(usize), Body(usize), Row(usize),
                    Cell(usize), Para(usize), Run(usize) }
-pub struct ContentPath { pub segs: SmallVec<[PathSeg; 5]>, pub revision: u64,
-                         pub text_revision: Option<u64> }
-pub struct RevisionCounter { current: u64 }
+// ContentPath retains public path/revision fields and private captured authority.
+// RevisionCounter owns prepared scope generations and first retirement causes.
+// Use existing constructors or counter capture methods, not struct literals.
 
 #[pyclass(name = "Document")]
 struct PyDocument { inner: rdocx::Document, revision: RevisionCounter }
@@ -57,25 +57,21 @@ An index path addresses a **position**, not an object. After
 to be paragraph 4. python-docx does not have this problem because it holds an
 lxml element pointer that follows the element.
 
-v0.1 therefore carries a **document revision counter**, bumped after every
-successful structural mutation and captured by every handle at construction.
-Failed and value-only mutations do not bump it. The shared crate reports a
-concrete Rust `StaleElementError` on mismatch. The package binding maps that
-domain error to its Python exception with the same revisions and message:
+Captured paths carry owner authority and the first causal retirement, not
+only a numeric revision. Word retains conservative document-wide structural
+invalidation. Presentation scopes bind physical slides, shapes, grids and text
+owners. Unrelated edits and supported owner relocation retain handles, while a
+removed and later reused numeric shape id cannot resurrect an old handle.
+Stale errors name the actual public operation and recovery path. Foreign
+presentation identity is checked before stale lookup or mutation.
 
-```
-rdocx.StaleElementError: paragraph handle was created at document revision 4,
-but the document is now at revision 5 (a structural change invalidated it).
-Re-fetch it with doc.paragraphs[i].
-```
-
-**Loud failure beats silently wrong data.** There are no snapshot accessors that
-keep working after invalidation.
-
-v0.2 upgrades to lazily-assigned stable ids backed by `w14:paraId`, which OOXML
-already defines for exactly this purpose, so they round-trip to disk and improve
-DOCX fidelity as a side effect. Then a handle survives unrelated removals and
-matches python-docx semantics, with no API change.
+Native staged edits finish validation, checked scope preparation and every
+returned Python object allocation before committing and publishing the
+candidate. `capture_prepared` binds returned handles to the successor state.
+Failures and actual no-ops publish nothing. Manual unbound native snapshots
+cannot acquire authority from a matching numeric position. Private authority
+changes pre-1.0 struct-literal source compatibility, while existing constructors
+remain available. No stable-id-on-disk or generic handle registry is implied.
 
 ### Two supporting decisions
 
@@ -526,9 +522,10 @@ opens in-memory package bytes, as the rdocx `Document` does. Lazy layouts,
 slides, shapes, placeholders, text frames, paragraphs, runs, columns and cells
 store only a presentation reference and `ContentPath`. The bounded
 source-compatibility surface is the seven python-pptx 1.0.2 Getting Started
-workflows. They change the import namespace and re-fetch through the public
-path after each structural write, because strict global revision invalidation
-intentionally stales every pre-write handle and collection. Pure-Python
+workflows. They change the import namespace. Captured collections and items
+resolve current owners after supported insertion or relocation. Retirement
+occurs at the affected structural or text owner, with an explicit stale error
+when that owner is no longer valid. Pure-Python
 `Length`, `Inches`, `Pt`, `RGBColor`, and the `MSO_SHAPE`, `MSO_SHAPE_TYPE`,
 `MSO_CONNECTOR_TYPE`, and `MSO_FILL_TYPE` enumerations keep native inheritance
 outside the limited ABI. `MSO_SHAPE` carries the 181 python-pptx
@@ -677,10 +674,13 @@ A group's `shapes` collection has the same `add_textbox`, `add_shape`,
 native `ShapesMut`, so groups nest to any depth. A member takes a `p:cNvPr` id
 unused across the slide, and the group, then every group enclosing it, is refit
 to the union of its members as python-pptx does, so members of a new group keep
-their slide coordinates. An addition to a group advances the revision once,
-like any addition, so the group handle and its collection go stale and the
-returned member is captured at the new revision. The next addition re-fetches
-the group, for example through `prs.slides[0].shapes[0].shapes`.
+their slide coordinates. An addition stages a cloned presentation and advances
+the revision once after native validation, checked owner preparation and
+allocation of the returned Python shape. Existing physical owners retain their
+authority, including the group, its collection and its existing members. The
+returned member is captured against the prepared successor before publication.
+The same group collection can make the next addition without being re-fetched.
+An error leaves native state and owner generations unchanged.
 A group added inside a group has the zero `a:xfrm` python-pptx writes, so its
 `left`, `top`, `width`, and `height` read zero until its first member arrives,
 while a group added to a slide's own shapes reads `None`. `add_group_shape` has
@@ -720,22 +720,15 @@ Missing-body reads remain explicit, while successful text authoring may create
 the body. Counted replacement preflights a missing body so zero matches, count
 mismatch and invalid empty placeholders preserve source and generations.
 
-PyPresentation owns text_revisions. Cell frames and all nested text handles
-inherit ContentPath.text_revision=Some(current cell-text generation). Ordinary
-shape captures retain None until their separate ancestor partition is added.
-Existing global revision validation runs first, then optional text validation.
-Cell.text, frame/paragraph text, paragraph/run addition and successful
-merge/split advance only this cell-text generation. Nested handles in other
-cells also retire conservatively. Run text and formatting edits retain both
-generations. Failed mutations and no-match replacement retain both. Stale
-messages identify cell-text topology and the fresh-cell retrieval path. Cell
-hyperlink reads resolve through the owning cell body, but assignment refuses
-before any slide relationship mutation. Actual cell vertical placement through
-a:tcPr anchor remains distinct from TextFrame bodyPr vertical_anchor.
-
-The optional public ContentPath field changes external struct-literal source
-compatibility before1.0. Existing constructors retain their signatures and
-initialize it to None. Native cell accessors are additive API changes.
+Cell frames and descendants capture the owning table-grid and cell-text
+scopes. Text replacement, merge/split and paragraph/run topology edits retire
+affected descendants while retaining the cell/table and unrelated owners where
+the operation preserves them. Formatting and run-value edits preserve text
+identity. Failed or no-match edits do not retire scopes. `Cell.vertical_anchor`
+reads and writes the direct `a:tcPr` anchor, independently of
+`Cell.text_frame.vertical_anchor` on `a:bodyPr`. Both retain physical text
+handles. Cell hyperlink reads use the owning body, while assigning an internal
+slide target refuses before relationship mutation.
 
 python-pptx has no public API to add or remove table rows and columns, and its
 users call `table._tbl.add_tr(height)`, which appends a row without cell
@@ -811,9 +804,10 @@ place and do not advance the revision. `rpptx` and `rpptx.enum.text` export
   a preserved picture bullet. `False` writes `a:buNone`, `None` removes the
   direct bullet, and `True` raises because automatic numbering is not
   writable yet.
-- `Paragraph.add_run(text="")` appends a run, advances the revision once, and
-  returns the new run captured at that revision. The paragraph handle it was
-  called on becomes stale, like the text frame after `add_paragraph`.
+- `Paragraph.add_run(text="")` stages an append and allocates the new returned
+  run against prepared successor scopes before publication. The owning
+  paragraph and text frame remain live, while prior affected run descendants
+  retire with the exact public operation label.
 - `Font` reads and writes the same properties for a run and for a
   paragraph's default run properties: `name` (`a:latin` typeface, keeping its
   other attributes), `size` (1 to 4000 points, as python-pptx validates),
@@ -866,14 +860,22 @@ and `TextFrame.try_replace_text(placeholder, replacement, *, expect=None)`
 keep that contract over a narrower scope. The slide form covers the slide's
 shapes, groups and table cells, plus its speaker notes unless `notes` is
 false, and leaves every other slide untouched. The text frame form covers that
-frame only. The count, the error and its message, the unchanged presentation
-and revision after a mismatch, and the single revision advance are those of
-the presentation form, so a replacement that changes something invalidates
-every held handle, including the slide or frame it was called on. Neither
-form clones the presentation. The slide form works on a copy of that slide
-and its notes and checks that they serialize. The frame form works on a copy
-of the text body when `expect` is given, in place otherwise, and serializes
-nothing, because replacing run text cannot make a body fail to serialize.
+frame only. Both binding routes stage a cloned presentation before native
+replacement and finish checked owner preparation before publishing it. The
+count, error and message, unchanged presentation and revision after an
+`expect` mismatch, and single revision advance for a nonzero count retain the
+presentation form's contract. Zero matches publish nothing.
+
+The slide route uses `Slide.try_replace_text` as the retirement cause. Only
+physical owners whose accepted native text changed receive a new descendant
+text generation. The frame route uses `TextFrame.try_replace_text` and retires
+the selected owner's descendant text generation when its count is nonzero.
+Affected paragraph, run, font and hyperlink descendants must be re-fetched.
+The owning slide, shape, cell and frame handles remain valid, as do unrelated
+physical owners and their descendants. Neither route performs global
+presentation invalidation or publishes an in-place edit before validation.
+A cell with no text body returns zero, or raises the same count-mismatch error
+for a nonzero `expect`, without creating a body or retiring an owner.
 
 `Presentation.validate()` runs the native `validate` with the GIL released and
 returns a tuple of frozen `ValidationIssue` snapshots in native order. Each
@@ -899,8 +901,8 @@ A `Slide` exposes optional speaker-note text as a readable and writable
 property. Assigning it on a slide without notes creates the notes slide, and
 the notes master when the deck has none, through
 `Presentation::set_notes_text`. A successful notes assignment publishes the
-native staged mutation, advances the global revision once, and makes pre-write
-handles stale. A rejected assignment leaves package bytes and revisions
+native staged mutation through its checked owner publication. Affected notes
+owners retire while unrelated slide and shape owners remain live. A rejected assignment leaves package bytes and revisions
 unchanged. A `Slide` also exposes an ordered tuple of frozen `Comment`
 snapshots. Each comment contains an ordered tuple of frozen `CommentReply`
 snapshots, and the presentation exposes an ordered tuple of frozen
@@ -911,9 +913,27 @@ Comment and reply moves retain native final-position semantics.
 id as unknown. `Slide.remove_comment(comment_id)` removes a thread with its
 replies, or one reply. Both use the native staged operations of
 `rpptx comment resolve` and `remove`. A successful
-collaboration operation advances the global revision once. Constructor or
-native validation failure publishes no candidate and leaves existing handles
-valid.
+collaboration operation publishes its affected owner scopes once. Constructor
+or native validation failure publishes no candidate and leaves existing
+handles valid.
+
+### Checked presentation surfaces
+
+`Shape` exposes title, alternative text, decorative state and direct flips.
+`ShapeCollection.group`, `Shape.ungroup`, `align` and `distribute` stage selected
+physical owners and preallocate returned handles before publication. Connector
+endpoint methods validate actual connection sites and current target owners.
+`Shape.insert_picture(image_file)` fills a picture placeholder under its
+existing identity with checked crop-to-fill. Invalid image or unrepresentable
+source metadata leaves bytes and every handle valid. Generated placeholder
+names follow native type/orientation/collision rules, without renaming imports.
+
+`Run.hyperlink.target_slide` gets, sets and clears same-presentation slide
+jumps under checked relationship ownership. External addresses and action-only
+clicks retain their distinct semantics. A live `Font.highlight` colour view
+shares the RGB/theme/brightness contract and refuses destructive unknown
+transform edits. `Font.small_caps` and `Font.all_caps` select mutually exclusive
+direct modes. These getter reads create no owner nodes or scope generations.
 
 ## Native Word facade stability
 

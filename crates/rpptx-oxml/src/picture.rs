@@ -12,9 +12,10 @@ use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::namespace::{
-    FIXED_SHAPE_TREE_PREFIXES, MC_NS, NamespaceBindings, P_NS, R_NS, non_visual_drawing_id,
-    non_visual_drawing_name, root_attributes, self_contained_attributes,
-    set_non_visual_drawing_name,
+    FIXED_SHAPE_TREE_PREFIXES, MC_NS, NamespaceBindings, P_NS, R_NS, accessibility_parent_bindings,
+    non_visual_drawing_decorative, non_visual_drawing_id, non_visual_drawing_name,
+    non_visual_drawing_text, root_attributes, self_contained_attributes,
+    set_non_visual_drawing_decorative, set_non_visual_drawing_name, set_non_visual_drawing_text,
 };
 use crate::placeholder::{ApplicationProperties, CT_Placeholder, parse_application_properties};
 
@@ -229,6 +230,48 @@ impl CT_Picture {
         };
         *self = Self::from_xml(&rewritten)?;
         Ok(())
+    }
+
+    /// Returns the direct accessibility description, including an explicit empty value.
+    pub fn alt_text(&self) -> Option<String> {
+        non_visual_drawing_text(&self.raw.non_visual_drawing_properties, "descr")
+    }
+
+    /// Returns the direct accessibility title.
+    pub fn title(&self) -> Option<String> {
+        non_visual_drawing_text(&self.raw.non_visual_drawing_properties, "title")
+    }
+
+    /// Replaces or clears the direct accessibility description.
+    pub fn set_alt_text(&mut self, text: Option<&str>) -> Result<()> {
+        set_non_visual_drawing_text(&mut self.raw.non_visual_drawing_properties, "descr", text)
+    }
+
+    /// Replaces or clears the direct accessibility title.
+    pub fn set_title(&mut self, text: Option<&str>) -> Result<()> {
+        set_non_visual_drawing_text(&mut self.raw.non_visual_drawing_properties, "title", text)
+    }
+
+    /// Returns the qualified decorative flag without promoting defaults.
+    pub fn decorative(&self) -> bool {
+        let bindings = accessibility_parent_bindings(
+            &self.raw.raw_attributes,
+            &self.raw.non_visual_attributes,
+        );
+        non_visual_drawing_decorative(&self.raw.non_visual_drawing_properties, &bindings)
+    }
+
+    /// Changes only the qualified decorative flag, retaining unrelated extensions.
+    pub fn set_decorative(&mut self, decorative: bool) -> Result<()> {
+        let bindings = accessibility_parent_bindings(
+            &self.raw.raw_attributes,
+            &self.raw.non_visual_attributes,
+        );
+        set_non_visual_drawing_decorative(
+            &mut self.raw.non_visual_drawing_properties,
+            decorative,
+            &bindings,
+        )
     }
 
     /// Changes the producer-facing non-visual picture name.

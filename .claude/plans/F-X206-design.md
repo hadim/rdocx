@@ -1,12 +1,12 @@
 # F-X206, Complete PowerPoint shape authoring and live handles
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X194, F-X197
 **Issue**: 309 and 323, captured in S91-intake-issues.json on 2026-10-09
 **Prerequisites**: F-X194 and F-X197
-**Implementation**: not claimed, no source changes or new gate evidence
+**Implementation**: owned implementation on accepted provider history with source-qualified scoped evidence
 
 ## Problem
 
@@ -312,13 +312,13 @@ possible changes. No baseline movement is preapproved. Implementation requires c
 
 ## Implementation checklist
 
-- [ ] Resolve technical contracts and actual native gaps against prerequisites.
-- [ ] Approve complete issue acceptance, source claims and measured output policy.
-- [ ] Claim only after actual prerequisites and file conflicts clear.
-- [ ] Prove installed public Base regressions before production changes.
-- [ ] Implement every requested capability, stubs and existing-entrypoint tests.
-- [ ] Run scoped gates and exact applicable oracle/risk riders.
-- [ ] Obtain independent zero-defect, zero-smell review and prepare handoff.
+- [x] Resolve technical contracts and actual native gaps against prerequisites.
+- [x] Approve complete issue acceptance, source claims and measured output policy.
+- [x] Claim only after actual prerequisites and file conflicts clear.
+- [x] Prove installed public Base regressions before production changes.
+- [x] Implement every requested capability, stubs and existing-entrypoint tests.
+- [x] Run scoped gates and exact applicable oracle/risk riders.
+- [x] Obtain independent zero-defect, zero-smell review and prepare handoff.
 
 ## Open questions
 
@@ -558,3 +558,42 @@ omissions, so it cannot be adopted as proof that fallback hides no failure.
 These rendering semantics require their own labelled behavior commit and
 measured reviewed deltas, separately from the duplicated group correction,
 handle migration and authoring wrappers. Root holds the baseline lease.
+
+## Qualified deterministic package serialization deltas
+
+The two existing SmartArt and F116 package controls retain their complete
+validation, owner, rendering and reopen assertions. Their historical archives
+were reproduced from exact Git source commits and recovered both original
+whole-package SHA-256 values. The R39 comparison records every changed member.
+SmartArt changes six of sixty members and F116 changes eleven of sixty.
+Member order and ZIP writer options remain identical. All other member bytes
+remain exact.
+
+The approved native placeholder naming changes generated Title Slide names
+from Placeholder 2 and Placeholder 3 to Title 1 and Subtitle 2. Namespace
+closure adds canonical DrawingML and PresentationML bindings to text-body
+owners, and preserves the inherited diagram binding on the SmartArt shape
+tree. The modeled rtl property is emitted before the preserved defTabSz
+attribute on nine default text-style levels. Expanded XML is unchanged apart
+from the approved generated names. Text, geometry, relationships, media,
+unknown attribute values and child order remain exact. No paint baseline is
+changed by this package expectation proposal.
+
+This is an explicitly attributed serialization behavior change. The labelled
+behavior commit must retain the R39 original archives and comparison evidence.
+Proposed package expectations are SmartArt
+9f71406a506c91df5e91f75bee01c3e7d1f4487b44d99e8709c646c8368082ea
+and F116
+ef24e9477e6b3b54e1c3b27dfbda8082fce6baad5f773ebf37a2577319d2c247.
+They are retained R27 current artifacts, not newly measured R38 outputs.
+Independent review and exact current-source regeneration of both original
+selectors are required before acceptance. Historical passing tests prove
+original package identity only, not acceptance of the current implementation.
+
+## Scoped completion evidence
+
+The owned implementation preserves claim Base7b1e5ef29464e93ae30e68df1523ce09143578ff and accepted provider history22503882. Independent foundation53, presentation52 followed by picture-preservation54, HLD-preservation55, provider-composition56 and equivalent test-placement57 cover the final owned projection. Their retained findings and corrections remain separate. The original dirty union is retained as an authenticated rollback capsule and named stash. No borrowed F200 formatting implementation or baseline update is included.
+
+Original public and native Base failures, strict fifty-deck inventory, native PowerPoint and pinned LibreOffice controls, source-font small-caps and contour oracles, full104 installed cases and native SVG controls remain retained with their exact input-qualified dispositions. The affected composed-source eleven-crate native check and Clippy, fifteen deciding native controls, WASM, eight installed controls, PPT strict typing and stubtest passed. Current deterministic hash49 matches. Eight affected verified archives and their README-only measurement successors are source-authenticated. The full policy run retains two original failures and two expected skips. Both exact policy successors passed, followed by prose, adapter and diff checks. Current SmartArt and F116 controls regenerate the reviewed9f714 and ef24 expectations. The SmartArt native child passed and its later wrapper missing-key failure remains retained and independently qualified from exact raw counts, not replayed or relabelled.
+
+All scope receipts and source equivalence dispositions are indexed in the worker progress checkpoint and retained task evidence. Final sprint workspace verification remains the integrator responsibility.

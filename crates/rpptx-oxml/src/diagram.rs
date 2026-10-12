@@ -949,7 +949,7 @@ fn root_and_children_impl(
                 seen_doctype = true;
                 declaration_allowed = false;
             }
-            Event::Text(text) if text.as_ref().iter().all(u8::is_ascii_whitespace) => {
+            Event::Text(text) if text.iter().all(u8::is_ascii_whitespace) => {
                 declaration_allowed = false;
             }
             Event::Comment(_) | Event::PI(_) => {
@@ -1014,7 +1014,7 @@ fn ensure_document_end(reader: &mut Reader<&[u8]>, buffer: &mut Vec<u8>) -> Resu
     loop {
         buffer.clear();
         match reader.read_event_into(buffer)? {
-            Event::Text(text) if text.as_ref().iter().all(u8::is_ascii_whitespace) => {}
+            Event::Text(text) if text.iter().all(u8::is_ascii_whitespace) => {}
             Event::Comment(_) | Event::PI(_) => {}
             Event::Eof => return Ok(()),
             _ => {

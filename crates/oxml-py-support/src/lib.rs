@@ -67,7 +67,7 @@ pub enum PathSeg {
 }
 
 /// An index path paired with the document revision at which it was captured.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ContentPath {
     /// Ordered index steps from the document root to the content.
     pub segs: SmallVec<[PathSeg; 5]>,
@@ -75,6 +75,7 @@ pub struct ContentPath {
     pub revision: u64,
     /// Optional cell-text generation inherited by nested presentation handles.
     pub text_revision: Option<u64>,
+    binding: Option<PathBinding>,
 }
 
 impl ContentPath {
@@ -84,6 +85,7 @@ impl ContentPath {
             segs,
             revision,
             text_revision: None,
+            binding: None,
         }
     }
 
@@ -123,35 +125,447 @@ pub struct StaleElementError {
     pub recovery_hint: String,
 }
 
-/// Monotonic revision owned by a Python document wrapper.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct RevisionCounter {
-    current: u64,
+/// Relevant invalidation partitions shared by the two binding families.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RevisionScope {
+    Document,
+    Owner,
+    Grid,
+    Text,
+    SlideInventory,
+    LayoutInventory,
+    MasterInventory,
 }
 
+#[derive(Debug)]
+struct ScopeGeneration {
+    origin: std::sync::Arc<()>,
+    generation: u64,
+    scope: RevisionScope,
+    retired: std::sync::OnceLock<InvalidationCause>,
+}
+
+/// One immutable generation retained by the current inventory and live handles.
+#[derive(Debug, Clone)]
+pub struct RevisionState(std::sync::Arc<ScopeGeneration>);
+
+/// The first successful public mutation that retired a generation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InvalidationCause {
+    pub serial: u64,
+    pub operation: Option<&'static str>,
+    pub scope: RevisionScope,
+}
+
+impl RevisionState {
+    pub fn generation(&self) -> u64 {
+        self.0.generation
+    }
+    pub fn scope(&self) -> RevisionScope {
+        self.0.scope
+    }
+    pub fn first_cause(&self) -> Option<&InvalidationCause> {
+        self.0.retired.get()
+    }
+    pub fn same_state(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PathBinding {
+    origin: std::sync::Arc<()>,
+    states: SmallVec<[RevisionState; 4]>,
+}
+
+/// Prepublication validation failure, with no counter or token mutation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum RevisionError {
+    #[error("document transaction serial or owner generation overflowed")]
+    Overflow,
+    #[error("scope belongs to a different document")]
+    ForeignOwner,
+    #[error("scope generation is already retired")]
+    Retired,
+    #[error("scope occurs more than once in one transaction")]
+    DuplicateScope,
+    #[error("prepared transaction no longer matches the owning counter")]
+    StalePreparation,
+    #[error("initial owner inventory was already initialized")]
+    AlreadyInitialized,
+    #[error("unable to allocate the prepared owner inventory")]
+    Allocation,
+}
+
+/// Preserve checked overflow and allocation failure before native publication.
+pub fn revision_to_pyerr(error: RevisionError) -> PyErr {
+    match error {
+        RevisionError::Overflow => PyOverflowError::new_err(error.to_string()),
+        RevisionError::Allocation => pyo3::exceptions::PyMemoryError::new_err(error.to_string()),
+        _ => PyValueError::new_err(error.to_string()),
+    }
+}
+
+/// Fully allocated successors. Dropping this value has no observable effect.
+#[derive(Debug)]
+pub struct PreparedRevision {
+    origin: std::sync::Arc<()>,
+    expected_serial: u64,
+    expected_generation: u64,
+    next_generation: u64,
+    operation: Option<&'static str>,
+    retired: Vec<RevisionState>,
+    successors: Vec<RevisionState>,
+    born: Vec<RevisionState>,
+}
+
+impl PreparedRevision {
+    /// Successors have the same ordering as the caller's affected scopes.
+    pub fn successor(&self, index: usize) -> Option<RevisionState> {
+        self.successors.get(index.checked_add(1)?).cloned()
+    }
+    pub fn committed_serial(&self) -> u64 {
+        self.expected_serial + 1
+    }
+    pub fn born(&self, index: usize) -> Option<RevisionState> {
+        self.born.get(index).cloned()
+    }
+}
+
+/// One document's common committed serial and checked generation allocator.
+#[derive(Debug)]
+pub struct RevisionCounter {
+    current: u64,
+    next_generation: u64,
+    origin: std::sync::Arc<()>,
+    document: RevisionState,
+    initialized: bool,
+}
+
+impl Default for RevisionCounter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+impl PartialEq for RevisionCounter {
+    fn eq(&self, other: &Self) -> bool {
+        self.current == other.current
+    }
+}
+impl Eq for RevisionCounter {}
+
 impl RevisionCounter {
-    /// Start at revision zero.
-    pub const fn new() -> Self {
-        Self { current: 0 }
+    pub fn new() -> Self {
+        let origin = std::sync::Arc::new(());
+        let document = RevisionState(std::sync::Arc::new(ScopeGeneration {
+            origin: origin.clone(),
+            generation: 0,
+            scope: RevisionScope::Document,
+            retired: std::sync::OnceLock::new(),
+        }));
+        Self {
+            current: 0,
+            next_generation: 0,
+            origin,
+            document,
+            initialized: false,
+        }
     }
-
-    /// Return the current document revision.
-    pub const fn current(self) -> u64 {
+    pub const fn current(&self) -> u64 {
         self.current
     }
 
-    /// Capture `segs` at the current document revision.
-    pub const fn capture(&self, segs: SmallVec<[PathSeg; 5]>) -> ContentPath {
-        ContentPath::new(segs, self.current)
+    fn owns(&self, state: &RevisionState) -> bool {
+        std::sync::Arc::ptr_eq(&self.origin, &state.0.origin)
     }
 
-    /// Bump after a successful structural mutation and return the new revision.
+    fn state(&self, generation: u64, scope: RevisionScope) -> RevisionState {
+        RevisionState(std::sync::Arc::new(ScopeGeneration {
+            origin: self.origin.clone(),
+            generation,
+            scope,
+            retired: std::sync::OnceLock::new(),
+        }))
+    }
+
+    /// Only construction uses this operation, before returning captured handles.
+    pub fn initialize_scopes(
+        &mut self,
+        scopes: &[RevisionScope],
+    ) -> Result<Vec<RevisionState>, RevisionError> {
+        if self.initialized
+            || self.current != 0
+            || std::sync::Arc::strong_count(&self.document.0) != 1
+        {
+            return Err(RevisionError::AlreadyInitialized);
+        }
+        let count = u64::try_from(scopes.len()).map_err(|_| RevisionError::Overflow)?;
+        let last = self
+            .next_generation
+            .checked_add(count)
+            .ok_or(RevisionError::Overflow)?;
+        let mut result = Vec::new();
+        result
+            .try_reserve_exact(scopes.len())
+            .map_err(|_| RevisionError::Allocation)?;
+        for (index, scope) in scopes.iter().enumerate() {
+            result.push(self.state(self.next_generation + index as u64 + 1, *scope));
+        }
+        self.next_generation = last;
+        self.initialized = true;
+        Ok(result)
+    }
+
+    pub fn capture(&self, segs: SmallVec<[PathSeg; 5]>) -> ContentPath {
+        let mut path = ContentPath::new(segs, self.current);
+        path.binding = Some(PathBinding {
+            origin: self.origin.clone(),
+            states: smallvec::smallvec![self.document.clone()],
+        });
+        path
+    }
+
+    pub fn capture_scopes(
+        &self,
+        segs: SmallVec<[PathSeg; 5]>,
+        scopes: &[RevisionState],
+    ) -> Result<ContentPath, RevisionError> {
+        if scopes.iter().any(|state| !self.owns(state)) {
+            return Err(RevisionError::ForeignOwner);
+        }
+        if scopes.iter().any(|state| state.first_cause().is_some()) {
+            return Err(RevisionError::Retired);
+        }
+        let mut states = SmallVec::new();
+        states
+            .try_reserve(scopes.len())
+            .map_err(|_| RevisionError::Allocation)?;
+        states.extend(scopes.iter().cloned());
+        let mut path = ContentPath::new(segs, self.current);
+        path.binding = Some(PathBinding {
+            origin: self.origin.clone(),
+            states,
+        });
+        Ok(path)
+    }
+
+    /// Capture an already allocated future document state before allocating a
+    /// returned Python handle. Failure leaves the current counter unchanged.
+    pub fn capture_prepared(
+        &self,
+        prepared: &PreparedRevision,
+        segs: SmallVec<[PathSeg; 5]>,
+    ) -> Result<ContentPath, RevisionError> {
+        if !std::sync::Arc::ptr_eq(&self.origin, &prepared.origin) {
+            return Err(RevisionError::ForeignOwner);
+        }
+        if self.current != prepared.expected_serial
+            || self.next_generation != prepared.expected_generation
+        {
+            return Err(RevisionError::StalePreparation);
+        }
+        let mut path = ContentPath::new(segs, prepared.committed_serial());
+        path.binding = Some(PathBinding {
+            origin: self.origin.clone(),
+            states: smallvec::smallvec![prepared.successors[0].clone()],
+        });
+        Ok(path)
+    }
+
+    /// Allocate all affected successors and new owner scopes before native publication.
+    pub fn prepare_scopes(
+        &self,
+        operation: &'static str,
+        scopes: &[RevisionState],
+        born: &[RevisionScope],
+    ) -> Result<PreparedRevision, RevisionError> {
+        self.prepare(Some(operation), scopes, born)
+    }
+
+    fn prepare(
+        &self,
+        operation: Option<&'static str>,
+        scopes: &[RevisionState],
+        born: &[RevisionScope],
+    ) -> Result<PreparedRevision, RevisionError> {
+        self.current.checked_add(1).ok_or(RevisionError::Overflow)?;
+        let total = scopes
+            .len()
+            .checked_add(born.len())
+            .and_then(|n| n.checked_add(1))
+            .ok_or(RevisionError::Overflow)?;
+        let next_generation = self
+            .next_generation
+            .checked_add(u64::try_from(total).map_err(|_| RevisionError::Overflow)?)
+            .ok_or(RevisionError::Overflow)?;
+        let mut retired = Vec::new();
+        retired
+            .try_reserve_exact(scopes.len() + 1)
+            .map_err(|_| RevisionError::Allocation)?;
+        retired.push(self.document.clone());
+        for scope in scopes {
+            if !self.owns(scope) {
+                return Err(RevisionError::ForeignOwner);
+            }
+            if scope.first_cause().is_some() {
+                return Err(RevisionError::Retired);
+            }
+            if retired.iter().any(|old| old.same_state(scope)) {
+                return Err(RevisionError::DuplicateScope);
+            }
+            retired.push(scope.clone());
+        }
+        let mut successors = Vec::new();
+        successors
+            .try_reserve_exact(retired.len())
+            .map_err(|_| RevisionError::Allocation)?;
+        let mut generation = self.next_generation;
+        for old in &retired {
+            generation += 1;
+            successors.push(self.state(generation, old.scope()));
+        }
+        let mut births = Vec::new();
+        births
+            .try_reserve_exact(born.len())
+            .map_err(|_| RevisionError::Allocation)?;
+        for scope in born {
+            generation += 1;
+            births.push(self.state(generation, *scope));
+        }
+        Ok(PreparedRevision {
+            origin: self.origin.clone(),
+            expected_serial: self.current,
+            expected_generation: self.next_generation,
+            next_generation,
+            operation,
+            retired,
+            successors,
+            born: births,
+        })
+    }
+
+    /// Under the same exclusive wrapper borrow, commit before infallible native swaps.
+    /// All rejection is before the first retirement. No fallible action follows success.
+    pub fn commit_scopes(&mut self, prepared: PreparedRevision) -> Result<u64, RevisionError> {
+        if !std::sync::Arc::ptr_eq(&self.origin, &prepared.origin) {
+            return Err(RevisionError::ForeignOwner);
+        }
+        if self.current != prepared.expected_serial
+            || self.next_generation != prepared.expected_generation
+            || !self.document.same_state(&prepared.retired[0])
+        {
+            return Err(RevisionError::StalePreparation);
+        }
+        if prepared
+            .retired
+            .iter()
+            .any(|state| state.first_cause().is_some())
+        {
+            return Err(RevisionError::Retired);
+        }
+        let serial = self.current + 1;
+        for state in &prepared.retired {
+            state
+                .0
+                .retired
+                .set(InvalidationCause {
+                    serial,
+                    operation: prepared.operation,
+                    scope: state.scope(),
+                })
+                .expect("private retirement under the owning exclusive borrow was prevalidated");
+        }
+        self.current = serial;
+        self.next_generation = prepared.next_generation;
+        self.document = prepared.successors[0].clone();
+        Ok(serial)
+    }
+
+    /// Numeric compatibility. Migrated consumers prepare with the real public label.
     pub fn bump(&mut self) -> u64 {
-        self.current = self
-            .current
-            .checked_add(1)
+        let prepared = self
+            .prepare(None, &[], &[])
             .expect("document revision counter overflowed");
-        self.current
+        self.commit_scopes(prepared)
+            .expect("legacy numeric transaction was just prepared")
+    }
+}
+
+impl PartialEq for ContentPath {
+    fn eq(&self, other: &Self) -> bool {
+        self.segs == other.segs
+            && self.revision == other.revision
+            && self.text_revision == other.text_revision
+    }
+}
+impl Eq for ContentPath {}
+
+impl ContentPath {
+    /// Unbound numeric selectors remain current-document explicit addressing.
+    pub fn belongs_to(&self, counter: &RevisionCounter) -> bool {
+        self.binding
+            .as_ref()
+            .is_none_or(|binding| std::sync::Arc::ptr_eq(&binding.origin, &counter.origin))
+    }
+
+    /// The physical owner is resolved by its checked generation, never visible equality.
+    pub fn owner_generation(&self) -> Option<u64> {
+        self.binding
+            .as_ref()?
+            .states
+            .iter()
+            .rev()
+            .find(|state| state.scope() == RevisionScope::Owner)
+            .map(RevisionState::generation)
+    }
+
+    /// Select the earliest committed retirement, with fixed scope ordering for ties.
+    pub fn validate_scopes(
+        &self,
+        counter: &RevisionCounter,
+        kind: &str,
+        hint: &str,
+    ) -> Result<(), StaleElementError> {
+        if !self.belongs_to(counter) {
+            return Err(StaleElementError {
+                element_kind: kind.to_owned(),
+                captured_revision: self.revision,
+                current_revision: counter.current(),
+                recovery_hint: "belongs to a different document".to_owned(),
+            });
+        }
+        let Some(binding) = &self.binding else {
+            return self.validate_revision(
+                counter.current(),
+                kind,
+                &format!(
+                    "Causal provenance is unavailable for this explicit numeric selector. {hint}"
+                ),
+            );
+        };
+        let first = binding
+            .states
+            .iter()
+            .filter_map(RevisionState::first_cause)
+            .min_by_key(|cause| (cause.serial, cause.scope));
+        let Some(cause) = first else {
+            return Ok(());
+        };
+        let reason = cause.operation.map_or_else(
+            || "Causal provenance is unavailable for this legacy mutation.".to_owned(),
+            |operation| {
+                format!(
+                    "First invalidated by {operation} at committed revision {}.",
+                    cause.serial
+                )
+            },
+        );
+        Err(StaleElementError {
+            element_kind: kind.to_owned(),
+            captured_revision: self.revision,
+            current_revision: counter.current(),
+            recovery_hint: format!("{reason} {hint}"),
+        })
     }
 }
 
@@ -299,6 +713,241 @@ mod tests {
 
         assert_eq!(before.revision, 0);
         assert_eq!(after.revision, 1);
+    }
+
+    #[test]
+    fn fx206_scope_tokens_preserve_ancestors_and_first_causal_order() {
+        let mut clock = RevisionCounter::new();
+        let scopes = clock
+            .initialize_scopes(&[
+                RevisionScope::Owner,
+                RevisionScope::Text,
+                RevisionScope::Grid,
+            ])
+            .unwrap();
+        let owner = clock
+            .capture_scopes(
+                smallvec![PathSeg::Slide(0), PathSeg::Shape(0)],
+                &scopes[..1],
+            )
+            .unwrap();
+        let child = clock.capture_scopes(owner.segs.clone(), &scopes).unwrap();
+        let first = clock
+            .prepare_scopes("TextFrame.text", &scopes[1..2], &[])
+            .unwrap();
+        let next_text = first.successor(0).unwrap();
+        clock.commit_scopes(first).unwrap();
+        assert!(owner.validate_scopes(&clock, "shape", "re-fetch").is_ok());
+        let second = clock
+            .prepare_scopes("Table.rows.delete", &scopes[2..], &[])
+            .unwrap();
+        clock.commit_scopes(second).unwrap();
+        let error = child
+            .validate_scopes(&clock, "run", "re-fetch")
+            .unwrap_err();
+        assert!(
+            error
+                .recovery_hint
+                .contains("TextFrame.text at committed revision 1")
+        );
+        assert!(!error.recovery_hint.contains("Table.rows.delete"));
+        let later = clock
+            .prepare_scopes("TextFrame.clear", &[next_text], &[])
+            .unwrap();
+        clock.commit_scopes(later).unwrap();
+        assert_eq!(
+            child
+                .validate_scopes(&clock, "run", "re-fetch")
+                .unwrap_err()
+                .recovery_hint,
+            error.recovery_hint
+        );
+    }
+
+    #[test]
+    fn fx206_scope_prepare_failure_noop_and_stale_commit_are_atomic() {
+        let mut clock = RevisionCounter::new();
+        let owner = clock
+            .initialize_scopes(&[RevisionScope::Owner])
+            .unwrap()
+            .remove(0);
+        let captured = clock
+            .capture_scopes(smallvec![PathSeg::Shape(0)], std::slice::from_ref(&owner))
+            .unwrap();
+        let prepared = clock
+            .prepare_scopes("Shapes.remove", std::slice::from_ref(&owner), &[])
+            .unwrap();
+        drop(prepared);
+        assert_eq!(clock.current(), 0);
+        assert_eq!(owner.first_cause(), None);
+        let first = clock
+            .prepare_scopes("Shapes.remove", std::slice::from_ref(&owner), &[])
+            .unwrap();
+        let stale = clock
+            .prepare_scopes("Shapes.remove", std::slice::from_ref(&owner), &[])
+            .unwrap();
+        clock.commit_scopes(first).unwrap();
+        let cause = *owner.first_cause().unwrap();
+        assert_eq!(
+            clock.commit_scopes(stale),
+            Err(RevisionError::StalePreparation)
+        );
+        assert_eq!(clock.current(), 1);
+        assert_eq!(owner.first_cause(), Some(&cause));
+        assert!(
+            captured
+                .validate_scopes(&clock, "shape", "refetch")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn fx206_bound_paths_keep_numeric_equality_without_foreign_or_reused_owner_authority() {
+        let mut clock = RevisionCounter::new();
+        let owner = clock
+            .initialize_scopes(&[RevisionScope::Owner])
+            .unwrap()
+            .remove(0);
+        let captured = clock
+            .capture_scopes(smallvec![PathSeg::Shape(0)], std::slice::from_ref(&owner))
+            .unwrap();
+        let manual = ContentPath::new(captured.segs.clone(), captured.revision);
+        assert_eq!(captured, manual);
+        let foreign = RevisionCounter::new();
+        assert!(!captured.belongs_to(&foreign));
+        assert!(manual.belongs_to(&foreign));
+        let prepared = clock
+            .prepare_scopes("Shapes.replace", &[owner], &[RevisionScope::Owner])
+            .unwrap();
+        let recreated = prepared.born(0).unwrap();
+        clock.commit_scopes(prepared).unwrap();
+        assert_ne!(captured.owner_generation(), Some(recreated.generation()));
+        assert!(
+            captured
+                .validate_scopes(&clock, "shape", "refetch")
+                .is_err()
+        );
+        let fresh = clock.capture_scopes(manual.segs, &[recreated]).unwrap();
+        assert!(fresh.validate_scopes(&clock, "shape", "refetch").is_ok());
+    }
+
+    #[test]
+    fn fx206_scope_lifetimes_have_no_history_and_overflow_has_no_side_effect() {
+        let mut clock = RevisionCounter::new();
+        let owner = clock
+            .initialize_scopes(&[RevisionScope::Owner])
+            .unwrap()
+            .remove(0);
+        let weak = std::sync::Arc::downgrade(&owner.0);
+        let prepared = clock
+            .prepare_scopes("Shapes.remove", std::slice::from_ref(&owner), &[])
+            .unwrap();
+        clock.commit_scopes(prepared).unwrap();
+        drop(owner);
+        assert!(weak.upgrade().is_none());
+        clock.current = u64::MAX;
+        assert!(matches!(
+            clock.prepare_scopes("Shapes.add", &[], &[]),
+            Err(RevisionError::Overflow)
+        ));
+        assert_eq!(clock.current(), u64::MAX);
+        assert!(clock.document.first_cause().is_none());
+    }
+
+    #[test]
+    fn fx206_generation_overflow_and_foreign_duplicate_preflight_preserve_state() {
+        let mut clock = RevisionCounter::new();
+        let owner = clock
+            .initialize_scopes(&[RevisionScope::Owner])
+            .unwrap()
+            .remove(0);
+        let mut other = RevisionCounter::new();
+        let foreign = other
+            .initialize_scopes(&[RevisionScope::Owner])
+            .unwrap()
+            .remove(0);
+        assert!(matches!(
+            clock.prepare_scopes("Shape.remove", &[foreign], &[]),
+            Err(RevisionError::ForeignOwner)
+        ));
+        assert!(matches!(
+            clock.prepare_scopes("Shape.remove", &[owner.clone(), owner.clone()], &[]),
+            Err(RevisionError::DuplicateScope)
+        ));
+        assert_eq!(clock.current(), 0);
+        assert!(owner.first_cause().is_none());
+        let generation = owner.generation();
+        clock.next_generation = u64::MAX;
+        assert!(matches!(
+            clock.prepare_scopes("Shapes.add", &[], &[RevisionScope::Owner]),
+            Err(RevisionError::Overflow)
+        ));
+        assert_eq!(owner.generation(), generation);
+        assert!(owner.first_cause().is_none());
+        assert_eq!(clock.current(), 0);
+        let mut construction = RevisionCounter::new();
+        construction.next_generation = u64::MAX;
+        assert!(matches!(
+            construction.initialize_scopes(&[RevisionScope::Owner]),
+            Err(RevisionError::Overflow)
+        ));
+        assert!(!construction.initialized);
+        assert!(construction.document.first_cause().is_none());
+    }
+
+    #[test]
+    fn fx206_same_transaction_scope_ties_have_one_label_and_future_capture_is_checked() {
+        let mut clock = RevisionCounter::new();
+        let scopes = clock
+            .initialize_scopes(&[
+                RevisionScope::Text,
+                RevisionScope::Owner,
+                RevisionScope::Grid,
+            ])
+            .unwrap();
+        let captured = clock
+            .capture_scopes(smallvec![PathSeg::Shape(0)], &scopes)
+            .unwrap();
+        let prepared = clock
+            .prepare_scopes("ShapeCollection.remove", &scopes, &[])
+            .unwrap();
+        assert!(prepared.successor(usize::MAX).is_none());
+        assert!(prepared.born(usize::MAX).is_none());
+        let future = clock
+            .capture_prepared(&prepared, smallvec![PathSeg::Shape(0)])
+            .unwrap();
+        let foreign = RevisionCounter::new();
+        assert!(matches!(
+            foreign.capture_prepared(&prepared, smallvec![]),
+            Err(RevisionError::ForeignOwner)
+        ));
+        clock.commit_scopes(prepared).unwrap();
+        assert_eq!(clock.current(), 1);
+        assert!(future.validate_scopes(&clock, "shape", "refetch").is_ok());
+        let causes = scopes
+            .iter()
+            .map(|state| *state.first_cause().unwrap())
+            .collect::<Vec<_>>();
+        assert!(causes.iter().all(|cause| cause.serial == 1 && cause.operation == Some("ShapeCollection.remove")));
+        assert_eq!(
+            causes
+                .iter()
+                .min_by_key(|cause| (cause.serial, cause.scope))
+                .unwrap()
+                .scope,
+            RevisionScope::Owner
+        );
+        assert!(
+            captured
+                .validate_scopes(&clock, "shape", "refetch")
+                .unwrap_err()
+                .recovery_hint
+                .contains("ShapeCollection.remove at committed revision 1")
+        );
+        assert!(matches!(
+            clock.capture_scopes(smallvec![], &scopes),
+            Err(RevisionError::Retired)
+        ));
     }
 
     #[test]

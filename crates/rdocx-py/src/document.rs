@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::PathBuf;
 
-use oxml_py_support::{PathSeg, RevisionCounter, StaleElementError};
+use oxml_py_support::{PathSeg, RevisionCounter, StaleElementError, revision_to_pyerr};
 use pyo3::exceptions::{PyIndexError, PyOverflowError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyList, PyString, PyTuple};
@@ -451,16 +451,29 @@ fn revision_kind_name(kind: rdocx::RevisionKind) -> &'static str {
     }
 }
 
-#[pyclass(name = "Story", frozen, get_all, eq, skip_from_py_object)]
-#[derive(Clone, PartialEq, Eq)]
+#[pyclass(name = "Story", frozen, eq, skip_from_py_object)]
+#[derive(Clone)]
 pub struct PyStory {
     pub kind: String,
     pub part_name: String,
     pub owner_index: usize,
+    binding: Option<oxml_py_support::ContentPath>,
 }
 
 #[pymethods]
 impl PyStory {
+    #[getter]
+    fn kind(&self) -> &str {
+        &self.kind
+    }
+    #[getter]
+    fn part_name(&self) -> &str {
+        &self.part_name
+    }
+    #[getter]
+    fn owner_index(&self) -> usize {
+        self.owner_index
+    }
     #[new]
     #[pyo3(signature = (*, kind, part_name, owner_index))]
     fn new(kind: String, part_name: String, owner_index: usize) -> Self {
@@ -468,12 +481,13 @@ impl PyStory {
             kind,
             part_name,
             owner_index,
+            binding: None,
         }
     }
 }
 
 #[pyclass(name = "StoryItem", frozen, eq, skip_from_py_object)]
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct PyStoryItem {
     story: PyStory,
     kind: String,
@@ -482,6 +496,7 @@ pub struct PyStoryItem {
     text: Option<String>,
     xml: Vec<u8>,
     revision: u64,
+    binding: Option<oxml_py_support::ContentPath>,
 }
 
 #[pymethods]
@@ -505,6 +520,7 @@ impl PyStoryItem {
             text,
             xml: xml.unwrap_or_default().to_vec(),
             revision,
+            binding: None,
         }
     }
 
@@ -1518,6 +1534,7 @@ impl PyDocument {
     /// A snapshot carries no fingerprint, so it resolves by kind, part name
     /// and owner index against the document as it is now.
     fn native_story(&self, py: Python<'_>, story: &PyStory) -> PyResult<rdocx::StoryId> {
+        self.validate_owned_story(py, story)?;
         self.inner
             .stories()
             .map_err(|error| rdocx_to_pyerr(py, error))?
@@ -1609,15 +1626,19 @@ impl PyDocument {
         py: Python<'_>,
         item: &PyStoryItem,
     ) -> PyResult<rdocx::ContentLocation> {
+        self.validate_owned_item(py, item)?;
         let story = self.native_story(py, &item.story)?;
-        if item.revision != self.revisions.current() {
+        if item.binding.is_none()
+            && item.story.binding.is_none()
+            && item.revision != self.revisions.current()
+        {
             return Err(crate::stale_to_pyerr(
                 py,
                 StaleElementError {
                     element_kind: "story item".to_owned(),
                     captured_revision: item.revision,
                     current_revision: self.revisions.current(),
-                    recovery_hint: "Re-fetch it with document.story_items.".to_owned(),
+                    recovery_hint: "Causal provenance is unavailable for this explicit numeric selector. Re-fetch it with document.story_items.".to_owned(),
                 },
             ));
         }
@@ -1692,13 +1713,14 @@ impl PyDocument {
         let item = &items[&position.location];
         Ok(PyStoryRunPosition {
             item: PyStoryItem {
-                story: story_snapshot(item.location().story()),
+                story: self.owned_story_snapshot(item.location().story()),
                 kind: story_item_kind_name(item.location().item_kind()).to_owned(),
                 index_path: item.location().index_path().to_vec(),
                 direct_body_index: item.direct_body_index(),
                 text: item.text().map(str::to_owned),
                 xml: item.xml().to_vec(),
                 revision: self.revisions.current(),
+                binding: Some(self.revisions.capture(smallvec![])),
             },
             run_index: position.run_index,
         })
@@ -1717,13 +1739,14 @@ impl PyDocument {
             .find(|item| item.location() == location)
             .ok_or_else(|| PyIndexError::new_err("inserted story item was not found"))?;
         Ok(PyStoryItem {
-            story: story_snapshot(item.location().story()),
+            story: self.owned_story_snapshot(item.location().story()),
             kind: story_item_kind_name(item.location().item_kind()).to_owned(),
             index_path: item.location().index_path().to_vec(),
             direct_body_index: item.direct_body_index(),
             text: item.text().map(str::to_owned),
             xml: item.xml().to_vec(),
             revision: self.revisions.current(),
+            binding: Some(self.revisions.capture(smallvec![])),
         })
     }
 
@@ -1748,13 +1771,14 @@ impl PyDocument {
             .story_range_paragraph_snapshot(&location)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         Ok(PyStoryItem {
-            story: story_snapshot(item.location().story()),
+            story: document.owned_story_snapshot(item.location().story()),
             kind: story_item_kind_name(item.location().item_kind()).to_owned(),
             index_path: item.location().index_path().to_vec(),
             direct_body_index: item.direct_body_index(),
             text: item.text().map(str::to_owned),
             xml: item.xml().to_vec(),
             revision: document.revisions.current(),
+            binding: Some(document.revisions.capture(smallvec![])),
         })
     }
 
@@ -1820,12 +1844,19 @@ impl PyDocument {
                 .map(|paragraph| paragraph.run_count())
         };
         let before = run_count(&self.inner);
-        let boundary = self
-            .inner
+        let mut candidate = self.inner.clone_for_staging();
+        let boundary = candidate
             .split_run(body_index, run_index, character_offset)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        if run_count(&self.inner) != before {
-            self.revisions.bump();
+        if run_count(&candidate) != before {
+            let prepared = self
+                .revisions
+                .prepare_scopes("Document.split_run", &[], &[])
+                .map_err(revision_to_pyerr)?;
+            self.revisions
+                .commit_scopes(prepared)
+                .map_err(revision_to_pyerr)?;
+            self.inner = candidate;
         }
         Ok(boundary)
     }
@@ -1834,15 +1865,28 @@ impl PyDocument {
     ///
     /// The GIL is released while it runs, and live handles are staled only
     /// when the count is nonzero.
-    fn counted_mutation<F>(&mut self, py: Python<'_>, mutation: F) -> PyResult<usize>
+    fn counted_mutation<F>(
+        &mut self,
+        py: Python<'_>,
+        operation: &'static str,
+        mutation: F,
+    ) -> PyResult<usize>
     where
         F: FnOnce(&mut rdocx::Document) -> rdocx::Result<usize> + Send,
     {
+        let mut candidate = self.inner.clone_for_staging();
         let count = py
-            .detach(|| mutation(&mut self.inner))
+            .detach(|| mutation(&mut candidate))
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         if count > 0 {
-            self.revisions.bump();
+            let prepared = self
+                .revisions
+                .prepare_scopes(operation, &[], &[])
+                .map_err(revision_to_pyerr)?;
+            self.revisions
+                .commit_scopes(prepared)
+                .map_err(revision_to_pyerr)?;
+            self.inner = candidate;
         }
         Ok(count)
     }
@@ -1855,32 +1899,43 @@ impl PyDocument {
         py: Python<'_>,
         pairs: &[(&str, &str, Option<usize>)],
         batch: bool,
-    ) -> PyResult<Vec<usize>> {
+    ) -> PyResult<(rdocx::Document, Vec<usize>)> {
+        let mut candidate = self.inner.clone_for_staging();
         let counts = py
-            .detach(|| self.inner.try_replace_all_expected(pairs))
+            .detach(|| candidate.try_replace_all_expected(pairs))
             .map_err(|error| rdocx_to_pyerr(py, error))?
             .map_err(|mismatch| crate::replacement_count_to_pyerr(py, &mismatch, batch))?;
-        if counts.iter().any(|count| *count > 0) {
-            self.revisions.bump();
-        }
-        Ok(counts)
+        Ok((candidate, counts))
     }
 
     // Both checked item and physical cell routes share singular count/error and
     // publication policy. The concrete closures are the two actual consumers.
-    pub(crate) fn scoped_replacement<F>(&mut self, py: Python<'_>, mutation: F) -> PyResult<usize>
+    pub(crate) fn scoped_replacement<F>(
+        &mut self,
+        py: Python<'_>,
+        operation: &'static str,
+        mutation: F,
+    ) -> PyResult<usize>
     where
         F: FnOnce(
                 &mut rdocx::Document,
             ) -> rdocx::Result<Result<usize, rdocx::ReplacementCountMismatch>>
             + Send,
     {
+        let mut candidate = self.inner.clone_for_staging();
         let count = py
-            .detach(|| mutation(&mut self.inner))
+            .detach(|| mutation(&mut candidate))
             .map_err(|error| rdocx_to_pyerr(py, error))?
             .map_err(|mismatch| crate::replacement_count_to_pyerr(py, &mismatch, false))?;
         if count > 0 {
-            self.revisions.bump();
+            let prepared = self
+                .revisions
+                .prepare_scopes(operation, &[], &[])
+                .map_err(revision_to_pyerr)?;
+            self.revisions
+                .commit_scopes(prepared)
+                .map_err(revision_to_pyerr)?;
+            self.inner = candidate;
         }
         Ok(count)
     }
@@ -1903,6 +1958,7 @@ impl PyDocument {
 
 fn story_snapshot(story: &rdocx::StoryId) -> PyStory {
     PyStory {
+        binding: None,
         kind: match story.kind() {
             rdocx::StoryKind::Body => "body",
             rdocx::StoryKind::TableCell => "table_cell",
@@ -2209,14 +2265,22 @@ impl PyDocument {
                 .map(|paragraph| paragraph.run_count())
         };
         let before = run_count(&document.inner);
-        let boundary = document
-            .inner
+        let mut candidate = document.inner.clone_for_staging();
+        let boundary = candidate
             .paragraph_mut(paragraph_index)
             .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
             .split_run(run_index, character_offset)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        if run_count(&document.inner) != before {
-            document.revisions.bump();
+        if run_count(&candidate) != before {
+            let prepared = document
+                .revisions
+                .prepare_scopes("Document.split_run", &[], &[])
+                .map_err(revision_to_pyerr)?;
+            document
+                .revisions
+                .commit_scopes(prepared)
+                .map_err(revision_to_pyerr)?;
+            document.inner = candidate;
         }
         Ok(boundary)
     }
@@ -2590,6 +2654,7 @@ impl PyDocument {
         ignore_comments: bool,
         ignored_stories: Option<Vec<String>>,
     ) -> PyResult<Bound<'py, PyTuple>> {
+        let mut candidate = self.inner.clone_for_staging();
         let (diagnostics, changed) = py
             .detach(|| {
                 let options = rdocx::ComparisonOptions {
@@ -2604,24 +2669,31 @@ impl PyDocument {
                         .map(|name| parse_comparison_story(name))
                         .collect::<rdocx::Result<_>>()?,
                 };
-                let before = self.inner.to_bytes()?;
+                let before = candidate.to_bytes()?;
                 let diagnostics =
-                    self.inner
-                        .compare_with_options(&edited.inner, author, timestamp, &options)?;
-                let changed = self.inner.to_bytes()? != before;
+                    candidate.compare_with_options(&edited.inner, author, timestamp, &options)?;
+                let changed = candidate.to_bytes()? != before;
                 Ok::<_, rdocx::Error>((diagnostics, changed))
             })
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        if changed {
-            self.revisions.bump();
-        }
-        PyTuple::new(
+        let result = PyTuple::new(
             py,
             diagnostics.into_iter().map(|item| PyComparisonDiagnostic {
                 location: item.location,
                 message: item.message,
             }),
-        )
+        )?;
+        if changed {
+            let prepared = self
+                .revisions
+                .prepare_scopes("Document.compare", &[], &[])
+                .map_err(revision_to_pyerr)?;
+            self.revisions
+                .commit_scopes(prepared)
+                .map_err(revision_to_pyerr)?;
+            self.inner = candidate;
+        }
+        Ok(result)
     }
 
     #[getter]
@@ -2873,24 +2945,40 @@ impl PyDocument {
     }
 
     fn insert_section(&mut self, py: Python<'_>, index: usize) -> PyResult<()> {
-        if index > self.inner.section_count() {
+        let mut candidate = self.inner.clone_for_staging();
+        if index > candidate.section_count() {
             return Err(PyIndexError::new_err("section index out of range"));
         }
-        self.inner
+        candidate
             .insert_section(index)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        let prepared = self
+            .revisions
+            .prepare_scopes("Document.insert_section", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        self.revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        self.inner = candidate;
         Ok(())
     }
 
     fn remove_section(&mut self, py: Python<'_>, index: usize) -> PyResult<()> {
-        if index >= self.inner.section_count() {
+        let mut candidate = self.inner.clone_for_staging();
+        if index >= candidate.section_count() {
             return Err(PyIndexError::new_err("section index out of range"));
         }
-        self.inner
+        candidate
             .remove_section(index)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        let prepared = self
+            .revisions
+            .prepare_scopes("Document.remove_section", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        self.revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        self.inner = candidate;
         Ok(())
     }
 
@@ -3180,7 +3268,10 @@ impl PyDocument {
             .inner
             .stories()
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        PyTuple::new(py, stories.iter().map(story_snapshot))
+        PyTuple::new(
+            py,
+            stories.iter().map(|story| self.owned_story_snapshot(story)),
+        )
     }
 
     #[getter]
@@ -3192,13 +3283,14 @@ impl PyDocument {
         let snapshots = items
             .into_iter()
             .map(|item| PyStoryItem {
-                story: story_snapshot(item.location().story()),
+                story: self.owned_story_snapshot(item.location().story()),
                 kind: story_item_kind_name(item.location().item_kind()).to_owned(),
                 index_path: item.location().index_path().to_vec(),
                 direct_body_index: item.direct_body_index(),
                 text: item.text().map(str::to_owned),
                 xml: item.xml().to_vec(),
                 revision: self.revisions.current(),
+                binding: Some(self.revisions.capture(smallvec![])),
             })
             .collect::<Vec<_>>();
         PyTuple::new(py, snapshots)
@@ -3225,7 +3317,9 @@ impl PyDocument {
                         section_index,
                         kind: kind_name.to_owned(),
                         variant: variant.to_str().to_owned(),
-                        story: resolved.as_ref().map(|value| story_snapshot(value.story())),
+                        story: resolved
+                            .as_ref()
+                            .map(|value| self.owned_story_snapshot(value.story())),
                         source_section: resolved.as_ref().map(rdocx::SectionStory::source_section),
                         inherited: resolved.is_some_and(|value| value.is_inherited()),
                     });
@@ -3243,16 +3337,28 @@ impl PyDocument {
         section_index: usize,
         kind: &str,
         variant: &str,
-    ) -> PyResult<PyStory> {
+    ) -> PyResult<Py<PyStory>> {
         let (kind, variant) = self.section_story_target(section_index, kind, variant)?;
+        let mut candidate = self.inner.clone_for_staging();
         let story = py
-            .detach(|| {
-                self.inner
-                    .create_section_story(section_index, kind, variant)
-            })
+            .detach(|| candidate.create_section_story(section_index, kind, variant))
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
-        Ok(story_snapshot(&story))
+        let prepared = self
+            .revisions
+            .prepare_scopes("Document.create_section_story", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        let mut snapshot = story_snapshot(&story);
+        snapshot.binding = Some(
+            self.revisions
+                .capture_prepared(&prepared, smallvec![])
+                .map_err(revision_to_pyerr)?,
+        );
+        let result = Py::new(py, snapshot)?;
+        self.revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        self.inner = candidate;
+        Ok(result)
     }
 
     fn link_section_story(
@@ -3262,17 +3368,29 @@ impl PyDocument {
         kind: &str,
         variant: &str,
         story: PyRef<'_, PyStory>,
-    ) -> PyResult<PyStory> {
+    ) -> PyResult<Py<PyStory>> {
         let (kind, variant) = self.section_story_target(section_index, kind, variant)?;
         let story = self.native_story(py, &story)?;
+        let mut candidate = self.inner.clone_for_staging();
         let linked = py
-            .detach(|| {
-                self.inner
-                    .link_section_story(section_index, kind, variant, &story)
-            })
+            .detach(|| candidate.link_section_story(section_index, kind, variant, &story))
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
-        Ok(story_snapshot(&linked))
+        let prepared = self
+            .revisions
+            .prepare_scopes("Document.link_section_story", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        let mut snapshot = story_snapshot(&linked);
+        snapshot.binding = Some(
+            self.revisions
+                .capture_prepared(&prepared, smallvec![])
+                .map_err(revision_to_pyerr)?,
+        );
+        let result = Py::new(py, snapshot)?;
+        self.revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        self.inner = candidate;
+        Ok(result)
     }
 
     fn unlink_section_story(
@@ -3281,16 +3399,28 @@ impl PyDocument {
         section_index: usize,
         kind: &str,
         variant: &str,
-    ) -> PyResult<PyStory> {
+    ) -> PyResult<Py<PyStory>> {
         let (kind, variant) = self.section_story_target(section_index, kind, variant)?;
+        let mut candidate = self.inner.clone_for_staging();
         let story = py
-            .detach(|| {
-                self.inner
-                    .unlink_section_story(section_index, kind, variant)
-            })
+            .detach(|| candidate.unlink_section_story(section_index, kind, variant))
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
-        Ok(story_snapshot(&story))
+        let prepared = self
+            .revisions
+            .prepare_scopes("Document.unlink_section_story", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        let mut snapshot = story_snapshot(&story);
+        snapshot.binding = Some(
+            self.revisions
+                .capture_prepared(&prepared, smallvec![])
+                .map_err(revision_to_pyerr)?,
+        );
+        let result = Py::new(py, snapshot)?;
+        self.revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        self.inner = candidate;
+        Ok(result)
     }
 
     #[getter]
@@ -3319,7 +3449,7 @@ impl PyDocument {
                 let position = Some((*next, *layout));
                 *next += 1;
                 PyHyperlink {
-                    story: story_snapshot(location.story()),
+                    story: self.owned_story_snapshot(location.story()),
                     index_path: location.index_path().to_vec(),
                     text: link.text,
                     url: link.url,
@@ -3356,16 +3486,32 @@ impl PyDocument {
     }
 
     fn set_header(&mut self, py: Python<'_>, text: &str) -> PyResult<()> {
-        py.detach(|| self.inner.try_set_header(text))
+        let mut candidate = self.inner.clone_for_staging();
+        py.detach(|| candidate.try_set_header(text))
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        let prepared = self
+            .revisions
+            .prepare_scopes("Document.set_header", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        self.revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        self.inner = candidate;
         Ok(())
     }
 
     fn set_footer(&mut self, py: Python<'_>, text: &str) -> PyResult<()> {
-        py.detach(|| self.inner.try_set_footer(text))
+        let mut candidate = self.inner.clone_for_staging();
+        py.detach(|| candidate.try_set_footer(text))
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        let prepared = self
+            .revisions
+            .prepare_scopes("Document.set_footer", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        self.revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        self.inner = candidate;
         Ok(())
     }
 
@@ -3375,10 +3521,18 @@ impl PyDocument {
         item: PyRef<'_, PyStoryItem>,
         text: &str,
     ) -> PyResult<()> {
+        let mut candidate = self.inner.clone_for_staging();
         let location = self.native_location(py, &item)?;
-        py.detach(|| self.inner.set_story_text(&location, text))
+        py.detach(|| candidate.set_story_text(&location, text))
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        let prepared = self
+            .revisions
+            .prepare_scopes("Document.set_story_text", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        self.revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        self.inner = candidate;
         Ok(())
     }
 
@@ -3389,10 +3543,18 @@ impl PyDocument {
         text: &str,
         url: &str,
     ) -> PyResult<()> {
+        let mut candidate = self.inner.clone_for_staging();
         let story = self.native_story(py, &story)?;
-        py.detach(|| self.inner.add_hyperlink_to_story(&story, text, url))
+        py.detach(|| candidate.add_hyperlink_to_story(&story, text, url))
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        let prepared = self
+            .revisions
+            .prepare_scopes("Document.add_hyperlink_to_story", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        self.revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        self.inner = candidate;
         Ok(())
     }
 
@@ -3405,7 +3567,8 @@ impl PyDocument {
         width: Option<i64>,
         height: Option<i64>,
         after: Option<PyRef<'_, PyStoryItem>>,
-    ) -> PyResult<PyStoryItem> {
+    ) -> PyResult<Py<PyStoryItem>> {
+        let mut candidate = self.inner.clone_for_staging();
         let after = after
             .as_deref()
             .map(|item| self.native_location(py, item))
@@ -3416,7 +3579,7 @@ impl PyDocument {
         };
         let location = py
             .detach(|| {
-                self.inner.insert_picture_to_story(
+                candidate.insert_picture_to_story(
                     &story,
                     after.as_ref(),
                     data,
@@ -3426,8 +3589,40 @@ impl PyDocument {
                 )
             })
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
-        self.story_item_snapshot(py, &location)
+        let prepared = self
+            .revisions
+            .prepare_scopes("Document.add_picture", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        let item = candidate
+            .story_item_snapshots()
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .into_iter()
+            .find(|item| item.location() == &location)
+            .ok_or_else(|| PyIndexError::new_err("inserted story item was not found"))?;
+        let binding = self
+            .revisions
+            .capture_prepared(&prepared, smallvec![])
+            .map_err(revision_to_pyerr)?;
+        let mut story = story_snapshot(item.location().story());
+        story.binding = Some(binding.clone());
+        let result = Py::new(
+            py,
+            PyStoryItem {
+                story,
+                kind: story_item_kind_name(item.location().item_kind()).to_owned(),
+                index_path: item.location().index_path().to_vec(),
+                direct_body_index: item.direct_body_index(),
+                text: item.text().map(str::to_owned),
+                xml: item.xml().to_vec(),
+                revision: prepared.committed_serial(),
+                binding: Some(binding),
+            },
+        )?;
+        self.revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        self.inner = candidate;
+        Ok(result)
     }
 
     #[pyo3(signature = (range, *, author, text, initials = None, date = None))]
@@ -3440,9 +3635,9 @@ impl PyDocument {
         date: Option<&str>,
         py: Python<'_>,
     ) -> PyResult<i32> {
+        let mut candidate = self.inner.clone_for_staging();
         let id = if let Ok(range) = range.cast::<PyRunRange>() {
-            self.inner
-                .add_comment_with_date((*range.borrow()).into(), author, initials, text, date)
+            candidate.add_comment_with_date((*range.borrow()).into(), author, initials, text, date)
         } else if let Ok(range) = range.cast::<PyStoryRunRange>() {
             let range = range.borrow();
             let start = rdocx::StoryRunPosition {
@@ -3453,7 +3648,7 @@ impl PyDocument {
                 location: self.native_location(py, &range.end.item)?,
                 run_index: range.end.run_index,
             };
-            self.inner.add_story_comment_with_date(
+            candidate.add_story_comment_with_date(
                 rdocx::StoryRunRange { start, end },
                 author,
                 initials,
@@ -3466,7 +3661,14 @@ impl PyDocument {
             ));
         }
         .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        let prepared = self
+            .revisions
+            .prepare_scopes("Document.add_comment", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        self.revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        self.inner = candidate;
         Ok(id)
     }
 
@@ -3486,11 +3688,18 @@ impl PyDocument {
         date: Option<&str>,
         py: Python<'_>,
     ) -> PyResult<i32> {
-        let id = self
-            .inner
+        let mut candidate = self.inner.clone_for_staging();
+        let id = candidate
             .add_comment_on_text(anchor, occurrence, author, initials, text, date)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        let prepared = self
+            .revisions
+            .prepare_scopes("Document.add_comment_on_text", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        self.revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        self.inner = candidate;
         Ok(id)
     }
 
@@ -3501,6 +3710,7 @@ impl PyDocument {
         range: PyRef<'_, PyStoryRunRange>,
         py: Python<'_>,
     ) -> PyResult<()> {
+        let mut candidate = self.inner.clone_for_staging();
         let start = rdocx::StoryRunPosition {
             location: self.native_location(py, &range.start.item)?,
             run_index: range.start.run_index,
@@ -3509,12 +3719,16 @@ impl PyDocument {
             location: self.native_location(py, &range.end.item)?,
             run_index: range.end.run_index,
         };
-        py.detach(|| {
-            self.inner
-                .move_comment(id, rdocx::StoryRunRange { start, end })
-        })
-        .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        py.detach(|| candidate.move_comment(id, rdocx::StoryRunRange { start, end }))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let prepared = self
+            .revisions
+            .prepare_scopes("Document.move_comment", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        self.revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        self.inner = candidate;
         Ok(())
     }
 
@@ -3527,9 +3741,17 @@ impl PyDocument {
         occurrence: usize,
         py: Python<'_>,
     ) -> PyResult<()> {
-        py.detach(|| self.inner.move_comment_to_text(id, anchor, occurrence))
+        let mut candidate = self.inner.clone_for_staging();
+        py.detach(|| candidate.move_comment_to_text(id, anchor, occurrence))
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        let prepared = self
+            .revisions
+            .prepare_scopes("Document.move_comment_to_text", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        self.revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        self.inner = candidate;
         Ok(())
     }
 
@@ -3542,33 +3764,54 @@ impl PyDocument {
         date: Option<&str>,
         py: Python<'_>,
     ) -> PyResult<i32> {
-        let id = self
-            .inner
+        let mut candidate = self.inner.clone_for_staging();
+        let id = candidate
             .reply_to_with_date(parent_id, author, text, date)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        let prepared = self
+            .revisions
+            .prepare_scopes("Document.reply_to", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        self.revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        self.inner = candidate;
         Ok(id)
     }
 
     #[pyo3(signature = (id, *, resolved = true))]
     fn resolve_comment(&mut self, id: i32, resolved: bool, py: Python<'_>) -> PyResult<bool> {
-        let updated = self
-            .inner
+        let mut candidate = self.inner.clone_for_staging();
+        let updated = candidate
             .resolve_comment(id, resolved)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         if updated {
-            self.revisions.bump();
+            let prepared = self
+                .revisions
+                .prepare_scopes("Document.resolve_comment", &[], &[])
+                .map_err(revision_to_pyerr)?;
+            self.revisions
+                .commit_scopes(prepared)
+                .map_err(revision_to_pyerr)?;
+            self.inner = candidate;
         }
         Ok(updated)
     }
 
     fn remove_comment(&mut self, id: i32, py: Python<'_>) -> PyResult<bool> {
-        let removed = self
-            .inner
+        let mut candidate = self.inner.clone_for_staging();
+        let removed = candidate
             .remove_comment(id)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         if removed {
-            self.revisions.bump();
+            let prepared = self
+                .revisions
+                .prepare_scopes("Document.remove_comment", &[], &[])
+                .map_err(revision_to_pyerr)?;
+            self.revisions
+                .commit_scopes(prepared)
+                .map_err(revision_to_pyerr)?;
+            self.inner = candidate;
         }
         Ok(removed)
     }
@@ -3693,23 +3936,35 @@ impl PyDocument {
         .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
-    fn rebuild_toc(&mut self, py: Python<'_>) -> PyResult<PyTocRebuildReport> {
+    fn rebuild_toc(&mut self, py: Python<'_>) -> PyResult<Py<PyTocRebuildReport>> {
+        let mut candidate = self.inner.clone_for_staging();
         let (report, changed) = py
             .detach(|| {
-                let before = self.inner.to_bytes()?;
-                let report = self.inner.rebuild_toc()?;
-                let changed = self.inner.to_bytes()? != before;
+                let before = candidate.to_bytes()?;
+                let report = candidate.rebuild_toc()?;
+                let changed = candidate.to_bytes()? != before;
                 Ok::<_, rdocx::Error>((report, changed))
             })
             .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let result = Py::new(
+            py,
+            PyTocRebuildReport {
+                entry_count: report.entry_count,
+                bookmark_count: report.bookmark_count,
+                diagnostics: report.diagnostics,
+            },
+        )?;
         if changed {
-            self.revisions.bump();
+            let prepared = self
+                .revisions
+                .prepare_scopes("Document.rebuild_toc", &[], &[])
+                .map_err(revision_to_pyerr)?;
+            self.revisions
+                .commit_scopes(prepared)
+                .map_err(revision_to_pyerr)?;
+            self.inner = candidate;
         }
-        Ok(PyTocRebuildReport {
-            entry_count: report.entry_count,
-            bookmark_count: report.bookmark_count,
-            diagnostics: report.diagnostics,
-        })
+        Ok(result)
     }
 
     #[getter(revisions)]
@@ -3725,25 +3980,29 @@ impl PyDocument {
                 author: revision.author().to_owned(),
                 timestamp: revision.timestamp().map(str::to_owned),
                 kind: revision_kind_name(revision.kind()).to_owned(),
-                story: Some(story_snapshot(revision.story())),
+                story: Some(self.owned_story_snapshot(revision.story())),
             }),
         )
     }
 
     fn accept_all(&mut self, py: Python<'_>) -> PyResult<usize> {
-        self.counted_mutation(py, rdocx::Document::accept_all)
+        self.counted_mutation(py, "Document.accept_all", rdocx::Document::accept_all)
     }
 
     fn reject_all(&mut self, py: Python<'_>) -> PyResult<usize> {
-        self.counted_mutation(py, rdocx::Document::reject_all)
+        self.counted_mutation(py, "Document.reject_all", rdocx::Document::reject_all)
     }
 
     fn accept_revisions_by_author(&mut self, py: Python<'_>, author: &str) -> PyResult<usize> {
-        self.counted_mutation(py, |document| document.accept_revisions_by_author(author))
+        self.counted_mutation(py, "Document.accept_revisions_by_author", |document| {
+            document.accept_revisions_by_author(author)
+        })
     }
 
     fn reject_revisions_by_author(&mut self, py: Python<'_>, author: &str) -> PyResult<usize> {
-        self.counted_mutation(py, |document| document.reject_revisions_by_author(author))
+        self.counted_mutation(py, "Document.reject_revisions_by_author", |document| {
+            document.reject_revisions_by_author(author)
+        })
     }
 
     #[pyo3(signature = (*, start, end))]
@@ -3753,7 +4012,7 @@ impl PyDocument {
         start: &str,
         end: &str,
     ) -> PyResult<usize> {
-        self.counted_mutation(py, |document| {
+        self.counted_mutation(py, "Document.accept_revisions_in_date_range", |document| {
             document.accept_revisions_in_date_range(start, end)
         })
     }
@@ -3765,17 +4024,21 @@ impl PyDocument {
         start: &str,
         end: &str,
     ) -> PyResult<usize> {
-        self.counted_mutation(py, |document| {
+        self.counted_mutation(py, "Document.reject_revisions_in_date_range", |document| {
             document.reject_revisions_in_date_range(start, end)
         })
     }
 
     fn accept_revision_id(&mut self, py: Python<'_>, id: i32) -> PyResult<usize> {
-        self.counted_mutation(py, |document| document.accept_revision_id(id))
+        self.counted_mutation(py, "Document.accept_revision_id", |document| {
+            document.accept_revision_id(id)
+        })
     }
 
     fn reject_revision_id(&mut self, py: Python<'_>, id: i32) -> PyResult<usize> {
-        self.counted_mutation(py, |document| document.reject_revision_id(id))
+        self.counted_mutation(py, "Document.reject_revision_id", |document| {
+            document.reject_revision_id(id)
+        })
     }
 
     /// Replace literal text only inside a checked paragraph, table or control item.
@@ -3789,7 +4052,7 @@ impl PyDocument {
         expect: Option<usize>,
     ) -> PyResult<usize> {
         let location = self.native_location(py, item)?;
-        self.scoped_replacement(py, |document| {
+        self.scoped_replacement(py, "Document.replace_text_at", |document| {
             document.try_replace_text_at(&location, old, new, expect)
         })
     }
@@ -3803,12 +4066,22 @@ impl PyDocument {
         expect: Option<usize>,
     ) -> PyResult<usize> {
         if expect.is_none() {
-            return self.counted_mutation(py, |document| {
+            return self.counted_mutation(py, "Document.try_replace_text", |document| {
                 document.try_replace_text(placeholder, replacement)
             });
         }
-        let counts =
+        let (candidate, counts) =
             self.expected_replacements(py, &[(placeholder, replacement, expect)], false)?;
+        if counts[0] > 0 {
+            let prepared = self
+                .revisions
+                .prepare_scopes("Document.try_replace_text", &[], &[])
+                .map_err(revision_to_pyerr)?;
+            self.revisions
+                .commit_scopes(prepared)
+                .map_err(revision_to_pyerr)?;
+            self.inner = candidate;
+        }
         Ok(counts[0])
     }
 
@@ -3839,8 +4112,20 @@ impl PyDocument {
                 (placeholder.as_str(), replacement.as_str(), *expected)
             })
             .collect::<Vec<_>>();
-        let counts = self.expected_replacements(py, &pairs, true)?;
-        PyTuple::new(py, counts)
+        let (candidate, counts) = self.expected_replacements(py, &pairs, true)?;
+        let changed = counts.iter().any(|count| *count > 0);
+        let result = PyTuple::new(py, counts)?;
+        if changed {
+            let prepared = self
+                .revisions
+                .prepare_scopes("Document.replace_all", &[], &[])
+                .map_err(revision_to_pyerr)?;
+            self.revisions
+                .commit_scopes(prepared)
+                .map_err(revision_to_pyerr)?;
+            self.inner = candidate;
+        }
+        Ok(result)
     }
 
     fn replace_all_regex(
@@ -3848,7 +4133,9 @@ impl PyDocument {
         py: Python<'_>,
         patterns: Vec<(String, String)>,
     ) -> PyResult<usize> {
-        self.counted_mutation(py, |document| document.replace_all_regex(&patterns))
+        self.counted_mutation(py, "Document.replace_all_regex", |document| {
+            document.replace_all_regex(&patterns)
+        })
     }
 
     #[pyo3(signature = (
@@ -3896,15 +4183,25 @@ impl PyDocument {
             merge_record_number,
             merge_sequence_number,
         };
-        self.counted_mutation(py, |document| document.update_fields(&context))
+        self.counted_mutation(py, "Document.update_fields", |document| {
+            document.update_fields(&context)
+        })
     }
 
     fn update_page_fields(&mut self, py: Python<'_>) -> PyResult<usize> {
+        let mut candidate = self.inner.clone_for_staging();
         let updated = py
-            .detach(|| self.inner.update_page_fields())
+            .detach(|| candidate.update_page_fields())
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         if updated != 0 {
-            self.revisions.bump();
+            let prepared = self
+                .revisions
+                .prepare_scopes("Document.update_page_fields", &[], &[])
+                .map_err(revision_to_pyerr)?;
+            self.revisions
+                .commit_scopes(prepared)
+                .map_err(revision_to_pyerr)?;
+            self.inner = candidate;
         }
         Ok(updated)
     }
@@ -3912,35 +4209,56 @@ impl PyDocument {
     fn update_layout_backed_fields(
         &mut self,
         py: Python<'_>,
-    ) -> PyResult<PyLayoutBackedFieldUpdateReport> {
+    ) -> PyResult<Py<PyLayoutBackedFieldUpdateReport>> {
+        let mut candidate = self.inner.clone_for_staging();
         let report = py
-            .detach(|| self.inner.update_layout_backed_fields())
+            .detach(|| candidate.update_layout_backed_fields())
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        if report.updated_count() != 0 {
-            self.revisions.bump();
+        let changed = report.updated_count() != 0;
+        let result = Py::new(
+            py,
+            PyLayoutBackedFieldUpdateReport {
+                page_fields: report.page_fields,
+                num_pages_fields: report.num_pages_fields,
+                page_reference_fields: report.page_reference_fields,
+                section_fields: report.section_fields,
+                section_pages_fields: report.section_pages_fields,
+                diagnostics: report.diagnostics,
+            },
+        )?;
+        if changed {
+            let prepared = self
+                .revisions
+                .prepare_scopes("Document.update_layout_backed_fields", &[], &[])
+                .map_err(revision_to_pyerr)?;
+            self.revisions
+                .commit_scopes(prepared)
+                .map_err(revision_to_pyerr)?;
+            self.inner = candidate;
         }
-        Ok(PyLayoutBackedFieldUpdateReport {
-            page_fields: report.page_fields,
-            num_pages_fields: report.num_pages_fields,
-            page_reference_fields: report.page_reference_fields,
-            section_fields: report.section_fields,
-            section_pages_fields: report.section_pages_fields,
-            diagnostics: report.diagnostics,
-        })
+        Ok(result)
     }
 
     #[pyo3(signature = (index, max_level = 3))]
     fn insert_toc(&mut self, py: Python<'_>, index: usize, max_level: u32) -> PyResult<()> {
-        if index > self.inner.content_count() {
+        let mut candidate = self.inner.clone_for_staging();
+        if index > candidate.content_count() {
             return Err(PyIndexError::new_err("content index out of range"));
         }
         if !(1..=9).contains(&max_level) {
             return Err(PyValueError::new_err("max_level must be between 1 and 9"));
         }
-        self.inner
+        candidate
             .insert_toc(index, max_level)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        let prepared = self
+            .revisions
+            .prepare_scopes("Document.insert_toc", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        self.revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        self.inner = candidate;
         Ok(())
     }
 
@@ -3955,40 +4273,64 @@ impl PyDocument {
     }
 
     fn add_paragraph(slf: Py<Self>, py: Python<'_>, text: &str) -> PyResult<Py<PyParagraph>> {
-        let (index, path) = {
-            let mut document = slf.borrow_mut(py);
-            let index = document.inner.paragraph_count();
-            document.inner.add_paragraph(text);
-            document.revisions.bump();
-            let path = document
-                .revisions
-                .capture(smallvec![PathSeg::Body(0), PathSeg::Para(index)]);
-            (index, path)
-        };
-        debug_assert!(matches!(path.segs.last(), Some(PathSeg::Para(i)) if *i == index));
-        Py::new(py, PyParagraph::new(slf, path))
+        let mut document = slf.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        let index = candidate.paragraph_count();
+        candidate.add_paragraph(text);
+        let prepared = document
+            .revisions
+            .prepare_scopes("Document.add_paragraph", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        let path = document
+            .revisions
+            .capture_prepared(&prepared, smallvec![PathSeg::Body(0), PathSeg::Para(index)])
+            .map_err(revision_to_pyerr)?;
+        let result = Py::new(py, PyParagraph::new(slf.clone_ref(py), path))?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        document.inner = candidate;
+        Ok(result)
     }
 
     #[pyo3(signature = (rows, cols))]
     fn add_table(slf: Py<Self>, py: Python<'_>, rows: usize, cols: usize) -> PyResult<Py<PyTable>> {
-        let (index, path) = {
-            let mut document = slf.borrow_mut(py);
-            let index = document.inner.table_count();
-            document.inner.add_table(rows, cols);
-            document.revisions.bump();
-            let path = document.revisions.capture(smallvec![PathSeg::Body(index)]);
-            (index, path)
-        };
-        debug_assert!(matches!(path.segs.last(), Some(PathSeg::Body(i)) if *i == index));
-        Py::new(py, PyTable::new(slf, path))
+        let mut document = slf.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        let index = candidate.table_count();
+        candidate.add_table(rows, cols);
+        let prepared = document
+            .revisions
+            .prepare_scopes("Document.add_table", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        let path = document
+            .revisions
+            .capture_prepared(&prepared, smallvec![PathSeg::Body(index)])
+            .map_err(revision_to_pyerr)?;
+        let result = Py::new(py, PyTable::new(slf.clone_ref(py), path))?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        document.inner = candidate;
+        Ok(result)
     }
 
     fn remove_content(&mut self, py: Python<'_>, index: usize) -> PyResult<bool> {
+        let mut candidate = self.inner.clone_for_staging();
         let removed = py
-            .detach(|| self.inner.try_remove_content(index))
+            .detach(|| candidate.try_remove_content(index))
             .map_err(|error| rdocx_to_pyerr(py, error))?;
         if removed {
-            self.revisions.bump();
+            let prepared = self
+                .revisions
+                .prepare_scopes("Document.remove_content", &[], &[])
+                .map_err(revision_to_pyerr)?;
+            self.revisions
+                .commit_scopes(prepared)
+                .map_err(revision_to_pyerr)?;
+            self.inner = candidate;
         }
         Ok(removed)
     }
@@ -4022,22 +4364,36 @@ impl PyDocument {
         index: usize,
         text: &str,
     ) -> PyResult<Py<PyParagraph>> {
-        let path = {
+        let result = {
             let mut document = slf.borrow_mut(py);
-            if index > document.inner.content_count() {
+            let mut candidate = document.inner.clone_for_staging();
+            if index > candidate.content_count() {
                 return Err(PyIndexError::new_err("content index out of range"));
             }
-            document.inner.insert_paragraph(index, text);
-            let paragraph = document
-                .inner
+            candidate.insert_paragraph(index, text);
+            let paragraph = candidate
                 .paragraph_index_of_content(index)
                 .expect("an inserted body paragraph has a paragraph index");
-            document.revisions.bump();
+            let prepared = document
+                .revisions
+                .prepare_scopes("Document.insert_paragraph", &[], &[])
+                .map_err(revision_to_pyerr)?;
+            let path = document
+                .revisions
+                .capture_prepared(
+                    &prepared,
+                    smallvec![PathSeg::Body(0), PathSeg::Para(paragraph)],
+                )
+                .map_err(revision_to_pyerr)?;
+            let result = Py::new(py, PyParagraph::new(slf.clone_ref(py), path))?;
             document
                 .revisions
-                .capture(smallvec![PathSeg::Body(0), PathSeg::Para(paragraph)])
+                .commit_scopes(prepared)
+                .map_err(revision_to_pyerr)?;
+            document.inner = candidate;
+            result
         };
-        Py::new(py, PyParagraph::new(slf, path))
+        Ok(result)
     }
 
     #[pyo3(signature = (index, rows, cols))]
@@ -4048,28 +4404,42 @@ impl PyDocument {
         rows: usize,
         cols: usize,
     ) -> PyResult<Py<PyTable>> {
-        let path = {
+        let result = {
             let mut document = slf.borrow_mut(py);
-            if index > document.inner.content_count() {
+            let mut candidate = document.inner.clone_for_staging();
+            if index > candidate.content_count() {
                 return Err(PyIndexError::new_err("content index out of range"));
             }
-            document.inner.insert_table(index, rows, cols);
+            candidate.insert_table(index, rows, cols);
             // Table handles count every table in document order, including
             // those inside block content controls, so find the new one.
-            let table = (0..document.inner.table_count())
-                .find(|table| document.inner.content_index_of_table(*table) == Some(index))
+            let table = (0..candidate.table_count())
+                .find(|table| candidate.content_index_of_table(*table) == Some(index))
                 .expect("an inserted body table has a table index");
-            document.revisions.bump();
-            document.revisions.capture(smallvec![PathSeg::Body(table)])
+            let prepared = document
+                .revisions
+                .prepare_scopes("Document.insert_table", &[], &[])
+                .map_err(revision_to_pyerr)?;
+            let path = document
+                .revisions
+                .capture_prepared(&prepared, smallvec![PathSeg::Body(table)])
+                .map_err(revision_to_pyerr)?;
+            let result = Py::new(py, PyTable::new(slf.clone_ref(py), path))?;
+            document
+                .revisions
+                .commit_scopes(prepared)
+                .map_err(revision_to_pyerr)?;
+            document.inner = candidate;
+            result
         };
-        Py::new(py, PyTable::new(slf, path))
+        Ok(result)
     }
 
     fn pop_content(
         slf: Py<Self>,
         py: Python<'_>,
         index: &Bound<'_, PyAny>,
-    ) -> PyResult<PyContentFragment> {
+    ) -> PyResult<Py<PyContentFragment>> {
         let location = if let Ok(item) = index.cast::<PyStoryItem>() {
             slf.borrow(py).native_location(py, &item.borrow())?
         } else {
@@ -4080,13 +4450,22 @@ impl PyDocument {
             }
             location
         };
-        let fragment = slf
-            .borrow_mut(py)
-            .inner
+        let mut document = slf.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        let fragment = candidate
             .remove_content_at(&location)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        slf.borrow_mut(py).revisions.bump();
-        Ok(PyContentFragment { inner: fragment })
+        let prepared = document
+            .revisions
+            .prepare_scopes("Document.pop_content", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        let result = Py::new(py, PyContentFragment { inner: fragment })?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        document.inner = candidate;
+        Ok(result)
     }
 
     fn insert_content(
@@ -4108,11 +4487,20 @@ impl PyDocument {
             slf.borrow(py).body_location(py, destination)?
         };
         let fragment = fragment.inner.clone();
-        slf.borrow_mut(py)
-            .inner
+        let mut document = slf.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        candidate
             .insert_content(&location, fragment)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        slf.borrow_mut(py).revisions.bump();
+        let prepared = document
+            .revisions
+            .prepare_scopes("Document.insert_content", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        document.inner = candidate;
         Ok(())
     }
 
@@ -4133,11 +4521,20 @@ impl PyDocument {
             let source = locations.pop().expect("two requested body locations");
             (source, destination)
         };
-        slf.borrow_mut(py)
-            .inner
+        let mut document = slf.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        candidate
             .clone_content(&source, &destination)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        slf.borrow_mut(py).revisions.bump();
+        let prepared = document
+            .revisions
+            .prepare_scopes("Document.clone_content", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        document.inner = candidate;
         Ok(())
     }
 
@@ -4158,11 +4555,20 @@ impl PyDocument {
             let source = locations.pop().expect("two requested body locations");
             (source, destination)
         };
-        slf.borrow_mut(py)
-            .inner
+        let mut document = slf.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        candidate
             .move_content(&source, &destination)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        slf.borrow_mut(py).revisions.bump();
+        let prepared = document
+            .revisions
+            .prepare_scopes("Document.move_content", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        document.inner = candidate;
         Ok(())
     }
 }
@@ -4225,6 +4631,70 @@ fn parse_comparison_story(name: &str) -> rdocx::Result<rdocx::ComparisonStoryKin
     }
 }
 
+// Native snapshots bind causal state without changing their visible value equality.
+
+impl PyDocument {
+    fn owned_story_snapshot(&self, story: &rdocx::StoryId) -> PyStory {
+        let mut snapshot = story_snapshot(story);
+        snapshot.binding = Some(self.revisions.capture(smallvec![]));
+        snapshot
+    }
+
+    fn validate_owned_story(&self, py: Python<'_>, story: &PyStory) -> PyResult<()> {
+        let Some(path) = &story.binding else {
+            return Ok(());
+        };
+        if !path.belongs_to(&self.revisions) {
+            return Err(PyValueError::new_err(
+                "story belongs to a different document",
+            ));
+        }
+        path.validate_scopes(
+            &self.revisions,
+            "story",
+            "Re-fetch it with document.stories.",
+        )
+        .map_err(|error| crate::stale_to_pyerr(py, error))
+    }
+
+    fn validate_owned_item(&self, py: Python<'_>, item: &PyStoryItem) -> PyResult<()> {
+        if let Some(path) = &item.binding {
+            if !path.belongs_to(&self.revisions) {
+                return Err(PyValueError::new_err(
+                    "story item belongs to a different document",
+                ));
+            }
+            path.validate_scopes(
+                &self.revisions,
+                "story item",
+                "Re-fetch it with document.story_items.",
+            )
+            .map_err(|error| crate::stale_to_pyerr(py, error))?;
+        }
+        self.validate_owned_story(py, &item.story)
+    }
+}
+
+impl PartialEq for PyStory {
+    fn eq(&self, other: &Self) -> bool {
+        self.kind == other.kind
+            && self.part_name == other.part_name
+            && self.owner_index == other.owner_index
+    }
+}
+impl Eq for PyStory {}
+impl PartialEq for PyStoryItem {
+    fn eq(&self, other: &Self) -> bool {
+        self.story == other.story
+            && self.kind == other.kind
+            && self.index_path == other.index_path
+            && self.direct_body_index == other.direct_body_index
+            && self.text == other.text
+            && self.xml == other.xml
+            && self.revision == other.revision
+    }
+}
+impl Eq for PyStoryItem {}
 fn collect_caller_fonts<'py>(
     py: Python<'py>,
     fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,

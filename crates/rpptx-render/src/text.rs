@@ -50,6 +50,7 @@ fn shaping_cache_entry_bytes(
         &style.east_asian_typeface,
         &style.complex_script_typeface,
         &style.symbol_typeface,
+        &style.language,
         &style.hyperlink_url,
         &segment.hyperlink_url,
     ];
@@ -275,11 +276,30 @@ pub(super) fn inline_items(
     Ok(items)
 }
 
+#[cfg(test)]
 fn inline_items_cached(
     font_manager: &mut FontManager,
     shaping_cache: &mut ShapingCache,
     paragraph: &ResolvedParagraph,
     page_number: usize,
+    contexts: &mut HashMap<usize, Option<String>>,
+) -> Result<Vec<InlineItem>, LayoutError> {
+    inline_items_with_caps(
+        font_manager,
+        shaping_cache,
+        paragraph,
+        page_number,
+        &mut Vec::new(),
+        contexts,
+    )
+}
+
+fn inline_items_with_caps(
+    font_manager: &mut FontManager,
+    shaping_cache: &mut ShapingCache,
+    paragraph: &ResolvedParagraph,
+    page_number: usize,
+    requests: &mut Vec<(bool, bool, Option<f64>, Option<String>)>,
     contexts: &mut HashMap<usize, Option<String>>,
 ) -> Result<Vec<InlineItem>, LayoutError> {
     let mut items = Vec::with_capacity(paragraph.runs.len());
@@ -290,7 +310,14 @@ fn inline_items_cached(
         match run {
             ResolvedTextRun::Text { text, style } => {
                 push_displayed_text(&mut items, text, |line| {
-                    shaping_cache.shape(font_manager, line, style)
+                    let shaped = shaping_cache.shape(font_manager, line, style)?;
+                    requests.push((
+                        style.small_caps,
+                        style.all_caps,
+                        style.spacing.filter(|_| style.small_caps || style.all_caps),
+                        style.language.clone(),
+                    ));
+                    Ok(shaped)
                 })?;
             }
             ResolvedTextRun::Field {
@@ -308,6 +335,12 @@ fn inline_items_cached(
                 };
                 push_displayed_text(&mut items, &rendered, |line| {
                     let mut segment = shaping_cache.shape(font_manager, line, style)?;
+                    requests.push((
+                        style.small_caps,
+                        style.all_caps,
+                        style.spacing.filter(|_| style.small_caps || style.all_caps),
+                        style.language.clone(),
+                    ));
                     if slide_number {
                         segment.field_kind = Some(FieldKind::Page);
                     }
@@ -396,7 +429,7 @@ fn shape_run(
     }
 
     Ok(TextSegment {
-        text: rendered_text,
+        text: text.to_owned(),
         direction: oxml_layout::TextDirection::Auto,
         source: None,
         font_id,
@@ -413,7 +446,7 @@ fn shape_run(
         underline: style.underline.then_some(Underline::Single),
         strike: style.strike,
         dstrike: false,
-        highlight: None,
+        highlight: style.highlight,
         baseline_offset: style.baseline.unwrap_or(0.0) * font_size,
         hyperlink_url: style.hyperlink_url.clone(),
         field_kind: None,
@@ -433,6 +466,8 @@ fn shape_marker(
     size: &Option<ResolvedBulletSize>,
 ) -> Result<TextSegment, LayoutError> {
     let mut style = first_run_style(paragraph).clone();
+    style.small_caps = false;
+    style.highlight = None;
     let base_size = style.font_size.unwrap_or(DEFAULT_FONT_SIZE);
     style.font_size = Some(match size {
         Some(ResolvedBulletSize::Percent(factor)) => base_size * factor,
@@ -476,6 +511,9 @@ static DEFAULT_RUN_STYLE: ResolvedRunStyle = ResolvedRunStyle {
     bold: false,
     italic: false,
     all_caps: false,
+    small_caps: false,
+    language: None,
+    highlight: None,
     underline: false,
     strike: false,
     spacing: None,
@@ -603,6 +641,7 @@ pub(super) struct StackedText {
     pub(super) height: f64,
     pub(super) font_scale: f64,
     width_fits: bool,
+    pub(super) diagnostics: Vec<String>,
 }
 
 impl StackedText {
@@ -638,9 +677,15 @@ pub(super) fn stack_text_for_page_with_directions(
     page_number: usize,
     paragraph_directions: &[oxml_layout::TextDirection],
 ) -> Result<StackedText, LayoutError> {
-    let shaped_paragraphs =
-        shape_paragraphs(font_manager, text, page_number, paragraph_directions)?;
-    match text.autofit {
+    let mut diagnostics = Vec::new();
+    let shaped_paragraphs = shape_paragraphs(
+        font_manager,
+        text,
+        page_number,
+        paragraph_directions,
+        &mut diagnostics,
+    )?;
+    let mut stacked = (|| match text.autofit {
         ResolvedAutofit::None | ResolvedAutofit::Shape => {
             stack_shaped_text(font_manager, content, text, &shaped_paragraphs, 1.0, None)
         }
@@ -681,7 +726,9 @@ pub(super) fn stack_text_for_page_with_directions(
             font_scale.unwrap_or(1.0),
             line_spacing_reduction,
         ),
-    }
+    })()?;
+    stacked.diagnostics = diagnostics;
+    Ok(stacked)
 }
 
 fn shape_paragraphs(
@@ -689,6 +736,7 @@ fn shape_paragraphs(
     text: &ResolvedTextBody,
     page_number: usize,
     paragraph_directions: &[oxml_layout::TextDirection],
+    diagnostics: &mut Vec<String>,
 ) -> Result<Vec<(Vec<InlineItem>, oxml_layout::TextDirection)>, LayoutError> {
     let mut numbering = NumberingState::default();
     let mut shaping_cache = ShapingCache::default();
@@ -701,10 +749,10 @@ fn shape_paragraphs(
                 .copied()
                 .unwrap_or(oxml_layout::TextDirection::Auto);
             let marker = numbering.marker(font_manager, &mut shaping_cache, paragraph)?;
+            let mut requests = Vec::new();
             let mut contexts = HashMap::new();
-            let legacy_items = inline_items_cached(font_manager, &mut shaping_cache,
-                paragraph, page_number, &mut contexts)?;
-            let uses_rich_text = base_direction != oxml_layout::TextDirection::Auto
+            let legacy_items = inline_items_with_caps(font_manager, &mut shaping_cache, paragraph, page_number, &mut requests, &mut contexts)?;
+            let uses_rich_text = requests.iter().any(|(small, all, _, _)| *small || *all) || base_direction != oxml_layout::TextDirection::Auto
                 || legacy_items.iter().any(|item| {
                     matches!(item, InlineItem::Text(segment) if needs_multilingual_layout(&segment.text))
                 });
@@ -713,6 +761,8 @@ fn shape_paragraphs(
                     font_manager,
                     legacy_items,
                     base_direction,
+                    &requests,
+                    diagnostics,
                     &contexts,
                 )?
             } else {
@@ -755,31 +805,50 @@ fn shape_multilingual_items_preserving_controls(
     font_manager: &mut FontManager,
     legacy_items: Vec<InlineItem>,
     base_direction: oxml_layout::TextDirection,
+    requests: &[(bool, bool, Option<f64>, Option<String>)],
+    diagnostics: &mut Vec<String>,
     contexts: &HashMap<usize, Option<String>>,
 ) -> Result<Vec<InlineItem>, LayoutError> {
+    let mut occurrence_languages = requests.iter();
     let styled = legacy_items
         .iter()
         .filter_map(|item| match item {
-            InlineItem::Text(segment) => Some((segment.clone(), None)),
+            InlineItem::Text(segment) => Some((
+                segment.clone(),
+                occurrence_languages
+                    .next()
+                    .and_then(|(_, _, _, language)| language.clone()),
+            )),
             _ => None,
         })
         .collect();
-    let mut shaped = std::collections::VecDeque::from(font_manager.shape_multilingual_paragraph(
+    let (spans, fallback_diagnostics) = font_manager.shape_multilingual_paragraph_with_caps(
         styled,
         base_direction,
         false,
-    )?);
+        &requests
+            .iter()
+            .map(|(small, all, _, _)| (*small, *all))
+            .collect::<Vec<_>>(),
+    )?;
+    diagnostics.extend(fallback_diagnostics);
+    let mut shaped = std::collections::VecDeque::from(spans);
     let mut items = Vec::new();
+    let mut occurrence = 0usize;
     for (index, item) in legacy_items.into_iter().enumerate() {
         let requested = contexts.get(&index).and_then(|family| family.as_deref());
         let InlineItem::Text(segment) = item else {
             items.push(item);
             continue;
         };
+        let spacing = requests
+            .get(occurrence)
+            .and_then(|(_, _, spacing, _)| *spacing);
+        occurrence += 1;
         let target_bytes = segment.text.len();
         let mut consumed_bytes = 0usize;
         while consumed_bytes < target_bytes {
-            let Some(span) = shaped.pop_front() else {
+            let Some(mut span) = shaped.pop_front() else {
                 return Err(LayoutError::Layout(
                     "multilingual paragraph shaping lost a styled text run".to_owned(),
                 ));
@@ -792,6 +861,30 @@ fn shape_multilingual_items_preserving_controls(
                         "multilingual paragraph shaping crossed a styled text boundary".to_owned(),
                     )
                 })?;
+            if let Some(spacing) = spacing {
+                let mut base = span.base().clone();
+                let advances = span
+                    .x_advances()
+                    .iter()
+                    .map(|advance| advance + spacing)
+                    .collect::<Vec<_>>();
+                base.advances = advances.clone();
+                base.width = advances.iter().sum();
+                span = oxml_layout::MultilingualTextSegment::new(
+                    base,
+                    span.logical_index(),
+                    span.language().map(str::to_owned),
+                    span.script(),
+                    span.direction(),
+                    span.bidi_level(),
+                    advances,
+                    span.y_advances().to_vec(),
+                    span.x_offsets().to_vec(),
+                    span.y_offsets().to_vec(),
+                    span.clusters().to_vec(),
+                    span.break_after(),
+                )?;
+            }
             font_manager.record_font_contribution(span.base().font_id, requested, span.text())?;
             items.push(InlineItem::MultilingualText(span));
         }
@@ -900,6 +993,7 @@ fn stack_shaped_text(
         height,
         font_scale,
         width_fits,
+        diagnostics: Vec::new(),
     })
 }
 
@@ -1295,7 +1389,7 @@ fn emit_segment(
         elements.push(PositionedElement::FilledRect {
             rect: Rect {
                 x,
-                y: baseline - segment.ascent,
+                y: adjusted_baseline - segment.ascent,
                 width: effective_width,
                 height: line_height,
             },
@@ -1353,7 +1447,7 @@ fn emit_segment(
         elements.push(PositionedElement::LinkAnnotation {
             rect: Rect {
                 x,
-                y: baseline - segment.ascent,
+                y: adjusted_baseline - segment.ascent,
                 width: effective_width,
                 height: line_height,
             },
@@ -1378,7 +1472,7 @@ fn emit_multilingual_segment(
         elements.push(PositionedElement::FilledRect {
             rect: Rect {
                 x,
-                y: baseline - base.ascent,
+                y: adjusted_baseline - base.ascent,
                 width: segment.width(),
                 height: line_height,
             },
@@ -1444,7 +1538,7 @@ fn emit_multilingual_segment(
         elements.push(PositionedElement::LinkAnnotation {
             rect: Rect {
                 x,
-                y: baseline - base.ascent,
+                y: adjusted_baseline - base.ascent,
                 width: segment.width(),
                 height: line_height,
             },
@@ -1816,6 +1910,7 @@ mod tests {
         text_shape.content = ResolvedContent::Text(text);
         let input = RenderInput {
             slides: vec![ResolvedSlide {
+                unresolved_member_count: 0,
                 size: (80.0, 30.0),
                 background: None,
                 shapes: vec![text_shape],
@@ -2005,6 +2100,7 @@ mod tests {
         text_shape.content = ResolvedContent::Text(text);
         let input = RenderInput {
             slides: vec![ResolvedSlide {
+                unresolved_member_count: 0,
                 size: (100.0, 50.0),
                 background: None,
                 shapes: vec![text_shape],
@@ -2088,6 +2184,7 @@ mod tests {
         });
         let input = RenderInput {
             slides: vec![ResolvedSlide {
+                unresolved_member_count: 0,
                 size: (200.0, 200.0),
                 background: None,
                 shapes: vec![text_shape],
@@ -2142,6 +2239,7 @@ mod tests {
         text_shape.content = ResolvedContent::Text(text);
         let input = RenderInput {
             slides: vec![ResolvedSlide {
+                unresolved_member_count: 0,
                 size: (100.0, 50.0),
                 background: None,
                 shapes: vec![text_shape],
@@ -2784,7 +2882,7 @@ mod tests {
     }
 
     #[test]
-    fn all_caps_transforms_text_before_font_resolution_and_shaping() {
+    fn all_caps_keep_logical_text_and_shape_uppercase() {
         let mut fonts = FontManager::new_deterministic().expect("deterministic fonts");
         let caps_style = ResolvedRunStyle {
             font_size: Some(18.0),
@@ -2800,7 +2898,7 @@ mod tests {
         let caps = shape_run(&mut fonts, "Straße", &caps_style).expect("shape all caps");
         let expected = shape_run(&mut fonts, "STRASSE", &normal_style).expect("shape uppercase");
 
-        assert_eq!(caps.text, "STRASSE");
+        assert_eq!(caps.text, "Straße");
         assert_eq!(caps.font_id, expected.font_id);
         assert_eq!(caps.glyph_ids, expected.glyph_ids);
         assert_eq!(caps.advances, expected.advances);
@@ -3040,6 +3138,7 @@ mod tests {
         text_shape.content = ResolvedContent::Text(text);
         let input = RenderInput {
             slides: vec![ResolvedSlide {
+                unresolved_member_count: 0,
                 size: (100.0, 50.0),
                 background: None,
                 shapes: vec![text_shape],
@@ -3143,6 +3242,7 @@ mod tests {
         text_shape.content = ResolvedContent::Text(text);
         let input = RenderInput {
             slides: vec![ResolvedSlide {
+                unresolved_member_count: 0,
                 size: (120.0, 80.0),
                 background: None,
                 shapes: vec![text_shape],
@@ -3203,6 +3303,7 @@ mod tests {
         text_shape.content = ResolvedContent::Text(text);
         let input = RenderInput {
             slides: vec![ResolvedSlide {
+                unresolved_member_count: 0,
                 size: (100.0, 50.0),
                 background: None,
                 shapes: vec![text_shape],
@@ -3596,6 +3697,131 @@ mod tests {
     }
 
     #[test]
+    fn fx206_caps_and_font_contribution_cache_keep_occurrences_on_cold_and_warm_paths() {
+        let text = "aBß";
+        let style = ResolvedRunStyle {
+            latin_typeface: Some("Carlito".into()),
+            font_size: Some(24.0),
+            language: Some("en".into()),
+            ..Default::default()
+        };
+        let mut capped = style.clone();
+        capped.small_caps = true;
+        let paragraph = ResolvedParagraph {
+            runs: vec![
+                ResolvedTextRun::Text {
+                    text: text.into(),
+                    style: capped,
+                },
+                ResolvedTextRun::Text {
+                    text: text.into(),
+                    style,
+                },
+            ],
+            ..Default::default()
+        };
+        let mut fonts = FontManager::new_deterministic().unwrap();
+        let mut cache = ShapingCache::default();
+        let mut observations = Vec::new();
+        for _ in 0..2 {
+            fonts.begin_layout();
+            fonts.begin_paragraph_font_trace();
+            let mut contexts = HashMap::new();
+            let mut requests = Vec::new();
+            let provisional = inline_items_with_caps(
+                &mut fonts,
+                &mut cache,
+                &paragraph,
+                1,
+                &mut requests,
+                &mut contexts,
+            )
+            .unwrap();
+            assert_eq!(requests.len(), 2);
+            assert!(requests[0].0);
+            assert!(!requests[1].0);
+            let mut diagnostics = Vec::new();
+            let accepted = shape_multilingual_items_preserving_controls(
+                &mut fonts,
+                provisional,
+                oxml_layout::TextDirection::LeftToRight,
+                &requests,
+                &mut diagnostics,
+                &contexts,
+            )
+            .unwrap();
+            let spans = accepted
+                .iter()
+                .filter_map(|item| match item {
+                    InlineItem::MultilingualText(span) => Some(span),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                spans.iter().map(|span| span.text()).collect::<String>(),
+                "aBßaBß"
+            );
+            assert!(spans.iter().any(|span| span.base().font_size == 24.0));
+            let events = fonts.finish_paragraph_font_events().unwrap();
+            let contributions = events
+                .iter()
+                .filter_map(|event| match event {
+                    FontTraceEvent::Contribution(contribution) => Some(contribution),
+                    FontTraceEvent::Resolution(_) => None,
+                })
+                .collect::<Vec<_>>();
+            assert!(!contributions.is_empty());
+            assert!(
+                contributions
+                    .iter()
+                    .all(|item| item.requested_family.as_deref() == Some("Carlito"))
+            );
+            for span in &spans {
+                assert!(
+                    contributions
+                        .iter()
+                        .any(|item| item.font_id == span.base().font_id)
+                );
+            }
+            let physical = contributions
+                .iter()
+                .map(|item| {
+                    let face = fonts.font_data(item.font_id).unwrap();
+                    (
+                        item.requested_family.clone(),
+                        face.family,
+                        face.face_index,
+                        face.data.to_vec(),
+                        face.variations,
+                        face.synthetic_bold,
+                        face.synthetic_italic,
+                    )
+                })
+                .collect::<Vec<_>>();
+            let shapes = spans
+                .iter()
+                .map(|span| {
+                    (
+                        span.text().to_owned(),
+                        span.base().font_size,
+                        span.glyph_ids().to_vec(),
+                        span.x_advances().to_vec(),
+                        span.clusters().to_vec(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            observations.push((physical, shapes, diagnostics));
+        }
+        assert_eq!(observations[0], observations[1]);
+        assert_eq!(
+            cache.entries.len(),
+            2,
+            "equal text with different cap requests uses distinct bounded cache entries"
+        );
+        assert!(cache.bytes < NATIVE_SHAPING_CACHE_MAX_BYTES);
+    }
+
+    #[test]
     fn fx195_shaping_cache_multilingual_probe_is_not_a_contribution() {
         let paragraph = ResolvedParagraph {
             runs: vec![ResolvedTextRun::Text {
@@ -3619,10 +3845,17 @@ mod tests {
             let mut contexts = HashMap::new();
             let provisional =
                 inline_items_cached(&mut fonts, &mut cache, &paragraph, 1, &mut contexts).unwrap();
+            let requests = provisional
+                .iter()
+                .filter(|item| matches!(item, InlineItem::Text(_)))
+                .map(|_| (false, false, None, None))
+                .collect::<Vec<_>>();
             let accepted = shape_multilingual_items_preserving_controls(
                 &mut fonts,
                 provisional,
                 oxml_layout::TextDirection::LeftToRight,
+                &requests,
+                &mut Vec::new(),
                 &contexts,
             )
             .unwrap();
@@ -3733,6 +3966,100 @@ mod tests {
     }
 
     #[test]
+    fn fx195_shaping_cache_oversized_language_preserves_cold_revisited_contributions() {
+        for oversized_length in [true, false] {
+            let mut language = String::with_capacity(NATIVE_SHAPING_CACHE_MAX_BYTES + 1);
+            if oversized_length {
+                language.push_str(&"x".repeat(NATIVE_SHAPING_CACHE_MAX_BYTES + 1));
+            } else {
+                language.push_str("en-US");
+            }
+            assert!(language.capacity() > NATIVE_SHAPING_CACHE_MAX_BYTES);
+            if !oversized_length {
+                assert_eq!(language.len(), 5, "capacity, not length, decides this case");
+            }
+            let paragraph = ResolvedParagraph {
+                runs: vec![ResolvedTextRun::Text {
+                    text: "same contributing text".into(),
+                    style: ResolvedRunStyle {
+                        latin_typeface: Some("Aptos".into()),
+                        font_size: Some(20.0),
+                        language: Some(language),
+                        ..Default::default()
+                    },
+                }],
+                ..Default::default()
+            };
+            let mut fonts = FontManager::new_deterministic().unwrap();
+            let mut cache = ShapingCache::default();
+            let mut captures = Vec::new();
+            for _ in 0..2 {
+                fonts.begin_layout();
+                fonts.begin_paragraph_font_trace();
+                let mut contexts = HashMap::new();
+                let mut requests = Vec::new();
+                let provisional = inline_items_with_caps(
+                    &mut fonts,
+                    &mut cache,
+                    &paragraph,
+                    1,
+                    &mut requests,
+                    &mut contexts,
+                )
+                .unwrap();
+                let accepted = shape_multilingual_items_preserving_controls(
+                    &mut fonts,
+                    provisional,
+                    oxml_layout::TextDirection::LeftToRight,
+                    &requests,
+                    &mut Vec::new(),
+                    &contexts,
+                )
+                .unwrap();
+                let contributions = fonts.finish_paragraph_font_contributions().unwrap();
+                assert!(!accepted.is_empty());
+                assert!(!contributions.is_empty());
+                assert!(
+                    contributions
+                        .iter()
+                        .all(|entry| { entry.requested_family.as_deref() == Some("Aptos") })
+                );
+                let faces = fonts
+                    .current_layout_fonts()
+                    .iter()
+                    .map(|id| {
+                        let face = fonts.font_data(*id).unwrap();
+                        (
+                            face.id,
+                            face.family,
+                            face.face_index,
+                            face.data.to_vec(),
+                            face.variations,
+                            face.synthetic_bold,
+                            face.synthetic_italic,
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                assert!(
+                    cache.entries.is_empty(),
+                    "oversized language must bypass admission"
+                );
+                assert_eq!(cache.bytes, 0);
+                assert_eq!(
+                    cache.entries.capacity(),
+                    0,
+                    "reject before reserving cache storage"
+                );
+                captures.push((format!("{accepted:?}"), faces, contributions));
+            }
+            assert_eq!(
+                captures[0], captures[1],
+                "exact cold/revisited glyphs, font inventory and actual requests"
+            );
+        }
+    }
+
+    #[test]
     fn fx195_shaping_cache_replays_contributing_font_identity() {
         let mut traces = Vec::new();
         let mut mismatches = Vec::new();
@@ -3798,10 +4125,17 @@ mod tests {
                 let provisional =
                     inline_items_cached(&mut fonts, &mut cache, &paragraph, 1, &mut contexts)
                         .unwrap();
+                let requests = provisional
+                    .iter()
+                    .filter(|item| matches!(item, InlineItem::Text(_)))
+                    .map(|_| (false, false, None, None))
+                    .collect::<Vec<_>>();
                 let accepted = shape_multilingual_items_preserving_controls(
                     &mut fonts,
                     provisional,
                     oxml_layout::TextDirection::LeftToRight,
+                    &requests,
+                    &mut Vec::new(),
                     &contexts,
                 )
                 .unwrap();
@@ -4047,6 +4381,7 @@ mod tests {
         text_shape.content = ResolvedContent::Text(text);
         let input = RenderInput {
             slides: vec![ResolvedSlide {
+                unresolved_member_count: 0,
                 size: (100.0, 50.0),
                 background: None,
                 shapes: vec![text_shape],
@@ -4439,5 +4774,224 @@ mod tests {
             (actual - expected).abs() < 0.001,
             "expected {expected}, got {actual}"
         );
+    }
+    #[test]
+    #[ignore = "required ROOT physical-font contour oracle, explicit named --ignored gate"]
+    fn fx206_caps_paint_matches_independent_hb_contours_with_negative_controls() {
+        let oracle = std::env::var("F206_CONTOUR_ORACLE").expect("admitted contour helper path");
+        let python = std::env::var("FONT_ORACLE_PYTHON").expect("pinned qualified interpreter");
+        let hb = std::env::var("HB_SHAPE").expect("pinned HarfBuzz path");
+        let artifacts = std::path::PathBuf::from(std::env::var("F206_ORACLE_OUTPUT").unwrap());
+        assert!(
+            artifacts.is_dir(),
+            "ROOT-created fresh owned evidence directory"
+        );
+        for case in ["smcp-default", "smcp-turkish", "fallback"] {
+            let prefix = if case == "fallback" {
+                "F206_FALLBACK"
+            } else {
+                "F206_SMCP"
+            };
+            let path = std::env::var(format!("{prefix}_FONT")).unwrap();
+            let sha = std::env::var(format!("{prefix}_SHA256")).unwrap();
+            let source = std::fs::read(&path).unwrap();
+            let mut fonts = FontManager::new_deterministic().unwrap();
+            let alias = "F206 physical contour control";
+            fonts.load_additional_fonts(&[oxml_layout::FontFile {
+                family: alias.to_owned(),
+                data: source.clone(),
+            }]);
+            let (logical, language) = match case {
+                "smcp-default" => ("office", "en"),
+                "smcp-turkish" => ("i", "tr"),
+                _ => ("aBß", "en"),
+            };
+            let style = ResolvedRunStyle {
+                font_size: Some(48.0),
+                latin_typeface: Some(alias.to_owned()),
+                ..ResolvedRunStyle::default()
+            };
+            let seed = ShapingCache::default()
+                .shape(&mut fonts, logical, &style)
+                .unwrap();
+            assert_eq!(
+                fonts.font_data(seed.font_id).unwrap().data.as_ref(),
+                source.as_slice(),
+                "actual selected physical face"
+            );
+            let (spans, diagnostics) = fonts
+                .shape_multilingual_paragraph_with_caps(
+                    vec![(seed, Some(language.to_owned()))],
+                    oxml_layout::TextDirection::LeftToRight,
+                    false,
+                    &[(true, false)],
+                )
+                .unwrap();
+            assert_eq!(
+                spans.iter().map(|span| span.text()).collect::<String>(),
+                logical
+            );
+            assert_eq!(
+                diagnostics.is_empty(),
+                case != "fallback",
+                "truthful feature versus fallback route"
+            );
+            let output = std::process::Command::new(&python)
+                .args([
+                    &oracle,
+                    "--font",
+                    &path,
+                    "--font-sha256",
+                    &sha,
+                    "--hb-shape",
+                    &hb,
+                    "--case",
+                    case,
+                    "--output",
+                    artifacts.join(format!("{case}.json")).to_str().unwrap(),
+                    "--execute-with-root-oracle-lease",
+                ])
+                .output()
+                .unwrap();
+            std::fs::write(artifacts.join(format!("{case}.stdout")), &output.stdout).unwrap();
+            std::fs::write(artifacts.join(format!("{case}.stderr")), &output.stderr).unwrap();
+            assert!(
+                output.status.success(),
+                "independent oracle prerequisite: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            let mut expected_gids = Vec::new();
+            let mut expected_advance = None;
+            let mut images = Vec::new();
+            let mut builder = tiny_skia::PathBuilder::new();
+            for row in stdout.lines() {
+                let fields = row.split_whitespace().collect::<Vec<_>>();
+                let number = |i: usize| fields[i].parse::<f32>().unwrap();
+                match fields[0] {
+                    "EXPECTED" | "NEGATIVE" => builder = tiny_skia::PathBuilder::new(),
+                    "ADV" if images.is_empty() => {
+                        expected_advance = Some(fields[1].parse::<f64>().unwrap())
+                    }
+                    "GIDS" if images.is_empty() => {
+                        expected_gids = fields[1]
+                            .split(',')
+                            .map(|v| v.parse::<u16>().unwrap())
+                            .collect()
+                    }
+                    "ADV" | "GIDS" => {}
+                    "M" => builder.move_to(number(1), number(2)),
+                    "L" => builder.line_to(number(1), number(2)),
+                    "Q" => builder.quad_to(number(1), number(2), number(3), number(4)),
+                    "C" => builder.cubic_to(
+                        number(1),
+                        number(2),
+                        number(3),
+                        number(4),
+                        number(5),
+                        number(6),
+                    ),
+                    "Z" => builder.close(),
+                    "END" => {
+                        let path = std::mem::take(&mut builder)
+                            .finish()
+                            .expect("nonempty independent ink");
+                        let mut pixmap = tiny_skia::Pixmap::new(960, 240).unwrap();
+                        pixmap.fill(tiny_skia::Color::WHITE);
+                        let mut paint = tiny_skia::Paint::default();
+                        paint.set_color_rgba8(0, 0, 0, 255);
+                        pixmap.fill_path(
+                            &path,
+                            &paint,
+                            tiny_skia::FillRule::Winding,
+                            tiny_skia::Transform::from_scale(2.0, 2.0),
+                            None,
+                        );
+                        images.push(pixmap);
+                    }
+                    _ => panic!("unexpected oracle record"),
+                }
+            }
+            assert_eq!(images.len(), 2);
+            assert_eq!(
+                spans
+                    .iter()
+                    .flat_map(|span| span.glyph_ids().iter().copied())
+                    .collect::<Vec<_>>(),
+                expected_gids
+            );
+            let width = spans.iter().map(|span| span.width()).sum::<f64>();
+            assert!(
+                (width - expected_advance.unwrap()).abs() < 1e-7,
+                "independently measured physical advance"
+            );
+            let mut elements = Vec::new();
+            let mut x = 20.0;
+            for span in &spans {
+                emit_multilingual_segment(span, x, 80.0, 60.0, &mut elements);
+                x += span.width();
+            }
+            let ids = spans
+                .iter()
+                .map(|span| span.font_id())
+                .collect::<std::collections::BTreeSet<_>>();
+            let data = ids
+                .into_iter()
+                .map(|id| fonts.font_data(id).unwrap())
+                .collect();
+            let result = oxml_layout::LayoutResult::new(
+                vec![std::sync::Arc::new(oxml_layout::PageFrame::new(
+                    1, 480.0, 120.0, elements,
+                ))],
+                data,
+                None,
+                Vec::new(),
+            );
+            let png = oxml_pdf::render_page_to_png(&result, 0, 144.0).unwrap();
+            std::fs::write(artifacts.join(format!("{case}-actual.png")), &png).unwrap();
+            images[0]
+                .save_png(artifacts.join(format!("{case}-expected.png")))
+                .unwrap();
+            images[1]
+                .save_png(artifacts.join(format!("{case}-negative.png")))
+                .unwrap();
+            let actual = tiny_skia::Pixmap::decode_png(&png).unwrap();
+            assert_eq!((actual.width(), actual.height()), (960, 240));
+            let ssim = |left: &tiny_skia::Pixmap, right: &tiny_skia::Pixmap| {
+                let values = |p: &tiny_skia::Pixmap| {
+                    p.pixels()
+                        .iter()
+                        .map(|p| {
+                            (f64::from(p.red()) + f64::from(p.green()) + f64::from(p.blue())) / 3.0
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let a = values(left);
+                let b = values(right);
+                let n = a.len() as f64;
+                let ma = a.iter().sum::<f64>() / n;
+                let mb = b.iter().sum::<f64>() / n;
+                let va = a.iter().map(|v| (v - ma).powi(2)).sum::<f64>() / (n - 1.0);
+                let vb = b.iter().map(|v| (v - mb).powi(2)).sum::<f64>() / (n - 1.0);
+                let cov = a
+                    .iter()
+                    .zip(&b)
+                    .map(|(a, b)| (a - ma) * (b - mb))
+                    .sum::<f64>()
+                    / (n - 1.0);
+                ((2.0 * ma * mb + 6.5025) * (2.0 * cov + 58.5225))
+                    / ((ma * ma + mb * mb + 6.5025) * (va + vb + 58.5225))
+            };
+            let positive = ssim(&actual, &images[0]);
+            let negative = ssim(&actual, &images[1]);
+            assert!(
+                positive >= 0.99,
+                "independent contour paint {case}: {positive}"
+            );
+            assert!(
+                negative < 0.99,
+                "features-off/ordinary paint must distinguish {case}: {negative}"
+            );
+        }
     }
 }

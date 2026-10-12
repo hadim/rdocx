@@ -29,14 +29,18 @@ pub struct PySlideLayout {
 }
 
 impl PySlideLayout {
-    fn validate(&self, py: Python<'_>) -> PyResult<()> {
+    fn validate(&self, py: Python<'_>) -> PyResult<usize> {
+        let presentation = self.presentation.borrow(py);
         validate_path(
             py,
-            &self.presentation.borrow(py),
+            &presentation,
             &self.path,
             "slide layout",
             &format!(".slide_layouts[{}]", self.index),
-        )
+        )?;
+        presentation
+            .current_layout_index(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("slide layout owner is absent"))
     }
 }
 
@@ -44,12 +48,12 @@ impl PySlideLayout {
 impl PySlideLayout {
     #[getter]
     fn name(&self, py: Python<'_>) -> PyResult<Option<String>> {
-        self.validate(py)?;
+        let index = self.validate(py)?;
         Ok(self
             .presentation
             .borrow(py)
             .inner
-            .layout_name(self.index)
+            .layout_name(index)
             .map(str::to_owned))
     }
 
@@ -58,7 +62,8 @@ impl PySlideLayout {
         other
             .extract::<PyRef<'_, PySlideLayout>>()
             .is_ok_and(|other| {
-                other.presentation.is(&self.presentation) && other.index == self.index
+                other.presentation.is(&self.presentation)
+                    && other.path.owner_generation() == self.path.owner_generation()
             })
     }
 }
@@ -91,7 +96,7 @@ impl PySlideLayoutCollection {
             PySlideLayout {
                 presentation: self.presentation.clone_ref(py),
                 index,
-                path: self.path.clone(),
+                path: self.presentation.borrow(py).capture_layout(index)?,
             },
         )
     }
@@ -118,8 +123,7 @@ impl PySlideLayoutCollection {
                 "layout not in this SlideLayouts collection",
             ));
         }
-        layout.validate(py)?;
-        Ok(layout.index)
+        layout.validate(py)
     }
 
     fn __iter__(&self, py: Python<'_>) -> PyResult<Py<PySlideLayoutIterator>> {
@@ -174,7 +178,9 @@ impl PySlide {
     pub(crate) fn validate(&self, py: Python<'_>) -> PyResult<usize> {
         let presentation = self.presentation.borrow(py);
         validate_path(py, &presentation, &self.path, "slide", "")?;
-        self.path
+        presentation
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("owner is absent"))?
             .segs
             .iter()
             .find_map(|segment| match segment {
@@ -190,9 +196,10 @@ impl PySlide {
     /// Two current handles are equal when they name the same slide of one
     /// presentation. Like python-pptx `Slide`, a handle is not hashable.
     fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
-        other
-            .extract::<PyRef<'_, PySlide>>()
-            .is_ok_and(|other| other.presentation.is(&self.presentation) && other.path == self.path)
+        other.extract::<PyRef<'_, PySlide>>().is_ok_and(|other| {
+            other.presentation.is(&self.presentation)
+                && other.path.owner_generation() == self.path.owner_generation()
+        })
     }
 
     #[getter]
@@ -229,11 +236,20 @@ impl PySlide {
     fn set_notes_text(&self, py: Python<'_>, text: &str) -> PyResult<()> {
         let index = self.validate(py)?;
         let mut presentation = self.presentation.borrow_mut(py);
-        presentation
-            .inner
+        let mut candidate = presentation.inner.clone();
+        candidate
             .set_notes_text(index, text)
             .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
-        presentation.revisions.bump();
+        let survivors = presentation.text_changed_owners(&self.path)?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "Slide.notes_text",
+            &survivors,
+            false,
+            false,
+            false,
+        )?;
+        presentation.publish_owners(candidate, prepared)?;
         Ok(())
     }
 
@@ -256,7 +272,8 @@ impl PySlide {
     ) -> PyResult<usize> {
         let index = self.validate(py)?;
         let mut presentation = self.presentation.borrow_mut(py);
-        let inner = &mut presentation.inner;
+        let mut candidate = presentation.inner.clone();
+        let inner = &mut candidate;
         let count = py
             .detach(|| inner.try_replace_slide_text(index, placeholder, replacement, notes, expect))
             .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
@@ -264,7 +281,16 @@ impl PySlide {
             return Err(replacement_count_to_pyerr(py, placeholder, expected, count));
         }
         if count > 0 {
-            presentation.revisions.bump();
+            let survivors = presentation.replaced_text_owners(&candidate)?;
+            let prepared = presentation.prepare_owners(
+                &candidate,
+                "Slide.try_replace_text",
+                &survivors,
+                false,
+                false,
+                false,
+            )?;
+            presentation.publish_owners(candidate, prepared)?;
         }
         Ok(count)
     }
@@ -282,7 +308,7 @@ impl PySlide {
                     format!("slide {index} has no layout reachable through the slide masters"),
                 )
             })?;
-        let path = presentation.revisions.capture(smallvec![]);
+        let path = presentation.capture_layout(layout)?;
         drop(presentation);
         Py::new(
             py,
@@ -307,13 +333,25 @@ impl PySlide {
                 "slide layout is not in this presentation",
             ));
         }
-        layout.validate(py)?;
+        let layout_index = layout.validate(py)?;
+        if self.presentation.borrow(py).inner.slide_layout_index(index) == Some(layout_index) {
+            return Ok(());
+        }
         let mut presentation = self.presentation.borrow_mut(py);
-        presentation
-            .inner
-            .set_slide_layout(index, layout.index)
+        let mut candidate = presentation.inner.clone();
+        candidate
+            .set_slide_layout(index, layout_index)
             .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
-        presentation.revisions.bump();
+        let survivors = presentation.unchanged_owners()?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "Slide.slide_layout",
+            &survivors,
+            false,
+            false,
+            false,
+        )?;
+        presentation.publish_owners(candidate, prepared)?;
         Ok(())
     }
 
@@ -427,17 +465,27 @@ impl PySlide {
             ));
         }
         let mut presentation = self.presentation.borrow_mut(py);
+        let mut candidate = presentation.inner.clone();
         match shape_id {
-            Some(shape_id) => presentation.inner.add_comment_at_shape(
+            Some(shape_id) => candidate.add_comment_at_shape(
                 index,
                 comment,
                 shape_id,
                 text_start.zip(text_length),
             ),
-            None => presentation.inner.add_comment(index, comment),
+            None => candidate.add_comment(index, comment),
         }
         .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
-        presentation.revisions.bump();
+        let survivors = presentation.unchanged_owners()?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "Slide.add_comment",
+            &survivors,
+            false,
+            false,
+            false,
+        )?;
+        presentation.publish_owners(candidate, prepared)?;
         Ok(())
     }
 
@@ -455,11 +503,20 @@ impl PySlide {
         let reply = rpptx::CommentReply::new(id, author_id, created, text)
             .map_err(|error| crate::rpptx_value_to_pyerr(py, error.to_string()))?;
         let mut presentation = self.presentation.borrow_mut(py);
-        presentation
-            .inner
+        let mut candidate = presentation.inner.clone();
+        candidate
             .reply_to_comment(index, comment_id, reply)
             .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
-        presentation.revisions.bump();
+        let survivors = presentation.unchanged_owners()?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "Slide.reply_to_comment",
+            &survivors,
+            false,
+            false,
+            false,
+        )?;
+        presentation.publish_owners(candidate, prepared)?;
         Ok(())
     }
 
@@ -467,11 +524,20 @@ impl PySlide {
     fn resolve_comment(&self, comment_id: &str, py: Python<'_>) -> PyResult<()> {
         let index = self.validate(py)?;
         let mut presentation = self.presentation.borrow_mut(py);
-        presentation
-            .inner
+        let mut candidate = presentation.inner.clone();
+        candidate
             .resolve_comment(index, comment_id)
             .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
-        presentation.revisions.bump();
+        let survivors = presentation.unchanged_owners()?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "Slide.resolve_comment",
+            &survivors,
+            false,
+            false,
+            false,
+        )?;
+        presentation.publish_owners(candidate, prepared)?;
         Ok(())
     }
 
@@ -479,22 +545,43 @@ impl PySlide {
     fn remove_comment(&self, comment_id: &str, py: Python<'_>) -> PyResult<()> {
         let index = self.validate(py)?;
         let mut presentation = self.presentation.borrow_mut(py);
-        presentation
-            .inner
+        let mut candidate = presentation.inner.clone();
+        candidate
             .remove_comment(index, comment_id)
             .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
-        presentation.revisions.bump();
+        let survivors = presentation.unchanged_owners()?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "Slide.remove_comment",
+            &survivors,
+            false,
+            false,
+            false,
+        )?;
+        presentation.publish_owners(candidate, prepared)?;
         Ok(())
     }
 
     fn move_comment(&self, from_: usize, to: usize, py: Python<'_>) -> PyResult<()> {
         let index = self.validate(py)?;
+        if from_ == to {
+            return Ok(());
+        }
         let mut presentation = self.presentation.borrow_mut(py);
-        presentation
-            .inner
+        let mut candidate = presentation.inner.clone();
+        candidate
             .move_comment(index, from_, to)
             .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
-        presentation.revisions.bump();
+        let survivors = presentation.unchanged_owners()?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "Slide.move_comment",
+            &survivors,
+            false,
+            false,
+            false,
+        )?;
+        presentation.publish_owners(candidate, prepared)?;
         Ok(())
     }
 
@@ -506,12 +593,24 @@ impl PySlide {
         py: Python<'_>,
     ) -> PyResult<()> {
         let index = self.validate(py)?;
+        if from_ == to {
+            return Ok(());
+        }
         let mut presentation = self.presentation.borrow_mut(py);
-        presentation
-            .inner
+        let mut candidate = presentation.inner.clone();
+        candidate
             .move_reply(index, comment_id, from_, to)
             .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
-        presentation.revisions.bump();
+        let survivors = presentation.unchanged_owners()?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "Slide.move_reply",
+            &survivors,
+            false,
+            false,
+            false,
+        )?;
+        presentation.publish_owners(candidate, prepared)?;
         Ok(())
     }
 }
@@ -542,8 +641,7 @@ impl PySlideCollection {
         let path = self
             .presentation
             .borrow(py)
-            .revisions
-            .capture(smallvec![PathSeg::Slide(index)]);
+            .capture_path(smallvec![PathSeg::Slide(index)], None)?;
         Py::new(py, PySlide::new(self.presentation.clone_ref(py), path))
     }
 }
@@ -575,22 +673,35 @@ impl PySlideCollection {
     fn add_slide(&self, py: Python<'_>, layout: &Bound<'_, PyAny>) -> PyResult<Py<PySlide>> {
         let layout = layout.extract::<PyRef<'_, PySlideLayout>>()?;
         self.len(py)?;
-        layout.validate(py)?;
-        let (index, path) = {
-            let mut presentation = self.presentation.borrow_mut(py);
-            let index = presentation.inner.len();
-            presentation
-                .inner
-                .add_slide(layout.index)
-                .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
-            presentation.revisions.bump();
-            let path = presentation
-                .revisions
-                .capture(smallvec![PathSeg::Slide(index)]);
-            (index, path)
-        };
-        debug_assert!(matches!(path.segs.last(), Some(PathSeg::Slide(value)) if *value == index));
-        Py::new(py, PySlide::new(self.presentation.clone_ref(py), path))
+        if !layout.presentation.is(&self.presentation) {
+            return Err(PyValueError::new_err(
+                "layout belongs to a different presentation",
+            ));
+        }
+        let layout_index = layout.validate(py)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        let index = presentation.inner.len();
+        let mut candidate = presentation.inner.clone();
+        candidate
+            .add_slide(layout_index)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        let survivors = presentation.unchanged_owners()?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "SlideCollection.add_slide",
+            &survivors,
+            true,
+            false,
+            false,
+        )?;
+        let path = presentation.capture_prepared_path(
+            &prepared,
+            smallvec![PathSeg::Slide(index)],
+            None,
+        )?;
+        let result = Py::new(py, PySlide::new(self.presentation.clone_ref(py), path))?;
+        presentation.publish_owners(candidate, prepared)?;
+        Ok(result)
     }
 
     /// Imports a slide of another presentation, using this presentation's theme.
@@ -620,8 +731,7 @@ impl PySlideCollection {
                         "layout is not a layout of this presentation",
                     ));
                 }
-                layout.validate(py)?;
-                Some(layout.index)
+                Some(layout.validate(py)?)
             }
             None => None,
         };
@@ -641,29 +751,46 @@ impl PySlideCollection {
         };
         let source = slide.presentation.clone_ref(py);
         drop(slide);
-        let path = {
-            let mut presentation = self.presentation.borrow_mut(py);
-            let result = if source.is(&self.presentation) {
-                let copy = presentation.inner.clone();
-                let layout_index = layout_index.or_else(|| copy.slide_layout_index(source_index));
-                presentation
-                    .inner
-                    .import_slide(&copy, source_index, layout_index, Some(inserted))
-                    .map(|_| ())
-            } else {
-                let source = source.borrow(py);
-                presentation
-                    .inner
-                    .import_slide(&source.inner, source_index, layout_index, Some(inserted))
-                    .map(|_| ())
-            };
-            result.map_err(|error| crate::rpptx_to_pyerr(py, error))?;
-            presentation.revisions.bump();
-            presentation
-                .revisions
-                .capture(smallvec![PathSeg::Slide(inserted)])
+        let mut presentation = self.presentation.borrow_mut(py);
+        let mut candidate = presentation.inner.clone();
+        let result = if source.is(&self.presentation) {
+            let layout_index =
+                layout_index.or_else(|| presentation.inner.slide_layout_index(source_index));
+            candidate
+                .import_slide(
+                    &presentation.inner,
+                    source_index,
+                    layout_index,
+                    Some(inserted),
+                )
+                .map(|_| ())
+        } else {
+            let source = source.borrow(py);
+            candidate
+                .import_slide(&source.inner, source_index, layout_index, Some(inserted))
+                .map(|_| ())
         };
-        Py::new(py, PySlide::new(self.presentation.clone_ref(py), path))
+        result.map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        let survivors =
+            presentation.slide_owner_edit(crate::presentation::SlideOwnerEdit::Insert(inserted))?;
+        // Native import targets an existing destination layout and never edits
+        // its layout or slide-master inventories.
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "SlideCollection.import_slide",
+            &survivors,
+            true,
+            false,
+            false,
+        )?;
+        let path = presentation.capture_prepared_path(
+            &prepared,
+            smallvec![PathSeg::Slide(inserted)],
+            None,
+        )?;
+        let result = Py::new(py, PySlide::new(self.presentation.clone_ref(py), path))?;
+        presentation.publish_owners(candidate, prepared)?;
+        Ok(result)
     }
 
     /// Removes one slide of this presentation with its notes and owned media.
@@ -675,11 +802,21 @@ impl PySlideCollection {
         }
         let index = slide.validate(py)?;
         let mut presentation = self.presentation.borrow_mut(py);
-        presentation
-            .inner
+        let mut candidate = presentation.inner.clone();
+        candidate
             .remove_slide(index)
             .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
-        presentation.revisions.bump();
+        let survivors =
+            presentation.slide_owner_edit(crate::presentation::SlideOwnerEdit::Remove(index))?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "SlideCollection.remove",
+            &survivors,
+            true,
+            false,
+            false,
+        )?;
+        presentation.publish_owners(candidate, prepared)?;
         Ok(())
     }
 
@@ -692,18 +829,29 @@ impl PySlideCollection {
             return Err(PyValueError::new_err("slide is not in this collection"));
         }
         let index = slide.validate(py)?;
-        let path = {
-            let mut presentation = self.presentation.borrow_mut(py);
-            presentation
-                .inner
-                .duplicate_slide(index)
-                .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
-            presentation.revisions.bump();
-            presentation
-                .revisions
-                .capture(smallvec![PathSeg::Slide(index + 1)])
-        };
-        Py::new(py, PySlide::new(self.presentation.clone_ref(py), path))
+        let mut presentation = self.presentation.borrow_mut(py);
+        let mut candidate = presentation.inner.clone();
+        candidate
+            .duplicate_slide(index)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        let survivors = presentation
+            .slide_owner_edit(crate::presentation::SlideOwnerEdit::Insert(index + 1))?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "SlideCollection.duplicate",
+            &survivors,
+            true,
+            false,
+            false,
+        )?;
+        let path = presentation.capture_prepared_path(
+            &prepared,
+            smallvec![PathSeg::Slide(index + 1)],
+            None,
+        )?;
+        let result = Py::new(py, PySlide::new(self.presentation.clone_ref(py), path))?;
+        presentation.publish_owners(candidate, prepared)?;
+        Ok(result)
     }
 
     /// Moves the slide at `from_` so that it ends up at index `to`.
@@ -712,12 +860,25 @@ impl PySlideCollection {
         let len = self.len(py)?;
         let from_ = normalize_index(from_, len, "slide")?;
         let to = normalize_index(to, len, "slide")?;
+        if from_ == to {
+            return Ok(());
+        }
         let mut presentation = self.presentation.borrow_mut(py);
-        presentation
-            .inner
+        let mut candidate = presentation.inner.clone();
+        candidate
             .move_slide(from_, to)
             .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
-        presentation.revisions.bump();
+        let survivors = presentation
+            .slide_owner_edit(crate::presentation::SlideOwnerEdit::Move { from: from_, to })?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "SlideCollection.move",
+            &survivors,
+            true,
+            false,
+            false,
+        )?;
+        presentation.publish_owners(candidate, prepared)?;
         Ok(())
     }
 }

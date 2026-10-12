@@ -1553,7 +1553,7 @@ fn inspect_json_adds_shape_details_without_changing_existing_slide_keys() {
                     {
                         "index": 0,
                         "id": 2,
-                        "name": "Placeholder 2",
+                        "name": "Title 1",
                         "kind": "shape",
                         "placeholder": { "type": "title", "idx": 0 },
                         "position": null,
@@ -1567,7 +1567,7 @@ fn inspect_json_adds_shape_details_without_changing_existing_slide_keys() {
                     {
                         "index": 1,
                         "id": 3,
-                        "name": "Placeholder 3",
+                        "name": "Content Placeholder 2",
                         "kind": "shape",
                         "placeholder": { "type": null, "idx": 1 },
                         "position": null,
@@ -2338,4 +2338,115 @@ fn fx195_every_ppt_cli_entrypoint_uses_caller_only_face() {
         oxml_pdf::render_page_to_png(&layout, 0, dpi).unwrap()
     );
     assert_eq!(fs::read(&input).unwrap(), before);
+}
+
+fn fx206_member_scene(placed: bool, reason: usize) -> String {
+    let member = |id: u32, x: i64, width: i64, properties: &str, style: &str, positioned: bool| {
+        let transform = if positioned {
+            format!(
+                r#"<a:xfrm><a:off x="{x}" y="127000"/><a:ext cx="{width}" cy="254000"/></a:xfrm>"#
+            )
+        } else {
+            String::new()
+        };
+        format!(
+            r#"<p:sp><p:nvSpPr><p:cNvPr id="{id}" name="owner{id}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>{transform}<a:prstGeom prst="rect"/>{properties}<f:opaque xmlns:f="urn:f206:member" literal="&#x41;"/></p:spPr>{style}</p:sp>"#
+        )
+    };
+    let (properties, style) = match reason {
+        0 => (
+            "",
+            r#"<p:style><a:lnRef idx="0"/><a:fillRef idx="999"/><a:effectRef idx="0"/><a:fontRef idx="minor"/></p:style>"#,
+        ),
+        1 => (
+            r#"<a:solidFill><a:schemeClr val="phClr"/></a:solidFill>"#,
+            "",
+        ),
+        _ => (
+            r#"<a:solidFill><a:prstClr val="futureColour"/></a:solidFill>"#,
+            "",
+        ),
+    };
+    let children = [
+        member(
+            1,
+            127000,
+            254000,
+            r#"<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>"#,
+            "",
+            true,
+        ),
+        member(2, 127000, 254000, properties, style, placed),
+        member(
+            3,
+            127000,
+            50800,
+            r#"<a:solidFill><a:srgbClr val="00FF00"/></a:solidFill>"#,
+            "",
+            true,
+        ),
+    ]
+    .join("");
+    format!(
+        r#"<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" showMasterSp="0"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="10" name="root"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:grpSp><p:nvGrpSpPr><p:cNvPr id="11" name="parent"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="63500" y="63500"/><a:ext cx="2540000" cy="2540000"/><a:chOff x="0" y="0"/><a:chExt cx="1270000" cy="1270000"/></a:xfrm></p:grpSpPr>{children}</p:grpSp></p:spTree></p:cSld></p:sld>"#
+    )
+}
+
+#[test]
+fn fx206_cli_recovery_reports_fallback_omission_and_keeps_fatal_output_atomic() {
+    let temp = TempWorkspace::new("member-recovery");
+    let path = temp.path.join("input.pptx");
+    for placed in [false, true] {
+        write_deck(&path, &["seed"]);
+        let mut package = OpcPackage::open(&path).unwrap();
+        package.set_part(
+            "/ppt/slides/slide1.xml",
+            fx206_member_scene(placed, 0).into_bytes(),
+        );
+        package.save(&path).unwrap();
+        let before = fs::read(&path).unwrap();
+        let pdf = temp.path.join(if placed {
+            "fallback.pdf"
+        } else {
+            "omission.pdf"
+        });
+        let output = cli(&[
+            "convert",
+            path.to_str().unwrap(),
+            "--to",
+            "pdf",
+            "--output",
+            pdf.to_str().unwrap(),
+        ]);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(fs::read(&pdf).unwrap().starts_with(b"%PDF-"));
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert_eq!(stderr.matches("Warning: unresolved member ").count(), 1);
+        assert!(stderr.contains("slide 1 incomplete: 1 unresolved members"));
+        assert!(stderr.contains(if placed {
+            "retained as bounds"
+        } else {
+            "omitted without trustworthy finite bounds"
+        }));
+        assert_eq!(fs::read(&path).unwrap(), before);
+    }
+    let bad = temp.path.join("fatal.pptx");
+    fs::write(&bad, b"not a package").unwrap();
+    let target = temp.path.join("preserved.pdf");
+    fs::write(&target, b"original").unwrap();
+    let output = cli(&[
+        "convert",
+        bad.to_str().unwrap(),
+        "--to",
+        "pdf",
+        "--output",
+        target.to_str().unwrap(),
+        "--force",
+    ]);
+    assert!(!output.status.success());
+    assert_eq!(fs::read(&target).unwrap(), b"original");
 }

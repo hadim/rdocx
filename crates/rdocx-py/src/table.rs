@@ -318,8 +318,8 @@ impl PyTable {
     pub(crate) fn validate(&self, py: Python<'_>) -> PyResult<usize> {
         let document = self.document.borrow(py);
         self.path
-            .validate_revision(
-                document.revisions.current(),
+            .validate_scopes(
+                &document.revisions,
                 "table",
                 "Re-fetch it with doc.tables[i].",
             )
@@ -611,16 +611,30 @@ impl PyTable {
         span: Option<u32>,
     ) -> PyResult<()> {
         let (row, col) = self.cell_coordinates(py, row, col)?;
-        let cells = |table: &mut rdocx::Table<'_>| table.row(row).map(|row| row.cell_count());
-        let changed = self.edit(py, |table| {
-            let before = cells(table);
-            table.set_cell_grid_span_checked(row, col, span)?;
-            Ok(cells(table) != before)
-        })?;
-        // Absorbed or restored cells shift the indexes after this one.
+        let table_index = self.validate(py)?;
+        let mut document = self.document.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        let changed = {
+            let mut table = candidate
+                .table_mut(table_index)
+                .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
+            let before = table.row(row).map(|row| row.cell_count());
+            table
+                .set_cell_grid_span_checked(row, col, span)
+                .map_err(|error| rdocx_to_pyerr(py, error))?;
+            table.row(row).map(|row| row.cell_count()) != before
+        };
         if changed {
-            self.document.borrow_mut(py).revisions.bump();
+            let prepared = document
+                .revisions
+                .prepare_scopes("Table.set_cell_grid_span", &[], &[])
+                .map_err(oxml_py_support::revision_to_pyerr)?;
+            document
+                .revisions
+                .commit_scopes(prepared)
+                .map_err(oxml_py_support::revision_to_pyerr)?;
         }
+        document.inner = candidate;
         Ok(())
     }
 
@@ -640,10 +654,10 @@ impl PyTable {
     #[pyo3(signature = (index, at = None))]
     fn clone_row(&self, py: Python<'_>, index: isize, at: Option<usize>) -> PyResult<Py<PyRow>> {
         let table_index = self.validate(py)?;
-        let path = {
+        let result = {
             let mut document = self.document.borrow_mut(py);
-            let row_count = document
-                .inner
+            let mut candidate = document.inner.clone_for_staging();
+            let row_count = candidate
                 .table(table_index)
                 .ok_or_else(|| PyIndexError::new_err("table index out of range"))?
                 .row_count();
@@ -652,32 +666,51 @@ impl PyTable {
             if insert_at > row_count {
                 return Err(PyIndexError::new_err("row insertion index out of range"));
             }
-            let inserted = document
-                .inner
+            let inserted = candidate
                 .clone_table_row(table_index, source, insert_at)
                 .map_err(|error| rdocx_to_pyerr(py, error))?;
-            document.revisions.bump();
+            let prepared = document
+                .revisions
+                .prepare_scopes("Table.clone_row", &[], &[])
+                .map_err(oxml_py_support::revision_to_pyerr)?;
             let mut segments = self.path.segs.clone();
             segments.push(PathSeg::Row(inserted));
-            document.revisions.capture(segments)
+            let path = document
+                .revisions
+                .capture_prepared(&prepared, segments)
+                .map_err(oxml_py_support::revision_to_pyerr)?;
+            let result = Py::new(py, PyRow::new(self.document.clone_ref(py), path))?;
+            document
+                .revisions
+                .commit_scopes(prepared)
+                .map_err(oxml_py_support::revision_to_pyerr)?;
+            document.inner = candidate;
+            result
         };
-        Py::new(py, PyRow::new(self.document.clone_ref(py), path))
+        Ok(result)
     }
 
     fn remove_row(&self, py: Python<'_>, index: isize) -> PyResult<()> {
         let table_index = self.validate(py)?;
         let mut document = self.document.borrow_mut(py);
-        let row_count = document
-            .inner
+        let mut candidate = document.inner.clone_for_staging();
+        let row_count = candidate
             .table(table_index)
             .ok_or_else(|| PyIndexError::new_err("table index out of range"))?
             .row_count();
         let row_index = normalize_index(index, row_count, "row")?;
-        document
-            .inner
+        candidate
             .remove_table_row(table_index, row_index)
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        document.revisions.bump();
+        let prepared = document
+            .revisions
+            .prepare_scopes("Table.remove_row", &[], &[])
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document.inner = candidate;
         Ok(())
     }
 }
@@ -698,8 +731,8 @@ impl PyRowCollection {
     fn validate(&self, py: Python<'_>) -> PyResult<usize> {
         let document = self.document.borrow(py);
         self.table_path
-            .validate_revision(
-                document.revisions.current(),
+            .validate_scopes(
+                &document.revisions,
                 "row collection",
                 "Re-fetch it with table.rows.",
             )
@@ -801,8 +834,8 @@ impl PyRow {
     fn validate(&self, py: Python<'_>) -> PyResult<(usize, usize)> {
         let document = self.document.borrow(py);
         self.path
-            .validate_revision(
-                document.revisions.current(),
+            .validate_scopes(
+                &document.revisions,
                 "row",
                 "Re-fetch it with table.rows[i].",
             )
@@ -937,8 +970,8 @@ impl PyCellCollection {
     fn validate(&self, py: Python<'_>) -> PyResult<(usize, usize)> {
         let document = self.document.borrow(py);
         self.row_path
-            .validate_revision(
-                document.revisions.current(),
+            .validate_scopes(
+                &document.revisions,
                 "cell collection",
                 "Re-fetch it with row.cells.",
             )
@@ -1040,8 +1073,8 @@ impl PyCell {
     fn validate(&self, py: Python<'_>) -> PyResult<(usize, usize, usize)> {
         let document = self.document.borrow(py);
         self.path
-            .validate_revision(
-                document.revisions.current(),
+            .validate_scopes(
+                &document.revisions,
                 "cell",
                 "Re-fetch it with row.cells[i].",
             )
@@ -1100,7 +1133,7 @@ impl PyCell {
         let cell = self.validate(py)?;
         self.document
             .borrow_mut(py)
-            .scoped_replacement(py, |document| {
+            .scoped_replacement(py, "Cell.replace_text", |document| {
                 document.try_replace_text_in_cell(cell, None, old, new, expect)
             })
     }
@@ -1119,10 +1152,19 @@ impl PyCell {
     fn set_text(&self, py: Python<'_>, value: &str) -> PyResult<()> {
         let (table, row, cell) = self.validate(py)?;
         let mut document = self.document.borrow_mut(py);
-        let inner = &mut document.inner;
+        let mut candidate = document.inner.clone_for_staging();
+        let inner = &mut candidate;
         py.detach(|| inner.try_set_cell_text(table, row, cell, value))
             .map_err(|error| rdocx_to_pyerr(py, error))?;
-        document.revisions.bump();
+        let prepared = document
+            .revisions
+            .prepare_scopes("Cell.text", &[], &[])
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document.inner = candidate;
         Ok(())
     }
     #[getter]
@@ -1135,11 +1177,11 @@ impl PyCell {
     }
     fn add_paragraph(&self, py: Python<'_>, text: &str) -> PyResult<Py<PyParagraph>> {
         let (table, row, cell) = self.validate(py)?;
-        let path = {
+        let result = {
             let mut document = self.document.borrow_mut(py);
+            let mut candidate = document.inner.clone_for_staging();
             let paragraph = {
-                let mut table = document
-                    .inner
+                let mut table = candidate
                     .table_mut(table)
                     .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
                 let mut cell = table
@@ -1149,15 +1191,31 @@ impl PyCell {
                 cell.add_paragraph(text);
                 paragraph
             };
-            document.revisions.bump();
-            document.revisions.capture(smallvec![
-                PathSeg::Body(table),
-                PathSeg::Row(row),
-                PathSeg::Cell(cell),
-                PathSeg::Para(paragraph)
-            ])
+            let prepared = document
+                .revisions
+                .prepare_scopes("Cell.add_paragraph", &[], &[])
+                .map_err(oxml_py_support::revision_to_pyerr)?;
+            let path = document
+                .revisions
+                .capture_prepared(
+                    &prepared,
+                    smallvec![
+                        PathSeg::Body(table),
+                        PathSeg::Row(row),
+                        PathSeg::Cell(cell),
+                        PathSeg::Para(paragraph)
+                    ],
+                )
+                .map_err(oxml_py_support::revision_to_pyerr)?;
+            let result = Py::new(py, PyParagraph::new(self.document.clone_ref(py), path))?;
+            document
+                .revisions
+                .commit_scopes(prepared)
+                .map_err(oxml_py_support::revision_to_pyerr)?;
+            document.inner = candidate;
+            result
         };
-        Py::new(py, PyParagraph::new(self.document.clone_ref(py), path))
+        Ok(result)
     }
     #[getter]
     fn width(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
@@ -1307,8 +1365,8 @@ impl PyCellParagraphCollection {
     fn validate(&self, py: Python<'_>) -> PyResult<(usize, usize, usize)> {
         let document = self.document.borrow(py);
         self.cell_path
-            .validate_revision(
-                document.revisions.current(),
+            .validate_scopes(
+                &document.revisions,
                 "cell paragraph collection",
                 "Re-fetch it with cell.paragraphs.",
             )

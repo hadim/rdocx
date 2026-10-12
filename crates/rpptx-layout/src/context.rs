@@ -498,6 +498,7 @@ impl<'a> ResolveCtx<'a> {
         mut identities: Option<&mut Vec<ResolvedShapeIdentity>>,
     ) -> Result<(ResolvedSlide, ResolvedSlideTextDirections), ResolveError> {
         let mut slide = ResolvedSlide {
+            unresolved_member_count: 0,
             size,
             background: None,
             shapes: Vec::new(),
@@ -554,18 +555,52 @@ impl<'a> ResolveCtx<'a> {
                 } => {
                     push_group_diagnostics(group_issues, &mut slide.diagnostics);
                     let mut shape_text_directions = Vec::new();
-                    if let Some(shape) = self.resolve_flattened_shape(
-                        ShapePlacement {
-                            source,
-                            group_scale,
-                            group_transform,
-                        },
-                        child,
-                        media,
-                        (hyperlinks, charts),
-                        fonts.as_deref_mut(),
-                        (&mut slide.diagnostics, &mut shape_text_directions),
-                    )? {
+                    let mut member_diagnostics = Vec::new();
+                    let result = self
+                        .resolve_flattened_shape(
+                            ShapePlacement {
+                                source,
+                                group_scale,
+                                group_transform,
+                            },
+                            child,
+                            media,
+                            (hyperlinks, charts),
+                            fonts.as_deref_mut(),
+                            (&mut member_diagnostics, &mut shape_text_directions),
+                        )
+                        .and_then(|resolved| {
+                            if resolved.is_none() {
+                                self.validate_unplaced_member(child, source, hyperlinks)?;
+                            }
+                            Ok(resolved)
+                        });
+                    let resolved = match result {
+                        Ok(resolved) => {
+                            slide.diagnostics.extend(member_diagnostics);
+                            resolved
+                        }
+                        Err(
+                            error @ (ResolveError::StyleIndexOutOfRange { .. }
+                            | ResolveError::UnresolvedPlaceholderColor { .. }
+                            | ResolveError::ConcreteValue { .. }),
+                        ) => {
+                            // Count the failed owner before deciding whether it can draw.
+                            slide.unresolved_member_count += 1;
+                            shape_text_directions.clear();
+                            self.unresolved_shape_fallback(
+                                ShapePlacement {
+                                    source,
+                                    group_scale,
+                                    group_transform,
+                                },
+                                child,
+                                &error,
+                                &mut slide.diagnostics,
+                            )
+                        }
+                    };
+                    if let Some(shape) = resolved {
                         if let Some(identities) = identities.as_deref_mut() {
                             identities.push(self.shape_identity(source, child));
                         }
@@ -576,6 +611,204 @@ impl<'a> ResolveCtx<'a> {
             }
         }
         Ok((slide, text_directions))
+    }
+
+    // Missing placement must not hide an error in the owned semantic inputs.
+    // Validate only dimension-independent values already consumed by this resolver.
+    // No replacement geometry or guessed dimensions are manufactured.
+    fn validate_unplaced_member(
+        &self,
+        child: &ShapeTreeChild,
+        source: FlattenedSource,
+        hyperlinks: Option<&ScopedHyperlinkTargets>,
+    ) -> Result<(), ResolveError> {
+        let (fill, line, effects) = match child {
+            ShapeTreeChild::Shape(shape) => {
+                let (mut effective, _) = self.shape_style_for_placement(shape, true)?;
+                effective.effects =
+                    self.effective_effects(shape.style(), &shape.shape_properties)?;
+                if let Some(body) = shape.text_body.as_ref() {
+                    self.resolve_text_body(shape, body, source, hyperlinks, &mut Vec::new())?;
+                }
+                (effective.fill, effective.line, effective.effects)
+            }
+            ShapeTreeChild::Picture(picture) => (
+                None,
+                picture.shape_properties.line.clone(),
+                picture.shape_properties.effects.clone(),
+            ),
+            ShapeTreeChild::Connector(connector) => (
+                connector.shape_properties.fill.clone(),
+                self.effective_connector_line(connector, true)?,
+                self.effective_effects(connector.style(), &connector.shape_properties)?,
+            ),
+            ShapeTreeChild::GraphicFrame(frame) => {
+                if let GraphicDataPayload::Table(table) = frame.graphic_data.payload() {
+                    self.resolve_table(
+                        table,
+                        source,
+                        hyperlinks,
+                        &mut Vec::new(),
+                        &mut Vec::new(),
+                    )?;
+                }
+                return Ok(());
+            }
+            ShapeTreeChild::AlternateContent(_) | ShapeTreeChild::GroupShape(_) => return Ok(()),
+        };
+        for fill in [
+            fill.as_ref(),
+            line.as_ref().and_then(|line| line.fill.as_ref()),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            match fill {
+                Fill::Solid(solid) => {
+                    if let Some(color) = solid.color.as_ref() {
+                        self.concrete_color(color)?;
+                    }
+                }
+                Fill::Gradient(gradient)
+                    if gradient.rotate_with_shape != Some(false)
+                        && matches!(gradient.flip.as_deref(), None | Some("none"))
+                        && gradient.tile_rect.is_none()
+                        && !matches!(
+                            gradient.geometry.as_ref(),
+                            Some(GradientGeometry::Path(_))
+                        ) =>
+                {
+                    // These stop colors precede dimension-dependent paint construction.
+                    // Keep concrete_fill's early unsupported boundary for a missing color.
+                    for stop in &gradient.stops {
+                        let Some(color) = stop.color.as_ref() else {
+                            break;
+                        };
+                        self.concrete_color(color)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(shadow) = effects
+            .as_ref()
+            .and_then(|effects| effects.outer_shadow.as_ref())
+        {
+            self.concrete_shadow(shadow)?;
+        }
+        Ok(())
+    }
+
+    fn unresolved_shape_fallback(
+        &self,
+        placement: ShapePlacement,
+        child: &ShapeTreeChild,
+        error: &ResolveError,
+        diagnostics: &mut Vec<Diagnostic>,
+    ) -> Option<ResolvedShape> {
+        let id = child
+            .non_visual_id()
+            .map_or_else(|| "without an id".to_owned(), |id| id.to_string());
+        let name = child.non_visual_name().unwrap_or_default();
+        let source = flattened_source_name(placement.source);
+        let values = match child {
+            ShapeTreeChild::Shape(shape) => transform_values(self.effective_xfrm(shape).as_ref()),
+            ShapeTreeChild::Picture(picture) => {
+                transform_values(self.effective_picture_xfrm(picture).as_ref())
+            }
+            ShapeTreeChild::GraphicFrame(frame) => transform_values(Some(&frame.transform)),
+            ShapeTreeChild::Connector(connector) => {
+                connector_transform_values(connector.shape_properties.transform.as_ref())
+            }
+            ShapeTreeChild::AlternateContent(alternate) => alternate
+                .chart_choice()
+                .and_then(|frame| transform_values(Some(&frame.transform))),
+            ShapeTreeChild::GroupShape(_) => None,
+        };
+        let values = values.filter(|(bounds, rotation, flip_h, flip_v)| {
+            let bounds = scaled_group_bounds(*bounds, placement.group_scale);
+            let matrix = resolved_shape_page_transform(&ResolvedShape {
+                group_transform: placement.group_transform,
+                bounds,
+                rotation_deg: *rotation,
+                flip_h: *flip_h,
+                flip_v: *flip_v,
+                geometry: ResolvedGeometry::BoundsFallback,
+                fill: None,
+                image_fill: None,
+                line: None,
+                head_end: None,
+                tail_end: None,
+                shadow: None,
+                content: ResolvedContent::None,
+                unsupported: Some("unresolved shape"),
+            });
+            [
+                bounds.x,
+                bounds.y,
+                bounds.width,
+                bounds.height,
+                *rotation,
+                matrix.a,
+                matrix.b,
+                matrix.c,
+                matrix.d,
+                matrix.e,
+                matrix.f,
+            ]
+            .into_iter()
+            .all(f64::is_finite)
+                && bounds.width >= 0.0
+                && bounds.height >= 0.0
+                && (bounds.width > 0.0 || bounds.height > 0.0)
+                && [
+                    Point { x: 0.0, y: 0.0 },
+                    Point {
+                        x: bounds.width,
+                        y: 0.0,
+                    },
+                    Point {
+                        x: 0.0,
+                        y: bounds.height,
+                    },
+                    Point {
+                        x: bounds.width,
+                        y: bounds.height,
+                    },
+                ]
+                .into_iter()
+                .all(|point| {
+                    let point = matrix.apply(point);
+                    point.x.is_finite() && point.y.is_finite()
+                })
+        });
+        let retained = if values.is_some() {
+            "retained as bounds"
+        } else {
+            "omitted without trustworthy finite bounds"
+        };
+        diagnostics.push(Diagnostic {
+            message: format!(
+                "unresolved member {source} shape {id} \"{name}\" {retained}: {error}"
+            ),
+        });
+        let (bounds, rotation_deg, flip_h, flip_v) = values?;
+        Some(ResolvedShape {
+            group_transform: placement.group_transform,
+            bounds: scaled_group_bounds(bounds, placement.group_scale),
+            rotation_deg,
+            flip_h,
+            flip_v,
+            geometry: ResolvedGeometry::BoundsFallback,
+            fill: None,
+            image_fill: None,
+            line: None,
+            head_end: None,
+            tail_end: None,
+            shadow: None,
+            content: ResolvedContent::None,
+            unsupported: Some("unresolved shape"),
+        })
     }
 
     fn shape_identity(
@@ -797,7 +1030,7 @@ impl<'a> ResolveCtx<'a> {
                     .unwrap_or((None, None));
                 let has_line_source =
                     connector.shape_properties.line.is_some() || connector.style().is_some();
-                let effective_line = self.effective_connector_line(connector)?;
+                let effective_line = self.effective_connector_line(connector, false)?;
                 let mut line = effective_line
                     .as_ref()
                     .map(|line| self.concrete_line(line, (bounds.width, bounds.height)))
@@ -807,8 +1040,6 @@ impl<'a> ResolveCtx<'a> {
                     .as_ref()
                     .map(resolved_line_ends)
                     .unwrap_or((None, None));
-                // A connector's effects only add a shadow, so an effect the
-                // theme cannot resolve drops the shadow instead of the slide.
                 let shadow = self
                     .effective_effects(connector.style(), &connector.shape_properties)
                     .and_then(|effects| {
@@ -817,13 +1048,7 @@ impl<'a> ResolveCtx<'a> {
                             .and_then(|effects| effects.outer_shadow.as_ref())
                             .map(|shadow| self.concrete_shadow(shadow))
                             .transpose()
-                    })
-                    .unwrap_or_else(|error| {
-                        diagnostics.push(Diagnostic {
-                            message: format!("connector effect not rendered: {error}"),
-                        });
-                        None
-                    });
+                    })?;
                 let (geometry, geometry_unsupported, geometry_diagnostic) = if let Some(custom) =
                     &connector.shape_properties.custom_geometry
                 {
@@ -2034,8 +2259,8 @@ impl ResolveCtx<'_> {
         paragraph: Option<&oxml_drawing::text::CT_TextParagraphProperties>,
         run: Option<&CT_TextCharacterProperties>,
     ) -> Result<ResolvedRunStyle, ResolveError> {
-        let effective = self.effective_text_properties(shape, paragraph, run).run;
-        self.resolved_run_style(effective)
+        let effective = self.effective_text_properties(shape, paragraph, run);
+        self.resolved_run_style(effective.run, effective.language)
     }
 
     fn resolve_table_run_style(
@@ -2044,15 +2269,14 @@ impl ResolveCtx<'_> {
         paragraph: Option<&oxml_drawing::text::CT_TextParagraphProperties>,
         run: Option<&CT_TextCharacterProperties>,
     ) -> Result<ResolvedRunStyle, ResolveError> {
-        let effective = self
-            .effective_table_text_properties(Some(table_style), paragraph, run)
-            .run;
-        self.resolved_run_style(effective)
+        let effective = self.effective_table_text_properties(Some(table_style), paragraph, run);
+        self.resolved_run_style(effective.run, effective.language)
     }
 
     fn resolved_run_style(
         &self,
         effective: CT_TextCharacterProperties,
+        language: Option<String>,
     ) -> Result<ResolvedRunStyle, ResolveError> {
         let fill = effective
             .fill
@@ -2065,6 +2289,13 @@ impl ResolveCtx<'_> {
             bold: effective.bold.unwrap_or(false),
             italic: effective.italic.unwrap_or(false),
             all_caps: effective.all_caps.unwrap_or(false),
+            small_caps: effective.small_caps.unwrap_or(false),
+            language,
+            highlight: effective
+                .highlight
+                .as_ref()
+                .map(|colour| self.concrete_color(colour))
+                .transpose()?,
             underline: effective
                 .underline
                 .is_some_and(|value| value != oxml_drawing::text::TextUnderline::None),
@@ -2345,6 +2576,14 @@ impl ResolveCtx<'_> {
                             text_directions.push(Vec::new());
                             None
                         };
+                        if let Some(body) = text.as_mut()
+                            && let Some(anchor) = cell
+                                .properties
+                                .as_ref()
+                                .and_then(|properties| properties.anchor)
+                        {
+                            body.anchor = resolved_anchor(anchor);
+                        }
                         if let Some(body) = text.as_mut()
                             && body.autofit != ResolvedAutofit::None
                         {
@@ -3005,6 +3244,16 @@ fn resolve_standalone_text_body(
     Ok((resolved_text_body(&properties, paragraphs)?, directions))
 }
 
+fn resolved_anchor(anchor: DrawingTextAnchor) -> TextAnchor {
+    match anchor {
+        DrawingTextAnchor::Top => TextAnchor::Top,
+        DrawingTextAnchor::Center => TextAnchor::Center,
+        DrawingTextAnchor::Bottom => TextAnchor::Bottom,
+        DrawingTextAnchor::Justified => TextAnchor::Justified,
+        DrawingTextAnchor::Distributed => TextAnchor::Distributed,
+    }
+}
+
 fn resolved_text_body(
     properties: &CT_TextBodyProperties,
     paragraphs: Vec<ResolvedParagraph>,
@@ -3015,13 +3264,7 @@ fn resolved_text_body(
         right: coordinate_points(properties.right_inset.as_ref())?,
         bottom: coordinate_points(properties.bottom_inset.as_ref())?,
     };
-    let anchor = match properties.anchor.unwrap_or(DrawingTextAnchor::Top) {
-        DrawingTextAnchor::Top => TextAnchor::Top,
-        DrawingTextAnchor::Center => TextAnchor::Center,
-        DrawingTextAnchor::Bottom => TextAnchor::Bottom,
-        DrawingTextAnchor::Justified => TextAnchor::Justified,
-        DrawingTextAnchor::Distributed => TextAnchor::Distributed,
-    };
+    let anchor = resolved_anchor(properties.anchor.unwrap_or(DrawingTextAnchor::Top));
     let vertical = match properties
         .vertical
         .unwrap_or(DrawingTextVertical::Horizontal)
@@ -3778,11 +4021,6 @@ fn group_affine(transform: &CT_Transform2D) -> Option<(Transform, u8)> {
     };
     let center_x = x + width / 2.0;
     let center_y = y + height / 2.0;
-    affine = affine.then(Transform::rotate_about(
-        f64::from(transform.rotation.0) / 60_000.0,
-        center_x,
-        center_y,
-    ));
     if transform.flip_horizontal || transform.flip_vertical {
         affine = affine.then(Transform {
             a: if transform.flip_horizontal { -1.0 } else { 1.0 },
@@ -3801,6 +4039,11 @@ fn group_affine(transform: &CT_Transform2D) -> Option<(Transform, u8)> {
             },
         });
     }
+    affine = affine.then(Transform::rotate_about(
+        f64::from(transform.rotation.0) / 60_000.0,
+        center_x,
+        center_y,
+    ));
     Some((affine, issues))
 }
 
@@ -5276,6 +5519,7 @@ mod tests {
         assert_eq!(stats.decks, EXPECTED_CORPUS_DECKS);
         assert!(stats.slides > EXPECTED_CORPUS_DECKS);
         assert_eq!(stats.contextual_errors, 0, "{}", stats.errors.join("\n"));
+        assert_eq!(stats.unresolved_members, 0, "{}", stats.errors.join("\n"));
         assert_eq!(stats.resolved, stats.slides);
         assert_eq!(stats.theme_references, 0);
     }
@@ -6060,7 +6304,7 @@ mod tests {
     }
 
     #[test]
-    fn unresolvable_connector_effect_drops_only_the_shadow_with_a_diagnostic() {
+    fn unresolvable_connector_effect_uses_counted_member_bounds_recovery() {
         let styled = |effect_reference: &str, direct: &str| {
             connector("line", 127_000, 254_000, "", direct).replace(
                 "</p:cxnSp>",
@@ -6085,22 +6329,24 @@ mod tests {
 
         let resolved = fixture.context().resolve_slide((720.0, 540.0)).unwrap();
 
-        let messages: Vec<_> = resolved
-            .diagnostics
-            .iter()
-            .map(|diagnostic| diagnostic.message.as_str())
-            .collect();
-        assert_eq!(
-            messages,
-            [
-                "connector effect not rendered: effect style index 9 is outside the 3 available entries",
-                "connector effect not rendered: effect style retains an unresolved phClr placeholder colour",
-            ]
+        assert_eq!(resolved.unresolved_member_count, 2);
+        assert_eq!(resolved.shapes.len(), 2);
+        assert_eq!(resolved.diagnostics.len(), 2);
+        assert!(
+            resolved.diagnostics[0]
+                .message
+                .contains("effect style index 9")
         );
-        let accent1 = Paint::Solid(Color::from_hex("156082"));
+        assert!(
+            resolved.diagnostics[1]
+                .message
+                .contains("effect style retains an unresolved phClr")
+        );
         for shape in &resolved.shapes {
+            assert_eq!(shape.geometry, ResolvedGeometry::BoundsFallback);
+            assert_eq!(shape.line, None);
             assert_eq!(shape.shadow, None);
-            assert_eq!(shape.line.as_ref().map(|line| &line.paint), Some(&accent1));
+            assert_eq!(shape.content, ResolvedContent::None);
         }
     }
 
@@ -6519,6 +6765,29 @@ mod tests {
                 size: Some(ResolvedBulletSize::Percent(1.25)),
             })
         );
+    }
+
+    #[test]
+    fn fx206_tcpr_anchor_resolution_modes_and_absent_body_fallback() {
+        for (attribute, expected) in [
+            ("", ResolvedTextAnchor::Bottom),
+            (" anchor='t'", ResolvedTextAnchor::Top),
+            (" anchor='ctr'", ResolvedTextAnchor::Center),
+            (" anchor='b'", ResolvedTextAnchor::Bottom),
+        ] {
+            let frame = format!(
+                r#"<p:graphicFrame><p:nvGraphicFramePr/><p:xfrm><a:off x="0" y="0"/><a:ext cx="127000" cy="127000"/></p:xfrm><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/table"><a:tbl><a:tblGrid><a:gridCol w="127000"/></a:tblGrid><a:tr h="127000"><a:tc><a:txBody><a:bodyPr anchor="b"/><a:lstStyle/><a:p><a:r><a:t>cell</a:t></a:r></a:p></a:txBody><a:tcPr{attribute}/></a:tc></a:tr></a:tbl></a:graphicData></a:graphic></p:graphicFrame>"#
+            );
+            let fixture = Fixture::new(&frame, "", "");
+            let resolved = fixture.context().resolve_slide((720.0, 540.0)).unwrap();
+            let ResolvedContent::Table(table) = &resolved.shapes[0].content else {
+                panic!("table");
+            };
+            assert_eq!(
+                table.rows[0].cells[0].text.as_ref().unwrap().anchor,
+                expected
+            );
+        }
     }
 
     #[test]
@@ -7112,6 +7381,7 @@ mod tests {
 
         assert_eq!(stats.decks, EXPECTED_CORPUS_DECKS);
         assert_eq!(stats.contextual_errors, 0, "{}", stats.errors.join("\n"));
+        assert_eq!(stats.unresolved_members, 0, "{}", stats.errors.join("\n"));
         assert!(
             stats.preset_inputs > 0,
             "corpus exercised no preset geometry"
@@ -7131,6 +7401,7 @@ mod tests {
         slides: usize,
         resolved: usize,
         contextual_errors: usize,
+        unresolved_members: usize,
         theme_references: usize,
         preset_inputs: usize,
         preset_evaluated: usize,
@@ -7251,6 +7522,18 @@ mod tests {
                 .unwrap_or_else(|_| panic!("{} {slide_part}: resolver panicked", path.display()));
                 match result {
                     Ok(resolved) => {
+                        stats.unresolved_members += resolved.unresolved_member_count;
+                        if resolved.unresolved_member_count > 0 {
+                            stats
+                                .errors
+                                .extend(resolved.diagnostics.iter().map(|diagnostic| {
+                                    format!(
+                                        "{} {slide_part}: {}",
+                                        path.display(),
+                                        diagnostic.message
+                                    )
+                                }));
+                        }
                         let debug = format!("{resolved:?}");
                         stats.theme_references += ["schemeClr", "sysClr", "scrgbClr", "prstClr"]
                             .into_iter()
@@ -7846,5 +8129,404 @@ mod tests {
 
     fn transform(x: i64) -> String {
         format!("<a:xfrm><a:off x=\"{x}\" y=\"0\"/><a:ext cx=\"100\" cy=\"100\"/></a:xfrm>")
+    }
+    fn fx206_recovery_shape(id: u32, props: &str, style: &str, placed: bool) -> String {
+        let transform = if placed {
+            r#"<a:xfrm><a:off x="127000" y="254000"/><a:ext cx="127000" cy="127000"/></a:xfrm>"#
+        } else {
+            ""
+        };
+        format!(
+            r#"<p:sp><p:nvSpPr><p:cNvPr id="{id}" name="owner{id}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>{transform}<a:prstGeom prst="rect"/>{props}</p:spPr>{style}</p:sp>"#
+        )
+    }
+
+    #[test]
+    fn fx206_recovery_semantic_errors_keep_siblings_and_count_boundsless_owners() {
+        let cases = [
+            (
+                "",
+                r#"<p:style><a:lnRef idx="0"/><a:fillRef idx="999"/><a:effectRef idx="0"/><a:fontRef idx="minor"/></p:style>"#,
+                "style index",
+            ),
+            (
+                r#"<a:solidFill><a:schemeClr val="phClr"/></a:solidFill>"#,
+                "",
+                "phClr",
+            ),
+            (
+                r#"<a:solidFill><a:prstClr val="futureColour"/></a:solidFill>"#,
+                "",
+                "concrete value",
+            ),
+        ];
+        for (properties, style, reason) in cases {
+            for placed in [true, false] {
+                let red = fx206_recovery_shape(
+                    1,
+                    r#"<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>"#,
+                    "",
+                    true,
+                );
+                let green = fx206_recovery_shape(
+                    3,
+                    r#"<a:solidFill><a:srgbClr val="00FF00"/></a:solidFill>"#,
+                    "",
+                    true,
+                );
+                let failed = fx206_recovery_shape(2, properties, style, placed);
+                let fixture = Fixture::new(&[red, failed, green].join(""), "", "");
+                let original = fixture.slide.clone();
+                let context = fixture.context();
+                let mut identities = Vec::new();
+                let (resolved, directions) = context
+                    .resolve_slide_inner_common(
+                        (100.0, 100.0),
+                        None,
+                        None,
+                        None,
+                        None,
+                        Some(&mut identities),
+                    )
+                    .unwrap();
+                assert_eq!(
+                    resolved.unresolved_member_count, 1,
+                    "{reason}, placed={placed}"
+                );
+                assert_eq!(
+                    identities
+                        .iter()
+                        .map(|identity| identity.shape_id.unwrap())
+                        .collect::<Vec<_>>(),
+                    if placed { vec![1, 2, 3] } else { vec![1, 3] }
+                );
+                assert_eq!(directions.len(), resolved.shapes.len());
+                assert_eq!(
+                    resolved.shapes.first().unwrap().fill,
+                    Some(Paint::Solid(Color::from_hex("FF0000")))
+                );
+                assert_eq!(
+                    resolved.shapes.last().unwrap().fill,
+                    Some(Paint::Solid(Color::from_hex("00FF00")))
+                );
+                let messages = resolved
+                    .diagnostics
+                    .iter()
+                    .filter(|diagnostic| diagnostic.message.starts_with("unresolved member "))
+                    .collect::<Vec<_>>();
+                assert_eq!(messages.len(), 1);
+                assert!(messages[0].message.contains("shape 2 \"owner2\""));
+                assert!(messages[0].message.contains(reason));
+                assert!(messages[0].message.contains(if placed {
+                    "retained as bounds"
+                } else {
+                    "omitted without trustworthy finite bounds"
+                }));
+                if placed {
+                    assert_eq!(
+                        resolved.shapes[1].geometry,
+                        ResolvedGeometry::BoundsFallback
+                    );
+                    assert_eq!(resolved.shapes[1].content, ResolvedContent::None);
+                }
+                assert_eq!(fixture.slide, original);
+            }
+        }
+    }
+
+    #[test]
+    fn fx206_recovery_valid_zero_and_background_setup_remain_distinct() {
+        let fixture = Fixture::new(
+            &fx206_recovery_shape(
+                1,
+                r#"<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>"#,
+                "",
+                true,
+            ),
+            "",
+            "",
+        );
+        let valid = fixture.context().resolve_slide((100.0, 100.0)).unwrap();
+        assert_eq!(valid.unresolved_member_count, 0);
+        assert!(valid.diagnostics.is_empty());
+        let xml = slide_xml_with(
+            "",
+            r#"<p:bg><p:bgRef idx="999"><a:schemeClr val="accent1"/></p:bgRef></p:bg>"#,
+            "",
+        );
+        let fixture = Fixture::from_xml(&xml, &layout_xml(""), &master_xml(""));
+        assert!(matches!(
+            fixture.context().resolve_slide((100.0, 100.0)),
+            Err(crate::ResolveError::StyleIndexOutOfRange { .. })
+        ));
+        assert!(CT_Slide::from_xml(b"<p:sld>").is_err());
+    }
+
+    #[test]
+    fn fx206_recovery_rejects_nonfinite_placement_without_hiding_the_failure() {
+        let fixture = Fixture::new(&fx206_recovery_shape(2, "", "", true), "", "");
+        let context = fixture.context();
+        let mut diagnostics = Vec::new();
+        let error = crate::ResolveError::ConcreteValue {
+            kind: "test semantic",
+            detail: "bad value".to_owned(),
+        };
+        let result = context.unresolved_shape_fallback(
+            super::ShapePlacement {
+                source: FlattenedSource::Slide,
+                group_scale: (1.0, 1.0),
+                group_transform: Transform {
+                    a: f64::INFINITY,
+                    ..Transform::IDENTITY
+                },
+            },
+            &fixture.slide.common_slide_data.shape_tree.children[0],
+            &error,
+            &mut diagnostics,
+        );
+        assert!(result.is_none());
+        assert_eq!(diagnostics.len(), 1);
+        assert!(
+            diagnostics[0]
+                .message
+                .contains("omitted without trustworthy finite bounds")
+        );
+    }
+
+    #[test]
+    fn fx206_recovery_alias_and_default_namespaces_keep_owned_failure_and_foreign_payload() {
+        let failed = fx206_recovery_shape(
+            2,
+            r#"<a:solidFill><a:schemeClr val="phClr"/></a:solidFill><f:solidFill xmlns:f="urn:foreign"><f:opaque/></f:solidFill>"#,
+            "",
+            true,
+        );
+        let original = slide_xml(&failed);
+        let conflicting = original
+            .replace("xmlns:p=", "xmlns:q=")
+            .replace("xmlns:a=", "xmlns:r=")
+            .replace("<p:", "<q:")
+            .replace("</p:", "</q:")
+            .replace("<a:", "<r:")
+            .replace("</a:", "</r:");
+        assert!(CT_Slide::from_xml(conflicting.as_bytes()).is_err());
+        let alias = original
+            .replace("xmlns:p=", "xmlns:q=")
+            .replace("xmlns:a=", "xmlns:d=")
+            .replace("<p:", "<q:")
+            .replace("</p:", "</q:")
+            .replace("<a:", "<d:")
+            .replace("</a:", "</d:");
+        let default = original.replace("<p:", "<").replace("</p:", "</").replacen(
+            "<sld ",
+            &format!("<sld xmlns=\"{P_NS}\" "),
+            1,
+        );
+        for xml in [original, alias, default] {
+            let fixture = Fixture::from_xml(&xml, &layout_xml(""), &master_xml(""));
+            let snapshot = fixture.slide.clone();
+            let resolved = fixture.context().resolve_slide((100.0, 100.0)).unwrap();
+            assert_eq!(resolved.unresolved_member_count, 1);
+            assert_eq!(resolved.shapes.len(), 1);
+            assert!(resolved.diagnostics[0].message.contains("phClr"));
+            assert_eq!(fixture.slide, snapshot);
+        }
+    }
+
+    #[test]
+    fn fx206_recovery_gradient_stop_errors_count_with_and_without_placement() {
+        for line in [false, true] {
+            for color in [
+                r#"<a:schemeClr val="phClr"/>"#,
+                r#"<a:prstClr val="futureColour"/>"#,
+            ] {
+                for placed in [false, true] {
+                    let gradient = format!(
+                        r#"<a:gradFill><a:gsLst><a:gs pos="0">{color}</a:gs><a:gs pos="100000"><a:srgbClr val="00FF00"/></a:gs></a:gsLst><a:lin ang="0" scaled="1"/></a:gradFill>"#
+                    );
+                    let properties = if line {
+                        format!("<a:ln>{gradient}</a:ln>")
+                    } else {
+                        gradient
+                    };
+                    let children = [
+                        fx206_recovery_shape(
+                            1,
+                            r#"<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>"#,
+                            "",
+                            true,
+                        ),
+                        fx206_recovery_shape(2, &properties, "", placed),
+                        fx206_recovery_shape(
+                            3,
+                            r#"<a:solidFill><a:srgbClr val="00FF00"/></a:solidFill>"#,
+                            "",
+                            true,
+                        ),
+                    ]
+                    .join("");
+                    for namespace in 0..3 {
+                        let xml = match namespace {
+                            1 => slide_xml(&children)
+                                .replace("xmlns:a=", "xmlns:d=")
+                                .replace("<a:", "<d:")
+                                .replace("</a:", "</d:"),
+                            2 => slide_xml(&children)
+                                .replace("xmlns:a=", "xmlns=")
+                                .replace("<a:", "<")
+                                .replace("</a:", "</"),
+                            _ => slide_xml(&children),
+                        };
+                        let fixture = Fixture::from_xml(&xml, &layout_xml(""), &master_xml(""));
+                        let before = fixture.slide.clone();
+                        let resolved = fixture.context().resolve_slide((100.0, 100.0)).unwrap();
+                        assert_eq!(
+                            resolved.unresolved_member_count, 1,
+                            "line={line} placed={placed} namespace={namespace}"
+                        );
+                        assert_eq!(resolved.shapes.len(), if placed { 3 } else { 2 });
+                        assert_eq!(
+                            resolved.shapes[0].fill,
+                            Some(Paint::Solid(Color::from_hex("FF0000")))
+                        );
+                        assert_eq!(
+                            resolved.shapes.last().unwrap().fill,
+                            Some(Paint::Solid(Color::from_hex("00FF00")))
+                        );
+                        assert_eq!(resolved.diagnostics.len(), 1);
+                        assert!(
+                            resolved.diagnostics[0]
+                                .message
+                                .contains("shape 2 \"owner2\"")
+                        );
+                        assert!(resolved.diagnostics[0].message.contains(if placed {
+                            "retained as bounds"
+                        } else {
+                            "omitted without trustworthy finite bounds"
+                        }));
+                        assert_eq!(fixture.slide, before);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fx206_recovery_unplaced_gradient_validation_keeps_supported_and_unsupported_boundaries() {
+        for (attributes, stops, geometry) in [
+            (
+                "",
+                r#"<a:gs pos="0"><a:srgbClr val="112233"/></a:gs>"#,
+                r#"<a:lin ang="0"/>"#,
+            ),
+            (
+                r#"rotWithShape="0""#,
+                r#"<a:gs pos="0"><a:schemeClr val="phClr"/></a:gs>"#,
+                r#"<a:lin ang="0"/>"#,
+            ),
+            (
+                r#"flip="x""#,
+                r#"<a:gs pos="0"><a:schemeClr val="phClr"/></a:gs>"#,
+                r#"<a:lin ang="0"/>"#,
+            ),
+            (
+                "",
+                r#"<a:gs pos="0"><a:schemeClr val="phClr"/></a:gs>"#,
+                r#"<a:path path="circle"/>"#,
+            ),
+            (
+                "",
+                r#"<a:gs pos="0"/><a:gs pos="100000"><a:schemeClr val="phClr"/></a:gs>"#,
+                r#"<a:lin ang="0"/>"#,
+            ),
+        ] {
+            let gradient = format!(
+                "<a:gradFill {attributes}><a:gsLst>{stops}</a:gsLst>{geometry}</a:gradFill>"
+            );
+            let fixture = Fixture::new(&fx206_recovery_shape(2, &gradient, "", false), "", "");
+            let before = fixture.slide.clone();
+            let resolved = fixture.context().resolve_slide((100.0, 100.0)).unwrap();
+            assert_eq!(
+                resolved.unresolved_member_count, 0,
+                "attributes={attributes:?}; stops={stops}; geometry={geometry}; diagnostics={:?}",
+                resolved.diagnostics
+            );
+            assert!(resolved.shapes.is_empty());
+            assert!(resolved.diagnostics.is_empty());
+            assert_eq!(fixture.slide, before);
+        }
+    }
+
+    #[test]
+    fn fx206_recovery_supported_gradient_phclr_before_missing_stop_still_counts() {
+        for placed in [false, true] {
+            let gradient = r#"<a:gradFill><a:gsLst><a:gs pos="0"><a:schemeClr val="phClr"/></a:gs><a:gs pos="100000"/></a:gsLst><a:lin ang="0"/></a:gradFill>"#;
+            let fixture = Fixture::new(&fx206_recovery_shape(2, gradient, "", placed), "", "");
+            let before = fixture.slide.clone();
+            let resolved = fixture.context().resolve_slide((100.0, 100.0)).unwrap();
+            assert_eq!(resolved.unresolved_member_count, 1);
+            assert_eq!(resolved.shapes.len(), usize::from(placed));
+            assert_eq!(resolved.diagnostics.len(), 1);
+            assert!(resolved.diagnostics[0].message.contains("phClr"));
+            assert!(resolved.diagnostics[0].message.contains(if placed {
+                "retained as bounds"
+            } else {
+                "omitted without trustworthy finite bounds"
+            }));
+            assert_eq!(fixture.slide, before);
+        }
+    }
+
+    #[test]
+    fn fx206_background_gradient_shape_rotation_does_not_hide_phclr_paint() {
+        let background = r#"<p:bg><p:bgPr><a:gradFill rotWithShape="0"><a:gsLst><a:gs pos="0"><a:schemeClr val="phClr"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000FF"/></a:gs></a:gsLst><a:lin ang="0"/></a:gradFill></p:bgPr></p:bg>"#;
+        let fixture = Fixture::from_xml(
+            &slide_xml_with("", background, ""),
+            &layout_xml_with("", "", "", ""),
+            &master_xml_with("", "", ""),
+        );
+        let before = fixture.slide.clone();
+        let resolved = fixture.context().resolve_slide((40.0, 20.0)).unwrap();
+        let Some(ResolvedBackground::Paint(Paint::Linear { stops, .. })) = resolved.background
+        else {
+            panic!("expected supported background gradient");
+        };
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[1].color, Color::from_hex("0000FF"));
+        assert_eq!(resolved.unresolved_member_count, 0);
+        assert!(resolved.diagnostics.is_empty());
+        assert_eq!(fixture.slide, before);
+    }
+
+    #[test]
+    fn fx206_gradient_rotation_policy_keeps_placed_reference_and_rotated_boundary() {
+        for rotation in [0, 5_400_000] {
+            let gradient = r#"<a:gradFill rotWithShape="0"><a:gsLst><a:gs pos="0"><a:schemeClr val="phClr"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000FF"/></a:gs></a:gsLst><a:lin ang="0"/></a:gradFill>"#;
+            let style = r#"<p:style><a:lnRef idx="0"/><a:fillRef idx="0"><a:srgbClr val="FF0000"/></a:fillRef><a:effectRef idx="0"/><a:fontRef idx="minor"/></p:style>"#;
+            let shape = fx206_recovery_shape(2, gradient, style, true)
+                .replace("<a:xfrm>", &format!("<a:xfrm rot=\"{rotation}\">"));
+            let fixture = Fixture::new(&shape, "", "");
+            let before = fixture.slide.clone();
+            let resolved = fixture.context().resolve_slide((100.0, 100.0)).unwrap();
+            assert_eq!(resolved.unresolved_member_count, 0);
+            assert_eq!(resolved.shapes.len(), 1);
+            if rotation == 0 {
+                let Some(Paint::Linear { stops, .. }) = &resolved.shapes[0].fill else {
+                    panic!("expected supported unrotated gradient");
+                };
+                assert_eq!(stops.len(), 2);
+                assert_eq!(stops[0].color, Color::from_hex("FF0000"));
+                assert_eq!(stops[1].color, Color::from_hex("0000FF"));
+                assert!(resolved.diagnostics.is_empty());
+            } else {
+                assert!(resolved.shapes[0].fill.is_none());
+                assert!(resolved.diagnostics.iter().any(|diagnostic| {
+                    diagnostic
+                        .message
+                        .contains("gradient independent of shape rotation")
+                }));
+            }
+            assert_eq!(fixture.slide, before);
+        }
     }
 }

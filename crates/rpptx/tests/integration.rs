@@ -8108,7 +8108,7 @@ const F124_ARTIFACT_SHA256: &str =
 const F116_ARTIFACT_SHA256: &str =
     "d36da6e8849eabd4487d2572baea19c3716ee7d0fe03aaa4714a28ce3c41de4f";
 const F116_CURRENT_ARTIFACT_SHA256: &str =
-    "f85098f013b90871a343d2da9b13d5bb3ab125788a7075cf2d423ac865efce08";
+    "ef24e9477e6b3b54e1c3b27dfbda8082fce6baad5f773ebf37a2577319d2c247";
 const F116_FINAL_TITLES: [&str; 10] = [
     "F-116 slide 10",
     "F-116 slide 02",
@@ -10074,8 +10074,35 @@ fn materialized_placeholder_geometry_keeps_the_shape_drawn_after_one_coordinate_
 
     let mut unmaterialized = presentation.clone();
     move_title(&mut unmaterialized);
-    assert_eq!(unmaterialized.effective_geometry(0, &[0]).unwrap(), None);
-    assert_text_frames_use_effective_geometry(&unmaterialized, 0);
+    assert_eq!(
+        unmaterialized.effective_geometry(0, &[0]).unwrap(),
+        Some((Emu(548_640), Emu(274_638), Emu(8_229_600), Emu(1_143_000)))
+    );
+    let inherited_before = open_opc(
+        &presentation.to_bytes().unwrap(),
+        "inherited operands before",
+    );
+    let inherited_after = open_opc(
+        &unmaterialized.to_bytes().unwrap(),
+        "inherited operands after",
+    );
+    for name in inherited_before.parts.keys().filter(|name| {
+        name.starts_with("/ppt/slideLayouts/") || name.starts_with("/ppt/slideMasters/")
+    }) {
+        assert_eq!(
+            inherited_after.get_part(name),
+            inherited_before.get_part(name),
+            "{name}"
+        );
+    }
+    assert_eq!(
+        Presentation::from_bytes(&unmaterialized.to_bytes().unwrap())
+            .unwrap()
+            .effective_geometry(0, &[0])
+            .unwrap(),
+        unmaterialized.effective_geometry(0, &[0]).unwrap()
+    );
+    assert_text_frames_use_effective_geometry(&unmaterialized, 1);
 
     presentation.materialize_geometry(0, &[0]).unwrap();
     let title = presentation.slide(0).unwrap().shape(0).unwrap();
@@ -10912,7 +10939,17 @@ fn m21_assert_representative_semantics(
 #[test]
 fn m21_minimal_smartart_source_classifies_the_unsupported_fallback() {
     let bytes = m21_minimal_smartart_fallback_deck_bytes();
+    let attribution_path = std::env::temp_dir().join(format!(
+        "rpptx-fx206-smartart-attribution-{}.pptx",
+        std::process::id()
+    ));
+    fs::write(&attribution_path, &bytes).unwrap();
+    eprintln!(
+        "SmartArt source retained until assertion passes: {}",
+        attribution_path.display()
+    );
     assert_eq!(sha256_bytes(&bytes), M21_CURRENT_MINIMAL_SOURCE_SHA256);
+    fs::remove_file(&attribution_path).unwrap();
     let presentation = Presentation::from_bytes(&bytes).unwrap();
     let (_, layout) = presentation.render_deterministic().unwrap();
     assert_eq!(
@@ -11185,7 +11222,7 @@ struct M21RecordedMovieSample {
 
 #[cfg(all(feature = "digital-signatures", feature = "render"))]
 const M21_CURRENT_MINIMAL_SOURCE_SHA256: &str =
-    "2a47b59d92718712a134e51a7ebc08a705505b4d7dd0cc39abd4febb53ea000b";
+    "9f71406a506c91df5e91f75bee01c3e7d1f4487b44d99e8709c646c8368082ea";
 
 #[cfg(all(feature = "digital-signatures", feature = "render"))]
 const M21_LEGACY_UNSIGNED_SOURCE_SHA256: &str =
@@ -13199,9 +13236,12 @@ fn ten_slide_write_api_deck_validates_and_reopens() {
     let candidate_path = f116_temp_path("validation", "pptx");
     fs::write(&candidate_path, &bytes).expect("write temporary F-116 candidate");
     let candidate_sha = sha256(&candidate_path);
-    fs::remove_file(&candidate_path).expect("remove temporary F-116 candidate");
-    eprintln!("F-116 candidate SHA-256: {candidate_sha}");
+    eprintln!(
+        "F-116 candidate SHA-256: {candidate_sha}; retained until assertion passes: {}",
+        candidate_path.display()
+    );
     assert_eq!(candidate_sha, F116_CURRENT_ARTIFACT_SHA256);
+    fs::remove_file(&candidate_path).expect("remove temporary F-116 candidate");
 
     let reopened = Presentation::from_bytes(&bytes).expect("reopen F-116 deck");
     assert_eq!(reopened.len(), 10);
@@ -15763,8 +15803,17 @@ fn assert_copied_notes_link(package: &OpcPackage, slide_part: &str) {
         slide_part
     );
     let xml = String::from_utf8(package.get_part(&notes_part).unwrap().to_vec()).unwrap();
-    assert!(
-        xml.contains(&format!(r#"<a:hlinkClick r:id="{}"/>"#, link.id)),
+    let clicks = owned_xml_starts(&xml, A_NS, "hlinkClick");
+    assert_eq!(
+        clicks
+            .iter()
+            .filter(|click| click.attributes.contains(&(
+                R_NS.to_owned(),
+                "id".to_owned(),
+                link.id.clone()
+            )))
+            .count(),
+        1,
         "{notes_part}: {xml}"
     );
 }
@@ -15850,7 +15899,17 @@ fn import_slide_carries_pictures_links_notes_and_background_with_shared_media() 
     assert_eq!(link.target, "https://example.com/import");
     assert_eq!(link.target_mode.as_deref(), Some("External"));
     let slide_xml = String::from_utf8(package.get_part(&slide_parts[0]).unwrap().to_vec()).unwrap();
-    assert!(slide_xml.contains(&format!(r#"<a:hlinkClick r:id="{}"/>"#, link.id)));
+    assert_eq!(
+        owned_xml_starts(&slide_xml, A_NS, "hlinkClick")
+            .iter()
+            .filter(|click| click.attributes.contains(&(
+                R_NS.to_owned(),
+                "id".to_owned(),
+                link.id.clone()
+            )))
+            .count(),
+        1
+    );
     assert!(slide_xml.contains("<p:bg><p:bgPr><a:blipFill>"));
     for relationship_id in slide_xml
         .split("r:embed=\"")
@@ -17001,9 +17060,38 @@ fn removing_a_jump_target_turns_its_links_into_no_action_like_powerpoint() {
     assert!(xml.contains(
         r#"<p:cNvPr id="60" name="Run jump"><a:hlinkHover r:id="" action="ppaction://noaction"/></p:cNvPr>"#
     ));
-    assert!(xml.contains(
-        r#"<a:rPr lang="en-US"><a:hlinkClick r:id="" action="ppaction://noaction"/></a:rPr>"#
-    ));
+    let properties = owned_xml_starts(&xml, A_NS, "rPr");
+    let clicks = owned_xml_starts(&xml, A_NS, "hlinkClick");
+    assert_eq!(
+        properties
+            .iter()
+            .filter(|properties| properties.attributes.contains(&(
+                String::new(),
+                "lang".to_owned(),
+                "en-US".to_owned()
+            )))
+            .count(),
+        1
+    );
+    assert_eq!(
+        clicks
+            .iter()
+            .filter(|click| click.attributes.contains(&(
+                R_NS.to_owned(),
+                "id".to_owned(),
+                String::new()
+            )) && click.attributes.contains(&(
+                String::new(),
+                "action".to_owned(),
+                "ppaction://noaction".to_owned()
+            )) && properties.iter().any(|properties| properties
+                .attributes
+                .contains(&(String::new(), "lang".to_owned(), "en-US".to_owned()))
+                && properties.offset < click.offset
+                && click.end < properties.end))
+            .count(),
+        1
+    );
     assert_eq!(
         first_slide_relationships(&presentation, rel_types::SLIDE),
         ["slide2.xml"]
@@ -17292,14 +17380,70 @@ fn text_mutation_preserves_unmodelled_xml_and_schema_order() {
     let formatted_xml =
         String::from_utf8(formatted_output.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
     let marker = r#"<mc:AlternateContent xmlns:x="urn:f112"><mc:Choice Requires="x"><x:producer-marker value="kept"/></mc:Choice><mc:Fallback><a:r><a:t>fallback</a:t></a:r></mc:Fallback></mc:AlternateContent>"#;
-    let field =
-        r#"<a:fld id="{00000000-0000-0000-0000-000000000001}"><a:t>field</a:t></a:fld><a:br/>"#;
-    let properties_index = formatted_xml.find("<a:pPr lvl=\"1\"").unwrap();
+    let field_and_break = |xml: &str| {
+        let fields = owned_xml_starts(xml, A_NS, "fld");
+        assert_eq!(fields.len(), 1);
+        assert!(fields[0].attributes.contains(&(
+            String::new(),
+            "id".to_owned(),
+            "{00000000-0000-0000-0000-000000000001}".to_owned()
+        )));
+        let texts = owned_xml_starts(xml, A_NS, "t")
+            .into_iter()
+            .filter(|text| text.offset > fields[0].offset && text.end < fields[0].end)
+            .collect::<Vec<_>>();
+        assert_eq!(texts.len(), 1);
+        let ordinary_attributes = |fact: &OwnedXmlStartFact| {
+            fact.attributes
+                .iter()
+                .filter(|(uri, name, _)| {
+                    uri != "http://www.w3.org/2000/xmlns/"
+                        && name != "xmlns"
+                        && !name.starts_with("xmlns:")
+                })
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ordinary_attributes(&fields[0]),
+            vec![(
+                String::new(),
+                "id".to_owned(),
+                "{00000000-0000-0000-0000-000000000001}".to_owned()
+            )]
+        );
+        assert!(ordinary_attributes(&texts[0]).is_empty());
+        let text_xml = &xml[texts[0].offset..texts[0].end];
+        assert_eq!(
+            &text_xml[text_xml.find('>').unwrap() + 1..text_xml.rfind("</").unwrap()],
+            "field"
+        );
+        let field_xml = &xml[fields[0].offset..fields[0].end];
+        assert_eq!(
+            &field_xml[field_xml.find('>').unwrap() + 1..field_xml.rfind("</").unwrap()],
+            text_xml
+        );
+        let breaks = owned_xml_starts(xml, A_NS, "br");
+        assert_eq!(breaks.len(), 1);
+        assert!(ordinary_attributes(&breaks[0]).is_empty());
+        assert_eq!(fields[0].end, breaks[0].offset);
+        fields[0].offset
+    };
+    let properties = owned_xml_starts(&formatted_xml, A_NS, "pPr");
+    let properties_index = properties
+        .iter()
+        .find(|properties| {
+            properties
+                .attributes
+                .contains(&(String::new(), "lvl".to_owned(), "1".to_owned()))
+        })
+        .unwrap()
+        .offset;
     let marker_index = formatted_xml.find(marker).unwrap();
-    let field_index = formatted_xml.find(field).unwrap();
+    let field_index = field_and_break(&formatted_xml);
     assert!(properties_index < marker_index);
     assert!(marker_index < field_index);
-    assert!(formatted_xml.contains(field));
+    assert!(field_index < owned_xml_starts(&formatted_xml, A_NS, "br")[0].offset);
     let reparsed_xml = String::from_utf8(
         CT_Slide::from_xml(formatted_output.get_part(SLIDE_TWO_PART).unwrap())
             .unwrap()
@@ -17307,9 +17451,18 @@ fn text_mutation_preserves_unmodelled_xml_and_schema_order() {
             .unwrap(),
     )
     .unwrap();
-    let properties_index = reparsed_xml.find("<a:pPr lvl=\"1\"").unwrap();
+    let properties = owned_xml_starts(&reparsed_xml, A_NS, "pPr");
+    let properties_index = properties
+        .iter()
+        .find(|properties| {
+            properties
+                .attributes
+                .contains(&(String::new(), "lvl".to_owned(), "1".to_owned()))
+        })
+        .unwrap()
+        .offset;
     let marker_index = reparsed_xml.find(marker).unwrap();
-    let field_index = reparsed_xml.find(field).unwrap();
+    let field_index = field_and_break(&reparsed_xml);
     assert!(properties_index < marker_index);
     assert!(marker_index < field_index);
 
@@ -17334,8 +17487,20 @@ fn text_mutation_preserves_unmodelled_xml_and_schema_order() {
     ] {
         assert!(xml.contains(marker), "missing preserved marker {marker}");
     }
-    assert!(xml.find("<a:bodyPr").unwrap() < xml.find("<a:p>").unwrap());
-    assert!(xml.find("<a:r>").unwrap() < xml.find("<a:t>ordered</a:t>").unwrap());
+    let body = owned_xml_starts(&xml, A_NS, "bodyPr");
+    let paragraphs = owned_xml_starts(&xml, A_NS, "p");
+    let runs = owned_xml_starts(&xml, A_NS, "r");
+    let texts = owned_xml_starts(&xml, A_NS, "t");
+    assert!(body[0].offset < paragraphs[0].offset);
+    let ordered = texts
+        .iter()
+        .filter(|text| xml[text.offset..text.end].contains(">ordered<"))
+        .collect::<Vec<_>>();
+    assert_eq!(ordered.len(), 1);
+    assert!(
+        runs.iter()
+            .any(|run| run.offset < ordered[0].offset && ordered[0].end < run.end)
+    );
 }
 
 #[test]
@@ -18955,7 +19120,24 @@ fn added_shape_carries_the_theme_style_and_renders_it() {
     assert_eq!(xml.matches("<p:style>").count(), 1);
     let shape_start = xml.find(r#"name="Shape 2""#).expect("added shape");
     let textbox_start = xml.find(r#"name="TextBox 3""#).expect("added textbox");
-    assert!(xml[shape_start..textbox_start].contains(style));
+    let styles = owned_xml_starts(&xml, P_NS, "style");
+    let text_bodies = owned_xml_starts(&xml, P_NS, "txBody");
+    let style_start = styles
+        .iter()
+        .find(|fact| fact.offset > shape_start && fact.offset < textbox_start)
+        .unwrap()
+        .offset;
+    let body_start = text_bodies
+        .iter()
+        .find(|fact| fact.offset > style_start && fact.offset < textbox_start)
+        .unwrap()
+        .offset;
+    let expected = style
+        .strip_prefix("</p:spPr>")
+        .unwrap()
+        .strip_suffix("<p:txBody>")
+        .unwrap();
+    assert_eq!(&xml[style_start..body_start], expected);
 
     let reopened = Presentation::from_bytes(&bytes).expect("reopen styled shape deck");
     assert!(reopened.validate().is_empty());
@@ -19360,7 +19542,8 @@ fn constructor_names_are_deterministic_from_allocated_ids() {
 
 #[test]
 fn shape_mutation_setters_survive_save_and_reload() {
-    let mut presentation = Presentation::from_bytes(&mutation_fixture_bytes()).unwrap();
+    let mut presentation =
+        Presentation::from_bytes(&mutation_fixture_with_attachment_geometry()).unwrap();
     let mut slide = presentation.slide_mut(0).unwrap();
     let mut shape = slide.shape_mut(0).unwrap();
     shape.set_position(Emu(101), Emu(202)).unwrap();
@@ -19535,7 +19718,8 @@ fn shape_refs_report_explicit_placeholder_types_and_direct_rotation() {
 
 #[test]
 fn shape_mutation_preserves_unmodelled_xml_and_schema_order() {
-    let mut presentation = Presentation::from_bytes(&mutation_fixture_bytes()).unwrap();
+    let mut presentation =
+        Presentation::from_bytes(&mutation_fixture_with_attachment_geometry()).unwrap();
     let mut slide = presentation.slide_mut(0).unwrap();
     let mut shape = slide.shape_mut(0).unwrap();
     shape.set_position(Emu(1), Emu(2)).unwrap();
@@ -27532,7 +27716,7 @@ fn setting_notes_text_creates_the_notes_slide_and_a_missing_notes_master() {
     ] {
         assert!(notes.contains(expected), "missing {expected} in {notes}");
     }
-    assert_eq!(notes.matches("<p:txBody>").count(), 1, "{notes}");
+    assert_eq!(owned_xml_starts(&notes, P_NS, "txBody").len(), 1, "{notes}");
     assert_eq!(
         package
             .content_types
@@ -27924,4 +28108,839 @@ fn names_and_chart_text_xml_cannot_carry_are_refused() {
         error.contains("/docProps/core.xml holds U+000C at line"),
         "{error}"
     );
+}
+
+fn fx206_member_scene(placed: bool, reason: usize) -> String {
+    let member = |id: u32, x: i64, width: i64, properties: &str, style: &str, positioned: bool| {
+        let transform = if positioned {
+            format!(
+                r#"<a:xfrm><a:off x="{x}" y="127000"/><a:ext cx="{width}" cy="254000"/></a:xfrm>"#
+            )
+        } else {
+            String::new()
+        };
+        format!(
+            r#"<p:sp><p:nvSpPr><p:cNvPr id="{id}" name="owner{id}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>{transform}<a:prstGeom prst="rect"/>{properties}<f:opaque xmlns:f="urn:f206:member" literal="&#x41;"/></p:spPr>{style}</p:sp>"#
+        )
+    };
+    let (properties, style) = match reason {
+        0 => (
+            "",
+            r#"<p:style><a:lnRef idx="0"/><a:fillRef idx="999"/><a:effectRef idx="0"/><a:fontRef idx="minor"/></p:style>"#,
+        ),
+        1 => (
+            r#"<a:solidFill><a:schemeClr val="phClr"/></a:solidFill>"#,
+            "",
+        ),
+        3 => (
+            r#"<a:solidFill><a:srgbClr val="000000"/></a:solidFill>"#,
+            "",
+        ),
+        4 => (
+            r#"<a:gradFill><a:gsLst><a:gs pos="0"><a:schemeClr val="phClr"/></a:gs></a:gsLst><a:lin ang="0"/></a:gradFill>"#,
+            "",
+        ),
+        5 => (
+            r#"<a:gradFill><a:gsLst><a:gs pos="0"><a:prstClr val="futureColour"/></a:gs></a:gsLst><a:lin ang="0"/></a:gradFill>"#,
+            "",
+        ),
+        6 => (
+            r#"<a:ln><a:gradFill><a:gsLst><a:gs pos="0"><a:schemeClr val="phClr"/></a:gs></a:gsLst><a:lin ang="0"/></a:gradFill></a:ln>"#,
+            "",
+        ),
+        7 => (
+            r#"<a:ln><a:gradFill><a:gsLst><a:gs pos="0"><a:prstClr val="futureColour"/></a:gs></a:gsLst><a:lin ang="0"/></a:gradFill></a:ln>"#,
+            "",
+        ),
+        _ => (
+            r#"<a:solidFill><a:prstClr val="futureColour"/></a:solidFill>"#,
+            "",
+        ),
+    };
+    let children = [
+        member(
+            1,
+            127000,
+            254000,
+            r#"<a:solidFill><a:srgbClr val="FF0000"/></a:solidFill>"#,
+            "",
+            true,
+        ),
+        member(2, 127000, 254000, properties, style, placed),
+        member(
+            3,
+            127000,
+            50800,
+            r#"<a:solidFill><a:srgbClr val="00FF00"/></a:solidFill>"#,
+            "",
+            true,
+        ),
+    ]
+    .join("");
+    format!(
+        r#"<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" showMasterSp="0"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="10" name="root"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/><p:grpSp><p:nvGrpSpPr><p:cNvPr id="11" name="parent"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="63500" y="63500"/><a:ext cx="2540000" cy="2540000"/><a:chOff x="0" y="0"/><a:chExt cx="1270000" cy="1270000"/></a:xfrm></p:grpSpPr>{children}</p:grpSp></p:spTree></p:cSld></p:sld>"#
+    )
+}
+
+#[test]
+fn fx206_public_recovery_keeps_group_pixels_count_and_package_order() {
+    let mut seed = rpptx::Presentation::new().unwrap();
+    seed.add_slide(6).unwrap();
+    let mut valid = open_opc(&seed.to_bytes().unwrap(), "positive placement");
+    valid.set_part(
+        "/ppt/slides/slide1.xml",
+        fx206_member_scene(true, 3).into_bytes(),
+    );
+    let valid = rpptx::Presentation::from_bytes(&package_bytes(valid)).unwrap();
+    let (positive, _) = valid
+        .render_deterministic()
+        .expect("positive package, group placement and native backend preconditions");
+    assert_eq!(positive.slides[0].shapes.len(), 3);
+    for reason in [0, 1, 2, 4, 5, 6, 7] {
+        for placed in [false, true] {
+            let mut presentation = rpptx::Presentation::new().unwrap();
+            presentation.add_slide(6).unwrap();
+            let mut package = open_opc(&presentation.to_bytes().unwrap(), "member source");
+            package.set_part(
+                "/ppt/slides/slide1.xml",
+                fx206_member_scene(placed, reason).into_bytes(),
+            );
+            let presentation = rpptx::Presentation::from_bytes(&package_bytes(package)).unwrap();
+            let before = presentation.to_bytes().unwrap();
+            let raw = open_opc(&before, "opaque owner")
+                .get_part("/ppt/slides/slide1.xml")
+                .unwrap()
+                .to_vec();
+            assert!(
+                String::from_utf8(raw)
+                    .unwrap()
+                    .contains("literal=\"&#x41;\"")
+            );
+            let (input, layout) = presentation.render_deterministic().unwrap();
+            assert_eq!(input.slides[0].unresolved_member_count, 1);
+            assert_eq!(input.slides[0].shapes.len(), if placed { 3 } else { 2 });
+            assert_eq!(
+                layout
+                    .diagnostics
+                    .iter()
+                    .filter(|d| d.message.starts_with("unresolved member "))
+                    .count(),
+                1
+            );
+            assert!(
+                layout
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.message == "slide 1 incomplete: 1 unresolved members")
+            );
+            let pixmap = tiny_skia::Pixmap::decode_png(
+                &oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap(),
+            )
+            .unwrap();
+            let at = |x, y| {
+                let p = pixmap.pixel(x, y).unwrap();
+                (p.red(), p.green(), p.blue())
+            };
+            assert_eq!(
+                at(28, 40),
+                (0, 255, 0),
+                "last valid sibling must paint on top at independently scaled point"
+            );
+            assert_eq!(
+                at(40, 40),
+                (255, 0, 0),
+                "first valid sibling interior must survive"
+            );
+            if placed {
+                let p = at(64, 40);
+                assert!(
+                    p.0 < 200 && p.1 < 80 && p.2 < 80,
+                    "failed group member bounds outline must paint the independent x65 edge"
+                );
+            }
+            assert_eq!(presentation.to_bytes().unwrap(), before);
+            let reopened = rpptx::Presentation::from_bytes(&before).unwrap();
+            let (again, second) = reopened.render_deterministic().unwrap();
+            assert_eq!(again.slides[0].unresolved_member_count, 1);
+            assert_eq!(
+                oxml_pdf::render_page_to_png(&second, 0, 72.0).unwrap(),
+                oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap()
+            );
+            assert_eq!(
+                open_opc(&reopened.to_bytes().unwrap(), "reopened")
+                    .get_part("/ppt/slides/slide1.xml"),
+                open_opc(&before, "original").get_part("/ppt/slides/slide1.xml")
+            );
+        }
+    }
+    assert!(rpptx::Presentation::from_bytes(b"not an OPC package").is_err());
+}
+
+#[test]
+fn fx206_public_timeline_recovery_reports_each_slide_once_after_reopen() {
+    for placed in [false, true] {
+        let mut seed = rpptx::Presentation::new().unwrap();
+        seed.add_slide(6).unwrap();
+        seed.add_slide(6).unwrap();
+        let mut package = open_opc(&seed.to_bytes().unwrap(), "timeline source");
+        package.set_part(
+            "/ppt/slides/slide1.xml",
+            fx206_member_scene(placed, 4).into_bytes(),
+        );
+        package.set_part(
+            "/ppt/slides/slide2.xml",
+            fx206_member_scene(placed, 6).into_bytes(),
+        );
+        let presentation = rpptx::Presentation::from_bytes(&package_bytes(package)).unwrap();
+        let before = presentation.to_bytes().unwrap();
+        for deck in [
+            &presentation,
+            &rpptx::Presentation::from_bytes(&before).unwrap(),
+        ] {
+            let frame = deck
+                .render_timeline_deterministic(1, rpptx::TimelinePosition::default(), Some(0))
+                .unwrap();
+            let messages = frame
+                .diagnostics
+                .iter()
+                .map(|d| d.message.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                messages
+                    .iter()
+                    .filter(|m| **m == "slide 2 incomplete: 1 unresolved members")
+                    .count(),
+                1
+            );
+            assert_eq!(
+                messages
+                    .iter()
+                    .filter(|m| **m == "slide 1 incomplete: 1 unresolved members")
+                    .count(),
+                1
+            );
+            assert_eq!(
+                messages
+                    .iter()
+                    .filter(|m| m.starts_with("unresolved member "))
+                    .count(),
+                2
+            );
+            assert!(
+                messages
+                    .iter()
+                    .position(|m| m.starts_with("slide 2 incomplete:"))
+                    .unwrap()
+                    < messages
+                        .iter()
+                        .position(|m| m.starts_with("slide 1 incomplete:"))
+                        .unwrap()
+            );
+            assert_eq!(
+                messages
+                    .iter()
+                    .filter(|m| m.contains(if placed {
+                        "retained as bounds"
+                    } else {
+                        "omitted without trustworthy finite bounds"
+                    }))
+                    .count(),
+                2
+            );
+            assert!(!frame.page.elements.is_empty());
+            assert_eq!(deck.to_bytes().unwrap(), before);
+        }
+    }
+}
+
+#[test]
+fn fx206_run_click_payload_survives_external_switch_base() {
+    let seed = two_run_text_box();
+    let children = r#"<p:sp><p:nvSpPr><p:cNvPr id="81" name="click payload"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr><a:hlinkClick r:id="rId81" tooltip="retained" history="0" xmlns:f="urn:foreign" f:keep="kept"><f:opaque><f:node/></f:opaque></a:hlinkClick></a:rPr><a:t>click</a:t></a:r></a:p></p:txBody></p:sp>"#;
+    let mut package = open_opc(&seed.to_bytes().unwrap(), "external click setup");
+    let slide_part = "/ppt/slides/slide1.xml";
+    let xml = String::from_utf8(package.get_part(slide_part).unwrap().to_vec()).unwrap();
+    package.set_part(
+        slide_part,
+        xml.replacen("</p:spTree>", &format!("{children}</p:spTree>"), 1)
+            .into_bytes(),
+    );
+    let relationships = package.get_or_create_part_rels(slide_part);
+    relationships.add_with_id("rId81", rel_types::HYPERLINK, "https://example.test/old");
+    relationships
+        .items
+        .iter_mut()
+        .find(|rel| rel.id == "rId81")
+        .unwrap()
+        .target_mode = Some("External".to_owned());
+    let mut presentation = open_package(package).unwrap();
+    let id = 81;
+    assert_eq!(
+        presentation.hyperlink_address(0, "rId81"),
+        Some("https://example.test/old")
+    );
+    let before = presentation.to_bytes().unwrap();
+    assert!(before.starts_with(b"PK"));
+    presentation
+        .set_run_hyperlink(0, id, 0, 0, Some("https://example.test/new"))
+        .unwrap();
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "retained run click");
+    let xml = std::str::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap()).unwrap();
+    assert!(xml.contains("tooltip=\"retained\""));
+    assert!(xml.contains("history=\"0\""));
+    assert!(xml.contains("f:keep=\"kept\""));
+    assert!(xml.contains("<f:opaque><f:node/></f:opaque>"));
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    assert_eq!(reopened.to_bytes().unwrap(), bytes);
+}
+
+#[test]
+fn fx206_run_slide_targets_share_prune_clear_and_reopen_atomically() {
+    let mut presentation = two_run_text_box();
+    presentation.add_slide(6).unwrap();
+    presentation.add_slide(6).unwrap();
+    let id = first_slide_shape_id(&presentation, 0);
+    assert_eq!(presentation.run_target_slide(0, id, 0, 0).unwrap(), None);
+    let before = presentation.to_bytes().unwrap();
+    assert!(
+        presentation
+            .set_run_target_slide(0, id, 0, 0, Some(99))
+            .is_err()
+    );
+    assert!(
+        presentation
+            .set_run_target_slide(0, id, 0, 99, Some(1))
+            .is_err()
+    );
+    assert!(presentation.run_target_slide(0, id + 1000, 0, 0).is_err());
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+    presentation.set_shape_target_slide(0, id, Some(1)).unwrap();
+    presentation
+        .set_run_target_slide(0, id, 0, 0, Some(1))
+        .unwrap();
+    presentation
+        .set_run_target_slide(0, id, 0, 1, Some(1))
+        .unwrap();
+    let first_id = run_hyperlink_id(&presentation, 0).unwrap();
+    assert_eq!(run_hyperlink_id(&presentation, 1), Some(first_id.clone()));
+    assert_eq!(presentation.run_target_slide(0, id, 0, 0).unwrap(), Some(1));
+    let linked = presentation.to_bytes().unwrap();
+    presentation
+        .set_run_target_slide(0, id, 0, 0, Some(1))
+        .unwrap();
+    assert_eq!(presentation.to_bytes().unwrap(), linked);
+    presentation
+        .set_run_target_slide(0, id, 0, 0, Some(2))
+        .unwrap();
+    assert_eq!(presentation.run_target_slide(0, id, 0, 0).unwrap(), Some(2));
+    let package = open_opc(&presentation.to_bytes().unwrap(), "shared slide jump");
+    assert!(
+        package
+            .get_part_rels("/ppt/slides/slide1.xml")
+            .unwrap()
+            .get_by_id(&first_id)
+            .is_some()
+    );
+    presentation
+        .set_run_target_slide(0, id, 0, 1, None)
+        .unwrap();
+    presentation.set_shape_target_slide(0, id, None).unwrap();
+    let package = open_opc(
+        &presentation.to_bytes().unwrap(),
+        "last owned slide jump removed",
+    );
+    assert!(
+        package
+            .get_part_rels("/ppt/slides/slide1.xml")
+            .unwrap()
+            .get_by_id(&first_id)
+            .is_none()
+    );
+    presentation
+        .set_run_hyperlink(0, id, 0, 0, Some("https://example.test/run"))
+        .unwrap();
+    assert_eq!(presentation.run_target_slide(0, id, 0, 0).unwrap(), None);
+    presentation
+        .set_run_target_slide(0, id, 0, 0, Some(0))
+        .unwrap();
+    assert_eq!(presentation.run_target_slide(0, id, 0, 0).unwrap(), Some(0));
+    let saved = presentation.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&saved).unwrap();
+    assert_eq!(reopened.run_target_slide(0, id, 0, 0).unwrap(), Some(0));
+    assert_eq!(reopened.to_bytes().unwrap(), saved);
+    presentation
+        .set_run_target_slide(0, id, 0, 0, None)
+        .unwrap();
+    assert_eq!(run_hyperlink_id(&presentation, 0), None);
+    let cleared = presentation.to_bytes().unwrap();
+    presentation
+        .set_run_target_slide(0, id, 0, 0, None)
+        .unwrap();
+    assert_eq!(presentation.to_bytes().unwrap(), cleared);
+}
+
+#[test]
+fn fx206_action_only_run_click_sound_prunes_only_last_reference_base() {
+    for shared in [false, true] {
+        let seed = two_run_text_box();
+        let sounding = |id: u32| {
+            format!(
+                r#"<p:sp><p:nvSpPr><p:cNvPr id="{id}" name="sound-only {id}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr><a:hlinkClick action="ppaction://hlinkshowjump?jump=nextslide"><a:snd r:embed="rSound" name="click"/></a:hlinkClick></a:rPr><a:t>click</a:t></a:r></a:p></p:txBody></p:sp>"#
+            )
+        };
+        let children = format!(
+            "{}{}",
+            if shared {
+                format!("{}{}", sounding(81), sounding(82))
+            } else {
+                sounding(81)
+            },
+            r#"<f:keep xmlns:f="urn:fx206" r:embed="rUnrelated"/>"#
+        );
+        let mut package = open_opc(&seed.to_bytes().unwrap(), "sound-only setup");
+        let slide_part = "/ppt/slides/slide1.xml";
+        let xml = String::from_utf8(package.get_part(slide_part).unwrap().to_vec()).unwrap();
+        package.set_part(
+            slide_part,
+            xml.replacen("</p:spTree>", &format!("{children}</p:spTree>"), 1)
+                .into_bytes(),
+        );
+        let relationships = package.get_or_create_part_rels(slide_part);
+        relationships.add_with_id("rSound", rel_types::AUDIO, "../media/click.wav");
+        relationships.add_with_id("rUnrelated", rel_types::AUDIO, "../media/unrelated.wav");
+        for name in ["/ppt/media/click.wav", "/ppt/media/unrelated.wav"] {
+            package.set_part(name, M21_AUDIO_WAV.to_vec());
+            package.content_types.add_override(name, "audio/wav");
+        }
+        let mut deck = open_package(package).unwrap();
+        let before = deck.to_bytes().unwrap();
+        let package = open_opc(&before, "sound-only positive");
+        assert_eq!(
+            package.get_part("/ppt/media/click.wav").unwrap(),
+            M21_AUDIO_WAV
+        );
+        let rels = package.get_part_rels("/ppt/slides/slide1.xml").unwrap();
+        let sound = rels.get_by_id("rSound").unwrap();
+        assert_eq!(sound.rel_type, rel_types::AUDIO);
+        assert_eq!(sound.target, "../media/click.wav");
+        let xml = std::str::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap()).unwrap();
+        assert_eq!(
+            xml.matches("<a:snd r:embed=\"rSound\"").count(),
+            if shared { 2 } else { 1 }
+        );
+        assert!(!xml.contains("<a:hlinkClick r:id="));
+        assert!(xml.contains(r#"<f:keep xmlns:f="urn:fx206" r:embed="rUnrelated"/>"#));
+        assert_eq!(
+            deck.hyperlink_address(0, "rSound"),
+            Some("../media/click.wav")
+        );
+        assert!(deck.set_run_hyperlink(0, 81, 0, 99, None).is_err());
+        assert_eq!(deck.to_bytes().unwrap(), before);
+        // Deciding existing-API assertion. There is no primary click r:id.
+        deck.set_run_hyperlink(0, 81, 0, 0, None).unwrap();
+        let first = deck.to_bytes().unwrap();
+        let package = open_opc(&first, "sound-only first clear");
+        let rels = package.get_part_rels("/ppt/slides/slide1.xml").unwrap();
+        assert_eq!(rels.get_by_id("rSound").is_some(), shared);
+        assert!(rels.get_by_id("rUnrelated").is_some());
+        assert_eq!(package.get_part("/ppt/media/click.wav").is_some(), shared);
+        assert_eq!(
+            package.get_part("/ppt/media/unrelated.wav").unwrap(),
+            M21_AUDIO_WAV
+        );
+        assert!(
+            std::str::from_utf8(package.get_part(slide_part).unwrap())
+                .unwrap()
+                .contains(r#"<f:keep xmlns:f="urn:fx206" r:embed="rUnrelated"/>"#)
+        );
+        deck.set_run_hyperlink(0, 81, 0, 0, None).unwrap();
+        assert_eq!(deck.to_bytes().unwrap(), first);
+        if shared {
+            deck.set_run_hyperlink(0, 82, 0, 0, None).unwrap();
+            let last = deck.to_bytes().unwrap();
+            let package = open_opc(&last, "sound-only final clear");
+            let rels = package.get_part_rels("/ppt/slides/slide1.xml").unwrap();
+            assert!(rels.get_by_id("rSound").is_none());
+            assert!(rels.get_by_id("rUnrelated").is_some());
+            assert!(package.get_part("/ppt/media/click.wav").is_none());
+            assert_eq!(
+                package.get_part("/ppt/media/unrelated.wav").unwrap(),
+                M21_AUDIO_WAV
+            );
+        }
+        let saved = deck.to_bytes().unwrap();
+        assert_eq!(
+            Presentation::from_bytes(&saved)
+                .unwrap()
+                .to_bytes()
+                .unwrap(),
+            saved
+        );
+    }
+}
+
+#[test]
+fn fx206_internal_run_alias_target_lookup_pruning_and_source_round_trip() {
+    for nested in [false, true] {
+        let mut seed = two_run_text_box();
+        seed.add_slide(6).unwrap();
+        seed.add_slide(6).unwrap();
+        let shape = r#"<p:sp xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:rel="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:f="urn:foreign"><p:nvSpPr><p:cNvPr id="91" name="alias links"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody f:body='&#65;'><q:bodyPr/><q:lstStyle/><q:p f:paragraph='&#66;'><q:r f:run='&#67;'><q:rPr xmlns:a='urn:foreign-a' f:properties='&#68;'><a:opaque f:keep='&#71;'/><f:hlinkClick rel:id='rOpaque'><f:keep/></f:hlinkClick><q:hlinkClick xmlns:r='urn:foreign' r:id='opaque' rel:id='rTarget' action='ppaction://hlinksldjump' tooltip='&#69;'><q:snd rel:embed='rSound' name='click'/><f:payload f:keep='&#70;'/></q:hlinkClick></q:rPr><q:t>first</q:t></q:r><q:r><q:rPr><q:hlinkClick rel:id='rTarget' action='ppaction://hlinksldjump'><q:snd rel:embed='rSound' name='click'/></q:hlinkClick></q:rPr><q:t>second</q:t></q:r></q:p></p:txBody></p:sp>"#;
+        let children = if nested {
+            let owned = shape.replacen("<p:sp xmlns:q=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:rel=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\" xmlns:f=\"urn:foreign\">", "<p:sp>", 1);
+            format!(
+                r#"<p:grpSp xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:rel="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:f="urn:foreign"><p:nvGrpSpPr><p:cNvPr id="90" name="parent aliases"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>{owned}</p:grpSp>"#
+            )
+        } else {
+            shape.to_owned()
+        };
+        let mut package = open_opc(&seed.to_bytes().unwrap(), "alias sound setup");
+        let slide_part = "/ppt/slides/slide1.xml";
+        let xml = String::from_utf8(package.get_part(slide_part).unwrap().to_vec()).unwrap();
+        package.set_part(
+            slide_part,
+            xml.replacen("</p:spTree>", &format!("{children}</p:spTree>"), 1)
+                .into_bytes(),
+        );
+        let relationships = package.get_or_create_part_rels(slide_part);
+        relationships.add_with_id("rTarget", rel_types::SLIDE, "slide2.xml");
+        relationships.add_with_id("rSound", rel_types::AUDIO, "../media/click.wav");
+        relationships.add_with_id("rOpaque", rel_types::AUDIO, "../media/opaque.wav");
+        for part in ["/ppt/media/click.wav", "/ppt/media/opaque.wav"] {
+            package.set_part(part, M21_AUDIO_WAV.to_vec());
+            package.content_types.add_override(part, "audio/wav");
+        }
+        let mut deck = open_package(package).unwrap();
+        assert_eq!(deck.run_target_slide(0, 91, 0, 0).unwrap(), Some(1));
+        assert_eq!(deck.run_target_slide(0, 91, 0, 1).unwrap(), Some(1));
+        let before = deck.to_bytes().unwrap();
+        assert!(deck.set_run_target_slide(0, 91, 0, 99, Some(2)).is_err());
+        assert_eq!(deck.to_bytes().unwrap(), before);
+        deck.set_run_target_slide(0, 91, 0, 0, Some(1)).unwrap();
+        assert_eq!(deck.to_bytes().unwrap(), before);
+        deck.set_run_target_slide(0, 91, 0, 0, Some(2)).unwrap();
+        let retargeted = deck.to_bytes().unwrap();
+        let package = open_opc(&retargeted, "alias retargeted");
+        let xml = std::str::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap()).unwrap();
+        for token in [
+            "xmlns:a='urn:foreign-a'",
+            "<a:opaque f:keep='&#71;'/>",
+            "f:body='&#65;'",
+            "f:paragraph='&#66;'",
+            "f:run='&#67;'",
+            "f:properties='&#68;'",
+            "tooltip='&#69;'",
+            "r:id='opaque'",
+            "<f:payload f:keep='&#70;'/>",
+            "<f:hlinkClick rel:id='rOpaque'><f:keep/></f:hlinkClick>",
+        ] {
+            assert!(xml.contains(token), "{token}");
+        }
+        let rels = package.get_part_rels("/ppt/slides/slide1.xml").unwrap();
+        assert!(rels.get_by_id("rTarget").is_some());
+        assert!(rels.get_by_id("rSound").is_some());
+        assert!(rels.get_by_id("rOpaque").is_some());
+        let mut reopened = Presentation::from_bytes(&retargeted).unwrap();
+        assert_eq!(reopened.run_target_slide(0, 91, 0, 0).unwrap(), Some(2));
+        assert_eq!(reopened.run_target_slide(0, 91, 0, 1).unwrap(), Some(1));
+        assert_eq!(reopened.to_bytes().unwrap(), retargeted);
+        reopened.set_run_target_slide(0, 91, 0, 1, None).unwrap();
+        let shared = reopened.to_bytes().unwrap();
+        let package = open_opc(&shared, "alias shared sound");
+        let rels = package.get_part_rels("/ppt/slides/slide1.xml").unwrap();
+        assert!(rels.get_by_id("rTarget").is_none());
+        assert!(rels.get_by_id("rSound").is_some());
+        assert!(rels.get_by_id("rOpaque").is_some());
+        reopened.set_run_target_slide(0, 91, 0, 0, None).unwrap();
+        let cleared = reopened.to_bytes().unwrap();
+        let package = open_opc(&cleared, "alias sound last reference");
+        let rels = package.get_part_rels("/ppt/slides/slide1.xml").unwrap();
+        assert!(rels.get_by_id("rSound").is_none());
+        assert!(rels.get_by_id("rOpaque").is_some());
+        assert_eq!(
+            Presentation::from_bytes(&cleared)
+                .unwrap()
+                .to_bytes()
+                .unwrap(),
+            cleared
+        );
+    }
+}
+
+#[test]
+fn fx206_new_run_slide_click_serialization_failure_is_atomic() {
+    let mut deck = two_run_text_box();
+    deck.add_slide(6).unwrap();
+    let shape_id = first_slide_shape_id(&deck, 0);
+    let original = oxml_drawing::text::CT_TextCharacterProperties::default();
+    {
+        let mut slide = deck.slide_mut(0).unwrap();
+        let mut shape = slide.shape_mut(0).unwrap();
+        let mut frame = shape.text_frame().unwrap();
+        let mut paragraph = frame.paragraph_mut(0).unwrap();
+        paragraph
+            .run_mut(0)
+            .unwrap()
+            .set_properties(original.clone());
+    }
+    let valid_before = deck.to_bytes().unwrap();
+    assert_eq!(deck.run_target_slide(0, shape_id, 0, 0).unwrap(), None);
+    let mut invalid = original.clone();
+    invalid.font_size = Some(0);
+    {
+        let mut slide = deck.slide_mut(0).unwrap();
+        let mut shape = slide.shape_mut(0).unwrap();
+        let mut frame = shape.text_frame().unwrap();
+        let mut paragraph = frame.paragraph_mut(0).unwrap();
+        paragraph
+            .run_mut(0)
+            .unwrap()
+            .set_properties(invalid.clone());
+    }
+    assert!(
+        deck.to_bytes().is_err(),
+        "invalid native authoring state must reach the real writer validation"
+    );
+    assert!(
+        deck.set_run_target_slide(0, shape_id, 0, 0, Some(1))
+            .is_err()
+    );
+    let current = deck
+        .slide(0)
+        .unwrap()
+        .shape(0)
+        .unwrap()
+        .text_frame()
+        .unwrap()
+        .paragraph(0)
+        .unwrap()
+        .run(0)
+        .unwrap()
+        .properties()
+        .unwrap()
+        .clone();
+    assert_eq!(
+        current, invalid,
+        "no staged click may escape the serialization failure"
+    );
+    {
+        let mut slide = deck.slide_mut(0).unwrap();
+        let mut shape = slide.shape_mut(0).unwrap();
+        let mut frame = shape.text_frame().unwrap();
+        let mut paragraph = frame.paragraph_mut(0).unwrap();
+        paragraph.run_mut(0).unwrap().set_properties(original);
+    }
+    assert_eq!(
+        deck.to_bytes().unwrap(),
+        valid_before,
+        "restoring only the deciding invalid value exposes any orphan relationship publication"
+    );
+}
+
+#[test]
+fn fx206_first_internal_run_click_closes_foreign_relationship_prefix_and_reopens() {
+    for nested in [false, true] {
+        for alias_present in [false, true] {
+            let mut seed = two_run_text_box();
+            seed.add_slide(6).unwrap();
+            let aliases = if alias_present {
+                r#" xmlns:rel="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#
+            } else {
+                ""
+            };
+            let shape = format!(
+                r#"<p:sp xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="urn:foreign-r" xmlns:f="urn:payload"{aliases}><p:nvSpPr><p:cNvPr id="91" name="first click"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr/><p:txBody><q:bodyPr/><q:lstStyle/><q:p><q:r><q:rPr xmlns:a='urn:foreign-a' f:keep='&#65;'><r:opaque id='&#66;'/></q:rPr><q:t>first click</q:t></q:r></q:p></p:txBody></p:sp>"#
+            );
+            let children = if nested {
+                let position = shape.find('>').unwrap();
+                let owned = format!("<p:sp>{}", &shape[position + 1..]);
+                format!(
+                    r#"<p:grpSp xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="urn:foreign-r" xmlns:f="urn:payload"{aliases}><p:nvGrpSpPr><p:cNvPr id="90" name="parent bindings"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/>{owned}</p:grpSp>"#
+                )
+            } else {
+                shape
+            };
+            let mut deck = with_first_slide_children(&seed, &children, &[]);
+            assert_eq!(deck.run_target_slide(0, 91, 0, 0).unwrap(), None);
+            let before = deck.to_bytes().unwrap();
+            assert!(deck.set_run_target_slide(0, 91, 0, 0, Some(99)).is_err());
+            assert_eq!(deck.to_bytes().unwrap(), before);
+            deck.set_run_target_slide(0, 91, 0, 0, Some(1)).unwrap();
+            let saved = deck.to_bytes().unwrap();
+            let package = open_opc(&saved, "first click relationship scope");
+            let xml =
+                std::str::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap()).unwrap();
+            for token in [
+                "xmlns:r=\"urn:foreign-r\"",
+                "xmlns:a='urn:foreign-a'",
+                "f:keep='&#65;'",
+                "<r:opaque id='&#66;'/>",
+            ] {
+                assert!(xml.contains(token), "{token}: {xml}");
+            }
+            let links: Vec<_> = package
+                .get_part_rels("/ppt/slides/slide1.xml")
+                .unwrap()
+                .items
+                .iter()
+                .filter(|relation| relation.rel_type == rel_types::SLIDE)
+                .collect();
+            assert_eq!(links.len(), 1);
+            assert_eq!(
+                OpcPackage::resolve_rel_target("/ppt/slides/slide1.xml", &links[0].target),
+                "/ppt/slides/slide2.xml"
+            );
+            let relationship_id = links[0].id.clone();
+            let mut reopened = Presentation::from_bytes(&saved).unwrap();
+            assert_eq!(reopened.run_target_slide(0, 91, 0, 0).unwrap(), Some(1));
+            assert_eq!(reopened.to_bytes().unwrap(), saved);
+            reopened.set_run_target_slide(0, 91, 0, 0, Some(1)).unwrap();
+            assert_eq!(reopened.to_bytes().unwrap(), saved);
+            reopened.set_run_target_slide(0, 91, 0, 0, None).unwrap();
+            let cleared = reopened.to_bytes().unwrap();
+            let package = open_opc(&cleared, "first click cleared");
+            assert!(
+                package
+                    .get_part_rels("/ppt/slides/slide1.xml")
+                    .unwrap()
+                    .get_by_id(&relationship_id)
+                    .is_none()
+            );
+            let xml =
+                std::str::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap()).unwrap();
+            assert!(xml.contains("<r:opaque id='&#66;'/>") && xml.contains("f:keep='&#65;'"));
+            let again = Presentation::from_bytes(&cleared).unwrap();
+            assert_eq!(again.run_target_slide(0, 91, 0, 0).unwrap(), None);
+            assert_eq!(again.to_bytes().unwrap(), cleared);
+        }
+    }
+}
+
+// Authored fixture geometry is an explicit operand, not inferred imported bounds.
+fn mutation_fixture_with_attachment_geometry() -> Vec<u8> {
+    let mut package = open_opc(&mutation_fixture_bytes(), "complete attachment operands");
+    let xml = String::from_utf8(package.get_part(SLIDE_TWO_PART).unwrap().to_vec()).unwrap();
+    let transform =
+        r#"<a:xfrm><a:off x="1000000" y="500000"/><a:ext cx="1270000" cy="1016000"/></a:xfrm>"#;
+    let xml = xml.replacen("<p:spPr producer=\"kept\">", &format!("<p:spPr producer=\"kept\">{transform}"), 1)
+        .replacen("<p:blipFill/><p:spPr/>", &format!(r#"<p:blipFill/><p:spPr>{transform}<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></p:spPr>"#), 1);
+    package.set_part(SLIDE_TWO_PART, xml.into_bytes());
+    package_bytes(package)
+}
+
+#[test]
+fn fx206_imported_glue_missing_bounds_refuses_position_without_publication() {
+    let mut presentation = Presentation::from_bytes(&mutation_fixture_bytes()).unwrap();
+    let before = presentation.to_bytes().unwrap();
+    let error = presentation
+        .slide_mut(0)
+        .unwrap()
+        .shape_mut(0)
+        .unwrap()
+        .set_position(Emu(101), Emu(202))
+        .unwrap_err();
+    assert!(matches!(&error, Error::InvalidShapeMutation { .. }));
+    assert!(
+        error
+            .to_string()
+            .contains("the shape has no position and size")
+    );
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+    assert_eq!(
+        Presentation::from_bytes(&before)
+            .unwrap()
+            .to_bytes()
+            .unwrap(),
+        before
+    );
+}
+
+struct OwnedXmlStartFact {
+    offset: usize,
+    end: usize,
+    attributes: Vec<(String, String, String)>,
+}
+fn owned_xml_starts(xml: &str, namespace: &str, local: &str) -> Vec<OwnedXmlStartFact> {
+    use quick_xml::{events::Event, name::ResolveResult, reader::NsReader};
+    let mut reader = NsReader::from_reader(xml.as_bytes());
+    let mut buffer = Vec::new();
+    let mut facts: Vec<OwnedXmlStartFact> = Vec::new();
+    let mut scopes: Vec<Option<usize>> = Vec::new();
+    loop {
+        let offset = reader.buffer_position() as usize;
+        let (resolved, event) = reader.read_resolved_event_into(&mut buffer).unwrap();
+        let owned =
+            matches!(resolved, ResolveResult::Bound(uri) if uri.as_ref() == namespace.as_bytes());
+        let empty = matches!(&event, Event::Empty(_));
+        match event {
+            Event::Start(start) | Event::Empty(start)
+                if owned && start.local_name().as_ref() == local.as_bytes() =>
+            {
+                let mut attributes = Vec::new();
+                for attribute in start.attributes() {
+                    let attribute = attribute.unwrap();
+                    let (uri, name) = reader.resolver().resolve_attribute(attribute.key);
+                    let uri = match uri {
+                        ResolveResult::Bound(uri) => {
+                            std::str::from_utf8(uri.as_ref()).unwrap().to_owned()
+                        }
+                        ResolveResult::Unbound => String::new(),
+                        ResolveResult::Unknown(prefix) => {
+                            panic!("unbound attribute prefix {prefix:?}")
+                        }
+                    };
+                    attributes.push((
+                        uri,
+                        std::str::from_utf8(name.as_ref()).unwrap().to_owned(),
+                        attribute
+                            .decoded_and_normalized_value(
+                                quick_xml::XmlVersion::Implicit1_0,
+                                reader.decoder(),
+                            )
+                            .unwrap()
+                            .into_owned(),
+                    ));
+                }
+                let index = facts.len();
+                facts.push(OwnedXmlStartFact {
+                    offset,
+                    end: reader.buffer_position() as usize,
+                    attributes,
+                });
+                if !empty {
+                    scopes.push(Some(index));
+                }
+            }
+            Event::Start(_) => scopes.push(None),
+            Event::End(_) => {
+                if let Some(Some(index)) = scopes.pop() {
+                    facts[index].end = reader.buffer_position() as usize;
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    facts
+}
+#[test]
+fn fx206_owned_xml_assertions_reject_foreign_lookalikes_and_wrong_values() {
+    let xml = format!(
+        r#"<q:root xmlns:q="{A_NS}" xmlns:rel="{R_NS}" xmlns:f="urn:foreign"><f:hlinkClick rel:id="wanted"/><q:hlinkClick xmlns:q="urn:shadow" rel:id="wanted"/><q:hlinkClick rel:id="wanted"/><q:hlinkClick rel:id="wrong"/></q:root>"#
+    );
+    let facts = owned_xml_starts(&xml, A_NS, "hlinkClick");
+    assert_eq!(facts.len(), 2);
+    assert!(
+        facts[0]
+            .attributes
+            .contains(&(R_NS.to_owned(), "id".to_owned(), "wanted".to_owned()))
+    );
+    assert!(!facts[1].attributes.contains(&(
+        R_NS.to_owned(),
+        "id".to_owned(),
+        "wanted".to_owned()
+    )));
+    assert!(facts[0].offset < facts[1].offset);
 }

@@ -50,11 +50,18 @@ its cost is recorded in `00-vision.md`.
 | Position and size, with placeholder inheritance | `Option`-returning plus an `effective_bounds` accessor |
 | Fill, line, shadow | Fill and line full. Shadow is the outer shadow, read and written, and python-pptx `inherit` |
 | Adjustment values, `a:avLst` | |
-| Click actions and hyperlinks | |
+| Click actions and hyperlinks | Shape and run internal slide targets with checked relationship ownership |
 | Placeholders by index and by type | |
-| Picture crop and intrinsic size | Via `oxml-media` |
+| Picture crop and intrinsic size | Via `oxml-media`, including same-owner picture-placeholder crop-to-fill insertion |
 | Image deduplication by content hash on insert | |
 | SmartArt inspection, bounded node-text editing, and native rendering for six pinned layouts | Data, layout, style, colour, cached drawing, and relationship ownership are typed. The exact pinned list, hierarchy, cycle, relationship, matrix, and pyramid resources lower through the shared DrawingML engines. Unsupported algorithms and unmodelled XML remain preserved |
+
+Shapes expose title, alternative text, decorative state and direct flips across
+ordinary shapes, pictures, graphic frames, groups and connectors. Checked
+selection operations group, ungroup, align and distribute existing physical
+owners, and glued connectors address actual target connection sites. Grouped
+geometry follows supported affine composition. Unsupported composition refuses
+atomically instead of dropping opaque members or changing selected owners.
 
 ### Text
 
@@ -62,7 +69,7 @@ its cost is recorded in `00-vision.md`.
 |---|---|
 | Text frame, paragraphs, runs, line breaks | |
 | Alignment, level, line spacing, space before and after | |
-| Font: bold, italic, underline, strike, size, name, colour, caps, language | |
+| Font: bold, italic, underline, strike, size, name, colour, caps, language | All and small caps, plus a live direct highlight colour format |
 | Bullets: character, auto-number, none, size percent, colour | python-pptx has no bullet API. This is beyond parity |
 | Margins, vertical anchor, word wrap, auto-size | |
 | Nine-level list style inheritance | |
@@ -71,6 +78,10 @@ its cost is recorded in `00-vision.md`.
 
 Rows, columns, cells, cell text and text frames, cell fill and margins,
 `merge` and `split`, merge-origin and span queries, and the banding flags.
+
+A cell's direct vertical anchor belongs to `a:tcPr`, independently of its
+text-frame `a:bodyPr` anchor. Layout uses the selected cell anchor when present.
+Absent direct cell anchoring retains the existing body-properties projection.
 
 ### Charts
 
