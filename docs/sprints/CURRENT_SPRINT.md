@@ -6,8 +6,8 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 now contains twenty-nine active stories, twenty completed, four running,
-five approved pending implementation. The latest bounded intake includes40 issues and30 PRs, plus final minor-release preparation.
+S91 now contains twenty-nine active stories, twenty completed, five running,
+four approved pending implementation. The latest bounded intake includes40 issues and30 PRs, plus final minor-release preparation.
 
 ## Spec references
 
@@ -51,7 +51,7 @@ five approved pending implementation. The latest bounded intake includes40 issue
 | F-X218 | Export presentations as semantic HTML and Markdown | L | pending | - |
 | F-X220 | Embed fonts through both native and public package families | L | in-progress | codex |
 | F-X221 | Prepare Word 0.17.0 and PowerPoint 0.15.0 minor releases | L | pending | - |
-| F-X222 | Restore linear Word story range inventory and empty owners | M | pending | - |
+| F-X222 | Restore linear Word story range inventory and empty owners | M | in-progress | codex |
 
 ## Carried to S92, user scope decision
 
@@ -1146,3 +1146,5 @@ Twenty of28 active stories are complete. F-X204, F-X215, F-X217 and the low-leve
 ## User-admitted PR363 and Issue362
 
 The user folds PR363 at0b9a3cccc1b31bac7ec4108c923faa176b072c47 and linked Issue362 into S91. F-X222 owns linear range inventory, evaluator reuse, actual field/TOC scaling and valid empty comments. Full immutable patch and all comments/reviews are assessed at /private/tmp/S91-intake-admission-362-363. No existing PR head advanced. Current included scope is40 issues and30 PRs, excluding open discussion264/281. There are29 stories,20 completed,4 running and5 approved pending. F222 waits for F204's Word source handover. F221 follows all28 repairs. Deferred S92 scope is unchanged.
+
+F-X222 is claimed in its isolated worker after F204 returned the narrow native inventory and evaluator regions. Five repair stories are running and four approved stories wait. F204 retains report, regex and public consumer regions. The integrated composition will be reconciled and independently reviewed.

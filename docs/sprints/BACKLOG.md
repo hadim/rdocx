@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 232 | 216 | 5 | 7 |
-| **Total** | **557** | **490** | **5** | **58** |
+| X, Cross-cutting | 232 | 216 | 6 | 6 |
+| **Total** | **557** | **490** | **6** | **57** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -780,5 +780,5 @@ HLD14 contract before adopting contributor changes.
 | F-X219 | Qualify full-range text watermark interoperability | S92 | M | pending |
 | F-X220 | Embed fonts through both native and public package families | S91 | L | in-progress |
 | F-X221 | Prepare Word 0.17.0 and PowerPoint 0.15.0 minor releases | S91 | L | pending |
-| F-X222 | Restore linear Word story range inventory and empty owners | S91 | M | pending |
+| F-X222 | Restore linear Word story range inventory and empty owners | S91 | M | in-progress |
 <!-- AUTOGEN:backlog-MX END -->
