@@ -310,7 +310,10 @@ and an unnamed or unmatched layout is refused. Notes relate to the destination
 notes master, which the bundled template supplies when the destination has
 none. Images, audio and video reuse equal destination media parts, SmartArt
 graphs are copied as by the bounded transfer, and external relationships such
-as hyperlinks keep their targets.
+as hyperlinks keep their targets. The copy reads both presentations as they
+are in memory, through the bytes a save would write, so an unsaved edit of the
+source is copied and an unsaved edit of the destination is what a source part
+is compared with.
 
 Charts, embedded objects and legacy drawings are copied part by part under
 fresh names, with their relationship ids kept so the copied bytes need no
