@@ -28966,31 +28966,34 @@ impl Document {
     /// Load font files from a directory and return them as FontFile entries.
     ///
     /// This is useful for CLI tools that accept a `--font-dir` argument.
-    /// Supports `.ttf`, `.otf`, and `.ttc` files.
+    /// Supports `.ttf`, `.otf`, and `.ttc` files, read in file name byte
+    /// order, so the font listed first never depends on the file system.
     pub fn load_fonts_from_dir<P: AsRef<Path>>(dir: P) -> Vec<rdocx_layout::FontFile> {
-        let mut fonts = Vec::new();
-        let dir = dir.as_ref();
-        if let Ok(entries) = std::fs::read_dir(dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                let ext = path
-                    .extension()
+        let Ok(entries) = std::fs::read_dir(dir.as_ref()) else {
+            return Vec::new();
+        };
+        let mut paths = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension()
                     .and_then(|e| e.to_str())
-                    .unwrap_or("")
-                    .to_lowercase();
-                if (ext == "ttf" || ext == "otf" || ext == "ttc")
-                    && let Ok(data) = std::fs::read(&path)
-                {
-                    let family = path
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("Unknown")
-                        .to_string();
-                    fonts.push(rdocx_layout::FontFile { family, data });
-                }
-            }
-        }
-        fonts
+                    .is_some_and(|ext| ["ttf", "otf", "ttc"].contains(&ext.to_lowercase().as_str()))
+            })
+            .collect::<Vec<_>>();
+        paths.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+        paths
+            .into_iter()
+            .filter_map(|path| {
+                let data = std::fs::read(&path).ok()?;
+                let family = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("Unknown")
+                    .to_string();
+                Some(rdocx_layout::FontFile { family, data })
+            })
+            .collect()
     }
 
     /// Save a header/footer part back to the OPC package.
@@ -33921,6 +33924,39 @@ mod tests {
                 .is_err(),
             "the caller-only layout stays strict"
         );
+    }
+
+    #[test]
+    fn font_directories_load_in_file_name_order_whatever_the_creation_order() {
+        const CARLITO: &[u8] = include_bytes!("../../oxml-layout/fonts/Carlito-Regular.ttf");
+        const CALADEA: &[u8] = include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf");
+        let root =
+            std::env::temp_dir().join(format!("rdocx-font-dir-order-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let files = [("Embedia.ttf", CARLITO), ("Aileron.TTF", CALADEA)];
+        let loaded = [false, true].map(|reversed| {
+            let dir = root.join(if reversed { "reversed" } else { "listed" });
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut order = files.to_vec();
+            if reversed {
+                order.reverse();
+            }
+            for (name, data) in order {
+                std::fs::write(dir.join(name), data).unwrap();
+            }
+            std::fs::write(dir.join("notes.txt"), b"not a font").unwrap();
+            Document::load_fonts_from_dir(&dir)
+                .into_iter()
+                .map(|font| (font.family, font.data))
+                .collect::<Vec<_>>()
+        });
+        std::fs::remove_dir_all(&root).unwrap();
+        let expected = vec![
+            ("Aileron".to_owned(), CALADEA.to_vec()),
+            ("Embedia".to_owned(), CARLITO.to_vec()),
+        ];
+        assert!(loaded[0] == expected, "files load in file name byte order");
+        assert!(loaded[1] == expected, "the creation order does not matter");
     }
 
     #[test]
