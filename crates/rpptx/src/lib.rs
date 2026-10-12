@@ -5221,7 +5221,7 @@ impl<'a> SfntTables<'a> {
             }
             let rank = match (platform, encoding, language) {
                 (3, 1, 0x0409) => 0,
-                (3, 1 | 10, _) => 1,
+                (3, 0 | 1 | 10, _) => 1,
                 (0, _, _) => 2,
                 (1, 0, 0) => 3,
                 _ => continue,
