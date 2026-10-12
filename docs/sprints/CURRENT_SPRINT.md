@@ -1047,3 +1047,37 @@ integration controls and the combined Word/CLI check, with49 matching hashes.
 The full worker scoped acceptance remains source-qualified in its consumed
 handoff. Ten stories are completed, three running and thirteen approved.
 Final integrated full verification and sprint review remain due.
+
+
+## Parallel closure update, 2026-10-12 01:33 BST
+
+Ten of26 active stories are completed, three are running and13 approved
+stories await their source and dependency boundaries. The latest authenticated
+intake at00:33:03 UTC still has38 included issues and28 PRs, with no arrivals,
+changed records or advanced heads. Issues264 and281 remain excluded.
+
+F-X200 passes the new diagnostic-once and original recovery-warning controls,
+five current installed Word controls, mypy and stubtest. Its actual49 hashes
+match the accepted font prefix plus the separately reviewed two Word namespace
+values. The canonical baseline remains unchanged until that owned behavior
+is integrated. Shared causal support must land through F-X206 first.
+
+F-X206 passes22 genuine verified package dry runs, all104 installed provider
+controls, the mandatory eight-owner SVG comparator and final metadata checks.
+The latter validates27 READMEs,22 inventories and24 compiled Rust examples.
+Independent foundation pass53 has zero findings. Presentation pass52 finds
+opaque empty-text-body data lost by picture conversion and a stale HLD
+projection. Separate bounded repairs are in progress, so no completion is
+claimed. The corrected45-carrier owned projection excludes borrowed Word
+formatting and preserves the accepted provider prefix at integration.
+
+F-X207 has a genuine inherited-prefix failure, an affected passing repair
+and38 passing text controls. Namespace-qualified authoring and final source
+preservation checks remain in progress. Ordinary import must continue to
+preserve foreign opaque content. Installed PPT renewal and affected archive
+closure remain due after independent review.
+
+Exactly22 reproducible extracted package directories were removed, freeing
+74,252,288 allocated bytes. All44 authenticated verified and measurement-only
+archives, required source capsules and original failed receipts remain.
+Final integrated full verification, sprint review and close remain due.
