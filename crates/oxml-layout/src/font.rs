@@ -838,7 +838,18 @@ impl FontManager {
             .collect::<Vec<_>>();
         for (id, loaded_families) in &loaded_faces {
             for loaded_family in loaded_families {
-                families.entry(loaded_family.clone()).or_default().push(*id);
+                // An earlier file only labelled with this family keeps its
+                // place ahead of the faces that really carry it, so a caller
+                // font listed first wins the family an embedded face carries.
+                families
+                    .entry(loaded_family.clone())
+                    .or_insert_with(|| {
+                        aliases
+                            .get(&loaded_family.to_lowercase())
+                            .cloned()
+                            .unwrap_or_default()
+                    })
+                    .push(*id);
             }
         }
         if !loaded_faces.is_empty()
@@ -2289,6 +2300,45 @@ mod tests {
             manager.fonts[manager.index_of(generic).unwrap()].family,
             "Carlito"
         );
+    }
+
+    #[test]
+    fn an_earlier_caller_label_wins_over_a_later_face_of_that_family() {
+        let bundled = |name: &str| {
+            bundled_font_data()
+                .into_iter()
+                .find(|(family, _)| *family == name)
+                .expect("bundled face")
+                .1
+                .to_vec()
+        };
+        let file = |family: &str, data: &[u8]| FontFile {
+            family: family.to_owned(),
+            data: data.to_vec(),
+        };
+        let (carlito, caladea) = (bundled("Carlito"), bundled("Caladea"));
+        let mut manager = FontManager::new_deterministic().expect("bundled fonts load");
+        let mut resolved = |fonts: &[FontFile]| {
+            manager.load_additional_fonts(fonts);
+            let id = manager
+                .resolve_font(Some("Caladea"), false, false)
+                .expect("Caladea resolves");
+            manager.fonts[manager.index_of(id).unwrap()].family.clone()
+        };
+
+        // A caller file labelled Caladea, listed before a face that really
+        // is Caladea, wins as a caller face of that family would.
+        assert_eq!(
+            resolved(&[file("Caladea", &carlito), file("Caladea", &caladea)]),
+            "Carlito"
+        );
+        // Listed after it, the face that really carries the family wins.
+        assert_eq!(
+            resolved(&[file("Caladea", &caladea), file("Caladea", &carlito)]),
+            "Caladea"
+        );
+        // A label alone still gives way to the bundled face of that family.
+        assert_eq!(resolved(&[file("Caladea", &carlito)]), "Caladea");
     }
 
     #[test]

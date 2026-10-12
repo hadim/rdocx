@@ -2796,6 +2796,62 @@ mod theme_and_embedded_font_tests {
         );
     }
 
+    /// A caller font only named after the typeface, a file `Embedia.ttf`
+    /// that holds Carlito, wins over the embedded face of that typeface as
+    /// a caller font whose own family is the typeface does.
+    #[test]
+    fn a_caller_font_named_after_the_typeface_wins_over_the_embedded_face() {
+        let embedded = renamed_bundled_face(CALADEA, "Caladea", "Embedia");
+        let mut document = Document::new();
+        document
+            .add_paragraph("")
+            .add_run("Embedded")
+            .font("Embedia");
+        document
+            .embed_font(
+                "Embedia",
+                EmbeddedFont::new(
+                    EmbeddedFontKind::Regular,
+                    embedded.clone(),
+                    EmbeddedFont::derive_font_key(&embedded),
+                    license(true, "Apache-2.0: Caladea"),
+                ),
+            )
+            .unwrap();
+        let document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        let dir = std::env::temp_dir().join(format!("rdocx-alias-font-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Embedia.ttf"), CARLITO).unwrap();
+        let caller = Document::load_fonts_from_dir(&dir);
+        std::fs::remove_dir_all(&dir).unwrap();
+        let caller = caller
+            .iter()
+            .map(|font| (font.family.as_str(), font.data.as_slice()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            caller.iter().map(|(family, _)| *family).collect::<Vec<_>>(),
+            ["Embedia"]
+        );
+
+        fn drawn(layout: &rdocx_layout::LayoutResult) -> Vec<&[u8]> {
+            layout.fonts.iter().map(|font| &*font.data).collect()
+        }
+        let layout = document.layout_deterministic().unwrap();
+        assert!(drawn(&layout.layout) == [embedded.as_slice()]);
+        let layout = document
+            .layout_with_fonts_and_bundled_fallback(&caller)
+            .unwrap();
+        assert!(
+            drawn(&layout.layout) == [CARLITO],
+            "the caller font wins the typeface it is named after"
+        );
+        let pdf = document.to_pdf_with_fonts(&caller).unwrap();
+        let uses = |name: &[u8]| pdf.windows(name.len()).any(|window| window == name);
+        assert!(uses(b"/Carlito"));
+        assert!(!uses(b"/Embedia"));
+    }
+
     type FontPartState = (
         String,
         String,
