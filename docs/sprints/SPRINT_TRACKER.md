@@ -958,3 +958,5 @@ Issues264 and281 remain excluded and open.
 | F-X205 | S91 | L | 4 | not recorded | 2026-10-12 | Scoped completion, PowerPoint parity and exports,40 installed controls, seven verified archives, clean integration review20 and10 integrated rows including49 matching hashes. Original failures retained. Full sprint gate remains due |
 
 | F-X203 | S91 | L | 4 | not recorded | 2026-10-12 | Scoped completion, shared Word operations and issue repairs, installed31 composite and typing, native367 integration, verified four archives and clean integration review17. Composed native/binding checks, exact chart paint and49 hashes pass. Policy139 qualified with2 existing skips and21 README cases compiled. Original failures retained. Full sprint gate remains due |
+
+| F-X209 | S91 | L | 4 | not recorded | 2026-10-12 | Scoped completion, physical master/layout/theme editing, explicit native and public composites, current installed logo and typing, three verified archives and clean independent integration review30. Composed six-crate check and49 matching hashes pass. Original failures retained. Full sprint gate remains due |

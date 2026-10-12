@@ -2168,13 +2168,19 @@ requirements discussions264 and281.
 | F-X217 | Import HTML and Markdown through public Word surfaces | L |
 | F-X218 | Export presentations as semantic HTML and Markdown | L |
 
-**Current delivery checkpoint**: seventeen of twenty-six active stories are
+**Current delivery checkpoint**: eighteen of twenty-six active stories are
 completed and integrated, F-X193 through F-X201, F-X203, F-X205 through
-F-X208, F-X210, F-X212 and F-X213. Remaining issue and PR repairs follow
+F-X209, F-X210, F-X212 and F-X213. Remaining issue and PR repairs follow
 completed dependencies and exclusive source boundaries. CURRENT_SPRINT.md
 records active owners and execution states. F-X192 and F-283 remain at S92 with their contracts,
 dirty worker work, reviews and required evidence retained. Standalone authoring
 work remains in later sprints. No design question remains outstanding.
+
+F-X209 completes its reviewed scoped integration in7349282b. Part-owned master,
+layout and theme edits pass native PowerPoint and LibreOffice acceptance, current
+installed logo and typing checks, verified archives and finite measurement policy.
+Independent integration review30 preserves completed Word contracts. The composed
+six-crate native and binding check and all49 approved hashes pass.
 
 F-X203 completes its reviewed scoped integration in4d992a37. Native and binding
 all-target/all-feature checks, exact chart paint, all49 hashes, source-qualified

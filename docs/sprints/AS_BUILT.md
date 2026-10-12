@@ -19205,3 +19205,25 @@ push, main merge, tag or publication is claimed.
 **Spec sections touched.** Exactly HLD03,04,08,10,12 and14, preserving the completed PowerPoint and watermark contracts.
 
 **Notes for future sessions.** Keep work/f-x203-codex through final verification and close. Required worker scratch and samples remain available for clean worktree retirement and warm-cache transfer to F-X202. Evidence is retained at /private/tmp/S91-F-X203-integration-checkpoint. No GitHub closure, sprint push, main merge, tag or publication is claimed.
+
+
+### F-X209, Edit PowerPoint masters layouts and themes
+
+**Completed.** 2026-10-12, S91 scoped dependency-prefix checkpoint
+**Size.** L, estimated4 to5 days, actual not recorded
+
+**What was built.** Issue312 and adapted PR327 persist selected master, layout and theme edits through existing physical part owners. Native and Python shape, image, background, text-style, placeholder and layout lifecycle operations stage checked changes atomically. Selected branding imports preserve direct slide content and qualified resource closure. Layout-hidden pictures saved by LibreOffice retain source and are omitted consistently from visible rendering and source inventory.
+
+**Non-obvious choices.** Existing causal providers retain surviving physical owners and retire removed layouts. ShapeMut already selected its presentation and path, so no second provider was added. Picture hiding uses the qualified explicit native flag without a new Python property. Namespace, opaque source and strict visible-drop diagnostics remain preserved.
+
+**Tests.** Genuine Base failures and original whole-run failures remain retained. Explicit source-qualified composites cover148 facade library passes with5 existing ignores,40 OXML library passes,315 facade integration passes with28 existing ignores,156 OXML integration passes,156 layout passes and22 installed public cases. Current source-inventory control covers21 deciding cases. Fresh wheel8 passes the original LibreOffice-saved logo successor, strict typing and stubtest with the complete installed Word distribution unchanged. Changed-crate checks, Clippy, formatting, both WASM graphs, docs and49 hashes pass. Three verified archive dry runs abort upload. Metadata-only successors retain exact normalized source totals and member counts with unchanged64-byte compression tolerance. Three policy controls and three Rust README examples pass.
+
+**Oracle evidence.** PowerPoint16.113.4 opens, saves and reopens four owned fixtures without repair. Logo visibility, effective backgrounds and caller-owned native Office Calibri40pt/RGB paint are qualified. Carlito substitution remains explicit without a font-parity claim. LibreOffice26.2.5.2 saves and reopens the four fixtures using isolated unattended profiles. Native source paint and current public reopened-logo paint are separate qualified controls. No cross-engine pixel identity or authenticated Google Slides import is claimed.
+
+**Integrated evidence.** Validated implementationcd63e96a and handoff-only tip7096cbdb integrate into7349282b. All20 owned crate, test and README carriers equal the prepared worker. Independent review30 is clean and preserves both completed Word and PowerPoint HLD sections. Only three PowerPoint archive measurements change, retaining the other19 canonical records. Actual combined six-crate all-target/all-feature compilation,49 hashes, prose, adapters and staged diff pass. Required evidence remains at /private/tmp/S91-F-X209-integration-checkpoint and /private/tmp/S91-F-X209-native-root-1. Original failures are not relabelled passing whole runs.
+
+**Hash harness.** All49 approved deterministic outputs match unchanged baseline342d09cd. Final full sprint verification and sprint review remain due.
+
+**Spec sections touched.** Exactly HLD02,05,06,08,10,12 and14, matching the approved impact list and preserving completed F-X203.
+
+**Notes for future sessions.** Keep work/f-x209-codex through final verification and close. Preserve required evidence before clean worktree retirement and transfer the warm PowerPoint cache to F-X214. No GitHub closure, sprint push, main merge, tag or publication is claimed.
