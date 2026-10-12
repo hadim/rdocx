@@ -6,8 +6,8 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 now contains twenty-six active stories, thirteen completed, two running,
-eleven approved pending implementation. Rolling contribution intake is reopened at the user's latest instruction.
+S91 now contains twenty-six active stories, fourteen completed, two running,
+ten approved pending implementation. Contribution intake is closed at the user's latest instruction.
 
 ## Spec references
 
@@ -1090,3 +1090,9 @@ contributor reconciliation and close preflight remain due.
 Fourteen of26 active stories are complete. F-X208 integrates at9d1907d9 and completes its scoped dependency-prefix checkpoint. F-X201 remains running. Eleven approved stories await their dependencies or exclusive carriers. The latest authenticated intake at05:08:47 UTC retains38 included issues and28 PRs, with no added or changed records. Issues264 and281 remain excluded and open. Ten carryovers stay at S92.
 
 Actual integrated receipt182b2be35af059720baae724a6b652041589dc25b7fffdeb35147b39f983bb48 and clean review14 qualify the PowerPoint prefix. The canonical49 hashes match the approved F-X200 baseline. The clean completed F-X208 worktree is removed without force, with required evidence retained and warm cache reserved for the next PowerPoint worker. Final full sprint verification, sprint review, contributor reconciliation and close preflight remain due.
+
+## Intake closed, latest user decision
+
+The user closed new issue and PR intake on 2026-10-12. S91 retains the authenticated 05:40:03 UTC inventory of38 included issues and28 PRs. Issues264 and281 remain excluded and open. The final snapshot is /private/tmp/S91-intake-refresh-20261012T053947Z/receipt.json. No new records or advanced PR heads were found in this final refresh. Later arrivals belong to a later sprint. This decision supersedes the rolling intake instructions above. Complete the existing issue acceptance and PR reconciliation against integrated evidence.
+
+Fourteen of26 active stories are complete. F-X201 and F-X205 are running in separate Word and PowerPoint worktrees. Ten approved stories remain. Final full verification, sprint review and close preflight are still required.
