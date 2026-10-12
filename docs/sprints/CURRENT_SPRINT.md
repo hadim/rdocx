@@ -1049,11 +1049,11 @@ handoff. Ten stories are completed, three running and thirteen approved.
 Final integrated full verification and sprint review remain due.
 
 
-## Parallel closure update, 2026-10-12 01:33 BST
+## Parallel closure update, 2026-10-12 01:47 BST
 
 Ten of26 active stories are completed, three are running and13 approved
 stories await their source and dependency boundaries. The latest authenticated
-intake at00:33:03 UTC still has38 included issues and28 PRs, with no arrivals,
+intake at00:47:11 UTC still has38 included issues and28 PRs, with no arrivals,
 changed records or advanced heads. Issues264 and281 remain excluded.
 
 F-X200 passes the new diagnostic-once and original recovery-warning controls,
@@ -1067,15 +1067,20 @@ controls, the mandatory eight-owner SVG comparator and final metadata checks.
 The latter validates27 READMEs,22 inventories and24 compiled Rust examples.
 Independent foundation pass53 has zero findings. Presentation pass52 finds
 opaque empty-text-body data lost by picture conversion and a stale HLD
-projection. Separate bounded repairs are in progress, so no completion is
-claimed. The corrected45-carrier owned projection excludes borrowed Word
-formatting and preserves the accepted provider prefix at integration.
+projection. Both corrections now have clean independent reviews54 and55.
+The genuine picture-preservation Base fails and three focused native controls
+pass. The sealed46-carrier owned projection includes one inherited compile-only
+carrier, excludes borrowed Word formatting and preserves completed providers.
+Independent semantic composition review56 is running. Actual owned history,
+focused artifact renewal and integration remain due, with no completion claim.
 
-F-X207 has a genuine inherited-prefix failure, an affected passing repair
-and38 passing text controls. Namespace-qualified authoring and final source
-preservation checks remain in progress. Ordinary import must continue to
-preserve foreign opaque content. Installed PPT renewal and affected archive
-closure remain due after independent review.
+F-X207 has a clean namespace-preservation review9, two genuine semantic Base
+failures,16 passing affected native controls and38 passing text controls.
+Ordinary import, exact saved member content and rendering preserve foreign
+opaque content. The current PPT wheel is installed once and15 existing
+installed controls pass. A new preservation probe, typing, affected archive
+closure and provider integration remain due. Every current installed Word
+package and distribution metadata member remains unchanged.
 
 Exactly22 reproducible extracted package directories were removed, freeing
 74,252,288 allocated bytes. All44 authenticated verified and measurement-only
