@@ -2461,6 +2461,7 @@ and changes no acceptance contract.
 | F-ID | Title | Size |
 |------|-------|------|
 | F-X192 | Complete the remaining Word bibliography catalogue | L |
+| F-X219 | Qualify full-range text watermark interoperability | M |
 | F-283 | Complete numbering-aware navigation fields | L |
 | F-X178 | Clearable direct run formatting setters | S |
 | F-284 | Stable container-wide template grammar | L |
@@ -3072,3 +3073,12 @@ There are 28 open PRs and 38 included issues. Only discussion Issue264 changed i
 ## S91 intake closed, latest user decision
 
 The user closed new issue and PR intake on 2026-10-12. The current S91 scope is frozen at38 included issues and28 PRs from the authenticated 05:40:03 UTC snapshot, /private/tmp/S91-intake-refresh-20261012T053947Z/receipt.json. Issues264 and281 remain excluded and open. Later arrivals belong to a later sprint. This decision supersedes rolling intake instructions for S91. Finish all existing acceptance owners and reconcile their PRs against integrated results without reopening intake.
+
+## Approved S92 text watermark follow-up
+
+On 2026-10-12 the user approved the temporary F-X201 DrawingML text opacity
+boundary at 0.5, with named atomic refusal for other values and existing VML
+full-range support retained. F-X219 in S92 must replace this restriction with
+a faithful full-range representation after actual Word and LibreOffice
+qualification. This is a deferred implementation follow-up from existing
+F-X201 evidence, not new issue or PR intake.

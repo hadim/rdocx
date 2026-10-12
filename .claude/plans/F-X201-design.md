@@ -311,3 +311,26 @@ this intake. Contributor tests and HLD changes are proposals, not local proof.
 ## PR343 contribution reuse
 
 Reuse PR343's assessed native story image allocation and content-type lookup only after reconciliation with the actual checked physical owner and one staged publication. The exact donor head is c6a78f683f327be8d7674af509874f74945080f3, with immutable assessment at /private/tmp/S91-PR343-intake/assessment.md. Related-story rich picture authoring remains the existing acceptance, including header, footer, notes and admitted cells or text boxes. Donor tests embed media relationships without inserting or painting a drawing. Actual owner-scoped drawings, saved/reopened media, stale/foreign/malformed refusals, aliases and native render controls remain required. Run picture binding integration belongs to F-X202 and consumes this ownership work once.
+
+## User-approved opacity boundary, 2026-10-12
+
+Actual native Word controls reverse the authored w14 opacity endpoints, while
+the 50 percent control paints correctly in Word and LibreOffice. The user
+approved a temporary restriction of new DrawingML text watermark authoring to
+opacity 0.5. Other finite opacity values return a named error before document,
+header, relationship, drawing identity or handle state changes. Existing VML
+compatibility setters retain their full range. All other F-X201 acceptance
+remains unchanged.
+
+Use real styled WPS text at opacity 0.5 with a genuine equivalent native
+WordArt textpath fallback. Project only the selected branch for painting and
+preserve the complete physical owner for strict source identity, replacement
+and repeated save/reopen. Tests prove one painted watermark, all inactive
+branches retained, foreign namespace refusal and atomic rejection on absent
+and existing owners for zero, one and intermediate unsupported opacities.
+Actual Word and LibreOffice default-opacity open, render and reopen remain
+mandatory. Retain the failed full-range controls as evidence.
+
+F-X219 in S92 owns full-range interoperability. This explicit user-approved
+boundary supersedes the earlier full-range DrawingML text opacity requirement
+without reopening S91 intake or claiming that the endpoint defects are fixed.

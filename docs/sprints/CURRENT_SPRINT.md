@@ -1096,3 +1096,11 @@ Actual integrated receipt182b2be35af059720baae724a6b652041589dc25b7fffdeb35147b3
 The user closed new issue and PR intake on 2026-10-12. S91 retains the authenticated 05:40:03 UTC inventory of38 included issues and28 PRs. Issues264 and281 remain excluded and open. The final snapshot is /private/tmp/S91-intake-refresh-20261012T053947Z/receipt.json. No new records or advanced PR heads were found in this final refresh. Later arrivals belong to a later sprint. This decision supersedes the rolling intake instructions above. Complete the existing issue acceptance and PR reconciliation against integrated evidence.
 
 Fourteen of26 active stories are complete. F-X201 and F-X205 are running in separate Word and PowerPoint worktrees. Ten approved stories remain. Final full verification, sprint review and close preflight are still required.
+
+## Approved text watermark interoperability boundary
+
+The user approved restricting F-X201's new DrawingML text watermark opacity
+to 0.5 on 2026-10-12. Unsupported values refuse before mutation. Existing
+VML compatibility support retains its full range. Full-range text watermark
+interoperability moves to F-X219 in S92. Other frozen issue and PR acceptance
+remains in S91. Intake stays closed.

@@ -7623,3 +7623,19 @@ Resolve Issues350 and351 captured at2026-10-11 18:56UTC. Expose existing HTML cr
 **Test gate**: regression
 
 Resolve Issues352 and353 captured at2026-10-11 18:56UTC. Rust, Python and CLI export one title-headed section per slide in existing outline reading order. Preserve paragraph levels and emphasis, links, semantic tables, picture alt text and embedded or adjacent image assets. Include notes and skip hidden slides when requested. Markdown uses nested lists and pipe tables. HTML uses semantic sections and tables and validates as HTML. Corpus expected-output comparisons cover every construct and option. This is semantic text export, with no pixel-exact promise.
+
+### F-X219, Qualify full-range text watermark interoperability
+
+**Size**: M
+**Depends on**: F-X201
+**Test gate**: regression
+
+Restore the full zero-to-one opacity range for real DrawingML text watermark
+authoring after the user-approved S91 temporary 0.5 restriction. Preserve
+legacy VML behavior and qualified inactive source branches. Use a faithful
+representation rather than reversing schema opacity operands, flattening
+colour or converting text to pixels. Actual native Word and LibreOffice
+open, render and reopen must show correct zero, intermediate and full-opacity
+results. Own rendering, API getters, source ownership, strict replacement and
+invalid-operation atomicity must agree. Retain S91's failed endpoint evidence
+and remove the temporary named restriction only after these controls pass.
