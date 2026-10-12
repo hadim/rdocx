@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use std::path::PathBuf;
 use std::process;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 mod commands;
 
@@ -118,6 +118,92 @@ enum Command {
         #[command(subcommand)]
         command: CommentCommand,
     },
+    /// List, embed, and remove embedded fonts
+    Font {
+        #[command(subcommand)]
+        command: FontCommand,
+    },
+}
+
+#[derive(Subcommand)]
+enum FontCommand {
+    /// List embedded fonts and their faces
+    List {
+        file: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Embed one face of a TrueType or OpenType font file
+    Embed {
+        file: PathBuf,
+        /// Font file holding one face
+        #[arg(long)]
+        font: PathBuf,
+        /// Typeface name slides use, normally the font's family name
+        #[arg(long)]
+        typeface: String,
+        #[arg(long, value_enum, default_value = "regular")]
+        face: FontFace,
+        /// Exact identity of the license that allows embedding
+        #[arg(long)]
+        license: String,
+        /// Confirm that the license allows embedding this font
+        #[arg(long)]
+        authorized: bool,
+        #[arg(long, short = 'o')]
+        output: PathBuf,
+        /// Output the operation record as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove one face, or a whole embedded font when no face is given
+    Remove {
+        file: PathBuf,
+        #[arg(long)]
+        typeface: String,
+        #[arg(long, value_enum)]
+        face: Option<FontFace>,
+        #[arg(long, short = 'o')]
+        output: PathBuf,
+        /// Output the operation record as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Set the presentation font flags
+    SetFlags {
+        file: PathBuf,
+        /// Whether PowerPoint uses the embedded fonts
+        #[arg(long)]
+        embed_true_type_fonts: Option<bool>,
+        /// Whether PowerPoint embeds only used characters when it saves
+        #[arg(long)]
+        save_subset_fonts: Option<bool>,
+        #[arg(long, short = 'o')]
+        output: PathBuf,
+        /// Output the operation record as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum FontFace {
+    Regular,
+    Bold,
+    Italic,
+    #[value(name = "bold_italic")]
+    BoldItalic,
+}
+
+impl From<FontFace> for rpptx::EmbeddedFontKind {
+    fn from(face: FontFace) -> Self {
+        match face {
+            FontFace::Regular => Self::Regular,
+            FontFace::Bold => Self::Bold,
+            FontFace::Italic => Self::Italic,
+            FontFace::BoldItalic => Self::BoldItalic,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -340,6 +426,50 @@ fn run_cli() {
                 output,
                 json,
             } => commands::comment_remove(&file, &id, &output, json),
+        },
+        Command::Font { command } => match command {
+            FontCommand::List { file, json } => commands::font_list(&file, json),
+            FontCommand::Embed {
+                file,
+                font,
+                typeface,
+                face,
+                license,
+                authorized,
+                output,
+                json,
+            } => commands::font_embed(
+                &file,
+                commands::FontInput {
+                    font: &font,
+                    typeface: &typeface,
+                    kind: face.into(),
+                    license: &license,
+                    authorized,
+                },
+                &output,
+                json,
+            ),
+            FontCommand::Remove {
+                file,
+                typeface,
+                face,
+                output,
+                json,
+            } => commands::font_remove(&file, &typeface, face.map(Into::into), &output, json),
+            FontCommand::SetFlags {
+                file,
+                embed_true_type_fonts,
+                save_subset_fonts,
+                output,
+                json,
+            } => commands::font_set_flags(
+                &file,
+                embed_true_type_fonts,
+                save_subset_fonts,
+                &output,
+                json,
+            ),
         },
     };
     // Standard output is line buffered, so a last line without a newline is

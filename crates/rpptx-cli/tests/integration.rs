@@ -683,6 +683,7 @@ fn inspect_and_text_report_presentation_order() {
         "thumbnail",
         "outline",
         "comment",
+        "font",
     ] {
         assert!(help.contains(command), "missing command {command}");
     }
@@ -2092,4 +2093,220 @@ fn comment_mutations_fail_without_creating_output() {
     assert_eq!(result.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&result.stderr).contains("output already exists"));
     assert_eq!(fs::read(&output).unwrap(), b"keep me");
+}
+
+#[test]
+fn font_commands_embed_list_remove_and_flag_fonts() {
+    let temp = TempWorkspace::new("fonts");
+    let input = temp.path.join("input.pptx");
+    let regular = temp.path.join("regular.pptx");
+    let bold = temp.path.join("bold.pptx");
+    let face_removed = temp.path.join("face-removed.pptx");
+    let font_removed = temp.path.join("font-removed.pptx");
+    let flagged = temp.path.join("flagged.pptx");
+    let refused = temp.path.join("refused.pptx");
+    write_deck(&input, &["first"]);
+    let fonts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../oxml-layout/fonts");
+    let caladea_regular = fonts.join("Caladea-Regular.ttf");
+    let caladea_bold = fonts.join("Caladea-Bold.ttf");
+    let arg = |path: &Path| path.to_str().unwrap().to_owned();
+    let json_of = |output: Output| -> serde_json::Value {
+        assert!(
+            output.status.success(),
+            "font command failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).unwrap()
+    };
+
+    let listed = cli(&["font", "list", &arg(&input)]);
+    assert_eq!(
+        String::from_utf8(listed.stdout).unwrap(),
+        "(no embedded fonts)\n"
+    );
+
+    let unauthorized = cli(&[
+        "font",
+        "embed",
+        &arg(&input),
+        "--font",
+        &arg(&caladea_regular),
+        "--typeface",
+        "Caladea",
+        "--license",
+        "OFL-1.1",
+        "--output",
+        &arg(&refused),
+    ]);
+    assert!(!unauthorized.status.success());
+    assert!(
+        String::from_utf8_lossy(&unauthorized.stderr).contains("explicit caller authorization")
+    );
+    assert!(!refused.exists());
+
+    let record = json_of(cli(&[
+        "font",
+        "embed",
+        &arg(&input),
+        "--font",
+        &arg(&caladea_regular),
+        "--typeface",
+        "Caladea",
+        "--license",
+        "OFL-1.1",
+        "--authorized",
+        "--output",
+        &arg(&regular),
+        "--json",
+    ]));
+    assert_eq!(
+        record,
+        json!({
+            "schema": 1,
+            "action": "embed",
+            "typeface": "Caladea",
+            "face": "regular",
+            "part": "/ppt/fonts/font1.fntdata",
+            "license": "OFL-1.1",
+            "output": arg(&regular),
+        })
+    );
+    let embedded = cli(&[
+        "font",
+        "embed",
+        &arg(&regular),
+        "--font",
+        &arg(&caladea_bold),
+        "--typeface",
+        "Caladea",
+        "--face",
+        "bold",
+        "--license",
+        "OFL-1.1",
+        "--authorized",
+        "--output",
+        &arg(&bold),
+    ]);
+    assert!(embedded.status.success());
+    assert_eq!(
+        String::from_utf8(embedded.stdout).unwrap(),
+        format!("embed\nWritten to {}\n", bold.display())
+    );
+
+    let listed = cli(&["font", "list", &arg(&bold)]);
+    let regular_len = fs::metadata(&caladea_regular).unwrap().len();
+    let lines = String::from_utf8(listed.stdout).unwrap();
+    let lines = lines.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines[0].starts_with("Caladea\tregular\teot\t"), "{lines:?}");
+    assert!(
+        lines[0].ends_with("\t/ppt/fonts/font1.fntdata"),
+        "{lines:?}"
+    );
+    assert!(lines[1].starts_with("Caladea\tbold\teot\t"), "{lines:?}");
+    let listed = json_of(cli(&["font", "list", &arg(&bold), "--json"]));
+    assert_eq!(listed["embed_true_type_fonts"], json!(true));
+    assert_eq!(listed["fonts"][0]["typeface"], json!("Caladea"));
+    assert_eq!(listed["fonts"][0]["pitch_family"], json!(18));
+    assert_eq!(listed["fonts"][0]["faces"][1]["face"], json!("bold"));
+    assert!(
+        listed["fonts"][0]["faces"][0]["stored_bytes"]
+            .as_u64()
+            .unwrap()
+            > regular_len
+    );
+
+    let package = OpcPackage::open(&bold).unwrap();
+    assert_eq!(
+        package
+            .content_types
+            .content_type_for("/ppt/fonts/font2.fntdata"),
+        Some("application/x-fontdata")
+    );
+    assert_eq!(
+        package
+            .get_part_rels("/ppt/presentation.xml")
+            .unwrap()
+            .get_all_by_type(rel_types::FONT)
+            .len(),
+        2
+    );
+
+    let record = json_of(cli(&[
+        "font",
+        "remove",
+        &arg(&bold),
+        "--typeface",
+        "Caladea",
+        "--face",
+        "regular",
+        "--output",
+        &arg(&face_removed),
+        "--json",
+    ]));
+    assert_eq!(record["faces"], json!(["regular"]));
+    let package = OpcPackage::open(&face_removed).unwrap();
+    assert!(package.get_part("/ppt/fonts/font1.fntdata").is_none());
+    assert!(package.get_part("/ppt/fonts/font2.fntdata").is_some());
+
+    let missing = cli(&[
+        "font",
+        "remove",
+        &arg(&face_removed),
+        "--typeface",
+        "Caladea",
+        "--face",
+        "italic",
+        "--output",
+        &arg(&refused),
+    ]);
+    assert!(!missing.status.success());
+    assert!(!refused.exists());
+
+    let record = json_of(cli(&[
+        "font",
+        "remove",
+        &arg(&face_removed),
+        "--typeface",
+        "Caladea",
+        "--output",
+        &arg(&font_removed),
+        "--json",
+    ]));
+    assert_eq!(record["faces"], json!(["bold"]));
+    let package = OpcPackage::open(&font_removed).unwrap();
+    assert!(
+        !package
+            .parts
+            .keys()
+            .any(|part| part.starts_with("/ppt/fonts/"))
+    );
+
+    let record = json_of(cli(&[
+        "font",
+        "set-flags",
+        &arg(&font_removed),
+        "--embed-true-type-fonts",
+        "false",
+        "--save-subset-fonts",
+        "true",
+        "--output",
+        &arg(&flagged),
+        "--json",
+    ]));
+    assert_eq!(record["embed_true_type_fonts"], json!(false));
+    assert_eq!(record["save_subset_fonts"], json!(true));
+    let presentation = Presentation::open(&flagged).unwrap();
+    assert!(!presentation.embed_true_type_fonts());
+    assert!(presentation.save_subset_fonts());
+    assert!(presentation.validate().is_empty());
+    let no_flag = cli(&[
+        "font",
+        "set-flags",
+        &arg(&flagged),
+        "--output",
+        &arg(&refused),
+    ]);
+    assert!(!no_flag.status.success());
+    assert!(!refused.exists());
 }

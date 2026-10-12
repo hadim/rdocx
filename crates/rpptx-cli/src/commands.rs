@@ -10,8 +10,9 @@ use oxml_cli_support::{
 };
 use oxml_pdf::{RasterFormat, RasterOptions, RasterOutput};
 use rpptx::{
-    AutofitMode, Comment, CommentAuthor, CommentReply, Presentation, ShapeKind, ShapeRef, SlideRef,
-    TextFrameRef, TextParagraphRef, TextRunRef,
+    AutofitMode, Comment, CommentAuthor, CommentReply, EmbeddedFont, EmbeddedFontFace,
+    EmbeddedFontFormat, EmbeddedFontKind, FontEmbeddingLicense, Presentation, ShapeKind, ShapeRef,
+    SlideRef, TextFrameRef, TextParagraphRef, TextRunRef,
 };
 use serde_json::{Value, json};
 
@@ -1007,6 +1008,188 @@ fn next_comment_guid(presentation: &Presentation) -> String {
         .map(|index| format!("{{00000000-0000-4000-8000-{index:012X}}}"))
         .find(|id| !used.contains(id))
         .expect("a finite set of used ids leaves a sequential id free")
+}
+
+pub struct FontInput<'a> {
+    pub font: &'a Path,
+    pub typeface: &'a str,
+    pub kind: EmbeddedFontKind,
+    pub license: &'a str,
+    pub authorized: bool,
+}
+
+/// Lists every embedded font face in list and schema order.
+pub fn font_list(file: &Path, as_json: bool) -> Result<()> {
+    let presentation = Presentation::open(file)?;
+    let fonts = presentation.embedded_fonts();
+    if as_json {
+        let records = fonts
+            .iter()
+            .map(|font| {
+                json!({
+                    "typeface": font.typeface,
+                    "panose": font.panose,
+                    "pitch_family": font.pitch_family,
+                    "charset": font.charset,
+                    "faces": font.faces.iter().map(font_face_json).collect::<Vec<_>>(),
+                })
+            })
+            .collect::<Vec<_>>();
+        return print_json(json!({
+            "embed_true_type_fonts": presentation.embed_true_type_fonts(),
+            "save_subset_fonts": presentation.save_subset_fonts(),
+            "fonts": records,
+        }));
+    }
+    let mut stdout = io::stdout().lock();
+    if fonts.iter().all(|font| font.faces.is_empty()) {
+        writeln!(stdout, "(no embedded fonts)")?;
+    }
+    for font in &fonts {
+        for face in &font.faces {
+            writeln!(
+                stdout,
+                "{}\t{}\t{}\t{}\t{}",
+                font.typeface,
+                font_kind_label(face.kind),
+                font_format_label(face.format),
+                face.stored_len,
+                face.part_name.as_deref().unwrap_or("(missing)")
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// Embeds one face from a font file and publishes the presentation atomically.
+pub fn font_embed(file: &Path, input: FontInput<'_>, output: &Path, as_json: bool) -> Result<()> {
+    ensure_output_paths_available(&[output.to_path_buf()])?;
+    let data = std::fs::read(input.font)
+        .map_err(|error| format!("cannot read font {}: {error}", input.font.display()))?;
+    let mut presentation = Presentation::open(file)?;
+    presentation.embed_font(
+        input.typeface,
+        EmbeddedFont::new(
+            input.kind,
+            data,
+            FontEmbeddingLicense::new(input.authorized, input.license),
+        ),
+    )?;
+    publish_presentation(&presentation, output)?;
+    let face = presentation
+        .embedded_fonts()
+        .into_iter()
+        .find(|font| font.typeface == input.typeface)
+        .and_then(|font| font.faces.into_iter().find(|face| face.kind == input.kind))
+        .expect("the embedded face is listed");
+    mutation_record(
+        as_json,
+        "embed",
+        json!({
+            "typeface": input.typeface,
+            "face": font_kind_label(input.kind),
+            "part": face.part_name,
+            "license": input.license,
+        }),
+        output,
+    )
+}
+
+/// Removes one face, or a whole embedded font, and publishes the result.
+pub fn font_remove(
+    file: &Path,
+    typeface: &str,
+    kind: Option<EmbeddedFontKind>,
+    output: &Path,
+    as_json: bool,
+) -> Result<()> {
+    ensure_output_paths_available(&[output.to_path_buf()])?;
+    let mut presentation = Presentation::open(file)?;
+    let removed = match kind {
+        Some(kind) => presentation
+            .remove_embedded_font(typeface, kind)?
+            .map(|face| vec![face]),
+        None => presentation.remove_font(typeface)?.map(|font| font.faces),
+    }
+    .ok_or_else(|| match kind {
+        Some(kind) => format!(
+            "embedded font {typeface} has no {} face",
+            font_kind_label(kind)
+        ),
+        None => format!("no embedded font named {typeface}"),
+    })?;
+    publish_presentation(&presentation, output)?;
+    mutation_record(
+        as_json,
+        "remove",
+        json!({
+            "typeface": typeface,
+            "faces": removed
+                .iter()
+                .map(|face| font_kind_label(face.kind))
+                .collect::<Vec<_>>(),
+        }),
+        output,
+    )
+}
+
+/// Sets the presentation font flags and publishes the result.
+pub fn font_set_flags(
+    file: &Path,
+    embed_true_type_fonts: Option<bool>,
+    save_subset_fonts: Option<bool>,
+    output: &Path,
+    as_json: bool,
+) -> Result<()> {
+    if embed_true_type_fonts.is_none() && save_subset_fonts.is_none() {
+        return Err("set-flags needs --embed-true-type-fonts or --save-subset-fonts".into());
+    }
+    ensure_output_paths_available(&[output.to_path_buf()])?;
+    let mut presentation = Presentation::open(file)?;
+    if let Some(value) = embed_true_type_fonts {
+        presentation.set_embed_true_type_fonts(value);
+    }
+    if let Some(value) = save_subset_fonts {
+        presentation.set_save_subset_fonts(value);
+    }
+    publish_presentation(&presentation, output)?;
+    mutation_record(
+        as_json,
+        "set-flags",
+        json!({
+            "embed_true_type_fonts": presentation.embed_true_type_fonts(),
+            "save_subset_fonts": presentation.save_subset_fonts(),
+        }),
+        output,
+    )
+}
+
+fn font_face_json(face: &EmbeddedFontFace) -> Value {
+    json!({
+        "face": font_kind_label(face.kind),
+        "relationship_id": face.relationship_id,
+        "part": face.part_name,
+        "format": font_format_label(face.format),
+        "stored_bytes": face.stored_len,
+    })
+}
+
+fn font_kind_label(kind: EmbeddedFontKind) -> &'static str {
+    match kind {
+        EmbeddedFontKind::Regular => "regular",
+        EmbeddedFontKind::Bold => "bold",
+        EmbeddedFontKind::Italic => "italic",
+        EmbeddedFontKind::BoldItalic => "bold_italic",
+    }
+}
+
+fn font_format_label(format: EmbeddedFontFormat) -> &'static str {
+    match format {
+        EmbeddedFontFormat::Eot => "eot",
+        EmbeddedFontFormat::CompressedEot => "compressed_eot",
+        EmbeddedFontFormat::Sfnt => "sfnt",
+        EmbeddedFontFormat::Unknown => "unknown",
+    }
 }
 
 fn publish_presentation(presentation: &Presentation, output: &Path) -> Result<()> {
