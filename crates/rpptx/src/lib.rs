@@ -11775,6 +11775,42 @@ fn max_resolved_sample_retention_count() -> usize {
     MAX_RESOLVED_SAMPLE_COUNT.get()
 }
 
+/// Decodes the faces of `p:embeddedFontLst` for the renderer, one font file
+/// per face under its `p:font` typeface, so a run naming that typeface draws
+/// the embedded face. Bold and italic faces are picked by their own weight
+/// and style. MicroType Express faces and parts that decode to no font are
+/// skipped and keep the fallback.
+#[cfg(feature = "render")]
+fn embedded_render_fonts(
+    package: &OpcPackage,
+    presentation_part: &str,
+    presentation: &CT_Presentation,
+    relationships: &Relationships,
+) -> Vec<oxml_layout::FontFile> {
+    presentation
+        .embedded_fonts()
+        .iter()
+        .flat_map(|entry| {
+            entry.faces().filter_map(|(_, relationship_id)| {
+                let relationship =
+                    relationships
+                        .get_by_id(relationship_id)
+                        .filter(|relationship| {
+                            relationship.rel_type == rel_types::FONT
+                                && !relationship_is_external(relationship)
+                        })?;
+                let part_name =
+                    OpcPackage::resolve_rel_target(presentation_part, &relationship.target);
+                let (_, data) = decode_embedded_font(package.get_part(&part_name)?);
+                Some(oxml_layout::FontFile {
+                    family: entry.typeface.clone(),
+                    data: data?,
+                })
+            })
+        })
+        .collect()
+}
+
 #[cfg(feature = "render")]
 fn prepare_render_context(
     package: &OpcPackage,
@@ -11809,6 +11845,13 @@ fn prepare_render_context(
     PREPARED_FONT_MANAGER_COUNT.with(|count| count.set(count.get() + 1));
     let mut font_manager = FontManager::new_deterministic()
         .map_err(|error| render_failure(format!("deterministic fonts: {error}")))?;
+    let fonts = embedded_render_fonts(
+        package,
+        &presentation_part,
+        &presentation,
+        presentation_relationships,
+    );
+    font_manager.load_additional_fonts(&fonts);
     let mut resolved_slides = Vec::with_capacity(presentation.slide_ids.len());
     let mut text_directions = Vec::with_capacity(presentation.slide_ids.len());
     let mut prepared_slides = Vec::with_capacity(presentation.slide_ids.len());
@@ -11954,7 +11997,7 @@ fn prepare_render_context(
     let input = RenderInput {
         slides: resolved_slides,
         media,
-        fonts: Vec::new(),
+        fonts,
         metadata: None,
     };
     #[cfg(test)]
