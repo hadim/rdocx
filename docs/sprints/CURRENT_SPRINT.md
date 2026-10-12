@@ -31,7 +31,7 @@ thirteen approved pending implementation. Rolling contribution intake is reopene
 | F-X198 | Preserve alternate text-box copies during scoped replacement | M | done | - |
 | F-X199 | Model namespace-qualified empty table cell margins | S | done | - |
 | F-X200 | Complete Python Word formatting and list parity | L | in-progress | codex |
-| F-X201 | Complete Python section stories and page authoring | L | pending | - |
+| F-X201 | Complete Python section stories and page authoring | L | in-progress | codex |
 | F-X202 | Complete Word tables pictures and internal links | L | pending | - |
 | F-X203 | Complete Python Word document operations and validation | L | pending | - |
 | F-X204 | Complete shared CLI one-shot editing commands | L | pending | - |

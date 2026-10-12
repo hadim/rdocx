@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 228 | 207 | 4 | 13 |
-| **Total** | **553** | **481** | **4** | **64** |
+| X, Cross-cutting | 228 | 207 | 5 | 12 |
+| **Total** | **553** | **481** | **5** | **63** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -759,7 +759,7 @@ HLD14 contract before adopting contributor changes.
 | F-X198 | Preserve alternate text-box copies during scoped replacement | S91 | M | done |
 | F-X199 | Model namespace-qualified empty table cell margins | S91 | S | done |
 | F-X200 | Complete Python Word formatting and list parity | S91 | L | in-progress |
-| F-X201 | Complete Python section stories and page authoring | S91 | L | pending |
+| F-X201 | Complete Python section stories and page authoring | S91 | L | in-progress |
 | F-X202 | Complete Word tables pictures and internal links | S91 | L | pending |
 | F-X203 | Complete Python Word document operations and validation | S91 | L | pending |
 | F-X204 | Complete shared CLI one-shot editing commands | S91 | L | pending |
