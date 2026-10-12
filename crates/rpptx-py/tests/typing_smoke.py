@@ -639,3 +639,34 @@ def fx208_authoring_signatures(presentation: Presentation, slide: Slide) -> None
     assert_type(metadata.type, PP_PLACEHOLDER_TYPE)
     assert_type(metadata.idx, int)
     slide.shapes[0].text_frame.paragraphs[0].add_field("slidenum", "")
+
+
+def _fx205_typed_parity_surface(prs: Presentation) -> None:
+    from rpptx._rpptx import AppProperties, CoreProperties, CustomProperties, Section, MediaInfo
+    assert_type(prs.core_properties, CoreProperties)
+    assert_type(prs.app_properties, AppProperties)
+    assert_type(prs.custom_properties, CustomProperties)
+    assert_type(prs.sections, tuple[Section, ...])
+    slide = prs.slides[0]
+    assert_type(slide.media, tuple[MediaInfo, ...])
+    paragraph = slide.shapes[0].text_frame.paragraphs[0]
+    font = paragraph.runs[0].font
+    assert_type(font.baseline, float | None)
+    assert_type(font.spacing, Length | None)
+    assert_type(font.language, str | None)
+    assert_type(font.east_asian_name, str | None)
+    assert_type(font.complex_script_name, str | None)
+    paragraph.auto_number = "arabicPeriod"
+    paragraph.auto_number_start = 3
+    paragraph.bullet_color = RGBColor(0x33, 0x66, 0x99)
+    paragraph.bullet_font = "Arial"
+    assert_type(paragraph.bullet_size, float | None)
+    paragraph.bullet_size = 1.25
+    fill = slide.shapes[0].fill
+    assert_type(fill.transparency, float | None)
+    fill.gradient_path = "circle"
+    assert_type(prs.render_slides(format="jpeg", quality=90, fonts=[]), list[bytes])
+    assert_type(prs.render_slides(format="tiff", fonts=[]), bytes)
+    assert_type(prs.to_pdfa(profile="pdfa-2b", fonts=[]), bytes)
+    assert_type(prs.to_handout_pdf(slides_per_page=6, fonts=[]), bytes)
+    assert_type(prs.to_odp(), tuple[bytes, list[tuple[str, str]]])

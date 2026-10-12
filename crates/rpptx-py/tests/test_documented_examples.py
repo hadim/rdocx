@@ -8623,3 +8623,337 @@ def test_fx208_number_start_public_base(tmp_path):
     assert prs.to_bytes() == before
     prs.slide_number_start = None
     assert Presentation.from_bytes(prs.to_bytes()).slide_number_start is None
+
+
+def _fx205_text_owner():
+    from rpptx import Presentation
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    frame = slide.shapes.add_textbox(0, 0, 1270000, 1270000).text_frame
+    paragraph = frame.paragraphs[0]
+    run = paragraph.add_run("F205 parity")
+    assert run.text == "F205 parity"
+    return prs, slide, frame.paragraphs[0], run
+
+
+@pytest.mark.parametrize("name,value", [("baseline", .25), ("spacing", 127), ("language", "ja-JP"), ("east_asian_name", "Arial"), ("complex_script_name", "Arial")])
+def test_fx205_extended_font_public_base(name, value):
+    from rpptx import Presentation
+    prs, _, _, run = _fx205_text_owner()
+    font = run.font
+    assert getattr(font, name) is None
+    setattr(font, name, value)
+    assert getattr(font, name) == value
+    reopened = Presentation.from_bytes(prs.to_bytes())
+    actual = reopened.slides[0].shapes[0].text_frame.paragraphs[0].runs[0].font
+    assert getattr(actual, name) == value
+    setattr(font, name, None)
+    assert getattr(font, name) is None
+
+
+@pytest.mark.parametrize("name,value", [("auto_number", "arabicPeriod"), ("auto_number_start", 3), ("bullet_color", "336699"), ("bullet_font", "Arial"), ("bullet_size", 1.25)])
+def test_fx205_bullet_public_base(name, value):
+    prs, _, paragraph, _ = _fx205_text_owner()
+    getattr(paragraph, name)
+    if name == "auto_number_start":
+        paragraph.auto_number = "arabicPeriod"
+    setattr(paragraph, name, value)
+    actual = getattr(paragraph, name)
+    if name == "bullet_color":
+        assert str(actual) == value
+    else:
+        assert actual == value
+    before = prs.to_bytes()
+    setattr(paragraph, name, value)
+    assert prs.to_bytes() == before
+
+
+@pytest.mark.parametrize("choice", ["gradient", "patterned", "picture", "transparency"])
+def test_fx205_fill_public_base(tmp_path, choice):
+    prs, slide, _, _ = _fx205_text_owner()
+    fill = slide.shapes[0].fill
+    if choice == "picture":
+        image = tmp_path / "owned.png"
+        _write_tiny_png(image)
+        fill.picture(image)
+    elif choice == "transparency":
+        fill.solid()
+        fill.fore_color.rgb = "336699"
+        fill.transparency = .25
+        assert fill.transparency == .25
+    elif choice == "gradient":
+        fill.gradient()
+        assert len(fill.gradient_stops) >= 2
+        fill.gradient_angle = 45.0
+        assert fill.gradient_angle == 45.0
+    else:
+        fill.patterned()
+        assert fill.type is not None
+    assert prs.to_bytes()
+
+
+@pytest.mark.parametrize("name", ["first_row", "last_row", "first_col", "last_col", "horz_banding", "vert_banding", "style_id"])
+def test_fx205_table_style_public_base(name):
+    from rpptx import Presentation
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    table = slide.shapes.add_table(2, 2, 0, 0, 1270000, 1270000).table
+    assert len(table.rows) == 2 and len(table.columns) == 2
+    getattr(table, name)
+    value = "{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}" if name == "style_id" else True
+    setattr(table, name, value)
+    assert getattr(table, name) == value
+    assert Presentation.from_bytes(prs.to_bytes()).slides[0].shapes[0].table.cell(0, 0).text_frame is not None
+
+
+@pytest.mark.parametrize("owner", ["core_properties", "app_properties", "custom_properties"])
+def test_fx205_properties_public_base(owner):
+    prs, _, _, _ = _fx205_text_owner()
+    properties = getattr(prs, owner)
+    if owner == "core_properties":
+        properties.author = "F205 author"
+        assert properties.author == "F205 author"
+    elif owner == "app_properties":
+        properties.application = "F205 app"
+        assert properties.application == "F205 app"
+    else:
+        properties.set("F205", "value")
+        assert properties.get("F205").value == "value"
+    assert prs.to_bytes()
+
+
+def test_fx205_sections_public_base():
+    prs, _, _, _ = _fx205_text_owner()
+    assert prs.sections == ()
+    prs.set_sections([("F205 section", [0])])
+    assert prs.sections[0].name == "F205 section"
+
+
+def test_fx205_media_public_base(tmp_path):
+    prs, slide, _, _ = _fx205_text_owner()
+    import wave
+    path = tmp_path / "sound.wav"
+    with wave.open(str(path), "wb") as stream:
+        stream.setnchannels(1)
+        stream.setsampwidth(2)
+        stream.setframerate(8000)
+        stream.writeframes(b"\x00\x00" * 80)
+    movie = slide.shapes.add_movie(path, 0, 0, 1270000, 1270000, mime_type="audio/wav")
+    assert slide.media
+    assert slide.extract_media(movie.shape_id) == path.read_bytes()
+    slide.remove_media(movie.shape_id)
+    assert slide.media == ()
+
+
+@pytest.mark.parametrize("format", ["jpeg", "tiff", "pdfa", "handout", "odp"])
+def test_fx205_exports_public_base(format):
+    prs, _, _, _ = _fx205_text_owner()
+    if format in ("jpeg", "tiff"):
+        output = prs.render_slides(format=format, dpi=24.0)
+        if format == "jpeg":
+            assert len(output) == 1 and output[0].startswith(b"\xff\xd8")
+        else:
+            assert output.startswith((b"II*\x00", b"MM\x00*"))
+    elif format == "pdfa":
+        assert prs.to_pdfa(profile="pdfa-2b").startswith(b"%PDF")
+    elif format == "handout":
+        assert prs.to_handout_pdf(slides_per_page=2).startswith(b"%PDF")
+    else:
+        output, diagnostics = prs.to_odp()
+        assert output.startswith(b"PK") and isinstance(diagnostics, list)
+
+
+def test_fx205_existing_cell_and_notes_capabilities_are_real():
+    from rpptx import Presentation
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    table = slide.shapes.add_table(1, 1, 0, 0, 1270000, 1270000).table
+    table.cell(0, 0).text_frame.paragraphs[0].add_run("F205 existing cell")
+    assert table.cell(0, 0).text == "F205 existing cell"
+    assert prs.to_notes_pdf().startswith(b"%PDF")
+
+
+def test_fx205_fresh_all_layouts_match_native_widescreen_rectangles():
+    # Native baseline75261bde, actual PowerPoint16.113.3, retained projection.
+    import xml.etree.ElementTree as ET
+    from rpptx import Presentation
+    prs = Presentation()
+    assert prs.slide_width == 12192000 and prs.slide_height == 6858000
+    expected = {'Blank': [('dt', '10', None, None), ('ftr', '11', None, None), ('sldNum', '12', None, None)],
+ 'Comparison': [('title',
+                 '0',
+                 {'x': '839788', 'y': '365125'},
+                 {'cx': '10515600', 'cy': '1325563'}),
+                ('body',
+                 '1',
+                 {'x': '839788', 'y': '1681163'},
+                 {'cx': '5157787', 'cy': '823912'}),
+                ('obj',
+                 '2',
+                 {'x': '839788', 'y': '2505075'},
+                 {'cx': '5157787', 'cy': '3684588'}),
+                ('body',
+                 '3',
+                 {'x': '6172200', 'y': '1681163'},
+                 {'cx': '5183188', 'cy': '823912'}),
+                ('obj',
+                 '4',
+                 {'x': '6172200', 'y': '2505075'},
+                 {'cx': '5183188', 'cy': '3684588'}),
+                ('dt', '10', None, None),
+                ('ftr', '11', None, None),
+                ('sldNum', '12', None, None)],
+ 'Content with Caption': [('title',
+                           '0',
+                           {'x': '839788', 'y': '457200'},
+                           {'cx': '3932237', 'cy': '1600200'}),
+                          ('obj',
+                           '1',
+                           {'x': '5183188', 'y': '987425'},
+                           {'cx': '6172200', 'cy': '4873625'}),
+                          ('body',
+                           '2',
+                           {'x': '839788', 'y': '2057400'},
+                           {'cx': '3932237', 'cy': '3811588'}),
+                          ('dt', '10', None, None),
+                          ('ftr', '11', None, None),
+                          ('sldNum', '12', None, None)],
+ 'Picture with Caption': [('title',
+                           '0',
+                           {'x': '839788', 'y': '457200'},
+                           {'cx': '3932237', 'cy': '1600200'}),
+                          ('pic',
+                           '1',
+                           {'x': '5183188', 'y': '987425'},
+                           {'cx': '6172200', 'cy': '4873625'}),
+                          ('body',
+                           '2',
+                           {'x': '839788', 'y': '2057400'},
+                           {'cx': '3932237', 'cy': '3811588'}),
+                          ('dt', '10', None, None),
+                          ('ftr', '11', None, None),
+                          ('sldNum', '12', None, None)],
+ 'Section Header': [('title',
+                     '0',
+                     {'x': '831850', 'y': '1709738'},
+                     {'cx': '10515600', 'cy': '2852737'}),
+                    ('body',
+                     '1',
+                     {'x': '831850', 'y': '4589463'},
+                     {'cx': '10515600', 'cy': '1500187'}),
+                    ('dt', '10', None, None),
+                    ('ftr', '11', None, None),
+                    ('sldNum', '12', None, None)],
+ 'Title Only': [('title', '0', None, None),
+                ('dt', '10', None, None),
+                ('ftr', '11', None, None),
+                ('sldNum', '12', None, None)],
+ 'Title Slide': [('ctrTitle',
+                  '0',
+                  {'x': '1524000', 'y': '1122363'},
+                  {'cx': '9144000', 'cy': '2387600'}),
+                 ('subTitle',
+                  '1',
+                  {'x': '1524000', 'y': '3602038'},
+                  {'cx': '9144000', 'cy': '1655762'}),
+                 ('dt', '10', None, None),
+                 ('ftr', '11', None, None),
+                 ('sldNum', '12', None, None)],
+ 'Title and Content': [('title', '0', None, None),
+                       ('obj', '1', None, None),
+                       ('dt', '10', None, None),
+                       ('ftr', '11', None, None),
+                       ('sldNum', '12', None, None)],
+ 'Title and Vertical Text': [('title', '0', None, None),
+                             ('body', '1', None, None),
+                             ('dt', '10', None, None),
+                             ('ftr', '11', None, None),
+                             ('sldNum', '12', None, None)],
+ 'Two Content': [('title', '0', None, None),
+                 ('obj',
+                  '1',
+                  {'x': '838200', 'y': '1825625'},
+                  {'cx': '5181600', 'cy': '4351338'}),
+                 ('obj',
+                  '2',
+                  {'x': '6172200', 'y': '1825625'},
+                  {'cx': '5181600', 'cy': '4351338'}),
+                 ('dt', '10', None, None),
+                 ('ftr', '11', None, None),
+                 ('sldNum', '12', None, None)],
+ 'Vertical Title and Text': [('title',
+                              '0',
+                              {'x': '8724900', 'y': '365125'},
+                              {'cx': '2628900', 'cy': '5811838'}),
+                             ('body',
+                              '1',
+                              {'x': '838200', 'y': '365125'},
+                              {'cx': '7734300', 'cy': '5811838'}),
+                             ('dt', '10', None, None),
+                             ('ftr', '11', None, None),
+                             ('sldNum', '12', None, None)],
+ '__master__': [('title',
+                 '0',
+                 {'x': '838200', 'y': '365125'},
+                 {'cx': '10515600', 'cy': '1325563'}),
+                ('body',
+                 '1',
+                 {'x': '838200', 'y': '1825625'},
+                 {'cx': '10515600', 'cy': '4351338'}),
+                ('dt',
+                 '2',
+                 {'x': '838200', 'y': '6356350'},
+                 {'cx': '2743200', 'cy': '365125'}),
+                ('ftr',
+                 '3',
+                 {'x': '4038600', 'y': '6356350'},
+                 {'cx': '4114800', 'cy': '365125'}),
+                ('sldNum',
+                 '4',
+                 {'x': '8610600', 'y': '6356350'},
+                 {'cx': '2743200', 'cy': '365125'})]}
+    p = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
+    a = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    actual = {}
+    with zipfile.ZipFile(io.BytesIO(prs.to_bytes())) as package:
+        for part in package.namelist():
+            if not (part.startswith("ppt/slideLayouts/slideLayout") or part == "ppt/slideMasters/slideMaster1.xml") or not part.endswith(".xml"):
+                continue
+            root = ET.fromstring(package.read(part))
+            common = root.find(p + "cSld")
+            key = common.get("name") if "slideLayouts/" in part else "__master__"
+            owners = []
+            for shape in common.find(p + "spTree"):
+                placeholder = shape.find("./" + p + "nvSpPr/" + p + "nvPr/" + p + "ph")
+                if placeholder is None:
+                    continue
+                transform = shape.find("./" + p + "spPr/" + a + "xfrm")
+                offset = transform.find(a + "off") if transform is not None else None
+                extent = transform.find(a + "ext") if transform is not None else None
+                owners.append((placeholder.get("type", "obj"), placeholder.get("idx", "0"), dict(offset.attrib) if offset is not None else None, dict(extent.attrib) if extent is not None else None))
+            actual[key] = owners
+    assert len(actual) == 12
+    assert actual == expected
+
+
+@pytest.mark.parametrize("lexical,expected", [("1pt",12700), ("1in",914400), ("1cm",360000), ("1mm",36000), ("1pc",152400), ("1pi",152400), ("-1pt",-12700)])
+def test_fx205_imported_universal_spacing_remains_present(lexical, expected):
+    from rpptx import Presentation
+    import re
+    from rpptx.util import Pt
+    prs, _, _, authored_run = _fx205_text_owner()
+    authored_run.font.size = Pt(12)
+    parts = _package_parts(prs.to_bytes())
+    source = parts["ppt/slides/slide1.xml"].decode()
+    source, count = re.subn(r"<a:rPr([^>]*)/>", lambda match: '<a:rPr' + match.group(1) + ' spc="' + lexical + '"/>', source, count=1)
+    assert count == 1
+    parts["ppt/slides/slide1.xml"] = source.encode()
+    imported = Presentation.from_bytes(_package_bytes(parts))
+    run = imported.slides[0].shapes[0].text_frame.paragraphs[0].runs[0]
+    before = imported.to_bytes()
+    assert int(run.font.spacing) == expected
+    assert imported.to_bytes() == before
+    run.font.spacing = 127
+    assert int(run.font.spacing) == 127
+    reopened = Presentation.from_bytes(imported.to_bytes())
+    assert int(reopened.slides[0].shapes[0].text_frame.paragraphs[0].runs[0].font.spacing) == 127

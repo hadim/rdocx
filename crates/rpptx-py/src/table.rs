@@ -166,8 +166,151 @@ impl PyTable {
     }
 }
 
+impl PyTable {
+    fn flag(&self, py: Python<'_>, read: fn(&rpptx::TableRef<'_>) -> bool) -> PyResult<bool> {
+        self.dimensions(py)?;
+        shape_ref_at(&self.presentation.borrow(py), &self.path)
+            .and_then(|shape| shape.table())
+            .map(|table| read(&table))
+            .ok_or_else(|| PyValueError::new_err("shape has no table"))
+    }
+
+    fn edit_properties(
+        &self,
+        py: Python<'_>,
+        edit: impl FnOnce(&mut rpptx::TableMut<'_>) -> rpptx::Result<()>,
+    ) -> PyResult<()> {
+        self.dimensions(py)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        let current = presentation
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("table owner is absent"))?;
+        let mut candidate = presentation.inner.clone();
+        let mut table = crate::shape::native_shape_mut_at(&mut candidate, &current)
+            .and_then(rpptx::ShapeMut::into_table_mut)
+            .ok_or_else(|| PyValueError::new_err("shape has no table"))?;
+        edit(&mut table).map_err(|error| rpptx_to_pyerr(py, error))?;
+        drop(table);
+        let proofs = presentation.unchanged_owners()?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "Table.formatting",
+            &proofs,
+            false,
+            false,
+            false,
+        )?;
+        presentation.publish_owners(candidate, prepared)
+    }
+}
+
 #[pymethods]
 impl PyTable {
+    #[getter]
+    fn first_row(&self, py: Python<'_>) -> PyResult<bool> {
+        self.flag(py, |table| table.first_row())
+    }
+    #[setter]
+    fn set_first_row(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        if self.first_row(py)? == value {
+            return Ok(());
+        }
+        self.edit_properties(py, |table| {
+            table.set_first_row(value);
+            Ok(())
+        })
+    }
+
+    #[getter]
+    fn last_row(&self, py: Python<'_>) -> PyResult<bool> {
+        self.flag(py, |table| table.last_row())
+    }
+    #[setter]
+    fn set_last_row(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        if self.last_row(py)? == value {
+            return Ok(());
+        }
+        self.edit_properties(py, |table| {
+            table.set_last_row(value);
+            Ok(())
+        })
+    }
+
+    #[getter]
+    fn first_col(&self, py: Python<'_>) -> PyResult<bool> {
+        self.flag(py, |table| table.first_column())
+    }
+    #[setter]
+    fn set_first_col(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        if self.first_col(py)? == value {
+            return Ok(());
+        }
+        self.edit_properties(py, |table| {
+            table.set_first_column(value);
+            Ok(())
+        })
+    }
+
+    #[getter]
+    fn last_col(&self, py: Python<'_>) -> PyResult<bool> {
+        self.flag(py, |table| table.last_column())
+    }
+    #[setter]
+    fn set_last_col(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        if self.last_col(py)? == value {
+            return Ok(());
+        }
+        self.edit_properties(py, |table| {
+            table.set_last_column(value);
+            Ok(())
+        })
+    }
+
+    #[getter]
+    fn horz_banding(&self, py: Python<'_>) -> PyResult<bool> {
+        self.flag(py, |table| table.horizontal_banding())
+    }
+    #[setter]
+    fn set_horz_banding(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        if self.horz_banding(py)? == value {
+            return Ok(());
+        }
+        self.edit_properties(py, |table| {
+            table.set_horizontal_banding(value);
+            Ok(())
+        })
+    }
+
+    #[getter]
+    fn vert_banding(&self, py: Python<'_>) -> PyResult<bool> {
+        self.flag(py, |table| table.vertical_banding())
+    }
+    #[setter]
+    fn set_vert_banding(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        if self.vert_banding(py)? == value {
+            return Ok(());
+        }
+        self.edit_properties(py, |table| {
+            table.set_vertical_banding(value);
+            Ok(())
+        })
+    }
+
+    #[getter]
+    fn style_id(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        self.dimensions(py)?;
+        Ok(shape_ref_at(&self.presentation.borrow(py), &self.path)
+            .and_then(|shape| shape.table())
+            .and_then(|table| table.style_id().map(str::to_owned)))
+    }
+    #[setter]
+    fn set_style_id(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        if self.style_id(py)? == value {
+            return Ok(());
+        }
+        self.edit_properties(py, |table| table.set_style_id(value))
+    }
+
     #[getter]
     fn columns(&self, py: Python<'_>) -> PyResult<Py<PyColumnCollection>> {
         self.dimensions(py)?;

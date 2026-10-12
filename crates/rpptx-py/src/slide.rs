@@ -2,7 +2,7 @@ use oxml_py_support::{ContentPath, PathSeg};
 use pyo3::PyClass;
 use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyDict, PyList, PySlice, PyTuple};
+use pyo3::types::{PyAny, PyBytes, PyDict, PyList, PySlice, PyTuple};
 use smallvec::smallvec;
 
 use crate::dml::{FillTarget, PyFillFormat};
@@ -23,6 +23,7 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PySlideLayout>()?;
     module.add_class::<PySlideLayoutCollection>()?;
     module.add_class::<PySlide>()?;
+    module.add_class::<PyMediaInfo>()?;
     module.add_class::<PySlideCollection>()?;
     module.add_class::<PyBackground>()?;
     Ok(())
@@ -171,6 +172,25 @@ impl PySlideLayoutIterator {
     }
 }
 
+/// An immutable media inventory snapshot in slide draw order.
+#[pyclass(name = "MediaInfo", frozen, get_all)]
+pub struct PyMediaInfo {
+    slide_index: usize,
+    shape_id: u32,
+    kind: String,
+    part_name: Option<String>,
+    content_type: Option<String>,
+    target: Option<String>,
+    poster_relationship_id: Option<String>,
+    trim_start_ms: Option<u64>,
+    trim_end_ms: Option<u64>,
+    volume: u32,
+    looped: bool,
+    show_when_stopped: bool,
+    trigger: &'static str,
+    diagnostics: Py<PyTuple>,
+}
+
 #[pyclass(name = "Slide")]
 pub struct PySlide {
     pub(crate) presentation: Py<PyPresentation>,
@@ -200,6 +220,137 @@ impl PySlide {
 
 #[pymethods]
 impl PySlide {
+    #[getter]
+    fn media<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let index = self.validate(py)?;
+        let inventory = self
+            .presentation
+            .borrow(py)
+            .inner
+            .media(index)
+            .map_err(|e| crate::rpptx_to_pyerr(py, e))?;
+        let mut result = Vec::with_capacity(inventory.len());
+        for info in inventory {
+            let (part_name, content_type, target) = match info.source {
+                rpptx::MediaLocation::Embedded {
+                    part_name,
+                    content_type,
+                } => (Some(part_name), Some(content_type), None),
+                rpptx::MediaLocation::Linked { target } => (None, None, Some(target)),
+            };
+            result.push(Py::new(
+                py,
+                PyMediaInfo {
+                    slide_index: info.slide_index,
+                    shape_id: info.shape_id,
+                    kind: if info.kind == rpptx::MediaKind::Audio {
+                        "audio"
+                    } else {
+                        "video"
+                    }
+                    .into(),
+                    part_name,
+                    content_type,
+                    target,
+                    poster_relationship_id: info.poster_relationship_id,
+                    trim_start_ms: info.settings.trim_start_ms,
+                    trim_end_ms: info.settings.trim_end_ms,
+                    volume: info.settings.volume,
+                    looped: info.settings.looped,
+                    show_when_stopped: info.settings.show_when_stopped,
+                    trigger: match info.settings.trigger {
+                        rpptx::MediaPlaybackTrigger::Automatic => "automatic",
+                        rpptx::MediaPlaybackTrigger::OnClick => "on_click",
+                        rpptx::MediaPlaybackTrigger::InClickSequence => "in_click_sequence",
+                    },
+                    diagnostics: PyTuple::new(
+                        py,
+                        info.diagnostics.into_iter().map(|d| match d {
+                            rpptx::MediaDiagnostic::UnsupportedContentType { content_type } => {
+                                ("unsupported_content_type", Some(content_type))
+                            }
+                            rpptx::MediaDiagnostic::MissingPlaybackTiming => {
+                                ("missing_playback_timing", None)
+                            }
+                            rpptx::MediaDiagnostic::UnsupportedPlaybackCommand { command } => {
+                                ("unsupported_playback_command", Some(command))
+                            }
+                            rpptx::MediaDiagnostic::MissingPoster => ("missing_poster", None),
+                        }),
+                    )?
+                    .unbind(),
+                },
+            )?);
+        }
+        PyTuple::new(py, result)
+    }
+
+    fn extract_media(&self, py: Python<'_>, shape_id: u32) -> PyResult<Option<Py<PyBytes>>> {
+        let index = self.validate(py)?;
+        Ok(self
+            .presentation
+            .borrow(py)
+            .inner
+            .extract_media(index, shape_id)
+            .map_err(|e| crate::rpptx_to_pyerr(py, e))?
+            .map(|bytes| PyBytes::new(py, &bytes).unbind()))
+    }
+
+    #[pyo3(signature = (shape_id, media_file, mime_type=None))]
+    fn replace_media(
+        &self,
+        py: Python<'_>,
+        shape_id: u32,
+        media_file: &Bound<'_, PyAny>,
+        mime_type: Option<&str>,
+    ) -> PyResult<()> {
+        let index = self.validate(py)?;
+        let media = crate::shape::MediaFile::read(media_file, mime_type)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        let mut candidate = presentation.inner.clone();
+        candidate
+            .replace_media(index, shape_id, media.input())
+            .map_err(|e| crate::rpptx_to_pyerr(py, e))?;
+        let survivors = presentation.unchanged_owners()?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "Slide.replace_media",
+            &survivors,
+            false,
+            false,
+            false,
+        )?;
+        presentation.publish_owners(candidate, prepared)
+    }
+
+    fn remove_media(&self, py: Python<'_>, shape_id: u32) -> PyResult<()> {
+        let index = self.validate(py)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        let shape_index = presentation
+            .inner
+            .slide(index)
+            .and_then(|slide| {
+                slide
+                    .shapes()
+                    .position(|shape| shape.non_visual_id() == Some(shape_id))
+            })
+            .ok_or_else(|| PyValueError::new_err("media shape is absent"))?;
+        let mut candidate = presentation.inner.clone();
+        candidate
+            .remove_media(index, shape_id)
+            .map_err(|e| crate::rpptx_to_pyerr(py, e))?;
+        let survivors = presentation.removed_shape_owners(&[PathSeg::Slide(index)], shape_index)?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "Slide.remove_media",
+            &survivors,
+            false,
+            false,
+            false,
+        )?;
+        presentation.publish_owners(candidate, prepared)
+    }
+
     #[getter]
     fn transition(&self, py: Python<'_>) -> PyResult<PySlideTransition> {
         self.validate(py)?;

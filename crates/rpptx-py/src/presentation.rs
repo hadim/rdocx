@@ -151,11 +151,680 @@ impl From<&rpptx::ValidationIssue> for PyValidationIssue {
     }
 }
 
+/// One presentation section: a named, contiguous run of slides.
+#[pyclass(name = "Section", frozen, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PySection {
+    /// The braced GUID PowerPoint identifies the section by.
+    pub id: String,
+    pub name: String,
+    /// The zero-based indices of the section's slides, in order.
+    pub slide_indices: Vec<usize>,
+    pub slide_ids: Vec<u32>,
+}
+
+#[pymethods]
+impl PySection {
+    #[getter]
+    fn id(&self) -> &str {
+        &self.id
+    }
+    #[getter]
+    fn name(&self) -> &str {
+        &self.name
+    }
+    #[getter]
+    fn slide_indices<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, &self.slide_indices)
+    }
+    #[getter]
+    fn slide_ids<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, &self.slide_ids)
+    }
+
+    fn __repr__(&self, py: Python<'_>) -> PyResult<String> {
+        Ok(format!(
+            "Section(id={}, name={}, slide_indices={:?})",
+            pyo3::types::PyString::new(py, &self.id).repr()?,
+            pyo3::types::PyString::new(py, &self.name).repr()?,
+            self.slide_indices
+        ))
+    }
+}
+
+fn section_guid(name: &str, position: usize, attempt: u32) -> String {
+    let hash = |seed: u64| {
+        let mut hash = seed;
+        for byte in name
+            .bytes()
+            .chain(position.to_le_bytes())
+            .chain(attempt.to_le_bytes())
+        {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01B3);
+        }
+        hash
+    };
+    let (high, low) = (hash(0xCBF2_9CE4_8422_2325), hash(0x6C62_272E_07BB_0142));
+    format!(
+        "{{{:08X}-{:04X}-4{:03X}-8{:03X}-{:012X}}}",
+        high >> 32,
+        (high >> 16) & 0xFFFF,
+        high & 0x0FFF,
+        (low >> 48) & 0x0FFF,
+        low & 0xFFFF_FFFF_FFFF
+    )
+}
+
+const DEFAULT_JPEG_QUALITY: u8 = 90;
+
+/// Reads a raster format, refusing an option the format would ignore.
+fn raster_format(
+    format: &str,
+    quality: Option<i64>,
+    transparent: bool,
+) -> PyResult<rpptx::RasterFormat> {
+    if quality.is_some() && !matches!(format, "jpg" | "jpeg") {
+        return Err(PyValueError::new_err(format!(
+            "quality applies to JPEG only, drop it or pass format=\"jpeg\" (format is {format:?})"
+        )));
+    }
+    if transparent && format != "png" {
+        return Err(PyValueError::new_err(format!(
+            "transparent applies to PNG only, drop it or pass format=\"png\" (format is {format:?})"
+        )));
+    }
+    match format {
+        "png" => Ok(rpptx::RasterFormat::Png {
+            transparent_background: transparent,
+        }),
+        "jpg" | "jpeg" => match quality.unwrap_or(i64::from(DEFAULT_JPEG_QUALITY)) {
+            quality @ 1..=100 => Ok(rpptx::RasterFormat::Jpeg {
+                quality: quality as u8,
+            }),
+            quality => Err(PyValueError::new_err(format!(
+                "JPEG quality must be from 1 to 100, got {quality}"
+            ))),
+        },
+        "tif" | "tiff" => Ok(rpptx::RasterFormat::Tiff),
+        other => Err(PyValueError::new_err(format!(
+            "unknown raster format {other:?}, expected png, jpeg, or tiff"
+        ))),
+    }
+}
+
+fn handout_layout(slides_per_page: u8) -> PyResult<rpptx::HandoutLayout> {
+    Ok(match slides_per_page {
+        1 => rpptx::HandoutLayout::One,
+        2 => rpptx::HandoutLayout::Two,
+        3 => rpptx::HandoutLayout::Three,
+        4 => rpptx::HandoutLayout::Four,
+        6 => rpptx::HandoutLayout::Six,
+        9 => rpptx::HandoutLayout::Nine,
+        _ => {
+            return Err(PyValueError::new_err(format!(
+                "slides_per_page must be 1, 2, 3, 4, 6, or 9, got {slides_per_page}"
+            )));
+        }
+    })
+}
+
+/// One ODP conversion diagnostic as a `(path, message)` pair.
+type OdpDiagnostics = Vec<(String, String)>;
+
+fn odp_diagnostics(diagnostics: &[rpptx::OdpDiagnostic]) -> OdpDiagnostics {
+    diagnostics
+        .iter()
+        .map(|diagnostic| (diagnostic.path.clone(), diagnostic.message.clone()))
+        .collect()
+}
+
+#[pyclass(name = "AppProperties")]
+pub struct PyAppProperties {
+    presentation: Py<PyPresentation>,
+}
+impl PyAppProperties {
+    fn read<T: Clone>(
+        &self,
+        py: Python<'_>,
+        field: fn(&mut rpptx::AppProperties) -> &mut Option<T>,
+    ) -> Option<T> {
+        let mut properties = self
+            .presentation
+            .borrow(py)
+            .inner
+            .application_properties()?
+            .clone();
+        field(&mut properties).clone()
+    }
+    fn write<T: Clone + PartialEq>(
+        &self,
+        py: Python<'_>,
+        field: fn(&mut rpptx::AppProperties) -> &mut Option<T>,
+        value: Option<T>,
+    ) -> PyResult<()> {
+        let mut presentation = self.presentation.borrow_mut(py);
+        let mut properties = presentation
+            .inner
+            .application_properties()
+            .cloned()
+            .unwrap_or_default();
+        if *field(&mut properties) == value {
+            return Ok(());
+        }
+        *field(&mut properties) = value;
+        presentation
+            .inner
+            .set_application_properties(properties)
+            .map_err(|error| rpptx_to_pyerr(py, error))
+    }
+}
+#[pymethods]
+impl PyAppProperties {
+    #[getter]
+    fn template(&self, py: Python<'_>) -> Option<String> {
+        self.read(py, |p| &mut p.template)
+    }
+    #[setter]
+    fn set_template(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.write(py, |p| &mut p.template, value)
+    }
+    #[getter]
+    fn manager(&self, py: Python<'_>) -> Option<String> {
+        self.read(py, |p| &mut p.manager)
+    }
+    #[setter]
+    fn set_manager(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.write(py, |p| &mut p.manager, value)
+    }
+    #[getter]
+    fn company(&self, py: Python<'_>) -> Option<String> {
+        self.read(py, |p| &mut p.company)
+    }
+    #[setter]
+    fn set_company(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.write(py, |p| &mut p.company, value)
+    }
+    #[getter]
+    fn pages(&self, py: Python<'_>) -> Option<i32> {
+        self.read(py, |p| &mut p.pages)
+    }
+    #[setter]
+    fn set_pages(&self, py: Python<'_>, value: Option<i32>) -> PyResult<()> {
+        self.write(py, |p| &mut p.pages, value)
+    }
+    #[getter]
+    fn words(&self, py: Python<'_>) -> Option<i32> {
+        self.read(py, |p| &mut p.words)
+    }
+    #[setter]
+    fn set_words(&self, py: Python<'_>, value: Option<i32>) -> PyResult<()> {
+        self.write(py, |p| &mut p.words, value)
+    }
+    #[getter]
+    fn characters(&self, py: Python<'_>) -> Option<i32> {
+        self.read(py, |p| &mut p.characters)
+    }
+    #[setter]
+    fn set_characters(&self, py: Python<'_>, value: Option<i32>) -> PyResult<()> {
+        self.write(py, |p| &mut p.characters, value)
+    }
+    #[getter]
+    fn presentation_format(&self, py: Python<'_>) -> Option<String> {
+        self.read(py, |p| &mut p.presentation_format)
+    }
+    #[setter]
+    fn set_presentation_format(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.write(py, |p| &mut p.presentation_format, value)
+    }
+    #[getter]
+    fn lines(&self, py: Python<'_>) -> Option<i32> {
+        self.read(py, |p| &mut p.lines)
+    }
+    #[setter]
+    fn set_lines(&self, py: Python<'_>, value: Option<i32>) -> PyResult<()> {
+        self.write(py, |p| &mut p.lines, value)
+    }
+    #[getter]
+    fn paragraphs(&self, py: Python<'_>) -> Option<i32> {
+        self.read(py, |p| &mut p.paragraphs)
+    }
+    #[setter]
+    fn set_paragraphs(&self, py: Python<'_>, value: Option<i32>) -> PyResult<()> {
+        self.write(py, |p| &mut p.paragraphs, value)
+    }
+    #[getter]
+    fn slides(&self, py: Python<'_>) -> Option<i32> {
+        self.read(py, |p| &mut p.slides)
+    }
+    #[setter]
+    fn set_slides(&self, py: Python<'_>, value: Option<i32>) -> PyResult<()> {
+        self.write(py, |p| &mut p.slides, value)
+    }
+    #[getter]
+    fn notes(&self, py: Python<'_>) -> Option<i32> {
+        self.read(py, |p| &mut p.notes)
+    }
+    #[setter]
+    fn set_notes(&self, py: Python<'_>, value: Option<i32>) -> PyResult<()> {
+        self.write(py, |p| &mut p.notes, value)
+    }
+    #[getter]
+    fn total_time(&self, py: Python<'_>) -> Option<i32> {
+        self.read(py, |p| &mut p.total_time)
+    }
+    #[setter]
+    fn set_total_time(&self, py: Python<'_>, value: Option<i32>) -> PyResult<()> {
+        self.write(py, |p| &mut p.total_time, value)
+    }
+    #[getter]
+    fn hidden_slides(&self, py: Python<'_>) -> Option<i32> {
+        self.read(py, |p| &mut p.hidden_slides)
+    }
+    #[setter]
+    fn set_hidden_slides(&self, py: Python<'_>, value: Option<i32>) -> PyResult<()> {
+        self.write(py, |p| &mut p.hidden_slides, value)
+    }
+    #[getter]
+    fn multimedia_clips(&self, py: Python<'_>) -> Option<i32> {
+        self.read(py, |p| &mut p.multimedia_clips)
+    }
+    #[setter]
+    fn set_multimedia_clips(&self, py: Python<'_>, value: Option<i32>) -> PyResult<()> {
+        self.write(py, |p| &mut p.multimedia_clips, value)
+    }
+    #[getter]
+    fn scale_crop(&self, py: Python<'_>) -> Option<bool> {
+        self.read(py, |p| &mut p.scale_crop)
+    }
+    #[setter]
+    fn set_scale_crop(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        self.write(py, |p| &mut p.scale_crop, value)
+    }
+    #[getter]
+    fn links_up_to_date(&self, py: Python<'_>) -> Option<bool> {
+        self.read(py, |p| &mut p.links_up_to_date)
+    }
+    #[setter]
+    fn set_links_up_to_date(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        self.write(py, |p| &mut p.links_up_to_date, value)
+    }
+    #[getter]
+    fn characters_with_spaces(&self, py: Python<'_>) -> Option<i32> {
+        self.read(py, |p| &mut p.characters_with_spaces)
+    }
+    #[setter]
+    fn set_characters_with_spaces(&self, py: Python<'_>, value: Option<i32>) -> PyResult<()> {
+        self.write(py, |p| &mut p.characters_with_spaces, value)
+    }
+    #[getter]
+    fn shared_document(&self, py: Python<'_>) -> Option<bool> {
+        self.read(py, |p| &mut p.shared_document)
+    }
+    #[setter]
+    fn set_shared_document(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        self.write(py, |p| &mut p.shared_document, value)
+    }
+    #[getter]
+    fn hyperlinks_changed(&self, py: Python<'_>) -> Option<bool> {
+        self.read(py, |p| &mut p.hyperlinks_changed)
+    }
+    #[setter]
+    fn set_hyperlinks_changed(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        self.write(py, |p| &mut p.hyperlinks_changed, value)
+    }
+    #[getter]
+    fn application(&self, py: Python<'_>) -> Option<String> {
+        self.read(py, |p| &mut p.application)
+    }
+    #[setter]
+    fn set_application(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.write(py, |p| &mut p.application, value)
+    }
+    #[getter]
+    fn application_version(&self, py: Python<'_>) -> Option<String> {
+        self.read(py, |p| &mut p.application_version)
+    }
+    #[setter]
+    fn set_application_version(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.write(py, |p| &mut p.application_version, value)
+    }
+}
+
+#[pyclass(name = "CustomFileTime", frozen, get_all)]
+pub struct PyCustomFileTime {
+    value: String,
+}
+#[pymethods]
+impl PyCustomFileTime {
+    #[new]
+    fn new(value: String) -> Self {
+        Self { value }
+    }
+}
+#[pyclass(name = "CustomProperty", frozen, get_all)]
+pub struct PyCustomProperty {
+    name: Option<String>,
+    pid: i32,
+    fmtid: String,
+    kind: &'static str,
+    value: Py<PyAny>,
+}
+fn custom_property_result(
+    py: Python<'_>,
+    property: &rpptx::CustomProperty,
+) -> PyResult<Py<PyCustomProperty>> {
+    use rpptx::CustomPropertyValue as Value;
+    let (kind, value) = match &property.value {
+        Value::Lpstr(v) => ("lpstr", v.clone().into_pyobject(py)?.into_any().unbind()),
+        Value::Lpwstr(v) => ("lpwstr", v.clone().into_pyobject(py)?.into_any().unbind()),
+        Value::I4(v) => ("i4", v.into_pyobject(py)?.into_any().unbind()),
+        Value::R8(v) => ("r8", v.into_pyobject(py)?.into_any().unbind()),
+        Value::Bool(v) => ("bool", v.into_pyobject(py)?.to_owned().into_any().unbind()),
+        Value::FileTime(v) => (
+            "filetime",
+            Py::new(py, PyCustomFileTime { value: v.clone() })?.into_any(),
+        ),
+        Value::Empty => ("empty", py.None()),
+        Value::Raw(v) => ("raw", PyBytes::new(py, v).into_any().unbind()),
+    };
+    Py::new(
+        py,
+        PyCustomProperty {
+            name: property.name.clone(),
+            pid: property.pid,
+            fmtid: property.fmtid.clone(),
+            kind,
+            value,
+        },
+    )
+}
+#[pyclass(name = "CustomProperties")]
+pub struct PyCustomProperties {
+    presentation: Py<PyPresentation>,
+}
+#[pymethods]
+impl PyCustomProperties {
+    fn __len__(&self, py: Python<'_>) -> usize {
+        self.presentation.borrow(py).inner.custom_properties().len()
+    }
+    fn get(&self, py: Python<'_>, name: &str) -> PyResult<Option<Py<PyCustomProperty>>> {
+        self.presentation
+            .borrow(py)
+            .inner
+            .custom_property(name)
+            .map(|p| custom_property_result(py, p))
+            .transpose()
+    }
+    fn __iter__(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let p = self.presentation.borrow(py);
+        let values = p
+            .inner
+            .custom_properties()
+            .iter()
+            .map(|p| custom_property_result(py, p))
+            .collect::<PyResult<Vec<_>>>()?;
+        PyTuple::new(py, values)?
+            .call_method0("__iter__")
+            .map(Bound::unbind)
+    }
+    fn set(&self, py: Python<'_>, name: String, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        use rpptx::CustomPropertyValue as Value;
+        let mut p = self.presentation.borrow_mut(py);
+        let existing = p.inner.custom_property(&name);
+        let converted = if value.is_none() {
+            Value::Empty
+        } else if value.is_instance_of::<pyo3::types::PyBool>() {
+            Value::Bool(value.extract()?)
+        } else if value.is_instance_of::<pyo3::types::PyInt>() {
+            Value::I4(value.extract::<i32>()?)
+        } else if value.is_instance_of::<pyo3::types::PyFloat>() {
+            let number = value.extract::<f64>()?;
+            if !number.is_finite() {
+                return Err(PyValueError::new_err("custom float must be finite"));
+            }
+            Value::R8(number)
+        } else if value.is_instance_of::<PyString>() {
+            let text = value.extract::<String>()?;
+            if existing.is_some_and(|p| matches!(p.value, Value::Lpstr(_))) {
+                Value::Lpstr(text)
+            } else {
+                Value::Lpwstr(text)
+            }
+        } else if let Ok(filetime) = value.extract::<PyRef<'_, PyCustomFileTime>>() {
+            Value::FileTime(filetime.value.clone())
+        } else {
+            return Err(PyTypeError::new_err(
+                "custom value must be string, signed32 int, finite float, bool, CustomFileTime or None",
+            ));
+        };
+        let (pid, fmtid) = if let Some(old) = existing {
+            (old.pid, old.fmtid.clone())
+        } else {
+            let mut pid = 2i32;
+            while p
+                .inner
+                .custom_properties()
+                .iter()
+                .any(|prop| prop.pid == pid)
+            {
+                pid = pid.checked_add(1).ok_or_else(|| {
+                    pyo3::exceptions::PyOverflowError::new_err("custom property PID exhausted")
+                })?;
+            }
+            (pid, "{D5CDD505-2E9C-101B-9397-08002B2CF9AE}".to_owned())
+        };
+        p.inner
+            .set_custom_property(rpptx::CustomProperty {
+                fmtid,
+                pid,
+                name: Some(name),
+                value: converted,
+            })
+            .map_err(|error| rpptx_to_pyerr(py, error))
+    }
+    fn delete(&self, py: Python<'_>, name: &str) -> PyResult<()> {
+        self.presentation
+            .borrow_mut(py)
+            .inner
+            .remove_custom_property(name)
+            .map(|_| ())
+            .map_err(|error| rpptx_to_pyerr(py, error))
+    }
+}
+
+type CoreField = fn(&mut rpptx::CoreProperties) -> &mut Option<String>;
+
+/// The longest text python-docx accepts for a core property.
+const CORE_TEXT_LIMIT: usize = 255;
+
+#[pyclass(name = "CoreProperties")]
+pub struct PyCoreProperties {
+    presentation: Py<PyPresentation>,
+}
+
+impl PyCoreProperties {
+    fn read(&self, py: Python<'_>, field: CoreField) -> Option<String> {
+        let presentation = self.presentation.borrow(py);
+        let mut properties = presentation.inner.core_properties()?.clone();
+        field(&mut properties).take()
+    }
+
+    fn write(&self, py: Python<'_>, field: CoreField, value: Option<String>) -> PyResult<()> {
+        let mut presentation = self.presentation.borrow_mut(py);
+        let mut properties = presentation
+            .inner
+            .core_properties()
+            .cloned()
+            .unwrap_or_default();
+        let value = value.filter(|value| !value.is_empty());
+        if *field(&mut properties) == value {
+            return Ok(());
+        }
+        *field(&mut properties) = value;
+        presentation
+            .inner
+            .set_core_properties(properties)
+            .map_err(|error| rpptx_to_pyerr(py, error))
+    }
+
+    fn text(&self, py: Python<'_>, field: CoreField) -> String {
+        self.read(py, field).unwrap_or_default()
+    }
+
+    fn set_text(&self, py: Python<'_>, field: CoreField, value: Option<String>) -> PyResult<()> {
+        if value
+            .as_deref()
+            .is_some_and(|value| value.chars().count() > CORE_TEXT_LIMIT)
+        {
+            return Err(PyValueError::new_err(format!(
+                "a core property holds at most {CORE_TEXT_LIMIT} characters"
+            )));
+        }
+        self.write(py, field, value)
+    }
+}
+
+#[pymethods]
+impl PyCoreProperties {
+    #[getter]
+    fn author(&self, py: Python<'_>) -> String {
+        self.text(py, |properties| &mut properties.creator)
+    }
+    #[setter]
+    fn set_author(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |properties| &mut properties.creator, value)
+    }
+    #[getter]
+    fn category(&self, py: Python<'_>) -> String {
+        self.text(py, |properties| &mut properties.category)
+    }
+    #[setter]
+    fn set_category(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |properties| &mut properties.category, value)
+    }
+    #[getter]
+    fn comments(&self, py: Python<'_>) -> String {
+        self.text(py, |properties| &mut properties.description)
+    }
+    #[setter]
+    fn set_comments(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |properties| &mut properties.description, value)
+    }
+    #[getter]
+    fn content_status(&self, py: Python<'_>) -> String {
+        self.text(py, |properties| &mut properties.content_status)
+    }
+    #[setter]
+    fn set_content_status(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |properties| &mut properties.content_status, value)
+    }
+    #[getter]
+    fn created(&self, py: Python<'_>) -> Option<String> {
+        self.read(py, |properties| &mut properties.created)
+    }
+    #[setter]
+    fn set_created(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.write(py, |properties| &mut properties.created, value)
+    }
+    #[getter]
+    fn identifier(&self, py: Python<'_>) -> String {
+        self.text(py, |properties| &mut properties.identifier)
+    }
+    #[setter]
+    fn set_identifier(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |properties| &mut properties.identifier, value)
+    }
+    #[getter]
+    fn keywords(&self, py: Python<'_>) -> String {
+        self.text(py, |properties| &mut properties.keywords)
+    }
+    #[setter]
+    fn set_keywords(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |properties| &mut properties.keywords, value)
+    }
+    #[getter]
+    fn language(&self, py: Python<'_>) -> String {
+        self.text(py, |properties| &mut properties.language)
+    }
+    #[setter]
+    fn set_language(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |properties| &mut properties.language, value)
+    }
+    #[getter]
+    fn last_modified_by(&self, py: Python<'_>) -> String {
+        self.text(py, |properties| &mut properties.last_modified_by)
+    }
+    #[setter]
+    fn set_last_modified_by(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |properties| &mut properties.last_modified_by, value)
+    }
+    #[getter]
+    fn last_printed(&self, py: Python<'_>) -> Option<String> {
+        self.read(py, |properties| &mut properties.last_printed)
+    }
+    #[setter]
+    fn set_last_printed(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.write(py, |properties| &mut properties.last_printed, value)
+    }
+    #[getter]
+    fn modified(&self, py: Python<'_>) -> Option<String> {
+        self.read(py, |properties| &mut properties.modified)
+    }
+    #[setter]
+    fn set_modified(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.write(py, |properties| &mut properties.modified, value)
+    }
+    #[getter]
+    fn revision(&self, py: Python<'_>) -> i64 {
+        self.read(py, |properties| &mut properties.revision)
+            .and_then(|value| value.trim().parse::<i64>().ok())
+            .map_or(0, |value| value.max(0))
+    }
+    #[setter]
+    fn set_revision(&self, py: Python<'_>, value: Option<i64>) -> PyResult<()> {
+        if value.is_some_and(|value| value < 1) {
+            return Err(PyValueError::new_err("revision must be a positive integer"));
+        }
+        self.write(
+            py,
+            |properties| &mut properties.revision,
+            value.map(|value| value.to_string()),
+        )
+    }
+    #[getter]
+    fn subject(&self, py: Python<'_>) -> String {
+        self.text(py, |properties| &mut properties.subject)
+    }
+    #[setter]
+    fn set_subject(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |properties| &mut properties.subject, value)
+    }
+    #[getter]
+    fn title(&self, py: Python<'_>) -> String {
+        self.text(py, |properties| &mut properties.title)
+    }
+    #[setter]
+    fn set_title(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |properties| &mut properties.title, value)
+    }
+    #[getter]
+    fn version(&self, py: Python<'_>) -> String {
+        self.text(py, |properties| &mut properties.version)
+    }
+    #[setter]
+    fn set_version(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        self.set_text(py, |properties| &mut properties.version, value)
+    }
+}
+
 #[pyclass(name = "Presentation")]
 pub struct PyPresentation {
     pub(crate) inner: rpptx::Presentation,
     pub(crate) revisions: RevisionCounter,
     owners: Vec<LiveOwner>,
+    pub(crate) gradient_stops: Vec<crate::dml::GradientStopTokens>,
+    pub(crate) next_gradient_stop: u64,
     slides: oxml_py_support::RevisionState,
     layouts: oxml_py_support::RevisionState,
     masters: oxml_py_support::RevisionState,
@@ -214,6 +883,100 @@ impl PyPresentation {
         self.inner
             .to_bytes()
             .map(|bytes| PyBytes::new(py, &bytes))
+            .map_err(|error| rpptx_to_pyerr(py, error))
+    }
+
+    #[getter]
+    fn custom_properties(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<PyCustomProperties>> {
+        Py::new(py, PyCustomProperties { presentation: slf })
+    }
+
+    #[getter]
+    fn app_properties(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<PyAppProperties>> {
+        Py::new(py, PyAppProperties { presentation: slf })
+    }
+
+    #[getter]
+    fn core_properties(slf: Py<Self>, py: Python<'_>) -> PyResult<Py<PyCoreProperties>> {
+        Py::new(py, PyCoreProperties { presentation: slf })
+    }
+
+    /// The presentation sections in order, empty without sections.
+    #[getter]
+    fn sections<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let indices = self
+            .inner
+            .slides()
+            .enumerate()
+            .map(|(index, slide)| (slide.id(), index))
+            .collect::<std::collections::HashMap<_, _>>();
+        PyTuple::new(
+            py,
+            self.inner.sections().iter().map(|section| PySection {
+                id: section.id.clone().unwrap_or_default(),
+                name: section.name.clone().unwrap_or_default(),
+                slide_ids: section.slide_ids.clone(),
+                slide_indices: section
+                    .slide_ids
+                    .iter()
+                    .filter_map(|id| indices.get(id).copied())
+                    .collect(),
+            }),
+        )
+    }
+
+    /// Replaces the sections with `(name, slide_indices)` pairs. The
+    /// sections must take every slide once, in slide order, as PowerPoint
+    /// requires, and an empty list removes them. A section keeps the id of
+    /// a current section with the same name.
+    fn set_sections(
+        &mut self,
+        py: Python<'_>,
+        sections: Vec<(String, Vec<usize>)>,
+    ) -> PyResult<()> {
+        let slide_ids = self
+            .inner
+            .slides()
+            .map(|slide| slide.id())
+            .collect::<Vec<_>>();
+        let assigned = sections
+            .iter()
+            .flat_map(|(_, indices)| indices.iter().copied())
+            .collect::<Vec<_>>();
+        if !sections.is_empty() && assigned != (0..slide_ids.len()).collect::<Vec<_>>() {
+            return Err(PyValueError::new_err(
+                "sections must take every slide once, in slide order",
+            ));
+        }
+        let mut current = self
+            .inner
+            .sections()
+            .iter()
+            .filter_map(|section| Some((section.name.clone()?, section.id.clone()?)))
+            .collect::<Vec<_>>();
+        let mut used = std::collections::HashSet::new();
+        let mut native = Vec::with_capacity(sections.len());
+        for (position, (name, indices)) in sections.into_iter().enumerate() {
+            let reused = current
+                .iter()
+                .position(|(current_name, _)| *current_name == name)
+                .map(|index| current.remove(index).1);
+            let id = match reused {
+                Some(id) if !used.contains(&id) => id,
+                _ => (0..)
+                    .map(|attempt| section_guid(&name, position, attempt))
+                    .find(|id| !used.contains(id))
+                    .expect("an unused section id exists"),
+            };
+            used.insert(id.clone());
+            let ids = indices.iter().map(|index| slide_ids[*index]).collect();
+            native.push(
+                rpptx::Section::new(id, name, ids)
+                    .map_err(|error| rpptx_value_to_pyerr(py, error.to_string()))?,
+            );
+        }
+        self.inner
+            .set_sections(native)
             .map_err(|error| rpptx_to_pyerr(py, error))
     }
 
@@ -403,6 +1166,53 @@ impl PyPresentation {
         PyTuple::new(py, frames.iter().map(PyTextFrameLayout::from))
     }
 
+    /// Renders slides as PNG or JPEG images, one per slide, or as one
+    /// multi-page TIFF. `slides` picks zero-based slides, all by default.
+    /// `quality` (JPEG, 90 by default) and `transparent` (PNG) raise for
+    /// another format rather than being ignored.
+    #[pyo3(signature = (*, dpi = 150.0, format = "png", quality = None, transparent = false, slides = None, fonts = None, font_dir = None, font_dirs = None))]
+    #[allow(clippy::too_many_arguments)] // Preserve the eight public keyword options at this PyO3 boundary.
+    fn render_slides<'py>(
+        &self,
+        py: Python<'py>,
+        dpi: f64,
+        format: &str,
+        quality: Option<i64>,
+        transparent: bool,
+        slides: Option<Vec<usize>>,
+        fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
+        font_dir: Option<PathBuf>,
+        font_dirs: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let format = raster_format(format, quality, transparent)?;
+        let slides = slides.unwrap_or_else(|| (0..self.inner.len()).collect());
+        let files = collect_caller_fonts(py, fonts, font_dir, font_dirs)?.unwrap_or_default();
+        let refs = files
+            .iter()
+            .map(|font| (font.family.as_str(), font.data.as_slice()))
+            .collect::<Vec<_>>();
+        let (rendered, _) = py
+            .detach(|| {
+                self.inner.render_slides_with_diagnostics(
+                    &slides,
+                    rpptx::RasterOptions { dpi, format },
+                    &refs,
+                )
+            })
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        match rendered {
+            rpptx::RasterOutput::SeparatePages(pages) => Ok(PyList::new(
+                py,
+                pages.iter().map(|page| PyBytes::new(py, page)),
+            )?
+            .into_any()
+            .unbind()),
+            rpptx::RasterOutput::MultiPageTiff(tiff) => {
+                Ok(PyBytes::new(py, &tiff).into_any().unbind())
+            }
+        }
+    }
+
     /// Explicit authoring transaction. Existing content handles keep their paths.
     #[pyo3(signature=(*,fonts=None,font_dir=None,font_dirs=None))]
     fn refresh_autofit<'py>(
@@ -445,6 +1255,121 @@ impl PyPresentation {
         })
         .map(|bytes| PyBytes::new(py, &bytes))
         .map_err(|error| rpptx_to_pyerr(py, error))
+    }
+
+    /// Archival PDF from one caller-font bundle with the selected exact profile.
+    #[pyo3(signature = (profile = "pdfa-2b", *, fonts = None, font_dir = None, font_dirs = None))]
+    fn to_pdfa<'py>(
+        &self,
+        py: Python<'py>,
+        profile: &str,
+        fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
+        font_dir: Option<PathBuf>,
+        font_dirs: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let profile = match profile {
+            "pdfa-2b" => rpptx::PdfConformance::PdfA2b,
+            "pdfa-3b" => rpptx::PdfConformance::PdfA3b,
+            _ => return Err(PyValueError::new_err("profile must be pdfa-2b or pdfa-3b")),
+        };
+        let files = collect_caller_fonts(py, fonts, font_dir, font_dirs)?.unwrap_or_default();
+        let refs = files
+            .iter()
+            .map(|font| (font.family.as_str(), font.data.as_slice()))
+            .collect::<Vec<_>>();
+        py.detach(|| self.inner.to_pdfa_deterministic_with_fonts(profile, &refs))
+            .map(|bytes| PyBytes::new(py, &bytes))
+            .map_err(|error| rpptx_to_pyerr(py, error))
+    }
+
+    /// Audience handout PDF. Legal absent masters use read-only neutral defaults.
+    #[pyo3(signature = (slides_per_page = 6, *, fonts = None, font_dir = None, font_dirs = None))]
+    fn to_handout_pdf<'py>(
+        &self,
+        py: Python<'py>,
+        slides_per_page: u8,
+        fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
+        font_dir: Option<PathBuf>,
+        font_dirs: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyBytes>> {
+        let arrangement = handout_layout(slides_per_page)?;
+        let files = collect_caller_fonts(py, fonts, font_dir, font_dirs)?.unwrap_or_default();
+        let refs = files
+            .iter()
+            .map(|font| (font.family.as_str(), font.data.as_slice()))
+            .collect::<Vec<_>>();
+        py.detach(|| {
+            self.inner
+                .to_handout_pdf_deterministic_with_fonts(arrangement, &refs)
+        })
+        .map(|bytes| PyBytes::new(py, &bytes))
+        .map_err(|error| rpptx_to_pyerr(py, error))
+    }
+
+    #[pyo3(signature = (slides_per_page = 6, dpi = 150.0, *, fonts = None, font_dir = None, font_dirs = None))]
+    fn render_all_handouts<'py>(
+        &self,
+        py: Python<'py>,
+        slides_per_page: u8,
+        dpi: f64,
+        fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
+        font_dir: Option<PathBuf>,
+        font_dirs: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Bound<'py, PyList>> {
+        let arrangement = handout_layout(slides_per_page)?;
+        let files = collect_caller_fonts(py, fonts, font_dir, font_dirs)?.unwrap_or_default();
+        let refs = files
+            .iter()
+            .map(|font| (font.family.as_str(), font.data.as_slice()))
+            .collect::<Vec<_>>();
+        let pages = py
+            .detach(|| {
+                self.inner
+                    .handout_page_pngs_deterministic_with_fonts(arrangement, dpi, &refs)
+            })
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        PyList::new(py, pages.iter().map(|bytes| PyBytes::new(py, bytes)))
+    }
+
+    /// Converts an OpenDocument presentation, from a path or bytes, and
+    /// returns the deck with the `(path, message)` diagnostics of what the
+    /// conversion changed or left out.
+    #[staticmethod]
+    fn from_odp(py: Python<'_>, file: &Bound<'_, PyAny>) -> PyResult<(Self, OdpDiagnostics)> {
+        let result = if let Ok(bytes) = file.extract::<Vec<u8>>()
+            && !file.is_instance_of::<pyo3::types::PyString>()
+        {
+            py.detach(|| rpptx::Presentation::from_odp_bytes(&bytes))
+        } else {
+            let path = file.extract::<PathBuf>()?;
+            py.detach(|| rpptx::Presentation::open_odp(path))
+        }
+        .map_err(|error| rpptx_to_pyerr(py, error))?;
+        let diagnostics = odp_diagnostics(&result.diagnostics);
+        Ok((
+            Self::from_presentation_owned(result.presentation)?,
+            diagnostics,
+        ))
+    }
+
+    /// Serializes the deck as an OpenDocument presentation and returns the
+    /// bytes with the `(path, message)` diagnostics of what was left out.
+    fn to_odp<'py>(&self, py: Python<'py>) -> PyResult<(Bound<'py, PyBytes>, OdpDiagnostics)> {
+        let result = py
+            .detach(|| self.inner.to_odp_bytes())
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        Ok((
+            PyBytes::new(py, &result.bytes),
+            odp_diagnostics(&result.diagnostics),
+        ))
+    }
+
+    /// Saves the deck as an OpenDocument presentation and returns the
+    /// `(path, message)` diagnostics of what was left out.
+    fn save_odp(&self, py: Python<'_>, path: PathBuf) -> PyResult<OdpDiagnostics> {
+        py.detach(|| self.inner.save_odp(path))
+            .map(|diagnostics| odp_diagnostics(&diagnostics))
+            .map_err(|error| rpptx_to_pyerr(py, error))
     }
 
     #[pyo3(signature = (dpi = 150.0, *, fonts = None, font_dir = None, font_dirs = None))]
@@ -951,6 +1876,8 @@ impl PyPresentation {
             inner,
             revisions,
             owners,
+            gradient_stops: Vec::new(),
+            next_gradient_stop: 0,
             slides,
             layouts,
             masters,

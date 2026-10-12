@@ -313,7 +313,9 @@ pub(crate) fn substitute_fill(
             // Match the paint boundary before resolving colours that cannot be drawn.
             if matches!(fill.flip.as_deref(), Some("x" | "y" | "xy"))
                 || fill.tile_rect.is_some()
-                || matches!(fill.geometry.as_ref(), Some(GradientGeometry::Path(_)))
+                || matches!(fill.geometry.as_ref(), Some(GradientGeometry::Path(path)) if !path.fill_to_rect.as_ref().is_some_and(|rect| {
+                    [rect.left, rect.top, rect.right, rect.bottom].into_iter().all(|value| value.is_some_and(|value| value.0 == 50_000))
+                }))
             {
                 return Ok(());
             }

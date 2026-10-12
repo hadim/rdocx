@@ -5,8 +5,10 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBool, PyFloat, PyList, PySlice, PyString};
 use rpptx::{
     AutofitMode, CT_TextCharacterProperties, CT_TextParagraphProperties, ColorChoice, Emu, Fill,
-    RgbColor, SolidFill, TextAlignment, TextAnchor, TextBulletCharacter, TextBulletChoice,
-    TextFont, TextNoBullet, TextSpacing, TextStrike, TextUnderline,
+    RgbColor, SolidFill, TextAlignment, TextAnchor, TextAutoNumber, TextAutoNumberScheme,
+    TextBullet, TextBulletCharacter, TextBulletChoice, TextBulletColor, TextBulletSize,
+    TextBulletSizeValue, TextFont, TextNoBullet, TextPointValue, TextSpacing, TextStrike,
+    TextUnderline,
 };
 
 use crate::normalize_index;
@@ -1043,6 +1045,188 @@ impl PyParagraph {
             properties.set_bullet(Some(bullet));
         })
     }
+    /// The auto-numbering scheme of a numbered paragraph, such as
+    /// `arabicPeriod` (1. 2. 3.), `alphaLcParenR` (a) b) c)), or
+    /// `romanUcPeriod` (I. II. III.), or `None` when the paragraph is not
+    /// numbered. Assigning a scheme numbers the paragraph, keeping a start
+    /// value already set, and `None` removes the numbering.
+    #[getter]
+    fn auto_number(&self, py: Python<'_>) -> PyResult<Option<&'static str>> {
+        self.read_bullet(py, |bullet| match &bullet.choice {
+            Some(TextBulletChoice::AutoNumber(number)) => Some(number.scheme.as_str()),
+            _ => None,
+        })
+    }
+
+    #[setter]
+    fn set_auto_number(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
+        let scheme = value
+            .map(|value| {
+                TextAutoNumberScheme::parse(value).ok_or_else(|| {
+                    PyValueError::new_err(format!(
+                        "auto number scheme must be an ST_TextAutonumberScheme token such as \
+                         \"arabicPeriod\", got {value:?}"
+                    ))
+                })
+            })
+            .transpose()?;
+        self.edit_bullet(py, |bullet| match (scheme, &mut bullet.choice) {
+            (Some(scheme), Some(TextBulletChoice::AutoNumber(number))) => number.scheme = scheme,
+            (Some(scheme), choice) => {
+                *choice = Some(TextBulletChoice::AutoNumber(TextAutoNumber::new(scheme)));
+            }
+            (None, choice @ Some(TextBulletChoice::AutoNumber(_))) => *choice = None,
+            (None, _) => {}
+        })
+    }
+
+    /// The number of the first paragraph of an auto-numbered list, from 1
+    /// to 32767, or `None` to start at 1.
+    #[getter]
+    fn auto_number_start(&self, py: Python<'_>) -> PyResult<Option<u16>> {
+        self.read_bullet(py, |bullet| match &bullet.choice {
+            Some(TextBulletChoice::AutoNumber(number)) => number.start_at,
+            _ => None,
+        })
+    }
+
+    #[setter]
+    fn set_auto_number_start(&self, py: Python<'_>, value: Option<u16>) -> PyResult<()> {
+        if value.is_some_and(|value| !(1..=32_767).contains(&value)) {
+            return Err(PyValueError::new_err(
+                "auto number start must be from 1 to 32767",
+            ));
+        }
+        if value.is_some() && self.auto_number(py)?.is_none() {
+            return Err(PyValueError::new_err(
+                "the paragraph is not numbered, set auto_number first",
+            ));
+        }
+        self.edit_bullet(py, |bullet| {
+            if let Some(TextBulletChoice::AutoNumber(number)) = &mut bullet.choice {
+                number.start_at = value;
+            }
+        })
+    }
+
+    /// The sRGB colour of the bullet or number as an `RGBColor`, or `None`
+    /// when it follows the text or uses another kind of colour.
+    #[getter]
+    fn bullet_color(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        let color = self.read_bullet(py, |bullet| match bullet.color.as_ref()?.color {
+            ColorChoice::Srgb { value, .. } => Some(value),
+            _ => None,
+        })?;
+        color
+            .map(|color| {
+                let [red, green, blue] = color.components();
+                py.import("rpptx.dml.color")?
+                    .getattr("RGBColor")?
+                    .call1((red, green, blue))
+                    .map(Bound::unbind)
+            })
+            .transpose()
+    }
+
+    #[setter]
+    fn set_bullet_color(&self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        let color = value
+            .filter(|value| !value.is_none())
+            .map(|value| {
+                oxml_py_support::rgb_channels(value, "bullet_color")
+                    .map(|(r, g, b)| RgbColor::new(r, g, b))
+            })
+            .transpose()?;
+        self.edit_bullet(py, |bullet| match color {
+            Some(rgb) => {
+                if let Some(current) = &mut bullet.color {
+                    current.color = crate::dml::with_rgb(Some(current.color.clone()), rgb);
+                } else {
+                    bullet.color = Some(TextBulletColor::new(ColorChoice::srgb(rgb)));
+                }
+            }
+            None => bullet.color = None,
+        })
+    }
+
+    /// The bullet or number size as a fraction of the text size, from 0.25
+    /// to 4.0. `None` means no percentage value, including retained point-size
+    /// values. Assigning `None` removes only the explicit size owner.
+    #[getter]
+    fn bullet_size(&self, py: Python<'_>) -> PyResult<Option<f64>> {
+        let size = self.read_bullet(py, |bullet| match &bullet.size.as_ref()?.value {
+            TextBulletSizeValue::Percent(value) => Some(value.clone()),
+            TextBulletSizeValue::Points(_) => None,
+        })?;
+        size.map(|value| {
+            match value.strip_suffix('%') {
+                Some(percent) => percent.parse::<f64>().map(|percent| percent / 100.0),
+                None => value.parse::<f64>().map(|value| value / 100_000.0),
+            }
+            .map_err(|_| PyValueError::new_err(format!("bullet size {value:?} is not a number")))
+        })
+        .transpose()
+    }
+
+    #[setter]
+    fn set_bullet_size(&self, py: Python<'_>, value: Option<f64>) -> PyResult<()> {
+        let size = value
+            .map(|value| {
+                if !value.is_finite() || !(0.25..=4.0).contains(&value) {
+                    return Err(PyValueError::new_err(
+                        "bullet size must be from 0.25 to 4.0",
+                    ));
+                }
+                TextBulletSize::percent(((value * 100_000.0).trunc() as i64).to_string()).map_err(
+                    |_| {
+                        PyValueError::new_err(format!(
+                            "bullet size must be from 0.25 to 4.0, got {value}"
+                        ))
+                    },
+                )
+            })
+            .transpose()?;
+        self.edit_bullet(py, |bullet| bullet.size = size)
+    }
+
+    /// The typeface of a bullet character, such as `Wingdings`, or `None`
+    /// when it follows the text.
+    #[getter]
+    fn bullet_font(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        self.read_bullet(py, |bullet| {
+            bullet.font.as_ref().map(|font| font.typeface.clone())
+        })
+    }
+
+    #[setter]
+    fn set_bullet_font(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        let font = typeface(value)?;
+        self.edit_bullet(py, |bullet| set_typeface(&mut bullet.font, font))
+    }
+}
+
+impl PyParagraph {
+    /// Reads one part of the direct bullet.
+    fn read_bullet<T>(
+        &self,
+        py: Python<'_>,
+        read: impl FnOnce(&TextBullet) -> Option<T>,
+    ) -> PyResult<Option<T>> {
+        self.read(py, |properties| {
+            properties
+                .and_then(|properties| properties.bullet.as_ref())
+                .and_then(read)
+        })
+    }
+
+    /// Changes the direct bullet, removing it when nothing is left.
+    fn edit_bullet(&self, py: Python<'_>, edit: impl FnOnce(&mut TextBullet)) -> PyResult<()> {
+        self.update(py, |properties| {
+            let mut bullet = properties.bullet.clone().unwrap_or_default();
+            edit(&mut bullet);
+            properties.set_bullet((bullet != TextBullet::default()).then_some(bullet));
+        })
+    }
 }
 
 #[pyclass(name = "ParagraphCollection")]
@@ -1472,6 +1656,23 @@ impl PyRunIterator {
     }
 }
 
+fn typeface(value: Option<String>) -> PyResult<Option<TextFont>> {
+    value
+        .map(TextFont::new)
+        .transpose()
+        .map_err(|_| PyValueError::new_err("font name must not be empty"))
+}
+
+/// Replaces or removes one typeface. An existing font element keeps its
+/// panose and charset attributes.
+fn set_typeface(slot: &mut Option<TextFont>, font: Option<TextFont>) {
+    match (slot.as_mut(), font) {
+        (_, None) => *slot = None,
+        (Some(current), Some(font)) => current.typeface = font.typeface,
+        (None, font) => *slot = font,
+    }
+}
+
 #[pyclass(name = "Font")]
 pub struct PyFont {
     presentation: Py<PyPresentation>,
@@ -1837,6 +2038,164 @@ impl PyFont {
         let current = font_highlight_at(py, &self.presentation, &self.path)?;
         let color = color.map(|rgb| crate::dml::with_rgb(current, rgb));
         write_font_highlight(py, &self.presentation, &self.path, color)
+    }
+
+    /// The vertical offset as a fraction of the font size: positive raises
+    /// the text (0.3 is PowerPoint's superscript), negative lowers it (-0.25
+    /// is its subscript), and `None` inherits.
+    #[getter]
+    fn baseline(&self, py: Python<'_>) -> PyResult<Option<f64>> {
+        let baseline = self.read(py, |properties| {
+            properties.and_then(|properties| properties.baseline.clone())
+        })?;
+        baseline
+            .map(|value| {
+                match value.strip_suffix('%') {
+                    Some(percent) => percent.parse::<f64>().map(|percent| percent / 100.0),
+                    None => value.parse::<f64>().map(|value| value / 100_000.0),
+                }
+                .map_err(|_| PyValueError::new_err(format!("baseline {value:?} is not a number")))
+            })
+            .transpose()
+    }
+
+    #[setter]
+    fn set_baseline(&self, py: Python<'_>, value: Option<f64>) -> PyResult<()> {
+        let baseline = value
+            .map(|value| {
+                if (-1.0..=1.0).contains(&value) {
+                    Ok(((value * 100_000.0).trunc() as i32).to_string())
+                } else {
+                    Err(PyValueError::new_err(format!(
+                        "baseline must be from -1.0 to 1.0, got {value}"
+                    )))
+                }
+            })
+            .transpose()?;
+        self.update(py, |properties| properties.baseline = baseline)
+    }
+
+    /// The character spacing as a `Length`, positive to expand and negative
+    /// to condense, or `None` to inherit.
+    #[getter]
+    fn spacing(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        let spacing = self.read(py, |properties| {
+            properties.and_then(|properties| properties.spacing.clone())
+        })?;
+        match spacing {
+            Some(TextPointValue::Centipoints(centipoints)) => {
+                length_object(py, i64::from(centipoints) * EMU_PER_CENTIPOINT).map(Some)
+            }
+            Some(TextPointValue::UniversalMeasure(value)) => {
+                let unit_start = value
+                    .find(|character: char| character.is_ascii_alphabetic())
+                    .unwrap_or(value.len());
+                let (number, unit) = value.split_at(unit_start);
+                let multiplier = match unit {
+                    "mm" => 36_000.0,
+                    "cm" => 360_000.0,
+                    "in" => 914_400.0,
+                    "pt" => 12_700.0,
+                    "pc" | "pi" => 152_400.0,
+                    _ => {
+                        return Err(PyValueError::new_err(format!(
+                            "unsupported character spacing unit {unit:?}"
+                        )));
+                    }
+                };
+                let emu = number
+                    .parse::<f64>()
+                    .map_err(|_| PyValueError::new_err("invalid character spacing measure"))?
+                    * multiplier;
+                if !emu.is_finite() || emu < i64::MIN as f64 || emu >= i64::MAX as f64 {
+                    return Err(PyValueError::new_err(
+                        "character spacing measure is outside the Length range",
+                    ));
+                }
+                length_object(py, emu.trunc() as i64).map(Some)
+            }
+            None => Ok(None),
+        }
+    }
+
+    #[setter]
+    fn set_spacing(&self, py: Python<'_>, value: Option<i64>) -> PyResult<()> {
+        let spacing = value
+            .map(|emu| {
+                let centipoints = emu / EMU_PER_CENTIPOINT;
+                if (-MAX_FONT_SIZE..=MAX_FONT_SIZE).contains(&centipoints) {
+                    Ok(TextPointValue::Centipoints(centipoints as i32))
+                } else {
+                    Err(PyValueError::new_err(
+                        "character spacing must be from -4000 to 4000 points",
+                    ))
+                }
+            })
+            .transpose()?;
+        self.update(py, |properties| properties.spacing = spacing)
+    }
+
+    /// The language tag of the text, such as `en-US` or `fr-FR`, which
+    /// proofing and hyphenation use, or `None` to inherit.
+    #[getter]
+    fn language(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        self.read(py, |properties| {
+            properties
+                .and_then(CT_TextCharacterProperties::language)
+                .map(str::to_owned)
+        })
+    }
+
+    #[setter]
+    fn set_language(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        if let Some(value) = value.as_deref()
+            && (value.is_empty()
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'))
+        {
+            return Err(PyValueError::new_err(format!(
+                "language must be a tag such as \"en-US\", got {value:?}"
+            )));
+        }
+        self.update(py, |properties| properties.set_language(value.as_deref()))
+    }
+
+    /// The East Asian typeface (`a:ea`), or `None` to inherit.
+    #[getter]
+    fn east_asian_name(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        self.read(py, |properties| {
+            properties
+                .and_then(|properties| properties.east_asian.as_ref())
+                .map(|font| font.typeface.clone())
+        })
+    }
+
+    #[setter]
+    fn set_east_asian_name(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        let font = typeface(value)?;
+        self.update(py, |properties| {
+            set_typeface(&mut properties.east_asian, font);
+        })
+    }
+
+    /// The complex-script typeface (`a:cs`), used for Arabic, Hebrew, Thai
+    /// and other complex scripts, or `None` to inherit.
+    #[getter]
+    fn complex_script_name(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        self.read(py, |properties| {
+            properties
+                .and_then(|properties| properties.complex_script.as_ref())
+                .map(|font| font.typeface.clone())
+        })
+    }
+
+    #[setter]
+    fn set_complex_script_name(&self, py: Python<'_>, value: Option<String>) -> PyResult<()> {
+        let font = typeface(value)?;
+        self.update(py, |properties| {
+            set_typeface(&mut properties.complex_script, font);
+        })
     }
 
     #[getter]

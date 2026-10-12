@@ -492,3 +492,15 @@ evidence, with no compatibility guarantee. Native Office typeface substitution
 is reported separately from the deterministic library font policy.
 
 DrawingML text watermark authoring supports only opacity 0.5. Other text opacity requests return a named atomic unsupported error. Legacy VML text and DrawingML image opacity retain their separate contracts.
+
+## PowerPoint Python parity
+
+PowerPoint Python exposes direct run baseline, character spacing, language and
+Latin, East Asian and complex-script faces, numbered bullets and independent
+bullet attributes. Existing cell text frames and shared colour formats remain
+the same owners. Shape, cell and slide fills support solid alpha, gradients,
+patterns and owned picture relationships. Table style and banding, checked
+core/application/custom properties, sections and media lifecycle are public.
+Raster export returns per-slide PNG/JPEG or one multi-page TIFF. Notes and
+handout PDF, PDF/A2b and PDF/A3b, and ordered ODP diagnostics use existing native
+exporters. Google Slides import remains best effort.

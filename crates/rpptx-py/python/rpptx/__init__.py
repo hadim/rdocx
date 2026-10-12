@@ -1,6 +1,6 @@
 """Python bindings for rpptx."""
 
-from .enum.dml import MSO_THEME_COLOR
+from .enum.dml import MSO_THEME_COLOR, MSO_PATTERN_TYPE, MSO_PATTERN
 from .dml.color import RGBColor
 from .enum.shapes import MSO_SHAPE, PP_PLACEHOLDER, PP_PLACEHOLDER_TYPE
 from .enum.text import MSO_ANCHOR, MSO_AUTO_SIZE, MSO_UNDERLINE, PP_ALIGN
@@ -35,11 +35,12 @@ class ReplacementCountError(RpptxError):
         return str(self.args[0])
 
 
-from ._rpptx import Comment, CommentAuthor, CommentReply, Presentation
+from ._rpptx import Comment, CommentAuthor, CommentReply, Presentation, CoreProperties, AppProperties, CustomProperties, CustomProperty, CustomFileTime, Section, MediaInfo, GradientStops, GradientStop
 from ._rpptx import SlideTransition, HeaderFooter, PlaceholderFormat, SlideMaster, SlideMasterCollection, Theme, ThemeFonts, ThemeFontSet
 from ._rpptx import AutofitRefreshResult, AutofitUpdate, BoundingBox, TextFrameLayout, TextLineLayout, ValidationIssue
 
 __all__ = [
+    "MSO_PATTERN_TYPE", "MSO_PATTERN", "CoreProperties", "AppProperties", "CustomProperties", "CustomProperty", "CustomFileTime", "Section", "MediaInfo", "GradientStops", "GradientStop",
     "MSO_THEME_COLOR",
     "BoundingBox",
     "AutofitRefreshResult",

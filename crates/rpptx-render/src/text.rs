@@ -83,6 +83,13 @@ fn shaping_cache_entry_bytes(
                 .saturating_mul(std::mem::size_of::<oxml_layout::GradientStop>()),
         );
     }
+    if let Some(Paint::Grid { colors, .. }) = &style.fill {
+        bytes = bytes.saturating_add(
+            colors
+                .capacity()
+                .saturating_mul(std::mem::size_of::<oxml_layout::Color>()),
+        );
+    }
     for event in events {
         if let FontTraceEvent::Contribution(contribution) = event {
             bytes = bytes.saturating_add(
@@ -309,12 +316,12 @@ fn inline_items_with_caps(
         let item_start = items.len();
         match run {
             ResolvedTextRun::Text { text, style } => {
-                push_displayed_text(&mut items, text, |line| {
+                push_displayed_text(&mut items, text, style, |line| {
                     let shaped = shaping_cache.shape(font_manager, line, style)?;
                     requests.push((
                         style.small_caps,
                         style.all_caps,
-                        style.spacing.filter(|_| style.small_caps || style.all_caps),
+                        style.spacing,
                         style.language.clone(),
                     ));
                     Ok(shaped)
@@ -333,12 +340,12 @@ fn inline_items_with_caps(
                 } else {
                     text.clone()
                 };
-                push_displayed_text(&mut items, &rendered, |line| {
+                push_displayed_text(&mut items, &rendered, style, |line| {
                     let mut segment = shaping_cache.shape(font_manager, line, style)?;
                     requests.push((
                         style.small_caps,
                         style.all_caps,
-                        style.spacing.filter(|_| style.small_caps || style.all_caps),
+                        style.spacing,
                         style.language.clone(),
                     ));
                     if slide_number {
@@ -381,6 +388,7 @@ fn inline_items_with_caps(
 fn push_displayed_text(
     items: &mut Vec<InlineItem>,
     text: &str,
+    style: &ResolvedRunStyle,
     mut shape: impl FnMut(&str) -> Result<TextSegment, LayoutError>,
 ) -> Result<(), LayoutError> {
     let spaced = |character: char| {
@@ -399,7 +407,28 @@ fn push_displayed_text(
             items.push(InlineItem::LineBreak);
         }
         if !line.is_empty() {
-            items.push(InlineItem::Text(shape(line)?));
+            // Keep shaping context within each script. Common whitespace,
+            // punctuation and combining marks stay with their preceding face.
+            // Identical resolved slots retain the original single-run path.
+            let mut start = 0;
+            let mut family = None;
+            for (index, character) in line.char_indices() {
+                let common = character.is_whitespace()
+                    || character.is_ascii_punctuation()
+                    || matches!(character as u32, 0x0300..=0x036F);
+                let mut encoded = [0; 4];
+                let selected = if common && index > 0 {
+                    family
+                } else {
+                    typeface_for_text(style, character.encode_utf8(&mut encoded))
+                };
+                if index > start && selected != family {
+                    items.push(InlineItem::Text(shape(&line[start..index])?));
+                    start = index;
+                }
+                family = selected;
+            }
+            items.push(InlineItem::Text(shape(&line[start..])?));
         }
     }
     Ok(())
@@ -629,6 +658,7 @@ fn text_color(fill: Option<&Paint>) -> Color {
         Some(Paint::Linear { stops, .. }) | Some(Paint::Radial { stops, .. }) => {
             stops.first().map_or(Color::BLACK, |stop| stop.color)
         }
+        Some(Paint::Grid { colors, .. }) => colors.first().copied().unwrap_or(Color::BLACK),
         Some(Paint::Tile { .. }) | None => Color::BLACK,
     }
 }
@@ -2093,6 +2123,182 @@ mod tests {
         assert_eq!(field.text, "1");
         assert_eq!(field.font_size, 22.0);
         assert_eq!(field.field_kind, Some(FieldKind::Page));
+    }
+
+    #[test]
+    fn fx205_multilingual_spacing_reaches_text_and_field_advances() {
+        for field in [false, true] {
+            for text in ["العربية", "漢字", "Latin العربية 漢字"] {
+                let mut widths = Vec::new();
+                let mut images = Vec::new();
+                for spacing in [None, Some(2.0)] {
+                    let style = ResolvedRunStyle {
+                        font_size: Some(18.0),
+                        latin_typeface: Some("Carlito".into()),
+                        spacing,
+                        language: Some("ar-SA".into()),
+                        ..Default::default()
+                    };
+                    let run = if field {
+                        ResolvedTextRun::Field {
+                            text: text.into(),
+                            field_type: Some("datetime1".into()),
+                            style,
+                        }
+                    } else {
+                        ResolvedTextRun::Text {
+                            text: text.into(),
+                            style,
+                        }
+                    };
+                    let body = ResolvedTextBody {
+                        paragraphs: vec![ResolvedParagraph {
+                            runs: vec![run],
+                            ..Default::default()
+                        }],
+                        ..text_body(TextInsets::default())
+                    };
+                    let mut fonts = FontManager::new_deterministic().unwrap();
+                    let stacked = stack_text(&mut fonts, test_content_box(2_000.0), &body).unwrap();
+                    widths.push(stacked.width);
+                    let layout = oxml_layout::LayoutResult::new(
+                        vec![
+                            oxml_layout::PageFrame::new(1, 2_000.0, 100.0, stacked.elements).into(),
+                        ],
+                        fonts.all_font_data(),
+                        None,
+                        Vec::new(),
+                    );
+                    images.push(oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap());
+                }
+                assert!(
+                    widths[1] > widths[0] + 2.0,
+                    "FX205_MULTILINGUAL_SPACING: {text} field={field} {widths:?}"
+                );
+                assert_ne!(
+                    images[0], images[1],
+                    "spacing must change actual painted glyph positions"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn fx205_mixed_script_slots_keep_distinct_physical_faces_for_text_and_fields() {
+        let style = ResolvedRunStyle {
+            font_size: Some(18.0),
+            latin_typeface: Some("Carlito".into()),
+            east_asian_typeface: Some("Noto Sans SC".into()),
+            complex_script_typeface: Some("Noto Sans Arabic".into()),
+            ..Default::default()
+        };
+        let text = "Latin العربية 你好";
+        for field in [false, true] {
+            let mut fonts = FontManager::new_deterministic().unwrap();
+            for (sample, family) in [
+                ("Latin", "Carlito"),
+                ("العربية", "Noto Sans Arabic"),
+                ("你好", "Noto Sans SC"),
+            ] {
+                let shaped = shape_run(&mut fonts, sample, &style).unwrap();
+                assert_eq!(fonts.font_data(shaped.font_id).unwrap().family, family);
+                assert!(
+                    shaped.glyph_ids.iter().all(|&g| g != 0),
+                    "source face must cover deciding text"
+                );
+            }
+            let run = if field {
+                ResolvedTextRun::Field {
+                    text: text.into(),
+                    field_type: Some("datetime1".into()),
+                    style: style.clone(),
+                }
+            } else {
+                ResolvedTextRun::Text {
+                    text: text.into(),
+                    style: style.clone(),
+                }
+            };
+            let paragraph = ResolvedParagraph {
+                runs: vec![run],
+                ..Default::default()
+            };
+            let items = inline_items(&mut fonts, &paragraph).unwrap();
+            let segments = items
+                .iter()
+                .filter_map(|item| {
+                    if let InlineItem::Text(s) = item {
+                        Some(s)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                segments.iter().map(|s| s.text.as_str()).collect::<String>(),
+                text
+            );
+            for (sample, family) in [
+                ("Latin", "Carlito"),
+                ("العربية", "Noto Sans Arabic"),
+                ("你好", "Noto Sans SC"),
+            ] {
+                let segment = segments
+                    .iter()
+                    .find(|s| s.text.contains(sample))
+                    .expect("retained source text");
+                assert_eq!(
+                    fonts.font_data(segment.font_id).unwrap().family,
+                    family,
+                    "FX205_MIXED_SCRIPT_FACE field={field} sample={sample}"
+                );
+                assert!(segment.glyph_ids.iter().all(|&g| g != 0));
+            }
+            let body = ResolvedTextBody {
+                paragraphs: vec![paragraph],
+                ..text_body(TextInsets::default())
+            };
+            let stacked = stack_text(&mut fonts, test_content_box(2000.0), &body).unwrap();
+            let mut painted = Vec::new();
+            oxml_layout::walk(&stacked.elements, &mut |element, _| match element {
+                oxml_layout::PositionedElement::Text(run) => {
+                    painted.push((run.text.clone(), run.font_id, run.glyph_ids.clone()))
+                }
+                oxml_layout::PositionedElement::MultilingualText(run) => {
+                    painted.push((run.logical_text.clone(), run.font_id, run.glyph_ids.clone()))
+                }
+                _ => {}
+            });
+            for (sample, family) in [
+                ("Latin", "Carlito"),
+                ("العربية", "Noto Sans Arabic"),
+                ("你好", "Noto Sans SC"),
+            ] {
+                let selected = painted
+                    .iter()
+                    .filter(|(text, _, _)| {
+                        text.chars()
+                            .any(|c| sample.contains(c) && !c.is_whitespace())
+                    })
+                    .collect::<Vec<_>>();
+                assert!(
+                    !selected.is_empty(),
+                    "deciding source glyphs must reach paint"
+                );
+                for (_, id, glyphs) in selected {
+                    assert_eq!(fonts.font_data(*id).unwrap().family, family);
+                    assert!(glyphs.iter().all(|&g| g != 0));
+                }
+            }
+            let layout = oxml_layout::LayoutResult::new(
+                vec![oxml_layout::PageFrame::new(1, 2000.0, 100.0, stacked.elements).into()],
+                fonts.all_font_data(),
+                None,
+                Vec::new(),
+            );
+            let png = oxml_pdf::render_page_to_png(&layout, 0, 72.0).unwrap();
+            assert!(png.len() > 100);
+        }
     }
 
     #[test]
@@ -3879,6 +4085,68 @@ mod tests {
             "equal text with different cap requests uses distinct bounded cache entries"
         );
         assert!(cache.bytes < NATIVE_SHAPING_CACHE_MAX_BYTES);
+    }
+
+    #[test]
+    fn fx205_grid_fill_cache_obeys_owned_heap_budget() {
+        let mut fonts = FontManager::new_deterministic().unwrap();
+        let mut cache = ShapingCache::default();
+        let fill = Paint::grid(
+            oxml_layout::Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 8.0,
+                height: 8.0,
+            },
+            256,
+            256,
+            vec![oxml_layout::Color::BLACK; 65_536],
+        )
+        .unwrap();
+        let style = ResolvedRunStyle {
+            latin_typeface: Some("Carlito".into()),
+            font_size: Some(20.0),
+            fill: Some(fill),
+            ..Default::default()
+        };
+        for i in 0..10 {
+            fonts.begin_layout();
+            fonts.begin_paragraph_font_trace();
+            let text = format!("owned grid {i}");
+            let segment = cache.shape(&mut fonts, &text, &style).unwrap();
+            assert!(!segment.glyph_ids.is_empty());
+            fonts.finish_paragraph_font_trace().unwrap();
+        }
+        assert!(
+            !cache.entries.is_empty(),
+            "below-budget grid owners are cached"
+        );
+        assert!(
+            cache.entries.len() < 10,
+            "over-budget owners must remain uncached"
+        );
+        let retained_colors = cache
+            .entries
+            .iter()
+            .map(|(_, style, _, _)| match &style.fill {
+                Some(Paint::Grid { colors, .. }) => {
+                    colors.capacity() * std::mem::size_of::<oxml_layout::Color>()
+                }
+                _ => 0,
+            })
+            .sum::<usize>();
+        assert!(cache.bytes >= retained_colors);
+        assert!(
+            cache.bytes
+                + cache.entries.capacity()
+                    * std::mem::size_of::<(
+                        String,
+                        ResolvedRunStyle,
+                        TextSegment,
+                        Vec<FontTraceEvent>
+                    )>()
+                <= NATIVE_SHAPING_CACHE_MAX_BYTES
+        );
     }
 
     #[test]

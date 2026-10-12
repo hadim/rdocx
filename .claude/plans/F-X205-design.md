@@ -1,12 +1,12 @@
 # F-X205, Complete Python PowerPoint text fill and export parity
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X194, F-X195, F-X197, F-X206
 **Issue**: 308, captured in S91-intake-issues.json on 2026-10-09
 **Prerequisites**: F-X194 and F-X197
-**Implementation**: not claimed, no source changes or new gate evidence
+**Implementation**: completed in the claimed codex worker, scoped evidence and prepared handoff
 
 ## Problem
 
@@ -253,13 +253,13 @@ possible changes. No baseline movement is approved by this design. Implementatio
 
 ## Implementation checklist
 
-- [ ] Resolve technical contracts and actual native gaps against prerequisites.
-- [ ] Approve complete issue acceptance, source claims and measured output policy.
-- [ ] Claim only after actual prerequisites and file conflicts clear.
-- [ ] Prove installed public Base regressions before production changes.
-- [ ] Implement every requested capability, stubs and existing-entrypoint tests.
-- [ ] Run scoped gates and exact applicable oracle/risk riders.
-- [ ] Obtain independent zero-defect, zero-smell review and prepare handoff.
+- [x] Resolve technical contracts and actual native gaps against prerequisites.
+- [x] Approve complete issue acceptance, source claims and measured output policy.
+- [x] Claim only after actual prerequisites and file conflicts clear.
+- [x] Prove installed public Base regressions before production changes.
+- [x] Implement every requested capability, stubs and existing-entrypoint tests.
+- [x] Run scoped gates and exact applicable oracle/risk riders.
+- [x] Obtain independent zero-defect, zero-smell review and prepare handoff.
 
 ## Open questions
 

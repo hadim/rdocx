@@ -37822,7 +37822,7 @@ mod tests {
         const WORD_SHA256: &str =
             "5046f7a0f2305518ec8a0c439b2df482790f29c05e41f6f5ef1d49dbb5473348";
         const POWERPOINT_SHA256: &str =
-            "0e3b27ea9a0750a4df4818d8d3f2a36234e31e56fa7b287b3d93a6517e88f158";
+            "79354125ec3c356ad4f5ff1fa3bb773b5938c57a92c249dc13770ab902c62ec6";
 
         let data = f158_chart_data(2);
         let evidence_dir = std::env::temp_dir();

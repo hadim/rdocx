@@ -1055,6 +1055,7 @@ pub struct TextFont {
 impl TextFont {
     pub fn new(typeface: impl Into<String>) -> Result<Self> {
         let typeface = typeface.into();
+        oxml_core::xml::reject_non_xml_characters("font typeface", &typeface)?;
         if typeface.is_empty() {
             return Err(invalid_attribute("font", "typeface", ""));
         }
@@ -1612,6 +1613,44 @@ impl CT_TextCharacterProperties {
             .iter()
             .find(|(name, _)| name == "lang")
             .map(|(_, value)| value.as_str())
+    }
+
+    /// Replaces or removes the `lang` language tag, keeping its position
+    /// among the preserved attributes.
+    pub fn set_language(&mut self, language: Option<&str>) {
+        if self.language() == language {
+            return;
+        }
+        let position = self
+            .raw_attributes
+            .iter()
+            .position(|(name, _)| name == "lang");
+        match (position, language) {
+            (Some(index), Some(value)) => self.raw_attributes[index].1 = value.to_owned(),
+            (Some(index), None) => {
+                self.raw_attributes.remove(index);
+            }
+            (None, Some(value)) => self
+                .raw_attributes
+                .push(("lang".to_owned(), value.to_owned())),
+            (None, None) => {}
+        }
+        if !self.source_attributes.is_empty() {
+            let position = self
+                .source_attributes
+                .iter()
+                .position(|(name, _)| name == "lang");
+            let token =
+                language.map(|value| format!(" lang=\"{}\"", quick_xml::escape::escape(value)));
+            match (position, token) {
+                (Some(index), Some(token)) => self.source_attributes[index].1 = token,
+                (Some(index), None) => {
+                    self.source_attributes.remove(index);
+                }
+                (None, Some(token)) => self.source_attributes.push(("lang".to_owned(), token)),
+                (None, None) => {}
+            }
+        }
     }
 
     /// Parses one complete character-property element with any prefix.
@@ -4509,6 +4548,33 @@ mod tests {
         TextAutoNumberScheme, TextBullet, TextBulletCharacter, TextBulletChoice,
         TextBulletSizeValue,
     };
+
+    #[test]
+    fn fx205_language_edits_preserve_other_attributes_and_font_source() {
+        let source = br#"<a:rPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:e="urn:opaque" lang="en-US" e:lang="unchanged" dirty="0"><a:ea typeface="Arial" panose="020B0604020202020204"/><e:payload keep="yes"/></a:rPr>"#;
+        let mut properties = CT_TextCharacterProperties::from_xml(source).unwrap();
+        let original = properties.clone();
+        properties.set_language(Some("ja-JP"));
+        assert_eq!(properties.language(), Some("ja-JP"));
+        let mut writer = Writer::new(Vec::new());
+        properties.write_xml(&mut writer, "a:rPr").unwrap();
+        let saved = writer.into_inner();
+        let xml = String::from_utf8(saved.clone()).unwrap();
+        assert!(xml.contains("e:lang=\"unchanged\""));
+        assert!(xml.contains("<e:payload keep=\"yes\"/>"));
+        assert!(xml.contains("panose=\"020B0604020202020204\""));
+        let reopened = CT_TextCharacterProperties::from_xml(&saved).unwrap();
+        assert_eq!(reopened.language(), Some("ja-JP"));
+        assert_eq!(reopened.east_asian, properties.east_asian);
+        let mut writer = Writer::new(Vec::new());
+        reopened.write_xml(&mut writer, "a:rPr").unwrap();
+        assert_eq!(writer.into_inner(), saved);
+        properties.set_language(Some("en-US"));
+        assert_eq!(properties, original);
+        properties.set_language(None);
+        assert_eq!(properties.language(), None);
+        assert!(super::TextFont::new("Arial\u{0}").is_err());
+    }
 
     #[test]
     fn fx206_picture_bullet_list_equality_preserves_foreign_and_opaque_owners() {

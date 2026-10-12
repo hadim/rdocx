@@ -474,3 +474,15 @@ Each presentation master exposes its own relationship-resolved Theme. Read-only
 colors include all twelve scheme slots as the existing scalar RGB values. Major
 and minor font sets expose Latin, East Asian and complex-script typefaces. An
 absent slot remains absent instead of borrowing a different master's theme.
+
+## Direct script and spacing properties
+
+Character spacing admits centipoints and universal pt/in/cm/mm/pc/pi units.
+Python reads an explicit value as Length and writes EMU divided by127 with
+truncation toward zero. Baseline is a signed fraction from-1 to1, represented
+as a truncated DrawingML percentage. Language updates the qualified retained
+character-property start token without discarding unrelated attributes. Latin,
+East Asian and complex-script faces remain independent typed font slots.
+Bullet scheme/start, colour, fractional size and font edit their own choices.
+An imported absolute point bullet size is preserved and is not reported as a
+fractional size or as a follows-text choice.

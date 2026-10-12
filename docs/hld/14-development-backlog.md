@@ -7016,7 +7016,9 @@ coverage checklist. Reuse cell text frames and colour formats. Add run baseline/
 through the installed public API on the claimed Base before implementation.
 Exercise all Issue308 acceptance criteria through save/reopen, native
 rendering where applicable, malformed/atomic refusal controls and preserved
-unmodelled XML. Python surfaces require accurate stubs, strict typing and
+unmodelled XML. The regression gate also checks all54 source-derived pattern
+programs, conditional PPT gradient interpolation, multilingual physical font
+slots and the bounded colour-grid cache budget. Python surfaces require accurate stubs, strict typing and
 stubtest. CLI surfaces require help/reference and existing integration tests.
 Use deterministic fonts and pinned native oracles for output claims. Record
 Google Docs/Slides import compatibility as best effort, never a CI guarantee.

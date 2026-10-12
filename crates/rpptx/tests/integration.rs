@@ -8108,7 +8108,7 @@ const F124_ARTIFACT_SHA256: &str =
 const F116_ARTIFACT_SHA256: &str =
     "d36da6e8849eabd4487d2572baea19c3716ee7d0fe03aaa4714a28ce3c41de4f";
 const F116_CURRENT_ARTIFACT_SHA256: &str =
-    "ef24e9477e6b3b54e1c3b27dfbda8082fce6baad5f773ebf37a2577319d2c247";
+    "83a81fa7104e68df9737168792d74d0f362329bb23fee8debc7df7dac4f5e64b";
 const F116_FINAL_TITLES: [&str; 10] = [
     "F-116 slide 10",
     "F-116 slide 02",
@@ -9922,11 +9922,11 @@ fn text_layout_lines_match_the_glyph_runs_the_renderer_draws() {
     assert_eq!(matched + rotated_runs, drawn.len());
 }
 
-const MASTER_TITLE: (i64, i64, i64, i64) = (457_200, 274_638, 8_229_600, 1_143_000);
-const MASTER_BODY: (i64, i64, i64, i64) = (457_200, 1_600_200, 8_229_600, 4_525_963);
-const MASTER_SLIDE_NUMBER: (i64, i64, i64, i64) = (6_553_200, 6_356_350, 2_133_600, 365_125);
-const TITLE_SLIDE_TITLE: (i64, i64, i64, i64) = (685_800, 2_130_425, 7_772_400, 1_470_025);
-const TITLE_SLIDE_SUBTITLE: (i64, i64, i64, i64) = (1_371_600, 3_886_200, 6_400_800, 1_752_600);
+const MASTER_TITLE: (i64, i64, i64, i64) = (838_200, 365_125, 10_515_600, 1_325_563);
+const MASTER_BODY: (i64, i64, i64, i64) = (838_200, 1_825_625, 10_515_600, 4_351_338);
+const MASTER_SLIDE_NUMBER: (i64, i64, i64, i64) = (8_610_600, 6_356_350, 2_743_200, 365_125);
+const TITLE_SLIDE_TITLE: (i64, i64, i64, i64) = (1_524_000, 1_122_363, 9_144_000, 2_387_600);
+const TITLE_SLIDE_SUBTITLE: (i64, i64, i64, i64) = (1_524_000, 3_602_038, 9_144_000, 1_655_762);
 
 /// A geometry as `Presentation::effective_geometry` reports it.
 fn emu_geometry((left, top, width, height): (i64, i64, i64, i64)) -> Option<(Emu, Emu, Emu, Emu)> {
@@ -10076,7 +10076,7 @@ fn materialized_placeholder_geometry_keeps_the_shape_drawn_after_one_coordinate_
     move_title(&mut unmaterialized);
     assert_eq!(
         unmaterialized.effective_geometry(0, &[0]).unwrap(),
-        Some((Emu(548_640), Emu(274_638), Emu(8_229_600), Emu(1_143_000)))
+        Some((Emu(548_640), Emu(274_638), Emu(10_515_600), Emu(1_325_563)))
     );
     let inherited_before = open_opc(
         &presentation.to_bytes().unwrap(),
@@ -10109,8 +10109,8 @@ fn materialized_placeholder_geometry_keeps_the_shape_drawn_after_one_coordinate_
     assert_eq!(
         (title.position(), title.size()),
         (
-            Some((Emu(457_200), Emu(274_638))),
-            Some((Emu(8_229_600), Emu(1_143_000)))
+            Some((Emu(838_200), Emu(365_125))),
+            Some((Emu(10_515_600), Emu(1_325_563)))
         )
     );
     let materialized = presentation.to_bytes().unwrap();
@@ -10119,7 +10119,7 @@ fn materialized_placeholder_geometry_keeps_the_shape_drawn_after_one_coordinate_
     move_title(&mut presentation);
     assert_eq!(
         presentation.effective_geometry(0, &[0]).unwrap(),
-        emu_geometry((548_640, 274_638, 8_229_600, 1_143_000))
+        emu_geometry((548_640, 274_638, 10_515_600, 1_325_563))
     );
     assert_text_frames_use_effective_geometry(&presentation, 1);
 
@@ -10188,6 +10188,8 @@ fn two_master_deck() -> Presentation {
             .to_vec(),
     )
     .unwrap();
+    let title_offset = format!(r#"<a:off x="{}" y="{}"/>"#, MASTER_TITLE.0, MASTER_TITLE.1);
+    assert_eq!(master_xml.matches(&title_offset).count(), 1);
     let layouts_start = master_xml.find("<p:sldLayoutIdLst>").unwrap();
     let layouts_end = master_xml.find("</p:sldLayoutIdLst>").unwrap() + "</p:sldLayoutIdLst>".len();
     let master_xml = format!(
@@ -10195,11 +10197,7 @@ fn two_master_deck() -> Presentation {
         &master_xml[..layouts_start],
         &master_xml[layouts_end..]
     )
-    .replacen(
-        r#"<a:off x="457200" y="274638"/>"#,
-        r#"<a:off x="457200" y="137319"/>"#,
-        1,
-    );
+    .replacen(&title_offset, r#"<a:off x="457200" y="137319"/>"#, 1);
     package.set_part(
         "/ppt/slideMasters/slideMaster2.xml",
         master_xml.into_bytes(),
@@ -10278,8 +10276,8 @@ fn changing_a_slide_layout_retargets_it_and_keeps_unplaced_placeholders_in_place
             slide.shape(1).unwrap().size()
         ),
         (
-            Some((Emu(457_200), Emu(1_600_200))),
-            Some((Emu(8_229_600), Emu(4_525_963)))
+            Some((Emu(838_200), Emu(1_825_625))),
+            Some((Emu(10_515_600), Emu(4_351_338)))
         ),
         "the body Title Only does not place keeps where it was drawn"
     );
@@ -10323,9 +10321,12 @@ fn changing_a_slide_layout_retargets_it_and_keeps_unplaced_placeholders_in_place
     assert_eq!(presentation.layout_count(), 12);
     presentation.set_slide_layout(0, 11).unwrap();
     assert_eq!(presentation.slide_layout_index(0), Some(11));
-    for (index, geometry) in [(457_200, 137_319, 8_229_600, 1_143_000), MASTER_BODY]
-        .into_iter()
-        .enumerate()
+    for (index, geometry) in [
+        (457_200, 137_319, MASTER_TITLE.2, MASTER_TITLE.3),
+        MASTER_BODY,
+    ]
+    .into_iter()
+    .enumerate()
     {
         assert_eq!(
             presentation.effective_geometry(0, &[index]).unwrap(),
@@ -11222,7 +11223,7 @@ struct M21RecordedMovieSample {
 
 #[cfg(all(feature = "digital-signatures", feature = "render"))]
 const M21_CURRENT_MINIMAL_SOURCE_SHA256: &str =
-    "9f71406a506c91df5e91f75bee01c3e7d1f4487b44d99e8709c646c8368082ea";
+    "5b2a7f2dd18cfc0b77eda496b52166811646f00cf752fc2c0b265caa361464a3";
 
 #[cfg(all(feature = "digital-signatures", feature = "render"))]
 const M21_LEGACY_UNSIGNED_SOURCE_SHA256: &str =
@@ -18446,10 +18447,29 @@ fn gradient_backgrounds_without_angle_or_path_open_render_and_round_trip() {
         .unwrap()
         .as_array()
         .unwrap();
-    assert_eq!(intervals.len(), 1);
-    let interval = dictionary(&intervals[0]);
-    assert_eq!(numbers(interval.get(b"C0").unwrap()), [1.0, 0.0, 0.0]);
-    assert_eq!(numbers(interval.get(b"C1").unwrap()), [0.0, 0.0, 1.0]);
+    // The PPT endpoint-pair rule uses channel-directed gamma 1.875.
+    // Its fixed 256 intervals retain exact endpoints and the unchanged axis.
+    assert_eq!(intervals.len(), 256);
+    assert_eq!(
+        numbers(dictionary(&intervals[0]).get(b"C0").unwrap()),
+        [1.0, 0.0, 0.0]
+    );
+    assert_eq!(
+        numbers(dictionary(intervals.last().unwrap()).get(b"C1").unwrap()),
+        [0.0, 0.0, 1.0]
+    );
+    for (index, interval) in intervals.iter().enumerate() {
+        let interval = dictionary(interval);
+        for (key, sample) in [(b"C0".as_slice(), index), (b"C1".as_slice(), index + 1)] {
+            let colour = numbers(interval.get(key).unwrap());
+            let fraction = sample as f64 / 256.0;
+            let red = 1.0 - fraction.powf(1.875);
+            let blue = 1.0 - (1.0 - fraction).powf(1.875);
+            assert!((f64::from(colour[0]) - red).abs() < 1.0e-4);
+            assert_eq!(colour[1], 0.0);
+            assert!((f64::from(colour[2]) - blue).abs() < 1.0e-4);
+        }
+    }
 
     let path = format!(
         r#"<p:bg><p:bgPr><a:gradFill rotWithShape="1">{stops}<a:path><a:fillToRect l="50000" t="50000" r="50000" b="50000"/></a:path></a:gradFill><a:effectLst/></p:bgPr></p:bg>"#
@@ -18458,14 +18478,41 @@ fn gradient_backgrounds_without_angle_or_path_open_render_and_round_trip() {
         Presentation::from_bytes(&blank_deck_with_background(content_types::SLIDE, &path))
             .expect("open a path gradient without @path");
     let (input, _) = presentation.render_deterministic().unwrap();
-    assert_eq!(
-        input.slides[0]
-            .diagnostics
-            .iter()
-            .map(|diagnostic| diagnostic.message.as_str())
-            .collect::<Vec<_>>(),
-        ["unsupported background rectangle path gradient"]
-    );
+    assert!(input.slides[0].diagnostics.is_empty());
+    let Some(rpptx_layout::ResolvedBackground::Paint(oxml_layout::Paint::Grid {
+        columns,
+        rows,
+        colors,
+        ..
+    })) = &input.slides[0].background
+    else {
+        panic!("centred rectangle background must publish visible path paint");
+    };
+    assert_eq!((*columns, *rows), (128, 128));
+    assert!(colors.iter().all(|colour| colour.a == 1.0));
+    assert_eq!(colors.len(), 128 * 128);
+    // Grid values represent cell centres, not boundary endpoints. Derive every
+    // rectangular distance from source geometry, then apply the directed rule.
+    for (index, colour) in colors.iter().enumerate() {
+        let x = index % 128;
+        let y = index / 128;
+        let horizontal = ((2 * x + 1) as f64 / 128.0 - 1.0).abs();
+        let vertical = ((2 * y + 1) as f64 / 128.0 - 1.0).abs();
+        let distance = horizontal.max(vertical);
+        let expected_red = 1.0 - distance.powf(1.875);
+        let expected_blue = 1.0 - (1.0 - distance).powf(1.875);
+        assert!(
+            (colour.r - expected_red).abs() < 1.0e-12,
+            "cell ({x}, {y}) red {}, expected {expected_red}",
+            colour.r
+        );
+        assert_eq!(colour.g, 0.0);
+        assert!(
+            (colour.b - expected_blue).abs() < 1.0e-12,
+            "cell ({x}, {y}) blue {}, expected {expected_blue}",
+            colour.b
+        );
+    }
     let saved = saved_slide_xml(&presentation);
     assert!(
         saved.contains(
@@ -27781,7 +27828,22 @@ fn setting_notes_text_creates_the_notes_slide_and_a_missing_notes_master() {
     let mut without_master = open_package(package).unwrap();
     without_master.add_slide(6).unwrap();
     assert!(without_master.validate().is_empty());
-    assert!(without_master.to_notes_pdf_deterministic().is_err());
+    let before_read_only_notes = without_master.to_bytes().unwrap();
+    let neutral_notes = without_master.to_notes_pdf_deterministic().unwrap();
+    assert!(neutral_notes.starts_with(b"%PDF-"));
+    assert_eq!(without_master.slide(0).unwrap().notes_text(), None);
+    assert_eq!(without_master.to_bytes().unwrap(), before_read_only_notes);
+    let unchanged = open_opc(&before_read_only_notes, "neutral read-only notes");
+    assert!(
+        unchanged
+            .get_part("/ppt/notesMasters/notesMaster1.xml")
+            .is_none()
+    );
+    assert!(
+        unchanged
+            .get_part("/ppt/notesSlides/notesSlide1.xml")
+            .is_none()
+    );
     without_master.set_notes_text(0, "First note").unwrap();
     assert!(
         without_master.validate().is_empty(),

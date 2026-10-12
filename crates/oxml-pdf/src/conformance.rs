@@ -160,6 +160,12 @@ fn validate_paint(paint: &Paint) -> Result<(), PdfError> {
             }
             Ok(())
         }
+        Paint::Grid { colors, .. } => {
+            for color in colors {
+                validate_color(*color)?;
+            }
+            Ok(())
+        }
         Paint::Tile { .. } => Err(PdfError::UnsupportedPaint { paint: "tile" }),
     }
 }

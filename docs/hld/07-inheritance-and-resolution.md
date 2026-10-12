@@ -278,8 +278,8 @@ direction, so non-square fills expose the complete stop domain. A background
 ignores `rotWithShape="0"` because it has no enclosing shape rotation. Shape
 fills with that value use the same concrete linear paint when their effective
 own and group transforms are unrotated and unflipped. A rotated or flipped
-shape continues to diagnose the independent rotation policy. Unsupported
-circle, rectangle, and shape path gradients, tile rectangles, and each
+shape continues to diagnose the independent rotation policy. Centred circle, rectangle and supported shape path gradients resolve to
+concrete sampled paint. Non-centred fill rectangles, tile rectangles and each
 non-none flip variant retain distinct diagnostic categories.
 
 Notes export resolves the notes master before the notes slide overlay. Master

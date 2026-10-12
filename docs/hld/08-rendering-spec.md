@@ -2526,3 +2526,27 @@ Foreign attributes and opaque children remain exact. Duplicate recognized
 edges refuse rather than silently selecting or adding another edge. Native
 print-background preferences and host font substitution do not establish
 repository paint parity.
+
+## PowerPoint sampled fills and script faces
+
+The concrete Grid paint carries finite bounds, column and row counts and a
+bounded owned RGBA palette. PDF emits coloured type1 tiling resources, raster
+uses a nearest-sampled repeat texture, and SVG emits an equivalent user-space
+pattern. Grid heap capacity is included in the shaping cache byte budget.
+PowerPoint's54 preset patterns use source-derived64-by64 palette weights and
+an8pt logical tile. Raster engines may differ in pixel phase and antialiasing,
+so program geometry, palette and mask ownership remain separately testable.
+
+Supported centred circle, rectangle and shape path fills sample source stops
+within the original fill geometry. PowerPoint two-endpoint gradients and
+mirrored three-stop endpoint gradients use channel-directed gamma1.875 with
+linear alpha. Other stop lists remain linear. This applies at PPT resolution,
+including linear fills, and leaves Word colour and shared Paint interpolation
+unchanged. Unsupported tile rectangles, flips and path geometries diagnose.
+
+Mixed-script text and fields select the resolved Latin, East Asian and
+complex-script faces at script boundaries before shared shaping and fallback.
+Ordinary character spacing survives directional and multilingual reshaping.
+JPEG quality applies only to JPEG, transparency only to PNG, and slide indices
+and DPI validate before layout. Caller fonts supply one deterministic bundle
+to slide, archival, notes and handout exports.

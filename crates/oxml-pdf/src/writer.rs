@@ -81,8 +81,8 @@ fn alpha_key(alpha: f64) -> Option<u32> {
 }
 
 fn collect_page_alpha_keys(page: &oxml_layout::PageFrame, keys: &mut BTreeSet<u32>) {
-    if let Some(Paint::Solid(color)) = &page.background {
-        insert_alpha(keys, color.a);
+    if let Some(paint) = &page.background {
+        collect_paint_alpha(paint, keys);
     }
     collect_alpha_keys(&page.elements, keys);
 }
@@ -104,15 +104,11 @@ fn collect_alpha_keys(elements: &[PositionedElement], keys: &mut BTreeSet<u32>) 
                 insert_alpha(keys, color.a)
             }
             PositionedElement::Path(path) => {
-                if let Some(Paint::Solid(color)) = &path.fill {
-                    insert_alpha(keys, color.a);
+                if let Some(paint) = &path.fill {
+                    collect_paint_alpha(paint, keys);
                 }
-                if let Some(Stroke {
-                    paint: Paint::Solid(color),
-                    ..
-                }) = &path.stroke
-                {
-                    insert_alpha(keys, color.a);
+                if let Some(stroke) = &path.stroke {
+                    collect_paint_alpha(&stroke.paint, keys);
                 }
             }
             PositionedElement::Group(group) => {
@@ -124,6 +120,18 @@ fn collect_alpha_keys(elements: &[PositionedElement], keys: &mut BTreeSet<u32>) 
             }
             _ => {}
         }
+    }
+}
+
+fn collect_paint_alpha(paint: &Paint, keys: &mut BTreeSet<u32>) {
+    match paint {
+        Paint::Solid(color) => insert_alpha(keys, color.a),
+        Paint::Grid { colors, .. } => {
+            for color in colors {
+                insert_alpha(keys, color.a);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -144,6 +152,12 @@ enum GradientTarget {
 enum GradientGeometry {
     Linear([f32; 4]),
     Radial([f32; 6]),
+    Grid {
+        bounds: oxml_layout::Rect,
+        columns: u16,
+        rows: u16,
+        colors: Vec<Color>,
+    },
 }
 
 struct GradientEntry {
@@ -232,6 +246,38 @@ impl GradientRegistry {
         matrix: Transform,
         alloc: &mut impl FnMut() -> Ref,
     ) {
+        if let Paint::Grid {
+            bounds,
+            columns,
+            rows,
+            colors,
+        } = paint
+        {
+            if Paint::grid(*bounds, *columns, *rows, colors.clone()).is_none() {
+                return;
+            }
+            let index = self.entries.len();
+            self.entries.push(GradientEntry {
+                page_idx,
+                name: format!("P{index}"),
+                pattern_ref: alloc(),
+                shading_ref: alloc(),
+                stitching_ref: alloc(),
+                interval_refs: Vec::new(),
+                matrix,
+                geometry: GradientGeometry::Grid {
+                    bounds: *bounds,
+                    columns: *columns,
+                    rows: *rows,
+                    colors: colors.clone(),
+                },
+                stops: Vec::new(),
+                extend: [true, true],
+            });
+            self.by_occurrence
+                .insert((page_idx, leaf_idx, target), index);
+            return;
+        }
         let (geometry, stops, extend) = match paint {
             Paint::Linear {
                 start,
@@ -266,7 +312,7 @@ impl GradientRegistry {
                 stops,
                 *extend,
             ),
-            Paint::Solid(_) | Paint::Tile { .. } => return,
+            Paint::Solid(_) | Paint::Tile { .. } | Paint::Grid { .. } => return,
         };
 
         let Some(stops) = normalize_gradient_stops(stops) else {
@@ -794,7 +840,7 @@ pub(crate) fn write_pdf_impl(
         state.finish();
     }
 
-    write_gradient_objects(&mut pdf, &gradients);
+    write_gradient_objects(&mut pdf, &gradients, &alpha_states);
 
     // ── Write pages ──────────────────────────────────────────────────
     for (page_idx, page) in layout.pages.iter().enumerate() {
@@ -981,8 +1027,72 @@ fn layout_uses_notdef(layout: &LayoutResult) -> bool {
     })
 }
 
-fn write_gradient_objects(pdf: &mut Pdf, gradients: &GradientRegistry) {
+fn write_gradient_objects(pdf: &mut Pdf, gradients: &GradientRegistry, alpha_states: &AlphaStates) {
     for entry in &gradients.entries {
+        if let GradientGeometry::Grid {
+            bounds,
+            columns,
+            rows,
+            colors,
+        } = &entry.geometry
+        {
+            let mut content = Content::new();
+            let dx = bounds.width / f64::from(*columns);
+            let dy = bounds.height / f64::from(*rows);
+            // Merge only identical adjacent source samples, retaining every colour and alpha.
+            for row in 0..usize::from(*rows) {
+                let mut col = 0;
+                while col < usize::from(*columns) {
+                    let color = colors[row * usize::from(*columns) + col];
+                    let mut end = col + 1;
+                    while end < usize::from(*columns)
+                        && colors[row * usize::from(*columns) + end] == color
+                    {
+                        end += 1;
+                    }
+                    content.save_state();
+                    set_fill_color(&mut content, color, alpha_states);
+                    content.rect(
+                        (bounds.x + col as f64 * dx) as f32,
+                        (bounds.y + row as f64 * dy) as f32,
+                        ((end - col) as f64 * dx) as f32,
+                        dy as f32,
+                    );
+                    content.fill_nonzero();
+                    content.restore_state();
+                    col = end;
+                }
+            }
+            let bytes = content.finish();
+            let mut pattern = pdf.tiling_pattern(entry.pattern_ref, &bytes);
+            pattern.paint_type(pdf_writer::types::PaintType::Colored);
+            pattern.tiling_type(pdf_writer::types::TilingType::ConstantSpacing);
+            pattern.bbox(Rect::new(
+                bounds.x as f32,
+                bounds.y as f32,
+                (bounds.x + bounds.width) as f32,
+                (bounds.y + bounds.height) as f32,
+            ));
+            pattern.x_step(bounds.width as f32);
+            pattern.y_step(bounds.height as f32);
+            pattern.matrix([
+                entry.matrix.a as f32,
+                entry.matrix.b as f32,
+                entry.matrix.c as f32,
+                entry.matrix.d as f32,
+                entry.matrix.e as f32,
+                entry.matrix.f as f32,
+            ]);
+            let mut resources = pattern.resources();
+            let mut states = resources.ext_g_states();
+            for state in &alpha_states.entries {
+                states.pair(Name(state.name.as_bytes()), state.reference);
+            }
+            states.finish();
+            resources.finish();
+            pattern.finish();
+            continue;
+        }
         let mut pattern = pdf.shading_pattern(entry.pattern_ref);
         pattern.shading_ref(entry.shading_ref);
         pattern.matrix([
@@ -996,15 +1106,16 @@ fn write_gradient_objects(pdf: &mut Pdf, gradients: &GradientRegistry) {
         pattern.finish();
 
         let mut shading = pdf.function_shading(entry.shading_ref);
-        match entry.geometry {
+        match &entry.geometry {
             GradientGeometry::Linear(coords) => {
                 shading.shading_type(FunctionShadingType::Axial);
-                shading.coords(coords);
+                shading.coords(*coords);
             }
             GradientGeometry::Radial(coords) => {
                 shading.shading_type(FunctionShadingType::Radial);
-                shading.coords(coords);
+                shading.coords(*coords);
             }
+            GradientGeometry::Grid { .. } => unreachable!("handled above"),
         }
         shading.color_space().device_rgb();
         shading
@@ -1629,7 +1740,7 @@ fn resolve_paint<'a>(
 ) -> Option<ResolvedPaint<'a>> {
     match paint {
         Paint::Solid(color) => Some(ResolvedPaint::Solid(*color)),
-        Paint::Linear { .. } | Paint::Radial { .. } => gradients
+        Paint::Linear { .. } | Paint::Radial { .. } | Paint::Grid { .. } => gradients
             .entry(page_idx, leaf_idx, target)
             .map(ResolvedPaint::Gradient),
         Paint::Tile { .. } => None,
@@ -3807,5 +3918,41 @@ mod tests {
         let pdf = String::from_utf8_lossy(&write_pdf(&layout)).into_owned();
 
         assert!(pdf.contains("/Rect [72 677 172 692]"), "{pdf}");
+    }
+    #[test]
+    fn fx205_colour_grid_pdf_has_owned_tiling_colour_and_alpha_resources() {
+        let paint = Paint::grid(
+            oxml_layout::Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 8.0,
+                height: 8.0,
+            },
+            2,
+            1,
+            vec![
+                Color {
+                    r: 1.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
+                Color {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 1.0,
+                    a: 0.5,
+                },
+            ],
+        )
+        .unwrap();
+        let pdf = pdf_for(vec![path_element(FillRule::NonZero, Some(paint), None)]);
+        assert!(pdf.contains("/PatternType 1"));
+        assert!(pdf.contains("/XStep 8"));
+        assert!(pdf.contains("/YStep 8"));
+        assert!(pdf.contains("/ca 0.5"));
+        assert!(pdf.contains("1 0 0 rg"));
+        assert!(pdf.contains("0 0 1 rg"));
+        assert!(pdf.contains("/ExtGState"));
     }
 }

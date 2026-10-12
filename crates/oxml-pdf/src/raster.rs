@@ -645,7 +645,10 @@ fn render_path(
     let Some(path_geometry) = build_path(path) else {
         return;
     };
-    if let Some(paint) = fill.and_then(raster_paint) {
+    let fill_texture = fill.and_then(grid_texture);
+    if let Some(paint) =
+        fill.and_then(|paint| raster_paint_with_texture(paint, fill_texture.as_ref()))
+    {
         let paint_mask =
             fill.and_then(|paint| gradient_domain_mask(pixmap, paint, transform, mask));
         pixmap.fill_path(
@@ -656,8 +659,9 @@ fn render_path(
             paint_mask.as_ref().or(mask),
         );
     }
+    let stroke_texture = stroke.and_then(|stroke| grid_texture(&stroke.paint));
     if let Some(stroke) = stroke
-        && let Some(paint) = raster_paint(&stroke.paint)
+        && let Some(paint) = raster_paint_with_texture(&stroke.paint, stroke_texture.as_ref())
     {
         let paint_mask = gradient_domain_mask(pixmap, &stroke.paint, transform, mask);
         let stroke = raster_stroke(stroke);
@@ -696,6 +700,64 @@ fn fill_rule(rule: oxml_layout::FillRule) -> FillRule {
         oxml_layout::FillRule::NonZero => FillRule::Winding,
         oxml_layout::FillRule::EvenOdd => FillRule::EvenOdd,
     }
+}
+
+fn grid_texture(paint: &LayoutPaint) -> Option<Pixmap> {
+    let LayoutPaint::Grid {
+        bounds,
+        columns,
+        rows,
+        colors,
+    } = paint
+    else {
+        return None;
+    };
+    oxml_layout::Paint::grid(*bounds, *columns, *rows, colors.clone())?;
+    let mut pixmap = Pixmap::new(u32::from(*columns), u32::from(*rows))?;
+    for (pixel, color) in pixmap.pixels_mut().iter_mut().zip(colors) {
+        let a = (color.a * 255.0).round() as u8;
+        *pixel = tiny_skia::PremultipliedColorU8::from_rgba(
+            (color.r * f64::from(a)).round() as u8,
+            (color.g * f64::from(a)).round() as u8,
+            (color.b * f64::from(a)).round() as u8,
+            a,
+        )?;
+    }
+    Some(pixmap)
+}
+
+fn raster_paint_with_texture<'a>(
+    paint: &LayoutPaint,
+    texture: Option<&'a Pixmap>,
+) -> Option<Paint<'a>> {
+    if let LayoutPaint::Grid {
+        bounds,
+        columns,
+        rows,
+        ..
+    } = paint
+    {
+        let texture = texture?;
+        let transform = Transform::from_row(
+            (bounds.width / f64::from(*columns)) as f32,
+            0.0,
+            0.0,
+            (bounds.height / f64::from(*rows)) as f32,
+            bounds.x as f32,
+            bounds.y as f32,
+        );
+        return Some(Paint {
+            shader: tiny_skia::Pattern::new(
+                texture.as_ref(),
+                tiny_skia::SpreadMode::Repeat,
+                tiny_skia::FilterQuality::Nearest,
+                1.0,
+                transform,
+            ),
+            ..Paint::default()
+        });
+    }
+    raster_paint(paint)
 }
 
 fn raster_paint(paint: &LayoutPaint) -> Option<Paint<'static>> {
@@ -737,7 +799,7 @@ fn raster_paint(paint: &LayoutPaint) -> Option<Paint<'static>> {
                 ..Paint::default()
             })
         }
-        LayoutPaint::Tile { .. } => None,
+        LayoutPaint::Tile { .. } | LayoutPaint::Grid { .. } => None,
     }
 }
 
@@ -2710,5 +2772,50 @@ mod tests {
 
         assert_eq!(rgb(pixmap.pixel(3, 8).unwrap()), (0, 0, 0));
         assert_eq!(rgb(pixmap.pixel(7, 8).unwrap()), (255, 255, 255));
+    }
+    #[test]
+    fn fx205_colour_grid_repeats_source_pixels_and_preserves_alpha() {
+        let bounds = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 8.0,
+            height: 8.0,
+        };
+        let paint = Paint::grid(
+            bounds,
+            2,
+            1,
+            vec![
+                Color {
+                    r: 1.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
+                Color {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 1.0,
+                    a: 0.5,
+                },
+            ],
+        )
+        .unwrap();
+        let element = PositionedElement::Path(PathElement {
+            path: Path::rect(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 32.0,
+                height: 32.0,
+            }),
+            fill: Some(paint),
+            stroke: None,
+        });
+        let pixmap = render_page_to_pixmap(&page(vec![element]), &[], 72.0).unwrap();
+        assert_eq!(rgb(pixmap.pixel(1, 1).unwrap()), (255, 0, 0));
+        assert_near_rgb(rgb(pixmap.pixel(5, 1).unwrap()), (127, 127, 255), 1);
+        assert_eq!(rgb(pixmap.pixel(9, 1).unwrap()), (255, 0, 0));
+        assert!(Paint::grid(bounds, 0, 1, Vec::new()).is_none());
+        assert!(Paint::grid(bounds, 2, 1, vec![Color::BLACK]).is_none());
     }
 }

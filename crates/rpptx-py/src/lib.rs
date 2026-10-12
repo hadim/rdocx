@@ -128,6 +128,12 @@ pub(crate) fn rpptx_value_to_pyerr(py: Python<'_>, message: String) -> PyErr {
 #[pymodule]
 fn _rpptx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyPresentation>()?;
+    module.add_class::<presentation::PyCoreProperties>()?;
+    module.add_class::<presentation::PyAppProperties>()?;
+    module.add_class::<presentation::PyCustomFileTime>()?;
+    module.add_class::<presentation::PyCustomProperty>()?;
+    module.add_class::<presentation::PyCustomProperties>()?;
+    module.add_class::<presentation::PySection>()?;
     module.add_class::<PyCommentAuthor>()?;
     module.add_class::<PyComment>()?;
     module.add_class::<PyCommentReply>()?;

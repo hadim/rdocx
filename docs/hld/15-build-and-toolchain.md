@@ -1112,3 +1112,15 @@ The tracked test job downloads that exact release, verifies both identities,
 exports the verified JAR path, and runs the source-built EPUB oracle as a
 required CI step before the full workspace suite. The validator is not included
 in any crate archive.
+
+## Bundled PowerPoint template authority
+
+The crate-local default template uses the authenticated Office16:9 master and
+all eleven layout rectangles. Fresh core metadata has absent creator,
+lastModifiedBy and description, with fixed created/modified timestamps
+2000-01-01T00:00:00Z. Imported and user-assigned timestamps remain explicit
+source values. Constructors and ordinary save add no ambient wall-clock data.
+Template geometry and metadata are separately labelled behaviour changes with
+measured hash attribution before any exclusive baseline update. The asset
+remains packaged under rpptx/assets and every archive measurement uses actual
+current source members.

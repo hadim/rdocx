@@ -700,6 +700,50 @@ impl<'a> SvgState<'a> {
                 self.defs.push_str(&definition);
                 Some(format!("{property}=\"url(#{id})\""))
             }
+            Paint::Grid {
+                bounds,
+                columns,
+                rows,
+                colors,
+            } => {
+                Paint::grid(*bounds, *columns, *rows, colors.clone())?;
+                let id = self.definition_id();
+                let dx = bounds.width / f64::from(*columns);
+                let dy = bounds.height / f64::from(*rows);
+                let mut definition = format!(
+                    "<pattern id=\"{id}\" patternUnits=\"userSpaceOnUse\" x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\">",
+                    number(bounds.x),
+                    number(bounds.y),
+                    number(bounds.width),
+                    number(bounds.height)
+                );
+                for row in 0..usize::from(*rows) {
+                    let mut col = 0;
+                    while col < usize::from(*columns) {
+                        let color = colors[row * usize::from(*columns) + col];
+                        let mut end = col + 1;
+                        while end < usize::from(*columns)
+                            && colors[row * usize::from(*columns) + end] == color
+                        {
+                            end += 1;
+                        }
+                        let _ = write!(
+                            definition,
+                            "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{}\" fill-opacity=\"{}\"/>",
+                            number(col as f64 * dx),
+                            number(row as f64 * dy),
+                            number((end - col) as f64 * dx),
+                            number(dy),
+                            color_hex(color),
+                            number(color.a)
+                        );
+                        col = end;
+                    }
+                }
+                definition.push_str("</pattern>");
+                self.defs.push_str(&definition);
+                Some(format!("{property}=\"url(#{id})\""))
+            }
             Paint::Tile { .. } => {
                 self.diagnose(
                     path,
@@ -3592,6 +3636,112 @@ mod tests {
             None,
             Vec::new(),
         )
+    }
+
+    #[test]
+    fn fx205_svg_colour_grid_preserves_origin_alpha_and_repeated_source_cells() {
+        for (origin, samples) in [
+            (
+                (8.0, 8.0),
+                [
+                    [255, 0, 0],
+                    [127, 127, 255],
+                    [0, 255, 0],
+                    [191, 191, 191],
+                    [255, 0, 0],
+                    [0, 255, 0],
+                ],
+            ),
+            (
+                (-3.0, -5.0),
+                [
+                    [191, 191, 191],
+                    [0, 255, 0],
+                    [127, 127, 255],
+                    [255, 0, 0],
+                    [191, 191, 191],
+                    [127, 127, 255],
+                ],
+            ),
+        ] {
+            let paint = Paint::grid(
+                Rect {
+                    x: origin.0,
+                    y: origin.1,
+                    width: 8.0,
+                    height: 8.0,
+                },
+                2,
+                2,
+                vec![
+                    color(1.0, 0.0, 0.0),
+                    Color {
+                        r: 0.0,
+                        g: 0.0,
+                        b: 1.0,
+                        a: 0.5,
+                    },
+                    color(0.0, 1.0, 0.0),
+                    Color {
+                        r: 0.0,
+                        g: 0.0,
+                        b: 0.0,
+                        a: 0.25,
+                    },
+                ],
+            )
+            .unwrap();
+            let scene = layout(vec![PositionedElement::Path(PathElement {
+                path: Path::rect(Rect {
+                    x: 8.0,
+                    y: 8.0,
+                    width: 32.0,
+                    height: 32.0,
+                }),
+                fill: Some(paint),
+                stroke: None,
+            })]);
+            let result = render_page(&scene, 0).unwrap();
+            assert!(result.diagnostics.is_empty());
+            let pattern = format!(
+                "patternUnits=\"userSpaceOnUse\" x=\"{}\" y=\"{}\" width=\"8\" height=\"8\"",
+                origin.0, origin.1
+            );
+            assert!(result.svg.contains(&pattern));
+            let png = oxml_pdf::render_page_to_png(&scene, 0, 72.0).unwrap();
+            let native = resvg::tiny_skia::Pixmap::decode_png(&png).unwrap();
+            let svg =
+                rasterise_with_resvg(&result.svg, native.width(), native.height(), &scene.fonts);
+            // Interior samples derive directly from the four source cells and white
+            // background. Repeat positions also decide the nonzero pattern origin.
+            for ((x, y), expected) in [(9, 9), (13, 9), (9, 13), (13, 13), (17, 9), (25, 13)]
+                .into_iter()
+                .zip(samples)
+            {
+                let offset = ((y * native.width() + x) * 4) as usize;
+                for pixels in [native.data(), svg.as_slice()] {
+                    for channel in 0..3 {
+                        assert!(
+                            (i16::from(pixels[offset + channel]) - expected[channel]).abs() <= 1
+                        );
+                    }
+                    assert_eq!(pixels[offset + 3], 255);
+                }
+            }
+            let score = luminance_ssim(native.data(), &svg);
+            assert!(score >= 0.99, "Grid SVG/raster SSIM {score}");
+            let shifted_pattern = format!(
+                "patternUnits=\"userSpaceOnUse\" x=\"{}\" y=\"{}\" width=\"8\" height=\"8\"",
+                origin.0 + 1.0,
+                origin.1
+            );
+            let shifted = result.svg.replacen(&pattern, &shifted_pattern, 1);
+            assert_ne!(shifted, result.svg);
+            let shifted =
+                rasterise_with_resvg(&shifted, native.width(), native.height(), &scene.fonts);
+            let score = luminance_ssim(native.data(), &shifted);
+            assert!(score < 0.99, "One-point Grid origin shift SSIM {score}");
+        }
     }
 
     #[test]

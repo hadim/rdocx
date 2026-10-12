@@ -3,7 +3,10 @@
 //! The `default-template` feature embeds a 16:9 zero-slide template derived
 //! from the MIT-licensed python-pptx 1.0.2 default template. The slide size was
 //! changed to 12,192,000 by 6,858,000 EMU, the size kind was changed to
-//! `screen16x9`, and python-pptx generated the notes-master infrastructure.
+//! `screen16x9`. Master and layout placeholder rectangles match the retained
+//! Office 16:9 authority. Fresh core dates are fixed to 2000-01-01T00:00:00Z,
+//! with no inherited author, last modifier or description. Imported packages
+//! keep their metadata. python-pptx generated the notes-master infrastructure.
 
 mod embedded;
 
@@ -21,14 +24,19 @@ use diagram::{DiagramResources, ScopedDiagramResources};
 use oxml_chart::CT_ChartSpace;
 pub use oxml_chart::{ChartData, ChartKind, RgbColor};
 use oxml_core::OxmlError;
+pub use oxml_core::app_properties::AppProperties;
 pub use oxml_core::core_properties::CoreProperties;
+pub use oxml_core::custom_properties::{CustomProperties, CustomProperty, CustomPropertyValue};
 pub use oxml_core::units::{Angle, Emu, Percent1000};
 #[cfg(feature = "render")]
 use oxml_drawing::color::ColorMap;
 pub use oxml_drawing::color::{ColorChoice, ColorTransform};
 pub use oxml_drawing::effect::{CT_EffectList, CT_OuterShadowEffect, RectAlignment};
 use oxml_drawing::fill::RelativeRect;
-pub use oxml_drawing::fill::{Fill, NoFill, PatternFill, SolidFill};
+pub use oxml_drawing::fill::{
+    Fill, GradientFill, GradientGeometry, GradientStop, NoFill, PathGradientKind, PatternFill,
+    SolidFill,
+};
 use oxml_drawing::geometry::{CT_PresetGeometry2D, Guide, GuideOp, GuideOperand};
 pub use oxml_drawing::line::{
     CT_LineProperties, LineDash, LineEnd, LineEndSize, LineEndType, PresetDash,
@@ -46,9 +54,10 @@ use oxml_drawing::text::{
     NormalAutofit, TextAutofit, TextRun, TextWrap,
 };
 pub use oxml_drawing::text::{
-    CT_TextCharacterProperties, CT_TextParagraphProperties, TextAlignment, TextAnchor, TextBullet,
-    TextBulletCharacter, TextBulletChoice, TextFont, TextNoBullet, TextSpacing, TextStrike,
-    TextUnderline,
+    CT_TextCharacterProperties, CT_TextParagraphProperties, TextAlignment, TextAnchor,
+    TextAutoNumber, TextAutoNumberScheme, TextBullet, TextBulletCharacter, TextBulletChoice,
+    TextBulletColor, TextBulletSize, TextBulletSizeValue, TextFont, TextNoBullet, TextPointValue,
+    TextSpacing, TextStrike, TextUnderline,
 };
 #[cfg(feature = "render")]
 use oxml_drawing::theme::CT_OfficeStyleSheet;
@@ -70,6 +79,8 @@ pub use oxml_opc::{
     CoveredRelationship, SignatureIssue, SignatureReport, SignerCertificateIdentity,
 };
 use oxml_opc::{OpcError, OpcPackage, Relationships, write_atomic_file};
+#[cfg(feature = "render")]
+pub use oxml_pdf::{PdfConformance, RasterFormat, RasterOptions, RasterOutput};
 use quick_xml::events::{BytesStart as XmlBytesStart, Event as XmlEvent};
 use quick_xml::name::{Namespace as XmlNamespace, ResolveResult as XmlResolveResult};
 use quick_xml::reader::NsReader;
@@ -726,6 +737,8 @@ pub struct Presentation {
     core_properties: Option<CoreProperties>,
     core_properties_part_name: String,
     core_properties_dirty: bool,
+    application_properties: Option<AppProperties>,
+    custom_properties: Option<CustomProperties>,
     comment_authors_part: Option<String>,
     comment_authors: CommentAuthorList,
     comment_authors_dirty: bool,
@@ -1013,6 +1026,27 @@ impl Presentation {
         } else {
             None
         };
+        let application_properties = property_part(
+            &package,
+            rel_types::EXTENDED_PROPERTIES,
+            content_types::EXTENDED_PROPERTIES,
+        )?
+        .map(|name| {
+            AppProperties::from_xml(required_part(&package, &name)?).map_err(|error| {
+                invalid_shape_mutation("application properties", error.to_string())
+            })
+        })
+        .transpose()?;
+        let custom_properties = property_part(
+            &package,
+            rel_types::CUSTOM_PROPERTIES,
+            content_types::CUSTOM_PROPERTIES,
+        )?
+        .map(|name| {
+            CustomProperties::from_xml(required_part(&package, &name)?)
+                .map_err(|error| invalid_shape_mutation("custom properties", error.to_string()))
+        })
+        .transpose()?;
         let layouts = resolve_layouts(&package, &presentation_part, &presentation)?;
         let (comment_authors_part, comment_authors) =
             resolve_comment_authors(&package, &presentation_part)?;
@@ -1064,6 +1098,8 @@ impl Presentation {
             core_properties_part_name: core_properties_part_name
                 .unwrap_or_else(|| DEFAULT_CORE_PROPERTIES_PART.to_owned()),
             core_properties_dirty: false,
+            application_properties,
+            custom_properties,
             comment_authors_part,
             comment_authors,
             comment_authors_dirty: false,
@@ -1248,6 +1284,59 @@ impl Presentation {
         font_files: &[(&str, &[u8])],
     ) -> Result<(RenderInput, LayoutResult)> {
         assemble_render_input(&self.staged_package(false)?, &caller_font_files(font_files))
+    }
+
+    /// Encodes selected slides from one caller-font layout, retaining owned diagnostics.
+    #[cfg(feature = "render")]
+    pub fn render_slides_with_diagnostics(
+        &self,
+        slide_indices: &[usize],
+        options: RasterOptions,
+        font_files: &[(&str, &[u8])],
+    ) -> Result<(RasterOutput, Vec<oxml_layout::Diagnostic>)> {
+        validate_export_png_pages(&[], options.dpi)?;
+        if slide_indices.is_empty() {
+            return Err(render_failure("raster slide selection is empty"));
+        }
+        let mut seen = HashSet::new();
+        for &index in slide_indices {
+            self.require_slide_index(index)?;
+            if !seen.insert(index) {
+                return Err(render_failure(
+                    "raster slide selection contains duplicate indices",
+                ));
+            }
+        }
+        if let RasterFormat::Jpeg { quality } = options.format
+            && !(1..=100).contains(&quality)
+        {
+            return Err(render_failure("JPEG quality must be in 1..=100"));
+        }
+        let (width, height) = self
+            .slide_size()
+            .unwrap_or((Emu(12_192_000), Emu(6_858_000)));
+        let scale = options.dpi / 914_400.0;
+        let pixels = ((width.0 as f64 * scale).ceil() as u64)
+            .checked_mul((height.0 as f64 * scale).ceil() as u64)
+            .and_then(|n| n.checked_mul(4))
+            .and_then(|n| n.checked_mul(slide_indices.len() as u64));
+        if width.0 <= 0
+            || height.0 <= 0
+            || pixels.is_none_or(|n| n > MAX_PRESENTATION_EXPORT_RASTER_BYTES)
+        {
+            return Err(render_failure(
+                "raster selection exceeds the decoded-output limit",
+            ));
+        }
+        let (_, layout) = self.render_deterministic_with_fonts(font_files)?;
+        let pages = slide_indices
+            .iter()
+            .map(|index| layout.pages[*index].clone())
+            .collect::<Vec<_>>();
+        validate_export_png_pages(&pages, options.dpi)?;
+        let output = oxml_pdf::render_pages(&layout, slide_indices, options)
+            .map_err(|error| render_failure(error.to_string()))?;
+        Ok((output, layout.diagnostics))
     }
 
     /// Render caller-selected fonts to a checked deterministic PDF.
@@ -2796,6 +2885,291 @@ impl Presentation {
         self.core_properties_dirty = true;
         self.core_properties
             .get_or_insert_with(CoreProperties::default)
+    }
+
+    /// Changes known core fields while retaining every unowned imported byte.
+    pub fn set_core_properties(&mut self, properties: CoreProperties) -> Result<()> {
+        for value in [
+            &properties.title,
+            &properties.creator,
+            &properties.subject,
+            &properties.description,
+            &properties.keywords,
+            &properties.last_modified_by,
+            &properties.created,
+            &properties.modified,
+            &properties.category,
+            &properties.content_status,
+            &properties.identifier,
+            &properties.language,
+            &properties.last_printed,
+            &properties.revision,
+            &properties.version,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            oxml_core::xml::reject_non_xml_characters("core property", value)
+                .map_err(|error| invalid_shape_mutation("core properties", error.to_string()))?;
+        }
+        properties
+            .to_xml()
+            .map_err(|error| invalid_shape_mutation("core properties", error.to_string()))?;
+        if self.core_properties.as_ref() == Some(&properties) {
+            return Ok(());
+        }
+        let mut candidate = self.clone();
+        let xml = if let (Some(old), Some(source)) = (
+            self.core_properties.as_ref(),
+            self.package.get_part(&self.core_properties_part_name),
+        ) {
+            patch_core_properties(source, old, &properties)?
+        } else {
+            if self.package.contains_part(&self.core_properties_part_name) {
+                return Err(Error::CorePropertiesPartCollision {
+                    part_name: self.core_properties_part_name.clone(),
+                });
+            }
+            properties
+                .to_xml()
+                .map_err(|error| invalid_shape_mutation("core properties", error.to_string()))?
+        };
+        candidate
+            .package
+            .set_part(&self.core_properties_part_name, xml);
+        candidate.package.content_types.add_override(
+            &self.core_properties_part_name,
+            content_types::CORE_PROPERTIES,
+        );
+        if candidate
+            .package
+            .package_rels
+            .get_by_type(rel_types::CORE_PROPERTIES)
+            .is_none()
+        {
+            candidate.package.package_rels.add(
+                rel_types::CORE_PROPERTIES,
+                self.core_properties_part_name.trim_start_matches('/'),
+            );
+        }
+        candidate.core_properties = Some(properties);
+        candidate.core_properties_dirty = false;
+        self.commit_candidate(candidate)
+    }
+
+    /// Removes the owned core bundle without changing any other source part.
+    pub fn remove_core_properties(&mut self) -> Result<Option<CoreProperties>> {
+        let Some(old) = self.core_properties.clone() else {
+            return Ok(None);
+        };
+        let mut candidate = self.clone();
+        candidate
+            .package
+            .remove_part(&self.core_properties_part_name);
+        candidate
+            .package
+            .content_types
+            .remove_override(&self.core_properties_part_name);
+        candidate
+            .package
+            .package_rels
+            .items
+            .retain(|rel| rel.rel_type != rel_types::CORE_PROPERTIES);
+        candidate.core_properties = None;
+        candidate.core_properties_dirty = false;
+        self.commit_candidate(candidate)?;
+        Ok(Some(old))
+    }
+
+    /// Returns cached application properties without dirtying retained XML.
+    pub fn application_properties(&self) -> Option<&AppProperties> {
+        self.application_properties.as_ref()
+    }
+
+    /// Publishes application properties after staged validation and source preservation.
+    pub fn set_application_properties(&mut self, properties: AppProperties) -> Result<()> {
+        if let Some(version) = &properties.application_version {
+            let bytes = version.as_bytes();
+            if bytes.len() != 7
+                || bytes[2] != b'.'
+                || !bytes[..2].iter().chain(&bytes[3..]).all(u8::is_ascii_digit)
+            {
+                return Err(invalid_shape_mutation(
+                    "application properties",
+                    "application_version must be XX.YYYY",
+                ));
+            }
+        }
+        let generated = properties
+            .to_xml()
+            .map_err(|e| invalid_shape_mutation("application properties", e.to_string()))?;
+        if self.application_properties.as_ref() == Some(&properties) {
+            return Ok(());
+        }
+        let mut candidate = self.clone();
+        let xml = if let Some(name) = property_part(
+            &self.package,
+            rel_types::EXTENDED_PROPERTIES,
+            content_types::EXTENDED_PROPERTIES,
+        )? {
+            patch_application_properties(
+                required_part(&self.package, &name)?,
+                self.application_properties.as_ref().ok_or_else(|| {
+                    invalid_shape_mutation(
+                        "application properties",
+                        "missing parsed property owner",
+                    )
+                })?,
+                &properties,
+            )?
+        } else {
+            generated
+        };
+        publish_property_part(
+            &mut candidate.package,
+            rel_types::EXTENDED_PROPERTIES,
+            content_types::EXTENDED_PROPERTIES,
+            "/docProps/app.xml",
+            xml,
+        )?;
+        candidate.application_properties = Some(properties);
+        self.commit_candidate(candidate)
+    }
+
+    /// Removes the owned application part and relationship together.
+    pub fn remove_application_properties(&mut self) -> Result<Option<AppProperties>> {
+        let Some(old) = self.application_properties.clone() else {
+            return Ok(None);
+        };
+        let mut candidate = self.clone();
+        if let Some(name) = property_part(
+            &candidate.package,
+            rel_types::EXTENDED_PROPERTIES,
+            content_types::EXTENDED_PROPERTIES,
+        )? {
+            candidate.package.remove_part(&name);
+            candidate.package.content_types.remove_override(&name);
+            candidate
+                .package
+                .package_rels
+                .items
+                .retain(|rel| rel.rel_type != rel_types::EXTENDED_PROPERTIES);
+        }
+        candidate.application_properties = None;
+        self.commit_candidate(candidate)?;
+        Ok(Some(old))
+    }
+
+    /// Returns custom properties in retained package order.
+    pub fn custom_properties(&self) -> &[CustomProperty] {
+        self.custom_properties
+            .as_ref()
+            .map(|p| p.properties.as_slice())
+            .unwrap_or_default()
+    }
+    /// Finds a case-sensitive custom property name.
+    pub fn custom_property(&self, name: &str) -> Option<&CustomProperty> {
+        self.custom_properties()
+            .iter()
+            .find(|p| p.name.as_deref() == Some(name))
+    }
+    /// Changes one named value while retaining its existing identity and source order.
+    pub fn set_custom_property(&mut self, mut property: CustomProperty) -> Result<()> {
+        let name = property
+            .name
+            .clone()
+            .filter(|n| !n.is_empty())
+            .ok_or_else(|| {
+                invalid_shape_mutation("custom properties", "property name must not be empty")
+            })?;
+        oxml_core::xml::reject_non_xml_characters("custom property name", &name)
+            .map_err(|e| invalid_shape_mutation("custom properties", e.to_string()))?;
+        if let Some(old) = self.custom_property(&name) {
+            if old.value == property.value {
+                return Ok(());
+            }
+            if matches!(old.value, CustomPropertyValue::Raw(_)) {
+                return Err(invalid_shape_mutation(
+                    "custom properties",
+                    "unsupported retained custom values are read-only",
+                ));
+            }
+            property.pid = old.pid;
+            property.fmtid = old.fmtid.clone();
+        } else if property.pid < 2
+            || self
+                .custom_properties()
+                .iter()
+                .any(|p| p.pid == property.pid)
+        {
+            return Err(invalid_shape_mutation(
+                "custom properties",
+                "custom property PID must be unique and at least 2",
+            ));
+        }
+        oxml_core::xml::reject_non_xml_characters("custom property fmtid", &property.fmtid)
+            .map_err(|e| invalid_shape_mutation("custom properties", e.to_string()))?;
+        let value = custom_value_xml(&property.value)?;
+        let mut candidate = self.clone();
+        let properties = candidate
+            .custom_properties
+            .get_or_insert_with(CustomProperties::default);
+        if let Some(index) = properties
+            .properties
+            .iter()
+            .position(|p| p.name.as_deref() == Some(&name))
+        {
+            properties.properties[index] = property.clone();
+        } else {
+            properties.properties.push(property.clone());
+        }
+        let part = property_part(
+            &self.package,
+            rel_types::CUSTOM_PROPERTIES,
+            content_types::CUSTOM_PROPERTIES,
+        )?;
+        let xml = if let Some(part) = part {
+            patch_custom_property(
+                required_part(&self.package, &part)?,
+                &name,
+                Some((&property, &value)),
+            )?
+        } else {
+            properties
+                .to_xml()
+                .map_err(|e| invalid_shape_mutation("custom properties", e.to_string()))?
+        };
+        publish_property_part(
+            &mut candidate.package,
+            rel_types::CUSTOM_PROPERTIES,
+            content_types::CUSTOM_PROPERTIES,
+            "/docProps/custom.xml",
+            xml,
+        )?;
+        self.commit_candidate(candidate)
+    }
+    /// Removes one property without changing other values or order.
+    pub fn remove_custom_property(&mut self, name: &str) -> Result<Option<CustomProperty>> {
+        let Some(old) = self.custom_property(name).cloned() else {
+            return Ok(None);
+        };
+        let mut candidate = self.clone();
+        let part = property_part(
+            &self.package,
+            rel_types::CUSTOM_PROPERTIES,
+            content_types::CUSTOM_PROPERTIES,
+        )?
+        .ok_or_else(|| invalid_shape_mutation("custom properties", "property bundle is absent"))?;
+        let xml = patch_custom_property(required_part(&self.package, &part)?, name, None)?;
+        candidate.package.set_part(&part, xml);
+        candidate
+            .custom_properties
+            .as_mut()
+            .expect("existing property")
+            .properties
+            .retain(|p| p.name.as_deref() != Some(name));
+        self.commit_candidate(candidate)?;
+        Ok(Some(old))
     }
 
     /// Reads the current theme reached by one presentation master.
@@ -4599,6 +4973,137 @@ impl Presentation {
             ShapeTreeChild::Picture(picture);
         candidate.to_bytes()?;
         *self = candidate;
+        Ok(())
+    }
+
+    /// Replaces one owned fill in a staged candidate and prunes only image
+    /// relationships that no qualified source owner still references.
+    pub fn set_fill_at(&mut self, owner: &FillOwnerLocation, fill: Fill) -> Result<()> {
+        let mut candidate = self.clone();
+        candidate.assign_fill_at(owner, fill)?;
+        if candidate.slides[owner.slide_index()].slide == self.slides[owner.slide_index()].slide {
+            return Ok(());
+        }
+        let previous = slide_relationship_ids(&self.slides[owner.slide_index()].slide)?;
+        candidate.release_unused_slide_images(owner.slide_index(), &previous)?;
+        self.commit_candidate(candidate)
+    }
+
+    /// Validates an image, then stages allocation, owner fill and reference
+    /// pruning before publishing any package change.
+    pub fn set_picture_fill(
+        &mut self,
+        owner: &FillOwnerLocation,
+        image_data: &[u8],
+        filename: &str,
+    ) -> Result<()> {
+        self.require_slide_index(owner.slide_index())?;
+        picture_dimensions(image_data, filename, None, None)?;
+        let mut candidate = self.clone();
+        let slide_part = candidate.slides[owner.slide_index()].part_name.clone();
+        let media_part = candidate
+            .media_store
+            .insert(&mut candidate.package, image_data, filename);
+        let mut relationships = candidate
+            .package
+            .get_part_rels(&slide_part)
+            .cloned()
+            .unwrap_or_default();
+        let id = relationships
+            .items
+            .iter()
+            .find(|relationship| {
+                relationship.rel_type == rel_types::IMAGE
+                    && !relationship_is_external(relationship)
+                    && OpcPackage::resolve_rel_target(&slide_part, &relationship.target)
+                        == media_part
+            })
+            .map(|relationship| relationship.id.clone())
+            .unwrap_or_else(|| {
+                relationships.add(
+                    rel_types::IMAGE,
+                    &relative_part_target(&slide_part, &media_part),
+                )
+            });
+        candidate.package.set_part_rels(&slide_part, relationships);
+        let source = format!(
+            r#"<a:blipFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" rotWithShape="1"><a:blip r:embed="{}"/><a:stretch><a:fillRect/></a:stretch></a:blipFill>"#,
+            quick_xml::escape::escape(&id)
+        );
+        let fill = Fill::from_xml(source.as_bytes())
+            .map_err(|error| invalid_shape_mutation("set picture fill", error.to_string()))?;
+        candidate.assign_fill_at(owner, fill)?;
+        let previous = slide_relationship_ids(&self.slides[owner.slide_index()].slide)?;
+        candidate.release_unused_slide_images(owner.slide_index(), &previous)?;
+        self.commit_candidate(candidate)
+    }
+
+    fn assign_fill_at(&mut self, owner: &FillOwnerLocation, fill: Fill) -> Result<()> {
+        let missing =
+            || invalid_shape_mutation("set owned fill", "fill owner is absent or unsupported");
+        self.require_slide_index(owner.slide_index())?;
+        if let FillOwnerLocation::SlideBackground { slide_index } = owner {
+            return self
+                .slide_mut(*slide_index)
+                .ok_or_else(missing)?
+                .set_background(fill);
+        }
+        let shape_path = match owner {
+            FillOwnerLocation::Shape { shape_path, .. }
+            | FillOwnerLocation::TableCell { shape_path, .. } => shape_path,
+            _ => unreachable!(),
+        };
+        let (first, descendants) = shape_path.split_first().ok_or_else(missing)?;
+        let slide = self.slide_mut(owner.slide_index()).ok_or_else(missing)?;
+        let mut shape = slide.into_shape_mut(*first).ok_or_else(missing)?;
+        for index in descendants {
+            shape = shape.into_child_mut(*index).ok_or_else(missing)?;
+        }
+        match owner {
+            FillOwnerLocation::Shape { .. } => shape.set_fill(fill),
+            FillOwnerLocation::TableCell { row, column, .. } => {
+                let mut cell = shape
+                    .into_table_mut()
+                    .and_then(|table| table.into_cell_mut(*row, *column))
+                    .ok_or_else(missing)?;
+                cell.set_fill(Some(fill));
+                Ok(())
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn release_unused_slide_images(
+        &mut self,
+        slide_index: usize,
+        previous: &HashSet<String>,
+    ) -> Result<()> {
+        self.require_slide_index(slide_index)?;
+        let record = &self.slides[slide_index];
+        let part_name = record.part_name.clone();
+        let referenced = slide_relationship_ids(&record.slide)?;
+        let Some(mut relationships) = self.package.get_part_rels(&part_name).cloned() else {
+            return Ok(());
+        };
+        let mut released = HashSet::new();
+        relationships.items.retain(|relationship| {
+            let unused = previous.contains(&relationship.id)
+                && relationship.rel_type == rel_types::IMAGE
+                && !relationship_is_external(relationship)
+                && !referenced.contains(&relationship.id);
+            if unused {
+                released.insert(OpcPackage::resolve_rel_target(
+                    &part_name,
+                    &relationship.target,
+                ));
+            }
+            !unused
+        });
+        if !released.is_empty() {
+            self.package.set_part_rels(&part_name, relationships);
+            prune_unreachable_parts(&mut self.package, &released);
+            self.media_store = MediaStore::scan(&self.package);
+        }
         Ok(())
     }
 
@@ -7780,6 +8285,662 @@ fn prune_unreachable_parts(package: &mut OpcPackage, candidates: &HashSet<String
     }
 }
 
+fn expanded_property_root(source: &[u8], namespace: &str, root: &str) -> Result<Vec<u8>> {
+    let mut reader = NsReader::from_reader(source);
+    let mut buffer = Vec::new();
+    loop {
+        let begin = reader.buffer_position() as usize;
+        let (qualified, event) = {
+            let (ns, event) = reader
+                .read_resolved_event_into(&mut buffer)
+                .map_err(|e| invalid_shape_mutation("properties", e.to_string()))?;
+            (xml_is(&ns, namespace), event)
+        };
+        let end = reader.buffer_position() as usize;
+        match event {
+            XmlEvent::Empty(start)
+                if qualified && xml_local_name(start.name().as_ref()) == root.as_bytes() =>
+            {
+                let mut result = source[..end - 2].to_vec();
+                result.push(b'>');
+                result.extend_from_slice(b"</");
+                result.extend_from_slice(start.name().as_ref());
+                result.push(b'>');
+                result.extend_from_slice(&source[end..]);
+                return Ok(result);
+            }
+            XmlEvent::Start(_) | XmlEvent::Empty(_) | XmlEvent::Eof => return Ok(source.to_vec()),
+            XmlEvent::Decl(_) | XmlEvent::Comment(_) | XmlEvent::PI(_) => {}
+            XmlEvent::Text(text) if text.iter().all(u8::is_ascii_whitespace) => {}
+            _ => {
+                return Err(invalid_shape_mutation(
+                    "properties",
+                    format!("unsupported property root at {begin}"),
+                ));
+            }
+        };
+        buffer.clear();
+    }
+}
+
+type PropertyChildRanges = Vec<(Option<String>, String, usize, usize)>;
+
+fn property_child_ranges(
+    source: &[u8],
+    namespace: &str,
+    root: &str,
+) -> Result<(PropertyChildRanges, usize)> {
+    let mut reader = NsReader::from_reader(source);
+    let mut buffer = Vec::new();
+    let mut depth = 0;
+    let mut pending = None;
+    let mut children = Vec::new();
+    let mut root_end = None;
+    loop {
+        let begin = reader.buffer_position() as usize;
+        let (uri, event) = {
+            let (resolved, event) = reader
+                .read_resolved_event_into(&mut buffer)
+                .map_err(|e| invalid_shape_mutation("properties", e.to_string()))?;
+            let uri = match resolved {
+                quick_xml::name::ResolveResult::Bound(ns) => {
+                    Some(String::from_utf8_lossy(ns.as_ref()).into_owned())
+                }
+                _ => None,
+            };
+            (uri, event)
+        };
+        let end = reader.buffer_position() as usize;
+        match event {
+            XmlEvent::Start(start) => {
+                if depth == 0
+                    && (uri.as_deref() != Some(namespace)
+                        || xml_local_name(start.name().as_ref()) != root.as_bytes())
+                {
+                    return Err(invalid_shape_mutation(
+                        "properties",
+                        "unqualified core owner",
+                    ));
+                }
+                if depth == 1 {
+                    pending = Some((
+                        uri,
+                        String::from_utf8_lossy(xml_local_name(start.name().as_ref())).into_owned(),
+                        begin,
+                    ));
+                }
+                depth += 1;
+            }
+            XmlEvent::Empty(start) if depth == 1 => children.push((
+                uri,
+                String::from_utf8_lossy(xml_local_name(start.name().as_ref())).into_owned(),
+                begin,
+                end,
+            )),
+            XmlEvent::End(_) => {
+                depth -= 1;
+                if depth == 1
+                    && let Some((uri, name, start)) = pending.take()
+                {
+                    children.push((uri, name, start, end));
+                }
+                if depth == 0 {
+                    root_end = Some(begin);
+                }
+            }
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let insertion = root_end
+        .ok_or_else(|| invalid_shape_mutation("properties", "missing core closing owner"))?;
+    Ok((children, insertion))
+}
+
+fn patch_application_properties(
+    source: &[u8],
+    old: &AppProperties,
+    new: &AppProperties,
+) -> Result<Vec<u8>> {
+    const NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties";
+    let fields = [
+        ("Template", old.template.clone(), new.template.clone()),
+        ("Manager", old.manager.clone(), new.manager.clone()),
+        ("Company", old.company.clone(), new.company.clone()),
+        (
+            "Pages",
+            old.pages.map(|value| value.to_string()),
+            new.pages.map(|value| value.to_string()),
+        ),
+        (
+            "Words",
+            old.words.map(|value| value.to_string()),
+            new.words.map(|value| value.to_string()),
+        ),
+        (
+            "Characters",
+            old.characters.map(|value| value.to_string()),
+            new.characters.map(|value| value.to_string()),
+        ),
+        (
+            "PresentationFormat",
+            old.presentation_format.clone(),
+            new.presentation_format.clone(),
+        ),
+        (
+            "Lines",
+            old.lines.map(|value| value.to_string()),
+            new.lines.map(|value| value.to_string()),
+        ),
+        (
+            "Paragraphs",
+            old.paragraphs.map(|value| value.to_string()),
+            new.paragraphs.map(|value| value.to_string()),
+        ),
+        (
+            "Slides",
+            old.slides.map(|value| value.to_string()),
+            new.slides.map(|value| value.to_string()),
+        ),
+        (
+            "Notes",
+            old.notes.map(|value| value.to_string()),
+            new.notes.map(|value| value.to_string()),
+        ),
+        (
+            "TotalTime",
+            old.total_time.map(|value| value.to_string()),
+            new.total_time.map(|value| value.to_string()),
+        ),
+        (
+            "HiddenSlides",
+            old.hidden_slides.map(|value| value.to_string()),
+            new.hidden_slides.map(|value| value.to_string()),
+        ),
+        (
+            "MMClips",
+            old.multimedia_clips.map(|value| value.to_string()),
+            new.multimedia_clips.map(|value| value.to_string()),
+        ),
+        (
+            "ScaleCrop",
+            old.scale_crop.map(|value| value.to_string()),
+            new.scale_crop.map(|value| value.to_string()),
+        ),
+        (
+            "LinksUpToDate",
+            old.links_up_to_date.map(|value| value.to_string()),
+            new.links_up_to_date.map(|value| value.to_string()),
+        ),
+        (
+            "CharactersWithSpaces",
+            old.characters_with_spaces.map(|value| value.to_string()),
+            new.characters_with_spaces.map(|value| value.to_string()),
+        ),
+        (
+            "SharedDoc",
+            old.shared_document.map(|value| value.to_string()),
+            new.shared_document.map(|value| value.to_string()),
+        ),
+        (
+            "HyperlinksChanged",
+            old.hyperlinks_changed.map(|value| value.to_string()),
+            new.hyperlinks_changed.map(|value| value.to_string()),
+        ),
+        (
+            "Application",
+            old.application.clone(),
+            new.application.clone(),
+        ),
+        (
+            "AppVersion",
+            old.application_version.clone(),
+            new.application_version.clone(),
+        ),
+    ];
+    let expanded = expanded_property_root(source, NS, "Properties")?;
+    let source = expanded.as_slice();
+    let (children, insertion) = property_child_ranges(source, NS, "Properties")?;
+    let mut edits = Vec::new();
+    let mut append = Vec::new();
+    for (name, before, after) in fields {
+        if before == after {
+            continue;
+        }
+        if let Some(value) = &after {
+            oxml_core::xml::reject_non_xml_characters("application property", value)
+                .map_err(|e| invalid_shape_mutation("application properties", e.to_string()))?;
+        }
+        let matches = children
+            .iter()
+            .filter(|(uri, local, _, _)| uri.as_deref() == Some(NS) && local == name)
+            .collect::<Vec<_>>();
+        if matches.len() > 1
+            || children
+                .iter()
+                .any(|(uri, local, _, _)| local == name && uri.as_deref() != Some(NS))
+        {
+            return Err(invalid_shape_mutation(
+                "application properties",
+                "ambiguous or foreign property spelling",
+            ));
+        }
+        if let Some((_, _, start, end)) = matches.first() {
+            edits.push((
+                *start,
+                *end,
+                edit_property_text(&source[*start..*end], after.as_deref())?,
+            ));
+        } else if let Some(value) = after {
+            append.extend(
+                format!(
+                    "<ap:{name} xmlns:ap=\"{NS}\">{}</ap:{name}>",
+                    quick_xml::escape::escape(&value)
+                )
+                .into_bytes(),
+            );
+        }
+    }
+    if !append.is_empty() {
+        edits.push((insertion, insertion, append));
+    }
+    edits.sort_by_key(|(start, _, _)| *start);
+    let mut result = Vec::new();
+    let mut cursor = 0;
+    for (start, end, bytes) in edits {
+        result.extend_from_slice(&source[cursor..start]);
+        result.extend(bytes);
+        cursor = end;
+    }
+    result.extend_from_slice(&source[cursor..]);
+    let parsed = AppProperties::from_xml(&result)
+        .map_err(|e| invalid_shape_mutation("application properties", e.to_string()))?;
+    if &parsed != new {
+        return Err(invalid_shape_mutation(
+            "application properties",
+            "retained source prevents exact typed update",
+        ));
+    }
+    Ok(result)
+}
+
+fn custom_value_xml(value: &CustomPropertyValue) -> Result<String> {
+    let (kind,text)=match value {
+        CustomPropertyValue::Lpstr(s)=>("lpstr",s.clone()),CustomPropertyValue::Lpwstr(s)=>("lpwstr",s.clone()),
+        CustomPropertyValue::I4(n)=>("i4",n.to_string()),CustomPropertyValue::R8(n) if n.is_finite()=>("r8",n.to_string()),
+        CustomPropertyValue::Bool(b)=>("bool",b.to_string()),CustomPropertyValue::FileTime(s)=>("filetime",s.clone()),
+        CustomPropertyValue::Empty=>return Ok(r#"<vt:empty xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"/>"#.to_owned()),
+        _=>return Err(invalid_shape_mutation("custom properties","new value must be a supported finite custom type")),
+    };
+    oxml_core::xml::reject_non_xml_characters("custom property value", &text)
+        .map_err(|e| invalid_shape_mutation("custom properties", e.to_string()))?;
+    Ok(format!(
+        "<vt:{kind} xmlns:vt=\"http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes\">{}</vt:{kind}>",
+        quick_xml::escape::escape(&text)
+    ))
+}
+
+fn patch_custom_property(
+    source: &[u8],
+    name: &str,
+    replacement: Option<(&CustomProperty, &str)>,
+) -> Result<Vec<u8>> {
+    const NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties";
+    let expanded = expanded_property_root(source, NS, "Properties")?;
+    let source = expanded.as_slice();
+    let (children, insertion) = property_child_ranges(source, NS, "Properties")?;
+    let mut selected = None;
+    for (uri, local, start, end) in children {
+        if uri.as_deref() != Some(NS) || local != "property" {
+            return Err(invalid_shape_mutation(
+                "custom properties",
+                "unqualified custom owner",
+            ));
+        }
+        let mut reader = quick_xml::Reader::from_reader(&source[start..end]);
+        if let XmlEvent::Start(root) | XmlEvent::Empty(root) = reader
+            .read_event()
+            .map_err(|e| invalid_shape_mutation("custom properties", e.to_string()))?
+        {
+            let property_name = root
+                .attributes()
+                .find_map(|a| a.ok().filter(|a| a.key.as_ref() == b"name"))
+                .map(|a| {
+                    a.decoded_and_normalized_value(
+                        quick_xml::XmlVersion::Implicit1_0,
+                        reader.decoder(),
+                    )
+                    .map(|v| v.into_owned())
+                })
+                .transpose()
+                .map_err(|e| invalid_shape_mutation("custom properties", e.to_string()))?;
+            if property_name.as_deref() == Some(name) && selected.replace((start, end)).is_some() {
+                return Err(invalid_shape_mutation(
+                    "custom properties",
+                    "duplicate property name",
+                ));
+            }
+        }
+    }
+    let Some((start, end)) = selected else {
+        if let Some((property, value)) = replacement {
+            let xml = format!(
+                "<property xmlns=\"{NS}\" fmtid=\"{}\" pid=\"{}\" name=\"{}\">{value}</property>",
+                quick_xml::escape::escape(&property.fmtid),
+                property.pid,
+                quick_xml::escape::escape(name)
+            );
+            let mut result = source[..insertion].to_vec();
+            result.extend(xml.as_bytes());
+            result.extend_from_slice(&source[insertion..]);
+            return Ok(result);
+        }
+        return Ok(source.to_vec());
+    };
+    let bytes = if let Some((_, value)) = replacement {
+        let owner = &source[start..end];
+        let mut reader = quick_xml::Reader::from_reader(owner);
+        let mut depth = 0;
+        let mut value_start = None;
+        let mut value_range = None;
+        loop {
+            let begin = reader.buffer_position() as usize;
+            let event = reader
+                .read_event()
+                .map_err(|e| invalid_shape_mutation("custom properties", e.to_string()))?;
+            let finish = reader.buffer_position() as usize;
+            match event {
+                XmlEvent::Start(_) => {
+                    if depth == 1 {
+                        value_start = Some(begin);
+                    }
+                    depth += 1;
+                }
+                XmlEvent::Empty(_) if depth == 1 => {
+                    if value_range.replace((begin, finish)).is_some() {
+                        return Err(invalid_shape_mutation(
+                            "custom properties",
+                            "ambiguous custom value",
+                        ));
+                    }
+                }
+                XmlEvent::End(_) => {
+                    depth -= 1;
+                    if depth == 1
+                        && let Some(begin) = value_start.take()
+                        && value_range.replace((begin, finish)).is_some()
+                    {
+                        return Err(invalid_shape_mutation(
+                            "custom properties",
+                            "ambiguous custom value",
+                        ));
+                    }
+                }
+                XmlEvent::Eof => break,
+                _ => {}
+            }
+        }
+        let (begin, finish) = value_range
+            .ok_or_else(|| invalid_shape_mutation("custom properties", "custom value is absent"))?;
+        let old_value = &owner[begin..finish];
+        let mut old_reader = quick_xml::Reader::from_reader(old_value);
+        let old_start = old_reader
+            .read_event()
+            .map_err(|e| invalid_shape_mutation("custom properties", e.to_string()))?;
+        let mut new_reader = quick_xml::Reader::from_reader(value.as_bytes());
+        let new_start = new_reader
+            .read_event()
+            .map_err(|e| invalid_shape_mutation("custom properties", e.to_string()))?;
+        let value_bytes = match (old_start, new_start) {
+            (XmlEvent::Start(old), XmlEvent::Start(new))
+                if xml_local_name(old.name().as_ref()) == xml_local_name(new.name().as_ref()) =>
+            {
+                let raw = new_reader
+                    .read_text(new.name())
+                    .map_err(|e| invalid_shape_mutation("custom properties", e.to_string()))?;
+                let decoded = raw
+                    .decode()
+                    .map_err(|e| invalid_shape_mutation("custom properties", e.to_string()))?;
+                let text = quick_xml::escape::unescape(&decoded)
+                    .map_err(|e| invalid_shape_mutation("custom properties", e.to_string()))?;
+                edit_property_text(old_value, Some(&text))?
+            }
+            (XmlEvent::Start(old) | XmlEvent::Empty(old), _) => {
+                for attribute in old.attributes() {
+                    let attribute = attribute
+                        .map_err(|e| invalid_shape_mutation("custom properties", e.to_string()))?;
+                    if attribute.key.as_ref() != b"xmlns"
+                        && !attribute.key.as_ref().starts_with(b"xmlns:")
+                    {
+                        return Err(invalid_shape_mutation(
+                            "custom properties",
+                            "changing the value type would discard an opaque attribute",
+                        ));
+                    }
+                }
+                edit_property_text(old_value, None)?;
+                value.as_bytes().to_vec()
+            }
+            _ => {
+                return Err(invalid_shape_mutation(
+                    "custom properties",
+                    "unsupported custom value owner",
+                ));
+            }
+        };
+        let mut result = owner[..begin].to_vec();
+        result.extend(value_bytes);
+        result.extend_from_slice(&owner[finish..]);
+        result
+    } else {
+        Vec::new()
+    };
+    let mut result = source[..start].to_vec();
+    result.extend(bytes);
+    result.extend_from_slice(&source[end..]);
+    CustomProperties::from_xml(&result)
+        .map_err(|e| invalid_shape_mutation("custom properties", e.to_string()))?;
+    Ok(result)
+}
+
+fn property_part(
+    package: &OpcPackage,
+    rel_type: &str,
+    content_type: &str,
+) -> Result<Option<String>> {
+    let matches = package.package_rels.get_all_by_type(rel_type);
+    if matches.len() > 1 {
+        return Err(invalid_shape_mutation(
+            "properties",
+            "ambiguous package property relationships",
+        ));
+    }
+    let Some(rel) = matches.first() else {
+        return Ok(None);
+    };
+    reject_external("/", rel)?;
+    let name = OpcPackage::resolve_rel_target("/", &rel.target);
+    required_part(package, &name)?;
+    if package.content_types.content_type_for(&name) != Some(content_type) {
+        return Err(invalid_shape_mutation(
+            "properties",
+            "property content type does not match its relationship",
+        ));
+    }
+    Ok(Some(name))
+}
+
+fn publish_property_part(
+    package: &mut OpcPackage,
+    rel_type: &str,
+    content_type: &str,
+    default: &str,
+    bytes: Vec<u8>,
+) -> Result<()> {
+    let name =
+        property_part(package, rel_type, content_type)?.unwrap_or_else(|| default.to_owned());
+    if package.package_rels.get_by_type(rel_type).is_none() {
+        if package.contains_part(&name) {
+            return Err(invalid_shape_mutation(
+                "properties",
+                "unowned property part collision",
+            ));
+        }
+        package
+            .package_rels
+            .add(rel_type, name.trim_start_matches('/'));
+    }
+    package.content_types.add_override(&name, content_type);
+    package.set_part(&name, bytes);
+    Ok(())
+}
+
+fn edit_property_text(source: &[u8], value: Option<&str>) -> Result<Vec<u8>> {
+    let mut reader = quick_xml::Reader::from_reader(source);
+    let mut buffer = Vec::new();
+    let mut result = Vec::new();
+    let mut opened = false;
+    let mut wrote = false;
+    loop {
+        let begin = reader.buffer_position() as usize;
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| invalid_shape_mutation("properties", error.to_string()))?;
+        let end = reader.buffer_position() as usize;
+        match event {
+            XmlEvent::Start(_) if !opened => {
+                opened = true;
+                result.extend_from_slice(&source[begin..end]);
+            }
+            XmlEvent::Empty(start) if !opened => {
+                result.extend_from_slice(&source[begin..end - 2]);
+                result.push(b'>');
+                result.extend_from_slice(quick_xml::escape::escape(value.unwrap_or("")).as_bytes());
+                result.extend_from_slice(b"</");
+                result.extend_from_slice(start.name().as_ref());
+                result.push(b'>');
+            }
+            XmlEvent::Text(_) | XmlEvent::CData(_) | XmlEvent::GeneralRef(_) => {
+                if !wrote {
+                    result.extend_from_slice(
+                        quick_xml::escape::escape(value.unwrap_or("")).as_bytes(),
+                    );
+                    wrote = true;
+                }
+            }
+            XmlEvent::End(_) => {
+                if !wrote {
+                    result.extend_from_slice(
+                        quick_xml::escape::escape(value.unwrap_or("")).as_bytes(),
+                    );
+                    wrote = true;
+                }
+                result.extend_from_slice(&source[begin..end]);
+            }
+            XmlEvent::Comment(_) | XmlEvent::PI(_) => result.extend_from_slice(&source[begin..end]),
+            XmlEvent::Eof => break,
+            _ => {
+                return Err(invalid_shape_mutation(
+                    "properties",
+                    "opaque nested property value cannot be changed safely",
+                ));
+            }
+        }
+        buffer.clear();
+    }
+    Ok(result)
+}
+
+fn patch_core_properties(
+    source: &[u8],
+    old: &CoreProperties,
+    new: &CoreProperties,
+) -> Result<Vec<u8>> {
+    const CP: &str = "http://schemas.openxmlformats.org/package/2006/metadata/core-properties";
+    const DC: &str = "http://purl.org/dc/elements/1.1/";
+    const DT: &str = "http://purl.org/dc/terms/";
+    let fields = [
+        (DC, "title", &old.title, &new.title),
+        (DC, "subject", &old.subject, &new.subject),
+        (DC, "creator", &old.creator, &new.creator),
+        (DC, "description", &old.description, &new.description),
+        (DC, "identifier", &old.identifier, &new.identifier),
+        (DC, "language", &old.language, &new.language),
+        (CP, "keywords", &old.keywords, &new.keywords),
+        (
+            CP,
+            "lastModifiedBy",
+            &old.last_modified_by,
+            &new.last_modified_by,
+        ),
+        (CP, "revision", &old.revision, &new.revision),
+        (CP, "lastPrinted", &old.last_printed, &new.last_printed),
+        (CP, "category", &old.category, &new.category),
+        (
+            CP,
+            "contentStatus",
+            &old.content_status,
+            &new.content_status,
+        ),
+        (CP, "version", &old.version, &new.version),
+        (DT, "created", &old.created, &new.created),
+        (DT, "modified", &old.modified, &new.modified),
+    ];
+    let expanded = expanded_property_root(source, CP, "coreProperties")?;
+    let source = expanded.as_slice();
+    let (children, insertion) = property_child_ranges(source, CP, "coreProperties")?;
+    let mut edits = Vec::new();
+    let mut append = Vec::new();
+    for (uri, name, before, after) in fields {
+        if before == after {
+            continue;
+        }
+        let matches: Vec<_> = children
+            .iter()
+            .filter(|(ns, local, _, _)| ns.as_deref() == Some(uri) && local == name)
+            .collect();
+        if matches.len() > 1 {
+            return Err(invalid_shape_mutation(
+                "core properties",
+                format!("duplicate owned {name}"),
+            ));
+        }
+        let replacement = after.as_ref().map(|value| {
+            let prefix = if uri == DC { "dc" } else if uri == DT { "dcterms" } else { "cp" };
+            let typed = if uri == DT { r#" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="dcterms:W3CDTF""# } else { "" };
+            format!("<{prefix}:{name} xmlns:{prefix}=\"{uri}\"{typed}>{}</{prefix}:{name}>", quick_xml::escape::escape(value)).into_bytes()
+        }).unwrap_or_default();
+        if let Some((_, _, start, end)) = matches.first() {
+            let retained = edit_property_text(&source[*start..*end], after.as_deref())?;
+            edits.push((*start, *end, retained));
+        } else {
+            append.extend(replacement);
+        }
+    }
+    if !append.is_empty() {
+        edits.push((insertion, insertion, append));
+    }
+    edits.sort_by_key(|(start, _, _)| *start);
+    let mut result = Vec::new();
+    let mut cursor = 0;
+    for (start, end, bytes) in edits {
+        result.extend_from_slice(&source[cursor..start]);
+        result.extend(bytes);
+        cursor = end;
+    }
+    result.extend_from_slice(&source[cursor..]);
+    let parsed = CoreProperties::from_xml(&result)
+        .map_err(|e| invalid_shape_mutation("core properties", e.to_string()))?;
+    if &parsed != new {
+        return Err(invalid_shape_mutation(
+            "core properties",
+            "retained foreign owner prevents exact typed update",
+        ));
+    }
+    Ok(result)
+}
+
 fn picture_dimensions(
     image_data: &[u8],
     image_filename: &str,
@@ -9959,6 +11120,38 @@ impl<'a> TableRef<'a> {
             .as_ref()
             .is_some_and(|properties| properties.band_columns)
     }
+    /// Returns the retained table style identity without creating properties.
+    pub fn style_id(&self) -> Option<&str> {
+        self.table.properties.as_ref()?.style_id.as_deref()
+    }
+}
+
+/// One current slide-owned fill location. Paths name existing native members,
+/// and cell coordinates name the table at that path. No relationship crosses slides.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FillOwnerLocation {
+    SlideBackground {
+        slide_index: usize,
+    },
+    Shape {
+        slide_index: usize,
+        shape_path: Vec<usize>,
+    },
+    TableCell {
+        slide_index: usize,
+        shape_path: Vec<usize>,
+        row: usize,
+        column: usize,
+    },
+}
+impl FillOwnerLocation {
+    fn slide_index(&self) -> usize {
+        match self {
+            Self::SlideBackground { slide_index }
+            | Self::Shape { slide_index, .. }
+            | Self::TableCell { slide_index, .. } => *slide_index,
+        }
+    }
 }
 
 /// A behavior-bearing mutable DrawingML table and its containing frame extent.
@@ -10005,6 +11198,39 @@ impl<'a> TableMut<'a> {
     /// Returns one grid-column width in EMU.
     pub fn column_width(&self, column: usize) -> Option<Emu> {
         self.table().grid.columns.get(column).copied()
+    }
+
+    /// Returns the retained table style identity.
+    pub fn style_id(&self) -> Option<&str> {
+        self.table().properties.as_ref()?.style_id.as_deref()
+    }
+
+    /// Changes only the table style reference, preserving grid and source metadata.
+    pub fn set_style_id(&mut self, value: Option<String>) -> Result<()> {
+        if let Some(value) = value.as_deref() {
+            let bytes = value.as_bytes();
+            if bytes.len() != 38
+                || bytes[0] != b'{'
+                || bytes[37] != b'}'
+                || !bytes[1..37].iter().enumerate().all(|(index, byte)| {
+                    if [8, 13, 18, 23].contains(&index) {
+                        *byte == b'-'
+                    } else {
+                        byte.is_ascii_hexdigit()
+                    }
+                })
+            {
+                return Err(invalid_table_mutation(
+                    "set table style",
+                    "style id must be a braced GUID".to_owned(),
+                ));
+            }
+        }
+        if self.style_id() == value.as_deref() {
+            return Ok(());
+        }
+        table_properties_mut(self.table_mut_raw()).style_id = value;
+        Ok(())
     }
 
     /// Changes one grid width and synchronizes the containing frame width.
@@ -11923,30 +13149,81 @@ fn render_notes_pages(
             message: error.to_string(),
         })?;
     let notes_size = export_page_size(&presentation);
-    let notes_master_part = render_exact_related_part(
-        package,
-        &presentation_part,
-        rel_types::NOTES_MASTER,
-        content_types::NOTES_MASTER,
-    )?;
-    let notes_master = CT_NotesMaster::from_xml(required_part(package, &notes_master_part)?)
-        .map_err(|error| Error::MalformedPart {
-            part_name: notes_master_part.clone(),
-            message: error.to_string(),
-        })?;
-    let theme_part = render_exact_related_part(
-        package,
-        &notes_master_part,
-        rel_types::THEME,
-        content_types::THEME,
-    )?;
-    let theme =
-        CT_OfficeStyleSheet::from_xml(required_part(package, &theme_part)?).map_err(|error| {
-            Error::MalformedPart {
+    let present = package
+        .get_part_rels(&presentation_part)
+        .is_some_and(|rels| !rels.get_all_by_type(rel_types::NOTES_MASTER).is_empty());
+    let (notes_master_part, notes_master, theme) = if present {
+        let notes_master_part = render_exact_related_part(
+            package,
+            &presentation_part,
+            rel_types::NOTES_MASTER,
+            content_types::NOTES_MASTER,
+        )?;
+        let notes_master = CT_NotesMaster::from_xml(required_part(package, &notes_master_part)?)
+            .map_err(|error| Error::MalformedPart {
+                part_name: notes_master_part.clone(),
+                message: error.to_string(),
+            })?;
+        let theme_part = render_exact_related_part(
+            package,
+            &notes_master_part,
+            rel_types::THEME,
+            content_types::THEME,
+        )?;
+        let theme = CT_OfficeStyleSheet::from_xml(required_part(package, &theme_part)?).map_err(
+            |error| Error::MalformedPart {
                 part_name: theme_part,
                 message: error.to_string(),
-            }
-        })?;
+            },
+        )?;
+        (notes_master_part, notes_master, theme)
+    } else {
+        // Native-authenticated Office 16:9 notes geometry, kept entirely in
+        // this read-only export surface. Imported owner graphs are not repaired.
+        let mut tree = CT_ShapeTree::new();
+        for (id, kind, idx, x, y, cx, cy) in [
+            (1, PhType::Header, None, 0, 0, 2971800, 458788),
+            (2, PhType::DateTime, Some(1), 3884613, 0, 2971800, 458788),
+            (
+                3,
+                PhType::SlideImage,
+                Some(2),
+                685800,
+                1143000,
+                5486400,
+                3086100,
+            ),
+            (4, PhType::Body, Some(3), 685800, 4400550, 5486400, 3600450),
+            (5, PhType::Footer, Some(4), 0, 8685213, 2971800, 458787),
+            (
+                6,
+                PhType::SlideNumber,
+                Some(5),
+                3884613,
+                8685213,
+                2971800,
+                458787,
+            ),
+        ] {
+            let placeholder = CT_Placeholder::new(Some(kind), idx);
+            let mut shape = CT_Shape::new_placeholder(id, placeholder)
+                .map_err(|e| render_failure(e.to_string()))?;
+            shape.shape_properties.transform =
+                Some(positioned_transform(Emu(x), Emu(y), Emu(cx), Emu(cy)));
+            tree.children.push(ShapeTreeChild::Shape(shape));
+        }
+        let shell = format!(
+            r#"<p:notesMaster xmlns:p="{P_NS}" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="0" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/></p:spTree></p:cSld><p:clrMap accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" bg1="lt1" bg2="lt2" folHlink="folHlink" hlink="hlink" tx1="dk1" tx2="dk2"/></p:notesMaster>"#
+        );
+        let mut master = CT_NotesMaster::from_xml(shell.as_bytes())
+            .map_err(|e| render_failure(e.to_string()))?;
+        master.common_slide_data.shape_tree = tree;
+        (
+            "/ppt/rdocx-neutral-notes-export.xml".to_owned(),
+            master,
+            assembly.slides[0].theme.clone(),
+        )
+    };
     let default_text_style = notes_master
         .notes_style
         .clone()
@@ -11966,6 +13243,7 @@ fn render_notes_pages(
                 &prepared.slide_part,
                 &notes.part_name,
                 &notes_master_part,
+                present,
             )?;
         }
         let (page_source, page_master, page_notes) = remap_notes_export_scope(
@@ -12131,30 +13409,46 @@ fn render_handout_pages(
             message: error.to_string(),
         })?;
     let page_size = export_page_size(&presentation);
-    let handout_master_part = render_exact_related_part(
-        package,
-        &presentation_part,
-        rel_types::HANDOUT_MASTER,
-        content_types::HANDOUT_MASTER,
-    )?;
-    let handout_master = CT_HandoutMaster::from_xml(required_part(package, &handout_master_part)?)
-        .map_err(|error| Error::MalformedPart {
-            part_name: handout_master_part.clone(),
-            message: error.to_string(),
-        })?;
-    let theme_part = render_exact_related_part(
-        package,
-        &handout_master_part,
-        rel_types::THEME,
-        content_types::THEME,
-    )?;
-    let theme =
-        CT_OfficeStyleSheet::from_xml(required_part(package, &theme_part)?).map_err(|error| {
-            Error::MalformedPart {
+    let present = package
+        .get_part_rels(&presentation_part)
+        .is_some_and(|rels| !rels.get_all_by_type(rel_types::HANDOUT_MASTER).is_empty());
+    let (handout_master_part, handout_master, theme) = if present {
+        let handout_master_part = render_exact_related_part(
+            package,
+            &presentation_part,
+            rel_types::HANDOUT_MASTER,
+            content_types::HANDOUT_MASTER,
+        )?;
+        let handout_master =
+            CT_HandoutMaster::from_xml(required_part(package, &handout_master_part)?).map_err(
+                |error| Error::MalformedPart {
+                    part_name: handout_master_part.clone(),
+                    message: error.to_string(),
+                },
+            )?;
+        let theme_part = render_exact_related_part(
+            package,
+            &handout_master_part,
+            rel_types::THEME,
+            content_types::THEME,
+        )?;
+        let theme = CT_OfficeStyleSheet::from_xml(required_part(package, &theme_part)?).map_err(
+            |error| Error::MalformedPart {
                 part_name: theme_part,
                 message: error.to_string(),
-            }
-        })?;
+            },
+        )?;
+        (handout_master_part, handout_master, theme)
+    } else {
+        let source = br#"<p:handoutMaster xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/></p:spTree></p:cSld><p:clrMap accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" bg1="lt1" bg2="lt2" folHlink="folHlink" hlink="hlink" tx1="dk1" tx2="dk2"/></p:handoutMaster>"#;
+        let master =
+            CT_HandoutMaster::from_xml(source).map_err(|e| render_failure(e.to_string()))?;
+        (
+            "/ppt/rdocx-neutral-handout-export.xml".to_owned(),
+            master,
+            assembly.slides[0].theme.clone(),
+        )
+    };
     let default_text_style = presentation.default_text_style.clone().unwrap_or_default();
     let shell_layout = assembly.slides[0].layout.clone();
     let shell_master = assembly.slides[0].master.clone();
@@ -12257,22 +13551,29 @@ fn validate_notes_export_graph(
     slide_part: &str,
     notes_part: &str,
     notes_master_part: &str,
+    require_master: bool,
 ) -> Result<()> {
     if package.content_types.content_type_for(notes_part) != Some(content_types::NOTES_SLIDE) {
         return Err(render_failure(format!(
             "{notes_part}: expected notes-slide content type"
         )));
     }
-    let master = render_exact_related_part(
-        package,
-        notes_part,
-        rel_types::NOTES_MASTER,
-        content_types::NOTES_MASTER,
-    )?;
-    if master != notes_master_part {
-        return Err(render_failure(format!(
-            "{notes_part}: notes master {master} differs from presentation master {notes_master_part}"
-        )));
+    if require_master
+        || package
+            .get_part_rels(notes_part)
+            .is_some_and(|rels| !rels.get_all_by_type(rel_types::NOTES_MASTER).is_empty())
+    {
+        let master = render_exact_related_part(
+            package,
+            notes_part,
+            rel_types::NOTES_MASTER,
+            content_types::NOTES_MASTER,
+        )?;
+        if master != notes_master_part {
+            return Err(render_failure(format!(
+                "{notes_part}: notes master {master} differs from presentation master {notes_master_part}"
+            )));
+        }
     }
     let slide_relationships = package
         .get_part_rels(notes_part)
@@ -16892,6 +18193,35 @@ impl Presentation {
 
 #[cfg(test)]
 mod write_tests {
+
+    #[cfg(feature = "default-template")]
+    #[test]
+    fn fx205_fresh_metadata_is_deterministic_and_does_not_leak_template_authors() {
+        let presentation = Presentation::new().unwrap();
+        assert_eq!(presentation.len(), 0);
+        let properties = presentation
+            .core_properties()
+            .expect("fresh core properties");
+        assert_eq!(properties.created.as_deref(), Some("2000-01-01T00:00:00Z"));
+        assert_eq!(properties.modified.as_deref(), Some("2000-01-01T00:00:00Z"));
+        assert!(properties.creator.is_none());
+        assert!(properties.last_modified_by.is_none());
+        assert!(properties.description.is_none());
+        let bytes = presentation.to_bytes().unwrap();
+        let reopened = Presentation::from_bytes(&bytes).unwrap();
+        assert_eq!(reopened.core_properties(), Some(properties));
+        assert_eq!(reopened.to_bytes().unwrap(), bytes);
+        let mut authored = reopened;
+        let properties = authored.core_properties_mut();
+        properties.created = Some("1999-12-31T23:59:59Z".to_owned());
+        properties.modified = Some("2025-01-01T00:00:00Z".to_owned());
+        properties.creator = Some("Explicit user".to_owned());
+        properties.description = Some("Imported description".to_owned());
+        let saved = authored.to_bytes().unwrap();
+        let imported = Presentation::from_bytes(&saved).unwrap();
+        assert_eq!(imported.core_properties(), authored.core_properties());
+        assert_eq!(imported.to_bytes().unwrap(), saved);
+    }
     use std::collections::HashSet;
 
     use rpptx_oxml::placeholder::PhType;
@@ -18566,6 +19896,340 @@ mod write_tests {
         .into_iter()
         .fold(0.0, f64::max);
         assert!(maximum_edge_error > 1.0);
+    }
+
+    #[test]
+    fn fx205_application_and_custom_updates_preserve_source_identity() {
+        let mut original = Presentation::new().unwrap();
+        original.package.set_part("/docProps/app.xml",br#"<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:e="urn:opaque" e:root="keep"><Company e:flag="keep">before</Company><!--keep--><e:payload e:val="exact"/></Properties>"#.to_vec());
+        let custom=br#"<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes" xmlns:e="urn:opaque" e:root="keep"><property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="7" name="Exact"><vt:lpwstr e:flag="keep">before</vt:lpwstr></property><property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="8" name="Opaque"><vt:vector size="0" baseType="lpstr"/></property></Properties>"#;
+        original
+            .package
+            .set_part("/docProps/custom.xml", custom.to_vec());
+        original
+            .package
+            .content_types
+            .add_override("/docProps/custom.xml", content_types::CUSTOM_PROPERTIES);
+        original
+            .package
+            .package_rels
+            .add(rel_types::CUSTOM_PROPERTIES, "docProps/custom.xml");
+        let mut p = Presentation::from_package(original.package).unwrap();
+        let mut app = p.application_properties().unwrap().clone();
+        app.company = Some("changed".to_owned());
+        p.set_application_properties(app.clone()).unwrap();
+        let app_xml =
+            String::from_utf8(p.package.get_part("/docProps/app.xml").unwrap().to_vec()).unwrap();
+        assert!(app_xml.contains(
+            "<Company e:flag=\"keep\">changed</Company><!--keep--><e:payload e:val=\"exact\"/>"
+        ));
+        assert!(app_xml.contains("e:root=\"keep\""));
+        let before = p.to_bytes().unwrap();
+        app.application_version = Some("1".to_owned());
+        assert!(p.set_application_properties(app).is_err());
+        assert_eq!(p.to_bytes().unwrap(), before);
+        let old = p.custom_property("Exact").unwrap().clone();
+        let mut changed = old.clone();
+        changed.pid = 99;
+        changed.fmtid = "caller identity must not replace imported".to_owned();
+        changed.value = CustomPropertyValue::Lpwstr("after & exact".to_owned());
+        p.set_custom_property(changed).unwrap();
+        let updated = p.custom_property("Exact").unwrap();
+        assert_eq!(updated.pid, 7);
+        assert_eq!(updated.fmtid, old.fmtid);
+        let source =
+            String::from_utf8(p.package.get_part("/docProps/custom.xml").unwrap().to_vec())
+                .unwrap();
+        assert!(source.contains("<vt:lpwstr e:flag=\"keep\">after &amp; exact</vt:lpwstr>"));
+        assert!(source.contains("<vt:vector size=\"0\" baseType=\"lpstr\"/>"));
+        assert!(source.contains("e:root=\"keep\""));
+        let before = p.to_bytes().unwrap();
+        let mut opaque = p.custom_property("Opaque").unwrap().clone();
+        opaque.value = CustomPropertyValue::Empty;
+        assert!(p.set_custom_property(opaque).is_err());
+        assert_eq!(p.to_bytes().unwrap(), before);
+        assert!(p.remove_custom_property("missing").unwrap().is_none());
+        assert_eq!(p.to_bytes().unwrap(), before);
+        let reopened = Presentation::from_bytes(&before).unwrap();
+        assert_eq!(reopened.custom_properties(), p.custom_properties());
+        assert_eq!(reopened.to_bytes().unwrap(), before);
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn fx205_raster_formats_and_absent_handout_master_are_read_only() {
+        let mut presentation = Presentation::new().unwrap();
+        presentation.add_slide(6).unwrap();
+        let before = presentation.to_bytes().unwrap();
+        assert!(presentation.handout_master.is_none());
+        let options = |format| RasterOptions { dpi: 12.0, format };
+        let (png, _) = presentation
+            .render_slides_with_diagnostics(
+                &[0],
+                options(RasterFormat::Png {
+                    transparent_background: false,
+                }),
+                &[],
+            )
+            .unwrap();
+        assert!(
+            matches!(png, RasterOutput::SeparatePages(pages) if pages.len()==1 && pages[0].starts_with(b"\x89PNG"))
+        );
+        let (jpeg, _) = presentation
+            .render_slides_with_diagnostics(&[0], options(RasterFormat::Jpeg { quality: 80 }), &[])
+            .unwrap();
+        assert!(
+            matches!(jpeg, RasterOutput::SeparatePages(pages) if pages.len()==1 && pages[0].starts_with(b"\xff\xd8"))
+        );
+        let (tiff, _) = presentation
+            .render_slides_with_diagnostics(&[0], options(RasterFormat::Tiff), &[])
+            .unwrap();
+        assert!(
+            matches!(tiff, RasterOutput::MultiPageTiff(bytes) if bytes.starts_with(b"II*\0") || bytes.starts_with(b"MM\0*"))
+        );
+        assert!(
+            presentation
+                .to_handout_pdf_deterministic(HandoutLayout::Two)
+                .unwrap()
+                .starts_with(b"%PDF")
+        );
+        for selection in [vec![], vec![0, 0], vec![1]] {
+            assert!(
+                presentation
+                    .render_slides_with_diagnostics(&selection, options(RasterFormat::Tiff), &[])
+                    .is_err()
+            );
+        }
+        assert!(
+            presentation
+                .render_slides_with_diagnostics(
+                    &[0],
+                    options(RasterFormat::Jpeg { quality: 0 }),
+                    &[]
+                )
+                .is_err()
+        );
+        assert_eq!(presentation.to_bytes().unwrap(), before);
+        assert!(presentation.handout_master.is_none());
+        let mut package = presentation.staged_package(true).unwrap();
+        let part = presentation.notes_master_part.as_ref().unwrap();
+        package.remove_part(part);
+        package.remove_part_rels(part);
+        package.content_types.remove_override(part);
+        package
+            .get_or_create_part_rels(&presentation.presentation_part)
+            .items
+            .retain(|rel| rel.rel_type != rel_types::NOTES_MASTER);
+        let without_notes = Presentation::from_package(package).unwrap();
+        assert!(without_notes.notes_master.is_none());
+        let original = without_notes.to_bytes().unwrap();
+        let notes = without_notes.to_notes_pdf_deterministic().unwrap();
+        assert!(notes.starts_with(b"%PDF"));
+        assert!(without_notes.notes_master.is_none());
+        assert_eq!(without_notes.to_bytes().unwrap(), original);
+    }
+
+    #[test]
+    fn fx205_checked_core_updates_retain_opaque_source_and_refuse_ambiguity() {
+        let mut original = Presentation::new().unwrap();
+        let source = br#"<c:coreProperties xmlns:c="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:d="http://purl.org/dc/elements/1.1/" xmlns:e="urn:opaque" e:flag="exact"><d:title e:old="retired">before</d:title><!--keep--><e:owner e:x="1">opaque&amp;payload</e:owner><d:creator>imported</d:creator></c:coreProperties>"#;
+        original
+            .package
+            .set_part("/docProps/core.xml", source.to_vec());
+        let mut presentation = Presentation::from_package(original.package.clone()).unwrap();
+        let mut properties = presentation.core_properties().unwrap().clone();
+        properties.title = Some("new & title".to_owned());
+        presentation
+            .set_core_properties(properties.clone())
+            .unwrap();
+        let bytes = presentation.to_bytes().unwrap();
+        let reopened = Presentation::from_bytes(&bytes).unwrap();
+        assert_eq!(reopened.core_properties(), Some(&properties));
+        let xml = String::from_utf8(
+            reopened
+                .package
+                .get_part("/docProps/core.xml")
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(xml.contains("<!--keep--><e:owner e:x=\"1\">opaque&amp;payload</e:owner><d:creator>imported</d:creator>"));
+        assert!(xml.contains("e:flag=\"exact\""));
+        assert!(xml.contains("<d:title e:old=\"retired\">new &amp; title</d:title>"));
+        presentation
+            .set_core_properties(properties.clone())
+            .unwrap();
+        assert_eq!(presentation.to_bytes().unwrap(), bytes);
+        properties.title = Some("invalid\0".to_owned());
+        assert!(presentation.set_core_properties(properties).is_err());
+        assert_eq!(presentation.to_bytes().unwrap(), bytes);
+        let duplicate = String::from_utf8(source.to_vec()).unwrap().replace(
+            "</c:coreProperties>",
+            "<d:title>duplicate</d:title></c:coreProperties>",
+        );
+        original
+            .package
+            .set_part("/docProps/core.xml", duplicate.into_bytes());
+        let mut duplicate = Presentation::from_package(original.package.clone()).unwrap();
+        let before = duplicate.to_bytes().unwrap();
+        let mut properties = duplicate.core_properties().unwrap().clone();
+        properties.title = Some("changed".to_owned());
+        assert!(duplicate.set_core_properties(properties).is_err());
+        assert_eq!(duplicate.to_bytes().unwrap(), before);
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn fx205_picture_fill_is_atomic_and_retains_shared_image_owners() {
+        let mut presentation = Presentation::new().unwrap();
+        presentation.add_slide(6).unwrap();
+        presentation
+            .slide_mut(0)
+            .unwrap()
+            .add_textbox(Emu(0), Emu(0), Emu(1270000), Emu(1270000))
+            .unwrap();
+        let owner = FillOwnerLocation::Shape {
+            slide_index: 0,
+            shape_path: vec![0],
+        };
+        let background = FillOwnerLocation::SlideBackground { slide_index: 0 };
+        let original = presentation.to_bytes().unwrap();
+        assert!(
+            presentation
+                .set_picture_fill(&owner, b"not an image", "bad.png")
+                .is_err()
+        );
+        assert_eq!(presentation.to_bytes().unwrap(), original);
+        let image = render_bound_png_header(2, 2);
+        presentation
+            .set_picture_fill(&owner, &image, "valid.png")
+            .unwrap();
+        presentation
+            .set_picture_fill(&background, &image, "valid.png")
+            .unwrap();
+        let image_parts = |p: &Presentation| {
+            p.package
+                .parts
+                .keys()
+                .filter(|name| name.starts_with("/ppt/media/"))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(image_parts(&presentation).len(), 1);
+        let no_fill = Fill::from_xml(
+            br#"<a:noFill xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"/>"#,
+        )
+        .unwrap();
+        presentation.set_fill_at(&owner, no_fill.clone()).unwrap();
+        assert_eq!(image_parts(&presentation).len(), 1);
+        let once = presentation.to_bytes().unwrap();
+        presentation.set_fill_at(&owner, no_fill.clone()).unwrap();
+        assert_eq!(presentation.to_bytes().unwrap(), once);
+        let absent = FillOwnerLocation::Shape {
+            slide_index: 0,
+            shape_path: vec![99],
+        };
+        assert!(
+            presentation
+                .set_picture_fill(&absent, &image, "valid.png")
+                .is_err()
+        );
+        assert_eq!(presentation.to_bytes().unwrap(), once);
+        presentation.set_fill_at(&background, no_fill).unwrap();
+        assert!(image_parts(&presentation).is_empty());
+        let bytes = presentation.to_bytes().unwrap();
+        let reopened = Presentation::from_bytes(&bytes).unwrap();
+        assert!(image_parts(&reopened).is_empty());
+        assert_eq!(reopened.to_bytes().unwrap(), bytes);
+        let part = presentation.slides[0].part_name.clone();
+        presentation.package.set_part(
+            "/ppt/media/imported-unused.png",
+            render_bound_png_header(3, 3),
+        );
+        presentation
+            .package
+            .content_types
+            .add_override("/ppt/media/imported-unused.png", "image/png");
+        let orphan_id = presentation
+            .package
+            .get_or_create_part_rels(&part)
+            .add(rel_types::IMAGE, "../media/imported-unused.png");
+        presentation
+            .set_picture_fill(&owner, &image, "new.png")
+            .unwrap();
+        presentation
+            .set_fill_at(&owner, Fill::NoFill(NoFill::default()))
+            .unwrap();
+        assert!(
+            presentation
+                .package
+                .get_part_rels(&part)
+                .unwrap()
+                .get_by_id(&orphan_id)
+                .is_some()
+        );
+        assert!(
+            presentation
+                .package
+                .get_part("/ppt/media/imported-unused.png")
+                .is_some()
+        );
+        // The existing validator flags imported unreferenced IMAGE edges.
+        // Checked owner edits still preserve those unrelated OPC source members.
+        let mut saved = std::io::Cursor::new(Vec::new());
+        presentation.package.write_to(&mut saved).unwrap();
+        let reopened = Presentation::from_bytes(saved.get_ref()).unwrap();
+        assert!(
+            reopened
+                .package
+                .get_part_rels(&part)
+                .unwrap()
+                .get_by_id(&orphan_id)
+                .is_some()
+        );
+        assert_eq!(
+            reopened.package.get_part("/ppt/media/imported-unused.png"),
+            presentation
+                .package
+                .get_part("/ppt/media/imported-unused.png")
+        );
+    }
+
+    #[test]
+    fn fx205_table_style_and_flags_retain_grid_and_reject_invalid_style() {
+        let mut presentation = Presentation::new().unwrap();
+        presentation.add_slide(0).unwrap();
+        let style = "{5C22544A-7EE6-4342-B048-85BDC9FD1C3A}";
+        {
+            let mut slide = presentation.slide_mut(0).unwrap();
+            let mut shape = slide
+                .add_table(2, 2, Emu(0), Emu(0), Emu(300), Emu(300))
+                .unwrap();
+            let mut table = shape.table_mut().unwrap();
+            let grid = table.table().grid.clone();
+            table.set_style_id(Some(style.to_owned())).unwrap();
+            table.set_first_row(true);
+            table.set_last_row(true);
+            table.set_first_column(true);
+            table.set_last_column(true);
+            table.set_horizontal_banding(true);
+            table.set_vertical_banding(true);
+            assert_eq!(table.table().grid, grid);
+            assert!(table.set_style_id(Some("not-a-guid".to_owned())).is_err());
+            assert_eq!(table.style_id(), Some(style));
+        }
+        let saved = presentation.to_bytes().unwrap();
+        let reopened = Presentation::from_bytes(&saved).unwrap();
+        let slide = reopened.slide(0).unwrap();
+        let table = slide.shapes().find_map(|shape| shape.table()).unwrap();
+        assert_eq!(table.style_id(), Some(style));
+        assert!(
+            table.first_row() && table.last_row() && table.first_column() && table.last_column()
+        );
+        assert!(table.horizontal_banding() && table.vertical_banding());
+        assert_eq!(table.row_count(), 2);
+        assert_eq!(table.column_count(), 2);
+        assert_eq!(reopened.to_bytes().unwrap(), saved);
     }
 
     #[test]

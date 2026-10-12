@@ -858,8 +858,8 @@ place and do not advance the revision. `rpptx` and `rpptx.enum.text` export
   for `a:buNone`, `True` for an automatic number or picture bullet, or `None`.
   Assigning a character keeps the bullet colour, size, and font and replaces
   a preserved picture bullet. `False` writes `a:buNone`, `None` removes the
-  direct bullet, and `True` raises because automatic numbering is not
-  writable yet.
+  direct bullet, and `True` raises because a scheme is required.
+  `auto_number` selects the concrete scheme and optional start instead.
 - `Paragraph.add_run(text="")` stages an append and allocates the new returned
   run against prepared successor scopes before publication. The owning
   paragraph and text frame remain live, while prior affected run descendants
@@ -2772,8 +2772,8 @@ Presentation::handout_page_pngs_deterministic(
 ) -> Result<Vec<Vec<u8>>>;
 ```
 
-These additions are native Rust APIs only. Python, WASM, and CLI surfaces add
-no notes or handout methods and continue to preserve the underlying parts. No
+Python exposes notes and handout PDF through the native exporters. WASM and
+CLI add no new notes or handout methods and preserve the underlying parts. No
 new public surface is added to `rpptx-layout`, `rpptx-render`, or the OXML
 crates. The additive facade API is reviewed through the pre-1.0 release gate.
 
@@ -3476,3 +3476,32 @@ methods. Length operands reject bool, floats and overflow rather than coercing
 Python values. `Twips` converts a checked signed twip count to EMU.
 
 SectionHandle.set_text_watermark admits only opacity 0.5. Other valid-range values raise the named unsupported RdocxError before publishing any story, linkage or source change. Legacy native VML methods and image watermark opacity are unchanged.
+
+## Extended PowerPoint properties, fills and export
+
+Font.baseline reads float or None and accepts fractions from-1 to1. Font.spacing
+reads Length or None. Font.language, east_asian_name and complex_script_name
+read direct source values. Paragraph.auto_number accepts any of the41 admitted
+DrawingML schemes with start_at from1 to32767. bullet_color, bullet_size and
+bullet_font remain independently editable. Fractional bullet size accepts
+0.25 to4.0, while an imported absolute point size reads None without implying
+a follows-text policy. Table first_row, last_row, first_col, last_col,
+horz_banding, vert_banding and style_id preserve grid and cell ownership.
+
+FillFormat.gradient_stops exposes checked live stops with runtime identity
+independent of XML IDs. Equal-valued stops remain distinct, reordering retains
+identity, and deletion refuses when fewer than two would remain. Shape and
+slide picture fills use the actual owning slide's relationship allocation.
+FillFormat.transparency reads float or None without creating a fill and writes
+only a solid fill. Rejected writes are atomic.
+
+Presentation.core_properties, app_properties and custom_properties are checked
+live views. Sections and Slide.media return immutable snapshots.
+Shapes.add_movie and native media operations preserve poster and relationship
+ownership. render_slides accepts keyword-only dpi, format, quality, transparent,
+slides, fonts, font_dir and font_dirs. PNG and JPEG return lists of bytes, TIFF
+returns one multi-page byte stream. to_pdfa accepts pdfa-2b or pdfa-3b, and
+to_handout_pdf accepts1,2,3,4,6 or9 slides per page. Both accept the common
+keyword-only caller-font inputs. from_odp(file) and to_odp return the
+presentation or bytes with ordered OdpDiagnostics. save_reports exposes the
+ordered report payload.

@@ -1397,7 +1397,9 @@ verify. python-pptx ships a binary template for the same reason.
 Contents: 16:9 slide size, one master with the standard colour map and full
 `p:txStyles`, the eleven standard layouts, a full theme, `presProps`,
 `viewProps`, `tableStyles` defaulted to Medium Style 2 Accent 1, a notes master,
-and **zero slides**.
+and **zero slides**. Master and all eleven layouts use authenticated Office widescreen
+placeholder rectangles. Fresh core metadata omits template authors and
+description and uses deterministic2000-01-01 timestamps.
 
 The asset must live under the crate's own directory. A workspace-root `assets/`
 compiles locally but is not included in the published `.crate`.
@@ -1417,3 +1419,19 @@ intents leave source parts and package bytes untouched.
 The optional firstSlideNum preserves absence and accepts zero. Displayed
 numbers use checked start-plus-slide-index arithmetic. Physical slide identity,
 page ordinal, output naming, notes and handout numbering do not change.
+
+## Checked presentation properties and media
+
+Core, application and custom property edits preserve unrelated source XML.
+Invalid inputs and unsafe opaque rewrites refuse before package publication.
+Custom properties retain order, PID and fmtid, allocate the lowest unused PID
+at least2, and distinguish an empty value from absence. Unsupported imported
+custom values remain read-only. Sections expose immutable snapshots and checked
+ordered edits preserving native IDs. Media insertion, extraction, replacement
+and removal use the producing slide's native relationships and poster ownership.
+Picture-fill replacement prunes only references released by the selected edit
+that are no longer reachable, retaining unrelated imported relationships.
+
+A missing notes or handout master supplies neutral read-only export geometry
+without creating package parts. A present malformed or wrong-scope owner is
+refused. Missing notes-slide content remains blank.

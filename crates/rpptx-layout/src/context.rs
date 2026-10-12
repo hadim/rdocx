@@ -1403,10 +1403,58 @@ impl<'a> ResolveCtx<'a> {
                     }
                     _ => None,
                 };
-                let (fill, unsupported) = self.concrete_fill(
-                    normalized.as_ref().unwrap_or(fill),
-                    (bounds.width, bounds.height),
-                )?;
+                let selected = normalized.as_ref().unwrap_or(fill);
+                let shape_path = matches!(selected, Fill::Gradient(g) if matches!(&g.geometry, Some(GradientGeometry::Path(p)) if p.kind == PathGradientKind::Shape));
+                let (fill, unsupported) = if shape_path {
+                    let preset = shape
+                        .shape_properties
+                        .preset_geometry
+                        .as_ref()
+                        .map(|p| p.preset.as_str())
+                        .unwrap_or("rect");
+                    if shape.shape_properties.custom_geometry.is_some()
+                        || !matches!(preset, "rect" | "ellipse")
+                    {
+                        (None, Some("shape path gradient on unsupported contour"))
+                    } else {
+                        let mut selected = selected.clone();
+                        if preset == "ellipse"
+                            && let Fill::Gradient(g) = &mut selected
+                            && let Some(GradientGeometry::Path(p)) = &mut g.geometry
+                        {
+                            p.kind = PathGradientKind::Circle;
+                        }
+                        // A circle path expands to the corner. An ellipse shape stops at its own contour.
+                        let (mut paint, unsupported) =
+                            self.concrete_fill(&selected, (bounds.width, bounds.height))?;
+                        if preset == "ellipse"
+                            && let Some(Paint::Grid { colors, .. }) = &mut paint
+                            && let Fill::Gradient(g) = &selected
+                        {
+                            let mut stops = g
+                                .stops
+                                .iter()
+                                .filter_map(|stop| {
+                                    stop.color.as_ref().map(|c| {
+                                        self.concrete_color(c).map(|color| GradientStop {
+                                            offset: f64::from(stop.position.0) / 100_000.0,
+                                            color,
+                                        })
+                                    })
+                                })
+                                .collect::<Result<Vec<_>, _>>()?;
+                            stops.sort_by(|a, b| a.offset.total_cmp(&b.offset));
+                            for (index, color) in colors.iter_mut().enumerate() {
+                                let x = ((index % 128) as f64 + 0.5) / 64.0 - 1.0;
+                                let y = ((index / 128) as f64 + 0.5) / 64.0 - 1.0;
+                                *color = path_gradient_color(&stops, x.hypot(y));
+                            }
+                        }
+                        (paint, unsupported)
+                    }
+                } else {
+                    self.concrete_fill(selected, (bounds.width, bounds.height))?
+                };
                 (fill, None, unsupported, None)
             }
             None => (None, None, None, None),
@@ -1918,13 +1966,14 @@ impl ResolveCtx<'_> {
                 if gradient.tile_rect.is_some() {
                     return Ok((None, Some("gradient tile rectangle")));
                 }
-                if let Some(GradientGeometry::Path(path)) = &gradient.geometry {
-                    let unsupported = match path.kind {
-                        PathGradientKind::Circle => "circle path gradient",
-                        PathGradientKind::Rectangle => "rectangle path gradient",
-                        PathGradientKind::Shape => "shape path gradient",
-                    };
-                    return Ok((None, Some(unsupported)));
+                if let Some(GradientGeometry::Path(path)) = &gradient.geometry
+                    && !path.fill_to_rect.as_ref().is_some_and(|rect| {
+                        [rect.left, rect.top, rect.right, rect.bottom]
+                            .into_iter()
+                            .all(|value| value.is_some_and(|value| value.0 == 50_000))
+                    })
+                {
+                    return Ok((None, Some("path gradient with non-centred fill rectangle")));
                 }
                 let mut stops = Vec::with_capacity(gradient.stops.len());
                 for stop in &gradient.stops {
@@ -1975,21 +2024,110 @@ impl ResolveCtx<'_> {
                                 x: center.x + delta.x,
                                 y: center.y + delta.y,
                             },
-                            stops,
+                            powerpoint_gradient_stops(&stops),
                             (true, true),
                         )
                     }
                     None => Paint::linear(
                         Point { x: 0.0, y: 0.0 },
                         Point { x: size.0, y: 0.0 },
-                        stops,
+                        powerpoint_gradient_stops(&stops),
                         (true, true),
                     ),
-                    Some(GradientGeometry::Path(_)) => unreachable!("rejected above"),
+                    Some(GradientGeometry::Path(path)) => {
+                        let centered = path.fill_to_rect.as_ref().is_some_and(|r| {
+                            [r.left, r.top, r.right, r.bottom]
+                                .into_iter()
+                                .all(|v| v.is_some_and(|v| v.0 == 50_000))
+                        });
+                        if !centered {
+                            return Ok((
+                                None,
+                                Some("path gradient with non-centred fill rectangle"),
+                            ));
+                        }
+                        let mut ordered = stops;
+                        ordered.sort_by(|a, b| a.offset.total_cmp(&b.offset));
+                        let mut colors = Vec::with_capacity(128 * 128);
+                        for y in 0..128 {
+                            for x in 0..128 {
+                                let dx = ((f64::from(x) + 0.5) / 128.0 - 0.5).abs() * 2.0;
+                                let dy = ((f64::from(y) + 0.5) / 128.0 - 0.5).abs() * 2.0;
+                                let distance = match path.kind {
+                                    PathGradientKind::Circle => {
+                                        dx.hypot(dy) / std::f64::consts::SQRT_2
+                                    }
+                                    PathGradientKind::Rectangle | PathGradientKind::Shape => {
+                                        dx.max(dy)
+                                    }
+                                };
+                                colors.push(path_gradient_color(&ordered, distance));
+                            }
+                        }
+                        let Some(paint) = Paint::grid(
+                            Rect {
+                                x: 0.0,
+                                y: 0.0,
+                                width: size.0,
+                                height: size.1,
+                            },
+                            128,
+                            128,
+                            colors,
+                        ) else {
+                            return Ok((
+                                None,
+                                Some("path gradient without positive finite extent"),
+                            ));
+                        };
+                        paint
+                    }
                 };
                 Ok((Some(paint), None))
             }
-            Fill::Pattern(_) => Ok((None, Some("pattern fill"))),
+            Fill::Pattern(pattern) => {
+                let Some(rows) = pattern.preset.as_deref().and_then(native_pattern_rows) else {
+                    return Ok((None, Some("pattern without supported preset")));
+                };
+                let foreground = pattern
+                    .foreground
+                    .as_ref()
+                    .map(|c| self.concrete_color(c))
+                    .transpose()?
+                    .unwrap_or(Color::BLACK);
+                let background = pattern
+                    .background
+                    .as_ref()
+                    .map(|c| self.concrete_color(c))
+                    .transpose()?
+                    .unwrap_or(Color::WHITE);
+                let mut colors = Vec::with_capacity(4096);
+                for &row in rows {
+                    let bits = NATIVE_PATTERN_ROW_WEIGHTS[usize::from(row)];
+                    for x in 0..64 {
+                        let weight = ((bits >> (126 - x * 2)) & 3) as u8;
+                        colors.push(blend_fill_colors(
+                            background,
+                            foreground,
+                            f64::from(weight) / 2.0,
+                        ));
+                    }
+                }
+                Ok((
+                    Paint::grid(
+                        Rect {
+                            x: 0.0,
+                            y: 0.0,
+                            width: 8.0,
+                            height: 8.0,
+                        },
+                        64,
+                        64,
+                        colors,
+                    ),
+                    None,
+                ))
+            }
             Fill::Blip(_) => Ok((None, Some("picture fill media"))),
         }
     }
@@ -3124,6 +3262,7 @@ fn universal_measure_points(value: &str) -> Result<f64, ResolveError> {
         })?;
     match unit {
         "pt" => Ok(number),
+        "pc" | "pi" => Ok(number * 12.0),
         "in" => Ok(number * 72.0),
         "cm" => Ok(number * 72.0 / 2.54),
         "mm" => Ok(number * 72.0 / 25.4),
@@ -4210,6 +4349,454 @@ fn find_placeholder<'a>(
     None
 }
 
+fn blend_fill_colors(a: Color, b: Color, t: f64) -> Color {
+    let t = t.clamp(0.0, 1.0);
+    Color {
+        r: a.r + (b.r - a.r) * t,
+        g: a.g + (b.g - a.g) * t,
+        b: a.b + (b.b - a.b) * t,
+        a: a.a + (b.a - a.a) * t,
+    }
+}
+
+// PowerPoint's documented two-colour endpoint and mirrored three-colour
+// gradients use channel-directed gamma 1.875. Other stop lists remain linear.
+// This PPT resolver samples the curve for existing encoded-RGB Paint consumers.
+// Word colour/tint policy and source-derived pattern palette weights stay intact.
+fn powerpoint_fill_colors(a: Color, b: Color, t: f64) -> Color {
+    fn channel(a: f64, b: f64, t: f64) -> f64 {
+        let weight = if b >= a {
+            1.0 - (1.0 - t).powf(1.875)
+        } else {
+            t.powf(1.875)
+        };
+        a + (b - a) * weight
+    }
+    let t = t.clamp(0.0, 1.0);
+    Color {
+        r: channel(a.r, b.r, t),
+        g: channel(a.g, b.g, t),
+        b: channel(a.b, b.b, t),
+        a: a.a + (b.a - a.a) * t,
+    }
+}
+
+fn powerpoint_gradient_stops(stops: &[GradientStop]) -> Vec<GradientStop> {
+    let mut ordered = stops.to_vec();
+    ordered.sort_by(|a, b| a.offset.total_cmp(&b.offset));
+    let gamma = ordered.len() == 2 && ordered[0].offset == 0.0 && ordered[1].offset == 1.0
+        || ordered.len() == 3
+            && ordered[0].offset == 0.0
+            && ordered[2].offset == 1.0
+            && ordered[0].color == ordered[2].color;
+    if !gamma {
+        return ordered;
+    }
+    let mut sampled = Vec::with_capacity(ordered.len() + 257);
+    for i in 0..=256 {
+        let offset = f64::from(i) / 256.0;
+        sampled.push(GradientStop {
+            offset,
+            color: path_gradient_color(&ordered, offset),
+        });
+    }
+    // Retain exact original stops, including coincident hard colour boundaries.
+    sampled.extend(ordered);
+    sampled.sort_by(|a, b| a.offset.total_cmp(&b.offset));
+    sampled
+}
+
+fn path_gradient_color(stops: &[GradientStop], distance: f64) -> Color {
+    let Some(first) = stops.first() else {
+        return Color::BLACK;
+    };
+    let gamma = stops.len() == 2 && stops[0].offset == 0.0 && stops[1].offset == 1.0
+        || stops.len() == 3
+            && stops[0].offset == 0.0
+            && stops[2].offset == 1.0
+            && stops[0].color == stops[2].color;
+    let distance = distance.clamp(0.0, 1.0);
+    if distance <= first.offset {
+        return first.color;
+    }
+    for pair in stops.windows(2) {
+        if distance <= pair[1].offset {
+            let width = pair[1].offset - pair[0].offset;
+            let t = if width > 0.0 {
+                (distance - pair[0].offset) / width
+            } else {
+                1.0
+            };
+            return if gamma {
+                powerpoint_fill_colors(pair[0].color, pair[1].color, t)
+            } else {
+                blend_fill_colors(pair[0].color, pair[1].color, t)
+            };
+        }
+    }
+    stops.last().map(|stop| stop.color).unwrap_or(first.color)
+}
+
+// Native PowerPoint 16.113.4 source-owned preset tiles, 8pt with 64 samples per axis.
+// Original PDF SHA82e0bfb2cd978c59ebac96d72020e2d28fc2a0bead9728ad8ba3e8b1e34674c0.
+// Each two-bit weight is background, half foreground, or foreground. Equal rows
+// share only constant data, retaining every sample from the independently captured tiles.
+const NATIVE_PATTERN_ROW_WEIGHTS: [u128; 77] = [
+    0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,
+    0xaaaa0000000000000000000000000000,
+    0xaaaaaaaa00000000aaaaaaaa00000000,
+    0x0000aaaaaaaa00000000aaaaaaaa0000,
+    0x00000000aaaaaaaa00000000aaaaaaaa,
+    0xaaaa00000000aaaaaaaa00000000aaaa,
+    0x00000000000000000000000000000000,
+    0xaaaa000000000000aaaa000000000000,
+    0x0000aaaa000000000000aaaa00000000,
+    0x00000000aaaa000000000000aaaa0000,
+    0x000000000000aaaa000000000000aaaa,
+    0xaaaaaaaaaaaaaaaa0000000000000000,
+    0x0000000000000000aaaaaaaaaaaaaaaa,
+    0x0000000000000000aaaa000000000000,
+    0x0000000000000000000000000000aaaa,
+    0x000000000000000000000000aaaa0000,
+    0x00000000000000000000aaaa00000000,
+    0x000000000000aaaaaaaa000000000000,
+    0x00000000aaaa00000000aaaa00000000,
+    0x0000aaaa0000000000000000aaaa0000,
+    0xaaaa000000000000000000000000aaaa,
+    0xaaaa555500000000000000005555aaaa,
+    0x5555aaaa5555000000005555aaaa5555,
+    0x00005555aaaa55555555aaaa55550000,
+    0x000000005555aaaaaaaa555500000000,
+    0x000000000000aaaa0000000000000000,
+    0xaaaa0000aaaa0000aaaa0000aaaa0000,
+    0xaaaa5555000000000000000000005555,
+    0x5555aaaa555500000000000000000000,
+    0x00005555aaaa55550000000000000000,
+    0x000000005555aaaa5555000000000000,
+    0x0000000000005555aaaa555500000000,
+    0x00000000000000005555aaaa55550000,
+    0x000000000000000000005555aaaa5555,
+    0x5555000000000000000000005555aaaa,
+    0xaaaa0000aaaaaaaa000000000000aaaa,
+    0x00000000aaaaaaaa0000000000000000,
+    0x000000000000000000000000aaaaaaaa,
+    0x000000000000aaaaaaaa0000aaaaaaaa,
+    0xaaaaaaaa0000aaaaaaaa000000000000,
+    0xaaaaaaaa000000000000000000000000,
+    0x0000000000000000aaaaaaaa00000000,
+    0xaaaa000000000000aaaaaaaa0000aaaa,
+    0x0000aaaa0000aaaa0000aaaa0000aaaa,
+    0xaaaa00000000000000000000aaaa0000,
+    0x00000000aaaa0000aaaa000000000000,
+    0x0000aaaa0000aaaa000000000000aaaa,
+    0x000000000000aaaa0000aaaa0000aaaa,
+    0xaaaaaaaaaaaa0000aaaaaaaaaaaa0000,
+    0xaaaa0000aaaaaaaaaaaa0000aaaaaaaa,
+    0x0000aaaaaaaaaaaa0000aaaaaaaaaaaa,
+    0xaaaaaaaa0000aaaaaaaaaaaa0000aaaa,
+    0xaaaaaaaaaaaa0000aaaaaaaaaaaaaaaa,
+    0xaaaaaaaaaaaaaaaaaaaaaaaaaaaa0000,
+    0xaaaaaaaaaaaaaaaa0000aaaaaaaaaaaa,
+    0x0000aaaaaaaaaaaaaaaaaaaaaaaaaaaa,
+    0xaaaa0000000000000000aaaa00000000,
+    0x0000aaaa00000000aaaa000000000000,
+    0x0000aaaa000000000000000000000000,
+    0x00000000aaaa00000000000000000000,
+    0x00000000aaaaaaaaaaaa000000000000,
+    0x0000aaaaaaaaaaaaaaaaaaaa00000000,
+    0xaaaa000000000000aaaa00000000aaaa,
+    0xaaaa000000000000aaaaaaaaaaaaaaaa,
+    0xaaaa00000000aaaaaaaa000000000000,
+    0xaaaaaaaaaaaaaaaaaaaa000000000000,
+    0x00000000aaaa00000000aaaa0000aaaa,
+    0x0000aaaa0000aaaa0000aaaa00000000,
+    0x0000aaaa000000000000aaaa0000aaaa,
+    0x000000000000aaaa0000aaaa00000000,
+    0xaaaaaaaa00000000000000000000aaaa,
+    0xaaaaaaaaaaaa00000000000000000000,
+    0x0000aaaaaaaaaaaa0000000000000000,
+    0x000000000000aaaaaaaaaaaa00000000,
+    0x0000000000000000aaaaaaaaaaaa0000,
+    0x00000000000000000000aaaaaaaaaaaa,
+    0xaaaa00000000000000000000aaaaaaaa,
+];
+
+fn native_pattern_rows(preset: &str) -> Option<&'static [u8; 64]> {
+    match preset {
+        "cross" => Some(&[
+            0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1,
+        ]),
+        "dkDnDiag" => Some(&[
+            2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5,
+            5, 5, 5, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5,
+            5, 5, 5, 5, 5, 5,
+        ]),
+        "dkHorz" => Some(&[
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+            6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+            6, 6, 6, 6, 6, 6,
+        ]),
+        "dkUpDiag" => Some(&[
+            4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 5, 5, 5, 5, 5,
+            5, 5, 5, 4, 4, 4, 4, 4, 4, 4, 4, 3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 5, 5,
+            5, 5, 5, 5, 5, 5,
+        ]),
+        "dkVert" => Some(&[
+            2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+            2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+            2, 2, 2, 2, 2, 2,
+        ]),
+        "dashDnDiag" => Some(&[
+            6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8,
+            8, 8, 8, 9, 9, 9, 9, 9, 9, 9, 9, 10, 10, 10, 10, 10, 10, 10, 10, 6, 6, 6, 6, 6, 6, 6,
+            6, 6, 6, 6, 6, 6, 6, 6, 6,
+        ]),
+        "dashHorz" => Some(&[
+            11, 11, 11, 11, 11, 11, 11, 11, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+            6, 6, 6, 6, 6, 6, 12, 12, 12, 12, 12, 12, 12, 12, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+            6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+        ]),
+        "dashUpDiag" => Some(&[
+            6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 10, 10, 10, 10, 10, 10, 10, 10, 9, 9,
+            9, 9, 9, 9, 9, 9, 8, 8, 8, 8, 8, 8, 8, 8, 7, 7, 7, 7, 7, 7, 7, 7, 6, 6, 6, 6, 6, 6, 6,
+            6, 6, 6, 6, 6, 6, 6, 6, 6,
+        ]),
+        "dashVert" => Some(&[
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
+            13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
+        ]),
+        "diagBrick" => Some(&[
+            14, 14, 14, 14, 14, 14, 14, 14, 15, 15, 15, 15, 15, 15, 15, 15, 16, 16, 16, 16, 16, 16,
+            16, 16, 13, 13, 13, 13, 13, 13, 13, 13, 17, 17, 17, 17, 17, 17, 17, 17, 18, 18, 18, 18,
+            18, 18, 18, 18, 19, 19, 19, 19, 19, 19, 19, 19, 20, 20, 20, 20, 20, 20, 20, 20,
+        ]),
+        "diagCross" => Some(&[
+            21, 21, 21, 21, 21, 21, 21, 21, 22, 22, 22, 22, 22, 22, 22, 22, 23, 23, 23, 23, 23, 23,
+            23, 23, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 23, 23, 23, 23,
+            23, 23, 23, 23, 22, 22, 22, 22, 22, 22, 22, 22, 21, 21, 21, 21, 21, 21, 21, 21,
+        ]),
+        "divot" => Some(&[
+            6, 6, 6, 6, 6, 6, 6, 6, 25, 25, 25, 25, 25, 25, 25, 25, 13, 13, 13, 13, 13, 13, 13, 13,
+            25, 25, 25, 25, 25, 25, 25, 25, 6, 6, 6, 6, 6, 6, 6, 6, 1, 1, 1, 1, 1, 1, 1, 1, 14, 14,
+            14, 14, 14, 14, 14, 14, 1, 1, 1, 1, 1, 1, 1, 1,
+        ]),
+        "dotDmnd" => Some(&[
+            1, 1, 1, 1, 1, 1, 1, 1, 6, 6, 6, 6, 6, 6, 6, 6, 9, 9, 9, 9, 9, 9, 9, 9, 6, 6, 6, 6, 6,
+            6, 6, 6, 13, 13, 13, 13, 13, 13, 13, 13, 6, 6, 6, 6, 6, 6, 6, 6, 9, 9, 9, 9, 9, 9, 9,
+            9, 6, 6, 6, 6, 6, 6, 6, 6,
+        ]),
+        "dotGrid" => Some(&[
+            26, 26, 26, 26, 26, 26, 26, 26, 6, 6, 6, 6, 6, 6, 6, 6, 1, 1, 1, 1, 1, 1, 1, 1, 6, 6,
+            6, 6, 6, 6, 6, 6, 1, 1, 1, 1, 1, 1, 1, 1, 6, 6, 6, 6, 6, 6, 6, 6, 1, 1, 1, 1, 1, 1, 1,
+            1, 6, 6, 6, 6, 6, 6, 6, 6,
+        ]),
+        "dnDiag" => Some(&[
+            27, 27, 27, 27, 27, 27, 27, 27, 28, 28, 28, 28, 28, 28, 28, 28, 29, 29, 29, 29, 29, 29,
+            29, 29, 30, 30, 30, 30, 30, 30, 30, 30, 31, 31, 31, 31, 31, 31, 31, 31, 32, 32, 32, 32,
+            32, 32, 32, 32, 33, 33, 33, 33, 33, 33, 33, 33, 34, 34, 34, 34, 34, 34, 34, 34,
+        ]),
+        "horz" => Some(&[
+            0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+            6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+            6, 6, 6, 6, 6, 6,
+        ]),
+        "horzBrick" => Some(&[
+            0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
+            13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
+        ]),
+        "lgCheck" => Some(&[
+            11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11,
+            11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12,
+            12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12,
+        ]),
+        "lgConfetti" => Some(&[
+            35, 35, 35, 35, 35, 35, 35, 35, 36, 36, 36, 36, 36, 36, 36, 36, 37, 37, 37, 37, 37, 37,
+            37, 37, 38, 38, 38, 38, 38, 38, 38, 38, 39, 39, 39, 39, 39, 39, 39, 39, 40, 40, 40, 40,
+            40, 40, 40, 40, 41, 41, 41, 41, 41, 41, 41, 41, 42, 42, 42, 42, 42, 42, 42, 42,
+        ]),
+        "lgGrid" => Some(&[
+            0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1,
+        ]),
+        "ltDnDiag" => Some(&[
+            7, 7, 7, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9, 9, 9, 10, 10, 10, 10,
+            10, 10, 10, 10, 7, 7, 7, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9, 9, 9,
+            10, 10, 10, 10, 10, 10, 10, 10,
+        ]),
+        "ltHorz" => Some(&[
+            0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+            6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+            6, 6, 6, 6, 6, 6,
+        ]),
+        "ltUpDiag" => Some(&[
+            10, 10, 10, 10, 10, 10, 10, 10, 9, 9, 9, 9, 9, 9, 9, 9, 8, 8, 8, 8, 8, 8, 8, 8, 7, 7,
+            7, 7, 7, 7, 7, 7, 10, 10, 10, 10, 10, 10, 10, 10, 9, 9, 9, 9, 9, 9, 9, 9, 8, 8, 8, 8,
+            8, 8, 8, 8, 7, 7, 7, 7, 7, 7, 7, 7,
+        ]),
+        "ltVert" => Some(&[
+            7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+            7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+            7, 7, 7, 7, 7, 7,
+        ]),
+        "narHorz" => Some(&[
+            0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 6, 6, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 6, 6,
+            6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6, 6, 6, 6, 6, 6, 6, 0, 0, 0, 0, 0, 0, 0, 0, 6, 6,
+            6, 6, 6, 6, 6, 6,
+        ]),
+        "narVert" => Some(&[
+            43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43,
+            43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43,
+            43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43, 43,
+        ]),
+        "openDmnd" => Some(&[
+            44, 44, 44, 44, 44, 44, 44, 44, 8, 8, 8, 8, 8, 8, 8, 8, 45, 45, 45, 45, 45, 45, 45, 45,
+            25, 25, 25, 25, 25, 25, 25, 25, 45, 45, 45, 45, 45, 45, 45, 45, 8, 8, 8, 8, 8, 8, 8, 8,
+            44, 44, 44, 44, 44, 44, 44, 44, 14, 14, 14, 14, 14, 14, 14, 14,
+        ]),
+        "pct10" => Some(&[
+            1, 1, 1, 1, 1, 1, 1, 1, 6, 6, 6, 6, 6, 6, 6, 6, 13, 13, 13, 13, 13, 13, 13, 13, 6, 6,
+            6, 6, 6, 6, 6, 6, 1, 1, 1, 1, 1, 1, 1, 1, 6, 6, 6, 6, 6, 6, 6, 6, 13, 13, 13, 13, 13,
+            13, 13, 13, 6, 6, 6, 6, 6, 6, 6, 6,
+        ]),
+        "pct20" => Some(&[
+            7, 7, 7, 7, 7, 7, 7, 7, 6, 6, 6, 6, 6, 6, 6, 6, 9, 9, 9, 9, 9, 9, 9, 9, 6, 6, 6, 6, 6,
+            6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7, 6, 6, 6, 6, 6, 6, 6, 6, 9, 9, 9, 9, 9, 9, 9, 9, 6, 6,
+            6, 6, 6, 6, 6, 6,
+        ]),
+        "pct25" => Some(&[
+            7, 7, 7, 7, 7, 7, 7, 7, 9, 9, 9, 9, 9, 9, 9, 9, 7, 7, 7, 7, 7, 7, 7, 7, 9, 9, 9, 9, 9,
+            9, 9, 9, 7, 7, 7, 7, 7, 7, 7, 7, 9, 9, 9, 9, 9, 9, 9, 9, 7, 7, 7, 7, 7, 7, 7, 7, 9, 9,
+            9, 9, 9, 9, 9, 9,
+        ]),
+        "pct30" => Some(&[
+            26, 26, 26, 26, 26, 26, 26, 26, 8, 8, 8, 8, 8, 8, 8, 8, 26, 26, 26, 26, 26, 26, 26, 26,
+            10, 10, 10, 10, 10, 10, 10, 10, 26, 26, 26, 26, 26, 26, 26, 26, 8, 8, 8, 8, 8, 8, 8, 8,
+            26, 26, 26, 26, 26, 26, 26, 26, 10, 10, 10, 10, 10, 10, 10, 10,
+        ]),
+        "pct40" => Some(&[
+            26, 26, 26, 26, 26, 26, 26, 26, 43, 43, 43, 43, 43, 43, 43, 43, 26, 26, 26, 26, 26, 26,
+            26, 26, 46, 46, 46, 46, 46, 46, 46, 46, 26, 26, 26, 26, 26, 26, 26, 26, 43, 43, 43, 43,
+            43, 43, 43, 43, 26, 26, 26, 26, 26, 26, 26, 26, 47, 47, 47, 47, 47, 47, 47, 47,
+        ]),
+        "pct5" => Some(&[
+            1, 1, 1, 1, 1, 1, 1, 1, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+            6, 6, 6, 13, 13, 13, 13, 13, 13, 13, 13, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6, 6,
+            6, 6, 6, 6, 6, 6, 6, 6, 6,
+        ]),
+        "pct50" => Some(&[
+            26, 26, 26, 26, 26, 26, 26, 26, 43, 43, 43, 43, 43, 43, 43, 43, 26, 26, 26, 26, 26, 26,
+            26, 26, 43, 43, 43, 43, 43, 43, 43, 43, 26, 26, 26, 26, 26, 26, 26, 26, 43, 43, 43, 43,
+            43, 43, 43, 43, 26, 26, 26, 26, 26, 26, 26, 26, 43, 43, 43, 43, 43, 43, 43, 43,
+        ]),
+        "pct60" => Some(&[
+            48, 48, 48, 48, 48, 48, 48, 48, 43, 43, 43, 43, 43, 43, 43, 43, 49, 49, 49, 49, 49, 49,
+            49, 49, 43, 43, 43, 43, 43, 43, 43, 43, 48, 48, 48, 48, 48, 48, 48, 48, 43, 43, 43, 43,
+            43, 43, 43, 43, 49, 49, 49, 49, 49, 49, 49, 49, 43, 43, 43, 43, 43, 43, 43, 43,
+        ]),
+        "pct70" => Some(&[
+            50, 50, 50, 50, 50, 50, 50, 50, 51, 51, 51, 51, 51, 51, 51, 51, 50, 50, 50, 50, 50, 50,
+            50, 50, 51, 51, 51, 51, 51, 51, 51, 51, 50, 50, 50, 50, 50, 50, 50, 50, 51, 51, 51, 51,
+            51, 51, 51, 51, 50, 50, 50, 50, 50, 50, 50, 50, 51, 51, 51, 51, 51, 51, 51, 51,
+        ]),
+        "pct75" => Some(&[
+            50, 50, 50, 50, 50, 50, 50, 50, 0, 0, 0, 0, 0, 0, 0, 0, 51, 51, 51, 51, 51, 51, 51, 51,
+            0, 0, 0, 0, 0, 0, 0, 0, 50, 50, 50, 50, 50, 50, 50, 50, 0, 0, 0, 0, 0, 0, 0, 0, 51, 51,
+            51, 51, 51, 51, 51, 51, 0, 0, 0, 0, 0, 0, 0, 0,
+        ]),
+        "pct80" => Some(&[
+            52, 52, 52, 52, 52, 52, 52, 52, 0, 0, 0, 0, 0, 0, 0, 0, 53, 53, 53, 53, 53, 53, 53, 53,
+            0, 0, 0, 0, 0, 0, 0, 0, 52, 52, 52, 52, 52, 52, 52, 52, 0, 0, 0, 0, 0, 0, 0, 0, 53, 53,
+            53, 53, 53, 53, 53, 53, 0, 0, 0, 0, 0, 0, 0, 0,
+        ]),
+        "pct90" => Some(&[
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 54, 54, 54, 54,
+            54, 54, 54, 54, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            55, 55, 55, 55, 55, 55, 55, 55,
+        ]),
+        "plaid" => Some(&[
+            26, 26, 26, 26, 26, 26, 26, 26, 43, 43, 43, 43, 43, 43, 43, 43, 26, 26, 26, 26, 26, 26,
+            26, 26, 43, 43, 43, 43, 43, 43, 43, 43, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11,
+            11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 11,
+        ]),
+        "shingle" => Some(&[
+            37, 37, 37, 37, 37, 37, 37, 37, 56, 56, 56, 56, 56, 56, 56, 56, 57, 57, 57, 57, 57, 57,
+            57, 57, 36, 36, 36, 36, 36, 36, 36, 36, 41, 41, 41, 41, 41, 41, 41, 41, 15, 15, 15, 15,
+            15, 15, 15, 15, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14,
+        ]),
+        "smCheck" => Some(&[
+            5, 5, 5, 5, 5, 5, 5, 5, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 5, 5, 5, 5, 5,
+            5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 5, 5,
+            5, 5, 5, 5, 5, 5,
+        ]),
+        "smConfetti" => Some(&[
+            1, 1, 1, 1, 1, 1, 1, 1, 13, 13, 13, 13, 13, 13, 13, 13, 58, 58, 58, 58, 58, 58, 58, 58,
+            15, 15, 15, 15, 15, 15, 15, 15, 25, 25, 25, 25, 25, 25, 25, 25, 14, 14, 14, 14, 14, 14,
+            14, 14, 59, 59, 59, 59, 59, 59, 59, 59, 16, 16, 16, 16, 16, 16, 16, 16,
+        ]),
+        "smGrid" => Some(&[
+            0, 0, 0, 0, 0, 0, 0, 0, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+            7, 7, 7, 0, 0, 0, 0, 0, 0, 0, 0, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7,
+            7, 7, 7, 7, 7, 7,
+        ]),
+        "solidDmnd" => Some(&[
+            25, 25, 25, 25, 25, 25, 25, 25, 60, 60, 60, 60, 60, 60, 60, 60, 61, 61, 61, 61, 61, 61,
+            61, 61, 53, 53, 53, 53, 53, 53, 53, 53, 61, 61, 61, 61, 61, 61, 61, 61, 60, 60, 60, 60,
+            60, 60, 60, 60, 25, 25, 25, 25, 25, 25, 25, 25, 6, 6, 6, 6, 6, 6, 6, 6,
+        ]),
+        "sphere" => Some(&[
+            50, 50, 50, 50, 50, 50, 50, 50, 62, 62, 62, 62, 62, 62, 62, 62, 63, 63, 63, 63, 63, 63,
+            63, 63, 63, 63, 63, 63, 63, 63, 63, 63, 50, 50, 50, 50, 50, 50, 50, 50, 64, 64, 64, 64,
+            64, 64, 64, 64, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65, 65,
+        ]),
+        "trellis" => Some(&[
+            0, 0, 0, 0, 0, 0, 0, 0, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0, 0, 0, 0, 5, 5, 5, 5, 5,
+            5, 5, 5, 0, 0, 0, 0, 0, 0, 0, 0, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0, 0, 0, 0, 5, 5,
+            5, 5, 5, 5, 5, 5,
+        ]),
+        "upDiag" => Some(&[
+            34, 34, 34, 34, 34, 34, 34, 34, 33, 33, 33, 33, 33, 33, 33, 33, 32, 32, 32, 32, 32, 32,
+            32, 32, 31, 31, 31, 31, 31, 31, 31, 31, 30, 30, 30, 30, 30, 30, 30, 30, 29, 29, 29, 29,
+            29, 29, 29, 29, 28, 28, 28, 28, 28, 28, 28, 28, 27, 27, 27, 27, 27, 27, 27, 27,
+        ]),
+        "vert" => Some(&[
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+            1, 1, 1, 1, 1, 1,
+        ]),
+        "wave" => Some(&[
+            6, 6, 6, 6, 6, 6, 6, 6, 17, 17, 17, 17, 17, 17, 17, 17, 66, 66, 66, 66, 66, 66, 66, 66,
+            40, 40, 40, 40, 40, 40, 40, 40, 6, 6, 6, 6, 6, 6, 6, 6, 17, 17, 17, 17, 17, 17, 17, 17,
+            66, 66, 66, 66, 66, 66, 66, 66, 40, 40, 40, 40, 40, 40, 40, 40,
+        ]),
+        "weave" => Some(&[
+            7, 7, 7, 7, 7, 7, 7, 7, 67, 67, 67, 67, 67, 67, 67, 67, 9, 9, 9, 9, 9, 9, 9, 9, 68, 68,
+            68, 68, 68, 68, 68, 68, 7, 7, 7, 7, 7, 7, 7, 7, 69, 69, 69, 69, 69, 69, 69, 69, 9, 9,
+            9, 9, 9, 9, 9, 9, 46, 46, 46, 46, 46, 46, 46, 46,
+        ]),
+        "wdDnDiag" => Some(&[
+            70, 70, 70, 70, 70, 70, 70, 70, 71, 71, 71, 71, 71, 71, 71, 71, 72, 72, 72, 72, 72, 72,
+            72, 72, 60, 60, 60, 60, 60, 60, 60, 60, 73, 73, 73, 73, 73, 73, 73, 73, 74, 74, 74, 74,
+            74, 74, 74, 74, 75, 75, 75, 75, 75, 75, 75, 75, 76, 76, 76, 76, 76, 76, 76, 76,
+        ]),
+        "wdUpDiag" => Some(&[
+            76, 76, 76, 76, 76, 76, 76, 76, 75, 75, 75, 75, 75, 75, 75, 75, 74, 74, 74, 74, 74, 74,
+            74, 74, 73, 73, 73, 73, 73, 73, 73, 73, 60, 60, 60, 60, 60, 60, 60, 60, 72, 72, 72, 72,
+            72, 72, 72, 72, 71, 71, 71, 71, 71, 71, 71, 71, 70, 70, 70, 70, 70, 70, 70, 70,
+        ]),
+        "zigZag" => Some(&[
+            20, 20, 20, 20, 20, 20, 20, 20, 19, 19, 19, 19, 19, 19, 19, 19, 18, 18, 18, 18, 18, 18,
+            18, 18, 17, 17, 17, 17, 17, 17, 17, 17, 20, 20, 20, 20, 20, 20, 20, 20, 19, 19, 19, 19,
+            19, 19, 19, 19, 18, 18, 18, 18, 18, 18, 18, 18, 17, 17, 17, 17, 17, 17, 17, 17,
+        ]),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -4984,9 +5571,9 @@ mod tests {
         else {
             panic!("expected inherited master gradient paint");
         };
-        assert_eq!(stops.len(), 2);
+        assert_eq!(stops.len(), 259);
         assert_eq!(stops[0].color, Color::from_hex("FF0000"));
-        assert_eq!(stops[1].color, Color::from_hex("0000FF"));
+        assert_eq!(stops.last().unwrap().color, Color::from_hex("0000FF"));
         assert!(resolved.diagnostics.is_empty());
     }
 
@@ -5239,13 +5826,20 @@ mod tests {
         );
 
         let resolved = fixture.context().resolve_slide((40.0, 20.0)).unwrap();
-        assert!(resolved.background.is_none());
-        assert_eq!(
-            resolved.diagnostics,
-            vec![oxml_layout::Diagnostic {
-                message: "unsupported background pattern fill".to_owned(),
-            }]
-        );
+        let Some(ResolvedBackground::Paint(Paint::Grid {
+            bounds,
+            columns,
+            rows,
+            colors,
+        })) = &resolved.background
+        else {
+            panic!("supported pattern background must paint");
+        };
+        assert_eq!((*columns, *rows), (64, 64));
+        assert_eq!((bounds.width, bounds.height), (8.0, 8.0));
+        assert!(colors.contains(&Color::from_hex("FF0000")));
+        assert!(colors.contains(&Color::WHITE));
+        assert!(resolved.diagnostics.is_empty());
 
         let group_fill = Fixture::from_xml(
             &slide_xml_with("", r#"<p:bg><p:bgPr><a:grpFill/></p:bgPr></p:bg>"#, ""),
@@ -6723,6 +7317,28 @@ mod tests {
     }
 
     #[test]
+    fn fx205_pica_spacing_is_resolved_as_source_points() {
+        for unit in ["pc", "pi"] {
+            let text = format!(
+                r#"<a:bodyPr/><a:p><a:r><a:rPr spc="1{unit}"/><a:t>spaced</a:t></a:r></a:p>"#
+            );
+            let fixture = Fixture::new(
+                &shape_with_details(None, None, &transform(0), Some(&text)),
+                "",
+                "",
+            );
+            let resolved = fixture.context().resolve_slide((720.0, 540.0)).unwrap();
+            let ResolvedContent::Text(body) = &resolved.shapes[0].content else {
+                panic!("text")
+            };
+            let ResolvedTextRun::Text { style, .. } = &body.paragraphs[0].runs[0] else {
+                panic!("run")
+            };
+            assert_eq!(style.spacing, Some(12.0));
+        }
+    }
+
+    #[test]
     fn paragraph_spacing_and_bullet_size_are_concrete() {
         let text = r#"<a:bodyPr/><a:p><a:pPr><a:lnSpc><a:spcPct val="120000"/></a:lnSpc><a:spcBef><a:spcPts val="600"/></a:spcBef><a:spcAft><a:spcPts val="300"/></a:spcAft><a:buSzPct val="125000"/><a:buChar char="*"/></a:pPr><a:r><a:t>spaced</a:t></a:r></a:p>"#;
         let fixture = Fixture::new(
@@ -7013,14 +7629,36 @@ mod tests {
             table.rows[0].cells[0].fill,
             Some(Paint::Solid(Color::from_hex("333333")))
         );
-        assert_eq!(table.rows[0].cells[1].fill, None);
-        assert!(
-            table.rows[0].cells[1]
-                .left
-                .as_ref()
-                .is_some_and(|border| border.stroke.is_none())
-        );
-        assert!(resolved.diagnostics.iter().any(|diagnostic| {
+        let Some(Paint::Grid {
+            columns,
+            rows,
+            colors,
+            ..
+        }) = &table.rows[0].cells[1].fill
+        else {
+            panic!("supported direct cell pattern must paint");
+        };
+        assert_eq!((*columns, *rows), (64, 64));
+        assert!(colors.contains(&Color::from_hex("FF0000")));
+        assert!(colors.contains(&Color::WHITE));
+        let stroke = table.rows[0].cells[1]
+            .left
+            .as_ref()
+            .and_then(|border| border.stroke.as_ref())
+            .expect("supported pattern border must remain visible");
+        let Paint::Grid {
+            columns,
+            rows,
+            colors,
+            ..
+        } = &stroke.paint
+        else {
+            panic!("expected pattern border grid");
+        };
+        assert_eq!((*columns, *rows), (64, 64));
+        assert!(colors.contains(&Color::from_hex("FF0000")));
+        assert!(colors.contains(&Color::WHITE));
+        assert!(!resolved.diagnostics.iter().any(|diagnostic| {
             diagnostic.message == "unsupported table cell pattern fill was ignored"
         }));
     }
@@ -7231,15 +7869,35 @@ mod tests {
                 r#"<a:lin ang="0"/><a:tileRect l="10000"/>"#,
                 "gradient tile rectangle",
             ),
-            ("", r#"<a:path path="circle"/>"#, "circle path gradient"),
-            ("", r#"<a:path path="rect"/>"#, "rectangle path gradient"),
-            ("", r#"<a:path path="shape"/>"#, "shape path gradient"),
+            (
+                "",
+                r#"<a:path path="circle"/>"#,
+                "path gradient with non-centred fill rectangle",
+            ),
+            (
+                "",
+                r#"<a:path path="rect"/>"#,
+                "path gradient with non-centred fill rectangle",
+            ),
+            (
+                "",
+                r#"<a:path path="shape"/>"#,
+                "path gradient with non-centred fill rectangle",
+            ),
         ];
 
         for (attributes, geometry, expected) in variants {
             let details = format!(
                 r#"<a:xfrm><a:off x="0" y="0"/><a:ext cx="127000" cy="127000"/></a:xfrm><a:gradFill {attributes}><a:gsLst><a:gs pos="0"><a:srgbClr val="000000"/></a:gs><a:gs pos="100000"><a:srgbClr val="FFFFFF"/></a:gs></a:gsLst>{geometry}</a:gradFill>"#
             );
+            let details = if geometry.contains("a:path") {
+                details.replace(
+                    r#"<a:srgbClr val="000000"/>"#,
+                    r#"<a:schemeClr val="phClr"/>"#,
+                )
+            } else {
+                details
+            };
             let fixture = Fixture::new(&shape_with_details(None, None, &details, None), "", "");
             let resolved = fixture.context().resolve_slide((720.0, 540.0)).unwrap();
 
@@ -7247,6 +7905,208 @@ mod tests {
             assert_eq!(resolved.shapes[0].unsupported, Some(expected));
             assert!(resolved.diagnostics[0].message.contains(expected));
         }
+    }
+
+    #[test]
+    fn fx205_path_and_pattern_fills_have_concrete_visible_paint() {
+        // Microsoft Open Specifications documents channel-directed gamma1.875
+        // only for endpoint pairs and mirrored three-stop lists, not all fills.
+        let a = Color {
+            r: 0.0,
+            g: 1.0,
+            b: 0.25,
+            a: 0.2,
+        };
+        let b = Color {
+            r: 1.0,
+            g: 0.0,
+            b: 0.25,
+            a: 0.8,
+        };
+        let stops = [
+            super::GradientStop {
+                offset: 0.0,
+                color: a,
+            },
+            super::GradientStop {
+                offset: 1.0,
+                color: b,
+            },
+        ];
+        let mid = super::path_gradient_color(&stops, 0.5);
+        let expected = 1.0 - 0.5_f64.powf(1.875);
+        assert!((mid.r - expected).abs() < 1e-12 && (mid.g - expected).abs() < 1e-12);
+        assert_eq!(mid.b, 0.25);
+        assert!((mid.a - 0.5).abs() < 1e-12);
+        let shifted = [
+            super::GradientStop {
+                offset: 0.1,
+                color: a,
+            },
+            super::GradientStop {
+                offset: 0.9,
+                color: b,
+            },
+        ];
+        assert!((super::path_gradient_color(&shifted, 0.5).r - 0.5).abs() < 1e-12);
+        assert_eq!(super::powerpoint_gradient_stops(&shifted).len(), 2);
+        let mirrored = [
+            stops[0],
+            super::GradientStop {
+                offset: 0.5,
+                color: b,
+            },
+            super::GradientStop {
+                offset: 1.0,
+                color: a,
+            },
+        ];
+        assert_eq!(
+            super::path_gradient_color(&mirrored, 0.25),
+            super::path_gradient_color(&mirrored, 0.75)
+        );
+        let geometry = r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#;
+        for kind in ["circle", "rect", "shape"] {
+            let fill = format!(
+                r#"<a:gradFill rotWithShape="1"><a:gsLst><a:gs pos="0"><a:srgbClr val="FF0000"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000FF"/></a:gs></a:gsLst><a:path path="{kind}"><a:fillToRect l="50000" t="50000" r="50000" b="50000"/></a:path></a:gradFill>"#
+            );
+            let shape = shape_with_details(
+                None,
+                None,
+                &format!("{}{}{}", transform(0), geometry, fill),
+                None,
+            );
+            let resolved = Fixture::new(&shape, "", "")
+                .context()
+                .resolve_slide((720.0, 540.0))
+                .unwrap();
+            assert!(
+                resolved.shapes[0].fill.is_some(),
+                "FX205_VISIBLE_PATH: {kind}"
+            );
+            assert_eq!(resolved.shapes[0].unsupported, None);
+            let Some(Paint::Grid {
+                columns,
+                rows,
+                colors,
+                ..
+            }) = &resolved.shapes[0].fill
+            else {
+                panic!("path did not publish sampled colour paint");
+            };
+            assert_eq!((*columns, *rows), (128, 128));
+            let center = colors[64 * 128 + 64];
+            assert!(
+                center.r > 0.98 && center.b < 0.02,
+                "path centre lost first source stop"
+            );
+            assert!(colors[0].b > 0.98, "path boundary lost last source stop");
+        }
+        // Supported paths must resolve the producing style reference before paint.
+        let details = r#"<a:xfrm><a:off x="0" y="0"/><a:ext cx="1270000" cy="1270000"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:gradFill><a:gsLst><a:gs pos="0"><a:schemeClr val="phClr"/></a:gs><a:gs pos="100000"><a:srgbClr val="0000FF"/></a:gs></a:gsLst><a:path path="rect"><a:fillToRect l="50000" t="50000" r="50000" b="50000"/></a:path></a:gradFill>"#;
+        let style = r#"<p:style><a:lnRef idx="0"/><a:fillRef idx="0"><a:srgbClr val="FF0000"/></a:fillRef><a:effectRef idx="0"/><a:fontRef idx="minor"/></p:style>"#;
+        let shape = shape_with_details(None, None, details, None)
+            .replace("</p:sp>", &format!("{style}</p:sp>"));
+        let fixture = Fixture::new(&shape, "", "");
+        let before = fixture.slide.clone();
+        let resolved = fixture.context().resolve_slide((720.0, 540.0)).unwrap();
+        let Some(Paint::Grid { colors, .. }) = &resolved.shapes[0].fill else {
+            panic!("source-qualified path reference must paint");
+        };
+        assert!(colors[64 * 128 + 64].r > 0.98);
+        assert!(colors[0].b > 0.98);
+        assert!(resolved.diagnostics.is_empty());
+        assert_eq!(fixture.slide, before);
+
+        for preset in [
+            "cross",
+            "dkDnDiag",
+            "dkHorz",
+            "dkUpDiag",
+            "dkVert",
+            "dashDnDiag",
+            "dashHorz",
+            "dashUpDiag",
+            "dashVert",
+            "diagBrick",
+            "diagCross",
+            "divot",
+            "dotDmnd",
+            "dotGrid",
+            "dnDiag",
+            "horz",
+            "horzBrick",
+            "lgCheck",
+            "lgConfetti",
+            "lgGrid",
+            "ltDnDiag",
+            "ltHorz",
+            "ltUpDiag",
+            "ltVert",
+            "narHorz",
+            "narVert",
+            "openDmnd",
+            "pct10",
+            "pct20",
+            "pct25",
+            "pct30",
+            "pct40",
+            "pct5",
+            "pct50",
+            "pct60",
+            "pct70",
+            "pct75",
+            "pct80",
+            "pct90",
+            "plaid",
+            "shingle",
+            "smCheck",
+            "smConfetti",
+            "smGrid",
+            "solidDmnd",
+            "sphere",
+            "trellis",
+            "upDiag",
+            "vert",
+            "wave",
+            "weave",
+            "wdDnDiag",
+            "wdUpDiag",
+            "zigZag",
+        ] {
+            let fill = format!(
+                r#"<a:pattFill prst="{preset}"><a:fgClr><a:srgbClr val="FF0000"/></a:fgClr><a:bgClr><a:srgbClr val="0000FF"/></a:bgClr></a:pattFill>"#
+            );
+            let shape = shape_with_details(
+                None,
+                None,
+                &format!("{}{}{}", transform(0), geometry, fill),
+                None,
+            );
+            let resolved = Fixture::new(&shape, "", "")
+                .context()
+                .resolve_slide((720.0, 540.0))
+                .unwrap();
+            assert!(
+                resolved.shapes[0].fill.is_some(),
+                "FX205_VISIBLE_PATTERN: {preset}"
+            );
+            assert_eq!(resolved.shapes[0].unsupported, None);
+            let Some(Paint::Grid {
+                bounds,
+                columns,
+                rows,
+                colors,
+            }) = &resolved.shapes[0].fill
+            else {
+                panic!("pattern did not publish sampled colour paint");
+            };
+            assert_eq!((*columns, *rows), (64, 64));
+            assert_eq!((bounds.width, bounds.height), (8.0, 8.0));
+            assert!(colors.iter().any(|c| c.r == 1.0 && c.b == 0.0));
+            assert!(colors.iter().any(|c| c.r == 0.0 && c.b == 1.0));
+        }
+        assert!(super::native_pattern_rows("foreign-preset").is_none());
     }
 
     #[test]
@@ -8573,8 +9433,8 @@ mod tests {
         else {
             panic!("expected supported background gradient");
         };
-        assert_eq!(stops.len(), 2);
-        assert_eq!(stops[1].color, Color::from_hex("0000FF"));
+        assert_eq!(stops.len(), 259);
+        assert_eq!(stops.last().unwrap().color, Color::from_hex("0000FF"));
         assert_eq!(resolved.unresolved_member_count, 0);
         assert!(resolved.diagnostics.is_empty());
         assert_eq!(fixture.slide, before);
@@ -8596,9 +9456,9 @@ mod tests {
                 let Some(Paint::Linear { stops, .. }) = &resolved.shapes[0].fill else {
                     panic!("expected supported unrotated gradient");
                 };
-                assert_eq!(stops.len(), 2);
+                assert_eq!(stops.len(), 259);
                 assert_eq!(stops[0].color, Color::from_hex("FF0000"));
-                assert_eq!(stops[1].color, Color::from_hex("0000FF"));
+                assert_eq!(stops.last().unwrap().color, Color::from_hex("0000FF"));
                 assert!(resolved.diagnostics.is_empty());
             } else {
                 assert!(resolved.shapes[0].fill.is_none());
