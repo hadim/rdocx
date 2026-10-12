@@ -2170,9 +2170,9 @@ requirements discussions264 and281.
 
 **Current delivery checkpoint**: seventeen of twenty-six active stories are
 completed and integrated, F-X193 through F-X201, F-X203, F-X205 through
-F-X208, F-X210, F-X212 and F-X213. F-X209 is running in its isolated worktree.
-Eight approved issue-linked stories await completed dependencies and exclusive
-source boundaries. F-X192 and F-283 remain at S92 with their contracts,
+F-X208, F-X210, F-X212 and F-X213. Remaining issue and PR repairs follow
+completed dependencies and exclusive source boundaries. CURRENT_SPRINT.md
+records active owners and execution states. F-X192 and F-283 remain at S92 with their contracts,
 dirty worker work, reviews and required evidence retained. Standalone authoring
 work remains in later sprints. No design question remains outstanding.
 
