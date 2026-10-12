@@ -9,6 +9,7 @@ from .enum import text as _text
 
 _Path = str | _os.PathLike[str]
 _RevisionView = _Literal["accepted", "tracked"]
+_EmbeddedFontKind = _Literal["regular", "bold", "italic", "bold_italic"]
 _BorderStyle = _Literal[
     "none", "single", "thick", "double", "dotted", "dashed", "dotDash", "wave"
 ]
@@ -18,7 +19,7 @@ _Margins = tuple[
 ]
 __all__ = [
     "Bookmark", "BoundingBox", "Cell", "CellCollection", "CellParagraphCollection",
-    "Comment", "ComparisonDiagnostic", "ContentFragment", "CoreProperties", "Document", "Font",
+    "Comment", "ComparisonDiagnostic", "ContentFragment", "CoreProperties", "Document", "EmbeddedFont", "Font", "FontDefinition", "FontEmbeddingLicense",
     "HeaderFooterVariant", "Hyperlink", "LayoutBackedFieldUpdateReport", "LayoutFragment", "LayoutPage", "ListLevel", "Paragraph", "ParagraphCollection",
     "ParagraphFormat", "Revision", "Row", "RowCollection", "Run", "RunCollection", "RunPosition",
     "RunRange", "Section", "Story", "StoryItem", "StoryRunPosition", "StoryRunRange", "Style",
@@ -590,6 +591,61 @@ class CoreProperties:
 
 
 @_final
+class FontEmbeddingLicense:
+    def __new__(cls, *, authorized: bool, identity: str) -> FontEmbeddingLicense: ...
+    @property
+    def authorized(self) -> bool: ...
+    @property
+    def identity(self) -> str: ...
+
+
+@_final
+class EmbeddedFont:
+    def __new__(
+        cls,
+        *,
+        kind: _EmbeddedFontKind,
+        data: bytes,
+        font_key: str,
+        subsetted: bool,
+        license: FontEmbeddingLicense,
+    ) -> EmbeddedFont: ...
+    @property
+    def kind(self) -> _EmbeddedFontKind: ...
+    @property
+    def data(self) -> bytes: ...
+    @property
+    def font_key(self) -> str: ...
+    @property
+    def subsetted(self) -> bool: ...
+    @property
+    def license(self) -> FontEmbeddingLicense: ...
+
+
+@_final
+class FontDefinition:
+    def __new__(
+        cls,
+        *,
+        name: str,
+        alternate_name: str | None = None,
+        family: str | None = None,
+        pitch: str | None = None,
+        embedded_fonts: _Sequence[EmbeddedFont] = ...,
+    ) -> FontDefinition: ...
+    @property
+    def name(self) -> str: ...
+    @property
+    def alternate_name(self) -> str | None: ...
+    @property
+    def family(self) -> str | None: ...
+    @property
+    def pitch(self) -> str | None: ...
+    @property
+    def embedded_fonts(self) -> tuple[EmbeddedFont, ...]: ...
+
+
+@_final
 class Document:
     def __new__(cls, path: _Path | None = None) -> Document: ...
     @staticmethod
@@ -749,6 +805,60 @@ class Document:
         """
     def remove_style(self, style: str) -> bool: ...
     def set_default_style(self, style: str) -> None: ...
+    @property
+    def fonts(self) -> tuple[FontDefinition, ...]:
+        """Font-table records, each with its embedded faces deobfuscated."""
+    def set_font(
+        self,
+        name: str,
+        *,
+        alternate_name: str | None = None,
+        family: str | None = None,
+        pitch: str | None = None,
+    ) -> None:
+        """Add or replace one font-table record, keeping its embedded faces.
+
+        ``family`` is an OOXML family (``decorative``, ``modern``, ``roman``,
+        ``script``, ``swiss`` or ``auto``) and ``pitch`` one of ``default``,
+        ``fixed`` or ``variable``.
+        """
+    def remove_font(self, name: str) -> FontDefinition | None:
+        """Remove a font-table record and its embedded faces, or return None."""
+    def embed_font(
+        self,
+        font_name: str,
+        font: bytes | _Path,
+        kind: _EmbeddedFontKind = "regular",
+        *,
+        license: FontEmbeddingLicense,
+        font_key: str | None = None,
+        subsetted: bool = False,
+    ) -> None:
+        """Embed a TrueType or OpenType face as one face of ``font_name``.
+
+        ``font`` is the font bytes or a path to the font file. ``license``
+        must authorize the embedding explicitly and name the exact licence.
+        ``font_key`` is a braced uppercase GUID, derived from the font bytes
+        when omitted. A missing font-table record is created. Embedding turns
+        on ``embed_true_type_fonts``, which makes Word keep the fonts when it
+        saves the document again. A refused embed changes nothing.
+        """
+    def remove_embedded_font(
+        self, font_name: str, kind: _EmbeddedFontKind = "regular"
+    ) -> EmbeddedFont | None:
+        """Remove one embedded face, keeping its font-table record."""
+    @property
+    def embed_true_type_fonts(self) -> bool | None: ...
+    @embed_true_type_fonts.setter
+    def embed_true_type_fonts(self, value: bool | None) -> None: ...
+    @property
+    def embed_system_fonts(self) -> bool | None: ...
+    @embed_system_fonts.setter
+    def embed_system_fonts(self, value: bool | None) -> None: ...
+    @property
+    def save_subset_fonts(self) -> bool | None: ...
+    @save_subset_fonts.setter
+    def save_subset_fonts(self, value: bool | None) -> None: ...
     def add_numbering_definition(self, levels: _Sequence[ListLevel]) -> int: ...
     def add_numbering_instance(self, definition_id: int) -> int: ...
     def link_style_to_numbering(self, style: str, num_id: int, level: int) -> None: ...
