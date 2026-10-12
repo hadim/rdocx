@@ -28069,14 +28069,17 @@ impl Document {
     ) -> rdocx_layout::LayoutInput {
         let mut input = self.build_layout_input();
         input.revision_view = options.revision_view;
-        input.fonts.extend(
-            font_files
-                .iter()
-                .map(|(family, data)| rdocx_layout::FontFile {
-                    family: (*family).to_owned(),
-                    data: data.to_vec(),
-                }),
-        );
+        // Caller faces load before the embedded ones so they win a family
+        // both supply, as an installed font is reported to win in Office.
+        let embedded = std::mem::take(&mut input.fonts);
+        input.fonts = font_files
+            .iter()
+            .map(|(family, data)| rdocx_layout::FontFile {
+                family: (*family).to_owned(),
+                data: data.to_vec(),
+            })
+            .chain(embedded)
+            .collect();
         input
     }
 

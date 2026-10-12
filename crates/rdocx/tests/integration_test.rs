@@ -2676,6 +2676,126 @@ mod theme_and_embedded_font_tests {
         );
     }
 
+    /// A bundled face whose seven-letter family `from` is renamed to `to`, a
+    /// family no host and no bundled font carries. The swap keeps every string
+    /// length and touches only the `name` table.
+    fn renamed_bundled_face(font: &[u8], from: &str, to: &str) -> Vec<u8> {
+        assert_eq!(from.len(), to.len());
+        let mut font = font.to_vec();
+        let table_count = usize::from(u16::from_be_bytes([font[4], font[5]]));
+        let record = (0..table_count)
+            .map(|index| 12 + index * 16)
+            .find(|record| &font[*record..*record + 4] == b"name")
+            .expect("name table");
+        let offset = u32::from_be_bytes(font[record + 8..record + 12].try_into().unwrap()) as usize;
+        let length =
+            u32::from_be_bytes(font[record + 12..record + 16].try_into().unwrap()) as usize;
+        let utf16 = |text: &str| {
+            text.encode_utf16()
+                .flat_map(u16::to_be_bytes)
+                .collect::<Vec<_>>()
+        };
+        for (old, new) in [
+            (from.as_bytes().to_vec(), to.as_bytes().to_vec()),
+            (utf16(from), utf16(to)),
+        ] {
+            let table = &mut font[offset..offset + length];
+            let mut at = 0;
+            while let Some(found) = table[at..]
+                .windows(old.len())
+                .position(|window| window == old)
+            {
+                table[at + found..at + found + old.len()].copy_from_slice(&new);
+                at += found + old.len();
+            }
+        }
+        font
+    }
+
+    /// GitHub issue #360. Word renders draw the faces the font table embeds,
+    /// the bold face for a bold run, and a caller font of the same family
+    /// wins over the embedded one, as an installed font would.
+    #[test]
+    fn renders_draw_the_faces_the_font_table_embeds() {
+        const CALADEA_BOLD: &[u8] = include_bytes!("../../oxml-layout/fonts/Caladea-Bold.ttf");
+        let regular = renamed_bundled_face(CALADEA, "Caladea", "Embedia");
+        let bold = renamed_bundled_face(CALADEA_BOLD, "Caladea", "Embedia");
+        let mut document = Document::new();
+        let mut paragraph = document.add_paragraph("");
+        paragraph.add_run("Embedded regular").font("Embedia");
+        paragraph.add_run(" and bold").font("Embedia").bold(true);
+        for (kind, face) in [
+            (EmbeddedFontKind::Regular, &regular),
+            (EmbeddedFontKind::Bold, &bold),
+        ] {
+            document
+                .embed_font(
+                    "Embedia",
+                    EmbeddedFont::new(
+                        kind,
+                        face.clone(),
+                        EmbeddedFont::derive_font_key(face),
+                        license(true, "Apache-2.0: Caladea"),
+                    ),
+                )
+                .unwrap();
+        }
+        let document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+
+        let layout = document.layout_deterministic().unwrap();
+        let mut used = layout
+            .layout
+            .fonts
+            .iter()
+            .map(|font| {
+                let face = if *font.data == *regular {
+                    "embedded regular"
+                } else if *font.data == *bold {
+                    "embedded bold"
+                } else {
+                    "another face"
+                };
+                (font.family.as_str(), font.bold, face)
+            })
+            .collect::<Vec<_>>();
+        used.sort();
+        assert_eq!(
+            used,
+            [
+                ("Embedia", false, "embedded regular"),
+                ("Embedia", true, "embedded bold")
+            ]
+        );
+        let pdf = document.to_pdf_deterministic().unwrap();
+        for name in [&b"/Embedia"[..], b"/Embedia-Bold"] {
+            assert!(
+                pdf.windows(name.len() + 1)
+                    .any(|window| &window[..name.len()] == name
+                        && !window[name.len()].is_ascii_alphanumeric()
+                        && window[name.len()] != b'-'),
+                "{}",
+                String::from_utf8_lossy(name)
+            );
+        }
+
+        let caller = renamed_bundled_face(CARLITO, "Carlito", "Embedia");
+        let layout = document
+            .layout_with_fonts_and_bundled_fallback(&[("Embedia", caller.as_slice())])
+            .unwrap();
+        let regular_face = layout.layout.fonts.iter().find(|font| !font.bold).unwrap();
+        assert_eq!(
+            &*regular_face.data,
+            caller.as_slice(),
+            "the caller face wins"
+        );
+        let bold_face = layout.layout.fonts.iter().find(|font| font.bold).unwrap();
+        assert_eq!(
+            &*bold_face.data,
+            bold.as_slice(),
+            "the embedded bold remains"
+        );
+    }
+
     type FontPartState = (
         String,
         String,
