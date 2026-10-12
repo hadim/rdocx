@@ -1253,7 +1253,8 @@ impl PyPresentation {
         drop(license);
         py.detach(|| self.inner.embed_font(typeface, font))
             .map_err(|error| rpptx_to_pyerr(py, error))?;
-        self.revisions.bump();
+        self.revisions
+            .invalidate(Scope::Slides, "Presentation.embed_font()");
         Ok(())
     }
 
@@ -1270,7 +1271,8 @@ impl PyPresentation {
             .remove_embedded_font(typeface, kind)
             .map_err(|error| rpptx_to_pyerr(py, error))?;
         if removed.is_some() {
-            self.revisions.bump();
+            self.revisions
+                .invalidate(Scope::Slides, "Presentation.remove_embedded_font()");
         }
         Ok(removed.map(Into::into))
     }
@@ -1286,7 +1288,8 @@ impl PyPresentation {
             .remove_font(typeface)
             .map_err(|error| rpptx_to_pyerr(py, error))?;
         if removed.is_some() {
-            self.revisions.bump();
+            self.revisions
+                .invalidate(Scope::Slides, "Presentation.remove_font()");
         }
         Ok(removed.map(Into::into))
     }
