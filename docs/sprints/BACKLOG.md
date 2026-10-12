@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 229 | 216 | 4 | 5 |
-| **Total** | **554** | **490** | **4** | **56** |
+| X, Cross-cutting | 231 | 216 | 4 | 7 |
+| **Total** | **556** | **490** | **4** | **58** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -778,4 +778,6 @@ HLD14 contract before adopting contributor changes.
 | F-X217 | Import HTML and Markdown through public Word surfaces | S91 | L | in-progress |
 | F-X218 | Export presentations as semantic HTML and Markdown | S91 | L | pending |
 | F-X219 | Qualify full-range text watermark interoperability | S92 | M | pending |
+| F-X220 | Embed fonts through both native and public package families | S91 | L | pending |
+| F-X221 | Prepare Word 0.17.0 and PowerPoint 0.15.0 minor releases | S91 | L | pending |
 <!-- AUTOGEN:backlog-MX END -->

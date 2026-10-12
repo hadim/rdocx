@@ -2167,8 +2167,10 @@ requirements discussions264 and281.
 | F-X216 | Import complete slides and merge decks with source formatting | L |
 | F-X217 | Import HTML and Markdown through public Word surfaces | L |
 | F-X218 | Export presentations as semantic HTML and Markdown | L |
+| F-X220 | Embed fonts through both native and public package families | L |
+| F-X221 | Prepare Word 0.17.0 and PowerPoint 0.15.0 minor releases | L |
 
-**Current delivery checkpoint**: twenty of twenty-six active stories are
+**Current delivery checkpoint**: twenty of twenty-eight active stories are
 completed and integrated, F-X193 through F-X203, F-X205 through
 F-X210, F-X212, F-X213 and F-X214. Remaining issue and PR repairs follow
 completed dependencies and exclusive source boundaries. CURRENT_SPRINT.md
@@ -3097,3 +3099,25 @@ full-range support retained. F-X219 in S92 must replace this restriction with
 a faithful full-range representation after actual Word and LibreOffice
 qualification. This is a deferred implementation follow-up from existing
 F-X201 evidence, not new issue or PR intake.
+
+
+## Bounded intake and minor releases, 2026-10-12
+
+The user explicitly folds Issue360 and PR361 plus updated PR357 and PR359 into S91. The authenticated18:41UTC check adds one issue/PR pair and advances only those two existing heads. Included scope is39 issues and29 PRs, with discussion264/281 excluded and open. This admits these exact records, without an automatic rolling-intake loop.
+
+F-X220 owns font embedding across native Word/PowerPoint, both Python packages and CLIs, real producer-format/native font-use qualification, bounded decoding, source preservation and explicit license policy. Its admitted PR361 head is a5795f2219d1cde5c613890369df3d88a84fc242. F-X216 consumes PR357 incremental16ee45f3 to57011087. F-X217 consumes PR359 incremental7567b403 toe974ea22, preserving completed semantic mark/code/owner contracts. Existing assessments and failed runs remain retained, and contributor reported gates are not local qualification.
+
+F-X221 prepares both next minor families after all27 repair stories complete: Word crates/Python0.17.0 and shared/PowerPoint crates/Python0.15.0. Fresh registry/tag receipt verifies published0.16.0/0.14.0 and absent next versions/tags. Preparation uses existing exact7/15 crate allowlists, new matching wheels/metadata, meaningful authenticated family notes and reviewed-SHA build-only rehearsal. No versions are changed yet and no publication is claimed. Final full sprint verification, clean sprint review and close remain due. Publication follows the exact reviewed main merge through separate release approval for each family, shared/PowerPoint first.
+
+Twenty of28 active stories are complete. F-X204, F-X215 and F-X217 are running in isolated worktrees with disjoint file leases. F-X211, F-X216, F-X218, F-X220 and F-X221 remain approved and pending. Bibliography, navigation, standalone authoring and full-range text watermark work remain deferred to S92. Required evidence and carried dirty work are retained.
+
+
+| Included issue | Included PR | Owner | Resolution contract |
+|---|---|---|---|
+| [360](https://github.com/tensorbee/rdocx/issues/360) | [361](https://github.com/tensorbee/rdocx/pull/361) | F-X220 | Explicit licensed font embedding, listing/removal/settings, both families and public surfaces, native producer/use and preserved imported font graphs |
+| 347,348,349 | [357](https://github.com/tensorbee/rdocx/pull/357) | F-X216 | Existing full slide-import contract, incremental head57011087 assessed without redoing accepted provider work |
+| 350,351 | [359](https://github.com/tensorbee/rdocx/pull/359) | F-X217 | Existing full Word import contract, incremental heade974ea22 adapted without losing semantic mark or code whitespace |
+
+### Final release preparation boundary
+
+F-X221 depends on every included repair F-X193 through F-X218 and F-X220. It follows all source-sharing implementation waves and remains exclusive for versions, locks, manifests, notes, archive measurements and HLD release prose. Native and installed repair acceptance is not deferred to publication. Final versioned wheels are rebuilt once the complete source graph is fixed, then reviewed-SHA hosted artifacts and actual final integrated gates decide closure. The next commands after closure are /release rpptx-v0.15.0 followed by /release v0.17.0, each under separate immediate exact-main-SHA approval. Only /close-sprint merges main and creates the sprint tag. Only /release creates release tags or starts publication.

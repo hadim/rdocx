@@ -7657,3 +7657,20 @@ open, render and reopen must show correct zero, intermediate and full-opacity
 results. Own rendering, API getters, source ownership, strict replacement and
 invalid-operation atomicity must agree. Retain S91's failed endpoint evidence
 and remove the temporary named restriction only after these controls pass.
+
+
+### F-X220, Embed fonts through both native and public package families
+
+**Size**: L
+**Depends on**: F-X195, F-X200, F-X205, F-X210
+**Test gate**: regression
+
+Resolve Issue360 with admitted PR361. Expose existing native Word font embedding, font records and face removal in Python/CLI, plus checked Word embedding settings. Add equivalent native/Python/CLI PowerPoint face embedding, listing/removal and flags, with actual embedded font parts/relationships and schema-ordered source-preserving font lists. Explicit caller authorization, exact license identity and valid bounded font input are required. Qualify PowerPoint-produced font format before writer bytes, real uninstalled regular/bold native font use and unchanged imported Word/PowerPoint font graphs. Unsupported compressed formats remain exact. Decode shared parts once, reject hostile lengths without huge allocation and preserve F195 caller override across render paths. Update existing consumer recipes and prepare concrete downstream skill guidance without falsely claiming an external submission. No new tracked font assets, product modules or dependencies are needed.
+
+### F-X221, Prepare Word 0.17.0 and PowerPoint 0.15.0 minor releases
+
+**Size**: L
+**Depends on**: F-X193, F-X194, F-X195, F-X196, F-X197, F-X198, F-X199, F-X200, F-X201, F-X202, F-X203, F-X204, F-X205, F-X206, F-X207, F-X208, F-X209, F-X210, F-X211, F-X212, F-X213, F-X214, F-X215, F-X216, F-X217, F-X218, F-X220
+**Test gate**: release regression
+
+Prepare matching minor Rust/CLI/Python families after every included S91 repair completes. Update exact stable seven-package Word family to0.17.0 and exact fifteen-package shared/PowerPoint family to0.15.0, with corresponding binding projects, internal pins/lock and meaningful authenticated family release notes. Use existing unified allowlists and release pipeline. Qualify current-source archives below10MiB, exact installed wheel/metadata/runtime/typing on Python3.9/3.12, both WASM graphs and reviewed-SHA build-only hosted artifacts. Current registry/tag facts are checked, then rechecked at release. Shared/PowerPoint publishes before Word consumes it. Preparation does not publish. Final integrated verification/review and close precede separate immediate exact-main-SHA release approvals for each family. Bibliography, navigation, full-range watermark and standalone authoring remain S92, and discussion264/281 stay open.

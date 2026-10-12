@@ -6,8 +6,8 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 now contains twenty-six active stories, twenty completed, three running,
-three approved pending implementation. Contribution intake is closed at the user's latest instruction.
+S91 now contains twenty-eight active stories, twenty completed, three running,
+five approved pending implementation. The latest bounded intake includes39 issues and29 PRs, plus final minor-release preparation.
 
 ## Spec references
 
@@ -49,6 +49,8 @@ three approved pending implementation. Contribution intake is closed at the user
 | F-X216 | Import complete slides and merge decks with source formatting | L | pending | - |
 | F-X217 | Import HTML and Markdown through public Word surfaces | L | in-progress | codex |
 | F-X218 | Export presentations as semantic HTML and Markdown | L | pending | - |
+| F-X220 | Embed fonts through both native and public package families | L | pending | - |
+| F-X221 | Prepare Word 0.17.0 and PowerPoint 0.15.0 minor releases | L | pending | - |
 
 ## Carried to S92, user scope decision
 
@@ -1128,3 +1130,14 @@ F-X215 is claimed for parallel work after completed F-X197 and F-X206. Its first
 ## F-X217 isolated native import phase, 2026-10-12
 
 F-X217 is claimed after completed F-X200 and F-X203. Its first file lease is only the existing native HTML importer, native dependency manifest and lock, and existing outbound Markdown carriers. F-X204 retains document, facade registration, binding, CLI and shared HLD ownership. F-X215 retains shared chart and workbook carriers. Further phases wait for explicit handover. The previously approved pinned parser dependency remains the only addition. This file boundary preserves the full approved import and round-trip acceptance. A task-owned target is required while both existing warm targets are leased.
+
+
+## Bounded intake and minor releases, 2026-10-12
+
+The user explicitly folds Issue360 and PR361 plus updated PR357 and PR359 into S91. The authenticated18:41UTC check adds one issue/PR pair and advances only those two existing heads. Included scope is39 issues and29 PRs, with discussion264/281 excluded and open. This admits these exact records, without an automatic rolling-intake loop.
+
+F-X220 owns font embedding across native Word/PowerPoint, both Python packages and CLIs, real producer-format/native font-use qualification, bounded decoding, source preservation and explicit license policy. Its admitted PR361 head is a5795f2219d1cde5c613890369df3d88a84fc242. F-X216 consumes PR357 incremental16ee45f3 to57011087. F-X217 consumes PR359 incremental7567b403 toe974ea22, preserving completed semantic mark/code/owner contracts. Existing assessments and failed runs remain retained, and contributor reported gates are not local qualification.
+
+F-X221 prepares both next minor families after all27 repair stories complete: Word crates/Python0.17.0 and shared/PowerPoint crates/Python0.15.0. Fresh registry/tag receipt verifies published0.16.0/0.14.0 and absent next versions/tags. Preparation uses existing exact7/15 crate allowlists, new matching wheels/metadata, meaningful authenticated family notes and reviewed-SHA build-only rehearsal. No versions are changed yet and no publication is claimed. Final full sprint verification, clean sprint review and close remain due. Publication follows the exact reviewed main merge through separate release approval for each family, shared/PowerPoint first.
+
+Twenty of28 active stories are complete. F-X204, F-X215 and F-X217 are running in isolated worktrees with disjoint file leases. F-X211, F-X216, F-X218, F-X220 and F-X221 remain approved and pending. Bibliography, navigation, standalone authoring and full-range text watermark work remain deferred to S92. Required evidence and carried dirty work are retained.
