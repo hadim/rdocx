@@ -513,6 +513,9 @@ pub struct CT_Settings {
     remove_personal_information: Option<bool>,
     remove_date_and_time: Option<bool>,
     display_background_shape: Option<bool>,
+    embed_true_type_fonts: Option<bool>,
+    embed_system_fonts: Option<bool>,
+    save_subset_fonts: Option<bool>,
     mirror_margins: Option<bool>,
     gutter_at_top: Option<bool>,
     proof_state: Option<DocumentProofState>,
@@ -712,6 +715,21 @@ impl CT_Settings {
                 let value = parse_toggle(element, prefixes)?;
                 let total = self.tally.record(&[name], value.is_some());
                 assign(&mut self.display_background_shape, value, total);
+            }
+            "embedTrueTypeFonts" => {
+                let value = parse_toggle(element, prefixes)?;
+                let total = self.tally.record(&[name], value.is_some());
+                assign(&mut self.embed_true_type_fonts, value, total);
+            }
+            "embedSystemFonts" => {
+                let value = parse_toggle(element, prefixes)?;
+                let total = self.tally.record(&[name], value.is_some());
+                assign(&mut self.embed_system_fonts, value, total);
+            }
+            "saveSubsetFonts" => {
+                let value = parse_toggle(element, prefixes)?;
+                let total = self.tally.record(&[name], value.is_some());
+                assign(&mut self.save_subset_fonts, value, total);
             }
             "mirrorMargins" => {
                 let value = parse_toggle(element, prefixes)?;
@@ -1177,6 +1195,78 @@ impl CT_Settings {
         }
         let removed = self.display_background_shape.take();
         self.finish_removal("displayBackgroundShape")?;
+        Ok(removed)
+    }
+
+    /// Return the `w:embedTrueTypeFonts` toggle.
+    pub fn embed_true_type_fonts(&self) -> Option<bool> {
+        self.embed_true_type_fonts
+    }
+
+    /// Ask Word to embed the TrueType fonts the document uses when it saves.
+    pub fn set_embed_true_type_fonts(&mut self, enabled: bool) -> Result<()> {
+        self.embed_true_type_fonts = Some(enabled);
+        self.finish_set(
+            "embedTrueTypeFonts",
+            write_toggle_setting("w:embedTrueTypeFonts", enabled)?,
+        )
+    }
+
+    /// Remove the `w:embedTrueTypeFonts` toggle itself.
+    pub fn remove_embed_true_type_fonts(&mut self) -> Result<Option<bool>> {
+        if !self.begin_removal("embedTrueTypeFonts")? {
+            return Ok(None);
+        }
+        let removed = self.embed_true_type_fonts.take();
+        self.finish_removal("embedTrueTypeFonts")?;
+        Ok(removed)
+    }
+
+    /// Return the `w:embedSystemFonts` toggle.
+    pub fn embed_system_fonts(&self) -> Option<bool> {
+        self.embed_system_fonts
+    }
+
+    /// Ask Word to embed common system fonts too when it embeds fonts.
+    pub fn set_embed_system_fonts(&mut self, enabled: bool) -> Result<()> {
+        self.embed_system_fonts = Some(enabled);
+        self.finish_set(
+            "embedSystemFonts",
+            write_toggle_setting("w:embedSystemFonts", enabled)?,
+        )
+    }
+
+    /// Remove the `w:embedSystemFonts` toggle itself.
+    pub fn remove_embed_system_fonts(&mut self) -> Result<Option<bool>> {
+        if !self.begin_removal("embedSystemFonts")? {
+            return Ok(None);
+        }
+        let removed = self.embed_system_fonts.take();
+        self.finish_removal("embedSystemFonts")?;
+        Ok(removed)
+    }
+
+    /// Return the `w:saveSubsetFonts` toggle.
+    pub fn save_subset_fonts(&self) -> Option<bool> {
+        self.save_subset_fonts
+    }
+
+    /// Ask Word to embed only the glyphs the document uses.
+    pub fn set_save_subset_fonts(&mut self, enabled: bool) -> Result<()> {
+        self.save_subset_fonts = Some(enabled);
+        self.finish_set(
+            "saveSubsetFonts",
+            write_toggle_setting("w:saveSubsetFonts", enabled)?,
+        )
+    }
+
+    /// Remove the `w:saveSubsetFonts` toggle itself.
+    pub fn remove_save_subset_fonts(&mut self) -> Result<Option<bool>> {
+        if !self.begin_removal("saveSubsetFonts")? {
+            return Ok(None);
+        }
+        let removed = self.save_subset_fonts.take();
+        self.finish_removal("saveSubsetFonts")?;
         Ok(removed)
     }
 
@@ -2002,6 +2092,9 @@ impl CT_Settings {
             && self.remove_personal_information.is_none()
             && self.remove_date_and_time.is_none()
             && self.display_background_shape.is_none()
+            && self.embed_true_type_fonts.is_none()
+            && self.embed_system_fonts.is_none()
+            && self.save_subset_fonts.is_none()
             && self.mirror_margins.is_none()
             && self.gutter_at_top.is_none()
             && self.proof_state.is_none()
@@ -2064,6 +2157,9 @@ impl CT_Settings {
             ),
             ("w:removeDateAndTime", self.remove_date_and_time),
             ("w:displayBackgroundShape", self.display_background_shape),
+            ("w:embedTrueTypeFonts", self.embed_true_type_fonts),
+            ("w:embedSystemFonts", self.embed_system_fonts),
+            ("w:saveSubsetFonts", self.save_subset_fonts),
             ("w:mirrorMargins", self.mirror_margins),
             ("w:gutterAtTop", self.gutter_at_top),
         ] {
@@ -2607,6 +2703,9 @@ pub const SUPPORTED_SETTINGS: &[&str] = &[
     "removePersonalInformation",
     "removeDateAndTime",
     "displayBackgroundShape",
+    "embedTrueTypeFonts",
+    "embedSystemFonts",
+    "saveSubsetFonts",
     "mirrorMargins",
     "gutterAtTop",
     "proofState",
@@ -3534,6 +3633,9 @@ mod tests {
                 r#"<w:removePersonalInformation/>"#,
                 r#"<w:removeDateAndTime w:val="false"/>"#,
                 r#"<w:displayBackgroundShape/>"#,
+                r#"<w:embedTrueTypeFonts/>"#,
+                r#"<w:embedSystemFonts w:val="false"/>"#,
+                r#"<w:saveSubsetFonts/>"#,
                 r#"<w:mirrorMargins/>"#,
                 r#"<w:gutterAtTop/>"#,
                 r#"<w:proofState w:spelling="clean" w:grammar="dirty"/>"#,
@@ -3750,6 +3852,50 @@ mod tests {
     }
 
     #[test]
+    fn font_embedding_toggles_set_and_remove_in_schema_order_around_raw_children() {
+        let xml = format!(
+            r#"<q:settings xmlns:q="{W_NS}" xmlns:x="urn:foreign"><q:zoom q:percent="100"/><x:kept x:value="raw"/><q:printFormsData/><q:saveFormsData/><q:mirrorMargins/></q:settings>"#,
+        );
+        let mut settings = CT_Settings::from_xml(xml.as_bytes()).unwrap();
+        assert_eq!(settings.embed_true_type_fonts(), None);
+
+        settings.set_save_subset_fonts(false).unwrap();
+        settings.set_embed_true_type_fonts(true).unwrap();
+        settings.set_embed_system_fonts(true).unwrap();
+        let output = String::from_utf8(settings.to_xml().unwrap()).unwrap();
+        assert!(output.contains(r#"<x:kept x:value="raw"/>"#));
+        let order = [
+            "<q:printFormsData/>",
+            "<w:embedTrueTypeFonts/>",
+            "<w:embedSystemFonts/>",
+            r#"<w:saveSubsetFonts w:val="false"/>"#,
+            "<q:saveFormsData/>",
+            "<q:mirrorMargins/>",
+        ]
+        .map(|needle| output.find(needle).unwrap_or_else(|| panic!("{needle}")));
+        assert!(order.windows(2).all(|pair| pair[0] < pair[1]), "{output}");
+
+        let mut reopened = CT_Settings::from_xml(output.as_bytes()).unwrap();
+        assert_eq!(reopened.embed_true_type_fonts(), Some(true));
+        assert_eq!(reopened.embed_system_fonts(), Some(true));
+        assert_eq!(reopened.save_subset_fonts(), Some(false));
+        assert_eq!(reopened.remove_embed_system_fonts().unwrap(), Some(true));
+        assert_eq!(reopened.remove_embed_system_fonts().unwrap(), None);
+        let removed = String::from_utf8(reopened.to_xml().unwrap()).unwrap();
+        assert!(!removed.contains("embedSystemFonts"));
+        assert!(removed.contains("<w:embedTrueTypeFonts/>"));
+
+        let mut constructed = CT_Settings::new();
+        constructed.set_mirror_margins(true).unwrap();
+        constructed.set_embed_true_type_fonts(true).unwrap();
+        let constructed = String::from_utf8(constructed.to_xml().unwrap()).unwrap();
+        assert!(
+            constructed.find("<w:embedTrueTypeFonts/>").unwrap()
+                < constructed.find("<w:mirrorMargins/>").unwrap()
+        );
+    }
+
+    #[test]
     fn update_fields_toggle_reads_sets_and_removes_in_schema_order() {
         let xml = format!(
             r#"<q:settings xmlns:q="{W_NS}" xmlns:x="urn:foreign"><q:characterSpacingControl q:val="doNotCompress"/><q:updateFields q:val="true"/><x:updateFields/><x:kept/><q:compat/></q:settings>"#,
@@ -3872,7 +4018,7 @@ mod tests {
             assert!(!seen.contains(name), "duplicate supported name {name}");
             seen.push(name);
         }
-        assert_eq!(SUPPORTED_SETTINGS.len(), 32);
+        assert_eq!(SUPPORTED_SETTINGS.len(), 35);
 
         let mut cursor = 0usize;
         for name in SUPPORTED_SETTINGS {
@@ -3904,6 +4050,9 @@ mod tests {
         assert_eq!(settings.remove_personal_information(), Some(true));
         assert_eq!(settings.remove_date_and_time(), Some(false));
         assert_eq!(settings.display_background_shape(), Some(true));
+        assert_eq!(settings.embed_true_type_fonts(), Some(true));
+        assert_eq!(settings.embed_system_fonts(), Some(false));
+        assert_eq!(settings.save_subset_fonts(), Some(true));
         assert_eq!(settings.mirror_margins(), Some(true));
         assert_eq!(settings.gutter_at_top(), Some(true));
         assert_eq!(

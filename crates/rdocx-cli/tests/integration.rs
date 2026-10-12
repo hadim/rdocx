@@ -5408,3 +5408,296 @@ fn fill_writes_each_control_type_as_word_does() {
         assert!(!refused.exists());
     }
 }
+
+#[test]
+fn font_commands_embed_list_remove_and_set_the_embedding_settings() {
+    let temp = TempWorkspace::new("font-embedding");
+    let fonts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../oxml-layout/fonts");
+    let regular = fonts.join("Caladea-Regular.ttf");
+    let bold = fonts.join("Caladea-Bold.ttf");
+    let input = temp.path.join("input.docx");
+    let regular_path = temp.path.join("regular.docx");
+    let bold_path = temp.path.join("bold.docx");
+    let removed_path = temp.path.join("removed.docx");
+    let settings_path = temp.path.join("settings.docx");
+    write_document(&input, &["Embedded Caladea"]);
+
+    let refused = cli(&[
+        "font",
+        "embed",
+        path_text(&input),
+        path_text(&regular),
+        "--name",
+        "Caladea",
+        "--license-identity",
+        "Apache-2.0: Caladea",
+        "-o",
+        path_text(&regular_path),
+    ]);
+    assert_eq!(refused.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&refused.stderr),
+        "Error: font embedding requires explicit caller authorization\n"
+    );
+    assert!(!regular_path.exists());
+    let not_a_font = cli(&[
+        "font",
+        "embed",
+        path_text(&input),
+        path_text(&input),
+        "--name",
+        "Caladea",
+        "--license-authorized",
+        "--license-identity",
+        "Apache-2.0: Caladea",
+        "-o",
+        path_text(&regular_path),
+    ]);
+    assert_eq!(not_a_font.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&not_a_font.stderr).contains("not a supported sfnt font"));
+    assert!(!regular_path.exists());
+
+    let embedded = cli(&[
+        "font",
+        "embed",
+        path_text(&input),
+        path_text(&regular),
+        "--name",
+        "Caladea",
+        "--license-authorized",
+        "--license-identity",
+        "Apache-2.0: Caladea",
+        "-o",
+        path_text(&regular_path),
+        "--json",
+    ]);
+    assert_success(&embedded, "font embed regular");
+    let record: Value = serde_json::from_slice(&embedded.stdout).unwrap();
+    let regular_bytes = fs::read(&regular).unwrap();
+    let regular_key = rdocx::EmbeddedFont::derive_font_key(&regular_bytes);
+    assert_eq!(
+        record,
+        json!({
+            "schema": 1,
+            "scope": "font_table",
+            "action": "embed",
+            "name": "Caladea",
+            "face": "regular",
+            "font_key": regular_key,
+            "byte_count": regular_bytes.len(),
+            "output": path_text(&regular_path),
+        })
+    );
+    let bold_embedded = cli(&[
+        "font",
+        "embed",
+        path_text(&regular_path),
+        path_text(&bold),
+        "--name",
+        "Caladea",
+        "--face",
+        "bold",
+        "--license-authorized",
+        "--license-identity",
+        "Apache-2.0: Caladea",
+        "--font-key",
+        "{00112233-4455-6677-8899-AABBCCDDEEFF}",
+        "-o",
+        path_text(&bold_path),
+    ]);
+    assert_success(&bold_embedded, "font embed bold");
+    assert_eq!(
+        String::from_utf8_lossy(&bold_embedded.stdout),
+        format!("embed\nWritten to {}\n", bold_path.display())
+    );
+
+    assert_success(
+        &cli(&["validate", path_text(&bold_path)]),
+        "validate embedded",
+    );
+    let listed = cli(&["font", "list", path_text(&bold_path)]);
+    assert_success(&listed, "font list");
+    let listed = String::from_utf8_lossy(&listed.stdout).into_owned();
+    assert!(
+        listed.contains("Caladea\tembedded: regular, bold\n"),
+        "{listed}"
+    );
+    assert!(listed.ends_with(
+        "Settings: embedTrueTypeFonts=true embedSystemFonts=unset saveSubsetFonts=unset\n"
+    ));
+    let listed_json = cli(&["font", "list", path_text(&bold_path), "--json"]);
+    assert_success(&listed_json, "font list JSON");
+    let value: Value = serde_json::from_slice(&listed_json.stdout).unwrap();
+    let caladea = value["fonts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|font| font["name"] == "Caladea")
+        .unwrap();
+    assert_eq!(
+        caladea["embedded"],
+        json!([
+            {
+                "face": "regular",
+                "font_key": regular_key,
+                "subsetted": false,
+                "license_authorized": true,
+                "license_identity": "Apache-2.0: Caladea",
+                "byte_count": regular_bytes.len(),
+            },
+            {
+                "face": "bold",
+                "font_key": "{00112233-4455-6677-8899-AABBCCDDEEFF}",
+                "subsetted": false,
+                "license_authorized": true,
+                "license_identity": "Apache-2.0: Caladea",
+                "byte_count": fs::read(&bold).unwrap().len(),
+            },
+        ])
+    );
+    assert_eq!(
+        value["settings"],
+        json!({
+            "embed_true_type_fonts": true,
+            "embed_system_fonts": null,
+            "save_subset_fonts": null,
+        })
+    );
+
+    let package = OpcPackage::open(&bold_path).unwrap();
+    let mut font_parts = package
+        .parts
+        .keys()
+        .filter(|part| part.starts_with("/word/fonts/"))
+        .cloned()
+        .collect::<Vec<_>>();
+    font_parts.sort();
+    assert_eq!(
+        font_parts,
+        ["/word/fonts/font1.odttf", "/word/fonts/font2.odttf"]
+    );
+    assert_eq!(
+        package
+            .get_part_rels("/word/fontTable.xml")
+            .unwrap()
+            .items
+            .iter()
+            .filter(|relationship| relationship.rel_type == rel_types::FONT)
+            .count(),
+        2
+    );
+    for part in &font_parts {
+        assert_eq!(
+            package.content_types.override_for(part),
+            Some("application/vnd.openxmlformats-officedocument.obfuscatedFont")
+        );
+    }
+
+    let missing_face = cli(&[
+        "font",
+        "remove",
+        path_text(&bold_path),
+        "--name",
+        "Caladea",
+        "--face",
+        "italic",
+        "-o",
+        path_text(&removed_path),
+    ]);
+    assert_eq!(missing_face.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8_lossy(&missing_face.stderr),
+        "Error: font Caladea has no embedded italic face\n"
+    );
+    let removed = cli(&[
+        "font",
+        "remove",
+        path_text(&bold_path),
+        "--name",
+        "Caladea",
+        "--face",
+        "bold",
+        "-o",
+        path_text(&removed_path),
+        "--json",
+    ]);
+    assert_success(&removed, "font remove bold");
+    let value: Value = serde_json::from_slice(&removed.stdout).unwrap();
+    assert_eq!(value["face"], "bold");
+    let package = OpcPackage::open(&removed_path).unwrap();
+    assert_eq!(
+        package
+            .parts
+            .keys()
+            .filter(|part| part.starts_with("/word/fonts/"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        package
+            .get_part_rels("/word/fontTable.xml")
+            .unwrap()
+            .items
+            .iter()
+            .filter(|relationship| relationship.rel_type == rel_types::FONT)
+            .count(),
+        1
+    );
+    let document = Document::open(&removed_path).unwrap();
+    let caladea = document
+        .fonts()
+        .into_iter()
+        .find(|font| font.name == "Caladea")
+        .unwrap();
+    assert_eq!(caladea.embedded_fonts.len(), 1);
+    assert_eq!(caladea.embedded_fonts[0].data, regular_bytes);
+
+    let no_flag = cli(&[
+        "font",
+        "settings",
+        path_text(&removed_path),
+        "-o",
+        path_text(&settings_path),
+    ]);
+    assert_eq!(no_flag.status.code(), Some(1));
+    assert!(!settings_path.exists());
+    let settings = cli(&[
+        "font",
+        "settings",
+        path_text(&removed_path),
+        "--embed-true-type-fonts",
+        "false",
+        "--save-subset-fonts",
+        "true",
+        "-o",
+        path_text(&settings_path),
+        "--json",
+    ]);
+    assert_success(&settings, "font settings");
+    let value: Value = serde_json::from_slice(&settings.stdout).unwrap();
+    assert_eq!(
+        value["settings"],
+        json!({
+            "embed_true_type_fonts": false,
+            "embed_system_fonts": null,
+            "save_subset_fonts": true,
+        })
+    );
+    let document = Document::open(&settings_path).unwrap();
+    assert_eq!(document.embed_true_type_fonts(), Some(false));
+    assert_eq!(document.save_subset_fonts(), Some(true));
+
+    let before = fs::read(&settings_path).unwrap();
+    let in_place = cli(&[
+        "font",
+        "remove",
+        path_text(&settings_path),
+        "--name",
+        "Caladea",
+        "-o",
+        path_text(&settings_path),
+    ]);
+    assert_eq!(in_place.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&in_place.stderr).starts_with("Error: output already exists"));
+    assert_eq!(fs::read(&settings_path).unwrap(), before);
+}

@@ -564,6 +564,132 @@ def test_a_new_document_names_compatibility_mode_15_so_word_does_not_open_it_in_
         assert mode in archive.read("word/settings.xml")
 
 
+def _font_package(data):
+    with zipfile.ZipFile(io.BytesIO(data)) as package:
+        names = package.namelist()
+        return {
+            "fonts": sorted(name for name in names if name.startswith("word/fonts/")),
+            "relationships": package.read("word/_rels/fontTable.xml.rels").decode(),
+            "content_types": package.read("[Content_Types].xml").decode(),
+            "settings": package.read("word/settings.xml").decode(),
+        }
+
+
+def test_fonts_embed_list_and_remove_faces_with_explicit_licences(tmp_path):
+    from pathlib import Path
+
+    import rdocx
+
+    fonts = Path(__file__).parents[2] / "oxml-layout" / "fonts"
+    regular = (fonts / "Caladea-Regular.ttf").read_bytes()
+    licence = rdocx.FontEmbeddingLicense(authorized=True, identity="Apache-2.0: Caladea")
+    document = rdocx.Document()
+    document.add_paragraph("Embedded Caladea")
+    assert document.embed_true_type_fonts is None
+
+    before = document.to_bytes()
+    refused = rdocx.FontEmbeddingLicense(authorized=False, identity="Apache-2.0: Caladea")
+    with pytest.raises(rdocx.RdocxError, match="explicit caller authorization"):
+        document.embed_font("Caladea", regular, license=refused)
+    with pytest.raises(rdocx.RdocxError, match="exact license identity"):
+        document.embed_font(
+            "Caladea", regular, license=rdocx.FontEmbeddingLicense(authorized=True, identity=" ")
+        )
+    with pytest.raises(rdocx.RdocxError, match="not a supported sfnt font"):
+        document.embed_font("Caladea", b"not a font" * 8, license=licence)
+    with pytest.raises(rdocx.RdocxError, match="16-byte OOXML GUID"):
+        document.embed_font("Caladea", regular, license=licence, font_key="{not-a-key}")
+    with pytest.raises(ValueError, match="unknown embedded font kind"):
+        document.embed_font("Caladea", regular, "heavy", license=licence)
+    with pytest.raises(TypeError):
+        document.embed_font("Caladea", regular)
+    with pytest.raises(FileNotFoundError):
+        document.embed_font("Caladea", tmp_path / "missing.ttf", license=licence)
+    assert document.to_bytes() == before
+    assert all(font.name != "Caladea" for font in document.fonts)
+
+    document.embed_font("Caladea", regular, license=licence)
+    document.embed_font("Caladea", fonts / "Caladea-Bold.ttf", "bold", license=licence)
+    document.set_font("Caladea", family="roman", pitch="variable")
+    assert document.embed_true_type_fonts is True
+    path = tmp_path / "embedded.docx"
+    document.save(path)
+
+    reopened = rdocx.Document.open(path)
+    caladea = next(font for font in reopened.fonts if font.name == "Caladea")
+    assert (caladea.family, caladea.pitch) == ("roman", "variable")
+    assert [face.kind for face in caladea.embedded_fonts] == ["regular", "bold"]
+    assert caladea.embedded_fonts[0].data == regular
+    assert caladea.embedded_fonts[1].data == (fonts / "Caladea-Bold.ttf").read_bytes()
+    assert caladea.embedded_fonts[0].license == licence
+    assert re.fullmatch(r"\{[0-9A-F]{8}(-[0-9A-F]{4}){3}-[0-9A-F]{12}\}", caladea.embedded_fonts[0].font_key)
+    assert caladea.embedded_fonts[0].font_key != caladea.embedded_fonts[1].font_key
+
+    package = _font_package(path.read_bytes())
+    assert package["fonts"] == ["word/fonts/font1.odttf", "word/fonts/font2.odttf"]
+    assert package["relationships"].count("relationships/font\"") == 2
+    assert package["content_types"].count("application/vnd.openxmlformats-officedocument.obfuscatedFont") == 2
+    assert "<w:embedTrueTypeFonts/>" in package["settings"]
+
+    removed = reopened.remove_embedded_font("Caladea", "bold")
+    assert removed is not None and removed.kind == "bold"
+    assert reopened.remove_embedded_font("Caladea", "bold") is None
+    after = rdocx.Document.from_bytes(reopened.to_bytes())
+    caladea = next(font for font in after.fonts if font.name == "Caladea")
+    assert [face.kind for face in caladea.embedded_fonts] == ["regular"]
+    package = _font_package(reopened.to_bytes())
+    assert package["fonts"] == ["word/fonts/font1.odttf"]
+    assert package["relationships"].count("relationships/font\"") == 1
+    assert package["content_types"].count("obfuscatedFont") == 1
+
+    after.embed_true_type_fonts = False
+    after.embed_system_fonts = False
+    after.save_subset_fonts = True
+    switched = rdocx.Document.from_bytes(after.to_bytes())
+    assert (
+        switched.embed_true_type_fonts,
+        switched.embed_system_fonts,
+        switched.save_subset_fonts,
+    ) == (False, False, True)
+    switched.embed_system_fonts = None
+    assert switched.embed_system_fonts is None
+    assert "embedSystemFonts" not in _font_package(switched.to_bytes())["settings"]
+
+    removed_font = switched.remove_font("Caladea")
+    assert removed_font is not None and len(removed_font.embedded_fonts) == 1
+    assert switched.remove_font("Caladea") is None
+    with zipfile.ZipFile(io.BytesIO(switched.to_bytes())) as archive:
+        assert not any(name.startswith("word/fonts/") for name in archive.namelist())
+
+
+def test_embed_font_reads_bytes_like_objects_and_binary_files(tmp_path):
+    from pathlib import Path
+
+    import rdocx
+
+    path = Path(__file__).parents[2] / "oxml-layout" / "fonts" / "Caladea-Regular.ttf"
+    regular = path.read_bytes()
+    licence = rdocx.FontEmbeddingLicense(authorized=True, identity="Apache-2.0: Caladea")
+    document = rdocx.Document()
+    with path.open("rb") as handle:
+        handle.read(16)
+        document.embed_font("Caladea", handle, license=licence)
+    document.embed_font("Caladea", bytearray(regular), "bold", license=licence)
+    document.embed_font("Caladea", memoryview(regular), "italic", license=licence)
+    document.embed_font("Caladea", io.BytesIO(regular), "bold_italic", license=licence)
+    with pytest.raises(TypeError, match="memoryview"):
+        document.embed_font("Caladea", 42, license=licence)
+    for snapshot in (rdocx.EmbeddedFont, rdocx.FontDefinition):
+        with pytest.raises(TypeError):
+            snapshot()
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    caladea = next(font for font in reopened.fonts if font.name == "Caladea")
+    assert [face.kind for face in caladea.embedded_fonts] == [
+        "regular", "bold", "italic", "bold_italic",
+    ]
+    assert all(face.data == regular for face in caladea.embedded_fonts)
+
+
 def _one_pixel_png(pixel=b"\xff\xff\xff"):
     def chunk(kind, data):
         crc = struct.pack(">I", zlib.crc32(kind + data))

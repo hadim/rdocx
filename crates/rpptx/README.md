@@ -40,6 +40,8 @@ presentation, notes, handout, PDF, and animation outputs.
   `showMasterSp`, master text styles, layout rename, duplicate and removal,
   theme colours and fonts, and `apply_theme` from a deck, a `.potx` or a
   `.thmx`.
+- Embed, list, and remove fonts in the Embedded OpenType form PowerPoint
+  reads, after explicit license authorization.
 - Resolve master, layout, placeholder, theme, chart, SmartArt, media, notes,
   comments, and timing state while preserving unmodelled package content.
 

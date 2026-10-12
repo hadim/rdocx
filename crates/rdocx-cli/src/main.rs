@@ -283,6 +283,11 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Inspect the font table, embed and remove font faces
+    Font {
+        #[command(subcommand)]
+        command: FontCommand,
+    },
 }
 
 #[derive(Subcommand)]
@@ -382,6 +387,97 @@ struct CoreArgs {
     /// Category
     #[arg(long)]
     category: Option<String>,
+}
+
+#[derive(Subcommand)]
+enum FontCommand {
+    /// List font-table records, their embedded faces and the embedding settings
+    List {
+        /// Path to the DOCX file
+        file: PathBuf,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Embed a TrueType or OpenType file as one face of a font
+    ///
+    /// The font-table record is created when it does not exist, and the
+    /// document's embedTrueTypeFonts setting is turned on, which makes Word
+    /// keep the fonts when it saves the document again.
+    Embed {
+        /// Path to the DOCX file
+        file: PathBuf,
+        /// TrueType or OpenType file to embed
+        font_file: PathBuf,
+        /// Font-table name the face belongs to, as runs name the font
+        #[arg(long)]
+        name: String,
+        /// Face to embed: regular, bold, italic, or bold_italic
+        #[arg(
+            long,
+            value_name = "FACE",
+            default_value = "regular",
+            value_parser = commands::parse_embedded_font_kind
+        )]
+        face: rdocx::EmbeddedFontKind,
+        /// Confirm that the font licence allows embedding it in the document
+        #[arg(long)]
+        license_authorized: bool,
+        /// Exact licence identity recorded with the face, such as
+        /// "OFL-1.1: Example Sans"
+        #[arg(long)]
+        license_identity: String,
+        /// Braced uppercase GUID that obfuscates the face, derived from the
+        /// font bytes when absent
+        #[arg(long)]
+        font_key: Option<String>,
+        /// Record that the font file holds a subset of the font
+        #[arg(long)]
+        subsetted: bool,
+        /// Output DOCX file
+        #[arg(long, short = 'o')]
+        output: PathBuf,
+        /// Output the operation record as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove one embedded face, or the whole font-table record without --face
+    Remove {
+        /// Path to the DOCX file
+        file: PathBuf,
+        /// Font-table name
+        #[arg(long)]
+        name: String,
+        /// Embedded face to remove: regular, bold, italic, or bold_italic
+        #[arg(long, value_name = "FACE", value_parser = commands::parse_embedded_font_kind)]
+        face: Option<rdocx::EmbeddedFontKind>,
+        /// Output DOCX file
+        #[arg(long, short = 'o')]
+        output: PathBuf,
+        /// Output the operation record as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Set the font embedding settings Word follows when it saves
+    Settings {
+        /// Path to the DOCX file
+        file: PathBuf,
+        /// Embed the TrueType fonts the document uses: true or false
+        #[arg(long, value_name = "BOOL")]
+        embed_true_type_fonts: Option<bool>,
+        /// Also embed common system fonts: true or false
+        #[arg(long, value_name = "BOOL")]
+        embed_system_fonts: Option<bool>,
+        /// Embed only the glyphs the document uses: true or false
+        #[arg(long, value_name = "BOOL")]
+        save_subset_fonts: Option<bool>,
+        /// Output DOCX file
+        #[arg(long, short = 'o')]
+        output: PathBuf,
+        /// Output the operation record as JSON
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -926,6 +1022,57 @@ fn run_cli() {
             output,
             json,
         } => commands::fill(&file, &tags, &aliases, &output, json),
+        Command::Font { command } => match command {
+            FontCommand::List { file, json } => commands::font_list(&file, json),
+            FontCommand::Embed {
+                file,
+                font_file,
+                name,
+                face,
+                license_authorized,
+                license_identity,
+                font_key,
+                subsetted,
+                output,
+                json,
+            } => commands::font_embed(
+                &file,
+                &font_file,
+                &name,
+                face,
+                commands::FontEmbedOptions {
+                    license: rdocx::FontEmbeddingLicense::new(license_authorized, license_identity),
+                    font_key,
+                    subsetted,
+                },
+                &output,
+                json,
+            ),
+            FontCommand::Remove {
+                file,
+                name,
+                face,
+                output,
+                json,
+            } => commands::font_remove(&file, &name, face, &output, json),
+            FontCommand::Settings {
+                file,
+                embed_true_type_fonts,
+                embed_system_fonts,
+                save_subset_fonts,
+                output,
+                json,
+            } => commands::font_settings(
+                &file,
+                commands::FontEmbeddingSettings {
+                    embed_true_type_fonts,
+                    embed_system_fonts,
+                    save_subset_fonts,
+                },
+                &output,
+                json,
+            ),
+        },
     };
 
     // Standard output is line buffered, so a last line without a newline is

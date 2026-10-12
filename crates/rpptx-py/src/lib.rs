@@ -15,8 +15,8 @@ use pyo3::types::{PyAny, PyType};
 
 use oxml_py_support::{ContentPath, PathSeg, RevisionCounter};
 use presentation::{
-    PyComment, PyCommentAuthor, PyCommentReply, PyCoreProperties, PyPresentation, PySection,
-    PyValidationIssue,
+    PyComment, PyCommentAuthor, PyCommentReply, PyCoreProperties, PyEmbeddedFontFace,
+    PyEmbeddedTypeface, PyFontEmbeddingLicense, PyPresentation, PySection, PyValidationIssue,
 };
 
 pub(crate) fn normalize_index(index: isize, len: usize, kind: &str) -> PyResult<usize> {
@@ -340,6 +340,9 @@ fn _rpptx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyValidationIssue>()?;
     module.add_class::<PyCoreProperties>()?;
     module.add_class::<PySection>()?;
+    module.add_class::<PyEmbeddedTypeface>()?;
+    module.add_class::<PyEmbeddedFontFace>()?;
+    module.add_class::<PyFontEmbeddingLicense>()?;
     slide::register(module)?;
     shape::register(module)?;
     dml::register(module)?;

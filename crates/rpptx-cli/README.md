@@ -19,6 +19,8 @@ replaces text, and produces deterministic fixed output.
   remove, move, hide and show, speaker notes, and core properties.
 - A `fit` check that lists every overflowing text frame with the font scale it
   needs and exits 1 when one overflows.
+- Embedded font listing, embedding with an explicit license, removal, and the
+  font embedding settings.
 - Scriptable output covers slide order, notes, comments, recursive group
   content, relationship-backed media, and deterministic rendering diagnostics.
 - Slide import from another deck, with a slide range, an insertion position,

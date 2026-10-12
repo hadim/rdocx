@@ -594,7 +594,7 @@ survive unchanged. Invalid elements are preserved but are not reported through
 the typed projections.
 
 `SUPPORTED_SETTINGS` closes that model. It names, in `xsd:sequence` order, the
-thirty-one top-level `w:settings` children the typed model owns, and the nested
+thirty-four top-level `w:settings` children the typed model owns, and the nested
 supported names are `compat/compatSetting`, every `CompatibilityOption` local
 name under `compat`, `docVars/docVar` and the bounded `mailMerge` members. One
 `SETTINGS_ORDER` table drives both schema-position insertion and that closed

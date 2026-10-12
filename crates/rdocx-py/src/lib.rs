@@ -20,10 +20,11 @@ use document::{
 };
 use document::{
     PyBookmark, PyBoundingBox, PyComment, PyComparisonDiagnostic, PyContentFragment,
-    PyCoreProperties, PyDocument, PyHeaderFooterVariant, PyHyperlink,
-    PyLayoutBackedFieldUpdateReport, PyLayoutFragment, PyLayoutPage, PyListLevel, PyPicture,
-    PyRevision, PyRunPosition, PyRunRange, PySection, PyStory, PyStoryItem, PyStoryRunPosition,
-    PyStoryRunRange, PyStyle, PySvgDiagnostic, PySvgRenderResult, PyTocRebuildReport,
+    PyCoreProperties, PyDocument, PyEmbeddedFont, PyFontDefinition, PyFontEmbeddingLicense,
+    PyHeaderFooterVariant, PyHyperlink, PyLayoutBackedFieldUpdateReport, PyLayoutFragment,
+    PyLayoutPage, PyListLevel, PyPicture, PyRevision, PyRunPosition, PyRunRange, PySection,
+    PyStory, PyStoryItem, PyStoryRunPosition, PyStoryRunRange, PyStyle, PySvgDiagnostic,
+    PySvgRenderResult, PyTocRebuildReport,
 };
 use document::{PyHtmlDiagnostic, PyMarkdownDiagnostic};
 use formatting::{PyColorFormat, PyFont, PyParagraphFormat, PyTabStop, PyTabStops};
@@ -398,6 +399,9 @@ fn _rdocx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyHeaderFooterVariant>()?;
     module.add_class::<PySection>()?;
     module.add_class::<PyStyle>()?;
+    module.add_class::<PyFontDefinition>()?;
+    module.add_class::<PyEmbeddedFont>()?;
+    module.add_class::<PyFontEmbeddingLicense>()?;
     module.add_class::<PyListLevel>()?;
     module.add_class::<PyParagraph>()?;
     module.add_class::<PyParagraphCollection>()?;

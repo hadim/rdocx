@@ -7,7 +7,10 @@ use pyo3::exceptions::{
     PyFileNotFoundError, PyIndexError, PyKeyError, PyOverflowError, PyTypeError, PyValueError,
 };
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
+use pyo3::types::{
+    PyAny, PyBool, PyByteArray, PyBytes, PyDict, PyFloat, PyInt, PyList, PyMemoryView, PyString,
+    PyTuple,
+};
 use smallvec::{SmallVec, smallvec};
 
 use rdocx_oxml::{ST_PageOrientation, ST_SectionType};
@@ -1512,6 +1515,206 @@ impl PyStyle {
             locked,
             is_default,
         }
+    }
+}
+
+/// The caller's explicit authorization and exact licence identity for one
+/// embedded font face. Neither has a default, so authorization is always a
+/// deliberate argument.
+#[pyclass(
+    name = "FontEmbeddingLicense",
+    frozen,
+    get_all,
+    eq,
+    skip_from_py_object
+)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyFontEmbeddingLicense {
+    pub authorized: bool,
+    pub identity: String,
+}
+
+#[pymethods]
+impl PyFontEmbeddingLicense {
+    #[new]
+    #[pyo3(signature = (*, authorized, identity))]
+    fn new(authorized: bool, identity: String) -> Self {
+        Self {
+            authorized,
+            identity,
+        }
+    }
+}
+
+/// Reads font bytes from bytes, a bytearray, a memoryview, a binary
+/// file-like object, or a path, as rpptx does. A file-like object is rewound
+/// first when it can seek.
+fn font_file_bytes(font: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
+    fn blob(data: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
+        if let Ok(bytes) = data.cast::<PyBytes>() {
+            return Ok(bytes.as_bytes().to_vec());
+        }
+        if let Ok(bytes) = data.cast::<PyByteArray>() {
+            return Ok(bytes.to_vec());
+        }
+        if data.is_instance_of::<PyMemoryView>() {
+            return blob(&data.call_method0("tobytes")?);
+        }
+        Err(PyTypeError::new_err(
+            "font file object must return bytes from read()",
+        ))
+    }
+    if font.is_instance_of::<PyBytes>()
+        || font.is_instance_of::<PyByteArray>()
+        || font.is_instance_of::<PyMemoryView>()
+    {
+        return blob(font);
+    }
+    if font.hasattr("read")? {
+        if font.hasattr("seek")? {
+            font.call_method1("seek", (0,))?;
+        }
+        return blob(&font.call_method0("read")?);
+    }
+    let path: PathBuf = font.extract().map_err(|_| {
+        PyTypeError::new_err(
+            "font must be bytes, a bytearray, a memoryview, a binary file, or a path to a font file",
+        )
+    })?;
+    Ok(std::fs::read(path)?)
+}
+
+impl From<rdocx::FontEmbeddingLicense> for PyFontEmbeddingLicense {
+    fn from(value: rdocx::FontEmbeddingLicense) -> Self {
+        Self {
+            authorized: value.authorized,
+            identity: value.identity,
+        }
+    }
+}
+
+/// One embedded face of a font-table record, with its deobfuscated bytes. A
+/// read-only snapshot that `Document.fonts` and the removals return.
+#[pyclass(name = "EmbeddedFont", frozen, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyEmbeddedFont {
+    kind: rdocx::EmbeddedFontKind,
+    data: Vec<u8>,
+    font_key: String,
+    subsetted: bool,
+    license: PyFontEmbeddingLicense,
+}
+
+#[pymethods]
+impl PyEmbeddedFont {
+    #[getter]
+    fn kind(&self) -> &'static str {
+        embedded_font_kind_name(self.kind)
+    }
+
+    #[getter]
+    fn data<'py>(&self, py: Python<'py>) -> Bound<'py, PyBytes> {
+        PyBytes::new(py, &self.data)
+    }
+
+    #[getter]
+    fn font_key(&self) -> &str {
+        &self.font_key
+    }
+
+    #[getter]
+    fn subsetted(&self) -> bool {
+        self.subsetted
+    }
+
+    #[getter]
+    fn license(&self) -> PyFontEmbeddingLicense {
+        self.license.clone()
+    }
+}
+
+impl From<rdocx::EmbeddedFont> for PyEmbeddedFont {
+    fn from(value: rdocx::EmbeddedFont) -> Self {
+        Self {
+            kind: value.kind,
+            data: value.data,
+            font_key: value.font_key,
+            subsetted: value.subsetted,
+            license: value.license.into(),
+        }
+    }
+}
+
+/// One font-table record and the faces embedded for it. A read-only snapshot
+/// that `Document.fonts` and `remove_font` return.
+#[pyclass(name = "FontDefinition", frozen, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyFontDefinition {
+    name: String,
+    alternate_name: Option<String>,
+    family: Option<String>,
+    pitch: Option<String>,
+    embedded_fonts: Vec<PyEmbeddedFont>,
+}
+
+#[pymethods]
+impl PyFontDefinition {
+    #[getter]
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[getter]
+    fn alternate_name(&self) -> Option<&str> {
+        self.alternate_name.as_deref()
+    }
+
+    #[getter]
+    fn family(&self) -> Option<&str> {
+        self.family.as_deref()
+    }
+
+    #[getter]
+    fn pitch(&self) -> Option<&str> {
+        self.pitch.as_deref()
+    }
+
+    #[getter]
+    fn embedded_fonts<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, self.embedded_fonts.iter().cloned())
+    }
+}
+
+impl From<rdocx::FontDefinition> for PyFontDefinition {
+    fn from(value: rdocx::FontDefinition) -> Self {
+        Self {
+            name: value.name,
+            alternate_name: value.alternate_name,
+            family: value.family,
+            pitch: value.pitch,
+            embedded_fonts: value.embedded_fonts.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+fn embedded_font_kind_name(kind: rdocx::EmbeddedFontKind) -> &'static str {
+    match kind {
+        rdocx::EmbeddedFontKind::Regular => "regular",
+        rdocx::EmbeddedFontKind::Bold => "bold",
+        rdocx::EmbeddedFontKind::Italic => "italic",
+        rdocx::EmbeddedFontKind::BoldItalic => "bold_italic",
+    }
+}
+
+fn embedded_font_kind_from_name(name: &str) -> PyResult<rdocx::EmbeddedFontKind> {
+    match name {
+        "regular" => Ok(rdocx::EmbeddedFontKind::Regular),
+        "bold" => Ok(rdocx::EmbeddedFontKind::Bold),
+        "italic" => Ok(rdocx::EmbeddedFontKind::Italic),
+        "bold_italic" => Ok(rdocx::EmbeddedFontKind::BoldItalic),
+        _ => Err(PyValueError::new_err(format!(
+            "unknown embedded font kind {name:?}, expected regular, bold, italic or bold_italic"
+        ))),
     }
 }
 
@@ -4540,6 +4743,124 @@ impl PyDocument {
 
     /// The style snapshots, a tuple that is also indexed by style name or ID
     /// as python-docx's `document.styles['Normal']` is.
+    #[getter]
+    fn fonts<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(
+            py,
+            self.inner.fonts().into_iter().map(PyFontDefinition::from),
+        )
+    }
+
+    // Font-table and settings changes leave content handles valid, so none
+    // of these bump the revision counter.
+    #[pyo3(signature = (name, *, alternate_name = None, family = None, pitch = None))]
+    fn set_font(
+        &mut self,
+        py: Python<'_>,
+        name: &str,
+        alternate_name: Option<String>,
+        family: Option<String>,
+        pitch: Option<String>,
+    ) -> PyResult<()> {
+        self.inner
+            .set_font(rdocx::FontDefinition {
+                name: name.to_owned(),
+                alternate_name,
+                family,
+                pitch,
+                embedded_fonts: Vec::new(),
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    fn remove_font(&mut self, py: Python<'_>, name: &str) -> PyResult<Option<PyFontDefinition>> {
+        self.inner
+            .remove_font(name)
+            .map(|removed| removed.map(Into::into))
+            .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    #[pyo3(signature = (font_name, font, kind = "regular", *, license, font_key = None, subsetted = false))]
+    #[allow(clippy::too_many_arguments)]
+    fn embed_font(
+        &mut self,
+        py: Python<'_>,
+        font_name: &str,
+        font: &Bound<'_, PyAny>,
+        kind: &str,
+        license: PyRef<'_, PyFontEmbeddingLicense>,
+        font_key: Option<String>,
+        subsetted: bool,
+    ) -> PyResult<()> {
+        let kind = embedded_font_kind_from_name(kind)?;
+        let data = font_file_bytes(font)?;
+        let font_key = font_key.unwrap_or_else(|| rdocx::EmbeddedFont::derive_font_key(&data));
+        let embedded = rdocx::EmbeddedFont::new(
+            kind,
+            data,
+            font_key,
+            rdocx::FontEmbeddingLicense::new(license.authorized, license.identity.clone()),
+        )
+        .with_subsetted(subsetted);
+        py.detach(|| self.inner.embed_font(font_name, embedded))
+            .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    fn remove_embedded_font(
+        &mut self,
+        py: Python<'_>,
+        font_name: &str,
+        kind: &str,
+    ) -> PyResult<Option<PyEmbeddedFont>> {
+        let kind = embedded_font_kind_from_name(kind)?;
+        self.inner
+            .remove_embedded_font(font_name, kind)
+            .map(|removed| removed.map(Into::into))
+            .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    #[getter]
+    fn embed_true_type_fonts(&self) -> Option<bool> {
+        self.inner.embed_true_type_fonts()
+    }
+
+    #[setter]
+    fn set_embed_true_type_fonts(&mut self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        match value {
+            Some(value) => self.inner.set_embed_true_type_fonts(value),
+            None => self.inner.remove_embed_true_type_fonts().map(drop),
+        }
+        .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    #[getter]
+    fn embed_system_fonts(&self) -> Option<bool> {
+        self.inner.embed_system_fonts()
+    }
+
+    #[setter]
+    fn set_embed_system_fonts(&mut self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        match value {
+            Some(value) => self.inner.set_embed_system_fonts(value),
+            None => self.inner.remove_embed_system_fonts().map(drop),
+        }
+        .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    #[getter]
+    fn save_subset_fonts(&self) -> Option<bool> {
+        self.inner.save_subset_fonts()
+    }
+
+    #[setter]
+    fn set_save_subset_fonts(&mut self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        match value {
+            Some(value) => self.inner.set_save_subset_fonts(value),
+            None => self.inner.remove_save_subset_fonts().map(drop),
+        }
+        .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
     #[getter]
     fn styles<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let styles = PyTuple::new(py, self.inner.styles().into_iter().map(style_snapshot))?;

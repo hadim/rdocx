@@ -1984,6 +1984,53 @@ mod theme_and_embedded_font_tests {
     }
 
     #[test]
+    fn font_embedding_refuses_collections_and_faces_without_the_required_tables() {
+        let mut document = Document::new();
+        document.set_font(corpus_font()).unwrap();
+        let before = document.to_bytes().unwrap();
+        let table_record = |font: &[u8], tag: &[u8; 4]| {
+            let count = usize::from(u16::from_be_bytes([font[4], font[5]]));
+            (0..count)
+                .map(|index| 12 + index * 16)
+                .find(|record| &font[*record..*record + 4] == tag)
+                .unwrap()
+        };
+        let mut collection = CARLITO.to_vec();
+        collection[..4].copy_from_slice(b"ttcf");
+        let mut without_name = CARLITO.to_vec();
+        let record = table_record(&without_name, b"name");
+        without_name[record..record + 4].copy_from_slice(b"xxxx");
+        let mut out_of_bounds = CARLITO.to_vec();
+        let record = table_record(&out_of_bounds, b"OS/2");
+        out_of_bounds[record + 12..record + 16].copy_from_slice(&u32::MAX.to_be_bytes());
+        let mut truncated_os2 = CARLITO.to_vec();
+        truncated_os2[record + 12..record + 16].copy_from_slice(&40_u32.to_be_bytes());
+        for (data, message) in [
+            (collection, "a font collection cannot be embedded"),
+            (without_name, "embedded font has no name table"),
+            (out_of_bounds, "malformed sfnt table directory"),
+            (truncated_os2, "truncated OS/2 or head table"),
+            (CARLITO[..12].to_vec(), "malformed sfnt table directory"),
+            (b"not a font at all".to_vec(), "not a supported sfnt font"),
+        ] {
+            let error = document
+                .embed_font(
+                    "Corpus Sans",
+                    EmbeddedFont::new(
+                        EmbeddedFontKind::Regular,
+                        data,
+                        FONT_KEY,
+                        license(true, "Apache-2.0: Carlito"),
+                    ),
+                )
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(message), "{error}");
+            assert_eq!(document.to_bytes().unwrap(), before);
+        }
+    }
+
+    #[test]
     fn font_embedding_requires_explicit_authorization_and_license_identity() {
         let mut document = Document::new();
         document.set_font(corpus_font()).unwrap();
@@ -2062,6 +2109,137 @@ mod theme_and_embedded_font_tests {
                 .license
                 .identity,
             exact_identity
+        );
+    }
+
+    fn settings_text(bytes: &[u8]) -> String {
+        let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        String::from_utf8(package.get_part("/word/settings.xml").unwrap().to_vec()).unwrap()
+    }
+
+    #[test]
+    fn derived_font_keys_are_deterministic_valid_guids() {
+        let carlito = EmbeddedFont::derive_font_key(CARLITO);
+        assert_eq!(carlito, EmbeddedFont::derive_font_key(CARLITO));
+        assert_ne!(carlito, EmbeddedFont::derive_font_key(CALADEA));
+        assert_eq!(carlito.len(), 38);
+        assert!(carlito.starts_with('{') && carlito.ends_with('}'));
+        assert!(carlito[1..37].split('-').map(str::len).eq([8, 4, 4, 4, 12]));
+        assert!(
+            carlito[1..37]
+                .chars()
+                .all(|character| character == '-' || matches!(character, '0'..='9' | 'A'..='F'))
+        );
+
+        let derived = |data: &[u8]| {
+            let mut document = Document::new();
+            document
+                .embed_font(
+                    "Corpus Sans",
+                    EmbeddedFont::new(
+                        EmbeddedFontKind::Regular,
+                        data.to_vec(),
+                        EmbeddedFont::derive_font_key(data),
+                        license(true, "Apache-2.0: Carlito"),
+                    ),
+                )
+                .unwrap();
+            document.to_bytes().unwrap()
+        };
+        let first = derived(CARLITO);
+        assert_eq!(first, derived(CARLITO));
+        let reopened = Document::from_bytes(&first).unwrap();
+        let embedded = &reopened
+            .fonts()
+            .into_iter()
+            .find(|font| font.name == "Corpus Sans")
+            .unwrap()
+            .embedded_fonts[0]
+            .clone();
+        assert_eq!(embedded.font_key, carlito);
+        assert_eq!(embedded.data, CARLITO);
+    }
+
+    #[test]
+    fn embedding_creates_a_missing_record_and_turns_on_embed_true_type_fonts() {
+        let mut document = Document::new();
+        assert_eq!(document.embed_true_type_fonts(), None);
+        assert!(
+            document
+                .embed_font(
+                    " ",
+                    EmbeddedFont::new(
+                        EmbeddedFontKind::Regular,
+                        CARLITO.to_vec(),
+                        FONT_KEY,
+                        license(true, "Apache-2.0: Carlito"),
+                    ),
+                )
+                .is_err()
+        );
+        let before = document.to_bytes().unwrap();
+        let denied = EmbeddedFont::new(
+            EmbeddedFontKind::Regular,
+            CARLITO.to_vec(),
+            FONT_KEY,
+            license(false, "Apache-2.0: Carlito"),
+        );
+        assert!(document.embed_font("New Font", denied).is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+        assert!(document.fonts().iter().all(|font| font.name != "New Font"));
+
+        document.embed_font("New Font", embedded_font()).unwrap();
+        let record = document
+            .fonts()
+            .into_iter()
+            .find(|font| font.name == "New Font")
+            .unwrap();
+        assert_eq!(record.alternate_name, None);
+        assert_eq!(record.family, None);
+        assert_eq!(record.embedded_fonts, vec![embedded_font()]);
+        assert_eq!(document.embed_true_type_fonts(), Some(true));
+        let bytes = document.to_bytes().unwrap();
+        assert!(settings_text(&bytes).contains("<w:embedTrueTypeFonts/>"));
+
+        let mut reopened = Document::from_bytes(&bytes).unwrap();
+        assert_eq!(reopened.embed_true_type_fonts(), Some(true));
+        reopened.set_embed_true_type_fonts(false).unwrap();
+        reopened.set_embed_system_fonts(false).unwrap();
+        reopened.set_save_subset_fonts(true).unwrap();
+        let switched_off = reopened.to_bytes().unwrap();
+        let settings = settings_text(&switched_off);
+        assert!(settings.contains(r#"<w:embedTrueTypeFonts w:val="false"/>"#));
+        assert!(settings.contains(r#"<w:embedSystemFonts w:val="false"/>"#));
+        assert!(settings.contains("<w:saveSubsetFonts/>"));
+        let reopened = Document::from_bytes(&switched_off).unwrap();
+        assert_eq!(reopened.embed_true_type_fonts(), Some(false));
+        assert_eq!(reopened.embed_system_fonts(), Some(false));
+        assert_eq!(reopened.save_subset_fonts(), Some(true));
+
+        let mut again = reopened;
+        assert_eq!(again.remove_embed_system_fonts().unwrap(), Some(false));
+        assert_eq!(again.embed_system_fonts(), None);
+        again
+            .embed_font(
+                "New Font",
+                EmbeddedFont::new(
+                    EmbeddedFontKind::Bold,
+                    CALADEA.to_vec(),
+                    EmbeddedFont::derive_font_key(CALADEA),
+                    license(true, "Apache-2.0: Caladea"),
+                ),
+            )
+            .unwrap();
+        assert_eq!(again.embed_true_type_fonts(), Some(true));
+        assert_eq!(
+            again
+                .fonts()
+                .into_iter()
+                .find(|font| font.name == "New Font")
+                .unwrap()
+                .embedded_fonts
+                .len(),
+            2
         );
     }
 
@@ -2496,6 +2674,126 @@ mod theme_and_embedded_font_tests {
                 .get_by_id(&original_id)
                 .is_some()
         );
+    }
+
+    type FontPartState = (
+        String,
+        String,
+        Option<String>,
+        Option<Vec<u8>>,
+        Option<String>,
+    );
+
+    /// The font-table XML of a package with `w:embed*` faces, and each font
+    /// relationship with its target bytes and content type.
+    fn embedded_font_state(package: &OpcPackage) -> Option<(Vec<u8>, Vec<FontPartState>)> {
+        let main = OpcPackage::resolve_rel_target(
+            "/",
+            &package
+                .package_rels
+                .get_by_type(rel_types::DOCUMENT)?
+                .target,
+        );
+        let relationship = package
+            .get_part_rels(&main)?
+            .get_by_type(rel_types::FONT_TABLE)?;
+        let font_table = OpcPackage::resolve_rel_target(&main, &relationship.target);
+        let xml = package.get_part(&font_table)?.to_vec();
+        let text = String::from_utf8_lossy(&xml);
+        if ![
+            "embedRegular",
+            "embedBold",
+            "embedItalic",
+            "embedBoldItalic",
+        ]
+        .iter()
+        .any(|name| text.contains(&format!(":{name} ")))
+        {
+            return None;
+        }
+        let parts = package
+            .get_part_rels(&font_table)
+            .map(|relationships| {
+                relationships
+                    .items
+                    .iter()
+                    .filter(|relationship| relationship.rel_type == FONT_REL_TYPE)
+                    .map(|relationship| {
+                        let target =
+                            OpcPackage::resolve_rel_target(&font_table, &relationship.target);
+                        (
+                            relationship.id.clone(),
+                            relationship.target.clone(),
+                            relationship.target_mode.clone(),
+                            package.get_part(&target).map(<[u8]>::to_vec),
+                            package
+                                .content_types
+                                .content_type_for(&target)
+                                .map(str::to_owned),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some((xml, parts))
+    }
+
+    #[test]
+    fn corpus_documents_keep_their_embedded_fonts_through_save_and_an_unrelated_edit() {
+        let corpus = std::env::var_os("RDOCX_DOCX_CORPUS_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/docx")
+            });
+        if !corpus.is_dir() {
+            assert!(
+                std::env::var_os("RDOCX_DOCX_CORPUS_REQUIRED").is_none(),
+                "required corpus is missing at {}",
+                corpus.display()
+            );
+            eprintln!(
+                "embedded font corpus round trip skipped because {} is absent",
+                corpus.display()
+            );
+            return;
+        }
+        let mut paths = std::fs::read_dir(&corpus)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "docx")
+            })
+            .collect::<Vec<_>>();
+        paths.sort();
+        let mut checked = 0;
+        for path in paths {
+            let bytes = std::fs::read(&path).unwrap();
+            let source = OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+            let Some(expected) = embedded_font_state(&source) else {
+                continue;
+            };
+            checked += 1;
+            let mut document = Document::from_bytes(&bytes).unwrap();
+            let saved = document.to_bytes().unwrap();
+            let saved = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+            assert_eq!(
+                embedded_font_state(&saved).as_ref(),
+                Some(&expected),
+                "{}: save",
+                path.display()
+            );
+            document.add_paragraph("An unrelated paragraph added after the embedded fonts.");
+            let edited = document.to_bytes().unwrap();
+            let edited = OpcPackage::from_reader(std::io::Cursor::new(edited)).unwrap();
+            assert_eq!(
+                embedded_font_state(&edited).as_ref(),
+                Some(&expected),
+                "{}: unrelated edit",
+                path.display()
+            );
+        }
+        eprintln!("checked embedded fonts in {checked} corpus documents");
     }
 }
 

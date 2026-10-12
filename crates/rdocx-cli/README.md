@@ -21,6 +21,8 @@ and produces fixed or flow output without an Office host.
 - One-shot edits: batch and regular-expression replacement, field updates,
   picture extraction, core and custom properties, and content-control values,
   with word, character, and page counts in `inspect`.
+- Font-table listing, font face embedding after an explicit licence
+  authorization, face removal, and the Word font embedding settings.
 - Package-preserving edits cover the final S74 paragraph, run, typography,
   table, section, settings, field, form, equation, and drawing surface.
 
@@ -78,6 +80,12 @@ rdocx fields update report.docx --now 2026-10-10 -o refreshed.docx
 rdocx images extract report.docx pictures --json
 rdocx meta set report.docx --title 'Final report' --custom Client=Acme -o titled.docx
 rdocx fill form.docx --tag client=Acme --alias 'Due date=2026-10-31' -o filled.docx
+rdocx font embed report.docx ExampleSans-Bold.ttf --name 'Example Sans' \
+  --face bold --license-authorized --license-identity 'OFL-1.1: Example Sans' \
+  -o embedded.docx
+rdocx font list embedded.docx --json
+rdocx font remove embedded.docx --name 'Example Sans' --face bold -o plain.docx
+rdocx font settings embedded.docx --save-subset-fonts true -o subset.docx
 ```
 
 `inspect` reports the word count, the character count with and without spaces, the page

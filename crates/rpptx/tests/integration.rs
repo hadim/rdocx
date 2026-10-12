@@ -33067,3 +33067,629 @@ fn an_unresolvable_group_member_is_named_and_its_siblings_still_draw() {
     let (input, _) = reopened.render_deterministic().unwrap();
     assert_eq!(input.slides[0].diagnostics, slide.diagnostics);
 }
+
+fn caladea_face(face: &str) -> Vec<u8> {
+    fs::read(workspace_root().join(format!("crates/oxml-layout/fonts/Caladea-{face}.ttf")))
+        .expect("bundled Caladea face")
+}
+
+fn open_font_license() -> rpptx::FontEmbeddingLicense {
+    rpptx::FontEmbeddingLicense::new(true, "Apache-2.0: Caladea")
+}
+
+#[cfg(feature = "default-template")]
+fn caladea_deck(kinds: &[rpptx::EmbeddedFontKind]) -> rpptx::Presentation {
+    let mut presentation = rpptx::Presentation::new().expect("default template");
+    for kind in kinds {
+        let face = match kind {
+            rpptx::EmbeddedFontKind::Bold | rpptx::EmbeddedFontKind::BoldItalic => "Bold",
+            _ => "Regular",
+        };
+        presentation
+            .embed_font(
+                "Caladea",
+                rpptx::EmbeddedFont::new(*kind, caladea_face(face), open_font_license()),
+            )
+            .expect("embed Caladea face");
+    }
+    presentation
+}
+
+fn u32_le_at(bytes: &[u8], offset: usize) -> u32 {
+    u32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap())
+}
+
+fn u16_le_at(bytes: &[u8], offset: usize) -> u16 {
+    u16::from_le_bytes(bytes[offset..offset + 2].try_into().unwrap())
+}
+
+#[test]
+#[cfg(feature = "default-template")]
+fn embedded_fonts_are_written_as_uncompressed_eot_parts_and_read_back() {
+    use rpptx::{EmbeddedFontFormat, EmbeddedFontKind};
+
+    let presentation = caladea_deck(&[EmbeddedFontKind::Regular, EmbeddedFontKind::Bold]);
+    assert!(presentation.embed_true_type_fonts());
+    // The bundled template already asks PowerPoint to subset on save.
+    assert!(presentation.save_subset_fonts());
+    assert!(
+        presentation.validate().is_empty(),
+        "{:?}",
+        presentation.validate()
+    );
+    let bytes = presentation.to_bytes().unwrap();
+
+    let reopened = rpptx::Presentation::from_bytes(&bytes).unwrap();
+    let fonts = reopened.embedded_fonts();
+    assert_eq!(fonts.len(), 1);
+    let font = &fonts[0];
+    assert_eq!(font.typeface, "Caladea");
+    assert_eq!(font.panose.as_deref(), Some("02040503050406030204"));
+    assert_eq!(font.pitch_family, Some(18));
+    assert_eq!(font.charset, Some(0));
+    assert_eq!(
+        font.faces.iter().map(|face| face.kind).collect::<Vec<_>>(),
+        [EmbeddedFontKind::Regular, EmbeddedFontKind::Bold]
+    );
+    for (face, source) in font.faces.iter().zip(["Regular", "Bold"]) {
+        assert_eq!(face.format, EmbeddedFontFormat::Eot);
+        assert_eq!(face.data.as_deref(), Some(caladea_face(source).as_slice()));
+    }
+    assert_eq!(
+        font.faces[0].part_name.as_deref(),
+        Some("/ppt/fonts/font1.fntdata")
+    );
+    assert_eq!(
+        font.faces[1].part_name.as_deref(),
+        Some("/ppt/fonts/font2.fntdata")
+    );
+
+    let package = open_opc(&bytes, "embedded fonts");
+    assert_eq!(
+        package
+            .content_types
+            .defaults
+            .get("fntdata")
+            .map(String::as_str),
+        Some("application/x-fontdata")
+    );
+    let relationships = package.get_part_rels("/ppt/presentation.xml").unwrap();
+    let regular = relationships
+        .get_by_id(&font.faces[0].relationship_id)
+        .unwrap();
+    assert_eq!(regular.rel_type, rel_types::FONT);
+    assert_eq!(regular.target, "fonts/font1.fntdata");
+    let xml =
+        String::from_utf8(package.get_part("/ppt/presentation.xml").unwrap().to_vec()).unwrap();
+    assert!(xml.contains(r#"embedTrueTypeFonts="1""#), "{xml}");
+    let list = format!(
+        r#"<p:embeddedFontLst><p:embeddedFont><p:font typeface="Caladea" panose="02040503050406030204" pitchFamily="18" charset="0"/><p:regular r:id="{}"/><p:bold r:id="{}"/></p:embeddedFont></p:embeddedFontLst>"#,
+        font.faces[0].relationship_id, font.faces[1].relationship_id
+    );
+    let list_at = xml.find(&list).unwrap_or_else(|| panic!("{xml}"));
+    assert!(xml.find("<p:notesSz").unwrap() < list_at);
+    assert!(list_at < xml.find("<p:defaultTextStyle").unwrap());
+
+    let regular_source = caladea_face("Regular");
+    let eot = package.get_part("/ppt/fonts/font1.fntdata").unwrap();
+    assert_eq!(u32_le_at(eot, 0) as usize, eot.len());
+    assert_eq!(u32_le_at(eot, 4) as usize, regular_source.len());
+    assert_eq!(u32_le_at(eot, 8), 0x0002_0001);
+    assert_eq!(u32_le_at(eot, 12), 0, "no compression and no XOR");
+    assert_eq!(&eot[16..26], &[2, 4, 5, 3, 5, 4, 6, 3, 2, 4]);
+    assert_eq!(eot[26], 1, "default charset");
+    assert_eq!(eot[27], 0, "upright");
+    assert_eq!(u32_le_at(eot, 28), 400);
+    assert_eq!(u16_le_at(eot, 32), 0, "Caladea's own fsType");
+    assert_eq!(u16_le_at(eot, 34), 0x504C);
+    assert_eq!(u32_le_at(eot, 52), 0x2000_0093, "code page range 1");
+    assert_eq!(u32_le_at(eot, 60), 0x85F7_3A50, "head checksum adjustment");
+    assert!(eot[64..80].iter().all(|byte| *byte == 0));
+    let family = "Caladea"
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+    assert_eq!(u16_le_at(eot, 80), 0);
+    assert_eq!(usize::from(u16_le_at(eot, 82)), family.len());
+    assert_eq!(&eot[84..84 + family.len()], family.as_slice());
+    assert!(eot.ends_with(&regular_source));
+    let bold = package.get_part("/ppt/fonts/font2.fntdata").unwrap();
+    assert_eq!(u32_le_at(bold, 28), 700);
+}
+
+#[test]
+#[cfg(feature = "default-template")]
+fn embedding_keeps_the_font_fs_type_and_replacing_a_face_rewrites_its_part() {
+    use rpptx::{EmbeddedFont, EmbeddedFontKind};
+
+    // fsType sits at offset 8 of OS/2. Patch it to editable embedding.
+    let mut editable = caladea_face("Regular");
+    let table_count = usize::from(u16::from_be_bytes([editable[4], editable[5]]));
+    let os2 = (0..table_count)
+        .map(|index| 12 + index * 16)
+        .find(|record| &editable[*record..*record + 4] == b"OS/2")
+        .map(|record| u32::from_be_bytes(editable[record + 8..record + 12].try_into().unwrap()))
+        .unwrap() as usize;
+    editable[os2 + 8..os2 + 10].copy_from_slice(&8_u16.to_be_bytes());
+
+    let mut presentation = rpptx::Presentation::new().unwrap();
+    presentation
+        .embed_font(
+            "Caladea",
+            EmbeddedFont::new(
+                EmbeddedFontKind::Regular,
+                editable.clone(),
+                open_font_license(),
+            ),
+        )
+        .unwrap();
+    let package = open_opc(&presentation.to_bytes().unwrap(), "editable font");
+    assert_eq!(
+        u16_le_at(package.get_part("/ppt/fonts/font1.fntdata").unwrap(), 32),
+        8
+    );
+    let relationship_id = presentation.embedded_fonts()[0].faces[0]
+        .relationship_id
+        .clone();
+
+    presentation
+        .embed_font(
+            "Caladea",
+            EmbeddedFont::new(
+                EmbeddedFontKind::Regular,
+                caladea_face("Bold"),
+                open_font_license(),
+            ),
+        )
+        .unwrap();
+    let fonts = presentation.embedded_fonts();
+    assert_eq!(fonts.len(), 1);
+    assert_eq!(fonts[0].faces.len(), 1);
+    assert_eq!(fonts[0].faces[0].relationship_id, relationship_id);
+    assert_eq!(
+        fonts[0].faces[0].part_name.as_deref(),
+        Some("/ppt/fonts/font1.fntdata")
+    );
+    assert_eq!(
+        fonts[0].faces[0].data.as_deref(),
+        Some(caladea_face("Bold").as_slice())
+    );
+    let package = open_opc(&presentation.to_bytes().unwrap(), "replaced font");
+    assert_eq!(
+        package
+            .parts
+            .keys()
+            .filter(|part| part.starts_with("/ppt/fonts/"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        package
+            .get_part_rels("/ppt/presentation.xml")
+            .unwrap()
+            .get_all_by_type(rel_types::FONT)
+            .len(),
+        1
+    );
+}
+
+#[test]
+#[cfg(feature = "default-template")]
+fn removing_faces_and_fonts_drops_their_parts_relationships_and_list() {
+    use rpptx::EmbeddedFontKind;
+
+    let mut presentation = caladea_deck(&[EmbeddedFontKind::Regular, EmbeddedFontKind::Bold]);
+    assert_eq!(
+        presentation
+            .remove_embedded_font("Caladea", EmbeddedFontKind::Italic)
+            .unwrap(),
+        None
+    );
+    assert_eq!(presentation.remove_font("Missing").unwrap(), None);
+
+    let removed = presentation
+        .remove_embedded_font("Caladea", EmbeddedFontKind::Regular)
+        .unwrap()
+        .unwrap();
+    assert_eq!(removed.kind, EmbeddedFontKind::Regular);
+    assert_eq!(
+        removed.data.as_deref(),
+        Some(caladea_face("Regular").as_slice())
+    );
+    let package = open_opc(&presentation.to_bytes().unwrap(), "one face removed");
+    assert!(package.get_part("/ppt/fonts/font1.fntdata").is_none());
+    assert!(package.get_part("/ppt/fonts/font2.fntdata").is_some());
+    let relationships = package.get_part_rels("/ppt/presentation.xml").unwrap();
+    assert!(relationships.get_by_id(&removed.relationship_id).is_none());
+    assert_eq!(relationships.get_all_by_type(rel_types::FONT).len(), 1);
+    let fonts = presentation.embedded_fonts();
+    assert_eq!(fonts[0].faces.len(), 1);
+    assert_eq!(fonts[0].faces[0].kind, EmbeddedFontKind::Bold);
+
+    let removed = presentation.remove_font("Caladea").unwrap().unwrap();
+    assert_eq!(removed.faces.len(), 1);
+    assert!(presentation.embedded_fonts().is_empty());
+    assert!(
+        presentation.validate().is_empty(),
+        "{:?}",
+        presentation.validate()
+    );
+    let bytes = presentation.to_bytes().unwrap();
+    let package = open_opc(&bytes, "fonts removed");
+    assert!(
+        !package
+            .parts
+            .keys()
+            .any(|part| part.starts_with("/ppt/fonts/"))
+    );
+    assert!(!package.content_types.defaults.contains_key("fntdata"));
+    assert!(
+        package
+            .get_part_rels("/ppt/presentation.xml")
+            .unwrap()
+            .get_all_by_type(rel_types::FONT)
+            .is_empty()
+    );
+    let xml = String::from_utf8_lossy(package.get_part("/ppt/presentation.xml").unwrap());
+    assert!(!xml.contains("embeddedFontLst"), "{xml}");
+    // Removal leaves the flag to the caller.
+    assert!(xml.contains(r#"embedTrueTypeFonts="1""#));
+    rpptx::Presentation::from_bytes(&bytes).unwrap();
+}
+
+#[test]
+#[cfg(feature = "default-template")]
+fn font_embedding_requires_authorization_a_license_identity_and_one_sfnt_face() {
+    use rpptx::{EmbeddedFont, EmbeddedFontKind, FontEmbeddingLicense};
+
+    let mut presentation = rpptx::Presentation::new().unwrap();
+    let before = presentation.to_bytes().unwrap();
+    let regular = caladea_face("Regular");
+    let mut collection = regular.clone();
+    collection[..4].copy_from_slice(b"ttcf");
+    let cases = [
+        (
+            "Caladea",
+            regular.clone(),
+            FontEmbeddingLicense::new(false, "Apache-2.0: Caladea"),
+            "explicit caller authorization",
+        ),
+        (
+            "Caladea",
+            regular.clone(),
+            FontEmbeddingLicense::new(true, "  "),
+            "exact license identity",
+        ),
+        (
+            "Caladea",
+            regular.clone(),
+            FontEmbeddingLicense::new(true, "Apache-2.0\nCaladea"),
+            "whitespace",
+        ),
+        (
+            "Caladea",
+            b"not a font".to_vec(),
+            open_font_license(),
+            "not a supported sfnt font",
+        ),
+        (
+            "Caladea",
+            collection,
+            open_font_license(),
+            "font collection",
+        ),
+        ("", regular, open_font_license(), "typeface"),
+    ];
+    for (typeface, data, license, message) in cases {
+        let error = presentation
+            .embed_font(
+                typeface,
+                EmbeddedFont::new(EmbeddedFontKind::Regular, data, license),
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(message), "{error}");
+    }
+    assert!(presentation.embedded_fonts().is_empty());
+    assert!(!presentation.embed_true_type_fonts());
+    assert_eq!(presentation.to_bytes().unwrap(), before);
+}
+
+#[test]
+#[cfg(feature = "default-template")]
+fn font_flags_are_set_and_cleared_on_the_presentation_root() {
+    let mut presentation = rpptx::Presentation::new().unwrap();
+    presentation.set_save_subset_fonts(true);
+    presentation.set_embed_true_type_fonts(true);
+    assert!(presentation.save_subset_fonts());
+    assert!(presentation.embed_true_type_fonts());
+    let bytes = presentation.to_bytes().unwrap();
+    let xml = String::from_utf8_lossy(
+        open_opc(&bytes, "font flags")
+            .get_part("/ppt/presentation.xml")
+            .unwrap(),
+    )
+    .into_owned();
+    assert!(xml.contains(r#"saveSubsetFonts="1""#), "{xml}");
+    assert!(xml.contains(r#"embedTrueTypeFonts="1""#), "{xml}");
+    let mut reopened = rpptx::Presentation::from_bytes(&bytes).unwrap();
+    assert!(reopened.save_subset_fonts() && reopened.embed_true_type_fonts());
+    reopened.set_save_subset_fonts(false);
+    reopened.set_embed_true_type_fonts(false);
+    let xml = String::from_utf8_lossy(
+        open_opc(&reopened.to_bytes().unwrap(), "cleared font flags")
+            .get_part("/ppt/presentation.xml")
+            .unwrap(),
+    )
+    .into_owned();
+    assert!(!xml.contains("saveSubsetFonts") && !xml.contains("embedTrueTypeFonts"));
+}
+
+#[test]
+#[cfg(feature = "default-template")]
+fn compressed_and_unmodelled_embedded_fonts_survive_saves_and_unrelated_edits() {
+    use rpptx::{EmbeddedFont, EmbeddedFontFormat, EmbeddedFontKind};
+
+    // A PowerPoint-style deck: an MTX-compressed face, an unknown child in the
+    // entry, and an entry this model keeps raw.
+    let written = caladea_deck(&[EmbeddedFontKind::Regular])
+        .to_bytes()
+        .unwrap();
+    let mut package = open_opc(&written, "compressed font source");
+    let mut compressed = package
+        .get_part("/ppt/fonts/font1.fntdata")
+        .unwrap()
+        .to_vec();
+    compressed[12..16].copy_from_slice(&0x4_u32.to_le_bytes());
+    let header_len = compressed.len() - caladea_face("Regular").len();
+    compressed.truncate(header_len + 64);
+    let eot_len = u32::try_from(compressed.len()).unwrap();
+    compressed[0..4].copy_from_slice(&eot_len.to_le_bytes());
+    compressed[4..8].copy_from_slice(&64_u32.to_le_bytes());
+    for (index, byte) in compressed[header_len..].iter_mut().enumerate() {
+        *byte = index as u8;
+    }
+    package.set_part("/ppt/fonts/font1.fntdata", compressed.clone());
+    let xml =
+        String::from_utf8(package.get_part("/ppt/presentation.xml").unwrap().to_vec()).unwrap();
+    let xml = xml
+        .replacen(
+            "</p:embeddedFont>",
+            r#"<x:keep xmlns:x="urn:fonts" x:a="1"/></p:embeddedFont><p:embeddedFont><x:unmodelled xmlns:x="urn:fonts"/></p:embeddedFont>"#,
+            1,
+        );
+    package.set_part("/ppt/presentation.xml", xml.clone().into_bytes());
+    let source = write_package(&package, "compressed font source", "write");
+
+    let mut presentation = rpptx::Presentation::from_bytes(&source).unwrap();
+    let fonts = presentation.embedded_fonts();
+    assert_eq!(fonts.len(), 1);
+    assert_eq!(fonts[0].faces[0].format, EmbeddedFontFormat::CompressedEot);
+    assert_eq!(fonts[0].faces[0].data, None);
+    assert_eq!(fonts[0].faces[0].stored_len, compressed.len());
+
+    let saved = open_opc(&presentation.to_bytes().unwrap(), "compressed font save");
+    assert_eq!(
+        saved.get_part("/ppt/presentation.xml").unwrap(),
+        xml.as_bytes()
+    );
+    assert_eq!(
+        saved.get_part("/ppt/fonts/font1.fntdata").unwrap(),
+        compressed.as_slice()
+    );
+
+    // An edit to the same list rewrites presentation.xml and keeps the rest.
+    presentation
+        .embed_font(
+            "Caladea",
+            EmbeddedFont::new(
+                EmbeddedFontKind::Bold,
+                caladea_face("Bold"),
+                open_font_license(),
+            ),
+        )
+        .unwrap();
+    let saved = open_opc(&presentation.to_bytes().unwrap(), "compressed font edit");
+    assert_eq!(
+        saved.get_part("/ppt/fonts/font1.fntdata").unwrap(),
+        compressed.as_slice()
+    );
+    let rewritten = String::from_utf8_lossy(saved.get_part("/ppt/presentation.xml").unwrap());
+    assert!(
+        rewritten.contains(r#"<x:keep xmlns:x="urn:fonts" x:a="1"/><p:bold r:id="#),
+        "{rewritten}"
+    );
+    assert!(
+        rewritten.contains(r#"</p:embeddedFont><p:embeddedFont><x:unmodelled xmlns:x="urn:fonts"/></p:embeddedFont></p:embeddedFontLst>"#),
+        "{rewritten}"
+    );
+    let faces = &presentation.embedded_fonts()[0].faces;
+    assert_eq!(faces[0].format, EmbeddedFontFormat::CompressedEot);
+    assert_eq!(faces[1].format, EmbeddedFontFormat::Eot);
+
+    // A raw sfnt part, as other producers write, reads back as such.
+    let mut package = open_opc(&source, "raw sfnt source");
+    package.set_part("/ppt/fonts/font1.fntdata", caladea_face("Regular"));
+    let raw =
+        rpptx::Presentation::from_bytes(&write_package(&package, "raw sfnt", "write")).unwrap();
+    let face = &raw.embedded_fonts()[0].faces[0];
+    assert_eq!(face.format, EmbeddedFontFormat::Sfnt);
+    assert_eq!(
+        face.data.as_deref(),
+        Some(caladea_face("Regular").as_slice())
+    );
+}
+
+#[test]
+#[cfg(feature = "default-template")]
+fn the_eot_header_reads_names_from_a_windows_symbol_encoded_name_table() {
+    use rpptx::{EmbeddedFont, EmbeddedFontKind};
+
+    // Leave only Windows symbol (3, 0) name records: Unicode and Macintosh
+    // records move to an unknown platform, and (3, 1) records become (3, 0).
+    let mut symbol = caladea_face("Regular");
+    let table_count = usize::from(u16::from_be_bytes([symbol[4], symbol[5]]));
+    let name = (0..table_count)
+        .map(|index| 12 + index * 16)
+        .find(|record| &symbol[*record..*record + 4] == b"name")
+        .map(|record| u32::from_be_bytes(symbol[record + 8..record + 12].try_into().unwrap()))
+        .unwrap() as usize;
+    let count = usize::from(u16::from_be_bytes([symbol[name + 2], symbol[name + 3]]));
+    for index in 0..count {
+        let record = name + 6 + index * 12;
+        let platform = u16::from_be_bytes([symbol[record], symbol[record + 1]]);
+        if platform == 3 {
+            symbol[record + 2..record + 4].copy_from_slice(&0_u16.to_be_bytes());
+        } else {
+            symbol[record..record + 2].copy_from_slice(&7_u16.to_be_bytes());
+        }
+    }
+
+    let mut presentation = rpptx::Presentation::new().unwrap();
+    presentation
+        .embed_font(
+            "Caladea",
+            EmbeddedFont::new(EmbeddedFontKind::Regular, symbol, open_font_license()),
+        )
+        .unwrap();
+    let package = open_opc(&presentation.to_bytes().unwrap(), "symbol names");
+    let eot = package.get_part("/ppt/fonts/font1.fntdata").unwrap();
+    let family = "Caladea"
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+    assert_eq!(usize::from(u16_le_at(eot, 82)), family.len());
+    assert_eq!(&eot[84..84 + family.len()], family.as_slice());
+    let style_at = 84 + family.len();
+    let style = "Regular"
+        .encode_utf16()
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+    assert_eq!(usize::from(u16_le_at(eot, style_at + 2)), style.len());
+    assert_eq!(
+        &eot[style_at + 4..style_at + 4 + style.len()],
+        style.as_slice()
+    );
+}
+
+type DeckFontPartState = (
+    String,
+    String,
+    Option<String>,
+    Option<Vec<u8>>,
+    Option<String>,
+);
+
+/// The `p:embeddedFontLst` element of a package's presentation part, written
+/// with the `p` prefix, and each font relationship with its target bytes and
+/// content type.
+fn deck_embedded_font_state(package: &OpcPackage) -> Option<(String, Vec<DeckFontPartState>)> {
+    let main = OpcPackage::resolve_rel_target(
+        "/",
+        &package
+            .package_rels
+            .get_by_type(rel_types::DOCUMENT)?
+            .target,
+    );
+    let xml = String::from_utf8_lossy(package.get_part(&main)?).into_owned();
+    let marker = xml.find(":embeddedFontLst")?;
+    let start = xml[..marker].rfind('<')?;
+    let prefix = &xml[start + 1..marker];
+    let close = format!("</{prefix}:embeddedFontLst>");
+    let end = match xml[start..].find(&close) {
+        Some(offset) => start + offset + close.len(),
+        None => start + xml[start..].find("/>")? + 2,
+    };
+    let list = xml[start..end]
+        .replace(&format!("<{prefix}:"), "<p:")
+        .replace(&format!("</{prefix}:"), "</p:");
+    let parts = package
+        .get_part_rels(&main)
+        .map(|relationships| {
+            relationships
+                .items
+                .iter()
+                .filter(|relationship| relationship.rel_type == rel_types::FONT)
+                .map(|relationship| {
+                    let target = OpcPackage::resolve_rel_target(&main, &relationship.target);
+                    (
+                        relationship.id.clone(),
+                        relationship.target.clone(),
+                        relationship.target_mode.clone(),
+                        package.get_part(&target).map(<[u8]>::to_vec),
+                        package
+                            .content_types
+                            .content_type_for(&target)
+                            .map(str::to_owned),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some((list, parts))
+}
+
+#[test]
+fn corpus_decks_keep_their_embedded_fonts_through_save_and_an_unrelated_edit() {
+    let corpus = corpus_dir();
+    if !corpus.is_dir() {
+        assert!(
+            std::env::var_os("RDOCX_PPTX_CORPUS_REQUIRED").is_none(),
+            "required corpus is missing at {}",
+            corpus.display()
+        );
+        eprintln!(
+            "embedded font corpus round trip skipped because {} is absent",
+            corpus.display()
+        );
+        return;
+    }
+    let mut paths = fs::read_dir(&corpus)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "pptx")
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    let mut checked = 0;
+    for path in paths {
+        let deck = path.display().to_string();
+        let bytes = fs::read(&path).unwrap();
+        let source = open_opc(&bytes, &deck);
+        let Some(expected) = deck_embedded_font_state(&source) else {
+            continue;
+        };
+        checked += 1;
+        let source_xml = source.get_part("/ppt/presentation.xml").map(<[u8]>::to_vec);
+        let mut presentation = Presentation::from_bytes(&bytes).unwrap();
+        let saved = open_opc(&presentation.to_bytes().unwrap(), &deck);
+        assert_eq!(
+            deck_embedded_font_state(&saved).as_ref(),
+            Some(&expected),
+            "{deck}: save"
+        );
+        assert_eq!(
+            saved.get_part("/ppt/presentation.xml").map(<[u8]>::to_vec),
+            source_xml,
+            "{deck}: an unedited presentation part stays byte-identical"
+        );
+
+        // A slide-size change rewrites presentation.xml from the model.
+        let (width, height) = presentation
+            .slide_size()
+            .unwrap_or((Emu(9_144_000), Emu(6_858_000)));
+        presentation
+            .set_slide_size(Emu(width.0 + 12_700), height)
+            .unwrap();
+        presentation.core_properties_mut().title = Some("Embedded font round trip".to_owned());
+        let edited = open_opc(&presentation.to_bytes().unwrap(), &deck);
+        assert_eq!(
+            deck_embedded_font_state(&edited).as_ref(),
+            Some(&expected),
+            "{deck}: unrelated edit"
+        );
+    }
+    eprintln!("checked embedded fonts in {checked} corpus decks");
+}

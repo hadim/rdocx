@@ -15,7 +15,10 @@ from rdocx import (
     ContentFragment,
     CoreProperties,
     Document,
+    EmbeddedFont,
     Font,
+    FontDefinition,
+    FontEmbeddingLicense,
     HeaderFooterVariant,
     HtmlDiagnostic,
     Hyperlink,
@@ -276,6 +279,25 @@ def exercise_rdocx_types(path: Path) -> None:
     document.link_style_to_numbering(note.style_id, num_id, 0)
     document.set_default_style("Normal")
     style_removed: bool = document.remove_style("BoxedNote")
+    font_license = FontEmbeddingLicense(authorized=True, identity="Apache-2.0: Caladea")
+    document.set_font("Caladea", family="roman", pitch="variable")
+    document.embed_font("Caladea", b"font", license=font_license)
+    document.embed_font("Caladea", bytearray(b"font"), "italic", license=font_license)
+    document.embed_font("Caladea", memoryview(b"font"), license=font_license)
+    with open("Caladea-Bold.ttf", "rb") as font_handle:
+        document.embed_font("Caladea", font_handle, "bold_italic", license=font_license)
+    document.embed_font(
+        "Caladea", Path("Caladea-Bold.ttf"), "bold", license=font_license, font_key=None
+    )
+    fonts: tuple[FontDefinition, ...] = document.fonts
+    assert_type(fonts[0].embedded_fonts, tuple[EmbeddedFont, ...])
+    assert_type(fonts[0].embedded_fonts[0].kind, Literal["regular", "bold", "italic", "bold_italic"])
+    assert_type(fonts[0].embedded_fonts[0].license.authorized, bool)
+    removed_face: EmbeddedFont | None = document.remove_embedded_font("Caladea", "bold")
+    removed_font: FontDefinition | None = document.remove_font("Caladea")
+    document.embed_true_type_fonts = False
+    document.save_subset_fonts = None
+    assert_type(document.embed_system_fonts, bool | None)
     stories: tuple[Story, ...] = document.stories
     image_data: bytes | None = document.image_data("rId1")
     document.replace_image("rId1", b"image")
@@ -436,6 +458,8 @@ def exercise_rdocx_types(path: Path) -> None:
         story_comment_id,
         updated_section,
         style_removed,
+        removed_face,
+        removed_font,
     )
     accepted, dated, replaced, matched, updated
 
@@ -446,7 +470,9 @@ if TYPE_CHECKING:
     CellParagraphCollection()  # type: ignore[call-arg]
     Column()  # type: ignore[call-arg]
     CoreProperties()  # type: ignore[call-arg]
+    EmbeddedFont()  # type: ignore[call-arg]
     Font()  # type: ignore[call-arg]
+    FontDefinition()  # type: ignore[call-arg]
     Paragraph()  # type: ignore[call-arg]
     ParagraphCollection()  # type: ignore[call-arg]
     ParagraphFormat()  # type: ignore[call-arg]

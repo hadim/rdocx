@@ -819,7 +819,7 @@ unmodelled and byte-identical, and their mutation returns an error rather than
 collapsing ownership. Every facade change uses the staged settings candidate,
 including collision-safe part and relationship allocation, before commit.
 
-The bounded surface closes over the thirty-one top-level names in
+The bounded surface closes over the thirty-four top-level names in
 `SUPPORTED_SETTINGS`, the complete `CT_Compat` on-off family, and the thirteen
 authored `w:mailMerge` members. Mail-merge members are written one at a time at
 their own schema positions, because `w:dataSource`, `w:headerSource` and
@@ -848,6 +848,13 @@ prefixes in schema order. The root merges producer MCE tokens and declares
 `rdocx` ignorable. Producer attributes and unmodeled children remain in their
 original relative slots. The `rdocx:` attributes retain the caller's explicit
 authorization fact and exact license identity across save and reopen.
+
+The `w:embedTrueTypeFonts`, `w:embedSystemFonts`, and `w:saveSubsetFonts`
+settings are typed optional on-off values written between `w:printFormsData`
+and `w:saveFormsData`. Embedding a face writes the obfuscated
+`/word/fonts/fontN.odttf` part, its font relationship from the font table, its
+content-type override, and turns on `w:embedTrueTypeFonts` in one staged
+mutation, so a refused embed changes no byte.
 
 Watermark authoring follows the document-to-header graph rather than assuming
 conventional header names. The facade materializes a missing default, first, or

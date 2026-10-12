@@ -97,6 +97,10 @@ with open("report.pdf", "wb") as output:
   valid.
 - Hyperlinks to a web address or, with `anchor=`, to a bookmark or a heading
   that gets a bookmark when it has none, with optional tooltips.
+- Font-table records listed through `Document.fonts`, and TrueType or
+  OpenType faces embedded with `Document.embed_font` after an explicit
+  `FontEmbeddingLicense`, so the document keeps its font on a machine that
+  does not have it installed.
 - Complete paragraph and run formatting, multilingual and vertical typography,
   conditional and floating tables, section semantics, settings, fields, forms,
   equations, drawings, comments, and metadata.

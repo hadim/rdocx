@@ -8,6 +8,9 @@ from rpptx import (
     Comment,
     CommentAuthor,
     CommentReply,
+    EmbeddedFontFace,
+    EmbeddedTypeface,
+    FontEmbeddingLicense,
     Inches,
     Length,
     MSO_ANCHOR,
@@ -767,6 +770,44 @@ def exercise_rpptx_master_layout_theme_types(presentation: Presentation, logo: P
     (used, hidden, placeholders)
 
 
+def exercise_rpptx_font_embedding_types(presentation: Presentation, font: Path) -> None:
+    license = FontEmbeddingLicense(authorized=True, identity="Apache-2.0: Caladea")
+    authorized: bool = license.authorized
+    identity: str = license.identity
+    presentation.embed_font("Caladea", font, license=license)
+    presentation.embed_font("Caladea", font.read_bytes(), "bold", license=license)
+    presentation.embed_font("Caladea", bytearray(font.read_bytes()), "italic", license=license)
+    presentation.embed_font("Caladea", memoryview(font.read_bytes()), license=license)
+    with font.open("rb") as handle:
+        presentation.embed_font("Caladea", handle, "bold_italic", license=license)
+    (authorized, identity)
+    fonts: tuple[EmbeddedTypeface, ...] = presentation.embedded_fonts
+    for entry in fonts:
+        typeface: str = entry.typeface
+        panose: str | None = entry.panose
+        pitch_family: int | None = entry.pitch_family
+        charset: int | None = entry.charset
+        faces: tuple[EmbeddedFontFace, ...] = entry.faces
+        for face in faces:
+            kind: str = face.kind
+            relationship_id: str = face.relationship_id
+            part_name: str | None = face.part_name
+            stored_format: str = face.format
+            stored_len: int = face.stored_len
+            data: bytes | None = face.data
+            (kind, relationship_id, part_name, stored_format, stored_len, data)
+        (typeface, panose, pitch_family, charset)
+    removed_face: EmbeddedFontFace | None = presentation.remove_embedded_font("Caladea", "bold")
+    removed_font: EmbeddedTypeface | None = presentation.remove_font("Caladea")
+    presentation.embed_true_type_fonts = True
+    presentation.save_subset_fonts = False
+    flags: tuple[bool, bool] = (
+        presentation.embed_true_type_fonts,
+        presentation.save_subset_fonts,
+    )
+    (removed_face, removed_font, flags)
+
+
 if TYPE_CHECKING:
     BoundingBox()  # type: ignore[call-arg]
     AdjustmentCollection()  # type: ignore[call-arg]
@@ -785,6 +826,9 @@ if TYPE_CHECKING:
     Comment()  # type: ignore[call-arg]
     CommentAuthor()  # type: ignore[call-arg]
     CommentReply()  # type: ignore[call-arg]
+    EmbeddedFontFace()  # type: ignore[call-arg]
+    EmbeddedTypeface()  # type: ignore[call-arg]
+    FontEmbeddingLicense()  # type: ignore[call-arg]
     Column()  # type: ignore[call-arg]
     ColumnCollection()  # type: ignore[call-arg]
     Font()  # type: ignore[call-arg]
