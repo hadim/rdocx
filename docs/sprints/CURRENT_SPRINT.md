@@ -6,7 +6,7 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 now contains twenty-six active stories, nineteen completed, two running,
+S91 now contains twenty-six active stories, twenty completed, one running,
 five approved pending implementation. Contribution intake is closed at the user's latest instruction.
 
 ## Spec references
@@ -44,7 +44,7 @@ five approved pending implementation. Contribution intake is closed at the user'
 | F-X211 | Complete Python script compatibility and safe XML access | L | pending | - |
 | F-X212 | Align native accessibility with visible paragraph content | M | done | - |
 | F-X213 | Preserve TOC entry boundary paragraphs during rebuild | M | done | - |
-| F-X214 | Bound recursive PowerPoint parsing and traversal | L | in-progress | codex |
+| F-X214 | Bound recursive PowerPoint parsing and traversal | L | done | - |
 | F-X215 | Create charts in Python and replace existing chart data | L | pending | - |
 | F-X216 | Import complete slides and merge decks with source formatting | L | pending | - |
 | F-X217 | Import HTML and Markdown through public Word surfaces | L | pending | - |
@@ -1109,3 +1109,12 @@ remains in S91. Intake stays closed.
 ## F-X201 integrated dependency checkpoint, 2026-10-12
 
 Fifteen of26 active stories are complete. F-X201 integrates at16113a06 after clean independent integration review23. Eleven focused Word regressions, combined native and binding compilation, all49 approved hashes, prose and adapter checks pass. Policy coverage is composite139 passes and two existing skips after correcting the stale shared package path. Original failures remain retained. F-X205 is running and ten approved stories await implementation. Final full sprint verification, sprint review and close preflight remain due. Intake remains closed at38 included issues and28 PRs, excluding discussion Issues264 and281.
+
+
+## F-X214 scoped completion, 2026-10-12
+
+Twenty of26 included stories are completed. Issue344 and PR355 complete the depth32 shared recognized-nesting contract, URI-owned timing and shape parsing, iterative authored traversal, exact opaque-source retention and atomic authored refusal. Integration a2ab9bd30a15707f932f9c34e048d07b64fbe44a preserves completed F-X202 and F-X209 contracts and the current S92 bibliography boundary. Twelve crate carriers match the reviewed worker exactly. Independent integration review5 reports zero defects and zero smells. Its external evidence-label nitpick is corrected from twenty to eighteen unchanged archive tuples.
+
+The scoped native composite qualifies956 passes and34 existing ignores. Original failing runs and exact successors remain retained. Fresh installed PowerPoint controls, typing and stubtest pass with the complete Word distribution unchanged. A legal eight-group deck passes native PowerPoint open/save/reopen. Four verified patched archive dry runs abort upload. Policy qualifies139 passes and2 existing skips using the exact registry-only successor. Actual combined six-crate check and49 unchanged deterministic hashes pass. No full workspace or full sprint acceptance is claimed.
+
+F-X204 remains running, with F-X211 and F-X215 through F-X218 approved pending implementation. Intake stays closed at38 included issues and28 PRs. Discussion Issues264 and281 remain open. Bibliography, navigation and separate authoring carryovers stay in S92. Final integrated verification and sprint review remain due.

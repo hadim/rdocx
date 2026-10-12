@@ -2168,9 +2168,9 @@ requirements discussions264 and281.
 | F-X217 | Import HTML and Markdown through public Word surfaces | L |
 | F-X218 | Export presentations as semantic HTML and Markdown | L |
 
-**Current delivery checkpoint**: nineteen of twenty-six active stories are
+**Current delivery checkpoint**: twenty of twenty-six active stories are
 completed and integrated, F-X193 through F-X203, F-X205 through
-F-X210, F-X212 and F-X213. Remaining issue and PR repairs follow
+F-X210, F-X212, F-X213 and F-X214. Remaining issue and PR repairs follow
 completed dependencies and exclusive source boundaries. CURRENT_SPRINT.md
 records active owners and execution states. F-X192 and F-283 remain at S92 with their contracts,
 dirty worker work, reviews and required evidence retained. Standalone authoring
@@ -2245,7 +2245,7 @@ The 2026-10-11 18:43 UTC refresh found no additions or changed PR heads.
 | [314](https://github.com/tensorbee/rdocx/issues/314) | Contributions above | All applicable S91 owners | Umbrella checklist, each provider credited once. |
 | [316](https://github.com/tensorbee/rdocx/issues/316), [331](https://github.com/tensorbee/rdocx/issues/331), [337](https://github.com/tensorbee/rdocx/issues/337) | [333](https://github.com/tensorbee/rdocx/pull/333), [336](https://github.com/tensorbee/rdocx/pull/336), [338](https://github.com/tensorbee/rdocx/pull/338) | F-X211, consumes completed providers | Frozen script corpus, safe XML, residual handles and bounded native control/text-box parsing. |
 | [340](https://github.com/tensorbee/rdocx/issues/340) | [341](https://github.com/tensorbee/rdocx/pull/341) | F-X213 | Entry-owned and single-paragraph TOC rebuild, retained opaque properties and namespace closure, completed with scoped acceptance. |
-| [344](https://github.com/tensorbee/rdocx/issues/344) | [355](https://github.com/tensorbee/rdocx/pull/355) | F-X214 | Bounded PowerPoint parsing and traversal, approved pending implementation. |
+| [344](https://github.com/tensorbee/rdocx/issues/344) | [355](https://github.com/tensorbee/rdocx/pull/355) | F-X214 | Bounded PowerPoint parsing and traversal, completed with scoped acceptance. |
 | [345](https://github.com/tensorbee/rdocx/issues/345), [346](https://github.com/tensorbee/rdocx/issues/346) | [356](https://github.com/tensorbee/rdocx/pull/356) | F-X215 | Python chart creation and preservation-aware data replacement, approved pending implementation. |
 | [347](https://github.com/tensorbee/rdocx/issues/347), [348](https://github.com/tensorbee/rdocx/issues/348), [349](https://github.com/tensorbee/rdocx/issues/349) | [357](https://github.com/tensorbee/rdocx/pull/357) | F-X216 | Complete slide graph import, source formatting and deck merge, approved pending implementation. |
 | [350](https://github.com/tensorbee/rdocx/issues/350), [351](https://github.com/tensorbee/rdocx/issues/351) | [359](https://github.com/tensorbee/rdocx/pull/359) | F-X217 | Public Word HTML and CommonMark import, approved pending completed F-X200 and F-X203. |

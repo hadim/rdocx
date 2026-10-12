@@ -19247,3 +19247,23 @@ push, main merge, tag or publication is claimed.
 **Spec sections touched.** Exactly HLD08,10,12 and14, preserving completed PowerPoint contracts.
 
 **Notes for future sessions.** Keep work/f-x202-codex through final verification and close. Preserve required scratch, samples and corpus before clean worktree retirement. Bibliography remains F-X192 in S92. No GitHub closure, push, main merge, tag, publication or whole-fixture font/pixel parity is claimed.
+
+
+### F-X214, Bound recursive PowerPoint parsing and traversal
+
+**Completed.** 2026-10-12, S91 scoped dependency-prefix checkpoint
+**Size.** L, actual not recorded
+
+**What was built.** Issue344 and adapted PR355 bound shared recognized shape and timing nesting at32, with URI-owned transparent timing wrappers and one source cursor. Private shared source ranges preserve opaque XML exactly. Iterative lineage, geometry, flattening and lowering protect authored trees and reject unsupported depth atomically.
+
+**Non-obvious choices.** Mixed group and alternate-content nesting shares one counter. Namespace aliases are resolved by URI. Opaque subtrees do not override recognized condition metadata. Empty timing condition lists support both XML spellings without a panic. One private source allocation avoids quadratic copies and does not change public model fields.
+
+**Tests.** Current native composite qualifies956 passes and34 existing ignores, preserving original failures and exact oracle successors. Four-crate Clippy, both WASM checks, formatting and49 hashes pass. Release boundary measurements exclude compiler time. Fresh installed PowerPoint group, alternate-content and timing controls pass at32 and reject33 without abort. Atomic authored refusal retains complete bytes and held leaves. Strict typing and stubtest pass with the complete Word distribution unchanged. Native PowerPoint16.113.4 accepts a legal eight-group deck through open/save/reopen. Four verified patched archive dry runs abort upload. Policy qualifies139 passes and2 existing skips after one exact registry-only successor.
+
+**Integrated evidence.** Implementation39407509 and handoff tipe5b4a2c8 integrate into a2ab9bd30a15707f932f9c34e048d07b64fbe44a. All12 crate carriers equal the worker. Working product review3 and final metadata review4 are clean. Bounded integration review5 reports zero defects and zero smells, with one corrected external receipt label. Five shared HLD compositions preserve completed providers and S92 scheduling. Four PPT archive tuples compose with18 unchanged canonical tuples, including both F-X202 Word tuples. Actual six-crate all-target/all-feature check,49 hashes, prose, adapters and both diff checks pass. Receipts remain in /private/tmp/S91-F-X214-integration-checkpoint and retained worker evidence. Original failures are not relabelled green.
+
+**Hash harness.** All49 deterministic entries match the unchanged baseline. Final full sprint verification and sprint review remain due.
+
+**Spec sections touched.** Exactly HLD02,06,08,10,12 and14, preserving completed Word and PowerPoint contracts.
+
+**Notes for future sessions.** Keep work/f-x214-codex through final verification and close. Preserve required evidence before clean worktree retirement. Bibliography remains F-X192 in S92. No GitHub closure, push, main merge, tag, publication or whole-fixture pixel parity is claimed.
