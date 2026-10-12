@@ -944,3 +944,5 @@ Issues264 and281 remain excluded and open.
 | F-X210 | S91 | L | 4 | not recorded | 2026-10-12 | Scoped prerequisite completion, approved font and symbol assets with bounded compatibility and same-render diagnostics. Worker native/installed/typing/paint/package gates qualified. Integrated seven checks and49 matching hashes pass, final package measurement within64 bytes, reviews29/30 clean. Full sprint gate remains due |
 
 | F-X213 | S91 | M | 2 | not recorded | 2026-10-12 | Scoped completion, entry-owned TOC boundaries and exact opaque preservation. Native21 and full affected suites, installed2 and typing, policy141, verified22 archives and clean integration review17. Composed TOC2 and Word/CLI checks pass on completed F-X210 prefix. Full sprint gate remains due |
+
+| F-X206 | S91 | L | 4 | not recorded | 2026-10-12 | Scoped completion, shape authoring and causal live handles, native affine and source-preserving XML. Current11-crate checks, installed8, typing, verified8 archives, policy successors and49 hashes pass. Integrated source exact and reviews53 to59 clean. Full sprint gate remains due |

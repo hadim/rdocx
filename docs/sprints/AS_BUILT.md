@@ -19060,3 +19060,26 @@ push, main merge, tag or publication is claimed.
 **Deviations from the design plan.** The approved compatibility amendment distinguishes unchanged exact saves from strict rich-query and mutation admission. No serializer waiver or reduced opaque-payload assertion is introduced. Historical failed compiler, runtime and policy receipts remain retained separately from successful retries.
 
 **Notes for future sessions.** Keep the worker branch and required source-qualified evidence through final sprint verification and review. This checkpoint does not claim the full integrated sprint gate, contributor closure, push, main merge, tag or publication.
+
+
+### F-X206, Complete PowerPoint shape authoring and live handles
+
+**Sprint.** S91
+**Completed.** 2026-10-12, scoped dependency checkpoint
+**Size.** L, estimated4 to5 days, actual not recorded
+
+**What was built.** Native and Python shape authoring use causal physical owners and live handles. Group transforms follow the independently measured native flip and rotation order. Semantic member failures retain visible fallback or diagnosed omission, with an independent unresolved count and ordered CLI reporting. Namespace-qualified source transport preserves unsupported XML. Picture conversion refuses opaque empty text owners atomically. Completed font and TOC behavior remains preserved.
+
+**Non-obvious choices.** Shared causal support belongs to this provider without introducing a dependency cycle with Word formatting. Imported duplicate IDs remain saveable only while their exact original source is retained. Native physical font selection, small caps and contour comparisons retain their declared input limits. Headless LibreOffice uses recovery suppression and isolated profiles. No borrowed Word formatting or two-key namespace baseline enters this feature.
+
+**Deviations from the design plan.** No product scope deviation. Independently reviewed inherited compile compatibility, test placement and pure formatting corrections retain original failed receipts. Generated names and qualified source serialization have explicitly attributed SmartArt9f714 and F116ef24 package expectations. Five local worker commits separate foundation, affine, recovery, serialization and metadata changes while retaining the exact tested final tree.
+
+**Spec sections touched.** HLD02 capability scope, HLD03 causal architecture, HLD05 DrawingML transforms and text, HLD06 shape ownership, HLD07 resolution, HLD08 rendering, HLD10 APIs and lifetimes, and HLD14 delivered acceptance. Section-only splices retain completed providers.
+
+**Tests.** Genuine old-production picture-owner Base fails and three deciding native controls pass. Source-qualified earlier acceptance includes104 installed cases, the mandatory eight-owner SVG comparator with16 scores at least0.99543, native PowerPoint affine evidence and unattended LibreOffice controls. Actual owned-source eleven-crate checks and Clippy, affected native and font controls, both WASM graphs, fresh installed PPT8, strict typing and stubtest pass. Eight affected genuine verified archive dry runs pass. Exact policy successors qualify the original two full-policy failures without relabelling them. Metadata-only successors retain member totals and compressed differences within6 bytes. SmartArt and F116 current-source controls reproduce the independently reviewed package identities. The SmartArt child passes, with a subsequent wrapper missing-key failure retained and qualified from its exact raw count.
+
+**Integrated evidence.** Validated worker7f65ae16 names implementation0f7491b3 and original claim7b1e5ef2. Integration72e5eac9 consumes its handoff without semantic conflicts. All crate, HLD, README measurement and plan bytes equal the qualified worker. Independent reviews53 through59 cover its final composition. Scoped evidence is indexed under /private/tmp/S91-F-X206-owned-archive-policy-r67, with exact integration proof under /private/tmp/S91-F-X206-integration-checkpoint. Larger historical suites and oracle inputs retain explicit source-equivalence qualifications rather than new execution claims.
+
+**Hash harness.** Unchanged. All49 actual owned-source entries match the accepted font baseline, which is identical on the integrated tree. The separately attributed two Word namespace changes remain F-X200 owned and pending. Full integrated sprint verification and review remain due.
+
+**Notes for future sessions.** Keep work/f-x206-codex and its five labelled commits through sprint verification and close. Original union, source capsules, reviewed archives, failed receipts and backup refs remain retained. Clean integrated worktrees may be removed without force. No GitHub closure, push, main merge, tag or publication is claimed.

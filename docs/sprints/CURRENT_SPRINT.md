@@ -6,7 +6,7 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 now contains twenty-six active stories, ten completed, three running,
+S91 now contains twenty-six active stories, eleven completed, two running,
 thirteen approved pending implementation. Rolling contribution intake is reopened at the user's latest instruction.
 
 ## Spec references
@@ -36,7 +36,7 @@ thirteen approved pending implementation. Rolling contribution intake is reopene
 | F-X203 | Complete Python Word document operations and validation | L | pending | - |
 | F-X204 | Complete shared CLI one-shot editing commands | L | pending | - |
 | F-X205 | Complete Python PowerPoint text fill and export parity | L | pending | - |
-| F-X206 | Complete PowerPoint shape authoring and live handles | L | in-progress | codex |
+| F-X206 | Complete PowerPoint shape authoring and live handles | L | done | - |
 | F-X207 | Persist PowerPoint autofit and implement fit_text | L | in-progress | codex |
 | F-X208 | Author PowerPoint footer fields themes and transitions | L | pending | - |
 | F-X209 | Edit PowerPoint masters layouts and themes | L | pending | - |
@@ -1049,44 +1049,39 @@ handoff. Ten stories are completed, three running and thirteen approved.
 Final integrated full verification and sprint review remain due.
 
 
-## Parallel closure update, 2026-10-12 02:07 BST
+## Parallel closure update, 2026-10-12 02:28 BST
 
-Ten of26 active stories are completed, three are running and13 approved
-stories await their source and dependency boundaries. The latest authenticated
-intake at01:06:23 UTC still has38 included issues and28 PRs, with no arrivals,
+Eleven of26 active stories are completed, two are running and13 approved
+stories await their exclusive source and dependency boundaries. Authenticated
+intake at01:21:13 UTC remains38 included issues and28 PRs, with no arrivals,
 changed records or advanced heads. Issues264 and281 remain excluded.
+Receipt: /private/tmp/S91-intake-refresh-20261012T012200Z/receipt.json.
 
-F-X200 passes the diagnostic-once and original recovery-warning controls,
-five current installed Word controls, mypy and stubtest. Its actual49 hashes
-match the accepted font prefix plus the separately reviewed two Word namespace
-values. The canonical baseline remains unchanged until that owned behavior
-is integrated. Its sealed30-source-carrier and six-section HLD proposal now
-matches actual F-X206 provider preimages. Canonical provider integration is
-the remaining source boundary, with no completion claim.
+F-X206 is integrated at72e5eac9 and completed at the scoped dependency
+checkpoint. Its actual current checks pass11 crates, Clippy, focused native
+controls, both WASM graphs, fresh installed PPT8, strict typing, stubtest,
+eight verified archives and two exact policy successors. Both serialization
+controls reproduce the reviewed package identities. All49 hashes match.
+Independent reviews53 to59 cover the final source and metadata projection.
+Integrated crate, HLD, README and plan bytes exactly match the qualified worker.
+Five worker commits retain separate behavior attribution. Original failed
+receipts remain failed, with successful affected successors recorded separately.
+The structured handoff is consumed. Full sprint verification remains due.
 
-F-X206 has adopted accepted sprint history and only its reviewed46 source
-carriers and eight HLD sections. Independent reviews53 to57 have zero findings.
-Actual composed checks pass11 crates, scoped Clippy, focused font and companion
-controls, picture preservation, diagnostic publication and both WASM graphs.
-The unchanged font-control block required a reviewed test placement repair.
-The original compile and formatting failures remain recorded. The format-only
-successor passes. Current hash, fresh PPT artifact and affected package closure
-are in progress. Original package-policy failures remain failed until their
-narrow registry and inventory successors qualify. Earlier104 installed cases,
-mandatory eight-owner SVG controls and verified archive evidence remain bound
-to their exact qualified source, never inferred for changed composition.
+F-X200 has clean owned-provider projection review65 and finite adoption steps.
+Its current Word wheel and five installed controls remain qualified. The
+reviewed two namespace hash values remain exclusively pending ROOT adoption
+after labelled Word behavior integration. Actual integrated provider history
+now permits its30 source-carrier and six HLD-section adoption and focused gates.
 
-F-X207 has clean namespace-preservation review9, two genuine semantic Base
-failures,16 passing affected native controls and38 passing text controls.
-Its current PPT wheel passes15 installed controls, opaque preservation and
-namespace refusal probes, strict mypy and stubtest. All20 installed Word
-package and distribution metadata members remain exact. Two current-source
-verified archives pass. Independently reviewed five-carrier metadata and HLD
-changes are adopted, with measurement-only successors, three affected policy
-checks, prose and adapter checks passing. Provider composition remains due.
+F-X207 passes16 affected native and38 text controls,15 installed controls,
+preservation and namespace probes, strict typing and stubtest. Its actual
+metadata and two archives pass. Independent provider review11 caught one
+missing constructor field. The exact one-field correction has clean review12.
+Localized rebinding to the completed rendering provider is prepared. Actual
+composed namespace and affine controls, artifact and archive renewal remain due.
+All20 current Word package and distribution metadata members remain preserved.
 
-Exactly22 reproducible F-X206 extracted package directories were removed,
-freeing74,252,288 allocated bytes. Two F-X207 extraction directories were also
-removed after archive authentication, retaining3,824,819 logical bytes only
-in the required archives. Required source capsules and original failed receipts
-remain. Final integrated full verification, sprint review and close remain due.
+Only clean integrated worker worktrees and authenticated reproducible extraction
+caches may be removed. Required source, archives, original failures and active
+build caches remain. Final full verification, sprint review and close remain due.
