@@ -1082,6 +1082,9 @@ Localized rebinding to the completed rendering provider is prepared. Actual
 composed namespace and affine controls, artifact and archive renewal remain due.
 All20 current Word package and distribution metadata members remain preserved.
 
-Only clean integrated worker worktrees and authenticated reproducible extraction
-caches may be removed. Required source, archives, original failures and active
-build caches remain. Final full verification, sprint review and close remain due.
+The clean completed F-X206 worktree was removed without force. Its branch
+remains. All1715 required scratch evidence files,285763684 logical bytes,
+are retained externally with their original path preserved by a symlink.
+The unused build cache removal frees42123436032 allocated bytes, about39GiB.
+Active Word and PPT worker caches remain. Final full verification, sprint
+review and close remain due.
