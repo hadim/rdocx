@@ -6,8 +6,8 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 now contains twenty-six active stories, eighteen completed, one running,
-seven approved pending implementation. Contribution intake is closed at the user's latest instruction.
+S91 now contains twenty-six active stories, eighteen completed, two running,
+six approved pending implementation. Contribution intake is closed at the user's latest instruction.
 
 ## Spec references
 
@@ -44,7 +44,7 @@ seven approved pending implementation. Contribution intake is closed at the user
 | F-X211 | Complete Python script compatibility and safe XML access | L | pending | - |
 | F-X212 | Align native accessibility with visible paragraph content | M | done | - |
 | F-X213 | Preserve TOC entry boundary paragraphs during rebuild | M | done | - |
-| F-X214 | Bound recursive PowerPoint parsing and traversal | L | pending | - |
+| F-X214 | Bound recursive PowerPoint parsing and traversal | L | in-progress | codex |
 | F-X215 | Create charts in Python and replace existing chart data | L | pending | - |
 | F-X216 | Import complete slides and merge decks with source formatting | L | pending | - |
 | F-X217 | Import HTML and Markdown through public Word surfaces | L | pending | - |
