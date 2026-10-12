@@ -19123,3 +19123,23 @@ push, main merge, tag or publication is claimed.
 **Hash harness.** Worker49 entries match its unchanged accepted baseline2bd99ae6. The integrated prefix uses the separately reviewed F-X200 two-entry namespace candidate. The actual integrated hash check matches all49 approved entries at baseline342d09cd7dc7ff66535c5cf257132c53992aa801aad0759204da42ad5935cc49. No PowerPoint hash delta is adopted. Full sprint verification and review remain due.
 
 **Notes for future sessions.** Claim8f57b6ac, sourceb67d211f and handoff-only tip3ad8b611 retain actual ancestor validation. Keep work/f-x207-codex through final verification and close. Clean integrated worktree removal without force retains531 required scratch and sample files, original absolute paths and authenticated external wheel. Cleanup removes19932041216 allocated cache bytes. Current scoped receipts remain under /private/tmp/S91-F-X207-completed206-localized-rebind-1 and /private/tmp/S91-F-X207-integration-checkpoint. No GitHub closure, push, main merge, tag or publication is claimed.
+
+
+### F-X208, Author PowerPoint footer fields themes and transitions
+
+**Completed.** 2026-10-12, S91 scoped dependency-prefix checkpoint
+**Size.** L, estimated4 to5 days, actual not recorded
+
+**What was built.** Issue311 and PR324 author legal layout and master footer policy, slide-owned fields, title suppression, explicit date caches and displayed numbering independent from physical page identity. Live native and Python owners expose placeholder metadata and per-master themes. Eight bounded transitions retain timing, sound, extensions and qualified compatibility branches. CLI footer and inspect operations use safe output publication.
+
+**Non-obvious choices.** Automatic dates never compute ambient text. Optional and empty caches remain distinct. Grouped footer templates preserve their transform ancestry. Inherited namespace closure preserves qualified opaque owners and permits repeat edits without admitting foreign owners. Three shared DrawingML text carriers are explicitly qualified for Word consumer composition.
+
+**Tests.** Genuine claimed Base capability failures remain retained. Whole working review7 closes through correction reviews9 and11, with final metadata review12 clean. Actual current OXML156 and DrawingML179 controls pass, with two explicit existing ignored Office controls. Current changed-crate checks and Clippy, both WASM graphs, current installed seven public controls, strict typing and stubtest pass. Native PowerPoint multi-master, default and branded template outputs open, save and reopen without repair. Six native PDF pages are inspected. Six genuine verified archive dry runs pass. Metadata-only successors authenticate actual source members and byte totals without renewed publication credit. Scoped evidence and original failed attempts remain source-qualified.
+
+**Integrated evidence.** Validated implementation656d6a8f and handoff-only39316457 squash into9d1907d9. All integrated crate carriers equal the reviewed worker. HLD and archive measurement composition preserve completed F-X200. The handoff is consumed. Actual focused integrated receipt182b2be35af059720baae724a6b652041589dc25b7fffdeb35147b39f983bb48 binds HEAD9d1907d9f4d112a0d3b04ee661c07ce0eb7e8ba2. Nine commands pass, including combined native/binding all-feature/all-target compilation, exact Word namespace and PPT transformed-owner regressions, exact footer and displayed-numbering controls, all49 approved hashes, prose, skill drift and diff. Source maps stay exact and owned process groups are naturally reaped. Two original stalled attempts remain failed with their explicit interventions and post-reap guard, granting no gate credit.
+
+**Hash harness.** Worker49 entries match its unchanged baseline. The integrated prefix preserves the separately reviewed F-X200 two-entry Word namespace delta and approved baseline342d09cd. No PowerPoint hash delta is adopted. Final full sprint verification and review remain due.
+
+**Spec sections touched.** Exactly HLD02,05,06,08,10,12 and14, covering bounded capabilities, source-qualified text and fields, policy ownership, layout and transition rendering, bindings and acceptance.
+
+**Notes for future sessions.** Keep work/f-x208-codex through final sprint review and close. Clean integrated worktree removed without force after integration is recorded. Required scratch and native inputs retain original absolute paths through the preserved evidence link. Warm PPT cache is reserved for transfer to the next worker to avoid repeating compilation. No GitHub closure, push, main merge, tag or publication is claimed.

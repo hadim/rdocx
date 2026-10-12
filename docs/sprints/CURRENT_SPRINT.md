@@ -38,7 +38,7 @@ eleven approved pending implementation. Rolling contribution intake is reopened 
 | F-X205 | Complete Python PowerPoint text fill and export parity | L | pending | - |
 | F-X206 | Complete PowerPoint shape authoring and live handles | L | done | - |
 | F-X207 | Persist PowerPoint autofit and implement fit_text | L | done | - |
-| F-X208 | Author PowerPoint footer fields themes and transitions | L | in-progress | codex |
+| F-X208 | Author PowerPoint footer fields themes and transitions | L | done | - |
 | F-X209 | Edit PowerPoint masters layouts and themes | L | pending | - |
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | done | - |
 | F-X211 | Complete Python script compatibility and safe XML access | L | pending | - |
@@ -1083,3 +1083,10 @@ F-X208 native footer and displayed-number controls pass. Their remaining
 full issue-linked implementation and acceptance are ongoing, with no feature
 completion claim. Final integrated full verification, sprint review,
 contributor reconciliation and close preflight remain due.
+
+
+### Current delivery status, 2026-10-12 05:24 UTC
+
+Fourteen of26 active stories are complete. F-X208 integrates at9d1907d9 and completes its scoped dependency-prefix checkpoint. F-X201 remains running. Eleven approved stories await their dependencies or exclusive carriers. The latest authenticated intake at05:08:47 UTC retains38 included issues and28 PRs, with no added or changed records. Issues264 and281 remain excluded and open. Ten carryovers stay at S92.
+
+Actual integrated receipt182b2be35af059720baae724a6b652041589dc25b7fffdeb35147b39f983bb48 and clean review14 qualify the PowerPoint prefix. The canonical49 hashes match the approved F-X200 baseline. The clean completed F-X208 worktree is removed without force, with required evidence retained and warm cache reserved for the next PowerPoint worker. Final full sprint verification, sprint review, contributor reconciliation and close preflight remain due.
