@@ -1049,40 +1049,44 @@ handoff. Ten stories are completed, three running and thirteen approved.
 Final integrated full verification and sprint review remain due.
 
 
-## Parallel closure update, 2026-10-12 01:47 BST
+## Parallel closure update, 2026-10-12 02:07 BST
 
 Ten of26 active stories are completed, three are running and13 approved
 stories await their source and dependency boundaries. The latest authenticated
-intake at00:47:11 UTC still has38 included issues and28 PRs, with no arrivals,
+intake at01:06:23 UTC still has38 included issues and28 PRs, with no arrivals,
 changed records or advanced heads. Issues264 and281 remain excluded.
 
-F-X200 passes the new diagnostic-once and original recovery-warning controls,
+F-X200 passes the diagnostic-once and original recovery-warning controls,
 five current installed Word controls, mypy and stubtest. Its actual49 hashes
 match the accepted font prefix plus the separately reviewed two Word namespace
 values. The canonical baseline remains unchanged until that owned behavior
-is integrated. Shared causal support must land through F-X206 first.
+is integrated. Its sealed30-source-carrier and six-section HLD proposal now
+matches actual F-X206 provider preimages. Canonical provider integration is
+the remaining source boundary, with no completion claim.
 
-F-X206 passes22 genuine verified package dry runs, all104 installed provider
-controls, the mandatory eight-owner SVG comparator and final metadata checks.
-The latter validates27 READMEs,22 inventories and24 compiled Rust examples.
-Independent foundation pass53 has zero findings. Presentation pass52 finds
-opaque empty-text-body data lost by picture conversion and a stale HLD
-projection. Both corrections now have clean independent reviews54 and55.
-The genuine picture-preservation Base fails and three focused native controls
-pass. The sealed46-carrier owned projection includes one inherited compile-only
-carrier, excludes borrowed Word formatting and preserves completed providers.
-Independent semantic composition review56 is running. Actual owned history,
-focused artifact renewal and integration remain due, with no completion claim.
+F-X206 has adopted accepted sprint history and only its reviewed46 source
+carriers and eight HLD sections. Independent reviews53 to57 have zero findings.
+Actual composed checks pass11 crates, scoped Clippy, focused font and companion
+controls, picture preservation, diagnostic publication and both WASM graphs.
+The unchanged font-control block required a reviewed test placement repair.
+The original compile and formatting failures remain recorded. The format-only
+successor passes. Current hash, fresh PPT artifact and affected package closure
+are in progress. Original package-policy failures remain failed until their
+narrow registry and inventory successors qualify. Earlier104 installed cases,
+mandatory eight-owner SVG controls and verified archive evidence remain bound
+to their exact qualified source, never inferred for changed composition.
 
-F-X207 has a clean namespace-preservation review9, two genuine semantic Base
+F-X207 has clean namespace-preservation review9, two genuine semantic Base
 failures,16 passing affected native controls and38 passing text controls.
-Ordinary import, exact saved member content and rendering preserve foreign
-opaque content. The current PPT wheel is installed once and15 existing
-installed controls pass. A new preservation probe, typing, affected archive
-closure and provider integration remain due. Every current installed Word
-package and distribution metadata member remains unchanged.
+Its current PPT wheel passes15 installed controls, opaque preservation and
+namespace refusal probes, strict mypy and stubtest. All20 installed Word
+package and distribution metadata members remain exact. Two current-source
+verified archives pass. Independently reviewed five-carrier metadata and HLD
+changes are adopted, with measurement-only successors, three affected policy
+checks, prose and adapter checks passing. Provider composition remains due.
 
-Exactly22 reproducible extracted package directories were removed, freeing
-74,252,288 allocated bytes. All44 authenticated verified and measurement-only
-archives, required source capsules and original failed receipts remain.
-Final integrated full verification, sprint review and close remain due.
+Exactly22 reproducible F-X206 extracted package directories were removed,
+freeing74,252,288 allocated bytes. Two F-X207 extraction directories were also
+removed after archive authentication, retaining3,824,819 logical bytes only
+in the required archives. Required source capsules and original failed receipts
+remain. Final integrated full verification, sprint review and close remain due.
