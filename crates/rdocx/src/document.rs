@@ -5757,31 +5757,62 @@ fn comment_namespace_source_boundaries(
 }
 
 // Existing checked paragraph paths shared by discovery and rich projection.
-// Neither consumer invents a second index axis.
+// Neither consumer invents a second index axis. Every owner of one source and
+// every control in it is scanned from its own excerpt, with each family of
+// scopes inventoried in one pass, so no owner or control rereads the source
+// from its start. One list per owner, in the order given.
+#[allow(clippy::type_complexity)] // One located span list per owner.
 fn story_range_paragraph_spans(
     xml: &[u8],
-    owner: &StoryOwnerSpan,
-    story: &StoryId,
-) -> Result<Vec<(ContentLocation, Range<usize>)>> {
-    let mut paragraphs = Vec::new();
-    for (index, item) in scan_story_items(xml, owner)?.iter().enumerate() {
-        let spans = match item.kind {
-            StoryItemKind::Paragraph => vec![(vec![index], item.full.clone())],
-            StoryItemKind::ContentControl => scan_story_control_paragraphs(xml, item)?
-                .into_iter()
-                .enumerate()
-                .map(|(paragraph, span)| (vec![index, paragraph], span))
-                .collect(),
-            _ => continue,
-        };
-        for (path, span) in spans {
-            paragraphs.push((
-                ContentLocation::new(story.clone(), StoryItemKind::Paragraph, path),
-                span,
-            ));
-        }
+    owners: &[(StoryId, StoryOwnerSpan)],
+) -> Result<Vec<Vec<(ContentLocation, Range<usize>)>>> {
+    let owner_scopes =
+        story_namespace_scopes_at(xml, owners.iter().map(|(_, owner)| owner.full.start))?;
+    let mut inventories = Vec::with_capacity(owners.len());
+    for (_, owner) in owners {
+        let scope = owner_scopes.get(&owner.full.start).ok_or_else(|| {
+            Error::Other("story owner namespace scope was not inventoried".to_owned())
+        })?;
+        inventories.push(scan_story_items_with_scope(xml, owner, scope)?);
     }
-    Ok(paragraphs)
+    let control_scopes = story_namespace_scopes_at(
+        xml,
+        inventories
+            .iter()
+            .flatten()
+            .filter(|item| item.kind == StoryItemKind::ContentControl)
+            .map(|item| item.full.start),
+    )?;
+    let mut spans = Vec::with_capacity(owners.len());
+    for ((story, _), items) in owners.iter().zip(&inventories) {
+        let mut paragraphs = Vec::new();
+        for (index, item) in items.iter().enumerate() {
+            let item_spans = match item.kind {
+                StoryItemKind::Paragraph => vec![(vec![index], item.full.clone())],
+                StoryItemKind::ContentControl => {
+                    let scope = control_scopes.get(&item.full.start).ok_or_else(|| {
+                        Error::Other(
+                            "content control namespace scope was not inventoried".to_owned(),
+                        )
+                    })?;
+                    scan_story_control_paragraphs_with_scope(xml, item, scope)?
+                        .into_iter()
+                        .enumerate()
+                        .map(|(paragraph, span)| (vec![index, paragraph], span))
+                        .collect()
+                }
+                _ => continue,
+            };
+            for (path, span) in item_spans {
+                paragraphs.push((
+                    ContentLocation::new(story.clone(), StoryItemKind::Paragraph, path),
+                    span,
+                ));
+            }
+        }
+        spans.push(paragraphs);
+    }
+    Ok(spans)
 }
 
 struct StoryLinkSpan {
@@ -9355,6 +9386,27 @@ fn scan_story_control_paragraphs(xml: &[u8], control: &StoryItemSpan) -> Result<
         buffer.clear();
     }
     Ok(paragraphs)
+}
+
+fn scan_story_control_paragraphs_with_scope(
+    xml: &[u8],
+    control: &StoryItemSpan,
+    scope: &BTreeMap<String, String>,
+) -> Result<Vec<Range<usize>>> {
+    let (closed, added) = scoped_story_fragment(xml, control.full.clone(), scope)?;
+    let mut local_control = control.clone();
+    local_control.full = 0..closed.len();
+    let map = |position: usize| {
+        if position == 0 {
+            control.full.start
+        } else {
+            control.full.start + position - added
+        }
+    };
+    Ok(scan_story_control_paragraphs(&closed, &local_control)?
+        .into_iter()
+        .map(|paragraph| map(paragraph.start)..map(paragraph.end))
+        .collect())
 }
 
 fn scan_story_items(xml: &[u8], owner: &StoryOwnerSpan) -> Result<Vec<StoryItemSpan>> {
@@ -16982,36 +17034,40 @@ impl Document {
     }
 
     pub(crate) fn text_box_cache_paragraphs(&self) -> Result<Vec<TextBoxCacheParagraph>> {
+        let (sources, paragraphs) = self.story_range_paragraph_sources()?;
+        let text_boxes = sources
+            .iter()
+            .map(|source| {
+                Ok(scan_story_owners(source.xml.as_ref(), source.root_kind)?
+                    .into_iter()
+                    .filter(|owner| owner.kind == StoryKind::TextBox)
+                    .collect::<Vec<_>>())
+            })
+            .collect::<Result<Vec<_>>>()?;
         let mut result = Vec::new();
         let mut seen = HashSet::new();
-        for (location, xml) in self.story_range_paragraphs()? {
+        for (source_index, paragraph, location, xml) in paragraphs {
             if !matches!(
                 location.story.kind,
                 StoryKind::TextBox | StoryKind::TableCell
             ) {
                 continue;
             }
-            let (source, paragraph) = self.story_range_paragraph_source(&location)?;
-            let text_box = scan_story_owners(source.xml.as_ref(), source.root_kind)?
-                .into_iter()
+            let source = &sources[source_index];
+            let text_box = text_boxes[source_index]
+                .iter()
                 .filter(|owner| {
-                    owner.kind == StoryKind::TextBox
-                        && owner.full.start <= paragraph.full.start
-                        && owner.full.end >= paragraph.full.end
+                    owner.full.start <= paragraph.start && owner.full.end >= paragraph.end
                 })
                 .min_by_key(|owner| owner.full.len());
             if let Some(text_box) = text_box
-                && seen.insert((
-                    source.part_name.clone(),
-                    paragraph.full.start,
-                    paragraph.full.end,
-                ))
+                && seen.insert((source.part_name.clone(), paragraph.start, paragraph.end))
             {
                 result.push(TextBoxCacheParagraph {
                     location,
                     xml,
                     owner_index: text_box.owner_index,
-                    paragraph_index: paragraph.full.start,
+                    paragraph_index: paragraph.start,
                 });
             }
         }
@@ -17180,21 +17236,27 @@ impl Document {
             .ok_or_else(|| {
                 Error::Other("rich comment namespace replay changed physical source".into())
             })?;
-        let owners = scan_story_owners(&canonical, StoryKind::Body)?;
+        let owners = scan_story_owners(&canonical, StoryKind::Body)?
+            .into_iter()
+            .map(|owner| {
+                let story = StoryId {
+                    kind: owner.kind,
+                    part_name: self.doc_part_name.clone(),
+                    owner_index: owner.owner_index,
+                    fingerprint: owner.fingerprint,
+                };
+                (story, owner)
+            })
+            .collect::<Vec<_>>();
         let mut paragraph_spans = HashMap::new();
-        for owner in &owners {
-            let story = StoryId {
-                kind: owner.kind,
-                part_name: self.doc_part_name.clone(),
-                owner_index: owner.owner_index,
-                fingerprint: owner.fingerprint,
-            };
-            for (location, span) in story_range_paragraph_spans(&canonical, owner, &story)? {
-                if paragraph_spans.insert(location, span).is_some() {
-                    return Err(Error::Other(
-                        "rich comment has duplicate physical paragraph path".into(),
-                    ));
-                }
+        for (location, span) in story_range_paragraph_spans(&canonical, &owners)?
+            .into_iter()
+            .flatten()
+        {
+            if paragraph_spans.insert(location, span).is_some() {
+                return Err(Error::Other(
+                    "rich comment has duplicate physical paragraph path".into(),
+                ));
             }
         }
         let scopes = story_namespace_scopes_at(
@@ -17225,22 +17287,70 @@ impl Document {
     }
 
     pub(crate) fn story_range_paragraphs(&self) -> Result<Vec<(ContentLocation, Vec<u8>)>> {
-        let mut paragraphs = Vec::new();
-        for (story_index, story) in self.stories()?.into_iter().enumerate() {
-            let (source, owner) = self.story_source_and_owner(&story)?;
-            let source_xml = source.xml.as_ref();
-            for (location, span) in story_range_paragraph_spans(source_xml, &owner, &story)? {
-                let scope = story_namespace_scope_at(source_xml, span.start)?;
-                let order = span.start;
-                let xml = close_content_fragment_namespaces(&source_xml[span], &scope)?;
-                paragraphs.push((story_index, order, location, xml));
-            }
-        }
-        paragraphs.sort_by_key(|(story_index, offset, _, _)| (*story_index, *offset));
+        let (_, paragraphs) = self.story_range_paragraph_sources()?;
         Ok(paragraphs
             .into_iter()
             .map(|(_, _, location, xml)| (location, xml))
             .collect())
+    }
+
+    /// List every checked range paragraph in story order, with the index of
+    /// its source and its span there, after building each package source once.
+    ///
+    /// Stories keep the identities and order of [`Self::stories`]. Each source
+    /// is scanned for its owners once and its paragraph scopes are inventoried
+    /// in one pass.
+    #[allow(clippy::type_complexity)] // Sources and their located paragraph spans form one inventory.
+    fn story_range_paragraph_sources(
+        &self,
+    ) -> Result<(
+        Vec<StorySource<'_>>,
+        Vec<(usize, Range<usize>, ContentLocation, Vec<u8>)>,
+    )> {
+        let sources = self.story_sources()?;
+        let mut paragraphs = Vec::new();
+        let mut seen = HashSet::new();
+        let mut story_index = 0usize;
+        for (source_index, source) in sources.iter().enumerate() {
+            let source_xml = source.xml.as_ref();
+            let mut owners = Vec::new();
+            for owner in scan_story_owners(source_xml, source.root_kind)? {
+                let identity = (owner.kind, source.part_name.clone(), owner.owner_index);
+                if !seen.insert(identity) {
+                    continue;
+                }
+                let story = StoryId {
+                    kind: owner.kind,
+                    part_name: source.part_name.clone(),
+                    owner_index: owner.owner_index,
+                    fingerprint: owner.fingerprint,
+                };
+                owners.push((story, owner));
+            }
+            let spans = story_range_paragraph_spans(source_xml, &owners)?;
+            let scopes = story_namespace_scopes_at(
+                source_xml,
+                spans.iter().flatten().map(|(_, span)| span.start),
+            )?;
+            for story_spans in spans {
+                for (location, span) in story_spans {
+                    let scope = scopes.get(&span.start).ok_or_else(|| {
+                        Error::Other("story paragraph namespace scope was not inventoried".into())
+                    })?;
+                    let xml = close_content_fragment_namespaces(&source_xml[span.clone()], scope)?;
+                    paragraphs.push((story_index, source_index, span, location, xml));
+                }
+                story_index += 1;
+            }
+        }
+        paragraphs.sort_by_key(|(story_index, _, span, _, _)| (*story_index, span.start));
+        Ok((
+            sources,
+            paragraphs
+                .into_iter()
+                .map(|(_, source_index, span, location, xml)| (source_index, span, location, xml))
+                .collect(),
+        ))
     }
 
     /// Materialize every story item after building each package source once.
@@ -31033,6 +31143,495 @@ mod tests {
             STORY_SOURCE_BUILDS.set(0);
             assert!(document.story_link_snapshots().unwrap().is_empty());
             assert_eq!(STORY_SOURCE_BUILDS.get(), 1);
+        }
+    }
+
+    #[test]
+    fn story_range_paragraphs_build_each_source_once() {
+        let mut document = Document::new();
+        document.add_paragraph("before");
+        let mut table = document.add_table(32, 8);
+        for row in 0..32 {
+            for column in 0..8 {
+                table
+                    .cell(row, column)
+                    .unwrap()
+                    .set_text(&format!("cell {row} {column}"));
+            }
+        }
+        document.add_paragraph("after");
+        document.set_header("header");
+        let document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+
+        STORY_SOURCE_BUILDS.set(0);
+        let paragraphs = document.story_range_paragraphs().unwrap();
+        assert_eq!(
+            paragraphs
+                .iter()
+                .filter(|(location, _)| location.story().kind() == StoryKind::TableCell)
+                .count(),
+            256
+        );
+        assert_eq!(STORY_SOURCE_BUILDS.get(), 1);
+
+        STORY_SOURCE_BUILDS.set(0);
+        assert!(document.story_ranges().unwrap().is_empty());
+        assert_eq!(STORY_SOURCE_BUILDS.get(), 1);
+
+        STORY_SOURCE_BUILDS.set(0);
+        assert!(document.text_box_cache_paragraphs().unwrap().is_empty());
+        assert_eq!(STORY_SOURCE_BUILDS.get(), 1);
+    }
+
+    // The per-story algorithm that `story_range_paragraph_sources` replaced.
+    // Each story looks up its source and owner again, each owner and control
+    // is scanned from the start of its source, and each paragraph scope, own
+    // declarations included, is read from the start of its source too.
+    fn reference_story_range_paragraph_spans(
+        xml: &[u8],
+        owner: &StoryOwnerSpan,
+        story: &StoryId,
+    ) -> Result<Vec<(ContentLocation, Range<usize>)>> {
+        let mut paragraphs = Vec::new();
+        for (index, item) in scan_story_items(xml, owner)?.iter().enumerate() {
+            let spans = match item.kind {
+                StoryItemKind::Paragraph => vec![(vec![index], item.full.clone())],
+                StoryItemKind::ContentControl => scan_story_control_paragraphs(xml, item)?
+                    .into_iter()
+                    .enumerate()
+                    .map(|(paragraph, span)| (vec![index, paragraph], span))
+                    .collect(),
+                _ => continue,
+            };
+            for (path, span) in spans {
+                paragraphs.push((
+                    ContentLocation::new(story.clone(), StoryItemKind::Paragraph, path),
+                    span,
+                ));
+            }
+        }
+        Ok(paragraphs)
+    }
+
+    fn reference_story_range_paragraphs(
+        document: &Document,
+    ) -> Result<Vec<(ContentLocation, Vec<u8>)>> {
+        let mut paragraphs = Vec::new();
+        for (story_index, story) in document.stories()?.into_iter().enumerate() {
+            let (source, owner) = document.story_source_and_owner(&story)?;
+            let source_xml = source.xml.as_ref();
+            for (location, span) in
+                reference_story_range_paragraph_spans(source_xml, &owner, &story)?
+            {
+                let scope = story_namespace_scope_at(source_xml, span.start)?;
+                let order = span.start;
+                let xml = close_content_fragment_namespaces(&source_xml[span], &scope)?;
+                paragraphs.push((story_index, order, location, xml));
+            }
+        }
+        paragraphs.sort_by_key(|(story_index, offset, _, _)| (*story_index, *offset));
+        Ok(paragraphs
+            .into_iter()
+            .map(|(_, _, location, xml)| (location, xml))
+            .collect())
+    }
+
+    fn reference_comment_story_range_paragraphs(
+        document: &Document,
+    ) -> Result<Vec<(ContentLocation, Vec<u8>)>> {
+        let mut paragraphs = reference_story_range_paragraphs(document)?;
+        let canonical = document.document.to_xml()?;
+        let restored = document.namespace_restored_main_source()?;
+        if restored == canonical {
+            return Ok(paragraphs);
+        }
+        let (boundaries, _) = comment_namespace_source_boundaries(&canonical, &restored)?
+            .ok_or_else(|| Error::Other("replay changed physical source".into()))?;
+        let mut paragraph_spans = HashMap::new();
+        for owner in &scan_story_owners(&canonical, StoryKind::Body)? {
+            let story = StoryId {
+                kind: owner.kind,
+                part_name: document.doc_part_name.clone(),
+                owner_index: owner.owner_index,
+                fingerprint: owner.fingerprint,
+            };
+            for (location, span) in
+                reference_story_range_paragraph_spans(&canonical, owner, &story)?
+            {
+                if paragraph_spans.insert(location, span).is_some() {
+                    return Err(Error::Other("duplicate physical paragraph path".into()));
+                }
+            }
+        }
+        let scopes = story_namespace_scopes_at(
+            &restored,
+            paragraph_spans
+                .values()
+                .filter_map(|span| boundaries.get(&span.start).copied()),
+        )?;
+        for (location, xml) in &mut paragraphs {
+            if location.story.part_name != document.doc_part_name {
+                continue;
+            }
+            let span = &paragraph_spans[location];
+            let start = boundaries[&span.start];
+            let end = boundaries[&span.end];
+            *xml = close_content_fragment_namespaces(&restored[start..end], &scopes[&start])?;
+        }
+        Ok(paragraphs)
+    }
+
+    #[allow(clippy::type_complexity)] // The cache fields, compared as one tuple.
+    fn reference_text_box_cache_paragraphs(
+        document: &Document,
+    ) -> Result<Vec<(ContentLocation, Vec<u8>, usize, usize)>> {
+        let mut result = Vec::new();
+        let mut seen = HashSet::new();
+        for (location, xml) in reference_story_range_paragraphs(document)? {
+            if !matches!(
+                location.story.kind,
+                StoryKind::TextBox | StoryKind::TableCell
+            ) {
+                continue;
+            }
+            let (source, paragraph) = document.story_range_paragraph_source(&location)?;
+            let text_box = scan_story_owners(source.xml.as_ref(), source.root_kind)?
+                .into_iter()
+                .filter(|owner| {
+                    owner.kind == StoryKind::TextBox
+                        && owner.full.start <= paragraph.full.start
+                        && owner.full.end >= paragraph.full.end
+                })
+                .min_by_key(|owner| owner.full.len());
+            if let Some(text_box) = text_box
+                && seen.insert((
+                    source.part_name.clone(),
+                    paragraph.full.start,
+                    paragraph.full.end,
+                ))
+            {
+                result.push((location, xml, text_box.owner_index, paragraph.full.start));
+            }
+        }
+        result.sort_by(|left, right| {
+            (left.0.story.part_name.as_str(), left.2, left.3).cmp(&(
+                right.0.story.part_name.as_str(),
+                right.2,
+                right.3,
+            ))
+        });
+        let mut ordinals = HashMap::<(String, usize), usize>::new();
+        for (location, _, owner_index, paragraph_index) in &mut result {
+            let ordinal = ordinals
+                .entry((location.story.part_name.clone(), *owner_index))
+                .or_default();
+            *paragraph_index = *ordinal;
+            *ordinal += 1;
+        }
+        Ok(result)
+    }
+
+    // Every story family, a nested table, block, nested and inline controls,
+    // text boxes in the body, a cell and a header, complex fields, bookmarks
+    // and a comment range. Paragraphs of the raw parts carry their own
+    // namespace declarations: one redeclares an inherited prefix, one binds a
+    // second Word prefix and some are self-closing. The header uses another
+    // Word prefix and is also referenced as a footer, so its cells and text
+    // box are reached from two sources.
+    fn all_story_range_fixture() -> Document {
+        let w = WORD_NAMESPACE;
+        let r = drawing_ns::R;
+        let field = concat!(
+            r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r>"#,
+            r#"<w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:t>1</w:t></w:r>"#,
+            r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#,
+        );
+        let text_box = |prefix: &str, text: &str| {
+            format!(
+                r#"<{prefix}:r><{prefix}:pict><v:shape><v:textbox><{prefix}:txbxContent><{prefix}:p><{prefix}:r><{prefix}:t>{text}</{prefix}:t></{prefix}:r></{prefix}:p><{prefix}:p xmlns:x="urn:box"/></{prefix}:txbxContent></v:textbox></v:shape></{prefix}:pict></{prefix}:r>"#
+            )
+        };
+        let body = format!(
+            concat!(
+                r#"<w:p><w:bookmarkStart w:id="1" w:name="BodyMark"/><w:r><w:t>body</w:t></w:r><w:bookmarkEnd w:id="1"/></w:p>"#,
+                r#"<w:p><w:r><w:t>page </w:t></w:r>{field}<w:sdt><w:sdtContent><w:r><w:t>inline control</w:t></w:r></w:sdtContent></w:sdt></w:p>"#,
+                r#"<w:tbl><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc>"#,
+                r#"<w:tc><w:p><w:r><w:t>outer cell</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>nested cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/></w:tc>"#,
+                r#"<w:tc><w:p>{cell_box}</w:p></w:tc></w:tr></w:tbl>"#,
+                r#"<w:sdt><w:sdtContent><w:p><w:r><w:t>control</w:t></w:r></w:p><w:sdt><w:sdtContent><w:p><w:r><w:t>nested control</w:t></w:r></w:p></w:sdtContent></w:sdt><w:p><w:r><w:t>control end</w:t></w:r></w:p></w:sdtContent></w:sdt>"#,
+                r#"<w:p>{body_box}</w:p>"#,
+                r#"<w:p><w:commentRangeStart w:id="2"/><w:r><w:t>commented</w:t></w:r><w:commentRangeEnd w:id="2"/><w:r><w:commentReference w:id="2"/></w:r></w:p>"#,
+                r#"<w:sectPr><w:headerReference w:type="default" r:id="storyHeader"/><w:footerReference w:type="default" r:id="storyFooter"/><w:footerReference w:type="first" r:id="storyHeaderAsFooter"/></w:sectPr>"#,
+            ),
+            field = field,
+            cell_box = text_box("w", "cell text box"),
+            body_box = text_box("w", "body text box"),
+        );
+        let header = format!(
+            concat!(
+                r#"<q:hdr xmlns:q="{w}" xmlns:x="urn:producer" xmlns:v="urn:schemas-microsoft-com:vml">"#,
+                r#"<q:p><q:bookmarkStart q:id="3" q:name="HeaderMark"/><q:r><q:t>header</q:t></q:r><q:bookmarkEnd q:id="3"/></q:p>"#,
+                r#"<q:p xmlns:x="urn:other"><q:r><q:t>redeclared</q:t></q:r></q:p>"#,
+                r#"<q:p xmlns:z="{w}"><z:r><z:t>own word prefix</z:t></z:r></q:p>"#,
+                r#"<q:p xmlns:x="urn:empty"/>"#,
+                r#"<q:p>{field}</q:p>"#,
+                r#"<q:tbl><q:tr><q:tc><q:p><q:r><q:t>header cell</q:t></q:r></q:p></q:tc><q:tc><q:p>{header_box}</q:p></q:tc></q:tr></q:tbl>"#,
+                r#"<q:sdt><q:sdtContent><q:p><q:r><q:t>header control</q:t></q:r></q:p></q:sdtContent></q:sdt>"#,
+                r#"</q:hdr>"#,
+            ),
+            w = w,
+            field = field.replace("w:", "q:"),
+            header_box = text_box("q", "header text box"),
+        );
+        let mut seed = Document::new();
+        let mut package = OpcPackage::from_reader(Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        package.set_part(
+            "/word/document.xml",
+            format!(
+                r#"<w:document xmlns:w="{w}" xmlns:r="{r}" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:x="urn:producer"><w:body>{body}</w:body></w:document>"#
+            )
+            .into_bytes(),
+        );
+        let relationships = package.get_or_create_part_rels("/word/document.xml");
+        for (id, relationship_type, target) in [
+            ("storyHeader", rel_types::HEADER, "header-story.xml"),
+            ("storyHeaderAsFooter", rel_types::FOOTER, "header-story.xml"),
+            ("storyFooter", rel_types::FOOTER, "footer-story.xml"),
+            (
+                "storyFootnotes",
+                rel_types::FOOTNOTES,
+                "footnotes-story.xml",
+            ),
+            ("storyEndnotes", rel_types::ENDNOTES, "endnotes-story.xml"),
+            ("storyComments", rel_types::COMMENTS, "comments-story.xml"),
+        ] {
+            relationships.add_with_id(id, relationship_type, target);
+        }
+        for (part, family, xml) in [
+            ("header-story.xml", "header", header),
+            (
+                "footer-story.xml",
+                "footer",
+                format!(
+                    r#"<w:ftr xmlns:w="{w}"><w:p><w:r><w:t>footer</w:t></w:r></w:p><w:p><w:fldSimple w:instr="PAGE"><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p></w:ftr>"#
+                ),
+            ),
+            (
+                "footnotes-story.xml",
+                "footnotes",
+                format!(
+                    r#"<w:footnotes xmlns:w="{w}"><w:footnote w:id="2"><w:p><w:bookmarkStart w:id="4" w:name="NoteMark"/><w:r><w:t>footnote</w:t></w:r><w:bookmarkEnd w:id="4"/></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>note cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl><w:p/></w:footnote></w:footnotes>"#
+                ),
+            ),
+            (
+                "endnotes-story.xml",
+                "endnotes",
+                format!(
+                    r#"<w:endnotes xmlns:w="{w}"><w:endnote w:id="2"><w:p><w:r><w:t>endnote</w:t></w:r></w:p><w:sdt><w:sdtContent><w:p><w:r><w:t>endnote control</w:t></w:r></w:p></w:sdtContent></w:sdt></w:endnote></w:endnotes>"#
+                ),
+            ),
+            (
+                "comments-story.xml",
+                "comments",
+                format!(
+                    r#"<w:comments xmlns:w="{w}"><w:comment w:id="2" w:author="Ada"><w:p><w:r><w:t>comment</w:t></w:r></w:p><w:p xmlns:x="urn:comment"><w:r><w:t>second</w:t></w:r></w:p></w:comment></w:comments>"#
+                ),
+            ),
+        ] {
+            let part = format!("/word/{part}");
+            package.set_part(&part, xml.into_bytes());
+            package.content_types.add_override(
+                &part,
+                &format!(
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.{family}+xml"
+                ),
+            );
+        }
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(bytes.get_ref()).unwrap()
+    }
+
+    fn authored_story_range_fixture() -> Document {
+        let mut document = Document::new();
+        document.add_paragraph("Introduction");
+        let mut table = document.add_table(3, 3);
+        for row in 0..3 {
+            for column in 0..3 {
+                table
+                    .cell(row, column)
+                    .unwrap()
+                    .set_text(&format!("cell {row} {column}"));
+            }
+        }
+        document.add_paragraph("Commented text");
+        document.set_header("header");
+        document.set_footer("footer");
+        document.add_footnote("footnote");
+        document
+            .add_comment_on_text("Commented", 0, "Ada", None, "note", None)
+            .unwrap();
+        document.insert_toc(0, 3).unwrap();
+        Document::from_bytes(&document.to_bytes().unwrap()).unwrap()
+    }
+
+    // Namespace declarations that the typed main document drops, so the
+    // rich comment projection replays them on a restored main source.
+    fn restored_comment_story_range_fixture() -> Document {
+        let mut seed = Document::new();
+        seed.add_paragraph("A");
+        let id = seed
+            .add_comment_on_text("A", 0, "Ada", None, "Review", None)
+            .unwrap();
+        let body = format!(
+            concat!(
+                r#"<w:p xmlns:x="urn:x"><w:commentRangeStart w:id="{id}"/><w:r><w:t>A</w:t></w:r><w:r><x:custom x:a="1"/></w:r><w:commentRangeEnd w:id="{id}"/><w:r><w:commentReference w:id="{id}"/></w:r></w:p>"#,
+                r#"<w:tbl xmlns:x="urn:x"><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r><x:custom x:a="2"/></w:p></w:tc></w:tr></w:tbl>"#,
+                r#"<w:sdt><w:sdtContent><w:p xmlns:x="urn:x"><w:r><w:t>control</w:t></w:r><w:r><x:custom x:a="3"/></w:r></w:p></w:sdtContent></w:sdt>"#,
+                r#"<w:p/>"#,
+            ),
+            id = id,
+        );
+        let mut package = OpcPackage::from_reader(Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        package.set_part(
+            "/word/document.xml",
+            format!(
+                r#"<w:document xmlns:w="{WORD_NAMESPACE}"><w:body>{body}</w:body></w:document>"#
+            )
+            .into_bytes(),
+        );
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        Document::from_bytes(bytes.get_ref()).unwrap()
+    }
+
+    // A self-closing owner, here an empty comment, holds no paragraph. A scan
+    // from the start of its source used to run past it and fail at the next
+    // closing tag, which broke the comment listing and page field updates.
+    #[test]
+    fn story_range_paragraphs_skip_a_self_closing_owner() {
+        let w = WORD_NAMESPACE;
+        let mut seed = Document::new();
+        seed.add_paragraph("Commented text");
+        let id = seed
+            .add_comment_on_text("Commented", 0, "Ada", None, "note", None)
+            .unwrap();
+        let mut package = OpcPackage::from_reader(Cursor::new(seed.to_bytes().unwrap())).unwrap();
+        let part = seed.comments_part_name.clone().unwrap();
+        let comments = String::from_utf8(package.get_part(&part).unwrap().to_vec()).unwrap();
+        let root = comments.find("<w:comments").unwrap();
+        let first = root + comments[root..].find('>').unwrap() + 1;
+        let comments = format!(
+            r#"{}<w:comment xmlns:w="{w}" w:id="{}" w:author="Ada"/>{}"#,
+            &comments[..first],
+            id + 1,
+            &comments[first..]
+        );
+        package.set_part(&part, comments.into_bytes());
+        let mut bytes = Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
+
+        let paragraphs = document.story_range_paragraphs().unwrap();
+        assert_eq!(
+            paragraphs
+                .iter()
+                .filter(|(location, _)| location.story().kind() == StoryKind::Comment)
+                .count(),
+            1
+        );
+        assert_eq!(document.story_ranges().unwrap().len(), 1);
+        assert_eq!(document.comment_anchor_snapshots().unwrap().len(), 2);
+        document.update_page_fields().unwrap();
+    }
+
+    #[test]
+    fn story_range_paragraphs_match_the_per_story_scan() {
+        let all = all_story_range_fixture();
+        let paragraphs = all.story_range_paragraphs().unwrap();
+        assert_eq!(
+            paragraphs
+                .iter()
+                .map(|(location, _)| location.story().kind())
+                .collect::<HashSet<_>>()
+                .len(),
+            8
+        );
+        assert!(
+            paragraphs
+                .iter()
+                .any(|(location, _)| location.index_path().len() == 2)
+        );
+        assert!(!all.text_box_cache_paragraphs().unwrap().is_empty());
+        assert_eq!(
+            all.story_sources()
+                .unwrap()
+                .iter()
+                .filter(|source| source.part_name == "/word/header-story.xml")
+                .count(),
+            2
+        );
+        let restored = restored_comment_story_range_fixture();
+        assert_ne!(
+            restored.namespace_restored_main_source().unwrap(),
+            restored.document.to_xml().unwrap()
+        );
+
+        for document in [all, authored_story_range_fixture(), restored] {
+            assert_eq!(
+                document.story_range_paragraphs().unwrap(),
+                reference_story_range_paragraphs(&document).unwrap()
+            );
+            assert_eq!(
+                document.comment_story_range_paragraphs().unwrap(),
+                reference_comment_story_range_paragraphs(&document).unwrap()
+            );
+            assert_eq!(
+                document
+                    .text_box_cache_paragraphs()
+                    .unwrap()
+                    .into_iter()
+                    .map(|paragraph| (
+                        paragraph.location,
+                        paragraph.xml,
+                        paragraph.owner_index,
+                        paragraph.paragraph_index
+                    ))
+                    .collect::<Vec<_>>(),
+                reference_text_box_cache_paragraphs(&document).unwrap()
+            );
+            // The batched spans also match for every owner of every source,
+            // including owners `stories` reports from an earlier source.
+            for source in document.story_sources().unwrap() {
+                let owners = scan_story_owners(&source.xml, source.root_kind)
+                    .unwrap()
+                    .into_iter()
+                    .map(|owner| {
+                        let story = StoryId {
+                            kind: owner.kind,
+                            part_name: source.part_name.clone(),
+                            owner_index: owner.owner_index,
+                            fingerprint: owner.fingerprint,
+                        };
+                        (story, owner)
+                    })
+                    .collect::<Vec<_>>();
+                let mut reference = Vec::new();
+                for (story, owner) in &owners {
+                    reference.extend(
+                        reference_story_range_paragraph_spans(&source.xml, owner, story).unwrap(),
+                    );
+                }
+                assert_eq!(
+                    story_range_paragraph_spans(&source.xml, &owners)
+                        .unwrap()
+                        .into_iter()
+                        .flatten()
+                        .collect::<Vec<_>>(),
+                    reference
+                );
+            }
         }
     }
 

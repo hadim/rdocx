@@ -12114,7 +12114,9 @@ impl<'a> Evaluator<'a> {
             .collect();
         // Main bookmark ranges keep their established accepted projection.
         // Related ranges are admitted only by the checked physical inventory.
-        if let Ok(ranges) = document.story_ranges() {
+        // One paragraph inventory serves the ranges and the name counts.
+        let paragraphs = document.story_range_paragraphs().ok();
+        if let Some(Ok(ranges)) = paragraphs.as_deref().map(Document::story_ranges_in) {
             for range in ranges {
                 let crate::StoryRangeKind::Bookmark { name, .. } = range.kind() else {
                     continue;
@@ -12135,7 +12137,7 @@ impl<'a> Evaluator<'a> {
                 }
             }
         }
-        if let Ok(paragraphs) = document.story_range_paragraphs() {
+        if let Some(paragraphs) = paragraphs {
             let mut names = HashMap::<String, usize>::new();
             for (_, xml) in paragraphs {
                 if let Ok(paragraph) = CT_P::from_xml_fragment(&xml) {
