@@ -1064,6 +1064,12 @@ pub fn font_list(file: &Path, as_json: bool) -> Result<()> {
             )?;
         }
     }
+    writeln!(
+        stdout,
+        "Settings: embedTrueTypeFonts={} saveSubsetFonts={}",
+        presentation.embed_true_type_fonts(),
+        presentation.save_subset_fonts()
+    )?;
     Ok(())
 }
 

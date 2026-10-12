@@ -3059,8 +3059,8 @@ methods, which rest on the new `Comment::remove_reply`.
 
 `font` lists, embeds, and removes embedded fonts and sets the font embedding
 settings, with the shape of `rdocx font`. `list` prints one line per face with
-the typeface, the face, the stored format, the stored byte count, and the part.
-Its JSON lists each font's `name`, panose, pitch family, character set, and
+the typeface, the face, the stored format, the stored byte count, and the part,
+then a `Settings:` line with both settings, as `rdocx font list` does. Its JSON lists each font's `name`, panose, pitch family, character set, and
 `embedded` faces, each with its `face`, relationship id, part, format,
 decoded `byte_count`, and `stored_byte_count`, beside a `settings` object.
 `embed` takes the font file after the presentation, `--name` for the typeface,

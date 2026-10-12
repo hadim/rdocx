@@ -2139,9 +2139,10 @@ fn font_commands_embed_list_remove_and_set_font_settings() {
     };
 
     let listed = cli(&["font", "list", &arg(&input)]);
+    // The bundled template already asks PowerPoint to subset on save.
     assert_eq!(
         String::from_utf8(listed.stdout).unwrap(),
-        "(no embedded fonts)\n"
+        "(no embedded fonts)\nSettings: embedTrueTypeFonts=false saveSubsetFonts=true\n"
     );
 
     // Without --license-authorized the facade refuses and nothing is written.
@@ -2187,13 +2188,17 @@ fn font_commands_embed_list_remove_and_set_font_settings() {
     let listed = cli(&["font", "list", &arg(&bold)]);
     let lines = String::from_utf8(listed.stdout).unwrap();
     let lines = lines.lines().collect::<Vec<_>>();
-    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert_eq!(lines.len(), 3, "{lines:?}");
     assert!(lines[0].starts_with("Caladea\tregular\teot\t"), "{lines:?}");
     assert!(
         lines[0].ends_with("\t/ppt/fonts/font1.fntdata"),
         "{lines:?}"
     );
     assert!(lines[1].starts_with("Caladea\tbold\teot\t"), "{lines:?}");
+    assert_eq!(
+        lines[2],
+        "Settings: embedTrueTypeFonts=true saveSubsetFonts=true"
+    );
     let listed = json_of(cli(&["font", "list", &arg(&bold), "--json"]));
     assert_eq!(listed["settings"]["embed_true_type_fonts"], json!(true));
     let font = &listed["fonts"][0];
