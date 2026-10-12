@@ -52,6 +52,12 @@ pub fn rgb_channels(value: &Bound<'_, PyAny>, parameter: &str) -> PyResult<(u8, 
 pub enum PathSeg {
     /// A slide in a presentation.
     Slide(usize),
+    /// A layout in a presentation.
+    Layout(usize),
+    /// A master in a presentation.
+    Master(usize),
+    /// A title, body or other master text style selected by its fixed slot.
+    TextStyle(usize),
     /// A shape in a slide or group shape.
     Shape(usize),
     /// An item in the document body's block content.

@@ -36,7 +36,7 @@ class ReplacementCountError(RpptxError):
 
 
 from ._rpptx import Comment, CommentAuthor, CommentReply, Presentation, CoreProperties, AppProperties, CustomProperties, CustomProperty, CustomFileTime, Section, MediaInfo, GradientStops, GradientStop
-from ._rpptx import SlideTransition, HeaderFooter, PlaceholderFormat, SlideMaster, SlideMasterCollection, Theme, ThemeFonts, ThemeFontSet
+from ._rpptx import SlideTransition, HeaderFooter, PlaceholderFormat, SlideMaster, SlideMasterCollection, Theme, ThemeFonts, ThemeFontSet, ThemeColors, MasterTextStyles, TextStyleList
 from ._rpptx import AutofitRefreshResult, AutofitUpdate, BoundingBox, TextFrameLayout, TextLineLayout, ValidationIssue
 
 __all__ = [
@@ -57,7 +57,7 @@ __all__ = [
     "PlaceholderFormat",
     "SlideMaster",
     "SlideMasterCollection",
-    "Theme",
+    "Theme", "ThemeColors", "MasterTextStyles", "TextStyleList",
     "ThemeFonts",
     "ThemeFontSet",
     "MSO_UNDERLINE",

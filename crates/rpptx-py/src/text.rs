@@ -126,6 +126,8 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyRunCollection>()?;
     module.add_class::<PyHyperlink>()?;
     module.add_class::<PyFont>()?;
+    module.add_class::<PyMasterTextStyles>()?;
+    module.add_class::<PyTextStyleList>()?;
     Ok(())
 }
 
@@ -184,10 +186,75 @@ fn native_text_frame_mut_at<'a>(
     }
 }
 
+fn style_address(
+    presentation: &PyPresentation,
+    path: &ContentPath,
+) -> Option<(usize, &'static str, usize)> {
+    let current = presentation.current_path(path)?;
+    let master = current.segs.iter().find_map(|segment| {
+        if let PathSeg::Master(index) = segment {
+            Some(*index)
+        } else {
+            None
+        }
+    })?;
+    let style = current.segs.iter().find_map(|segment| {
+        if let PathSeg::TextStyle(index) = segment {
+            ["title", "body", "other"].get(*index).copied()
+        } else {
+            None
+        }
+    })?;
+    Some((master, style, paragraph_index(&current)? + 1))
+}
+
+fn update_style_level(
+    py: Python<'_>,
+    presentation: &mut PyPresentation,
+    path: &ContentPath,
+    update: impl FnOnce(&mut CT_TextParagraphProperties) -> PyResult<()>,
+) -> PyResult<()> {
+    let (master, style, level) = style_address(presentation, path)
+        .ok_or_else(|| PyIndexError::new_err("master style owner is absent"))?;
+    let mut properties = presentation
+        .inner
+        .master_text_style(master, style, level)
+        .map_err(|error| crate::rpptx_to_pyerr(py, error))?
+        .cloned()
+        .unwrap_or_default();
+    let before = properties.clone();
+    update(&mut properties)?;
+    if properties == before {
+        return Ok(());
+    }
+    let mut candidate = presentation.inner.clone();
+    candidate
+        .set_master_text_style(master, style, level, properties)
+        .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+    let proofs = presentation.unchanged_owners()?;
+    let prepared = presentation.prepare_owners(
+        &candidate,
+        "MasterTextStyles.level",
+        &proofs,
+        false,
+        false,
+        false,
+    )?;
+    presentation.publish_owners(candidate, prepared)
+}
+
 fn font_properties(
     presentation: &PyPresentation,
     path: &ContentPath,
 ) -> Option<rpptx::CT_TextCharacterProperties> {
+    if let Some((master, style, level)) = style_address(presentation, path) {
+        return presentation
+            .inner
+            .master_text_style(master, style, level)
+            .ok()??
+            .default_run_properties
+            .clone();
+    }
     let paragraph = paragraph_index(path)?;
     let paragraph =
         text_frame_ref_at(presentation, path).and_then(|frame| frame.paragraph(paragraph))?;
@@ -631,7 +698,15 @@ impl PyParagraph {
         read: impl FnOnce(Option<&CT_TextParagraphProperties>) -> T,
     ) -> PyResult<T> {
         let index = self.validate(py)?;
-        text_frame_ref_at(&self.presentation.borrow(py), &self.path)
+        let presentation = self.presentation.borrow(py);
+        if let Some((master, style, level)) = style_address(&presentation, &self.path) {
+            let properties = presentation
+                .inner
+                .master_text_style(master, style, level)
+                .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+            return Ok(read(properties));
+        }
+        text_frame_ref_at(&presentation, &self.path)
             .and_then(|frame| frame.paragraph(index))
             .map(|paragraph| read(paragraph.properties()))
             .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))
@@ -646,6 +721,12 @@ impl PyParagraph {
     ) -> PyResult<()> {
         let index = self.validate(py)?;
         let mut presentation = self.presentation.borrow_mut(py);
+        if style_address(&presentation, &self.path).is_some() {
+            return update_style_level(py, &mut presentation, &self.path, |properties| {
+                update(properties);
+                Ok(())
+            });
+        }
         let mut paragraph = text_frame_mut_at(&mut presentation, &self.path)
             .and_then(|frame| frame.into_paragraph_mut(index))
             .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
@@ -1727,6 +1808,17 @@ impl PyFont {
         let paragraph = paragraph_index(&self.path)
             .ok_or_else(|| PyIndexError::new_err("paragraph index is missing"))?;
         let mut presentation = self.presentation.borrow_mut(py);
+        if style_address(&presentation, &self.path).is_some() {
+            return update_style_level(py, &mut presentation, &self.path, |level| {
+                let before = level.default_run_properties.clone().unwrap_or_default();
+                let mut properties = before.clone();
+                update(&mut properties)?;
+                if properties != before {
+                    level.default_run_properties = Some(properties);
+                }
+                Ok(())
+            });
+        }
         let mut paragraph = text_frame_mut_at(&mut presentation, &self.path)
             .and_then(|frame| frame.into_paragraph_mut(paragraph))
             .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
@@ -2253,4 +2345,106 @@ where
     Err(PyTypeError::new_err(format!(
         "{kind} indices must be integers or slices"
     )))
+}
+
+/// Master title, body and other styles, bound to the existing physical owner.
+#[pyclass(name = "MasterTextStyles")]
+pub struct PyMasterTextStyles {
+    pub(crate) presentation: Py<PyPresentation>,
+    pub(crate) path: ContentPath,
+}
+impl PyMasterTextStyles {
+    fn list(&self, py: Python<'_>, style: usize) -> PyResult<Py<PyTextStyleList>> {
+        validate_path(
+            py,
+            &self.presentation.borrow(py),
+            &self.path,
+            "master text styles",
+            ".text_styles",
+        )?;
+        let mut path = self.path.clone();
+        path.segs.push(PathSeg::TextStyle(style));
+        Py::new(
+            py,
+            PyTextStyleList {
+                presentation: self.presentation.clone_ref(py),
+                path,
+            },
+        )
+    }
+}
+#[pymethods]
+impl PyMasterTextStyles {
+    #[getter]
+    fn title(&self, py: Python<'_>) -> PyResult<Py<PyTextStyleList>> {
+        self.list(py, 0)
+    }
+    #[getter]
+    fn body(&self, py: Python<'_>) -> PyResult<Py<PyTextStyleList>> {
+        self.list(py, 1)
+    }
+    #[getter]
+    fn other(&self, py: Python<'_>) -> PyResult<Py<PyTextStyleList>> {
+        self.list(py, 2)
+    }
+}
+/// Nine master levels with the existing paragraph-format editing interface.
+#[pyclass(name = "TextStyleList")]
+pub struct PyTextStyleList {
+    presentation: Py<PyPresentation>,
+    path: ContentPath,
+}
+impl PyTextStyleList {
+    fn item(&self, py: Python<'_>, level: usize) -> PyResult<Py<PyParagraph>> {
+        validate_path(
+            py,
+            &self.presentation.borrow(py),
+            &self.path,
+            "master text style",
+            ".text_styles",
+        )?;
+        if level >= 9 {
+            return Err(PyIndexError::new_err("text style level is out of range"));
+        }
+        let mut path = self.path.clone();
+        path.segs.push(PathSeg::Para(level));
+        Py::new(py, PyParagraph::new(self.presentation.clone_ref(py), path))
+    }
+}
+#[pymethods]
+impl PyTextStyleList {
+    fn __len__(&self, py: Python<'_>) -> PyResult<usize> {
+        validate_path(
+            py,
+            &self.presentation.borrow(py),
+            &self.path,
+            "master text style",
+            ".text_styles",
+        )?;
+        Ok(9)
+    }
+    fn __getitem__(&self, py: Python<'_>, index: isize) -> PyResult<Py<PyParagraph>> {
+        self.item(py, normalize_index(index, 9, "text style level")?)
+    }
+    /// One-based selection matching the native DrawingML level number.
+    fn level(&self, py: Python<'_>, level: usize) -> PyResult<Py<PyParagraph>> {
+        if !(1..=9).contains(&level) {
+            return Err(PyValueError::new_err("level must be from 1 through 9"));
+        }
+        self.item(py, level - 1)
+    }
+    /// The first level's direct font, without materializing absent defaults.
+    #[getter]
+    fn font(&self, py: Python<'_>) -> PyResult<Py<PyFont>> {
+        validate_path(
+            py,
+            &self.presentation.borrow(py),
+            &self.path,
+            "master text style",
+            ".text_styles",
+        )?;
+        let mut path = self.path.clone();
+        path.segs.push(PathSeg::Para(0));
+        Py::new(py, PyFont::new(self.presentation.clone_ref(py), path))
+    }
 }

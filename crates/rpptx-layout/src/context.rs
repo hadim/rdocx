@@ -903,6 +903,9 @@ impl<'a> ResolveCtx<'a> {
                 text_directions,
             ),
             ShapeTreeChild::Picture(picture) => {
+                if picture.hidden() {
+                    return Ok(None);
+                }
                 let Some((bounds, rotation_deg, flip_h, flip_v)) =
                     transform_values(self.effective_picture_xfrm(picture).as_ref())
                 else {
@@ -6509,6 +6512,32 @@ mod tests {
                     .to_owned(),
             }]
         );
+    }
+
+    #[test]
+    fn fx209_hidden_picture_is_omitted_without_affecting_visible_owners() {
+        for (attribute, count) in [
+            ("", 1),
+            ("hidden='0'", 1),
+            ("hidden='false'", 1),
+            ("hidden='1'", 0),
+            ("hidden='true'", 0),
+            ("xmlns:f='urn:foreign' f:hidden='1'", 1),
+        ] {
+            let input = picture("rId1", "", "", 0)
+                .replace("<p:cNvPr/>", &format!("<p:cNvPr {attribute}/>"));
+            let fixture = Fixture::new(&input, "", "");
+            let media = ScopedMediaIds {
+                slide: HashMap::from([("rId1".to_owned(), MediaId(11))]),
+                ..ScopedMediaIds::default()
+            };
+            let resolved = fixture
+                .context()
+                .resolve_slide_with_media((40.0, 20.0), &media)
+                .unwrap();
+            assert_eq!(resolved.shapes.len(), count, "{attribute}");
+            assert!(resolved.diagnostics.is_empty());
+        }
     }
 
     #[test]

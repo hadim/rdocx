@@ -504,3 +504,13 @@ core/application/custom properties, sections and media lifecycle are public.
 Raster export returns per-slide PNG/JPEG or one multi-page TIFF. Notes and
 handout PDF, PDF/A2b and PDF/A3b, and ordered ODP diagnostics use existing native
 exporters. Google Slides import remains best effort.
+
+## PowerPoint reusable branding
+
+Master and layout shapes use the same concrete authoring provider as slides,
+with image and hyperlink relationships on the actual owning part. Master and
+layout backgrounds, direct master text styles and named theme colour/font slots
+are editable. Layout lifecycle checks actual inbound package relationships.
+Theme application accepts a selected PPTX or POTX master or one THMX theme,
+imports supported selected dependencies atomically and preserves direct slide
+content. Google Slides compatibility remains best effort.

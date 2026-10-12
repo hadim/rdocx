@@ -1435,3 +1435,34 @@ that are no longer reachable, retaining unrelated imported relationships.
 A missing notes or handout master supplies neutral read-only export geometry
 without creating package parts. A present malformed or wrong-scope owner is
 refused. Missing notes-slide content remains blank.
+
+## Master and layout authoring
+
+The concrete ShapeOwner selects slide, layout or master records. The existing
+shape tree, geometry and mutation types serve all three owners. Pictures and
+external shape hyperlinks resolve and edit their physical part relationships.
+Selected picture replacement keeps geometry and copy-on-write media ownership.
+Direct root shape removal checks timing targets, detaches connectors and prunes
+only released relationships. Direct root reorder retains identities.
+
+Master and layout order follows qualified presentation and master ID lists,
+independent of relationship order or duplicate names. Layout duplication uses
+fresh IDs and an owning relationship source splice. Removal validates complete
+inbound ownership and refuses a layout used by any slide. Unrelated XML and
+relationship source remain untouched.
+
+Master title, body and other paragraph defaults select existing DrawingML
+levels1 through9. Level edits write only the selected qualified source owner,
+retain opaque siblings and validate the staged package before publication.
+Follow-master-background detaches the actual effective background with namespace,
+compatibility policy and image closure. Restoring inheritance removes the local
+background and only relationships released by that change. Unsafe selected
+reference source refuses atomically.
+
+Theme application copies all three selected schemes and supported images.
+Optional master import allocates fresh part names, master/layout IDs and
+relationship scopes for the selected master and its ordered layouts. Every
+qualified retained XML relationship reference must resolve in its own scope.
+Unsupported selected dependencies refuse before publication. Empty layout
+mapping retains current slide links. Explicit mapping changes only the owning
+slide relationship target, preserving direct slide geometry, text and fields.

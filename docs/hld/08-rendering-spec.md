@@ -2556,3 +2556,19 @@ to slide, archival, notes and handout exports.
 Calculated Python page_count uses deterministic native layout and the existing caller-font options. Producer app-properties page counts remain cached metadata. Word and character counts use accepted body content and exclude related-story presentation labels. Equation insertion converts before candidate publication. Inline and display snapshots preserve occurrence boundaries, and display conversion returns one ordered result per native equation child plus wrapper diagnostics. Conversion does not infer display intent from whitespace.
 
 Checkbox display runs bind the selected checkedState or uncheckedState scalar and font together. Genuine caller faces retain the qualified font provider precedence. Original source scalar and state-font facts remain unchanged by semantic font fallback. PDF and raster acceptance must distinguish actual painted glyph selection from mere resource presence.
+
+## Editable branding inheritance
+
+Rendering resolves current persisted master, layout and theme owners through
+the same inheritance chain as imported decks. Master pictures appear on linked
+slides unless layout or slide showMasterSp suppresses them. Layout pictures
+remain layout-owned. Master paragraph defaults and actual theme colour/font
+resources affect inherited properties without replacing explicit slide values.
+
+Background detachment preserves the current effective fill and its image scope.
+Explicit imported layout mapping can change inherited geometry or appearance,
+but does not rewrite direct slide coordinates or content. Imported resources
+remain bounded to the preflighted selected closure. Deterministic physical font
+registration and the pinned Word tint convention remain unchanged.
+
+Qualified picture drawing properties with hidden=true or hidden=1 do not paint. Missing and false hidden flags retain ordinary picture rendering. The reader uses the actual qualified cNvPr owner and retains its raw bytes, including foreign attributes and children. LibreOffice may materialize master visibility as hidden layout pictures during save and reopen.

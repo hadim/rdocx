@@ -232,6 +232,28 @@ impl CT_Picture {
         Ok(())
     }
 
+    /// Reports the qualified drawing owner's explicit hidden flag without changing source.
+    pub fn hidden(&self) -> bool {
+        let bindings = accessibility_parent_bindings(
+            &self.raw.raw_attributes,
+            &self.raw.non_visual_attributes,
+        );
+        let mut reader = Reader::from_reader(self.raw.non_visual_drawing_properties.as_slice());
+        let Ok(Event::Start(start) | Event::Empty(start)) = reader.read_event() else {
+            return false;
+        };
+        let Ok(bindings) = bindings.with_start(&start) else {
+            return false;
+        };
+        bindings.element_uri(start.name().as_ref()) == Some(P_NS)
+            && local_name(start.name().as_ref()) == b"cNvPr"
+            && matches!(
+                non_visual_drawing_text(&self.raw.non_visual_drawing_properties, "hidden")
+                    .as_deref(),
+                Some("true" | "1")
+            )
+    }
+
     /// Returns the direct accessibility description, including an explicit empty value.
     pub fn alt_text(&self) -> Option<String> {
         non_visual_drawing_text(&self.raw.non_visual_drawing_properties, "descr")
@@ -1606,6 +1628,102 @@ mod tests {
     use oxml_drawing::xfrm::{CT_Point2D, CT_PositiveSize2D, CT_Transform2D};
 
     use super::CT_Picture;
+
+    #[test]
+    fn fx209_picture_hidden_is_qualified_and_source_preserving() {
+        let base = String::from_utf8(
+            CT_Picture::new(7, "Logo", "rId1", CT_Transform2D::default())
+                .unwrap()
+                .to_xml()
+                .unwrap(),
+        )
+        .unwrap();
+        for (prefix, declaration) in [
+            ("p:", ""),
+            (
+                "q:",
+                "xmlns:q=\"http://schemas.openxmlformats.org/presentationml/2006/main\"",
+            ),
+            (
+                "",
+                "xmlns=\"http://schemas.openxmlformats.org/presentationml/2006/main\"",
+            ),
+        ] {
+            let owner = base
+                .replace("<p:", &format!("<{prefix}"))
+                .replace("</p:", &format!("</{prefix}"));
+            let owner = if declaration.is_empty() {
+                owner
+            } else {
+                owner.replacen(
+                    &format!("<{prefix}pic "),
+                    &format!("<{prefix}pic {declaration} "),
+                    1,
+                )
+            };
+            let mut reader = quick_xml::Reader::from_reader(owner.as_bytes());
+            let quick_xml::events::Event::Start(start) = reader.read_event().unwrap() else {
+                panic!("picture fixture must begin with its owner");
+            };
+            let bindings = super::NamespaceBindings::default()
+                .with_start(&start)
+                .unwrap();
+            assert_eq!(
+                bindings.element_uri(start.name().as_ref()),
+                Some(super::P_NS)
+            );
+            assert!(owner.contains("http://schemas.openxmlformats.org/presentationml/2006/main"));
+            for (attribute, expected) in [
+                ("", false),
+                ("hidden='0'", false),
+                ("hidden='false'", false),
+                ("hidden='1'", true),
+                ("hidden='true'", true),
+                ("hidden='&#49;'", true),
+                ("hidden='&#116;rue'", true),
+                ("xmlns:f='urn:foreign' f:hidden='1'", false),
+            ] {
+                let xml = owner.replacen(
+                    &format!("<{prefix}cNvPr "),
+                    &format!("<{prefix}cNvPr {attribute} xmlns:x='urn:opaque' x:keep='&#65;' "),
+                    1,
+                );
+                let picture = CT_Picture::from_xml(xml.as_bytes()).unwrap();
+                let raw = picture.raw.non_visual_drawing_properties.clone();
+                let before = picture.to_xml().unwrap();
+                assert_eq!(picture.hidden(), expected, "{prefix} {attribute}");
+                assert_eq!(picture.raw.non_visual_drawing_properties, raw);
+                assert_eq!(picture.to_xml().unwrap(), before);
+                assert!(
+                    String::from_utf8(before)
+                        .unwrap()
+                        .contains("x:keep='&#65;'")
+                );
+            }
+        }
+        let rebound = base.replacen(
+            "<p:cNvPr id=\"7\" name=\"Logo\"/>",
+            "<q:cNvPr xmlns:q='urn:foreign' id='7' name='Logo' hidden='1'/>",
+            1,
+        );
+        assert_ne!(rebound, base);
+        assert!(matches!(
+            CT_Picture::from_xml(rebound.as_bytes()),
+            Err(super::OxmlError::InvalidValue(message))
+                if message == "p:nvPicPr children must be p:cNvPr, p:cNvPicPr, and p:nvPr in order"
+        ));
+        for foreign in [
+            "<f:cNvPr xmlns:f='urn:foreign' hidden='1'/>",
+            "<q:cNvPr xmlns:q='urn:foreign' hidden='1'/>",
+        ] {
+            let xml = base.replacen("<p:cNvPr ", &format!("{foreign}<p:cNvPr "), 1);
+            let picture = CT_Picture::from_xml(xml.as_bytes()).unwrap();
+            let before = picture.to_xml().unwrap();
+            assert!(!picture.hidden());
+            assert_eq!(picture.to_xml().unwrap(), before);
+            assert!(String::from_utf8(before).unwrap().contains(foreign));
+        }
+    }
 
     #[test]
     fn picture_constructor_round_trips_in_schema_order() {

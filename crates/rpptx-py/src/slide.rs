@@ -2,7 +2,7 @@ use oxml_py_support::{ContentPath, PathSeg};
 use pyo3::PyClass;
 use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyBytes, PyDict, PyList, PySlice, PyTuple};
+use pyo3::types::{PyAny, PyBytes, PyList, PySlice, PyTuple};
 use smallvec::smallvec;
 
 use crate::dml::{FillTarget, PyFillFormat};
@@ -16,6 +16,7 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PySlideMaster>()?;
     module.add_class::<PySlideMasterCollection>()?;
     module.add_class::<PyTheme>()?;
+    module.add_class::<PyThemeColors>()?;
     module.add_class::<PyThemeFonts>()?;
     module.add_class::<PyThemeFontSet>()?;
     module.add_class::<PyHeaderFooter>()?;
@@ -54,6 +55,159 @@ impl PySlideLayout {
 
 #[pymethods]
 impl PySlideLayout {
+    #[setter]
+    fn set_name(&self, py: Python<'_>, name: Option<&str>) -> PyResult<()> {
+        let index = self.validate(py)?;
+        self.presentation
+            .borrow_mut(py)
+            .inner
+            .set_layout_name(index, name)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))
+    }
+
+    #[getter]
+    fn slide_master(&self, py: Python<'_>) -> PyResult<Py<PySlideMaster>> {
+        let index = self.validate(py)?;
+        let master = self
+            .presentation
+            .borrow(py)
+            .inner
+            .layout_master_index(index)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        PySlideMasterCollection::new(
+            self.presentation.clone_ref(py),
+            self.presentation
+                .borrow(py)
+                .capture_path(smallvec![], None)?,
+        )
+        .item(py, master)
+    }
+
+    #[getter]
+    fn used_by_slides<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let index = self.validate(py)?;
+        let indices = self
+            .presentation
+            .borrow(py)
+            .inner
+            .layout_used_by_slides(index)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        let items = indices
+            .into_iter()
+            .map(|index| {
+                let path = self
+                    .presentation
+                    .borrow(py)
+                    .capture_path(smallvec![PathSeg::Slide(index)], None)?;
+                Py::new(py, PySlide::new(self.presentation.clone_ref(py), path))
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        PyTuple::new(py, items)
+    }
+
+    #[getter]
+    fn background(&self, py: Python<'_>) -> PyResult<Py<PyBackground>> {
+        let index = self.validate(py)?;
+        let path = self
+            .presentation
+            .borrow(py)
+            .capture_path(smallvec![PathSeg::Layout(index)], None)?;
+        Py::new(
+            py,
+            PyBackground {
+                presentation: self.presentation.clone_ref(py),
+                path,
+            },
+        )
+    }
+
+    #[getter]
+    fn follow_master_background(&self, py: Python<'_>) -> PyResult<bool> {
+        let index = self.validate(py)?;
+        self.presentation
+            .borrow(py)
+            .inner
+            .has_explicit_background_at(rpptx::ShapeOwner::Layout(index))
+            .map(|explicit| !explicit)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))
+    }
+
+    #[setter]
+    fn set_follow_master_background(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        let index = self.validate(py)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        let mut candidate = presentation.inner.clone();
+        candidate
+            .set_follow_master_background_at(rpptx::ShapeOwner::Layout(index), value)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        let proofs = presentation.unchanged_owners()?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "SlideLayout.follow_master_background",
+            &proofs,
+            false,
+            false,
+            false,
+        )?;
+        presentation.publish_owners(candidate, prepared)
+    }
+
+    #[getter]
+    fn show_master_shapes(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+        let index = self.validate(py)?;
+        self.presentation
+            .borrow(py)
+            .inner
+            .show_master_shapes_at(rpptx::ShapeOwner::Layout(index))
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))
+    }
+
+    #[setter]
+    fn set_show_master_shapes(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        let index = self.validate(py)?;
+        let mut p = self.presentation.borrow_mut(py);
+        let mut candidate = p.inner.clone();
+        candidate
+            .set_show_master_shapes_at(rpptx::ShapeOwner::Layout(index), value)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        let proofs = p.unchanged_owners()?;
+        let prepared = p.prepare_owners(
+            &candidate,
+            "SlideLayout.show_master_shapes",
+            &proofs,
+            false,
+            false,
+            false,
+        )?;
+        p.publish_owners(candidate, prepared)
+    }
+
+    #[getter]
+    fn placeholders(&self, py: Python<'_>) -> PyResult<Py<PyPlaceholderCollection>> {
+        let index = self.validate(py)?;
+        let path = self
+            .presentation
+            .borrow(py)
+            .capture_path(smallvec![PathSeg::Layout(index)], None)?;
+        Py::new(
+            py,
+            PyPlaceholderCollection::new(self.presentation.clone_ref(py), path),
+        )
+    }
+
+    #[getter]
+    fn shapes(&self, py: Python<'_>) -> PyResult<PyShapeCollection> {
+        let index = self.validate(py)?;
+        let path = self
+            .presentation
+            .borrow(py)
+            .capture_path(smallvec![PathSeg::Layout(index)], None)?;
+        Ok(PyShapeCollection::new(
+            self.presentation.clone_ref(py),
+            path,
+        ))
+    }
+
     #[getter]
     fn name(&self, py: Python<'_>) -> PyResult<Option<String>> {
         let index = self.validate(py)?;
@@ -132,6 +286,70 @@ impl PySlideLayoutCollection {
             ));
         }
         layout.validate(py)
+    }
+
+    /// Duplicates one layout into a fresh part owned by the same master.
+    fn duplicate(&self, py: Python<'_>, layout: &Bound<'_, PyAny>) -> PyResult<Py<PySlideLayout>> {
+        self.len(py)?;
+        let layout = layout.extract::<PyRef<'_, PySlideLayout>>()?;
+        if !layout.presentation.is(&self.presentation) {
+            return Err(PyValueError::new_err("layout is not in this presentation"));
+        }
+        let index = layout.validate(py)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        let mut candidate = presentation.inner.clone();
+        let inserted = candidate
+            .duplicate_layout(index)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        let proofs = presentation.unchanged_owners()?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "SlideLayoutCollection.duplicate",
+            &proofs,
+            false,
+            true,
+            false,
+        )?;
+        let path = presentation.capture_prepared_path(
+            &prepared,
+            smallvec![PathSeg::Layout(inserted)],
+            None,
+        )?;
+        let result = Py::new(
+            py,
+            PySlideLayout {
+                presentation: self.presentation.clone_ref(py),
+                index: inserted,
+                path,
+            },
+        )?;
+        presentation.publish_owners(candidate, prepared)?;
+        Ok(result)
+    }
+
+    /// Removes an unused layout only after the complete inbound graph is checked.
+    fn remove(&self, py: Python<'_>, layout: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.len(py)?;
+        let layout = layout.extract::<PyRef<'_, PySlideLayout>>()?;
+        if !layout.presentation.is(&self.presentation) {
+            return Err(PyValueError::new_err("layout is not in this presentation"));
+        }
+        let index = layout.validate(py)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        let mut candidate = presentation.inner.clone();
+        candidate
+            .remove_layout(index)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        let proofs = presentation.removed_layout_owners(index)?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "SlideLayoutCollection.remove",
+            &proofs,
+            false,
+            true,
+            false,
+        )?;
+        presentation.publish_owners(candidate, prepared)
     }
 
     fn __iter__(&self, py: Python<'_>) -> PyResult<Py<PySlideLayoutIterator>> {
@@ -568,6 +786,36 @@ impl PySlide {
         )
     }
 
+    #[getter]
+    fn show_master_shapes(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+        let index = self.validate(py)?;
+        self.presentation
+            .borrow(py)
+            .inner
+            .show_master_shapes_at(rpptx::ShapeOwner::Slide(index))
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))
+    }
+
+    #[setter]
+    fn set_show_master_shapes(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        let index = self.validate(py)?;
+        let mut p = self.presentation.borrow_mut(py);
+        let mut candidate = p.inner.clone();
+        candidate
+            .set_show_master_shapes_at(rpptx::ShapeOwner::Slide(index), value)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        let proofs = p.unchanged_owners()?;
+        let prepared = p.prepare_owners(
+            &candidate,
+            "Slide.show_master_shapes",
+            &proofs,
+            false,
+            false,
+            false,
+        )?;
+        p.publish_owners(candidate, prepared)
+    }
+
     /// Whether the slide inherits its background from its layout and master.
     #[getter]
     fn follow_master_background(&self, py: Python<'_>) -> PyResult<bool> {
@@ -584,22 +832,20 @@ impl PySlide {
     fn set_follow_master_background(&self, py: Python<'_>, value: bool) -> PyResult<()> {
         let index = self.validate(py)?;
         let mut presentation = self.presentation.borrow_mut(py);
-        let explicit = presentation
-            .inner
-            .slide(index)
-            .is_some_and(|slide| slide.has_explicit_background());
-        let mut slide = presentation
-            .inner
-            .slide_mut(index)
-            .ok_or_else(|| PyIndexError::new_err(format!("slide index {index} is out of range")))?;
-        if value {
-            slide.remove_background();
-        } else if !explicit {
-            slide
-                .set_background(rpptx::Fill::NoFill(rpptx::NoFill::default()))
-                .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
-        }
-        Ok(())
+        let mut candidate = presentation.inner.clone();
+        candidate
+            .set_follow_master_background_at(rpptx::ShapeOwner::Slide(index), value)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        let proofs = presentation.unchanged_owners()?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "Slide.follow_master_background",
+            &proofs,
+            false,
+            false,
+            false,
+        )?;
+        presentation.publish_owners(candidate, prepared)
     }
 
     #[getter]
@@ -1172,6 +1418,56 @@ impl PySlideMaster {
 
 #[pymethods]
 impl PySlideMaster {
+    #[getter]
+    fn text_styles(&self, py: Python<'_>) -> PyResult<Py<crate::text::PyMasterTextStyles>> {
+        self.validate(py)?;
+        Py::new(
+            py,
+            crate::text::PyMasterTextStyles {
+                presentation: self.presentation.clone_ref(py),
+                path: self.path.clone(),
+            },
+        )
+    }
+
+    #[getter]
+    fn background(&self, py: Python<'_>) -> PyResult<Py<PyBackground>> {
+        self.validate(py)?;
+        Py::new(
+            py,
+            PyBackground {
+                presentation: self.presentation.clone_ref(py),
+                path: self.path.clone(),
+            },
+        )
+    }
+
+    #[getter]
+    fn placeholders(&self, py: Python<'_>) -> PyResult<Py<PyPlaceholderCollection>> {
+        let index = self.validate(py)?;
+        let path = self
+            .presentation
+            .borrow(py)
+            .capture_path(smallvec![PathSeg::Master(index)], None)?;
+        Py::new(
+            py,
+            PyPlaceholderCollection::new(self.presentation.clone_ref(py), path),
+        )
+    }
+
+    #[getter]
+    fn shapes(&self, py: Python<'_>) -> PyResult<PyShapeCollection> {
+        let index = self.validate(py)?;
+        let path = self
+            .presentation
+            .borrow(py)
+            .capture_path(smallvec![PathSeg::Master(index)], None)?;
+        Ok(PyShapeCollection::new(
+            self.presentation.clone_ref(py),
+            path,
+        ))
+    }
+
     /// The theme this master uses, read when accessed.
     #[getter]
     fn theme(&self, py: Python<'_>) -> PyResult<PyTheme> {
@@ -1191,8 +1487,8 @@ impl PySlideMaster {
             .presentation
             .borrow(py)
             .inner
-            .master_layouts(index)
-            .ok_or_else(|| PyIndexError::new_err("slide master index out of range"))?;
+            .master_layout_indices(index)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
         let collection =
             PySlideLayoutCollection::new(self.presentation.clone_ref(py), self.path.clone());
         let items = layouts
@@ -1246,7 +1542,10 @@ impl PySlideMasterCollection {
                     .slide_master_part_name(index)
                     .map_err(|e| crate::rpptx_to_pyerr(py, e))?
                     .ok_or_else(|| PyIndexError::new_err("slide master index out of range"))?,
-                path: self.path.clone(),
+                path: self
+                    .presentation
+                    .borrow(py)
+                    .capture_path(smallvec![PathSeg::Master(index)], None)?,
             },
         )
     }
@@ -1275,7 +1574,7 @@ impl PySlideMasterCollection {
     }
 }
 
-/// A read-only view that resolves its original master part on every access.
+/// A live view that resolves its original master part on every access.
 #[pyclass(name = "Theme")]
 pub struct PyTheme {
     presentation: Py<PyPresentation>,
@@ -1308,52 +1607,211 @@ impl PyTheme {
     }
 
     #[getter]
-    fn colors<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let rgb = py.import("rpptx.dml.color")?.getattr("RGBColor")?;
-        let colors = PyDict::new(py);
-        for (slot, color) in self.current(py)?.colors {
-            let value = match color {
-                Some(color) => {
-                    let [r, g, b] = color.components();
-                    rgb.call1((r, g, b))?.unbind()
-                }
-                None => py.None(),
-            };
-            colors.set_item(slot, value)?;
-        }
-        Ok(colors)
+    fn colors(&self, py: Python<'_>) -> PyResult<PyThemeColors> {
+        self.current(py)?;
+        Ok(PyThemeColors {
+            presentation: self.presentation.clone_ref(py),
+            part_name: self.part_name.clone(),
+            path: self.path.clone(),
+        })
     }
 
     #[getter]
     fn fonts(&self, py: Python<'_>) -> PyResult<PyThemeFonts> {
-        let current = self.current(py)?;
-        let fonts = |f: rpptx::ThemeFonts| PyThemeFontSet {
-            latin: f.latin,
-            east_asian: f.east_asian,
-            complex_script: f.complex_script,
-        };
+        self.current(py)?;
         Ok(PyThemeFonts {
-            major: fonts(current.major_font),
-            minor: fonts(current.minor_font),
+            presentation: self.presentation.clone_ref(py),
+            part_name: self.part_name.clone(),
+            path: self.path.clone(),
         })
     }
 }
 
-/// The theme's heading (`major`) and body (`minor`) fonts.
-#[pyclass(name = "ThemeFonts", frozen, get_all, skip_from_py_object)]
-#[derive(Clone)]
-pub struct PyThemeFonts {
-    major: PyThemeFontSet,
-    minor: PyThemeFontSet,
+/// Live access to the twelve concrete color-scheme slots of the owning theme.
+#[pyclass(name = "ThemeColors")]
+pub struct PyThemeColors {
+    presentation: Py<PyPresentation>,
+    part_name: String,
+    path: ContentPath,
 }
 
-/// One theme font collection's typefaces, empty when the theme names none.
-#[pyclass(name = "ThemeFontSet", frozen, get_all, skip_from_py_object)]
-#[derive(Clone)]
+#[pymethods]
+impl PyThemeColors {
+    fn __len__(&self, py: Python<'_>) -> PyResult<usize> {
+        Ok(self.theme(py).current(py)?.colors.len())
+    }
+
+    fn __getitem__(&self, py: Python<'_>, key: &str) -> PyResult<Py<PyAny>> {
+        let current = self.theme(py).current(py)?;
+        let color = current
+            .colors
+            .into_iter()
+            .find(|(slot, _)| *slot == key)
+            .ok_or_else(|| pyo3::exceptions::PyKeyError::new_err(key.to_owned()))?
+            .1;
+        match color {
+            Some(color) => {
+                let [r, g, b] = color.components();
+                py.import("rpptx.dml.color")?
+                    .getattr("RGBColor")?
+                    .call1((r, g, b))
+                    .map(Bound::unbind)
+            }
+            None => Ok(py.None()),
+        }
+    }
+
+    fn __setitem__(&self, py: Python<'_>, key: &str, value: &Bound<'_, PyAny>) -> PyResult<()> {
+        let master = PySlideMaster {
+            presentation: self.presentation.clone_ref(py),
+            part_name: self.part_name.clone(),
+            path: self.path.clone(),
+        };
+        let index = master.validate(py)?;
+        let (r, g, b) = oxml_py_support::rgb_channels(value, "Theme.colors")?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        let mut candidate = presentation.inner.clone();
+        candidate
+            .set_theme_color(index, key, rpptx::RgbColor::new(r, g, b))
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        let proofs = presentation.unchanged_owners()?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "Theme.colors",
+            &proofs,
+            false,
+            false,
+            false,
+        )?;
+        presentation.publish_owners(candidate, prepared)
+    }
+
+    fn keys<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(
+            py,
+            self.theme(py)
+                .current(py)?
+                .colors
+                .into_iter()
+                .map(|(slot, _)| slot),
+        )
+    }
+
+    fn __iter__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        self.keys(py)?.into_any().try_iter().map(Bound::into_any)
+    }
+}
+
+impl PyThemeColors {
+    fn theme(&self, py: Python<'_>) -> PyTheme {
+        PyTheme {
+            presentation: self.presentation.clone_ref(py),
+            part_name: self.part_name.clone(),
+            path: self.path.clone(),
+        }
+    }
+}
+
+/// The owning theme's heading and body font collections.
+#[pyclass(name = "ThemeFonts")]
+pub struct PyThemeFonts {
+    presentation: Py<PyPresentation>,
+    part_name: String,
+    path: ContentPath,
+}
+
+#[pymethods]
+impl PyThemeFonts {
+    #[getter]
+    fn major(&self, py: Python<'_>) -> PyThemeFontSet {
+        self.collection(py, true)
+    }
+    #[getter]
+    fn minor(&self, py: Python<'_>) -> PyThemeFontSet {
+        self.collection(py, false)
+    }
+}
+
+impl PyThemeFonts {
+    fn collection(&self, py: Python<'_>, major: bool) -> PyThemeFontSet {
+        PyThemeFontSet {
+            presentation: self.presentation.clone_ref(py),
+            part_name: self.part_name.clone(),
+            path: self.path.clone(),
+            major,
+        }
+    }
+}
+
+/// Live typefaces in one theme collection, empty when the source names none.
+#[pyclass(name = "ThemeFontSet")]
 pub struct PyThemeFontSet {
-    latin: String,
-    east_asian: String,
-    complex_script: String,
+    presentation: Py<PyPresentation>,
+    part_name: String,
+    path: ContentPath,
+    major: bool,
+}
+
+impl PyThemeFontSet {
+    fn current(&self, py: Python<'_>) -> PyResult<rpptx::ThemeFonts> {
+        let theme = PyTheme {
+            presentation: self.presentation.clone_ref(py),
+            part_name: self.part_name.clone(),
+            path: self.path.clone(),
+        }
+        .current(py)?;
+        Ok(if self.major {
+            theme.major_font
+        } else {
+            theme.minor_font
+        })
+    }
+
+    fn write(&self, py: Python<'_>, script: &str, typeface: &str) -> PyResult<()> {
+        let master = PySlideMaster {
+            presentation: self.presentation.clone_ref(py),
+            part_name: self.part_name.clone(),
+            path: self.path.clone(),
+        };
+        let index = master.validate(py)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        let mut candidate = presentation.inner.clone();
+        candidate
+            .set_theme_font(index, self.major, script, typeface)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        let proofs = presentation.unchanged_owners()?;
+        let prepared =
+            presentation.prepare_owners(&candidate, "Theme.fonts", &proofs, false, false, false)?;
+        presentation.publish_owners(candidate, prepared)
+    }
+}
+
+#[pymethods]
+impl PyThemeFontSet {
+    #[getter]
+    fn latin(&self, py: Python<'_>) -> PyResult<String> {
+        Ok(self.current(py)?.latin)
+    }
+    #[setter]
+    fn set_latin(&self, py: Python<'_>, value: &str) -> PyResult<()> {
+        self.write(py, "latin", value)
+    }
+    #[getter]
+    fn east_asian(&self, py: Python<'_>) -> PyResult<String> {
+        Ok(self.current(py)?.east_asian)
+    }
+    #[setter]
+    fn set_east_asian(&self, py: Python<'_>, value: &str) -> PyResult<()> {
+        self.write(py, "east_asian", value)
+    }
+    #[getter]
+    fn complex_script(&self, py: Python<'_>) -> PyResult<String> {
+        Ok(self.current(py)?.complex_script)
+    }
+    #[setter]
+    fn set_complex_script(&self, py: Python<'_>, value: &str) -> PyResult<()> {
+        self.write(py, "complex_script", value)
+    }
 }
 
 pub(crate) fn header_footer_settings(

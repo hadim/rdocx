@@ -59,7 +59,6 @@ pub use oxml_drawing::text::{
     TextBulletColor, TextBulletSize, TextBulletSizeValue, TextFont, TextNoBullet, TextPointValue,
     TextSpacing, TextStrike, TextUnderline,
 };
-#[cfg(feature = "render")]
 use oxml_drawing::theme::CT_OfficeStyleSheet;
 use oxml_drawing::xfrm::{CT_Point2D, CT_PositiveSize2D, CT_Transform2D};
 use oxml_layout::MediaId;
@@ -71,14 +70,14 @@ use oxml_layout::{
 use oxml_media::{
     ImageFormat, MediaNamer, audio_video_signature_matches, is_safe_content_type, probe, resolve,
 };
-pub use oxml_opc::PackageReadLimits;
 use oxml_opc::content_types;
 use oxml_opc::relationship::{Relationship, rel_types};
 #[cfg(feature = "digital-signatures")]
 pub use oxml_opc::{
     CoveredRelationship, SignatureIssue, SignatureReport, SignerCertificateIdentity,
 };
-use oxml_opc::{OpcError, OpcPackage, Relationships, write_atomic_file};
+use oxml_opc::{OpcError, Relationships, write_atomic_file};
+pub use oxml_opc::{OpcPackage, PackageReadLimits};
 #[cfg(feature = "render")]
 pub use oxml_pdf::{PdfConformance, RasterFormat, RasterOptions, RasterOutput};
 use quick_xml::events::{BytesStart as XmlBytesStart, Event as XmlEvent};
@@ -120,7 +119,6 @@ use rpptx_oxml::relmap::{
 use rpptx_oxml::shape_tree::{
     CT_GroupShape, CT_Shape, CT_ShapeTree, ShapeIdAllocator, ShapeTreeChild, rewrite_shape_ids,
 };
-#[cfg(feature = "render")]
 use rpptx_oxml::slide_parts::CT_CommonSlideData;
 #[cfg(feature = "render")]
 use rpptx_oxml::slide_parts::ColorMapOverrideKind;
@@ -751,6 +749,8 @@ pub struct Presentation {
     embedded_invalidated_signatures: HashSet<(String, String)>,
     package_signatures_invalidated: bool,
     layouts: Vec<LayoutRecord>,
+    masters: Vec<MasterRecord>,
+    themes: Vec<ThemeRecord>,
     slides: Vec<SlideRecord>,
 }
 
@@ -758,6 +758,31 @@ pub struct Presentation {
 struct LayoutRecord {
     part_name: String,
     layout: CT_SlideLayout,
+    dirty: bool,
+}
+
+/// Mutable records use the actual package part as their identity.
+#[derive(Clone, Debug)]
+struct MasterRecord {
+    id: Option<u32>,
+    part_name: String,
+    // An unprojectable retained master may still be opened and saved unchanged.
+    master: std::result::Result<CT_SlideMaster, String>,
+    dirty: bool,
+}
+#[derive(Clone, Debug)]
+struct ThemeRecord {
+    part_name: String,
+    theme: CT_OfficeStyleSheet,
+    dirty: bool,
+}
+
+/// A checked shape-tree owner. Indices follow each existing public inventory.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShapeOwner {
+    Slide(usize),
+    Layout(usize),
+    Master(usize),
 }
 
 #[derive(Clone, Debug)]
@@ -1048,6 +1073,8 @@ impl Presentation {
         })
         .transpose()?;
         let layouts = resolve_layouts(&package, &presentation_part, &presentation)?;
+        let masters = resolve_master_records(&package, &presentation_part, &presentation)?;
+        let themes = Vec::new();
         let (comment_authors_part, comment_authors) =
             resolve_comment_authors(&package, &presentation_part)?;
         let (notes_master_part, notes_master) = resolve_notes_master(&package, &presentation_part)?;
@@ -1112,6 +1139,8 @@ impl Presentation {
             embedded_invalidated_signatures: HashSet::new(),
             package_signatures_invalidated,
             layouts,
+            masters,
+            themes,
             slides,
         })
     }
@@ -2362,6 +2391,64 @@ impl Presentation {
                 })?,
             );
         }
+        for record in self.masters.iter().filter(|record| record.dirty) {
+            let master = record
+                .master
+                .as_ref()
+                .map_err(|message| Error::MalformedPart {
+                    part_name: record.part_name.clone(),
+                    message: message.clone(),
+                })?;
+            let original = self
+                .package
+                .get_part(&record.part_name)
+                .and_then(|xml| CT_SlideMaster::from_xml(xml).ok());
+            if original.as_ref() != Some(master) {
+                package.set_part(
+                    &record.part_name,
+                    master.to_xml().map_err(|error| Error::MalformedPart {
+                        part_name: record.part_name.clone(),
+                        message: error.to_string(),
+                    })?,
+                );
+            }
+        }
+        for record in &self.layouts {
+            let original = self
+                .package
+                .get_part(&record.part_name)
+                .and_then(|xml| CT_SlideLayout::from_xml(xml).ok());
+            if record.dirty && original.as_ref() != Some(&record.layout) {
+                package.set_part(
+                    &record.part_name,
+                    record
+                        .layout
+                        .to_xml()
+                        .map_err(|error| Error::MalformedPart {
+                            part_name: record.part_name.clone(),
+                            message: error.to_string(),
+                        })?,
+                );
+            }
+        }
+        for record in self.themes.iter().filter(|record| record.dirty) {
+            let original = self
+                .package
+                .get_part(&record.part_name)
+                .and_then(|xml| CT_OfficeStyleSheet::from_xml(xml).ok());
+            if original.as_ref() != Some(&record.theme) {
+                package.set_part(
+                    &record.part_name,
+                    record
+                        .theme
+                        .to_xml()
+                        .map_err(|error| Error::MalformedPart {
+                            part_name: record.part_name.clone(),
+                            message: error.to_string(),
+                        })?,
+                );
+            }
+        }
         for record in &self.slides {
             let slide_changed = self
                 .package
@@ -2701,6 +2788,27 @@ impl Presentation {
         {
             return notes.notes.to_xml().ok();
         }
+        if let Some(record) = self
+            .masters
+            .iter()
+            .find(|record| record.dirty && record.part_name.eq_ignore_ascii_case(part_name))
+        {
+            return record.master.as_ref().ok()?.to_xml().ok();
+        }
+        if let Some(record) = self
+            .layouts
+            .iter()
+            .find(|record| record.dirty && record.part_name.eq_ignore_ascii_case(part_name))
+        {
+            return record.layout.to_xml().ok();
+        }
+        if let Some(record) = self
+            .themes
+            .iter()
+            .find(|record| record.dirty && record.part_name.eq_ignore_ascii_case(part_name))
+        {
+            return record.theme.to_xml().ok();
+        }
         self.package.get_part(part_name).map(<[u8]>::to_vec)
     }
 
@@ -2732,18 +2840,22 @@ impl Presentation {
     /// own shapes down to the group, and is empty for the slide's own shapes.
     /// A missing slide or a path that does not end at a group returns `None`.
     pub fn shapes_mut(&mut self, slide_index: usize, group: &[usize]) -> Option<ShapesMut<'_>> {
-        let tree = &mut self
-            .slides
-            .get_mut(slide_index)?
-            .slide
-            .common_slide_data
-            .shape_tree;
+        self.shapes_mut_at(ShapeOwner::Slide(slide_index), group)
+            .ok()
+    }
+
+    /// Returns the actual shape collection of a slide, layout or master.
+    /// Missing owners and paths that do not end at a group return a checked error.
+    pub fn shapes_mut_at(&mut self, owner: ShapeOwner, group: &[usize]) -> Result<ShapesMut<'_>> {
+        let tree = &mut self.owner_data_mut(owner)?.shape_tree;
         if !group.is_empty() {
-            group_at_mut(&mut tree.children, group)?;
+            group_at_mut(&mut tree.children, group).ok_or_else(|| {
+                invalid_shape_mutation("shape collection", "path is not a physical group")
+            })?;
         }
-        Some(ShapesMut {
+        Ok(ShapesMut {
             presentation: self,
-            slide_index,
+            owner,
             group: group.to_vec(),
         })
     }
@@ -3172,6 +3284,1178 @@ impl Presentation {
         Ok(Some(old))
     }
 
+    /// Returns the current master model, retaining an unprojectable source as an error.
+    pub fn master(&self, index: usize) -> Option<&CT_SlideMaster> {
+        self.masters.get(index)?.master.as_ref().ok()
+    }
+
+    pub fn master_count(&self) -> usize {
+        self.masters.len()
+    }
+
+    /// Returns the actual optional producer master ID.
+    pub fn master_id(&self, index: usize) -> Option<u32> {
+        self.masters.get(index)?.id
+    }
+
+    pub fn layout(&self, index: usize) -> Option<&CT_SlideLayout> {
+        self.layouts.get(index).map(|record| &record.layout)
+    }
+
+    fn owner_part_name(&self, owner: ShapeOwner) -> Result<&str> {
+        if let ShapeOwner::Slide(index) = owner {
+            self.require_slide_index(index)?;
+        }
+        let part = match owner {
+            ShapeOwner::Slide(index) => self
+                .slides
+                .get(index)
+                .map(|record| record.part_name.as_str()),
+            ShapeOwner::Layout(index) => self
+                .layouts
+                .get(index)
+                .map(|record| record.part_name.as_str()),
+            ShapeOwner::Master(index) => self
+                .masters
+                .get(index)
+                .map(|record| record.part_name.as_str()),
+        };
+        part.ok_or_else(|| invalid_shape_mutation("part owner", format!("missing {owner:?}")))
+    }
+
+    fn owner_data(&self, owner: ShapeOwner) -> Result<&CT_CommonSlideData> {
+        self.owner_part_name(owner)?;
+        match owner {
+            ShapeOwner::Slide(index) => Ok(&self.slides[index].slide.common_slide_data),
+            ShapeOwner::Layout(index) => Ok(&self.layouts[index].layout.common_slide_data),
+            ShapeOwner::Master(index) => self.masters[index]
+                .master
+                .as_ref()
+                .map(|master| &master.common_slide_data)
+                .map_err(|message| Error::MalformedPart {
+                    part_name: self.masters[index].part_name.clone(),
+                    message: message.clone(),
+                }),
+        }
+    }
+
+    fn owner_data_mut(&mut self, owner: ShapeOwner) -> Result<&mut CT_CommonSlideData> {
+        self.owner_data(owner)?;
+        match owner {
+            ShapeOwner::Slide(index) => Ok(&mut self.slides[index].slide.common_slide_data),
+            ShapeOwner::Layout(index) => {
+                self.layouts[index].dirty = true;
+                Ok(&mut self.layouts[index].layout.common_slide_data)
+            }
+            ShapeOwner::Master(index) => {
+                let record = &mut self.masters[index];
+                record.dirty = true;
+                record
+                    .master
+                    .as_mut()
+                    .map(|master| &mut master.common_slide_data)
+                    .map_err(|message| Error::MalformedPart {
+                        part_name: record.part_name.clone(),
+                        message: message.clone(),
+                    })
+            }
+        }
+    }
+
+    /// Reads a direct master title/body/other paragraph level, numbered one through nine.
+    pub fn master_text_style(
+        &self,
+        master_index: usize,
+        style: &str,
+        level: usize,
+    ) -> Result<Option<&CT_TextParagraphProperties>> {
+        if !(1..=9).contains(&level) {
+            return Err(invalid_shape_mutation(
+                "master text style",
+                "level must be from 1 through 9",
+            ));
+        }
+        let master = self.master(master_index).ok_or_else(|| {
+            invalid_shape_mutation("master text style", "master owner is absent or malformed")
+        })?;
+        let styles = master.text_styles.as_ref();
+        let list = match style {
+            "title" => styles.map(|styles| &styles.title_style),
+            "body" => styles.map(|styles| &styles.body_style),
+            "other" => styles.map(|styles| &styles.other_style),
+            _ => {
+                return Err(invalid_shape_mutation(
+                    "master text style",
+                    "style must be title, body or other",
+                ));
+            }
+        };
+        Ok(list.and_then(|list| list.level(level)))
+    }
+
+    /// Changes only the selected qualified level source and validates before publication.
+    pub fn set_master_text_style(
+        &mut self,
+        master_index: usize,
+        style: &str,
+        level: usize,
+        properties: CT_TextParagraphProperties,
+    ) -> Result<()> {
+        let current = self
+            .master_text_style(master_index, style, level)?
+            .cloned()
+            .unwrap_or_default();
+        if current == properties {
+            return Ok(());
+        }
+        let mut candidate = self.clone();
+        candidate.package = self.staged_package(true)?;
+        let part = self
+            .master_part(master_index)?
+            .ok_or_else(|| invalid_shape_mutation("master text style", "master owner is absent"))?;
+        let source = required_part(&candidate.package, &part)?;
+        let (children, root_end) =
+            property_child_ranges(source, rpptx_oxml::namespace::P_NS, "sldMaster")?;
+        let styles = children
+            .iter()
+            .filter(|(uri, name, _, _)| {
+                uri.as_deref() == Some(rpptx_oxml::namespace::P_NS) && name == "txStyles"
+            })
+            .collect::<Vec<_>>();
+        if styles.len() > 1 {
+            return Err(footer_malformed(&part, "master has ambiguous text styles"));
+        }
+        let tag = format!("a:lvl{level}pPr");
+        let mut writer = quick_xml::Writer::new(Vec::new());
+        properties
+            .write_xml(&mut writer, &tag)
+            .map_err(|error| footer_malformed(&part, error.to_string()))?;
+        let mut replacement = writer.into_inner();
+        let first_end = replacement
+            .iter()
+            .position(|byte| *byte == b'>')
+            .ok_or_else(|| footer_malformed(&part, "level source has no start token"))?;
+        let insertion = if replacement[first_end - 1] == b'/' {
+            first_end - 1
+        } else {
+            first_end
+        };
+        let mut fragment_reader = quick_xml::Reader::from_reader(replacement.as_slice());
+        let start = match fragment_reader.read_event().map_err(OpcError::from)? {
+            XmlEvent::Start(start) | XmlEvent::Empty(start) => start,
+            _ => return Err(footer_malformed(&part, "level source is not an element")),
+        };
+        let mut has_a = false;
+        for attribute in start.attributes() {
+            let attribute = attribute
+                .map_err(quick_xml::Error::from)
+                .map_err(OpcError::from)?;
+            if attribute.key.as_ref() == b"xmlns:a" {
+                if attribute
+                    .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())
+                    .map_err(OpcError::from)?
+                    .as_ref()
+                    != A_NS
+                {
+                    return Err(footer_malformed(&part, "level canonical prefix is rebound"));
+                }
+                has_a = true;
+            }
+        }
+        if !has_a {
+            replacement.splice(insertion..insertion, format!(" xmlns:a=\"{A_NS}\"").bytes());
+        }
+        let style_tag = format!("{style}Style");
+        let (begin, end, changed) = if let Some((_, _, begin, end)) = styles.first() {
+            let mut styles_source = portable_owned_fragment(source, *begin, *end)?;
+            let (style_children, _) =
+                property_child_ranges(&styles_source, rpptx_oxml::namespace::P_NS, "txStyles")?;
+            let selected = style_children
+                .iter()
+                .filter(|(uri, name, _, _)| {
+                    uri.as_deref() == Some(rpptx_oxml::namespace::P_NS) && name == &style_tag
+                })
+                .collect::<Vec<_>>();
+            if selected.len() != 1 {
+                return Err(footer_malformed(
+                    &part,
+                    "selected master style is absent or ambiguous",
+                ));
+            }
+            let (_, _, style_begin, style_end) = selected[0];
+            let mut list_source =
+                portable_owned_fragment(&styles_source, *style_begin, *style_end)?;
+            let (levels, list_end) =
+                property_child_ranges(&list_source, rpptx_oxml::namespace::P_NS, &style_tag)?;
+            let level_tag = format!("lvl{level}pPr");
+            let selected_levels = levels
+                .iter()
+                .filter(|(uri, name, _, _)| uri.as_deref() == Some(A_NS) && name == &level_tag)
+                .collect::<Vec<_>>();
+            if selected_levels.len() > 1 {
+                return Err(footer_malformed(
+                    &part,
+                    "selected master level is ambiguous",
+                ));
+            }
+            let range = if let Some((_, _, begin, end)) = selected_levels.first() {
+                *begin..*end
+            } else {
+                let before = levels
+                    .iter()
+                    .find(|(uri, name, _, _)| {
+                        uri.as_deref() == Some(A_NS)
+                            && name
+                                .strip_prefix("lvl")
+                                .and_then(|name| name.strip_suffix("pPr"))
+                                .and_then(|number| number.parse::<usize>().ok())
+                                .is_some_and(|number| number > level)
+                    })
+                    .map(|(_, _, begin, _)| *begin)
+                    .unwrap_or(list_end);
+                before..before
+            };
+            list_source.splice(range, replacement);
+            styles_source.splice(*style_begin..*style_end, list_source);
+            (*begin, *end, styles_source)
+        } else {
+            let mut fragment = format!(
+                "<p:txStyles xmlns:p=\"{}\" xmlns:a=\"{A_NS}\">",
+                rpptx_oxml::namespace::P_NS
+            )
+            .into_bytes();
+            for slot in ["title", "body", "other"] {
+                fragment.extend_from_slice(format!("<p:{slot}Style>").as_bytes());
+                if slot == style {
+                    fragment.extend_from_slice(&replacement);
+                }
+                fragment.extend_from_slice(format!("</p:{slot}Style>").as_bytes());
+            }
+            fragment.extend_from_slice(b"</p:txStyles>");
+            let before = children
+                .iter()
+                .find(|(uri, name, _, _)| {
+                    uri.as_deref() == Some(rpptx_oxml::namespace::P_NS) && name == "extLst"
+                })
+                .map(|(_, _, begin, _)| *begin)
+                .unwrap_or(root_end);
+            (before, before, fragment)
+        };
+        let mut changed_source = source.to_vec();
+        changed_source.splice(begin..end, changed);
+        let master = CT_SlideMaster::from_xml(&changed_source)
+            .map_err(|error| footer_malformed(&part, error.to_string()))?;
+        candidate.package.set_part(&part, changed_source);
+        candidate.masters[master_index].master = Ok(master);
+        candidate.masters[master_index].dirty = false;
+        candidate.commit_owned_parts()?;
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Reads only the directly owned background fill without materializing inheritance.
+    pub fn background_fill_at(&self, owner: ShapeOwner) -> Result<Option<&Fill>> {
+        Ok(self
+            .owner_data(owner)?
+            .background
+            .as_ref()
+            .and_then(|background| match background.rendering() {
+                rpptx_oxml::slide_parts::BackgroundRendering::Properties(fill) => fill.as_deref(),
+                _ => None,
+            }))
+    }
+
+    /// Reads whether the part carries its own background choice.
+    pub fn has_explicit_background_at(&self, owner: ShapeOwner) -> Result<bool> {
+        Ok(self.owner_data(owner)?.background.is_some())
+    }
+
+    /// Detaches the effective background into its actual owner, or restores inheritance.
+    pub fn set_follow_master_background_at(
+        &mut self,
+        owner: ShapeOwner,
+        follow: bool,
+    ) -> Result<()> {
+        self.owner_data(owner)?;
+        if matches!(owner, ShapeOwner::Master(_)) {
+            return Err(invalid_shape_mutation(
+                "follow master background",
+                "masters have no parent background",
+            ));
+        }
+        let explicit = self.owner_data(owner)?.background.is_some();
+        if follow == !explicit {
+            return Ok(());
+        }
+        let mut candidate = self.clone();
+        candidate.package = self.staged_package(true)?;
+        if follow {
+            candidate.owner_data_mut(owner)?.background = None;
+        } else {
+            let mut ancestors = Vec::new();
+            let layout = match owner {
+                ShapeOwner::Slide(index) => self.slide_layout_index(index),
+                ShapeOwner::Layout(index) => Some(index),
+                ShapeOwner::Master(_) => unreachable!(),
+            };
+            if let Some(index) = layout {
+                if matches!(owner, ShapeOwner::Slide(_)) {
+                    ancestors.push(ShapeOwner::Layout(index));
+                }
+                ancestors.push(ShapeOwner::Master(self.layout_master_index(index)?));
+            }
+            let inherited = ancestors.into_iter().find_map(|source_owner| {
+                self.owner_data(source_owner)
+                    .ok()?
+                    .background
+                    .as_ref()
+                    .map(|background| (source_owner, background.clone()))
+            });
+            let background = if let Some((source_owner, background)) = inherited {
+                let source_part = self.owner_part_name(source_owner)?;
+                let source = required_part(&candidate.package, source_part)?;
+                let raw = background.raw_xml();
+                let positions = source
+                    .windows(raw.len())
+                    .enumerate()
+                    .filter_map(|(index, bytes)| (bytes == raw).then_some(index))
+                    .collect::<Vec<_>>();
+                if positions.len() != 1 {
+                    return Err(invalid_shape_mutation(
+                        "follow master background",
+                        "background source is absent or ambiguous",
+                    ));
+                }
+                let mut portable =
+                    portable_owned_fragment(source, positions[0], positions[0] + raw.len())?;
+                let destination_part = self.owner_part_name(owner)?.to_owned();
+                let mut relationships = candidate
+                    .package
+                    .get_part_rels(&destination_part)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut remapped = HashMap::new();
+                for id in relationship_ids(&portable).map_err(|error| {
+                    invalid_shape_mutation("follow master background", error.to_string())
+                })? {
+                    let relationship = candidate
+                        .package
+                        .get_part_rels(source_part)
+                        .and_then(|relationships| relationships.get_by_id(&id))
+                        .ok_or_else(|| {
+                            footer_malformed(
+                                source_part,
+                                format!("background relationship {id} is absent"),
+                            )
+                        })?;
+                    if relationship.rel_type != rel_types::IMAGE
+                        || relationship_is_external(relationship)
+                    {
+                        return Err(footer_malformed(
+                            source_part,
+                            format!("unsupported background relationship {id}"),
+                        ));
+                    }
+                    let target = OpcPackage::resolve_rel_target(source_part, &relationship.target);
+                    required_part(&candidate.package, &target)?;
+                    let existing = relationships
+                        .items
+                        .iter()
+                        .find(|item| {
+                            item.rel_type == rel_types::IMAGE
+                                && !relationship_is_external(item)
+                                && OpcPackage::resolve_rel_target(&destination_part, &item.target)
+                                    == target
+                        })
+                        .map(|item| item.id.clone());
+                    let fresh = existing.unwrap_or_else(|| {
+                        relationships.add(
+                            rel_types::IMAGE,
+                            &relative_part_target(&destination_part, &target),
+                        )
+                    });
+                    remapped.insert(id, fresh);
+                }
+                portable = rewrite_exact_rel_ids(&portable, &remapped).map_err(|error| {
+                    invalid_shape_mutation("follow master background", error.to_string())
+                })?;
+                candidate
+                    .package
+                    .set_part_rels(&destination_part, relationships);
+                rpptx_oxml::slide_parts::CT_Background::from_xml(&portable).map_err(|error| {
+                    invalid_shape_mutation("follow master background", error.to_string())
+                })?
+            } else {
+                rpptx_oxml::slide_parts::CT_Background::from_fill(Fill::NoFill(NoFill::default()))
+                    .map_err(|error| {
+                    invalid_shape_mutation("follow master background", error.to_string())
+                })?
+            };
+            candidate.owner_data_mut(owner)?.background = Some(background);
+        }
+        let previous = self.owner_relationship_ids(owner)?;
+        candidate.release_unused_owner_images(owner, &previous)?;
+        candidate.commit_owned_parts()?;
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Changes an optional slide or layout visibility policy without changing master shapes.
+    pub fn set_show_master_shapes_at(
+        &mut self,
+        owner: ShapeOwner,
+        show: Option<bool>,
+    ) -> Result<()> {
+        self.owner_data(owner)?;
+        let current = match owner {
+            ShapeOwner::Slide(index) => self.slides[index].slide.show_master_shapes,
+            ShapeOwner::Layout(index) => self.layouts[index].layout.show_master_shapes,
+            ShapeOwner::Master(_) => {
+                return Err(invalid_shape_mutation(
+                    "show master shapes",
+                    "masters have no showMasterSp policy",
+                ));
+            }
+        };
+        if current == show {
+            return Ok(());
+        }
+        let mut candidate = self.clone();
+        match owner {
+            ShapeOwner::Slide(index) => candidate.slides[index].slide.show_master_shapes = show,
+            ShapeOwner::Layout(index) => {
+                candidate.layouts[index].layout.show_master_shapes = show;
+                candidate.layouts[index].dirty = true;
+            }
+            ShapeOwner::Master(_) => unreachable!(),
+        }
+        candidate.commit_owned_parts()?;
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Reads optional local visibility, preserving absence versus an explicit flag.
+    pub fn show_master_shapes_at(&self, owner: ShapeOwner) -> Result<Option<bool>> {
+        self.owner_data(owner)?;
+        match owner {
+            ShapeOwner::Slide(index) => Ok(self.slides[index].slide.show_master_shapes),
+            ShapeOwner::Layout(index) => Ok(self.layouts[index].layout.show_master_shapes),
+            ShapeOwner::Master(_) => Err(invalid_shape_mutation(
+                "show master shapes",
+                "masters have no showMasterSp policy",
+            )),
+        }
+    }
+
+    /// Reads one physical child path in a slide, layout or master.
+    pub fn part_shape_at(&self, owner: ShapeOwner, path: &[usize]) -> Result<ShapeRef<'_>> {
+        child_at(&self.owner_data(owner)?.shape_tree.children, path)
+            .map(shape_ref)
+            .ok_or_else(|| invalid_shape_mutation("shape owner", "missing physical path"))
+    }
+
+    /// Edits the actual part-owned child, including group descendants.
+    pub fn shape_mut_at(&mut self, owner: ShapeOwner, path: &[usize]) -> Result<ShapeMut<'_>> {
+        child_at(&self.owner_data(owner)?.shape_tree.children, path)
+            .ok_or_else(|| invalid_shape_mutation("shape owner", "missing physical path"))?;
+        Ok(owned_shape_mut(self, owner, path.to_vec()))
+    }
+
+    fn part_inherited_target_transform(
+        &self,
+        owner: ShapeOwner,
+        target: &ShapeTreeChild,
+        operation: &'static str,
+    ) -> Result<CT_Transform2D> {
+        #[cfg(feature = "render")]
+        if let ShapeOwner::Layout(index) = owner
+            && let Some(placeholder) = shape_placeholder(target)
+        {
+            let (layout, master) = self.layout_and_master(index)?;
+            if let Some(transform) = inherited_xfrm(placeholder, layout, &master)
+                .filter(|transform| transform.offset.is_some() && transform.extent.is_some())
+            {
+                return Ok(transform.clone());
+            }
+        }
+        let _ = (owner, target);
+        Err(invalid_shape_mutation(
+            operation,
+            "the part shape has no position and size",
+        ))
+    }
+
+    /// Materializes a placeholder through the actual part inheritance chain.
+    #[cfg(feature = "render")]
+    pub fn materialize_owner_geometry(&mut self, owner: ShapeOwner, path: &[usize]) -> Result<()> {
+        if let ShapeOwner::Slide(index) = owner {
+            return self.materialize_geometry(index, path);
+        }
+        let target = self.part_shape_at(owner, path)?.child;
+        let own = shape_transform(target);
+        if own.is_some_and(|transform| transform.offset.is_some() && transform.extent.is_some()) {
+            return Ok(());
+        }
+        if shape_placeholder(target).is_none() {
+            return Ok(());
+        }
+        let inherited =
+            self.part_inherited_target_transform(owner, target, "materialize geometry")?;
+        let mut transform = own.cloned().unwrap_or_else(|| inherited.clone());
+        transform.offset = transform.offset.or(inherited.offset);
+        transform.extent = transform.extent.or(inherited.extent);
+        let child = child_at_mut(&mut self.owner_data_mut(owner)?.shape_tree.children, path)
+            .expect("the physical path was checked");
+        *shape_mut(child).transform_mut("materialize geometry")? = transform;
+        Ok(())
+    }
+
+    fn validate_owned_part(&self, owner: ShapeOwner) -> Result<()> {
+        let result = match owner {
+            ShapeOwner::Slide(index) => self.slides[index].slide.to_xml(),
+            ShapeOwner::Layout(index) => self.layouts[index].layout.to_xml(),
+            ShapeOwner::Master(index) => self.masters[index]
+                .master
+                .as_ref()
+                .map_err(|message| Error::MalformedPart {
+                    part_name: self.masters[index].part_name.clone(),
+                    message: message.clone(),
+                })?
+                .to_xml(),
+        };
+        result.map(|_| ()).map_err(|error| Error::MalformedPart {
+            part_name: self.owner_part_name(owner).unwrap_or_default().to_owned(),
+            message: error.to_string(),
+        })
+    }
+
+    /// Changes only the layout's optional cSld name.
+    pub fn set_layout_name(&mut self, index: usize, name: Option<&str>) -> Result<()> {
+        self.owner_data(ShapeOwner::Layout(index))?;
+        if self.layouts[index].layout.common_slide_data.name.as_deref() == name {
+            return Ok(());
+        }
+        let mut candidate = self.clone();
+        candidate.layouts[index].layout.common_slide_data.name = name.map(str::to_owned);
+        candidate.layouts[index].dirty = true;
+        candidate.commit_owned_parts()?;
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Reopen validates the changed source before any live record is replaced.
+    fn commit_owned_parts(&mut self) -> Result<()> {
+        let package = self.staged_package(true)?;
+        let mut output = Cursor::new(Vec::new());
+        package.write_to(&mut output)?;
+        let mut reopened = Self::from_bytes(output.get_ref())?;
+        reopened.embedded_invalidated_signatures = self.embedded_invalidated_signatures.clone();
+        reopened.package_signatures_invalidated = self.package_signatures_invalidated
+            || self.retained_package_signature_would_be_invalidated()?;
+        *self = reopened;
+        Ok(())
+    }
+
+    fn theme_part_for_edit(&self, master_index: usize) -> Result<String> {
+        let master_part = self
+            .master_part(master_index)?
+            .ok_or_else(|| invalid_shape_mutation("edit theme", "master index is out of range"))?;
+        related_internal_part(&self.package, &master_part, rel_types::THEME)?
+            .ok_or_else(|| footer_malformed(&master_part, "master has no theme relationship"))
+    }
+
+    /// Applies the selected source schemes, preserving destination root and extension source.
+    pub fn apply_theme(
+        &mut self,
+        source: &OpcPackage,
+        source_master: Option<usize>,
+        import_masters: bool,
+        layout_map: &[(usize, usize)],
+    ) -> Result<()> {
+        let source_deck = source
+            .main_document_part()
+            .map(|_| Self::from_package(source.clone()))
+            .transpose()?;
+        let source_theme = if let Some(source_deck) = &source_deck {
+            let index = match source_master {
+                Some(index) if index < source_deck.master_count() => index,
+                None if source_deck.master_count() == 1 => 0,
+                _ => {
+                    return Err(invalid_shape_mutation(
+                        "apply theme",
+                        "select exactly one source master",
+                    ));
+                }
+            };
+            source_deck.theme_part_for_edit(index)?
+        } else {
+            if source_master.is_some() || import_masters || !layout_map.is_empty() {
+                return Err(invalid_shape_mutation(
+                    "apply theme",
+                    "a theme package has no master or layout inventory",
+                ));
+            }
+            let relationships = source
+                .package_rels
+                .items
+                .iter()
+                .filter(|relationship| relationship.rel_type == rel_types::THEME)
+                .collect::<Vec<_>>();
+            if relationships.len() != 1 || relationship_is_external(relationships[0]) {
+                return Err(invalid_shape_mutation(
+                    "apply theme",
+                    "one internal package theme relationship is required",
+                ));
+            }
+            OpcPackage::resolve_rel_target("/", &relationships[0].target)
+        };
+        if source.content_types.content_type_for(&source_theme) != Some(content_types::THEME) {
+            return Err(footer_malformed(
+                &source_theme,
+                "source theme content type is not supported",
+            ));
+        }
+        let xml = required_part(source, &source_theme)?;
+        oxml_drawing::theme::CT_OfficeStyleSheet::from_xml(xml)
+            .map_err(|error| footer_malformed(&source_theme, error.to_string()))?;
+        let schemes = ["clrScheme", "fontScheme", "fmtScheme"]
+            .into_iter()
+            .map(|name| portable_theme_scheme(xml, name))
+            .collect::<Result<Vec<_>>>()?;
+        if !import_masters && !layout_map.is_empty() {
+            return Err(invalid_shape_mutation(
+                "apply theme",
+                "layout mapping requires imported masters",
+            ));
+        }
+        let staged = self.staged_package(true)?;
+        let mut candidate = self.clone();
+        candidate.package = staged.clone();
+        let mut themes = HashSet::new();
+        for index in 0..self.master_count() {
+            themes.insert(self.theme_part_for_edit(index)?);
+        }
+        for part in themes {
+            let destination = required_part(&staged, &part)?;
+            let mut patched = destination.to_vec();
+            let mut edits = Vec::new();
+            for (name, scheme) in ["clrScheme", "fontScheme", "fmtScheme"]
+                .into_iter()
+                .zip(&schemes)
+            {
+                let owner = theme_source_owner(destination, &["theme", "themeElements", name])?
+                    .ok_or_else(|| {
+                        footer_malformed(&part, format!("qualified {name} is absent"))
+                    })?;
+                edits.push((owner.start, owner.end, scheme));
+            }
+            edits.sort_by_key(|(start, _, _)| std::cmp::Reverse(*start));
+            let source_relationships = source
+                .get_part_rels(&source_theme)
+                .cloned()
+                .unwrap_or_default();
+            let mut destination_relationships = candidate
+                .package
+                .get_part_rels(&part)
+                .cloned()
+                .unwrap_or_default();
+            let mut relationships = HashMap::new();
+            for (_, _, scheme) in &edits {
+                for id in relationship_ids(scheme)
+                    .map_err(|error| footer_malformed(&source_theme, error.to_string()))?
+                {
+                    if relationships.contains_key(&id) {
+                        continue;
+                    }
+                    let relationship = source_relationships.get_by_id(&id).ok_or_else(|| {
+                        footer_malformed(
+                            &source_theme,
+                            format!("missing selected scheme relationship {id}"),
+                        )
+                    })?;
+                    if relationship_is_external(relationship)
+                        || relationship.rel_type != rel_types::IMAGE
+                    {
+                        return Err(footer_malformed(
+                            &source_theme,
+                            format!(
+                                "unsupported selected scheme relationship {id}: {}",
+                                relationship.rel_type
+                            ),
+                        ));
+                    }
+                    let image_part =
+                        OpcPackage::resolve_rel_target(&source_theme, &relationship.target);
+                    preflight_internal_transfer_image(source, &image_part, "apply theme")?;
+                    let filename = image_part.rsplit('/').next().unwrap_or("image");
+                    let image = required_part(source, &image_part)?;
+                    let copied =
+                        candidate
+                            .media_store
+                            .insert(&mut candidate.package, image, filename);
+                    if candidate.package.content_types.content_type_for(&copied)
+                        != source.content_types.content_type_for(&image_part)
+                    {
+                        return Err(footer_malformed(
+                            &image_part,
+                            "image content type does not match its copied program",
+                        ));
+                    }
+                    let new_id = destination_relationships
+                        .add(rel_types::IMAGE, &relative_part_target(&part, &copied));
+                    relationships.insert(id, new_id);
+                }
+            }
+            for (start, end, scheme) in edits {
+                let rewritten = rewrite_exact_rel_ids(scheme, &relationships)
+                    .map_err(|error| footer_malformed(&source_theme, error.to_string()))?;
+                patched.splice(start..end, rewritten);
+            }
+            oxml_drawing::theme::CT_OfficeStyleSheet::from_xml(&patched)
+                .map_err(|error| footer_malformed(&part, error.to_string()))?;
+            candidate.package.set_part(&part, patched);
+            candidate
+                .package
+                .set_part_rels(&part, destination_relationships);
+        }
+        if import_masters {
+            let source_deck = source_deck.as_ref().ok_or_else(|| {
+                invalid_shape_mutation("apply theme", "source has no master inventory")
+            })?;
+            let selected = source_master.unwrap_or(0);
+            let original_layouts = self.layout_count();
+            let imported = candidate.import_selected_master(source_deck, selected)?;
+            let mut destinations = HashSet::new();
+            for &(destination, source_index) in layout_map {
+                if destination >= original_layouts
+                    || source_index >= imported.len()
+                    || !destinations.insert(destination)
+                {
+                    return Err(invalid_shape_mutation(
+                        "apply theme",
+                        "layout map has a duplicate or out-of-range owner",
+                    ));
+                }
+            }
+            for &(destination, source_index) in layout_map {
+                let original_part = self.layouts[destination].part_name.clone();
+                let imported_part = candidate.layouts[imported[source_index]].part_name.clone();
+                for slide in &candidate.slides {
+                    let relationships = candidate
+                        .package
+                        .get_part_rels(&slide.part_name)
+                        .ok_or_else(|| {
+                            footer_malformed(&slide.part_name, "slide relationships are absent")
+                        })?;
+                    let layouts = relationships
+                        .items
+                        .iter()
+                        .filter(|relationship| relationship.rel_type == rel_types::SLIDE_LAYOUT)
+                        .collect::<Vec<_>>();
+                    if layouts.len() != 1 || relationship_is_external(layouts[0]) {
+                        return Err(footer_malformed(
+                            &slide.part_name,
+                            "one internal layout relationship is required",
+                        ));
+                    }
+                    if OpcPackage::resolve_rel_target(&slide.part_name, &layouts[0].target)
+                        == original_part
+                    {
+                        let changes = HashMap::from([(
+                            layouts[0].id.clone(),
+                            relative_part_target(&slide.part_name, &imported_part),
+                        )]);
+                        let changed =
+                            retarget_import_relationships(&relationships.to_xml()?, &changes)?;
+                        candidate
+                            .package
+                            .part_rels
+                            .insert(slide.part_name.clone(), changed);
+                    }
+                }
+            }
+        }
+        candidate.commit_owned_parts()?;
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Copies only the selected branding graph into fresh part scopes.
+    fn import_selected_master(&mut self, source: &Self, selected: usize) -> Result<Vec<usize>> {
+        let master_part = source
+            .master_part(selected)?
+            .ok_or_else(|| invalid_shape_mutation("import master", "source master is absent"))?;
+        let theme_part = source.theme_part_for_edit(selected)?;
+        let layouts = source.master_layout_indices(selected)?;
+        let source_package = source.staged_package(true)?;
+        let mut parts = vec![master_part.clone(), theme_part.clone()];
+        parts.extend(
+            layouts
+                .iter()
+                .map(|index| source.layouts[*index].part_name.clone()),
+        );
+        let allowed: HashSet<_> = parts.iter().cloned().collect();
+        let mut images = HashSet::new();
+        for part in &parts {
+            let xml = required_part(&source_package, part)?;
+            let (namespace, root, content_type) = if part == &master_part {
+                (
+                    rpptx_oxml::namespace::P_NS,
+                    "sldMaster",
+                    content_types::SLIDE_MASTER,
+                )
+            } else if part == &theme_part {
+                (A_NS, "theme", content_types::THEME)
+            } else {
+                (
+                    rpptx_oxml::namespace::P_NS,
+                    "sldLayout",
+                    content_types::SLIDE_LAYOUT,
+                )
+            };
+            property_child_ranges(xml, namespace, root)?;
+            if source_package.content_types.content_type_for(part) != Some(content_type) {
+                return Err(footer_malformed(
+                    part,
+                    "selected source part has an invalid content type",
+                ));
+            }
+            for id in
+                relationship_ids(xml).map_err(|error| footer_malformed(part, error.to_string()))?
+            {
+                if source_package
+                    .get_part_rels(part)
+                    .and_then(|relationships| relationships.get_by_id(&id))
+                    .is_none()
+                {
+                    return Err(footer_malformed(
+                        part,
+                        format!("selected qualified relationship reference {id} is absent"),
+                    ));
+                }
+            }
+            for relationship in source_package
+                .get_part_rels(part)
+                .into_iter()
+                .flat_map(|relationships| &relationships.items)
+            {
+                if relationship_is_external(relationship) {
+                    if relationship.rel_type == rel_types::HYPERLINK {
+                        continue;
+                    }
+                    return Err(footer_malformed(
+                        part,
+                        format!(
+                            "unsupported selected external relationship {}",
+                            relationship.id
+                        ),
+                    ));
+                }
+                let target = OpcPackage::resolve_rel_target(part, &relationship.target);
+                match relationship.rel_type.as_str() {
+                    rel_types::SLIDE_MASTER if part != &master_part && target == master_part => {}
+                    rel_types::SLIDE_LAYOUT
+                        if part == &master_part
+                            && allowed.contains(&target)
+                            && target != theme_part
+                            && target != master_part => {}
+                    rel_types::THEME if part == &master_part && target == theme_part => {}
+                    rel_types::IMAGE => {
+                        preflight_internal_transfer_image(
+                            &source_package,
+                            &target,
+                            "import master",
+                        )?;
+                        images.insert(target);
+                    }
+                    _ => {
+                        return Err(footer_malformed(
+                            part,
+                            format!(
+                                "unsupported selected relationship {}: {}",
+                                relationship.id, relationship.rel_type
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+        let mut mapping = HashMap::new();
+        for part in &parts {
+            let fresh = fresh_related_part_name(&self.package, part);
+            self.package.set_part(&fresh, Vec::new());
+            mapping.insert(part.clone(), fresh);
+        }
+        for image in images {
+            let filename = image.rsplit('/').next().unwrap_or("image");
+            let copied = self.media_store.insert(
+                &mut self.package,
+                required_part(&source_package, &image)?,
+                filename,
+            );
+            if self.package.content_types.content_type_for(&copied)
+                != source_package.content_types.content_type_for(&image)
+            {
+                return Err(footer_malformed(
+                    &image,
+                    "image content type does not match its copied program",
+                ));
+            }
+            mapping.insert(image, copied);
+        }
+        for part in &parts {
+            let destination = &mapping[part];
+            let content_type = source_package
+                .content_types
+                .content_type_for(part)
+                .ok_or_else(|| footer_malformed(part, "selected source content type is absent"))?;
+            let mut xml = required_part(&source_package, part)?.to_vec();
+            if part == &master_part {
+                let mut next = self
+                    .masters
+                    .iter()
+                    .filter_map(|record| record.master.as_ref().ok())
+                    .map(|master| master.slide_layout_ids())
+                    .collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(|error| footer_malformed(part, error.to_string()))?
+                    .into_iter()
+                    .flatten()
+                    .map(|(id, _)| id)
+                    .max()
+                    .unwrap_or(2_147_483_647);
+                let mut ids = HashMap::new();
+                for (_, relationship) in source
+                    .master(selected)
+                    .ok_or_else(|| footer_malformed(part, "master model is absent"))?
+                    .slide_layout_ids()
+                    .map_err(|error| footer_malformed(part, error.to_string()))?
+                {
+                    next = next.checked_add(1).ok_or_else(|| {
+                        invalid_shape_mutation("import master", "layout ID space exhausted")
+                    })?;
+                    ids.insert(relationship, next);
+                }
+                xml = reassign_imported_layout_ids(&xml, &ids)?;
+            }
+            self.package.set_part(destination, xml);
+            self.package
+                .content_types
+                .add_override(destination, content_type);
+            if let Some(relationships) = source_package.get_part_rels(part) {
+                let changes = relationships
+                    .items
+                    .iter()
+                    .filter(|relationship| !relationship_is_external(relationship))
+                    .map(|relationship| {
+                        let target = OpcPackage::resolve_rel_target(part, &relationship.target);
+                        mapping
+                            .get(&target)
+                            .map(|fresh| {
+                                (
+                                    relationship.id.clone(),
+                                    relative_part_target(destination, fresh),
+                                )
+                            })
+                            .ok_or_else(|| footer_malformed(part, "selected closure is incomplete"))
+                    })
+                    .collect::<Result<HashMap<_, _>>>()?;
+                self.package.set_part_rels(
+                    destination,
+                    retarget_import_relationships(&relationships.to_xml()?, &changes)?,
+                );
+            }
+        }
+        let new_master = mapping[&master_part].clone();
+        let id = self
+            .presentation
+            .slide_master_ids
+            .iter()
+            .filter_map(|item| item.id)
+            .max()
+            .unwrap_or(2_147_483_647)
+            .max(2_147_483_647)
+            .checked_add(1)
+            .ok_or_else(|| invalid_shape_mutation("import master", "master ID space exhausted"))?;
+        let relationships = self
+            .package
+            .get_part_rels(&self.presentation_part)
+            .ok_or_else(|| {
+                footer_malformed(
+                    &self.presentation_part,
+                    "presentation relationships are absent",
+                )
+            })?;
+        let source_relationships = relationships.to_xml()?;
+        let mut allocated = relationships.clone();
+        let relationship_id = allocated.add(
+            rel_types::SLIDE_MASTER,
+            &relative_part_target(&self.presentation_part, &new_master),
+        );
+        let added = allocated
+            .get_by_id(&relationship_id)
+            .expect("allocated master relationship");
+        let relationships = edit_master_layout_relationship(&source_relationships, added, false)?;
+        self.package
+            .set_part_rels(&self.presentation_part, relationships);
+        let presentation_source = required_part(&self.package, &self.presentation_part)?;
+        let changed = append_imported_master_id(presentation_source, id, &relationship_id)?;
+        self.presentation = CT_Presentation::from_xml(&changed)
+            .map_err(|error| footer_malformed(&self.presentation_part, error.to_string()))?;
+        self.package.set_part(&self.presentation_part, changed);
+        let master = CT_SlideMaster::from_xml(required_part(&self.package, &new_master)?)
+            .map_err(|error| footer_malformed(&new_master, error.to_string()))?;
+        self.masters.push(MasterRecord {
+            id: Some(id),
+            part_name: new_master,
+            master: Ok(master),
+            dirty: false,
+        });
+        let mut imported = Vec::new();
+        for index in layouts {
+            let part_name = mapping[&source.layouts[index].part_name].clone();
+            imported.push(self.layouts.len());
+            self.layouts.push(LayoutRecord {
+                part_name,
+                layout: source.layouts[index].layout.clone(),
+                dirty: false,
+            });
+        }
+        Ok(imported)
+    }
+
+    /// Replaces one qualified scheme color without rewriting unrelated source XML.
+    pub fn set_theme_color(
+        &mut self,
+        master_index: usize,
+        slot: &str,
+        rgb: RgbColor,
+    ) -> Result<()> {
+        const SLOTS: &[&str] = &[
+            "dk1", "lt1", "dk2", "lt2", "accent1", "accent2", "accent3", "accent4", "accent5",
+            "accent6", "hlink", "folHlink",
+        ];
+        if !SLOTS.contains(&slot) {
+            return Err(invalid_shape_mutation(
+                "edit theme color",
+                "unknown theme color slot",
+            ));
+        }
+        let part = self.theme_part_for_edit(master_index)?;
+        let source = required_part(&self.package, &part)?;
+        let mut selected = None;
+        for choice in [
+            "srgbClr",
+            "scrgbClr",
+            "hslClr",
+            "sysClr",
+            "schemeClr",
+            "prstClr",
+        ] {
+            let path = ["theme", "themeElements", "clrScheme", slot, choice];
+            if let Some(owner) = theme_source_owner(source, &path)?
+                && selected.replace((choice, owner)).is_some()
+            {
+                return Err(invalid_shape_mutation(
+                    "edit theme color",
+                    "ambiguous theme color choice",
+                ));
+            }
+        }
+        let (choice, owner) = selected.ok_or_else(|| {
+            invalid_shape_mutation("edit theme color", "qualified color owner is absent")
+        })?;
+        let [r, g, b] = rgb.components();
+        let value = format!("{r:02X}{g:02X}{b:02X}");
+        let bytes = if choice == "srgbClr" {
+            let patched = patch_theme_attribute(source, &owner, "val", &value)?;
+            clear_theme_color_transforms(&patched, slot)?
+        } else {
+            // Changing the concrete color choice owns its schema value, but cannot discard opaque payload.
+            if !owner.empty
+                || owner.attributes.iter().any(|(name, _, _)| {
+                    !matches!(
+                        (choice, name.as_str()),
+                        ("sysClr", "val" | "lastClr")
+                            | ("schemeClr" | "prstClr", "val")
+                            | ("scrgbClr", "r" | "g" | "b")
+                            | ("hslClr", "hue" | "sat" | "lum")
+                    ) && name != "xmlns"
+                        && !name.starts_with("xmlns:")
+                })
+            {
+                return Err(invalid_shape_mutation(
+                    "edit theme color",
+                    "changing the color type would discard opaque source",
+                ));
+            }
+            let replacement = format!("<a:srgbClr xmlns:a=\"{A_NS}\" val=\"{value}\"/>");
+            let mut bytes = source[..owner.start].to_vec();
+            bytes.extend_from_slice(replacement.as_bytes());
+            bytes.extend_from_slice(&source[owner.end..]);
+            bytes
+        };
+        if bytes == source {
+            return Ok(());
+        }
+        CT_OfficeStyleSheet::from_xml(&bytes).map_err(|error| footer_malformed(&part, error))?;
+        let mut candidate = self.clone();
+        candidate.package.set_part(&part, bytes);
+        candidate.commit_owned_parts()?;
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Changes one qualified typeface while retaining all other lexical source facts.
+    pub fn set_theme_font(
+        &mut self,
+        master_index: usize,
+        major: bool,
+        script: &str,
+        typeface: &str,
+    ) -> Result<()> {
+        oxml_core::xml::reject_non_xml_characters("theme typeface", typeface)
+            .map_err(|error| invalid_shape_mutation("edit theme font", error.to_string()))?;
+        if typeface.chars().any(|ch| ch.is_control()) {
+            return Err(invalid_shape_mutation(
+                "edit theme font",
+                "typeface contains a control character",
+            ));
+        }
+        let script = match script {
+            "latin" => "latin",
+            "east_asian" => "ea",
+            "complex_script" => "cs",
+            _ => {
+                return Err(invalid_shape_mutation(
+                    "edit theme font",
+                    "unknown font script slot",
+                ));
+            }
+        };
+        let part = self.theme_part_for_edit(master_index)?;
+        let source = required_part(&self.package, &part)?;
+        let path = [
+            "theme",
+            "themeElements",
+            "fontScheme",
+            if major { "majorFont" } else { "minorFont" },
+            script,
+        ];
+        let owner = theme_source_owner(source, &path)?.ok_or_else(|| {
+            invalid_shape_mutation("edit theme font", "qualified typeface owner is absent")
+        })?;
+        let bytes = patch_theme_attribute(source, &owner, "typeface", typeface)?;
+        if bytes == source {
+            return Ok(());
+        }
+        CT_OfficeStyleSheet::from_xml(&bytes).map_err(|error| footer_malformed(&part, error))?;
+        let mut candidate = self.clone();
+        candidate.package.set_part(&part, bytes);
+        candidate.commit_owned_parts()?;
+        *self = candidate;
+        Ok(())
+    }
+
     /// Reads the current theme reached by one presentation master.
     pub fn theme(&self, master_index: usize) -> Result<Option<Theme>> {
         let Some(master_part) = self.master_part(master_index)? else {
@@ -3243,18 +4527,323 @@ impl Presentation {
         )))
     }
 
-    /// Returns the zero-based layout indices one master owns, in the order
-    /// [`Self::layout_name`] numbers them, or `None` for an unknown master.
+    /// Resolves a master's qualified layout list in its producer order.
+    pub fn master_layout_indices(&self, master_index: usize) -> Result<Vec<usize>> {
+        let record = self.masters.get(master_index).ok_or_else(|| {
+            invalid_shape_mutation("master layouts", "master index is out of range")
+        })?;
+        let master = record
+            .master
+            .as_ref()
+            .map_err(|error| footer_malformed(&record.part_name, error))?;
+        let relationships = self
+            .package
+            .get_part_rels(&record.part_name)
+            .ok_or_else(|| {
+                footer_malformed(&record.part_name, "master relationships are absent")
+            })?;
+        master
+            .slide_layout_ids()
+            .map_err(|error| footer_malformed(&record.part_name, error))?
+            .into_iter()
+            .map(|(_, id)| {
+                let relationship = relationships.get_by_id(&id).ok_or_else(|| {
+                    footer_malformed(&record.part_name, "master layout relationship is absent")
+                })?;
+                if relationship.rel_type != rel_types::SLIDE_LAYOUT
+                    || relationship_is_external(relationship)
+                {
+                    return Err(footer_malformed(
+                        &record.part_name,
+                        "master layout relationship has unsafe type or mode",
+                    ));
+                }
+                let part = OpcPackage::resolve_rel_target(&record.part_name, &relationship.target);
+                let index = self
+                    .layouts
+                    .iter()
+                    .position(|layout| layout.part_name == part)
+                    .ok_or_else(|| {
+                        footer_malformed(
+                            &part,
+                            "master layout is absent from the presentation inventory",
+                        )
+                    })?;
+                if self.layout_master_part(index)?.0 != record.part_name {
+                    return Err(footer_malformed(
+                        &part,
+                        "layout points to a different master",
+                    ));
+                }
+                Ok(index)
+            })
+            .collect()
+    }
+
+    /// Returns layout indices in the selected master's source ID-list order.
     pub fn master_layouts(&self, master_index: usize) -> Option<Vec<usize>> {
-        let master_part = self.master_part(master_index).ok()??;
-        Some(
-            (0..self.layouts.len())
-                .filter(|&layout_index| {
-                    self.layout_master_part(layout_index)
-                        .is_ok_and(|(part, _)| part.eq_ignore_ascii_case(&master_part))
-                })
-                .collect(),
-        )
+        self.master_layout_indices(master_index).ok()
+    }
+
+    /// Duplicates one layout in its existing master, preserving its part-scoped IDs and safe closure.
+    pub fn duplicate_layout(&mut self, index: usize) -> Result<usize> {
+        let record = self.layouts.get(index).ok_or_else(|| {
+            invalid_shape_mutation("duplicate layout", "layout index is out of range")
+        })?;
+        let master_index = self.layout_master_index(index)?;
+        if !self.master_layout_indices(master_index)?.contains(&index) {
+            return Err(invalid_shape_mutation(
+                "duplicate layout",
+                "layout is absent from its master's qualified ID list",
+            ));
+        }
+        let source_package = self.staged_package(true)?;
+        let mut relationships = source_package
+            .get_part_rels(&record.part_name)
+            .cloned()
+            .unwrap_or_default();
+        for relationship in &relationships.items {
+            if relationship_is_external(relationship) {
+                if relationship.rel_type != rel_types::HYPERLINK {
+                    return Err(invalid_shape_mutation(
+                        "duplicate layout",
+                        "unsupported external relationship in selected layout",
+                    ));
+                }
+            } else {
+                let target =
+                    OpcPackage::resolve_rel_target(&record.part_name, &relationship.target);
+                match relationship.rel_type.as_str() {
+                    rel_types::SLIDE_MASTER => {
+                        required_part(&source_package, &target)?;
+                    }
+                    rel_types::IMAGE => preflight_internal_transfer_image(
+                        &source_package,
+                        &target,
+                        "duplicate layout",
+                    )?,
+                    _ => {
+                        return Err(invalid_shape_mutation(
+                            "duplicate layout",
+                            "unsupported selected layout dependency",
+                        ));
+                    }
+                }
+            }
+        }
+        let mut largest = 2_147_483_647u32;
+        for master in &self.masters {
+            for (id, _) in master
+                .master
+                .as_ref()
+                .map_err(|error| footer_malformed(&master.part_name, error))?
+                .slide_layout_ids()
+                .map_err(|error| footer_malformed(&master.part_name, error))?
+            {
+                largest = largest.max(id);
+            }
+        }
+        let id = largest.checked_add(1).ok_or_else(|| {
+            invalid_shape_mutation("duplicate layout", "master layout IDs are exhausted")
+        })?;
+        let mut candidate = self.clone();
+        let part = fresh_related_part_name(&candidate.package, &record.part_name);
+        for relationship in &mut relationships.items {
+            if !relationship_is_external(relationship) {
+                relationship.target = relative_part_target(
+                    &part,
+                    &OpcPackage::resolve_rel_target(&record.part_name, &relationship.target),
+                );
+            }
+        }
+        candidate.package.set_part(
+            &part,
+            required_part(&source_package, &record.part_name)?.to_vec(),
+        );
+        candidate.package.set_part_rels(&part, relationships);
+        let content_type = source_package
+            .content_types
+            .content_type_for(&record.part_name)
+            .ok_or_else(|| footer_malformed(&record.part_name, "layout content type is absent"))?;
+        candidate
+            .package
+            .content_types
+            .add_override(&part, content_type);
+        let master_part = candidate.masters[master_index].part_name.clone();
+        let relationship_source = candidate
+            .package
+            .get_part_rels(&master_part)
+            .ok_or_else(|| footer_malformed(&master_part, "master relationships are absent"))?
+            .to_xml()?;
+        let relationship_id = candidate
+            .package
+            .get_part_rels_mut(&master_part)
+            .ok_or_else(|| footer_malformed(&master_part, "master relationships are absent"))?
+            .add(
+                rel_types::SLIDE_LAYOUT,
+                &relative_part_target(&master_part, &part),
+            );
+        let added_relationship = candidate
+            .package
+            .get_part_rels(&master_part)
+            .and_then(|relationships| relationships.get_by_id(&relationship_id))
+            .expect("newly allocated master relationship")
+            .clone();
+        let edited_relationships =
+            edit_master_layout_relationship(&relationship_source, &added_relationship, false)?;
+        candidate
+            .package
+            .part_rels
+            .insert(master_part.clone(), edited_relationships);
+        let master_source = required_part(&source_package, &master_part)?;
+        let edited_master = candidate.masters[master_index]
+            .master
+            .as_mut()
+            .map_err(|error| footer_malformed(&master_part, error))?
+            .append_slide_layout_id(master_source, id, &relationship_id)
+            .map_err(|error| footer_malformed(&master_part, error))?;
+        candidate.package.set_part(&master_part, edited_master);
+        candidate.masters[master_index].dirty = false;
+        candidate.layouts.push(LayoutRecord {
+            part_name: part.clone(),
+            layout: record.layout.clone(),
+            dirty: false,
+        });
+        candidate.commit_owned_parts()?;
+        let inserted = candidate
+            .layouts
+            .iter()
+            .position(|layout| layout.part_name == part)
+            .ok_or_else(|| {
+                footer_malformed(&part, "duplicated layout was not admitted on reopen")
+            })?;
+        *self = candidate;
+        Ok(inserted)
+    }
+
+    /// Removes only an unused layout whose complete inbound package graph is owned by its master.
+    pub fn remove_layout(&mut self, index: usize) -> Result<()> {
+        let record = self.layouts.get(index).ok_or_else(|| {
+            invalid_shape_mutation("remove layout", "layout index is out of range")
+        })?;
+        let master_index = self.layout_master_index(index)?;
+        let master_part = self.masters[master_index].part_name.clone();
+        let ids = self.masters[master_index]
+            .master
+            .as_ref()
+            .map_err(|error| footer_malformed(&master_part, error))?
+            .slide_layout_ids()
+            .map_err(|error| footer_malformed(&master_part, error))?;
+        let mut selected_id = None;
+        for (source, relationships) in &self.package.part_rels {
+            for relationship in &relationships.items {
+                if relationship_is_external(relationship)
+                    || OpcPackage::resolve_rel_target(source, &relationship.target)
+                        != record.part_name
+                {
+                    continue;
+                }
+                if source != &master_part
+                    || relationship.rel_type != rel_types::SLIDE_LAYOUT
+                    || !ids.iter().any(|(_, id)| id == &relationship.id)
+                    || selected_id.replace(relationship.id.clone()).is_some()
+                {
+                    return Err(invalid_shape_mutation(
+                        "remove layout",
+                        "layout is used or has an unsupported inbound relationship",
+                    ));
+                }
+            }
+        }
+        if self.package.package_rels.items.iter().any(|relationship| {
+            !relationship_is_external(relationship)
+                && OpcPackage::resolve_rel_target("/", &relationship.target) == record.part_name
+        }) {
+            return Err(invalid_shape_mutation(
+                "remove layout",
+                "layout has an unsupported package-root relationship",
+            ));
+        }
+        let selected_id = selected_id.ok_or_else(|| {
+            invalid_shape_mutation("remove layout", "qualified master ownership is absent")
+        })?;
+        let mut candidate = self.clone();
+        let mut media = HashSet::new();
+        collect_media_targets(&candidate.package, &record.part_name, &mut media);
+        let source_package = self.staged_package(true)?;
+        let master_source = required_part(&source_package, &master_part)?;
+        let edited_master = candidate.masters[master_index]
+            .master
+            .as_mut()
+            .map_err(|error| footer_malformed(&master_part, error))?
+            .remove_slide_layout_id(master_source, &selected_id)
+            .map_err(|error| footer_malformed(&master_part, error))?;
+        candidate.package.set_part(&master_part, edited_master);
+        candidate.masters[master_index].dirty = false;
+        let relationships = candidate
+            .package
+            .get_part_rels(&master_part)
+            .expect("checked master relationships");
+        let selected_relationship = relationships
+            .get_by_id(&selected_id)
+            .expect("checked selected master relationship");
+        let edited_relationships =
+            edit_master_layout_relationship(&relationships.to_xml()?, selected_relationship, true)?;
+        candidate
+            .package
+            .part_rels
+            .insert(master_part.clone(), edited_relationships);
+        candidate.package.remove_part(&record.part_name);
+        candidate.package.remove_part_rels(&record.part_name);
+        candidate
+            .package
+            .content_types
+            .remove_override(&record.part_name);
+        candidate.layouts.remove(index);
+        prune_unreachable_parts(&mut candidate.package, &media);
+        candidate.media_store = MediaStore::scan(&candidate.package);
+        candidate.commit_owned_parts()?;
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Resolves the unique current master of an existing layout.
+    pub fn layout_master_index(&self, layout_index: usize) -> Result<usize> {
+        if layout_index >= self.layouts.len() {
+            return Err(invalid_shape_mutation(
+                "layout master",
+                "layout index is out of range",
+            ));
+        }
+        let (part, _) = self.layout_master_part(layout_index)?;
+        self.masters
+            .iter()
+            .position(|master| master.part_name == part)
+            .ok_or_else(|| {
+                footer_malformed(&part, "master is absent from the presentation inventory")
+            })
+    }
+
+    /// Counts every current slide-layout relationship, including hidden slides.
+    pub fn layout_used_by_slides(&self, layout_index: usize) -> Result<Vec<usize>> {
+        let layout = self.layouts.get(layout_index).ok_or_else(|| {
+            invalid_shape_mutation("layout usage", "layout index is out of range")
+        })?;
+        self.slides
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slide)| {
+                match related_internal_part(
+                    &self.package,
+                    &slide.part_name,
+                    rel_types::SLIDE_LAYOUT,
+                ) {
+                    Ok(Some(part)) if part == layout.part_name => Some(Ok(index)),
+                    Ok(_) => None,
+                    Err(error) => Some(Err(error)),
+                }
+            })
+            .collect()
     }
 
     /// Returns the `p:hf` flags of one master, `None` without the element
@@ -3264,11 +4853,19 @@ impl Presentation {
         let Some(master_part) = self.master_part(master_index)? else {
             return Ok(None);
         };
-        let master = CT_SlideMaster::from_xml(required_part(&self.package, &master_part)?)
-            .map_err(|error| Error::MalformedPart {
-                part_name: master_part,
-                message: error.to_string(),
-            })?;
+        let master = self
+            .masters
+            .iter()
+            .find(|record| record.part_name == master_part)
+            .ok_or_else(|| {
+                footer_malformed(
+                    &master_part,
+                    "master is absent from the presentation inventory",
+                )
+            })?
+            .master
+            .as_ref()
+            .map_err(|error| footer_malformed(&master_part, error))?;
         Ok(master.header_footer.as_ref().map(HeaderFooterFlags::from))
     }
 
@@ -3369,12 +4966,30 @@ impl Presentation {
         slide_index: usize,
         shape_path: &[usize],
     ) -> Result<Option<(Emu, Emu, Emu, Emu)>> {
-        let child = self
-            .shape_at(slide_index, shape_path, "read effective geometry")?
-            .child;
+        self.effective_geometry_at(ShapeOwner::Slide(slide_index), shape_path)
+    }
+
+    /// Reads the current geometry of a physical slide, layout or master shape.
+    #[cfg(feature = "render")]
+    pub fn effective_geometry_at(
+        &self,
+        owner: ShapeOwner,
+        shape_path: &[usize],
+    ) -> Result<Option<(Emu, Emu, Emu, Emu)>> {
+        let child = self.part_shape_at(owner, shape_path)?.child;
         let own = shape_transform(child);
         let inherited = match (own, shape_placeholder(child)) {
-            (None, Some(placeholder)) => self.inherited_transform(slide_index, placeholder)?,
+            (None, Some(placeholder)) => match owner {
+                ShapeOwner::Slide(slide_index) => {
+                    self.inherited_transform(slide_index, placeholder)?
+                }
+                ShapeOwner::Layout(_) => Some(self.part_inherited_target_transform(
+                    owner,
+                    child,
+                    "read effective geometry",
+                )?),
+                ShapeOwner::Master(_) => None,
+            },
             _ => None,
         };
         Ok(own.or(inherited.as_ref()).and_then(|transform| {
@@ -3537,10 +5152,19 @@ impl Presentation {
                     part_name: record.part_name.clone(),
                     message: "layout has no slide master relationship".to_owned(),
                 })?;
-        let master = CT_SlideMaster::from_xml(required_part(&self.package, &master_part)?)
-            .map_err(|error| Error::MalformedPart {
+        let master = self
+            .masters
+            .iter()
+            .find(|record| record.part_name == master_part)
+            .ok_or_else(|| Error::MalformedPart {
+                part_name: master_part.clone(),
+                message: "layout master is not in presentation inventory".into(),
+            })?
+            .master
+            .clone()
+            .map_err(|message| Error::MalformedPart {
                 part_name: master_part,
-                message: error.to_string(),
+                message,
             })?;
         Ok((&record.layout, master))
     }
@@ -4765,7 +6389,7 @@ impl Presentation {
         height: Option<Emu>,
     ) -> Result<ShapeRef<'_>> {
         self.append_picture(
-            slide_index,
+            ShapeOwner::Slide(slide_index),
             &[],
             image_data,
             image_filename,
@@ -4783,7 +6407,7 @@ impl Presentation {
     #[allow(clippy::too_many_arguments)]
     fn append_picture(
         &mut self,
-        slide_index: usize,
+        owner: ShapeOwner,
         group: &[usize],
         image_data: &[u8],
         image_filename: &str,
@@ -4792,16 +6416,9 @@ impl Presentation {
         width: Option<Emu>,
         height: Option<Emu>,
     ) -> Result<&mut ShapeTreeChild> {
-        let slide = self
-            .slides
-            .get(slide_index)
-            .ok_or(Error::UnknownSlideIndex {
-                index: slide_index,
-                slide_count: self.slides.len(),
-            })?;
-        let slide_part = slide.part_name.clone();
+        let slide_part = self.owner_part_name(owner)?.to_owned();
         let (width, height) = picture_dimensions(image_data, image_filename, width, height)?;
-        let id = ShapeIdAllocator::scan(&slide.slide.common_slide_data.shape_tree).allocate();
+        let id = ShapeIdAllocator::scan(&self.owner_data(owner)?.shape_tree).allocate();
 
         let mut package = self.package.clone();
         let mut media_store = self.media_store.clone();
@@ -4837,7 +6454,7 @@ impl Presentation {
         package.set_part_rels(&slide_part, relationships);
         self.package = package;
         self.media_store = media_store;
-        let tree = &mut self.slides[slide_index].slide.common_slide_data.shape_tree;
+        let tree = &mut self.owner_data_mut(owner)?.shape_tree;
         Ok(append_member(tree, group, ShapeTreeChild::Picture(picture)))
     }
 
@@ -4981,12 +6598,14 @@ impl Presentation {
     pub fn set_fill_at(&mut self, owner: &FillOwnerLocation, fill: Fill) -> Result<()> {
         let mut candidate = self.clone();
         candidate.assign_fill_at(owner, fill)?;
-        if candidate.slides[owner.slide_index()].slide == self.slides[owner.slide_index()].slide {
+        if candidate.owner_data(owner.owner())? == self.owner_data(owner.owner())? {
             return Ok(());
         }
-        let previous = slide_relationship_ids(&self.slides[owner.slide_index()].slide)?;
-        candidate.release_unused_slide_images(owner.slide_index(), &previous)?;
-        self.commit_candidate(candidate)
+        let previous = self.owner_relationship_ids(owner.owner())?;
+        candidate.release_unused_owner_images(owner.owner(), &previous)?;
+        candidate.commit_owned_parts()?;
+        *self = candidate;
+        Ok(())
     }
 
     /// Validates an image, then stages allocation, owner fill and reference
@@ -4997,10 +6616,10 @@ impl Presentation {
         image_data: &[u8],
         filename: &str,
     ) -> Result<()> {
-        self.require_slide_index(owner.slide_index())?;
+        self.owner_data(owner.owner())?;
         picture_dimensions(image_data, filename, None, None)?;
         let mut candidate = self.clone();
-        let slide_part = candidate.slides[owner.slide_index()].part_name.clone();
+        let slide_part = candidate.owner_part_name(owner.owner())?.to_owned();
         let media_part = candidate
             .media_store
             .insert(&mut candidate.package, image_data, filename);
@@ -5033,35 +6652,50 @@ impl Presentation {
         let fill = Fill::from_xml(source.as_bytes())
             .map_err(|error| invalid_shape_mutation("set picture fill", error.to_string()))?;
         candidate.assign_fill_at(owner, fill)?;
-        let previous = slide_relationship_ids(&self.slides[owner.slide_index()].slide)?;
-        candidate.release_unused_slide_images(owner.slide_index(), &previous)?;
-        self.commit_candidate(candidate)
+        let previous = self.owner_relationship_ids(owner.owner())?;
+        candidate.release_unused_owner_images(owner.owner(), &previous)?;
+        candidate.commit_owned_parts()?;
+        *self = candidate;
+        Ok(())
     }
 
-    fn assign_fill_at(&mut self, owner: &FillOwnerLocation, fill: Fill) -> Result<()> {
+    fn assign_fill_at(&mut self, location: &FillOwnerLocation, fill: Fill) -> Result<()> {
+        let owner = location.owner();
         let missing =
             || invalid_shape_mutation("set owned fill", "fill owner is absent or unsupported");
-        self.require_slide_index(owner.slide_index())?;
-        if let FillOwnerLocation::SlideBackground { slide_index } = owner {
-            return self
-                .slide_mut(*slide_index)
-                .ok_or_else(missing)?
-                .set_background(fill);
+        self.owner_data(owner)?;
+        if matches!(
+            location,
+            FillOwnerLocation::SlideBackground { .. } | FillOwnerLocation::OwnedBackground { .. }
+        ) {
+            let common = self.owner_data_mut(owner)?;
+            if let Some(background) = &mut common.background {
+                background
+                    .replace_fill(fill)
+                    .map_err(|error| invalid_shape_mutation("set background", error.to_string()))?;
+            } else {
+                common.background = Some(
+                    rpptx_oxml::slide_parts::CT_Background::from_fill(fill).map_err(|error| {
+                        invalid_shape_mutation("set background", error.to_string())
+                    })?,
+                );
+            }
+            return Ok(());
         }
-        let shape_path = match owner {
+        let path = match location {
             FillOwnerLocation::Shape { shape_path, .. }
-            | FillOwnerLocation::TableCell { shape_path, .. } => shape_path,
+            | FillOwnerLocation::TableCell { shape_path, .. }
+            | FillOwnerLocation::OwnedShape { shape_path, .. }
+            | FillOwnerLocation::OwnedTableCell { shape_path, .. } => shape_path,
             _ => unreachable!(),
         };
-        let (first, descendants) = shape_path.split_first().ok_or_else(missing)?;
-        let slide = self.slide_mut(owner.slide_index()).ok_or_else(missing)?;
-        let mut shape = slide.into_shape_mut(*first).ok_or_else(missing)?;
-        for index in descendants {
-            shape = shape.into_child_mut(*index).ok_or_else(missing)?;
-        }
-        match owner {
-            FillOwnerLocation::Shape { .. } => shape.set_fill(fill),
-            FillOwnerLocation::TableCell { row, column, .. } => {
+        let mut shape = self.shape_mut_at(owner, path)?;
+        match location {
+            FillOwnerLocation::Shape { .. } | FillOwnerLocation::OwnedShape { .. } => {
+                shape.set_fill(fill)
+            }
+            FillOwnerLocation::TableCell { row, column, .. }
+            | FillOwnerLocation::OwnedTableCell { row, column, .. } => {
                 let mut cell = shape
                     .into_table_mut()
                     .and_then(|table| table.into_cell_mut(*row, *column))
@@ -5073,15 +6707,36 @@ impl Presentation {
         }
     }
 
-    fn release_unused_slide_images(
+    fn owner_relationship_ids(&self, owner: ShapeOwner) -> Result<HashSet<String>> {
+        let part = self.owner_part_name(owner)?;
+        let xml = match owner {
+            ShapeOwner::Slide(index) => self.slides[index].slide.to_xml(),
+            ShapeOwner::Layout(index) => self.layouts[index].layout.to_xml(),
+            ShapeOwner::Master(index) => self.masters[index]
+                .master
+                .as_ref()
+                .map_err(|message| Error::MalformedPart {
+                    part_name: part.to_owned(),
+                    message: message.clone(),
+                })?
+                .to_xml(),
+        }
+        .map_err(|error| Error::MalformedPart {
+            part_name: part.to_owned(),
+            message: error.to_string(),
+        })?;
+        relationship_ids(&xml)
+            .map(|ids| ids.into_iter().collect())
+            .map_err(|error| invalid_shape_mutation("owned image references", error.to_string()))
+    }
+
+    fn release_unused_owner_images(
         &mut self,
-        slide_index: usize,
+        owner: ShapeOwner,
         previous: &HashSet<String>,
     ) -> Result<()> {
-        self.require_slide_index(slide_index)?;
-        let record = &self.slides[slide_index];
-        let part_name = record.part_name.clone();
-        let referenced = slide_relationship_ids(&record.slide)?;
+        let part_name = self.owner_part_name(owner)?.to_owned();
+        let referenced = self.owner_relationship_ids(owner)?;
         let Some(mut relationships) = self.package.get_part_rels(&part_name).cloned() else {
             return Ok(());
         };
@@ -5113,17 +6768,25 @@ impl Presentation {
     /// The content type comes from the package, falling back to the sniffed
     /// image format.
     pub fn picture_image(&self, slide_index: usize, shape_id: u32) -> Result<PictureImage<'_>> {
-        self.require_slide_index(slide_index)?;
-        let record = &self.slides[slide_index];
-        let picture = find_picture(
-            &record.slide.common_slide_data.shape_tree.children,
-            shape_id,
-        )
-        .ok_or_else(|| not_a_picture("read picture image", shape_id))?;
+        self.picture_image_at(ShapeOwner::Slide(slide_index), shape_id)
+    }
+
+    /// Reads an image from its actual slide, layout or master relationship scope.
+    pub fn picture_image_at(&self, owner: ShapeOwner, shape_id: u32) -> Result<PictureImage<'_>> {
+        let data = self.owner_data(owner)?;
+        if picture_shape_id_count(&data.shape_tree.children, shape_id) != 1 {
+            return Err(invalid_shape_mutation(
+                "read picture image",
+                format!("shape id {shape_id} is missing or ambiguous"),
+            ));
+        }
+        let source_part = self.owner_part_name(owner)?;
+        let picture = find_picture(&data.shape_tree.children, shape_id)
+            .ok_or_else(|| not_a_picture("read picture image", shape_id))?;
         let relationship_id = picture_image_relationship(picture, "read picture image", shape_id)?;
         let part_name = require_internal_related_part(
             &self.package,
-            &record.part_name,
+            source_part,
             relationship_id,
             rel_types::IMAGE,
         )?;
@@ -5157,16 +6820,31 @@ impl Presentation {
         shape_id: u32,
         image_data: &[u8],
     ) -> Result<()> {
+        self.replace_picture_image_at(ShapeOwner::Slide(slide_index), shape_id, image_data)
+    }
+
+    /// Replaces an image through its physical part owner with the same copy-on-write rules.
+    pub fn replace_picture_image_at(
+        &mut self,
+        owner: ShapeOwner,
+        shape_id: u32,
+        image_data: &[u8],
+    ) -> Result<()> {
         const OPERATION: &str = "replace picture image";
-        self.require_slide_index(slide_index)?;
+        let data = self.owner_data(owner)?;
+        if picture_shape_id_count(&data.shape_tree.children, shape_id) != 1 {
+            return Err(invalid_shape_mutation(
+                OPERATION,
+                format!("shape id {shape_id} is missing or ambiguous"),
+            ));
+        }
         let format = ImageFormat::sniff(image_data).ok_or_else(|| Error::InvalidShapeMutation {
             operation: OPERATION,
             message: "replacement bytes are not a supported image".to_owned(),
         })?;
         let mut staged = self.clone();
-        let slide_part = staged.slides[slide_index].part_name.clone();
-        let slide = &mut staged.slides[slide_index].slide;
-        let picture = find_picture_mut(&mut slide.common_slide_data.shape_tree.children, shape_id)
+        let slide_part = staged.owner_part_name(owner)?.to_owned();
+        let picture = find_picture(&staged.owner_data(owner)?.shape_tree.children, shape_id)
             .ok_or_else(|| not_a_picture(OPERATION, shape_id))?;
         let relationship_id = picture_image_relationship(picture, OPERATION, shape_id)?.to_owned();
         let old_part = require_internal_related_part(
@@ -5198,16 +6876,31 @@ impl Presentation {
                 format!("picture {shape_id} carries a second image, such as an SVG alternate"),
             ));
         }
-        let slide_xml = slide
-            .to_xml()
-            .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()))?;
+        let slide_xml = match owner {
+            ShapeOwner::Slide(index) => staged.slides[index].slide.to_xml(),
+            ShapeOwner::Layout(index) => staged.layouts[index].layout.to_xml(),
+            ShapeOwner::Master(index) => staged.masters[index]
+                .master
+                .as_ref()
+                .expect("checked owner")
+                .to_xml(),
+        }
+        .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()))?;
         let uses = relationship_ids(&slide_xml)
             .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()))?
             .into_iter()
             .filter(|id| *id == relationship_id)
             .count();
-        let picture = find_picture_mut(&mut slide.common_slide_data.shape_tree.children, shape_id)
-            .expect("picture found above");
+        let picture = find_picture_mut(
+            &mut staged.owner_data_mut(owner)?.shape_tree.children,
+            shape_id,
+        )
+        .ok_or_else(|| {
+            invalid_shape_mutation(
+                OPERATION,
+                "picture in raw alternate content cannot be replaced",
+            )
+        })?;
         let relationship_id = if uses > 1 {
             let isolated = relationships.add(
                 rel_types::IMAGE,
@@ -5268,7 +6961,13 @@ impl Presentation {
         staged.package.set_part_rels(&slide_part, relationships);
         prune_unreachable_parts(&mut staged.package, &HashSet::from([old_part]));
         staged.media_store = MediaStore::scan(&staged.package);
-        self.commit_candidate(staged)
+        if matches!(owner, ShapeOwner::Slide(_)) {
+            self.commit_candidate(staged)
+        } else {
+            staged.commit_owned_parts()?;
+            *self = staged;
+            Ok(())
+        }
     }
 
     /// Removes one immediate slide child and the package parts only it used.
@@ -5278,12 +6977,16 @@ impl Presentation {
     /// A shape that other slide animations still target is rejected without
     /// any change.
     pub fn remove_shape(&mut self, slide_index: usize, shape_index: usize) -> Result<()> {
+        self.remove_shape_at(ShapeOwner::Slide(slide_index), shape_index)
+    }
+
+    /// Removes a direct physical-owner shape with checked relationship cleanup.
+    pub fn remove_shape_at(&mut self, owner: ShapeOwner, shape_index: usize) -> Result<()> {
         const OPERATION: &str = "remove shape";
-        self.require_slide_index(slide_index)?;
+        self.owner_data(owner)?;
         let mut staged = self.clone();
-        let slide_part = staged.slides[slide_index].part_name.clone();
-        let slide = &mut staged.slides[slide_index].slide;
-        let children = &slide.common_slide_data.shape_tree.children;
+        let slide_part = staged.owner_part_name(owner)?.to_owned();
+        let children = &staged.owner_data(owner)?.shape_tree.children;
         let child = children
             .get(shape_index)
             .ok_or_else(|| Error::InvalidSlideMutation {
@@ -5299,25 +7002,37 @@ impl Presentation {
                 operation: OPERATION,
                 shape_kind: shape_kind(child),
             })?;
-        if children
-            .iter()
-            .position(|child| child.non_visual_id() == Some(shape_id))
-            != Some(shape_index)
-        {
-            return Err(Error::InvalidSlideMutation {
-                operation: OPERATION,
-                message: format!("shape id {shape_id} is not unique on the slide"),
-            });
-        }
-        let mut removed_ids = HashSet::new();
+        let mut removed_counts = HashMap::new();
         let mut media_ids = Vec::new();
         collect_subtree_ids(
             std::slice::from_ref(child),
-            &mut removed_ids,
+            &mut removed_counts,
             &mut media_ids,
         );
-        let before = slide_relationship_ids(slide)?;
-        if let Some(timing) = &mut slide.timing {
+        let mut owner_counts = HashMap::new();
+        collect_subtree_ids(children, &mut owner_counts, &mut Vec::new());
+        if let Some(ambiguous) = removed_counts.iter().find_map(|(id, count)| {
+            (*count != 1 || owner_counts.get(id) != Some(&1)).then_some(*id)
+        }) {
+            return Err(invalid_shape_mutation(
+                OPERATION,
+                format!("shape id {ambiguous} is not unique in the owning part"),
+            ));
+        }
+        let removed_ids: HashSet<u32> = removed_counts.into_keys().collect();
+        let before = staged.owner_relationship_ids(owner)?;
+        let timing = match owner {
+            ShapeOwner::Slide(index) => &mut staged.slides[index].slide.timing,
+            ShapeOwner::Layout(index) => &mut staged.layouts[index].layout.timing,
+            ShapeOwner::Master(index) => {
+                &mut staged.masters[index]
+                    .master
+                    .as_mut()
+                    .expect("owner was checked")
+                    .timing
+            }
+        };
+        if let Some(timing) = timing {
             for media_id in media_ids {
                 timing
                     .remove_media(media_id)
@@ -5336,15 +7051,15 @@ impl Presentation {
             }
         }
         detach_connectors(
-            &mut slide.common_slide_data.shape_tree.children,
+            &mut staged.owner_data_mut(owner)?.shape_tree.children,
             &removed_ids,
         );
-        slide
-            .common_slide_data
+        staged
+            .owner_data_mut(owner)?
             .shape_tree
             .remove_child_by_id(shape_id)
             .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()))?;
-        let after = slide_relationship_ids(slide)?;
+        let after = staged.owner_relationship_ids(owner)?;
         let mut candidates = HashSet::new();
         if let Some(relationships) = staged.package.get_part_rels_mut(&slide_part) {
             relationships.items.retain(|relationship| {
@@ -5362,7 +7077,13 @@ impl Presentation {
         }
         prune_unreachable_parts(&mut staged.package, &candidates);
         staged.media_store = MediaStore::scan(&staged.package);
-        self.commit_candidate(staged)
+        if matches!(owner, ShapeOwner::Slide(_)) {
+            self.commit_candidate(staged)
+        } else {
+            staged.commit_owned_parts()?;
+            *self = staged;
+            Ok(())
+        }
     }
 
     /// Returns the target of one relationship of a slide, the address that a
@@ -5380,17 +7101,28 @@ impl Presentation {
             .map(|relationship| relationship.target.as_str())
     }
 
-    /// Resolves the external click hyperlink of one slide shape by its non-visual id.
+    /// Resolves the stored click address of one slide shape by its non-visual id.
     pub fn shape_hyperlink_address(
         &self,
         slide_index: usize,
         shape_id: u32,
     ) -> Result<Option<&str>> {
-        let (_, location) = self.locate_shape_click("shape hyperlink", slide_index, shape_id)?;
+        self.shape_hyperlink_address_at(ShapeOwner::Slide(slide_index), shape_id)
+    }
+
+    /// Resolves the click address in the actual physical owner's relationship scope.
+    pub fn shape_hyperlink_address_at(
+        &self,
+        owner: ShapeOwner,
+        shape_id: u32,
+    ) -> Result<Option<&str>> {
+        let (_, location) = self.locate_shape_click("shape hyperlink", owner, shape_id)?;
+        let part = self.owner_part_name(owner)?;
         Ok(location
             .relationship_id
             .as_deref()
-            .and_then(|id| self.hyperlink_address(slide_index, id)))
+            .and_then(|id| self.package.get_part_rels(part)?.get_by_id(id))
+            .map(|relationship| relationship.target.as_str()))
     }
 
     /// Returns the zero-based index of the slide that the click action of one
@@ -5405,7 +7137,11 @@ impl Presentation {
     /// of the presentation, such as a next-slide jump on the last slide, where
     /// python-pptx raises `ValueError`.
     pub fn shape_target_slide(&self, slide_index: usize, shape_id: u32) -> Result<Option<usize>> {
-        let (_, location) = self.locate_shape_click("shape target slide", slide_index, shape_id)?;
+        let (_, location) = self.locate_shape_click(
+            "shape target slide",
+            ShapeOwner::Slide(slide_index),
+            shape_id,
+        )?;
         Ok(self.click_target_slide(
             slide_index,
             location.action.as_deref(),
@@ -5467,8 +7203,18 @@ impl Presentation {
         shape_id: u32,
         address: Option<&str>,
     ) -> Result<()> {
+        self.set_shape_hyperlink_at(ShapeOwner::Slide(slide_index), shape_id, address)
+    }
+
+    /// Changes one physical owner click address without modifying other source parts.
+    pub fn set_shape_hyperlink_at(
+        &mut self,
+        owner: ShapeOwner,
+        shape_id: u32,
+        address: Option<&str>,
+    ) -> Result<()> {
         const OPERATION: &str = "set shape hyperlink";
-        self.require_slide_index(slide_index)?;
+        self.owner_data(owner)?;
         if address.is_some_and(|address| {
             address.is_empty()
                 || address.chars().any(|character| {
@@ -5482,7 +7228,7 @@ impl Presentation {
         }
         self.set_shape_click_action(
             OPERATION,
-            slide_index,
+            owner,
             shape_id,
             address.map(ShapeClickTarget::Address),
         )
@@ -5508,7 +7254,7 @@ impl Presentation {
         }
         self.set_shape_click_action(
             "set shape target slide",
-            slide_index,
+            ShapeOwner::Slide(slide_index),
             shape_id,
             target_slide_index.map(ShapeClickTarget::Slide),
         )
@@ -5519,25 +7265,26 @@ impl Presentation {
     fn locate_shape_click(
         &self,
         operation: &'static str,
-        slide_index: usize,
+        owner: ShapeOwner,
         shape_id: u32,
     ) -> Result<(Vec<u8>, ShapeHyperlinkLocation)> {
-        self.require_slide_index(slide_index)?;
-        let record = &self.slides[slide_index];
-        if shape_id_count(
-            &record.slide.common_slide_data.shape_tree.children,
-            shape_id,
-        ) != 1
-        {
+        self.owner_data(owner)?;
+        if shape_id_count(&self.owner_data(owner)?.shape_tree.children, shape_id) != 1 {
             return Err(invalid_shape_mutation(
                 operation,
                 "shape id is missing or ambiguous",
             ));
         }
-        let xml = record
-            .slide
-            .to_xml()
-            .map_err(|error| invalid_shape_mutation(operation, error.to_string()))?;
+        let xml = match owner {
+            ShapeOwner::Slide(index) => self.slides[index].slide.to_xml(),
+            ShapeOwner::Layout(index) => self.layouts[index].layout.to_xml(),
+            ShapeOwner::Master(index) => self.masters[index]
+                .master
+                .as_ref()
+                .expect("checked owner")
+                .to_xml(),
+        }
+        .map_err(|error| invalid_shape_mutation(operation, error.to_string()))?;
         let location = locate_shape_hyperlink(&xml, shape_id)?
             .ok_or_else(|| invalid_shape_mutation(operation, "shape has no p:cNvPr"))?;
         Ok((xml, location))
@@ -5546,12 +7293,12 @@ impl Presentation {
     fn set_shape_click_action(
         &mut self,
         operation: &'static str,
-        slide_index: usize,
+        owner: ShapeOwner,
         shape_id: u32,
         target: Option<ShapeClickTarget<'_>>,
     ) -> Result<()> {
-        let (xml, location) = self.locate_shape_click(operation, slide_index, shape_id)?;
-        let part_name = self.slides[slide_index].part_name.clone();
+        let (xml, location) = self.locate_shape_click(operation, owner, shape_id)?;
+        let part_name = self.owner_part_name(owner)?.to_owned();
         let mut relationships = self
             .package
             .get_part_rels(&part_name)
@@ -5617,10 +7364,10 @@ impl Presentation {
             &location,
             link.as_ref().map(|(id, action)| (id.as_str(), *action)),
         )?;
-        let slide = CT_Slide::from_xml(&rewritten)
+        let before = relationship_ids(&xml)
             .map_err(|error| invalid_shape_mutation(operation, error.to_string()))?;
-        let before = slide_relationship_ids(&self.slides[slide_index].slide)?;
-        let after = slide_relationship_ids(&slide)?;
+        let after = relationship_ids(&rewritten)
+            .map_err(|error| invalid_shape_mutation(operation, error.to_string()))?;
         let removed_parts = relationships
             .items
             .iter()
@@ -5634,13 +7381,30 @@ impl Presentation {
         relationships.items.retain(|relationship| {
             !before.contains(&relationship.id) || after.contains(&relationship.id)
         });
-        let mut package = self.package.clone();
-        package.set_part_rels(&part_name, relationships);
-        prune_unreachable_parts(&mut package, &removed_parts);
-        let media = MediaStore::scan(&package);
-        self.slides[slide_index].slide = slide;
-        self.package = package;
-        self.media_store = media;
+        let mut candidate = self.clone();
+        candidate.package = self.staged_package(true)?;
+        match owner {
+            ShapeOwner::Slide(index) => {
+                candidate.slides[index].slide = CT_Slide::from_xml(&rewritten)
+                    .map_err(|error| invalid_shape_mutation(operation, error.to_string()))?
+            }
+            ShapeOwner::Layout(index) => {
+                candidate.layouts[index].layout = CT_SlideLayout::from_xml(&rewritten)
+                    .map_err(|error| invalid_shape_mutation(operation, error.to_string()))?;
+                candidate.layouts[index].dirty = false;
+            }
+            ShapeOwner::Master(index) => {
+                candidate.masters[index].master = Ok(CT_SlideMaster::from_xml(&rewritten)
+                    .map_err(|error| invalid_shape_mutation(operation, error.to_string()))?);
+                candidate.masters[index].dirty = false;
+            }
+        }
+        candidate.package.set_part(&part_name, rewritten);
+        candidate.package.set_part_rels(&part_name, relationships);
+        prune_unreachable_parts(&mut candidate.package, &removed_parts);
+        candidate.media_store = MediaStore::scan(&candidate.package);
+        candidate.commit_owned_parts()?;
+        *self = candidate;
         Ok(())
     }
 
@@ -5933,10 +7697,18 @@ impl Presentation {
         from_index: usize,
         to_index: usize,
     ) -> Result<()> {
+        self.move_shape_at(ShapeOwner::Slide(slide_index), from_index, to_index)
+    }
+
+    /// Changes direct shape order on one actual slide, layout or master.
+    pub fn move_shape_at(
+        &mut self,
+        owner: ShapeOwner,
+        from_index: usize,
+        to_index: usize,
+    ) -> Result<()> {
         const OPERATION: &str = "move shape";
-        self.require_slide_index(slide_index)?;
-        let tree = &mut self.slides[slide_index].slide.common_slide_data.shape_tree;
-        let count = tree.children.len();
+        let count = self.owner_data(owner)?.shape_tree.children.len();
         if let Some(index) = [from_index, to_index]
             .into_iter()
             .find(|index| *index >= count)
@@ -5946,7 +7718,9 @@ impl Presentation {
                 format!("shape index {index} is out of range for {count} shapes"),
             ));
         }
-        tree.move_child(from_index, to_index)
+        self.owner_data_mut(owner)?
+            .shape_tree
+            .move_child(from_index, to_index)
             .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()))
     }
 
@@ -6766,6 +8540,24 @@ fn not_a_picture(operation: &'static str, shape_id: u32) -> Error {
     invalid_shape_mutation(operation, format!("shape id {shape_id} is not a picture"))
 }
 
+// Picture reads include selected compatibility fallbacks. Ordinary mutable
+// shape counts deliberately exclude those source-only representations.
+fn picture_shape_id_count(children: &[ShapeTreeChild], shape_id: u32) -> usize {
+    children
+        .iter()
+        .map(|child| match child {
+            ShapeTreeChild::GroupShape(group) => {
+                usize::from(child.non_visual_id() == Some(shape_id))
+                    + picture_shape_id_count(&group.children, shape_id)
+            }
+            ShapeTreeChild::AlternateContent(alternate) => {
+                picture_shape_id_count(alternate.selected_fallback().unwrap_or_default(), shape_id)
+            }
+            _ => usize::from(child.non_visual_id() == Some(shape_id)),
+        })
+        .sum()
+}
+
 fn find_picture(children: &[ShapeTreeChild], shape_id: u32) -> Option<&CT_Picture> {
     children.iter().find_map(|child| match child {
         ShapeTreeChild::Picture(picture) if child.non_visual_id() == Some(shape_id) => {
@@ -6822,6 +8614,816 @@ enum ShapeClickTarget<'a> {
     Address(&'a str),
     /// The zero-based index of a slide of the presentation.
     Slide(usize),
+}
+
+struct ThemeSourceOwner {
+    start: usize,
+    end: usize,
+    empty: bool,
+    attributes: Vec<(String, String, (usize, usize))>,
+}
+
+fn theme_source_owner(source: &[u8], expected: &[&str]) -> Result<Option<ThemeSourceOwner>> {
+    let mut reader = NsReader::from_reader(source);
+    let mut buffer = Vec::new();
+    let mut path = Vec::new();
+    let mut found = None;
+    let mut pending = None;
+    loop {
+        let begin = reader.buffer_position() as usize;
+        let (qualified, event) = {
+            let (namespace, event) = reader
+                .read_resolved_event_into(&mut buffer)
+                .map_err(|error| invalid_shape_mutation("edit theme", error.to_string()))?;
+            (xml_is(&namespace, A_NS), event)
+        };
+        let finish = reader.buffer_position() as usize;
+        let empty = matches!(&event, XmlEvent::Empty(_));
+        match event {
+            XmlEvent::Start(start) | XmlEvent::Empty(start) => {
+                let local =
+                    String::from_utf8_lossy(xml_local_name(start.name().as_ref())).into_owned();
+                if path.is_empty() && (!qualified || local != "theme") {
+                    return Err(invalid_shape_mutation(
+                        "edit theme",
+                        "qualified DrawingML theme root is required",
+                    ));
+                }
+                path.push(if qualified { local } else { String::new() });
+                if path.iter().map(String::as_str).eq(expected.iter().copied()) {
+                    if found.is_some() || pending.is_some() {
+                        return Err(invalid_shape_mutation(
+                            "edit theme",
+                            "duplicate selected theme owner",
+                        ));
+                    }
+                    let mut attributes = Vec::new();
+                    for attribute in start.attributes() {
+                        let attribute = attribute.map_err(|error| {
+                            invalid_shape_mutation("edit theme", error.to_string())
+                        })?;
+                        let raw_start: &[u8] = start.as_ref();
+                        let offset =
+                            attribute.value.as_ptr() as usize - raw_start.as_ptr() as usize;
+                        let value = attribute
+                            .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())
+                            .map_err(|error| {
+                                invalid_shape_mutation("edit theme", error.to_string())
+                            })?
+                            .into_owned();
+                        attributes.push((
+                            String::from_utf8_lossy(attribute.key.as_ref()).into_owned(),
+                            value,
+                            (
+                                begin + 1 + offset,
+                                begin + 1 + offset + attribute.value.len(),
+                            ),
+                        ));
+                    }
+                    let owner = ThemeSourceOwner {
+                        start: begin,
+                        end: finish,
+                        empty,
+                        attributes,
+                    };
+                    if empty {
+                        found = Some(owner);
+                    } else {
+                        pending = Some((path.len(), owner));
+                    }
+                }
+                if empty {
+                    path.pop();
+                }
+            }
+            XmlEvent::End(_) => {
+                if pending
+                    .as_ref()
+                    .is_some_and(|(depth, _)| *depth == path.len())
+                {
+                    let (_, mut owner) = pending.take().expect("selected owner has depth");
+                    owner.end = finish;
+                    found = Some(owner);
+                }
+                path.pop();
+            }
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    Ok(found)
+}
+
+/// Closes a copied theme scheme with its actual inherited namespace bindings.
+fn portable_theme_scheme(source: &[u8], name: &str) -> Result<Vec<u8>> {
+    let owner =
+        theme_source_owner(source, &["theme", "themeElements", name])?.ok_or_else(|| {
+            invalid_shape_mutation("apply theme", format!("qualified {name} is absent"))
+        })?;
+    portable_owned_fragment(source, owner.start, owner.end)
+}
+
+/// Carries actual namespace and compatibility scope for copied theme/background owners.
+fn portable_owned_fragment(source: &[u8], owner_start: usize, owner_end: usize) -> Result<Vec<u8>> {
+    let mut reader = NsReader::from_reader(source);
+    let mut buffer = Vec::new();
+    let mut scopes: Vec<Vec<(String, String)>> = Vec::new();
+    type CompatibilityPolicy = (String, String, Vec<(String, String)>);
+    let mut policies: Vec<Vec<CompatibilityPolicy>> = Vec::new();
+    loop {
+        let begin = reader.buffer_position() as usize;
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(|error| invalid_shape_mutation("apply theme", error.to_string()))?;
+        let finish = reader.buffer_position() as usize;
+        let empty = matches!(&event, XmlEvent::Empty(_));
+        match event {
+            XmlEvent::Start(start) | XmlEvent::Empty(start) => {
+                let mut inherited = scopes.last().cloned().unwrap_or_default();
+                let mut local = HashSet::new();
+                let inherited_policies = policies.last().cloned().unwrap_or_default();
+                let mut local_policies = Vec::new();
+                for attribute in start.attributes() {
+                    let attribute = attribute.map_err(|error| {
+                        invalid_shape_mutation("apply theme", error.to_string())
+                    })?;
+                    let key = String::from_utf8_lossy(attribute.key.as_ref()).into_owned();
+                    let (namespace, policy_name) =
+                        reader.resolver().resolve_attribute(attribute.key);
+                    if xml_is(
+                        &namespace,
+                        "http://schemas.openxmlformats.org/markup-compatibility/2006",
+                    ) {
+                        if !matches!(
+                            policy_name.as_ref(),
+                            b"Ignorable"
+                                | b"ProcessContent"
+                                | b"PreserveElements"
+                                | b"PreserveAttributes"
+                                | b"MustUnderstand"
+                        ) {
+                            return Err(invalid_shape_mutation(
+                                "apply theme",
+                                "unsupported inherited markup compatibility policy",
+                            ));
+                        }
+                        let value = attribute
+                            .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())
+                            .map_err(|error| {
+                                invalid_shape_mutation("apply theme", error.to_string())
+                            })?
+                            .into_owned();
+                        local_policies.push((key.clone(), value));
+                    }
+                    if key == "xmlns" || key.starts_with("xmlns:") {
+                        let value = attribute
+                            .decoded_and_normalized_value(XmlVersion::Implicit1_0, start.decoder())
+                            .map_err(|error| {
+                                invalid_shape_mutation("apply theme", error.to_string())
+                            })?
+                            .into_owned();
+                        inherited.retain(|(old, _)| old != &key);
+                        inherited.push((key.clone(), value));
+                        local.insert(key);
+                    }
+                }
+                let mut effective_policies = inherited_policies.clone();
+                for (key, value) in &local_policies {
+                    let name = key.rsplit(':').next().unwrap_or(key);
+                    if let Some((old_key, old_value, old_scope)) = effective_policies
+                        .iter()
+                        .find(|(old, _, _)| old.rsplit(':').next() == Some(name))
+                    {
+                        if old_key != key || old_value != value || old_scope != &inherited {
+                            return Err(invalid_shape_mutation(
+                                "apply theme",
+                                "nested markup compatibility policy needs an unsupported merge",
+                            ));
+                        }
+                    } else {
+                        effective_policies.push((key.clone(), value.clone(), inherited.clone()));
+                    }
+                }
+                if begin == owner_start {
+                    let insertion = finish - if empty { 2 } else { 1 };
+                    let mut result = source[owner_start..insertion].to_vec();
+                    for (key, value, declaration_scope) in &inherited_policies {
+                        let property = key.rsplit(':').next().unwrap_or(key);
+                        let mut prefixes = vec![key.split(':').next().unwrap_or(key)];
+                        for token in value.split_whitespace() {
+                            prefixes.push(if matches!(property, "Ignorable" | "MustUnderstand") {
+                                token
+                            } else {
+                                token.split_once(':').map(|(prefix, _)| prefix).ok_or_else(|| invalid_shape_mutation("apply theme", "unqualified inherited compatibility QName is unsupported"))?
+                            });
+                        }
+                        for prefix in prefixes {
+                            let declaration = format!("xmlns:{prefix}");
+                            let before = declaration_scope
+                                .iter()
+                                .find(|(name, _)| name == &declaration)
+                                .map(|(_, uri)| uri);
+                            let after = inherited
+                                .iter()
+                                .find(|(name, _)| name == &declaration)
+                                .map(|(_, uri)| uri);
+                            if before.is_none() || before != after {
+                                return Err(invalid_shape_mutation(
+                                    "apply theme",
+                                    "inherited compatibility prefix was rebound or undeclared",
+                                ));
+                            }
+                        }
+                        if !local_policies
+                            .iter()
+                            .any(|(local, _)| local.rsplit(':').next() == Some(property))
+                        {
+                            result.extend_from_slice(
+                                format!(" {key}=\"{}\"", quick_xml::escape::escape(value))
+                                    .as_bytes(),
+                            );
+                        }
+                    }
+                    for (key, value) in inherited {
+                        if !local.contains(&key) {
+                            result.extend_from_slice(
+                                format!(" {key}=\"{}\"", quick_xml::escape::escape(&value))
+                                    .as_bytes(),
+                            );
+                        }
+                    }
+                    result.extend_from_slice(&source[insertion..owner_end]);
+                    return Ok(result);
+                }
+                if !empty {
+                    scopes.push(inherited);
+                    policies.push(effective_policies);
+                }
+            }
+            XmlEvent::End(_) => {
+                scopes.pop();
+                policies.pop();
+            }
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    Err(invalid_shape_mutation(
+        "apply theme",
+        "selected scheme source is incomplete",
+    ))
+}
+
+/// Patches only owned Target values in a copied relationship scope.
+fn retarget_import_relationships(
+    source: &[u8],
+    changes: &HashMap<String, String>,
+) -> Result<Relationships> {
+    let original = Relationships::from_xml(source)?;
+    let mut reader = NsReader::from_reader(source);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut edits = Vec::new();
+    let mut seen = HashSet::new();
+    loop {
+        let begin = reader.buffer_position() as usize;
+        let (qualified, event) = {
+            let (namespace, event) = reader
+                .read_resolved_event_into(&mut buffer)
+                .map_err(OpcError::from)?;
+            (
+                xml_is(
+                    &namespace,
+                    "http://schemas.openxmlformats.org/package/2006/relationships",
+                ),
+                event,
+            )
+        };
+        let empty = matches!(&event, XmlEvent::Empty(_));
+        match event {
+            XmlEvent::Start(start) | XmlEvent::Empty(start) => {
+                if depth == 1 && qualified && start.local_name().as_ref() == b"Relationship" {
+                    let mut id = None;
+                    let mut target = None;
+                    for attribute in start.attributes() {
+                        let attribute = attribute
+                            .map_err(quick_xml::Error::from)
+                            .map_err(OpcError::from)?;
+                        if attribute.key.as_ref() == b"Id" {
+                            id = Some(
+                                attribute
+                                    .decoded_and_normalized_value(
+                                        XmlVersion::Implicit1_0,
+                                        start.decoder(),
+                                    )
+                                    .map_err(OpcError::from)?
+                                    .into_owned(),
+                            );
+                        } else if attribute.key.as_ref() == b"Target" {
+                            let raw: &[u8] = start.as_ref();
+                            let offset = attribute.value.as_ptr() as usize - raw.as_ptr() as usize;
+                            target = Some((
+                                begin + 1 + offset,
+                                begin + 1 + offset + attribute.value.len(),
+                            ));
+                        }
+                    }
+                    if let Some(id) = id
+                        && let Some(changed) = changes.get(&id)
+                    {
+                        let range = target.ok_or_else(|| {
+                            invalid_shape_mutation("import relationships", "owned Target is absent")
+                        })?;
+                        if !seen.insert(id) {
+                            return Err(invalid_shape_mutation(
+                                "import relationships",
+                                "duplicate selected relationship",
+                            ));
+                        }
+                        edits.push((range, changed));
+                    }
+                }
+                if !empty {
+                    depth += 1;
+                }
+            }
+            XmlEvent::End(_) => {
+                depth = depth.saturating_sub(1);
+            }
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    if seen.len() != changes.len() {
+        return Err(invalid_shape_mutation(
+            "import relationships",
+            "selected qualified relationship is absent",
+        ));
+    }
+    edits.sort_by_key(|((begin, _), _)| std::cmp::Reverse(*begin));
+    let mut result = source.to_vec();
+    for ((begin, end), value) in edits {
+        result.splice(begin..end, quick_xml::escape::escape(value).bytes());
+    }
+    let parsed = Relationships::from_xml(&result)?;
+    let mut expected = original.items;
+    for relationship in &mut expected {
+        if let Some(target) = changes.get(&relationship.id) {
+            relationship.target = target.clone();
+        }
+    }
+    if parsed.items != expected {
+        return Err(invalid_shape_mutation(
+            "import relationships",
+            "retarget changed unrelated relationship facts",
+        ));
+    }
+    Ok(parsed)
+}
+
+/// Allocates fresh IDs in the selected imported master's existing list owners.
+fn reassign_imported_layout_ids(source: &[u8], ids: &HashMap<String, u32>) -> Result<Vec<u8>> {
+    let mut reader = NsReader::from_reader(source);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut list = false;
+    let mut seen = HashSet::new();
+    let mut edits = Vec::new();
+    loop {
+        let begin = reader.buffer_position() as usize;
+        let (qualified, event) = {
+            let (namespace, event) = reader
+                .read_resolved_event_into(&mut buffer)
+                .map_err(OpcError::from)?;
+            (xml_is(&namespace, rpptx_oxml::namespace::P_NS), event)
+        };
+        let empty = matches!(&event, XmlEvent::Empty(_));
+        match event {
+            XmlEvent::Start(start) | XmlEvent::Empty(start) => {
+                if depth == 0 && (!qualified || start.local_name().as_ref() != b"sldMaster") {
+                    return Err(invalid_shape_mutation(
+                        "import master",
+                        "qualified master root is required",
+                    ));
+                }
+                if depth == 1 && qualified && start.local_name().as_ref() == b"sldLayoutIdLst" {
+                    list = true;
+                }
+                if depth == 2 && list && qualified && start.local_name().as_ref() == b"sldLayoutId"
+                {
+                    let mut relationship = None;
+                    let mut range = None;
+                    for attribute in start.attributes() {
+                        let attribute = attribute
+                            .map_err(quick_xml::Error::from)
+                            .map_err(OpcError::from)?;
+                        let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
+                        if local.as_ref() == b"id"
+                            && xml_is(&namespace, rpptx_oxml::namespace::R_NS)
+                        {
+                            relationship = Some(
+                                attribute
+                                    .decoded_and_normalized_value(
+                                        XmlVersion::Implicit1_0,
+                                        start.decoder(),
+                                    )
+                                    .map_err(OpcError::from)?
+                                    .into_owned(),
+                            );
+                        } else if attribute.key.as_ref() == b"id" {
+                            let raw: &[u8] = start.as_ref();
+                            let offset = attribute.value.as_ptr() as usize - raw.as_ptr() as usize;
+                            range = Some((
+                                begin + 1 + offset,
+                                begin + 1 + offset + attribute.value.len(),
+                            ));
+                        }
+                    }
+                    let relationship = relationship.ok_or_else(|| {
+                        invalid_shape_mutation("import master", "layout relationship ID is absent")
+                    })?;
+                    let id = ids.get(&relationship).ok_or_else(|| {
+                        invalid_shape_mutation(
+                            "import master",
+                            "layout list has an unsupported route",
+                        )
+                    })?;
+                    if !seen.insert(relationship) {
+                        return Err(invalid_shape_mutation(
+                            "import master",
+                            "duplicate layout relationship",
+                        ));
+                    }
+                    edits.push((
+                        range.ok_or_else(|| {
+                            invalid_shape_mutation("import master", "layout ID is absent")
+                        })?,
+                        id,
+                    ));
+                }
+                if !empty {
+                    depth += 1;
+                }
+            }
+            XmlEvent::End(_) => {
+                if depth == 2 {
+                    list = false;
+                }
+                depth = depth.saturating_sub(1);
+            }
+            XmlEvent::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    if seen.len() != ids.len() {
+        return Err(invalid_shape_mutation(
+            "import master",
+            "qualified layout inventory is incomplete",
+        ));
+    }
+    edits.sort_by_key(|((begin, _), _)| std::cmp::Reverse(*begin));
+    let mut result = source.to_vec();
+    for ((begin, end), id) in edits {
+        result.splice(begin..end, id.to_string().bytes());
+    }
+    CT_SlideMaster::from_xml(&result)
+        .map_err(|error| invalid_shape_mutation("import master", error.to_string()))?;
+    Ok(result)
+}
+
+/// Adds a presentation master ID without rewriting unrelated presentation children.
+fn append_imported_master_id(source: &[u8], id: u32, relationship: &str) -> Result<Vec<u8>> {
+    let (children, root_end) =
+        property_child_ranges(source, rpptx_oxml::namespace::P_NS, "presentation")?;
+    let lists = children
+        .iter()
+        .filter(|(uri, name, _, _)| {
+            uri.as_deref() == Some(rpptx_oxml::namespace::P_NS) && name == "sldMasterIdLst"
+        })
+        .collect::<Vec<_>>();
+    if lists.len() > 1 {
+        return Err(invalid_shape_mutation(
+            "import master",
+            "duplicate master ID lists",
+        ));
+    }
+    let item = format!(
+        "<p:sldMasterId xmlns:p=\"{}\" xmlns:r=\"{}\" id=\"{id}\" r:id=\"{}\"/>",
+        rpptx_oxml::namespace::P_NS,
+        rpptx_oxml::namespace::R_NS,
+        quick_xml::escape::escape(relationship)
+    );
+    let mut result = source.to_vec();
+    if let Some((_, _, begin, end)) = lists.first().copied() {
+        let mut reader = NsReader::from_reader(&source[*begin..*end]);
+        let mut buffer = Vec::new();
+        // Read the physical token only. Its qualified ownership was proved in the parent scope above.
+        let event = reader
+            .read_event_into(&mut buffer)
+            .map_err(OpcError::from)?;
+        let head_end = *begin + reader.buffer_position() as usize;
+        match event {
+            XmlEvent::Empty(start) => {
+                let name = String::from_utf8_lossy(start.name().as_ref()).into_owned();
+                let expanded = format!(">{item}</{name}>");
+                result.splice(head_end - 2..head_end, expanded.bytes());
+            }
+            XmlEvent::Start(_) => {
+                let close = source[*begin..*end]
+                    .windows(2)
+                    .rposition(|token| token == b"</")
+                    .ok_or_else(|| {
+                        invalid_shape_mutation("import master", "master list is incomplete")
+                    })?
+                    + *begin;
+                result.splice(close..close, item.bytes());
+            }
+            _ => {
+                return Err(invalid_shape_mutation(
+                    "import master",
+                    "master list root is unsupported",
+                ));
+            }
+        }
+    } else {
+        let insertion = children
+            .iter()
+            .find(|(uri, _, _, _)| uri.as_deref() == Some(rpptx_oxml::namespace::P_NS))
+            .map(|(_, _, begin, _)| *begin)
+            .unwrap_or(root_end);
+        let list = format!(
+            "<p:sldMasterIdLst xmlns:p=\"{}\">{item}</p:sldMasterIdLst>",
+            rpptx_oxml::namespace::P_NS
+        );
+        result.splice(insertion..insertion, list.bytes());
+    }
+    CT_Presentation::from_xml(&result)
+        .map_err(|error| invalid_shape_mutation("import master", error.to_string()))?;
+    Ok(result)
+}
+
+/// Changes one owned master layout relationship without rewriting retained source.
+fn edit_master_layout_relationship(
+    source: &[u8],
+    selected: &Relationship,
+    remove: bool,
+) -> Result<Relationships> {
+    const OPC_NS: &[u8] = b"http://schemas.openxmlformats.org/package/2006/relationships";
+    let original = Relationships::from_xml(source)?;
+    if !matches!(
+        selected.rel_type.as_str(),
+        rel_types::SLIDE_LAYOUT | rel_types::SLIDE_MASTER
+    ) || relationship_is_external(selected)
+        || original.get_by_id(&selected.id).is_some() != remove
+    {
+        return Err(invalid_shape_mutation(
+            "layout relationship",
+            "selected ownership does not match source",
+        ));
+    }
+    let mut reader = quick_xml::NsReader::from_reader(source);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    let mut root = None;
+    let mut close = None;
+    let mut selected_range = None;
+    let mut pending = None;
+    loop {
+        let begin = reader.buffer_position() as usize;
+        let (qualified, event) = {
+            let (namespace, event) = reader
+                .read_resolved_event_into(&mut buffer)
+                .map_err(OpcError::from)?;
+            (
+                matches!(namespace, quick_xml::name::ResolveResult::Bound(value) if value.as_ref() == OPC_NS),
+                event,
+            )
+        };
+        let finish = reader.buffer_position() as usize;
+        let empty = matches!(&event, quick_xml::events::Event::Empty(_));
+        match event {
+            quick_xml::events::Event::Start(start) | quick_xml::events::Event::Empty(start) => {
+                if depth == 0 {
+                    if !qualified
+                        || start.local_name().as_ref() != b"Relationships"
+                        || empty
+                        || root.replace(()).is_some()
+                    {
+                        return Err(invalid_shape_mutation(
+                            "layout relationship",
+                            "unsupported relationship root",
+                        ));
+                    }
+                } else if depth == 1 && qualified && start.local_name().as_ref() == b"Relationship"
+                {
+                    let mut id = None;
+                    for attribute in start.attributes() {
+                        let attribute = attribute
+                            .map_err(quick_xml::Error::from)
+                            .map_err(OpcError::from)?;
+                        if attribute.key.as_ref() == b"Id" {
+                            id = Some(
+                                attribute
+                                    .decoded_and_normalized_value(
+                                        quick_xml::XmlVersion::Implicit1_0,
+                                        start.decoder(),
+                                    )
+                                    .map_err(OpcError::from)?
+                                    .into_owned(),
+                            );
+                        }
+                    }
+                    if id.as_deref() == Some(selected.id.as_str()) {
+                        if empty {
+                            selected_range = Some((begin, finish));
+                        } else {
+                            pending = Some(begin);
+                        }
+                    }
+                }
+                if !empty {
+                    depth += 1;
+                }
+            }
+            quick_xml::events::Event::End(_) => {
+                if depth == 2
+                    && let Some(begin) = pending.take()
+                {
+                    selected_range = Some((begin, finish));
+                }
+                if depth == 1 {
+                    close = Some(begin);
+                }
+                depth = depth.saturating_sub(1);
+            }
+            quick_xml::events::Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let mut result = source.to_vec();
+    if remove {
+        let (begin, finish) = selected_range.ok_or_else(|| {
+            invalid_shape_mutation(
+                "layout relationship",
+                "selected qualified relationship is absent",
+            )
+        })?;
+        result.drain(begin..finish);
+    } else {
+        let insertion = close.ok_or_else(|| {
+            invalid_shape_mutation("layout relationship", "relationship root is incomplete")
+        })?;
+        let added = format!(
+            "<Relationship xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\" Id=\"{}\" Type=\"{}\" Target=\"{}\"/>",
+            quick_xml::escape::escape(&selected.id),
+            quick_xml::escape::escape(&selected.rel_type),
+            quick_xml::escape::escape(&selected.target)
+        );
+        result.splice(insertion..insertion, added.bytes());
+    }
+    let parsed = Relationships::from_xml(&result)?;
+    let mut expected = original.items;
+    if remove {
+        expected.retain(|relationship| relationship.id != selected.id);
+    } else {
+        expected.push(selected.clone());
+    }
+    if parsed.items != expected {
+        return Err(invalid_shape_mutation(
+            "layout relationship",
+            "source splice changed unrelated relationships",
+        ));
+    }
+    Ok(parsed)
+}
+
+fn clear_theme_color_transforms(source: &[u8], slot: &str) -> Result<Vec<u8>> {
+    const TRANSFORMS: &[&str] = &[
+        "tint", "shade", "comp", "inv", "gray", "alpha", "alphaOff", "alphaMod", "hue", "hueOff",
+        "hueMod", "sat", "satOff", "satMod", "lum", "lumOff", "lumMod", "red", "redOff", "redMod",
+        "green", "greenOff", "greenMod", "blue", "blueOff", "blueMod", "gamma", "invGamma",
+    ];
+    let mut reader = NsReader::from_reader(source);
+    let mut buffer = Vec::new();
+    let mut path = Vec::new();
+    let mut pending = None;
+    let mut ranges = Vec::new();
+    loop {
+        let begin = reader.buffer_position() as usize;
+        let (qualified, event) = {
+            let (namespace, event) = reader
+                .read_resolved_event_into(&mut buffer)
+                .map_err(|error| invalid_shape_mutation("edit theme color", error.to_string()))?;
+            (xml_is(&namespace, A_NS), event)
+        };
+        let finish = reader.buffer_position() as usize;
+        let empty = matches!(&event, XmlEvent::Empty(_));
+        match event {
+            XmlEvent::Start(start) | XmlEvent::Empty(start) => {
+                if pending.is_some() {
+                    return Err(invalid_shape_mutation(
+                        "edit theme color",
+                        "color transform contains opaque child payload",
+                    ));
+                }
+                let local =
+                    String::from_utf8_lossy(xml_local_name(start.name().as_ref())).into_owned();
+                if path.iter().map(String::as_str).eq([
+                    "theme",
+                    "themeElements",
+                    "clrScheme",
+                    slot,
+                    "srgbClr",
+                ]) && TRANSFORMS.contains(&local.as_str())
+                {
+                    if !qualified {
+                        return Err(invalid_shape_mutation(
+                            "edit theme color",
+                            "foreign color transform lookalike",
+                        ));
+                    }
+                    for attribute in start.attributes() {
+                        let attribute = attribute.map_err(|error| {
+                            invalid_shape_mutation("edit theme color", error.to_string())
+                        })?;
+                        let name = attribute.key.as_ref();
+                        if name != b"val" && name != b"xmlns" && !name.starts_with(b"xmlns:") {
+                            return Err(invalid_shape_mutation(
+                                "edit theme color",
+                                "color transform contains opaque attributes",
+                            ));
+                        }
+                    }
+                    if empty {
+                        ranges.push((begin, finish));
+                    } else {
+                        pending = Some((path.len() + 1, begin));
+                    }
+                }
+                path.push(if qualified { local } else { String::new() });
+                if empty {
+                    path.pop();
+                }
+            }
+            XmlEvent::End(_) => {
+                if pending
+                    .as_ref()
+                    .is_some_and(|(depth, _)| *depth == path.len())
+                {
+                    let (_, begin) = pending.take().expect("color transform depth exists");
+                    ranges.push((begin, finish));
+                }
+                path.pop();
+            }
+            XmlEvent::Text(text)
+                if pending.is_some() && text.iter().all(u8::is_ascii_whitespace) => {}
+            XmlEvent::Eof => break,
+            _ if pending.is_some() => {
+                return Err(invalid_shape_mutation(
+                    "edit theme color",
+                    "color transform contains opaque body payload",
+                ));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let mut result = Vec::new();
+    let mut cursor = 0;
+    for (begin, end) in ranges {
+        result.extend_from_slice(&source[cursor..begin]);
+        cursor = end;
+    }
+    result.extend_from_slice(&source[cursor..]);
+    Ok(result)
+}
+
+fn patch_theme_attribute(
+    source: &[u8],
+    owner: &ThemeSourceOwner,
+    attribute: &str,
+    value: &str,
+) -> Result<Vec<u8>> {
+    let (_, original, (begin, end)) = owner
+        .attributes
+        .iter()
+        .find(|(name, _, _)| name == attribute)
+        .ok_or_else(|| {
+            invalid_shape_mutation("edit theme", "selected schema attribute is absent")
+        })?;
+    if original == value {
+        return Ok(source.to_vec());
+    }
+    let escaped = quick_xml::escape::escape(value);
+    let mut result = source[..*begin].to_vec();
+    result.extend_from_slice(escaped.as_bytes());
+    result.extend_from_slice(&source[*end..]);
+    Ok(result)
 }
 
 fn xml_local_name(name: &[u8]) -> &[u8] {
@@ -7178,11 +9780,13 @@ fn picture_image_relationship<'a>(
 
 fn collect_subtree_ids(
     children: &[ShapeTreeChild],
-    ids: &mut HashSet<u32>,
+    ids: &mut HashMap<u32, usize>,
     media_ids: &mut Vec<u32>,
 ) {
     for child in children {
-        ids.extend(child.non_visual_id());
+        if let Some(id) = child.non_visual_id() {
+            *ids.entry(id).or_default() += 1;
+        }
         match child {
             ShapeTreeChild::Picture(picture) if picture.media.is_some() => {
                 media_ids.extend(child.non_visual_id());
@@ -9002,6 +11606,37 @@ fn infer_picture_dimension(
         })
 }
 
+fn resolve_master_records(
+    package: &OpcPackage,
+    presentation_part: &str,
+    presentation: &CT_Presentation,
+) -> Result<Vec<MasterRecord>> {
+    presentation
+        .slide_master_ids
+        .iter()
+        .map(|entry| {
+            let relationship = package
+                .get_part_rels(presentation_part)
+                .and_then(|rels| rels.get_by_id(&entry.relationship_id))
+                .ok_or_else(|| Error::MissingRelationship {
+                    source_part: presentation_part.to_owned(),
+                    relationship_id: entry.relationship_id.clone(),
+                })?;
+            require_relationship_type(presentation_part, relationship, rel_types::SLIDE_MASTER)?;
+            reject_external(presentation_part, relationship)?;
+            let part_name = OpcPackage::resolve_rel_target(presentation_part, &relationship.target);
+            let master = CT_SlideMaster::from_xml(required_part(package, &part_name)?)
+                .map_err(|error| error.to_string());
+            Ok(MasterRecord {
+                id: entry.id,
+                part_name,
+                master,
+                dirty: false,
+            })
+        })
+        .collect()
+}
+
 fn resolve_layouts(
     package: &OpcPackage,
     presentation_part: &str,
@@ -9039,7 +11674,11 @@ fn resolve_layouts(
                 part_name: part_name.clone(),
                 message: error.to_string(),
             })?;
-            layouts.push(LayoutRecord { part_name, layout });
+            layouts.push(LayoutRecord {
+                part_name,
+                layout,
+                dirty: false,
+            });
         }
     }
     Ok(layouts)
@@ -9750,7 +12389,11 @@ impl<'a> SlideMut<'a> {
     /// Returns one immediate z-order child for in-place mutation.
     pub fn shape_mut(&mut self, index: usize) -> Option<ShapeMut<'_>> {
         self.shape_tree().children.get(index)?;
-        Some(owned_shape_mut(self.presentation, self.index, vec![index]))
+        Some(owned_shape_mut(
+            self.presentation,
+            ShapeOwner::Slide(self.index),
+            vec![index],
+        ))
     }
 
     /// Consumes this handle and returns one immediate z-order child for mutation.
@@ -9761,7 +12404,11 @@ impl<'a> SlideMut<'a> {
             .shape_tree
             .children
             .get(index)?;
-        Some(owned_shape_mut(self.presentation, self.index, vec![index]))
+        Some(owned_shape_mut(
+            self.presentation,
+            ShapeOwner::Slide(self.index),
+            vec![index],
+        ))
     }
     fn append_member(
         &mut self,
@@ -9773,7 +12420,11 @@ impl<'a> SlideMut<'a> {
             .common_slide_data
             .shape_tree;
         let index = append_new_member(tree, &[], build)?;
-        candidate.refresh_connector_attachments(self.index, self.presentation, &HashSet::new())?;
+        candidate.refresh_connector_attachments(
+            ShapeOwner::Slide(self.index),
+            self.presentation,
+            &HashSet::new(),
+        )?;
         candidate.slides[self.index]
             .slide
             .to_xml()
@@ -9782,7 +12433,11 @@ impl<'a> SlideMut<'a> {
                 message: error.to_string(),
             })?;
         *self.presentation = candidate;
-        Ok(owned_shape_mut(self.presentation, self.index, vec![index]))
+        Ok(owned_shape_mut(
+            self.presentation,
+            ShapeOwner::Slide(self.index),
+            vec![index],
+        ))
     }
 }
 
@@ -9796,7 +12451,7 @@ impl<'a> SlideMut<'a> {
 /// the union of their members, as python-pptx does.
 pub struct ShapesMut<'a> {
     presentation: &'a mut Presentation,
-    slide_index: usize,
+    owner: ShapeOwner,
     group: Vec<usize>,
 }
 
@@ -9872,16 +12527,13 @@ impl ShapesMut<'_> {
         height: Option<Emu>,
     ) -> Result<ShapeMut<'_>> {
         let mut candidate = self.presentation.clone();
-        let tree = &mut candidate.slides[self.slide_index]
-            .slide
-            .common_slide_data
-            .shape_tree;
+        let tree = &mut candidate.owner_data_mut(self.owner)?.shape_tree;
         let count = Members::at(tree, &self.group)
             .ok_or_else(|| invalid_shape_mutation("add picture", "missing group"))?
             .children()
             .len();
         candidate.append_picture(
-            self.slide_index,
+            self.owner,
             &self.group,
             image_data,
             image_filename,
@@ -9890,22 +12542,12 @@ impl ShapesMut<'_> {
             width,
             height,
         )?;
-        candidate.refresh_connector_attachments(
-            self.slide_index,
-            self.presentation,
-            &HashSet::new(),
-        )?;
-        candidate.slides[self.slide_index]
-            .slide
-            .to_xml()
-            .map_err(|error| Error::MalformedPart {
-                part_name: candidate.slides[self.slide_index].part_name.clone(),
-                message: error.to_string(),
-            })?;
+        candidate.refresh_connector_attachments(self.owner, self.presentation, &HashSet::new())?;
+        candidate.validate_owned_part(self.owner)?;
         let mut path = self.group.clone();
         path.push(count);
         *self.presentation = candidate;
-        Ok(owned_shape_mut(self.presentation, self.slide_index, path))
+        Ok(owned_shape_mut(self.presentation, self.owner, path))
     }
 
     fn append(
@@ -9913,27 +12555,14 @@ impl ShapesMut<'_> {
         build: impl FnOnce(u32) -> Result<ShapeTreeChild>,
     ) -> Result<ShapeMut<'_>> {
         let mut candidate = self.presentation.clone();
-        let tree = &mut candidate.slides[self.slide_index]
-            .slide
-            .common_slide_data
-            .shape_tree;
+        let tree = &mut candidate.owner_data_mut(self.owner)?.shape_tree;
         let index = append_new_member(tree, &self.group, build)?;
-        candidate.refresh_connector_attachments(
-            self.slide_index,
-            self.presentation,
-            &HashSet::new(),
-        )?;
-        candidate.slides[self.slide_index]
-            .slide
-            .to_xml()
-            .map_err(|error| Error::MalformedPart {
-                part_name: candidate.slides[self.slide_index].part_name.clone(),
-                message: error.to_string(),
-            })?;
+        candidate.refresh_connector_attachments(self.owner, self.presentation, &HashSet::new())?;
+        candidate.validate_owned_part(self.owner)?;
         let mut path = self.group.clone();
         path.push(index);
         *self.presentation = candidate;
-        Ok(owned_shape_mut(self.presentation, self.slide_index, path))
+        Ok(owned_shape_mut(self.presentation, self.owner, path))
     }
 }
 
@@ -10484,7 +13113,7 @@ pub struct ShapeMut<'a> {
 enum ShapeMutOwner<'a> {
     Presentation {
         presentation: &'a mut Presentation,
-        slide: usize,
+        owner: ShapeOwner,
         path: Vec<usize>,
     },
     Child(&'a mut ShapeTreeChild),
@@ -10496,13 +13125,13 @@ fn shape_mut(child: &mut ShapeTreeChild) -> ShapeMut<'_> {
 }
 fn owned_shape_mut(
     presentation: &mut Presentation,
-    slide: usize,
+    owner: ShapeOwner,
     path: Vec<usize>,
 ) -> ShapeMut<'_> {
     ShapeMut {
         owner: ShapeMutOwner::Presentation {
             presentation,
-            slide,
+            owner,
             path,
         },
     }
@@ -10520,13 +13149,13 @@ impl<'a> ShapeMut<'a> {
         match &mut self.owner {
             ShapeMutOwner::Presentation {
                 presentation,
-                slide,
+                owner,
                 path,
             } => {
                 let ShapeTreeChild::GroupShape(group) = child_at(
-                    &presentation.slides[*slide]
-                        .slide
-                        .common_slide_data
+                    &presentation
+                        .owner_data(*owner)
+                        .expect("validated owner")
                         .shape_tree
                         .children,
                     path,
@@ -10537,7 +13166,7 @@ impl<'a> ShapeMut<'a> {
                 group.children.get(index)?;
                 let mut child_path = path.clone();
                 child_path.push(index);
-                Some(owned_shape_mut(presentation, *slide, child_path))
+                Some(owned_shape_mut(presentation, *owner, child_path))
             }
             ShapeMutOwner::Child(child) => match child {
                 ShapeTreeChild::GroupShape(group) => group.children.get_mut(index).map(shape_mut),
@@ -10551,13 +13180,13 @@ impl<'a> ShapeMut<'a> {
         match self.owner {
             ShapeMutOwner::Presentation {
                 presentation,
-                slide,
+                owner,
                 mut path,
             } => {
                 let ShapeTreeChild::GroupShape(group) = child_at(
-                    &presentation.slides[slide]
-                        .slide
-                        .common_slide_data
+                    &presentation
+                        .owner_data(owner)
+                        .expect("validated owner")
                         .shape_tree
                         .children,
                     &path,
@@ -10567,7 +13196,7 @@ impl<'a> ShapeMut<'a> {
                 };
                 group.children.get(index)?;
                 path.push(index);
-                Some(owned_shape_mut(presentation, slide, path))
+                Some(owned_shape_mut(presentation, owner, path))
             }
             ShapeMutOwner::Child(child) => match child {
                 ShapeTreeChild::GroupShape(group) => group.children.get_mut(index).map(shape_mut),
@@ -10928,12 +13557,12 @@ impl<'a> ShapeMut<'a> {
             ShapeMutOwner::Child(child) => child,
             ShapeMutOwner::Presentation {
                 presentation,
-                slide,
+                owner,
                 path,
             } => child_at(
-                &presentation.slides[*slide]
-                    .slide
-                    .common_slide_data
+                &presentation
+                    .owner_data(*owner)
+                    .expect("validated owner")
                     .shape_tree
                     .children,
                 path,
@@ -10946,12 +13575,12 @@ impl<'a> ShapeMut<'a> {
             ShapeMutOwner::Child(child) => child,
             ShapeMutOwner::Presentation {
                 presentation,
-                slide,
+                owner,
                 path,
             } => child_at_mut(
-                &mut presentation.slides[*slide]
-                    .slide
-                    .common_slide_data
+                &mut presentation
+                    .owner_data_mut(*owner)
+                    .expect("validated owner")
                     .shape_tree
                     .children,
                 path,
@@ -10964,12 +13593,12 @@ impl<'a> ShapeMut<'a> {
             ShapeMutOwner::Child(child) => child,
             ShapeMutOwner::Presentation {
                 presentation,
-                slide,
+                owner,
                 path,
             } => child_at_mut(
-                &mut presentation.slides[slide]
-                    .slide
-                    .common_slide_data
+                &mut presentation
+                    .owner_data_mut(owner)
+                    .expect("validated owner")
                     .shape_tree
                     .children,
                 &path,
@@ -10982,18 +13611,18 @@ impl<'a> ShapeMut<'a> {
             ShapeMutOwner::Child(child) => shape_mut(child),
             ShapeMutOwner::Presentation {
                 presentation,
-                slide,
+                owner,
                 path,
-            } => owned_shape_mut(presentation, *slide, path.clone()),
+            } => owned_shape_mut(presentation, *owner, path.clone()),
         }
     }
     fn apply_geometry(&mut self, edit: GeometryEdit) -> Result<()> {
         match &mut self.owner {
             ShapeMutOwner::Presentation {
                 presentation,
-                slide,
+                owner,
                 path,
-            } => presentation.edit_shape_geometry(*slide, path, edit),
+            } => presentation.edit_shape_geometry(*owner, path, edit),
             ShapeMutOwner::Child(child) => apply_leaf_geometry(child, edit),
         }
     }
@@ -11143,13 +13772,32 @@ pub enum FillOwnerLocation {
         row: usize,
         column: usize,
     },
+    /// A background owned by a slide, layout or master.
+    OwnedBackground {
+        owner: ShapeOwner,
+    },
+    /// A physical shape in a slide, layout or master.
+    OwnedShape {
+        owner: ShapeOwner,
+        shape_path: Vec<usize>,
+    },
+    /// A physical table cell in a slide, layout or master.
+    OwnedTableCell {
+        owner: ShapeOwner,
+        shape_path: Vec<usize>,
+        row: usize,
+        column: usize,
+    },
 }
 impl FillOwnerLocation {
-    fn slide_index(&self) -> usize {
+    fn owner(&self) -> ShapeOwner {
         match self {
             Self::SlideBackground { slide_index }
             | Self::Shape { slide_index, .. }
-            | Self::TableCell { slide_index, .. } => *slide_index,
+            | Self::TableCell { slide_index, .. } => ShapeOwner::Slide(*slide_index),
+            Self::OwnedBackground { owner }
+            | Self::OwnedShape { owner, .. }
+            | Self::OwnedTableCell { owner, .. } => *owner,
         }
     }
 }
@@ -16427,10 +19075,13 @@ fn render_source_shape_has_bounds(context: &ResolveCtx<'_>, item: &FlattenedItem
             .effective_xfrm(shape)
             .as_ref()
             .is_some_and(render_transform_has_bounds),
-        ShapeTreeChild::Picture(picture) => context
-            .effective_picture_xfrm(picture)
-            .as_ref()
-            .is_some_and(render_transform_has_bounds),
+        ShapeTreeChild::Picture(picture) => {
+            !picture.hidden()
+                && context
+                    .effective_picture_xfrm(picture)
+                    .as_ref()
+                    .is_some_and(render_transform_has_bounds)
+        }
         ShapeTreeChild::GraphicFrame(frame) => render_transform_has_bounds(&frame.transform),
         ShapeTreeChild::Connector(connector) => connector
             .shape_properties
@@ -17411,8 +20062,20 @@ impl Presentation {
                 .ok_or_else(|| {
                     footer_malformed(&record.part_name, "layout has no slide master relationship")
                 })?;
-        let master = CT_SlideMaster::from_xml(required_part(&self.package, &master_part)?)
-            .map_err(|error| footer_malformed(&master_part, error))?;
+        let master = self
+            .masters
+            .iter()
+            .find(|record| record.part_name == master_part)
+            .ok_or_else(|| {
+                footer_malformed(
+                    &master_part,
+                    "master is absent from the presentation inventory",
+                )
+            })?
+            .master
+            .as_ref()
+            .map_err(|error| footer_malformed(&master_part, error))?
+            .clone();
         Ok((master_part, master))
     }
 
@@ -17442,8 +20105,19 @@ impl Presentation {
         let master =
             match related_internal_part(&self.package, layout_part, rel_types::SLIDE_MASTER)? {
                 Some(master_part) => Some(
-                    CT_SlideMaster::from_xml(required_part(&self.package, &master_part)?)
-                        .map_err(|error| footer_malformed(&master_part, error))?,
+                    self.masters
+                        .iter()
+                        .find(|record| record.part_name == master_part)
+                        .ok_or_else(|| {
+                            footer_malformed(
+                                &master_part,
+                                "master is absent from the presentation inventory",
+                            )
+                        })?
+                        .master
+                        .as_ref()
+                        .map_err(|error| footer_malformed(&master_part, error))?
+                        .clone(),
                 ),
                 None => None,
             };
@@ -18193,6 +20867,1409 @@ impl Presentation {
 
 #[cfg(test)]
 mod write_tests {
+    #[cfg(all(feature = "default-template", feature = "render"))]
+    #[test]
+    fn fx209_hidden_picture_source_inventory_matches_resolution_order() {
+        for (prefix, declaration) in [
+            ("p:", ""),
+            (
+                "q:",
+                "xmlns:q=\"http://schemas.openxmlformats.org/presentationml/2006/main\"",
+            ),
+            (
+                "",
+                "xmlns=\"http://schemas.openxmlformats.org/presentationml/2006/main\"",
+            ),
+        ] {
+            for (attribute, hidden) in [
+                ("", false),
+                ("hidden='0'", false),
+                ("hidden='false'", false),
+                ("hidden='1'", true),
+                ("hidden='true'", true),
+                ("hidden='&#49;'", true),
+                ("xmlns:f='urn:foreign' f:hidden='1'", false),
+            ] {
+                let mut deck = Presentation::new().unwrap();
+                deck.add_slide(6).unwrap();
+                let picture = |id, x| {
+                    let transform = CT_Transform2D::from_xml(
+                        format!("<a:xfrm xmlns:a='{A_NS}'><a:off x='{x}' y='127000'/><a:ext cx='127000' cy='127000'/></a:xfrm>").as_bytes(),
+                    ).unwrap();
+                    CT_Picture::new(id, "Logo", "rId1", transform).unwrap()
+                };
+                let base = String::from_utf8(picture(7, 127_000).to_xml().unwrap()).unwrap();
+                let owner = base
+                    .replace("<p:", &format!("<{prefix}"))
+                    .replace("</p:", &format!("</{prefix}"));
+                let owner = if declaration.is_empty() {
+                    owner
+                } else {
+                    owner.replacen(
+                        &format!("<{prefix}pic "),
+                        &format!("<{prefix}pic {declaration} "),
+                        1,
+                    )
+                };
+                let owner = owner.replacen(
+                    &format!("<{prefix}cNvPr "),
+                    &format!("<{prefix}cNvPr {attribute} "),
+                    1,
+                );
+                let selected = CT_Picture::from_xml(owner.as_bytes()).unwrap();
+                assert_eq!(selected.hidden(), hidden);
+                let retained = selected.to_xml().unwrap();
+                deck.slides[0].slide.common_slide_data.shape_tree.children = vec![
+                    ShapeTreeChild::Picture(selected),
+                    ShapeTreeChild::Picture(picture(8, 508_000)),
+                ];
+                let master = deck.masters[0].master.as_ref().unwrap();
+                let layout = &deck.layouts[6].layout;
+                let slide = &deck.slides[0].slide;
+                let default_style = deck
+                    .presentation
+                    .default_text_style
+                    .clone()
+                    .unwrap_or_default();
+                let theme_part = deck.theme_part_for_edit(0).unwrap();
+                let theme = CT_OfficeStyleSheet::from_xml(
+                    required_part(&deck.package, &theme_part).unwrap(),
+                )
+                .unwrap();
+                let context = ResolveCtx::new(
+                    &theme,
+                    render_effective_color_map(master, layout, slide),
+                    master,
+                    layout,
+                    slide,
+                    &default_style,
+                );
+                let sources = context
+                    .flatten()
+                    .into_iter()
+                    .filter(|item| render_source_shape_has_bounds(&context, item))
+                    .map(|item| match item {
+                        FlattenedItem::Shape { child, .. } => child.non_visual_id().unwrap(),
+                        _ => panic!("bounded source owner"),
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    sources,
+                    if hidden { vec![8] } else { vec![7, 8] },
+                    "{prefix} {attribute}"
+                );
+                let media = ScopedMediaIds {
+                    slide: HashMap::from([("rId1".to_owned(), MediaId(11))]),
+                    ..ScopedMediaIds::default()
+                };
+                let resolved = context
+                    .resolve_slide_with_media((960.0, 540.0), &media)
+                    .unwrap();
+                assert_eq!(sources.len(), resolved.shapes.len());
+                assert_eq!(resolved.shapes.last().unwrap().bounds.x, 40.0);
+                assert!(resolved.diagnostics.is_empty());
+                let ShapeTreeChild::Picture(selected) =
+                    &slide.common_slide_data.shape_tree.children[0]
+                else {
+                    panic!("selected source picture");
+                };
+                assert_eq!(selected.to_xml().unwrap(), retained);
+            }
+        }
+    }
+    #[cfg(feature = "default-template")]
+    #[test]
+    fn fx209_master_style_levels_are_source_local_idempotent_and_atomic() {
+        let mut deck = Presentation::new().unwrap();
+        deck.add_slide(1).unwrap();
+        let part = deck.master_part(0).unwrap().unwrap();
+        let mut package = deck.staged_package(true).unwrap();
+        let source = String::from_utf8(required_part(&package, &part).unwrap().to_vec()).unwrap();
+        let close = source.rfind("</").unwrap();
+        let mut source = source.clone();
+        source.insert_str(close, "<x:retained xmlns:x='urn:opaque' keep='&#65;'/>");
+        package.set_part(&part, source.as_bytes().to_vec());
+        let mut deck = Presentation::from_package(package).unwrap();
+        let before = deck.staged_package(true).unwrap();
+        let mut properties = deck
+            .master_text_style(0, "title", 1)
+            .unwrap()
+            .cloned()
+            .unwrap_or_default();
+        let mut font = properties
+            .default_run_properties
+            .clone()
+            .unwrap_or_default();
+        font.font_size = Some(4000);
+        font.latin = Some(TextFont::new("Carlito").unwrap());
+        properties.default_run_properties = Some(font);
+        deck.set_master_text_style(0, "title", 1, properties.clone())
+            .unwrap();
+        let mut expected_writer = quick_xml::Writer::new(Vec::new());
+        properties
+            .write_xml(&mut expected_writer, "a:lvl1pPr")
+            .unwrap();
+        let mut expected_xml = format!("<a:lstStyle xmlns:a=\"{A_NS}\">").into_bytes();
+        // A standalone level carries its own conventional DrawingML binding.
+        // Match that requested source closure before comparing every property.
+        let mut expected_level = expected_writer.into_inner();
+        let end = expected_level
+            .iter()
+            .position(|byte| *byte == b'>')
+            .unwrap();
+        let insertion = if expected_level[end - 1] == b'/' {
+            end - 1
+        } else {
+            end
+        };
+        expected_level.splice(insertion..insertion, format!(" xmlns:a=\"{A_NS}\"").bytes());
+        expected_xml.extend_from_slice(&expected_level);
+        expected_xml.extend_from_slice(b"</a:lstStyle>");
+        let expected_list = CT_TextListStyle::from_xml(&expected_xml).unwrap();
+        let expected = expected_list.level(1).unwrap();
+        assert_eq!(
+            deck.master_text_style(0, "title", 1).unwrap(),
+            Some(expected)
+        );
+        let saved = deck.to_bytes().unwrap();
+        deck.set_master_text_style(0, "title", 1, properties.clone())
+            .unwrap();
+        assert_eq!(deck.to_bytes().unwrap(), saved);
+        let reopened = Presentation::from_bytes(&saved).unwrap();
+        assert_eq!(
+            reopened
+                .master_text_style(0, "title", 1)
+                .unwrap()
+                .unwrap()
+                .default_run_properties
+                .as_ref()
+                .unwrap()
+                .font_size,
+            Some(4000)
+        );
+        assert!(
+            String::from_utf8(required_part(&deck.package, &part).unwrap().to_vec())
+                .unwrap()
+                .contains("<x:retained xmlns:x='urn:opaque' keep='&#65;'/>")
+        );
+        for (name, bytes) in &before.parts {
+            if name != &part {
+                assert_eq!(
+                    required_part(&deck.staged_package(true).unwrap(), name).unwrap(),
+                    bytes
+                );
+            }
+        }
+        for (style, level) in [("body", 0), ("body", 10), ("foreign", 1)] {
+            assert!(
+                deck.set_master_text_style(0, style, level, properties.clone())
+                    .is_err()
+            );
+            assert_eq!(deck.to_bytes().unwrap(), saved);
+        }
+        for level in 1..=5 {
+            let mut properties = deck
+                .master_text_style(0, "body", level)
+                .unwrap()
+                .cloned()
+                .unwrap_or_default();
+            let mut bullet = properties.bullet.clone().unwrap_or_default();
+            bullet.choice = Some(TextBulletChoice::Character(
+                TextBulletCharacter::new("•").unwrap(),
+            ));
+            properties.set_bullet(Some(bullet));
+            deck.set_master_text_style(0, "body", level, properties)
+                .unwrap();
+        }
+        let reopened = Presentation::from_bytes(&deck.to_bytes().unwrap()).unwrap();
+        for level in 1..=5 {
+            assert!(matches!(
+                reopened
+                    .master_text_style(0, "body", level)
+                    .unwrap()
+                    .unwrap()
+                    .bullet
+                    .as_ref()
+                    .unwrap()
+                    .choice,
+                Some(TextBulletChoice::Character(_))
+            ));
+        }
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn fx209_background_reference_opaque_source_refuses_atomically() {
+        let original = Presentation::new().unwrap();
+        let part = original.master_part(0).unwrap().unwrap();
+        for opaque in [
+            "attribute",
+            "child",
+            "transform-attribute",
+            "color-attribute",
+            "nested-color",
+        ] {
+            let mut package = original.staged_package(true).unwrap();
+            let source =
+                String::from_utf8(required_part(&package, &part).unwrap().to_vec()).unwrap();
+            let changed = if opaque == "attribute" {
+                source.replacen(
+                    "<p:bgRef ",
+                    "<p:bgRef xmlns:x='urn:opaque' x:keep='&#65;' ",
+                    1,
+                )
+            } else if opaque == "child" {
+                source.replacen(
+                    "</p:bgRef>",
+                    "<x:retained xmlns:x='urn:opaque' keep='&#65;'/></p:bgRef>",
+                    1,
+                )
+            } else {
+                let reference = source.find("<p:bgRef ").unwrap();
+                let content = reference + source[reference..].find('>').unwrap() + 1;
+                let end = content + source[content..].find("</p:bgRef>").unwrap();
+                let replacement = match opaque {
+                    "transform-attribute" => {
+                        "<a:srgbClr val='ABCDEF'><a:tint val='50000' lastClr='ABCDEF'/></a:srgbClr>"
+                    }
+                    "color-attribute" => "<a:srgbClr val='ABCDEF' hue='60000'/>",
+                    _ => "<a:srgbClr val='ABCDEF'><a:schemeClr val='accent1'/></a:srgbClr>",
+                };
+                let mut changed = source.clone();
+                changed.replace_range(content..end, replacement);
+                changed
+            };
+            assert_ne!(
+                changed, source,
+                "source background reference fixture {opaque}"
+            );
+            package.set_part(&part, changed.into_bytes());
+            let mut deck = Presentation::from_package(package).unwrap();
+            let before = deck.to_bytes().unwrap();
+            let image = render_bound_png_header(2, 2);
+            assert!(
+                deck.set_picture_fill(
+                    &FillOwnerLocation::OwnedBackground {
+                        owner: ShapeOwner::Master(0)
+                    },
+                    &image,
+                    "background.png"
+                )
+                .is_err()
+            );
+            assert_eq!(
+                deck.to_bytes().unwrap(),
+                before,
+                "F209_BACKGROUND_OPAQUE_ATOMIC {opaque}"
+            );
+        }
+    }
+
+    #[test]
+    fn fx209_imported_opaque_relationship_references_are_preflighted_atomically() {
+        let source = Presentation::new().unwrap();
+        let selected = [
+            source.master_part(0).unwrap().unwrap(),
+            source.layouts[0].part_name.clone(),
+            source.theme_part_for_edit(0).unwrap(),
+        ];
+        let mut destination = Presentation::new().unwrap();
+        destination.add_slide(6).unwrap();
+        let before = destination.to_bytes().unwrap();
+        for part in selected {
+            let mut package = source.staged_package(true).unwrap();
+            let xml = String::from_utf8(required_part(&package, &part).unwrap().to_vec()).unwrap();
+            let close = xml.rfind("</").unwrap();
+            let mut changed = xml.clone();
+            changed.insert_str(close, &format!("<x:retained xmlns:x=\"urn:opaque\" xmlns:z=\"{}\" z:embed=\"missing\" keep=\"&#65;\"/>", rpptx_oxml::namespace::R_NS));
+            package.set_part(&part, changed.into_bytes());
+            assert!(
+                destination.apply_theme(&package, None, true, &[]).is_err(),
+                "F209_OPAQUE_REF_PREFLIGHT {part}"
+            );
+            assert_eq!(
+                destination.to_bytes().unwrap(),
+                before,
+                "F209_OPAQUE_REF_ATOMIC {part}"
+            );
+        }
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn fx209_background_detachment_copies_actual_image_scope_and_restores_inheritance() {
+        let mut deck = Presentation::new().unwrap();
+        deck.add_slide(6).unwrap();
+        let image = render_bound_png_header(2, 2);
+        deck.set_picture_fill(
+            &FillOwnerLocation::OwnedBackground {
+                owner: ShapeOwner::Master(0),
+            },
+            &image,
+            "background.png",
+        )
+        .unwrap();
+        let master_part = deck
+            .owner_part_name(ShapeOwner::Master(0))
+            .unwrap()
+            .to_owned();
+        let original = deck.staged_package(true).unwrap();
+        for owner in [ShapeOwner::Layout(6), ShapeOwner::Slide(0)] {
+            deck.set_follow_master_background_at(owner, false).unwrap();
+            assert!(deck.has_explicit_background_at(owner).unwrap());
+            let part = deck.owner_part_name(owner).unwrap();
+            let background = deck.owner_data(owner).unwrap().background.as_ref().unwrap();
+            let ids = relationship_ids(background.raw_xml()).unwrap();
+            assert_eq!(ids.len(), 1);
+            let relationship = deck
+                .package
+                .get_part_rels(part)
+                .unwrap()
+                .get_by_id(&ids[0])
+                .unwrap();
+            assert_eq!(
+                required_part(
+                    &deck.package,
+                    &OpcPackage::resolve_rel_target(part, &relationship.target)
+                )
+                .unwrap(),
+                image
+            );
+            let before = deck.to_bytes().unwrap();
+            deck.set_follow_master_background_at(owner, false).unwrap();
+            assert_eq!(deck.to_bytes().unwrap(), before);
+            let reopened = Presentation::from_bytes(&before).unwrap();
+            assert!(reopened.has_explicit_background_at(owner).unwrap());
+            deck.set_follow_master_background_at(owner, true).unwrap();
+            assert!(!deck.has_explicit_background_at(owner).unwrap());
+        }
+        assert_eq!(
+            required_part(&deck.staged_package(true).unwrap(), &master_part).unwrap(),
+            required_part(&original, &master_part).unwrap()
+        );
+        let before = deck.to_bytes().unwrap();
+        assert!(
+            deck.set_follow_master_background_at(ShapeOwner::Layout(usize::MAX), false)
+                .is_err()
+        );
+        assert_eq!(deck.to_bytes().unwrap(), before);
+    }
+
+    #[test]
+    fn fx209_imported_master_mapping_preserves_direct_slide_source_and_unrelated_parts() {
+        let mut source = Presentation::new().unwrap();
+        source
+            .set_theme_color(0, "accent1", RgbColor::new(17, 34, 51))
+            .unwrap();
+        let source_package = source.staged_package(true).unwrap();
+        let mut destination = Presentation::new().unwrap();
+        destination.add_slide(6).unwrap();
+        destination
+            .shapes_mut(0, &[])
+            .unwrap()
+            .add_textbox(Emu(100), Emu(200), Emu(300), Emu(400))
+            .unwrap();
+        let before = destination.staged_package(true).unwrap();
+        let masters = destination.master_count();
+        let layouts = destination.layout_count();
+        destination
+            .apply_theme(&source_package, None, true, &[(6, 0)])
+            .unwrap();
+        assert_eq!(destination.master_count(), masters + 1);
+        assert_eq!(destination.layout_count(), layouts + source.layout_count());
+        let imported = destination.master_layout_indices(masters).unwrap();
+        assert_eq!(
+            imported.len(),
+            source.master_layout_indices(0).unwrap().len()
+        );
+        assert_eq!(
+            destination.slide_layout_index(0),
+            Some(imported[0]),
+            "F209_IMPORT_MAPPING slide_count={} slide={:?} layouts={:?}",
+            destination.slides.len(),
+            destination.slides.first().map(|slide| &slide.part_name),
+            destination
+                .layouts
+                .iter()
+                .map(|layout| &layout.part_name)
+                .collect::<Vec<_>>()
+        );
+        let after = destination.staged_package(true).unwrap();
+        for (part, bytes) in &before.parts {
+            let is_theme =
+                (0..masters).any(|index| destination.theme_part_for_edit(index).unwrap() == *part);
+            if !is_theme && part != &destination.presentation_part {
+                assert_eq!(
+                    after.get_part(part),
+                    Some(bytes.as_slice()),
+                    "F209_IMPORT_DIRECT_SOURCE {part}"
+                );
+            }
+        }
+        let ids = destination
+            .masters
+            .iter()
+            .flat_map(|record| record.master.as_ref().unwrap().slide_layout_ids().unwrap())
+            .map(|(id, _)| id)
+            .collect::<Vec<_>>();
+        assert_eq!(ids.iter().collect::<HashSet<_>>().len(), ids.len());
+        let saved = destination.to_bytes().unwrap();
+        let reopened = Presentation::from_bytes(&saved).unwrap();
+        assert_eq!(reopened.master_count(), masters + 1);
+        assert_eq!(
+            reopened.slide_layout_index(0),
+            Some(reopened.master_layout_indices(masters).unwrap()[0])
+        );
+        for map in [
+            vec![(6, 0), (6, 1)],
+            vec![(usize::MAX, 0)],
+            vec![(6, usize::MAX)],
+        ] {
+            assert!(
+                destination
+                    .apply_theme(&source_package, None, true, &map)
+                    .is_err()
+            );
+            assert_eq!(destination.to_bytes().unwrap(), saved);
+        }
+        let mut no_mapping = Presentation::new().unwrap();
+        no_mapping.add_slide(6).unwrap();
+        let before = no_mapping.staged_package(true).unwrap();
+        no_mapping
+            .apply_theme(&source_package, None, true, &[])
+            .unwrap();
+        for slide in &no_mapping.slides {
+            assert_eq!(
+                no_mapping
+                    .package
+                    .get_part_rels(&slide.part_name)
+                    .unwrap()
+                    .to_xml()
+                    .unwrap(),
+                before
+                    .get_part_rels(&slide.part_name)
+                    .unwrap()
+                    .to_xml()
+                    .unwrap()
+            );
+        }
+    }
+
+    #[cfg(feature = "default-template")]
+    #[test]
+    fn fx209_selected_scheme_image_closure_and_fresh_master_images_are_real() {
+        let mut source = Presentation::new().unwrap();
+        let image = b"\x89PNG\r\n\x1a\nselected-theme-image";
+        source
+            .shapes_mut_at(ShapeOwner::Master(0), &[])
+            .unwrap()
+            .add_picture(
+                image,
+                "logo.png",
+                Emu(0),
+                Emu(0),
+                Some(Emu(100)),
+                Some(Emu(200)),
+            )
+            .unwrap();
+        let mut source_package = source.staged_package(true).unwrap();
+        let theme_part = source.theme_part_for_edit(0).unwrap();
+        let image_part = source_package
+            .parts
+            .keys()
+            .find(|name| name.starts_with("/ppt/media/"))
+            .unwrap()
+            .clone();
+        let mut relationships = source_package
+            .get_part_rels(&theme_part)
+            .cloned()
+            .unwrap_or_default();
+        let id = relationships.add(
+            rel_types::IMAGE,
+            &relative_part_target(&theme_part, &image_part),
+        );
+        let xml = source_package.get_part(&theme_part).unwrap();
+        let list = theme_source_owner(
+            xml,
+            &["theme", "themeElements", "fmtScheme", "bgFillStyleLst"],
+        )
+        .unwrap()
+        .unwrap();
+        let list_source = portable_owned_fragment(xml, list.start, list.end).unwrap();
+        let (fills, _) = property_child_ranges(&list_source, A_NS, "bgFillStyleLst").unwrap();
+        assert_eq!(fills.len(), 3);
+        let (_, _, start, end) = &fills[0];
+        let mut changed_list = list_source.clone();
+        changed_list.splice(*start..*end, format!("<a:blipFill xmlns:a=\"{A_NS}\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><a:blip r:embed=\"{id}\"/><a:stretch><a:fillRect/></a:stretch></a:blipFill>").bytes());
+        let mut changed = xml.to_vec();
+        changed.splice(list.start..list.end, changed_list);
+        source_package.set_part(&theme_part, changed);
+        source_package.set_part_rels(&theme_part, relationships);
+        for import in [false, true] {
+            let mut deck = Presentation::new().unwrap();
+            deck.add_slide(6).unwrap();
+            let before = deck.staged_package(true).unwrap();
+            let slide_part = deck.slides[0].part_name.clone();
+            deck.apply_theme(&source_package, None, import, &[])
+                .unwrap();
+            assert_eq!(deck.master_count(), if import { 2 } else { 1 });
+            let saved = deck.staged_package(true).unwrap();
+            assert_eq!(saved.get_part(&slide_part), before.get_part(&slide_part));
+            let dest_theme = deck.theme_part_for_edit(0).unwrap();
+            let fmt =
+                portable_theme_scheme(saved.get_part(&dest_theme).unwrap(), "fmtScheme").unwrap();
+            let ids = relationship_ids(&fmt).unwrap();
+            assert_eq!(ids.len(), 1);
+            let copied =
+                require_internal_related_part(&saved, &dest_theme, &ids[0], rel_types::IMAGE)
+                    .unwrap();
+            assert_eq!(saved.get_part(&copied).unwrap(), image);
+            assert_eq!(
+                saved.content_types.content_type_for(&copied),
+                Some("image/png")
+            );
+            assert_eq!(
+                saved
+                    .parts
+                    .keys()
+                    .filter(|part| part.starts_with("/ppt/media/"))
+                    .count(),
+                1
+            );
+            let reopened = Presentation::from_bytes(&deck.to_bytes().unwrap()).unwrap();
+            assert_eq!(reopened.master_count(), deck.master_count());
+            if import {
+                let master = reopened.master(1).unwrap();
+                let id = master
+                    .common_slide_data
+                    .shape_tree
+                    .children
+                    .iter()
+                    .find_map(|child| {
+                        if matches!(child, ShapeTreeChild::Picture(_)) {
+                            child.non_visual_id()
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap();
+                assert_eq!(
+                    reopened
+                        .picture_image_at(ShapeOwner::Master(1), id)
+                        .unwrap()
+                        .bytes,
+                    image
+                );
+            }
+            let before = deck.to_bytes().unwrap();
+            let mut bad = source_package.clone();
+            bad.content_types.add_override(&image_part, "image/jpeg");
+            assert!(deck.apply_theme(&bad, None, import, &[]).is_err());
+            assert_eq!(deck.to_bytes().unwrap(), before);
+        }
+    }
+
+    #[test]
+    fn fx209_selective_theme_transports_inherited_compatibility_policy_or_refuses_atomically() {
+        let source = Presentation::new().unwrap();
+        let mut source_package = source.staged_package(true).unwrap();
+        let theme_part = source.theme_part_for_edit(0).unwrap();
+        let mut xml =
+            String::from_utf8(source_package.get_part(&theme_part).unwrap().to_vec()).unwrap();
+        let root = xml.find("<a:theme ").unwrap();
+        xml.insert_str(root + "<a:theme".len(), " xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\" xmlns:x=\"urn:source-extension\" mc:Ignorable=\"x\"");
+        let close = xml.rfind("</a:fmtScheme>").unwrap();
+        xml.insert_str(close, "<x:retained keep='&#65;'/>");
+        source_package.set_part(&theme_part, xml.as_bytes().to_vec());
+        let mut destination = Presentation::new().unwrap();
+        destination
+            .apply_theme(&source_package, None, false, &[])
+            .unwrap();
+        let part = destination.theme_part_for_edit(0).unwrap();
+        let after = destination.staged_package(true).unwrap();
+        let owner = theme_source_owner(
+            after.get_part(&part).unwrap(),
+            &["theme", "themeElements", "fmtScheme"],
+        )
+        .unwrap()
+        .unwrap();
+        let fragment =
+            std::str::from_utf8(&after.get_part(&part).unwrap()[owner.start..owner.end]).unwrap();
+        assert!(fragment.contains("mc:Ignorable=\"x\""));
+        assert!(fragment.contains("xmlns:x=\"urn:source-extension\""));
+        assert!(fragment.contains("<x:retained keep='&#65;'/>"));
+        let stable = destination.to_bytes().unwrap();
+        let fmt = xml.find("<a:fmtScheme ").unwrap();
+        xml.insert_str(
+            fmt + "<a:fmtScheme".len(),
+            " xmlns:x=\"urn:rebound-extension\"",
+        );
+        source_package.set_part(&theme_part, xml.into_bytes());
+        assert!(
+            destination
+                .apply_theme(&source_package, None, false, &[])
+                .is_err()
+        );
+        assert_eq!(destination.to_bytes().unwrap(), stable);
+    }
+
+    #[test]
+    fn fx209_selective_theme_schemes_preserve_destination_and_refuse_unsafe_source() {
+        let mut source = Presentation::new().unwrap();
+        source
+            .set_theme_color(0, "accent1", RgbColor::new(17, 34, 51))
+            .unwrap();
+        source.set_theme_font(0, true, "latin", "Carlito").unwrap();
+        let source_part = source.theme_part_for_edit(0).unwrap();
+        let source_package = source.staged_package(true).unwrap();
+        let mut destination = Presentation::new().unwrap();
+        let before = destination.staged_package(true).unwrap();
+        let theme_part = destination.theme_part_for_edit(0).unwrap();
+        destination
+            .apply_theme(&source_package, None, false, &[])
+            .unwrap();
+        assert_eq!(
+            destination
+                .theme(0)
+                .unwrap()
+                .unwrap()
+                .colors
+                .iter()
+                .find(|(slot, _)| *slot == "accent1")
+                .unwrap()
+                .1,
+            Some(RgbColor::new(17, 34, 51))
+        );
+        assert_eq!(
+            destination.theme(0).unwrap().unwrap().major_font.latin,
+            "Carlito"
+        );
+        let after = destination.staged_package(true).unwrap();
+        for (part, bytes) in &before.parts {
+            if part != &theme_part {
+                assert_eq!(
+                    after.get_part(part),
+                    Some(bytes.as_slice()),
+                    "unrelated {part}"
+                );
+            }
+        }
+        for scheme in ["clrScheme", "fontScheme", "fmtScheme"] {
+            let expected =
+                portable_theme_scheme(source_package.get_part(&source_part).unwrap(), scheme)
+                    .unwrap();
+            let actual =
+                portable_theme_scheme(after.get_part(&theme_part).unwrap(), scheme).unwrap();
+            assert_eq!(actual, expected);
+        }
+        let saved = destination.to_bytes().unwrap();
+        let reopened = Presentation::from_bytes(&saved).unwrap();
+        assert_eq!(
+            reopened.theme(0).unwrap().unwrap().major_font.latin,
+            "Carlito"
+        );
+        let mut thmx = OpcPackage::new();
+        thmx.set_part(
+            "/theme/custom.xml",
+            source_package.get_part(&source_part).unwrap().to_vec(),
+        );
+        thmx.content_types
+            .add_override("/theme/custom.xml", content_types::THEME);
+        thmx.package_rels.add(rel_types::THEME, "theme/custom.xml");
+        destination.apply_theme(&thmx, None, false, &[]).unwrap();
+        let unchanged = destination.to_bytes().unwrap();
+        assert!(destination.apply_theme(&thmx, Some(0), false, &[]).is_err());
+        assert_eq!(destination.to_bytes().unwrap(), unchanged);
+        let mut bad = thmx.clone();
+        let xml = bad.get_part("/theme/custom.xml").unwrap();
+        let fmt = theme_source_owner(xml, &["theme", "themeElements", "fmtScheme"])
+            .unwrap()
+            .unwrap();
+        let mut changed = xml.to_vec();
+        let close = xml[fmt.start..fmt.end]
+            .windows(2)
+            .rposition(|token| token == b"</")
+            .unwrap()
+            + fmt.start;
+        changed.splice(close..close, br#"<x:retained xmlns:x="urn:opaque" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="rId1"/>"#.iter().copied());
+        bad.set_part("/theme/custom.xml", changed);
+        let mut relationships = Relationships::new();
+        relationships.add(rel_types::OLE_OBJECT, "unsafe.bin");
+        bad.set_part_rels("/theme/custom.xml", relationships);
+        assert!(destination.apply_theme(&bad, None, false, &[]).is_err());
+        assert_eq!(destination.to_bytes().unwrap(), unchanged);
+    }
+
+    #[test]
+    fn fx209_layout_lifecycle_preserves_source_and_checks_complete_inbound_graph() {
+        let mut deck = Presentation::new().unwrap();
+        deck.add_slide(6).unwrap();
+        deck.slide_mut(0).unwrap().set_hidden(true);
+        let original = deck.to_bytes().unwrap();
+        assert!(deck.remove_layout(6).is_err());
+        assert_eq!(
+            deck.to_bytes().unwrap(),
+            original,
+            "F209_USED_HIDDEN_LAYOUT_ATOMIC"
+        );
+        let count = deck.layout_count();
+        let owner = deck.layout_master_index(6).unwrap();
+        let clone = deck.duplicate_layout(6).unwrap();
+        assert_eq!(deck.layout_count(), count + 1);
+        assert_eq!(deck.layout_master_index(clone).unwrap(), owner);
+        assert_eq!(deck.layout_name(clone), deck.layout_name(6));
+        assert_eq!(deck.layouts[clone].layout, deck.layouts[6].layout);
+        let master = deck.master(owner).unwrap();
+        let ids = master.slide_layout_ids().unwrap();
+        assert_eq!(ids.len(), deck.master_layout_indices(owner).unwrap().len());
+        assert_eq!(
+            ids.iter().map(|(id, _)| id).collect::<HashSet<_>>().len(),
+            ids.len()
+        );
+        let source_package = Presentation::from_bytes(&original)
+            .unwrap()
+            .staged_package(true)
+            .unwrap();
+        let duplicated_package = deck.staged_package(true).unwrap();
+        let master_part = deck.masters[owner].part_name.clone();
+        for (part, bytes) in &source_package.parts {
+            if part != &master_part {
+                assert_eq!(
+                    duplicated_package.get_part(part),
+                    Some(bytes.as_slice()),
+                    "F209_DUPLICATE_UNRELATED {part}"
+                );
+            }
+        }
+        let duplicated_bytes = deck.to_bytes().unwrap();
+        let mut obstructed = deck.clone();
+        let cloned_part = obstructed.layouts[clone].part_name.clone();
+        let mut unknown = Relationships::new();
+        unknown.add(
+            rel_types::SLIDE_LAYOUT,
+            &relative_part_target("/custom/retained.xml", &cloned_part),
+        );
+        obstructed
+            .package
+            .set_part("/custom/retained.xml", b"<retained/>".to_vec());
+        obstructed
+            .package
+            .set_part_rels("/custom/retained.xml", unknown);
+        let before = obstructed.to_bytes().unwrap();
+        assert!(obstructed.remove_layout(clone).is_err());
+        assert_eq!(
+            obstructed.to_bytes().unwrap(),
+            before,
+            "F209_RAW_INBOUND_LAYOUT_ATOMIC"
+        );
+        deck.remove_layout(clone).unwrap();
+        assert_eq!(deck.layout_count(), count);
+        assert_eq!(
+            deck.to_bytes().unwrap(),
+            original,
+            "F209_DUPLICATE_REMOVE_EXACT_RESTORATION"
+        );
+        let reopened = Presentation::from_bytes(&duplicated_bytes).unwrap();
+        assert_eq!(reopened.to_bytes().unwrap(), duplicated_bytes);
+    }
+
+    #[cfg(feature = "default-template")]
+    #[test]
+    fn fx209_theme_slots_preserve_other_parts_and_refuse_atomically() {
+        let mut source_deck = Presentation::new().unwrap();
+        let theme_part = source_deck.theme_part_for_edit(0).unwrap();
+        let original_theme =
+            String::from_utf8(source_deck.package.get_part(&theme_part).unwrap().to_vec()).unwrap();
+        let alias_theme = original_theme
+            .replace("a:", "q:")
+            .replace("xmlns:a=", "xmlns:q=")
+            .replacen(
+                "<q:theme ",
+                "<q:theme xmlns:x='urn:example' x:keep='&#65;' ",
+                1,
+            );
+        assert!(alias_theme.contains("x:keep='&#65;'"));
+        source_deck
+            .package
+            .set_part(&theme_part, alias_theme.as_bytes().to_vec());
+        source_deck
+            .set_theme_color(0, "accent1", RgbColor::new(17, 34, 51))
+            .unwrap();
+        source_deck
+            .set_theme_font(0, true, "latin", "Carlito")
+            .unwrap();
+        let edited_source =
+            std::str::from_utf8(source_deck.package.get_part(&theme_part).unwrap()).unwrap();
+        assert!(
+            edited_source.contains("x:keep='&#65;'"),
+            "F209_OPAQUE_THEME_ATTRIBUTE_BYTES"
+        );
+        assert!(edited_source.contains("<q:theme "));
+        assert!(!edited_source.contains("<a:theme"));
+        let bytes = source_deck.to_bytes().unwrap();
+        let reopened = Presentation::from_bytes(&bytes).unwrap();
+        assert_eq!(reopened.to_bytes().unwrap(), bytes);
+        for (old, replacement) in [
+            ("<q:theme ", "<q:theme xmlns:q='urn:foreign' "),
+            ("<q:clrScheme ", "<q:clrScheme xmlns:q='urn:foreign' "),
+            ("<q:accent1>", "<q:accent1 xmlns:q='urn:foreign'>"),
+            ("<q:majorFont>", "<q:majorFont xmlns:q='urn:foreign'>"),
+        ] {
+            assert!(
+                alias_theme.contains(old),
+                "source-qualified fixture owner {old}"
+            );
+            let foreign = if old == "<q:theme " {
+                alias_theme.replacen(A_NS, "urn:foreign", 1)
+            } else {
+                alias_theme.replacen(old, replacement, 1)
+            };
+            let mut package = source_deck.staged_package(true).unwrap();
+            package.set_part(&theme_part, foreign.into_bytes());
+            let mut deck = Presentation::from_package(package).unwrap();
+            let before = deck.to_bytes().unwrap();
+            let result = if old.contains("majorFont") {
+                deck.set_theme_font(0, true, "latin", "Other")
+            } else {
+                deck.set_theme_color(0, "accent1", RgbColor::new(1, 2, 3))
+            };
+            assert!(result.is_err(), "F209_FOREIGN_THEME_OWNER_REFUSED {old}");
+            assert_eq!(
+                deck.to_bytes().unwrap(),
+                before,
+                "F209_FOREIGN_THEME_ATOMIC {old}"
+            );
+        }
+        for (choice, allowed, misplaced) in [
+            ("sysClr", "val='windowText' lastClr='000000'", "hue='1'"),
+            ("schemeClr", "val='accent2'", "lastClr='ABCDEF'"),
+            ("prstClr", "val='red'", "hue='1'"),
+            ("scrgbClr", "r='10000' g='20000' b='30000'", "val='1'"),
+            ("hslClr", "hue='0' sat='50000' lum='50000'", "r='1'"),
+        ] {
+            for opaque in [false, true] {
+                let attributes = if opaque {
+                    format!("{allowed} {misplaced}")
+                } else {
+                    allowed.to_owned()
+                };
+                let input = alias_theme.replacen(
+                    "<q:accent1><q:srgbClr val=\"4F81BD\"/></q:accent1>",
+                    &format!("<q:accent1><q:{choice} {attributes}/></q:accent1>"),
+                    1,
+                );
+                assert_ne!(input, alias_theme, "qualified source color fixture");
+                let mut package = source_deck.staged_package(true).unwrap();
+                package.set_part(&theme_part, input.into_bytes());
+                let mut deck = Presentation::from_package(package).unwrap();
+                let before = deck.to_bytes().unwrap();
+                let result = deck.set_theme_color(0, "accent1", RgbColor::new(17, 34, 51));
+                if opaque {
+                    assert!(
+                        result.is_err(),
+                        "F209_MISPLACED_COLOR_ATTRIBUTE_REFUSED {choice}"
+                    );
+                    assert_eq!(
+                        deck.to_bytes().unwrap(),
+                        before,
+                        "F209_MISPLACED_COLOR_ATTRIBUTE_ATOMIC {choice}"
+                    );
+                } else {
+                    result.unwrap();
+                    assert_eq!(
+                        deck.theme(0)
+                            .unwrap()
+                            .unwrap()
+                            .colors
+                            .iter()
+                            .find(|(slot, _)| *slot == "accent1")
+                            .unwrap()
+                            .1,
+                        Some(RgbColor::new(17, 34, 51))
+                    );
+                    let saved = deck.to_bytes().unwrap();
+                    assert_eq!(
+                        Presentation::from_bytes(&saved)
+                            .unwrap()
+                            .to_bytes()
+                            .unwrap(),
+                        saved
+                    );
+                }
+            }
+        }
+        let tinted = alias_theme.replacen("<q:accent1><q:srgbClr val=\"4F81BD\"/></q:accent1>", "<q:accent1><q:srgbClr val=\"4F81BD\"><q:tint val=\"50000\"/><x:keep v='&#65;'/></q:srgbClr></q:accent1>", 1);
+        assert_ne!(
+            tinted, alias_theme,
+            "imported transform fixture selected real accent1"
+        );
+        let mut package = source_deck.staged_package(true).unwrap();
+        package.set_part(&theme_part, tinted.into_bytes());
+        let mut transformed = Presentation::from_package(package).unwrap();
+        transformed
+            .set_theme_color(0, "accent1", RgbColor::new(17, 34, 51))
+            .unwrap();
+        let colors = transformed.theme(0).unwrap().unwrap().colors;
+        assert_eq!(
+            colors
+                .iter()
+                .find(|(slot, _)| *slot == "accent1")
+                .unwrap()
+                .1,
+            Some(RgbColor::new(17, 34, 51)),
+            "F209_ABSOLUTE_THEME_RGB"
+        );
+        let xml = std::str::from_utf8(transformed.package.get_part(&theme_part).unwrap()).unwrap();
+        assert!(xml.contains("<x:keep v='&#65;'/>") && xml.contains("x:keep='&#65;'"));
+        let selected = xml
+            .split("<q:accent1>")
+            .nth(1)
+            .unwrap()
+            .split("</q:accent1>")
+            .next()
+            .unwrap();
+        assert!(
+            !selected.contains("<q:tint"),
+            "F209_SELECTED_RGB_TRANSFORMS_CLEARED"
+        );
+        let bytes = transformed.to_bytes().unwrap();
+        assert_eq!(
+            Presentation::from_bytes(&bytes)
+                .unwrap()
+                .to_bytes()
+                .unwrap(),
+            bytes
+        );
+        for transform in [
+            "<q:tint xmlns:q='urn:foreign' val='50000'/>",
+            "<q:tint val='50000' x:keep='&#65;'/>",
+        ] {
+            let input = alias_theme.replacen(
+                "<q:accent1><q:srgbClr val=\"4F81BD\"/></q:accent1>",
+                &format!(
+                    "<q:accent1><q:srgbClr val=\"4F81BD\">{transform}</q:srgbClr></q:accent1>"
+                ),
+                1,
+            );
+            assert_ne!(input, alias_theme);
+            let mut package = source_deck.staged_package(true).unwrap();
+            package.set_part(&theme_part, input.into_bytes());
+            let mut deck = Presentation::from_package(package).unwrap();
+            let before = deck.to_bytes().unwrap();
+            assert!(
+                deck.set_theme_color(0, "accent1", RgbColor::new(17, 34, 51))
+                    .is_err(),
+                "F209_UNSAFE_TRANSFORM_REFUSED"
+            );
+            assert_eq!(
+                deck.to_bytes().unwrap(),
+                before,
+                "F209_UNSAFE_TRANSFORM_ATOMIC"
+            );
+        }
+        let mut deck = Presentation::new().unwrap();
+        let before = deck.staged_package(true).unwrap();
+        let master_part = deck.master_part(0).unwrap().unwrap();
+        let theme_part = related_internal_part(&deck.package, &master_part, rel_types::THEME)
+            .unwrap()
+            .unwrap();
+        let original =
+            CT_OfficeStyleSheet::from_xml(before.get_part(&theme_part).unwrap()).unwrap();
+        deck.set_theme_color(0, "accent1", RgbColor::new(17, 34, 51))
+            .unwrap();
+        deck.set_theme_font(0, true, "latin", "Carlito").unwrap();
+        let bytes = deck.to_bytes().unwrap();
+        let reopened = Presentation::from_bytes(&bytes).unwrap();
+        let current = reopened.theme(0).unwrap().unwrap();
+        assert_eq!(
+            current
+                .colors
+                .iter()
+                .find(|(slot, _)| *slot == "accent1")
+                .unwrap()
+                .1,
+            Some(RgbColor::new(17, 34, 51))
+        );
+        assert_eq!(current.major_font.latin, "Carlito");
+        let saved = reopened.staged_package(true).unwrap();
+        let edited = CT_OfficeStyleSheet::from_xml(saved.get_part(&theme_part).unwrap()).unwrap();
+        assert_eq!(
+            edited.theme_elements.format_scheme,
+            original.theme_elements.format_scheme
+        );
+        assert_eq!(
+            edited.theme_elements.font_scheme.minor_font,
+            original.theme_elements.font_scheme.minor_font
+        );
+        assert_eq!(
+            edited
+                .theme_elements
+                .font_scheme
+                .major_font
+                .supplemental_fonts,
+            original
+                .theme_elements
+                .font_scheme
+                .major_font
+                .supplemental_fonts
+        );
+        for (name, part) in &before.parts {
+            if name != &theme_part {
+                assert_eq!(
+                    saved.get_part(name),
+                    Some(part.as_slice()),
+                    "F209_THEME_UNRELATED_PART {name}"
+                );
+            }
+        }
+        assert!(
+            deck.set_theme_color(0, "unknown", RgbColor::new(1, 2, 3))
+                .is_err()
+        );
+        assert!(deck.set_theme_font(0, true, "unknown", "Other").is_err());
+        assert!(
+            deck.set_theme_font(0, true, "latin", "bad\u{0}face")
+                .is_err()
+        );
+        assert_eq!(deck.to_bytes().unwrap(), bytes, "F209_THEME_ATOMIC_REFUSAL");
+        deck.set_theme_color(0, "accent1", RgbColor::new(17, 34, 51))
+            .unwrap();
+        deck.set_theme_font(0, true, "latin", "Carlito").unwrap();
+        assert_eq!(deck.to_bytes().unwrap(), bytes, "F209_THEME_EXACT_NOOP");
+        assert_eq!(reopened.to_bytes().unwrap(), bytes);
+    }
+
+    #[cfg(all(feature = "default-template", feature = "render"))]
+    #[test]
+    fn fx209_part_owned_shape_edits_persist_and_refuse_atomically() {
+        let mut deck = Presentation::new().unwrap();
+        deck.add_slide(6).unwrap();
+        let original = deck.staged_package(true).unwrap();
+        let slide_part = deck.slides[0].part_name.clone();
+        let unrelated_layout = deck.layouts[1].part_name.clone();
+        let image = b"\x89PNG\r\n\x1a\nfixture";
+        for owner in [ShapeOwner::Master(0), ShapeOwner::Layout(6)] {
+            let part = deck.owner_part_name(owner).unwrap().to_owned();
+            let index = deck.owner_data(owner).unwrap().shape_tree.children.len();
+            deck.shapes_mut_at(owner, &[])
+                .unwrap()
+                .add_picture(
+                    image,
+                    "logo.png",
+                    Emu(10),
+                    Emu(20),
+                    Some(Emu(100)),
+                    Some(Emu(200)),
+                )
+                .unwrap()
+                .set_name("part-owned-logo")
+                .unwrap();
+            deck.shape_mut_at(owner, &[index])
+                .unwrap()
+                .set_position(Emu(30), Emu(40))
+                .unwrap();
+            let before = deck.to_bytes().unwrap();
+            assert!(
+                deck.shape_mut_at(owner, &[index])
+                    .unwrap()
+                    .set_size(Emu(-1), Emu(200))
+                    .is_err()
+            );
+            assert_eq!(
+                deck.to_bytes().unwrap(),
+                before,
+                "F209_PART_OWNER_ATOMIC_REFUSAL"
+            );
+            let rels = deck.package.get_part_rels(&part).unwrap();
+            let picture = deck.part_shape_at(owner, &[index]).unwrap().child;
+            let ShapeTreeChild::Picture(picture) = picture else {
+                panic!("physical picture owner")
+            };
+            let rel = rels
+                .get_by_id(
+                    picture
+                        .blip_fill
+                        .as_ref()
+                        .unwrap()
+                        .blip
+                        .as_ref()
+                        .unwrap()
+                        .embed
+                        .as_deref()
+                        .unwrap(),
+                )
+                .unwrap();
+            assert_eq!(rel.rel_type, rel_types::IMAGE);
+            assert!(
+                deck.package
+                    .get_part(&OpcPackage::resolve_rel_target(&part, &rel.target))
+                    .is_some()
+            );
+            let reopened = Presentation::from_bytes(&before).unwrap();
+            let child = reopened.part_shape_at(owner, &[index]).unwrap().child;
+            assert_eq!(
+                shape_transform(child).unwrap().offset,
+                Some(CT_Point2D {
+                    x: Emu(30),
+                    y: Emu(40)
+                })
+            );
+            assert_eq!(reopened.to_bytes().unwrap(), before);
+        }
+        let saved = deck.staged_package(true).unwrap();
+        assert_eq!(saved.get_part(&slide_part), original.get_part(&slide_part));
+        assert_eq!(
+            saved.get_part(&unrelated_layout),
+            original.get_part(&unrelated_layout)
+        );
+        let images = saved
+            .parts
+            .keys()
+            .filter(|name| name.starts_with("/ppt/media/"))
+            .count();
+        assert_eq!(images, 1, "F209_SHARED_MEDIA_DEDUP");
+    }
+
+    #[cfg(all(feature = "default-template", feature = "render"))]
+    #[test]
+    fn fx209_part_owned_picture_replacement_and_hyperlink_use_physical_scope() {
+        let mut deck = Presentation::new().unwrap();
+        deck.add_slide(6).unwrap();
+        let before_slide = deck
+            .staged_package(true)
+            .unwrap()
+            .get_part(&deck.slides[0].part_name)
+            .unwrap()
+            .to_vec();
+        let image = b"\x89PNG\r\n\x1a\nfixture";
+        for owner in [ShapeOwner::Master(0), ShapeOwner::Layout(6)] {
+            let index = deck.owner_data(owner).unwrap().shape_tree.children.len();
+            deck.shapes_mut_at(owner, &[])
+                .unwrap()
+                .add_picture(
+                    image,
+                    "logo.png",
+                    Emu(30),
+                    Emu(40),
+                    Some(Emu(100)),
+                    Some(Emu(200)),
+                )
+                .unwrap();
+            let saved = deck.to_bytes().unwrap();
+            let reopened = Presentation::from_bytes(&saved).unwrap();
+            let child = reopened.part_shape_at(owner, &[index]).unwrap().child;
+            let id = deck
+                .part_shape_at(owner, &[index])
+                .unwrap()
+                .non_visual_id()
+                .unwrap();
+            assert_eq!(deck.picture_image_at(owner, id).unwrap().bytes, image);
+            let owner_part = deck.owner_part_name(owner).unwrap().to_owned();
+            let source_package = deck.staged_package(true).unwrap();
+            let owner_xml = String::from_utf8(
+                required_part(&source_package, &owner_part)
+                    .unwrap()
+                    .to_vec(),
+            )
+            .unwrap();
+            assert_eq!(owner_xml.matches("<p:pic").count(), 1);
+            let picture_start = owner_xml.find("<p:pic").unwrap();
+            let picture_end = picture_start
+                + owner_xml[picture_start..].find("</p:pic>").unwrap()
+                + "</p:pic>".len();
+            let picture_source = &owner_xml[picture_start..picture_end];
+            for fallback_case in ["sole", "direct-duplicate", "group-duplicate"] {
+                let mut selected = format!(
+                    "<mc:AlternateContent xmlns:mc=\"http://schemas.openxmlformats.org/markup-compatibility/2006\"><mc:Choice Requires=\"x\" xmlns:x=\"urn:unsupported\"><x:opaque keep='&#65;'/></mc:Choice><mc:Fallback>{picture_source}</mc:Fallback></mc:AlternateContent>"
+                );
+                if fallback_case == "direct-duplicate" {
+                    selected.push_str(picture_source);
+                } else if fallback_case == "group-duplicate" {
+                    selected.push_str(&format!("<p:grpSp><p:nvGrpSpPr><p:cNvPr id=\"999\" name=\"Duplicate group\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"1000\" cy=\"1000\"/><a:chOff x=\"0\" y=\"0\"/><a:chExt cx=\"1000\" cy=\"1000\"/></a:xfrm></p:grpSpPr>{picture_source}</p:grpSp>"));
+                }
+                let mut changed = owner_xml.clone();
+                changed.replace_range(picture_start..picture_end, &selected);
+                let mut package = source_package.clone();
+                package.set_part(&owner_part, changed.into_bytes());
+                let mut fallback = Presentation::from_package(package).unwrap();
+                let before = fallback.to_bytes().unwrap();
+                if fallback_case == "sole" {
+                    assert_eq!(
+                        fallback.picture_image_at(owner, id).unwrap().bytes,
+                        image,
+                        "F209_SOLE_FALLBACK_READ"
+                    );
+                    let error = fallback
+                        .replace_picture_image_at(owner, id, image)
+                        .unwrap_err();
+                    assert!(
+                        error.to_string().contains("alternate content"),
+                        "F209_OPAQUE_FALLBACK_NAMED_REFUSAL {error}"
+                    );
+                } else {
+                    assert!(
+                        fallback.picture_image_at(owner, id).is_err(),
+                        "F209_FALLBACK_AMBIGUITY_READ {fallback_case}"
+                    );
+                    assert!(
+                        fallback.replace_picture_image_at(owner, id, image).is_err(),
+                        "F209_FALLBACK_AMBIGUITY_WRITE {fallback_case}"
+                    );
+                    assert!(
+                        fallback.remove_shape_at(owner, index + 1).is_err(),
+                        "F209_SUBTREE_FALLBACK_ID_AMBIGUITY_REMOVE {fallback_case}"
+                    );
+                }
+                assert_eq!(
+                    fallback.to_bytes().unwrap(),
+                    before,
+                    "F209_FALLBACK_ATOMIC {fallback_case}"
+                );
+            }
+            let mut duplicate = deck.clone();
+            let duplicate_child =
+                duplicate.owner_data(owner).unwrap().shape_tree.children[index].clone();
+            duplicate
+                .owner_data_mut(owner)
+                .unwrap()
+                .shape_tree
+                .children
+                .push(duplicate_child);
+            let duplicate_bytes = duplicate.to_bytes().unwrap();
+            let mut duplicate = Presentation::from_bytes(&duplicate_bytes).unwrap();
+            assert!(
+                duplicate.picture_image_at(owner, id).is_err(),
+                "F209_AMBIGUOUS_PICTURE_READ_REFUSED {owner:?}"
+            );
+            assert!(
+                duplicate
+                    .replace_picture_image_at(owner, id, image)
+                    .is_err(),
+                "F209_AMBIGUOUS_PICTURE_WRITE_REFUSED {owner:?}"
+            );
+            assert!(
+                duplicate.remove_shape_at(owner, index).is_err(),
+                "F209_FIRST_DUPLICATE_REMOVE_REFUSED {owner:?}"
+            );
+            assert_eq!(
+                duplicate.to_bytes().unwrap(),
+                duplicate_bytes,
+                "F209_AMBIGUOUS_PICTURE_ATOMIC {owner:?}"
+            );
+            let replacement = b"\x89PNG\r\n\x1a\nreplacement";
+            deck.replace_picture_image_at(owner, id, replacement)
+                .unwrap();
+            assert_eq!(deck.picture_image_at(owner, id).unwrap().bytes, replacement);
+            assert_eq!(
+                shape_transform(deck.part_shape_at(owner, &[index]).unwrap().child),
+                shape_transform(child)
+            );
+            deck.set_shape_hyperlink_at(owner, id, Some("https://example.com/logo"))
+                .unwrap();
+            assert_eq!(
+                deck.shape_hyperlink_address_at(owner, id).unwrap(),
+                Some("https://example.com/logo")
+            );
+            let linked = deck.to_bytes().unwrap();
+            deck.set_shape_hyperlink_at(owner, id, Some("https://example.com/logo"))
+                .unwrap();
+            assert_eq!(deck.to_bytes().unwrap(), linked);
+            assert!(
+                deck.set_shape_hyperlink_at(owner, id, Some("bad\u{0}address"))
+                    .is_err()
+            );
+            assert!(
+                deck.replace_picture_image_at(owner, id, b"not an image")
+                    .is_err()
+            );
+            assert_eq!(deck.to_bytes().unwrap(), linked);
+            let reopened = Presentation::from_bytes(&linked).unwrap();
+            assert_eq!(
+                reopened.picture_image_at(owner, id).unwrap().bytes,
+                replacement
+            );
+            assert_eq!(
+                reopened.shape_hyperlink_address_at(owner, id).unwrap(),
+                Some("https://example.com/logo")
+            );
+            deck.set_shape_hyperlink_at(owner, id, None).unwrap();
+            assert_eq!(deck.shape_hyperlink_address_at(owner, id).unwrap(), None);
+            let original_ids = deck
+                .owner_data(owner)
+                .unwrap()
+                .shape_tree
+                .children
+                .iter()
+                .filter_map(|child| child.non_visual_id())
+                .collect::<Vec<_>>();
+            deck.move_shape_at(owner, index, 0).unwrap();
+            assert_eq!(
+                deck.owner_data(owner).unwrap().shape_tree.children[0].non_visual_id(),
+                Some(id)
+            );
+            let reordered = deck.to_bytes().unwrap();
+            assert!(deck.move_shape_at(owner, usize::MAX, 0).is_err());
+            assert!(deck.remove_shape_at(owner, usize::MAX).is_err());
+            assert_eq!(deck.to_bytes().unwrap(), reordered);
+            let timing = CT_Timing::from_xml(format!("<p:timing xmlns:p=\"{}\"><p:tnLst><p:animEffect transition=\"in\" filter=\"fade\"><p:cBhvr><p:cTn id=\"1\" dur=\"1000\" fill=\"hold\"/><p:tgtEl><p:spTgt spid=\"{id}\"/></p:tgtEl></p:cBhvr></p:animEffect></p:tnLst></p:timing>", rpptx_oxml::namespace::P_NS).as_bytes()).unwrap();
+            match owner {
+                ShapeOwner::Master(index) => {
+                    deck.masters[index].master.as_mut().unwrap().timing = Some(timing);
+                    deck.masters[index].dirty = true;
+                }
+                ShapeOwner::Layout(index) => {
+                    deck.layouts[index].layout.timing = Some(timing);
+                    deck.layouts[index].dirty = true;
+                }
+                _ => unreachable!(),
+            }
+            let animated = deck.to_bytes().unwrap();
+            assert!(deck.remove_shape_at(owner, 0).is_err());
+            assert_eq!(deck.to_bytes().unwrap(), animated);
+            match owner {
+                ShapeOwner::Master(index) => {
+                    deck.masters[index].master.as_mut().unwrap().timing = None
+                }
+                ShapeOwner::Layout(index) => deck.layouts[index].layout.timing = None,
+                _ => unreachable!(),
+            }
+            deck.remove_shape_at(owner, 0).unwrap();
+            assert!(deck.picture_image_at(owner, id).is_err());
+            let expected = original_ids
+                .into_iter()
+                .filter(|old| *old != id)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                deck.owner_data(owner)
+                    .unwrap()
+                    .shape_tree
+                    .children
+                    .iter()
+                    .filter_map(|child| child.non_visual_id())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            let reopened = Presentation::from_bytes(&deck.to_bytes().unwrap()).unwrap();
+            assert_eq!(
+                reopened
+                    .owner_data(owner)
+                    .unwrap()
+                    .shape_tree
+                    .children
+                    .iter()
+                    .filter_map(|child| child.non_visual_id())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+        assert_eq!(
+            deck.staged_package(true)
+                .unwrap()
+                .get_part(&deck.slides[0].part_name)
+                .unwrap(),
+            before_slide.as_slice()
+        );
+    }
 
     #[cfg(feature = "default-template")]
     #[test]
@@ -20734,12 +24811,14 @@ mod write_tests {
         master.header_footer = None;
         deck.package
             .set_part(&master_part, master.to_xml().unwrap());
+        deck = Presentation::from_package(deck.staged_package(true).unwrap()).unwrap();
         deck.layouts[layout].layout.header_footer = None;
         assert_eq!(deck.slide_header_footer_policy(0).unwrap(), None);
         assert!(!deck.slide_header_footer(0).unwrap().slide_number);
         master.header_footer = Some(CT_HeaderFooter::new(Some(false), None, Some(true), None));
         deck.package
             .set_part(&master_part, master.to_xml().unwrap());
+        deck = Presentation::from_package(deck.staged_package(true).unwrap()).unwrap();
         assert_eq!(
             deck.slide_header_footer_policy(0).unwrap(),
             Some((
@@ -23630,9 +27709,10 @@ fn sorted_indices(operation: &'static str, indices: &[usize], count: usize) -> R
 
 impl ShapesMut<'_> {
     fn tree(&mut self) -> &mut CT_ShapeTree {
-        &mut self.presentation.slides[self.slide_index]
-            .slide
-            .common_slide_data
+        &mut self
+            .presentation
+            .owner_data_mut(self.owner)
+            .expect("validated owner")
             .shape_tree
     }
 
@@ -23689,7 +27769,7 @@ impl ShapesMut<'_> {
         fit_group_to_members(group, false);
         let mut path = group_path;
         path.push(place);
-        Ok(owned_shape_mut(self.presentation, self.slide_index, path))
+        Ok(owned_shape_mut(self.presentation, self.owner, path))
     }
 
     /// Replaces the group at `index` by its members and returns their new
@@ -23709,8 +27789,18 @@ impl ShapesMut<'_> {
     fn ungroup_in_candidate(&mut self, index: usize) -> Result<std::ops::Range<usize>> {
         const OPERATION: &str = "ungroup shapes";
         let group_path = self.group.clone();
-        let slide = &mut self.presentation.slides[self.slide_index].slide;
-        let members = Members::at(&mut slide.common_slide_data.shape_tree, &group_path)
+        let timing = match self.owner {
+            ShapeOwner::Slide(i) => self.presentation.slides[i].slide.timing.clone(),
+            ShapeOwner::Layout(i) => self.presentation.layouts[i].layout.timing.clone(),
+            ShapeOwner::Master(i) => self.presentation.masters[i]
+                .master
+                .as_ref()
+                .expect("validated owner")
+                .timing
+                .clone(),
+        };
+        let common = self.presentation.owner_data_mut(self.owner)?;
+        let members = Members::at(&mut common.shape_tree, &group_path)
             .ok_or_else(|| invalid_shape_mutation(OPERATION, "the collection is not a group"))?;
         let count = members.children().len();
         let child = members.children().get(index).ok_or_else(|| {
@@ -23726,7 +27816,7 @@ impl ShapesMut<'_> {
             });
         };
         let group_id = child.non_visual_id();
-        if let (Some(timing), Some(id)) = (&slide.timing, group_id)
+        if let (Some(timing), Some(id)) = (&timing, group_id)
             && timing.references_shape(id)
         {
             return Err(invalid_shape_mutation(
@@ -23742,18 +27832,15 @@ impl ShapesMut<'_> {
             })?;
         }
         let range = index..index + placed.len();
-        let mut members = Members::at(&mut slide.common_slide_data.shape_tree, &group_path)
-            .expect("the group path was checked");
+        let mut members =
+            Members::at(&mut common.shape_tree, &group_path).expect("the group path was checked");
         members.replace_group(
             index,
             placed,
             members_to_parent(Some(&transform)) == Affine::IDENTITY,
         )?;
         if let Some(id) = group_id {
-            detach_connectors(
-                &mut slide.common_slide_data.shape_tree.children,
-                &HashSet::from([id]),
-            );
+            detach_connectors(&mut common.shape_tree.children, &HashSet::from([id]));
         }
         Ok(range)
     }
@@ -23858,9 +27945,9 @@ impl ShapesMut<'_> {
             return Err(invalid_shape_mutation(operation, "too few selected shapes"));
         }
         let parent = members_to_slide(
-            &self.presentation.slides[self.slide_index]
-                .slide
-                .common_slide_data
+            &self
+                .presentation
+                .owner_data(self.owner)?
                 .shape_tree
                 .children,
             &group_path,
@@ -23877,7 +27964,7 @@ impl ShapesMut<'_> {
             let mut path = self.group.clone();
             path.push(*index);
             self.presentation
-                .materialize_geometry(self.slide_index, &path)?;
+                .materialize_owner_geometry(self.owner, &path)?;
         }
         let members = Members::at(self.tree(), &group_path).expect("the group path was checked");
         let bounds = sorted
@@ -23958,9 +28045,9 @@ impl ShapesMut<'_> {
     ) -> Result<()> {
         let group_path = self.group.clone();
         let inverse = members_to_slide(
-            &self.presentation.slides[self.slide_index]
-                .slide
-                .common_slide_data
+            &self
+                .presentation
+                .owner_data(self.owner)?
                 .shape_tree
                 .children,
             &group_path,
@@ -24208,23 +28295,19 @@ impl Presentation {
     /// no connector are rejected without change.
     fn connect_connector_in_candidate(
         &mut self,
-        slide_index: usize,
+        owner: ShapeOwner,
         connector_path: &[usize],
         end: ConnectorEnd,
         shape_id: u32,
         site: u32,
     ) -> Result<()> {
         const OPERATION: &str = "connect connector";
-        self.require_slide_index(slide_index)?;
-        let children = &self.slides[slide_index]
-            .slide
-            .common_slide_data
-            .shape_tree
-            .children;
+        self.owner_data(owner)?;
+        let children = &self.owner_data(owner)?.shape_tree.children;
         let connector = child_at(children, connector_path).ok_or_else(|| {
             invalid_shape_mutation(
                 OPERATION,
-                format!("slide {slide_index} has no shape at path {connector_path:?}"),
+                format!("owner {owner:?} has no shape at path {connector_path:?}"),
             )
         })?;
         let ShapeTreeChild::Connector(connector) = connector else {
@@ -24256,7 +28339,12 @@ impl Presentation {
             Some(transform) if transform.offset.is_some() && transform.extent.is_some() => {
                 transform.clone()
             }
-            _ => self.inherited_target_transform(slide_index, target, OPERATION)?,
+            _ => match owner {
+                ShapeOwner::Slide(slide_index) => {
+                    self.inherited_target_transform(slide_index, target, OPERATION)?
+                }
+                _ => self.part_inherited_target_transform(owner, target, OPERATION)?,
+            },
         };
         let extent = target_transform
             .extent
@@ -24303,11 +28391,7 @@ impl Presentation {
             ConnectorEnd::End => [current[0], point],
         };
 
-        let children = &mut self.slides[slide_index]
-            .slide
-            .common_slide_data
-            .shape_tree
-            .children;
+        let children = &mut self.owner_data_mut(owner)?.shape_tree.children;
         let Some(ShapeTreeChild::Connector(connector)) = child_at_mut(children, connector_path)
         else {
             unreachable!("the connector was found above");
@@ -24365,95 +28449,63 @@ impl Presentation {
         target: u32,
         site: u32,
     ) -> Result<()> {
+        self.connect_connector_at(ShapeOwner::Slide(slide), path, end, target, site)
+    }
+
+    /// Stages a connector attachment in its actual owning part.
+    pub fn connect_connector_at(
+        &mut self,
+        owner: ShapeOwner,
+        path: &[usize],
+        end: ConnectorEnd,
+        target: u32,
+        site: u32,
+    ) -> Result<()> {
+        self.owner_data(owner)?;
         let mut candidate = self.clone();
-        candidate.connect_connector_in_candidate(slide, path, end, target, site)?;
-        candidate.slides[slide]
-            .slide
-            .to_xml()
-            .map_err(|error| Error::MalformedPart {
-                part_name: candidate.slides[slide].part_name.clone(),
-                message: error.to_string(),
-            })?;
+        candidate.connect_connector_in_candidate(owner, path, end, target, site)?;
+        candidate.validate_owned_part(owner)?;
         *self = candidate;
         Ok(())
     }
     fn refresh_connector_attachments(
         &mut self,
-        slide: usize,
+        owner: ShapeOwner,
         previous: &Presentation,
         removed: &HashSet<u32>,
     ) -> Result<()> {
-        self.require_slide_index(slide)?;
+        self.owner_data(owner)?;
         let mut attachments = Vec::new();
         collect_connector_attachments(
-            &self.slides[slide]
-                .slide
-                .common_slide_data
-                .shape_tree
-                .children,
+            &self.owner_data(owner)?.shape_tree.children,
             &mut Vec::new(),
             &mut attachments,
         );
         detach_connectors(
-            &mut self.slides[slide]
-                .slide
-                .common_slide_data
-                .shape_tree
-                .children,
+            &mut self.owner_data_mut(owner)?.shape_tree.children,
             removed,
         );
         for (path, end, id, site) in attachments {
             if removed.contains(&id) {
                 continue;
             }
-            let before = geometry_target_signature(
-                &previous.slides[slide]
-                    .slide
-                    .common_slide_data
-                    .shape_tree
-                    .children,
-                id,
-            );
+            let before =
+                geometry_target_signature(&previous.owner_data(owner)?.shape_tree.children, id);
             // Never adopt a formerly dangling reference by incidental ID allocation.
             if before.is_empty() {
                 continue;
             }
-            let after = geometry_target_signature(
-                &self.slides[slide]
-                    .slide
-                    .common_slide_data
-                    .shape_tree
-                    .children,
-                id,
-            );
-            let connector_id = child_at(
-                &self.slides[slide]
-                    .slide
-                    .common_slide_data
-                    .shape_tree
-                    .children,
-                &path,
-            )
-            .and_then(ShapeTreeChild::non_visual_id);
+            let after = geometry_target_signature(&self.owner_data(owner)?.shape_tree.children, id);
+            let connector_id = child_at(&self.owner_data(owner)?.shape_tree.children, &path)
+                .and_then(ShapeTreeChild::non_visual_id);
+            let before_children = &previous.owner_data(owner)?.shape_tree.children;
+            let after_children = &self.owner_data(owner)?.shape_tree.children;
             let connector_changed = connector_id.is_some_and(|connector_id| {
-                geometry_target_signature(
-                    &previous.slides[slide]
-                        .slide
-                        .common_slide_data
-                        .shape_tree
-                        .children,
-                    connector_id,
-                ) != geometry_target_signature(
-                    &self.slides[slide]
-                        .slide
-                        .common_slide_data
-                        .shape_tree
-                        .children,
-                    connector_id,
-                )
+                geometry_target_signature(before_children, connector_id)
+                    != geometry_target_signature(after_children, connector_id)
             });
             if before != after || connector_changed {
-                self.connect_connector_in_candidate(slide, &path, end, id, site)?;
+                self.connect_connector_in_candidate(owner, &path, end, id, site)?;
             }
         }
         Ok(())
@@ -24466,7 +28518,11 @@ impl Presentation {
         left: Emu,
         top: Emu,
     ) -> Result<()> {
-        self.edit_shape_geometry(slide, path, GeometryEdit::Position(left, top))
+        self.edit_shape_geometry(
+            ShapeOwner::Slide(slide),
+            path,
+            GeometryEdit::Position(left, top),
+        )
     }
     pub fn set_shape_size(
         &mut self,
@@ -24478,7 +28534,11 @@ impl Presentation {
         if width.0 < 0 || height.0 < 0 {
             return Err(invalid_shape_mutation("set size", "negative extent"));
         }
-        self.edit_shape_geometry(slide, path, GeometryEdit::Size(width, height))
+        self.edit_shape_geometry(
+            ShapeOwner::Slide(slide),
+            path,
+            GeometryEdit::Size(width, height),
+        )
     }
     pub fn set_shape_rotation(
         &mut self,
@@ -24486,7 +28546,11 @@ impl Presentation {
         path: &[usize],
         rotation: Angle,
     ) -> Result<()> {
-        self.edit_shape_geometry(slide, path, GeometryEdit::Rotation(rotation))
+        self.edit_shape_geometry(
+            ShapeOwner::Slide(slide),
+            path,
+            GeometryEdit::Rotation(rotation),
+        )
     }
     pub fn set_shape_flips(
         &mut self,
@@ -24495,15 +28559,19 @@ impl Presentation {
         horizontal: bool,
         vertical: bool,
     ) -> Result<()> {
-        self.edit_shape_geometry(slide, path, GeometryEdit::Flips(horizontal, vertical))
+        self.edit_shape_geometry(
+            ShapeOwner::Slide(slide),
+            path,
+            GeometryEdit::Flips(horizontal, vertical),
+        )
     }
     fn edit_shape_geometry(
         &mut self,
-        slide: usize,
+        owner: ShapeOwner,
         path: &[usize],
         edit: GeometryEdit,
     ) -> Result<()> {
-        self.require_slide_index(slide)?;
+        self.owner_data(owner)?;
         if let GeometryEdit::Size(width, height) = &edit
             && (width.0 < 0 || height.0 < 0)
         {
@@ -24511,25 +28579,15 @@ impl Presentation {
         }
         let mut candidate = self.clone();
         #[cfg(feature = "render")]
-        candidate.materialize_geometry(slide, path)?;
+        candidate.materialize_owner_geometry(owner, path)?;
         let child = child_at_mut(
-            &mut candidate.slides[slide]
-                .slide
-                .common_slide_data
-                .shape_tree
-                .children,
+            &mut candidate.owner_data_mut(owner)?.shape_tree.children,
             path,
         )
         .ok_or_else(|| invalid_shape_mutation("shape geometry", "missing physical owner"))?;
         apply_leaf_geometry(child, edit)?;
-        candidate.refresh_connector_attachments(slide, self, &HashSet::new())?;
-        candidate.slides[slide]
-            .slide
-            .to_xml()
-            .map_err(|error| Error::MalformedPart {
-                part_name: candidate.slides[slide].part_name.clone(),
-                message: error.to_string(),
-            })?;
+        candidate.refresh_connector_attachments(owner, self, &HashSet::new())?;
+        candidate.validate_owned_part(owner)?;
         *self = candidate;
         Ok(())
     }
@@ -24577,66 +28635,39 @@ impl ShapesMut<'_> {
     pub fn group(&mut self, indices: &[usize]) -> Result<ShapeMut<'_>> {
         let mut candidate = self.presentation.clone();
         let id = candidate
-            .shapes_mut(self.slide_index, &self.group)
-            .ok_or_else(|| invalid_shape_mutation("group shapes", "missing parent"))?
+            .shapes_mut_at(self.owner, &self.group)
+            .map_err(|_| invalid_shape_mutation("group shapes", "missing parent"))?
             .group_in_candidate(indices)?
             .leaf()
             .non_visual_id()
             .ok_or_else(|| invalid_shape_mutation("group shapes", "missing new group ID"))?;
-        candidate.refresh_connector_attachments(
-            self.slide_index,
-            self.presentation,
-            &HashSet::new(),
-        )?;
-        let path = path_of_id(
-            &candidate.slides[self.slide_index]
-                .slide
-                .common_slide_data
-                .shape_tree
-                .children,
-            id,
-        )
-        .ok_or_else(|| invalid_shape_mutation("group shapes", "new group missing"))?;
-        candidate.slides[self.slide_index]
-            .slide
-            .to_xml()
-            .map_err(|error| Error::MalformedPart {
-                part_name: candidate.slides[self.slide_index].part_name.clone(),
-                message: error.to_string(),
-            })?;
+        candidate.refresh_connector_attachments(self.owner, self.presentation, &HashSet::new())?;
+        let path = path_of_id(&candidate.owner_data(self.owner)?.shape_tree.children, id)
+            .ok_or_else(|| invalid_shape_mutation("group shapes", "new group missing"))?;
+        candidate.validate_owned_part(self.owner)?;
         *self.presentation = candidate;
-        Ok(owned_shape_mut(self.presentation, self.slide_index, path))
+        Ok(owned_shape_mut(self.presentation, self.owner, path))
     }
     pub fn ungroup(&mut self, index: usize) -> Result<std::ops::Range<usize>> {
         let mut candidate = self.presentation.clone();
         let mut path = self.group.clone();
         path.push(index);
         let id = child_at(
-            &candidate.slides[self.slide_index]
-                .slide
-                .common_slide_data
-                .shape_tree
-                .children,
+            &candidate.owner_data(self.owner)?.shape_tree.children,
             &path,
         )
         .and_then(|c| c.non_visual_id())
         .ok_or_else(|| invalid_shape_mutation("ungroup shapes", "missing group identity"))?;
         let range = candidate
-            .shapes_mut(self.slide_index, &self.group)
-            .ok_or_else(|| invalid_shape_mutation("ungroup shapes", "missing parent"))?
+            .shapes_mut_at(self.owner, &self.group)
+            .map_err(|_| invalid_shape_mutation("ungroup shapes", "missing parent"))?
             .ungroup_in_candidate(index)?;
         candidate.refresh_connector_attachments(
-            self.slide_index,
+            self.owner,
             self.presentation,
             &HashSet::from([id]),
         )?;
-        candidate.slides[self.slide_index]
-            .slide
-            .to_xml()
-            .map_err(|error| Error::MalformedPart {
-                part_name: candidate.slides[self.slide_index].part_name.clone(),
-                message: error.to_string(),
-            })?;
+        candidate.validate_owned_part(self.owner)?;
         *self.presentation = candidate;
         Ok(range)
     }
@@ -24648,21 +28679,11 @@ impl ShapesMut<'_> {
     ) -> Result<()> {
         let mut candidate = self.presentation.clone();
         candidate
-            .shapes_mut(self.slide_index, &self.group)
-            .ok_or_else(|| invalid_shape_mutation("align shapes", "missing parent"))?
+            .shapes_mut_at(self.owner, &self.group)
+            .map_err(|_| invalid_shape_mutation("align shapes", "missing parent"))?
             .align_in_candidate(indices, alignment, reference)?;
-        candidate.refresh_connector_attachments(
-            self.slide_index,
-            self.presentation,
-            &HashSet::new(),
-        )?;
-        candidate.slides[self.slide_index]
-            .slide
-            .to_xml()
-            .map_err(|error| Error::MalformedPart {
-                part_name: candidate.slides[self.slide_index].part_name.clone(),
-                message: error.to_string(),
-            })?;
+        candidate.refresh_connector_attachments(self.owner, self.presentation, &HashSet::new())?;
+        candidate.validate_owned_part(self.owner)?;
         *self.presentation = candidate;
         Ok(())
     }
@@ -24674,21 +28695,11 @@ impl ShapesMut<'_> {
     ) -> Result<()> {
         let mut candidate = self.presentation.clone();
         candidate
-            .shapes_mut(self.slide_index, &self.group)
-            .ok_or_else(|| invalid_shape_mutation("distribute shapes", "missing parent"))?
+            .shapes_mut_at(self.owner, &self.group)
+            .map_err(|_| invalid_shape_mutation("distribute shapes", "missing parent"))?
             .distribute_in_candidate(indices, direction, reference)?;
-        candidate.refresh_connector_attachments(
-            self.slide_index,
-            self.presentation,
-            &HashSet::new(),
-        )?;
-        candidate.slides[self.slide_index]
-            .slide
-            .to_xml()
-            .map_err(|error| Error::MalformedPart {
-                part_name: candidate.slides[self.slide_index].part_name.clone(),
-                message: error.to_string(),
-            })?;
+        candidate.refresh_connector_attachments(self.owner, self.presentation, &HashSet::new())?;
+        candidate.validate_owned_part(self.owner)?;
         *self.presentation = candidate;
         Ok(())
     }

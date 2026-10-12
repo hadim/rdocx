@@ -1242,22 +1242,70 @@ impl CT_Shape {
                 "fill picture cannot preserve a foreign root relationship binding".to_owned(),
             ));
         }
-        let empty_body = CT_TextBody::from_xml(br#"<a:txBody xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:bodyPr/><a:lstStyle/><a:p/></a:txBody>"#).map_err(|e| OxmlError::InvalidValue(e.to_string()))?;
         let unsupported_text_body = if let Some(body) = &self.text_body {
-            // Semantic text equality deliberately ignores the lexical root.
-            // A picture has no txBody owner, so even an otherwise empty body
-            // cannot surrender an imported root attribute during conversion.
+            // Conversion removes the text owner. Admit only its qualified empty
+            // shell, independent of harmless producer namespace aliases.
             let xml = body
                 .to_xml()
                 .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
-            let mut reader = Reader::from_reader(xml.as_slice());
-            let opaque_root = match reader.read_event()? {
-                Event::Start(start) => all_attributes(&start)?
-                    .iter()
-                    .any(|(name, _)| name != "xmlns" && !name.starts_with("xmlns:")),
-                _ => true,
-            };
-            opaque_root || (body != &empty_body && body != &CT_TextBody::new())
+            let mut reader = NsReader::from_reader(xml.as_slice());
+            let mut buffer = Vec::new();
+            let mut depth = 0;
+            let mut child_order = 0;
+            let mut root_seen = false;
+            let mut unsupported = false;
+            loop {
+                let (namespace, event) = reader.read_resolved_event_into(&mut buffer)?;
+                match event {
+                    Event::Start(ref start) | Event::Empty(ref start) => {
+                        let local = start.local_name();
+                        let qualified = match namespace {
+                            ResolveResult::Bound(Namespace(uri)) if depth == 0 => {
+                                (uri == P_NS.as_bytes() || uri == A_NS.as_bytes())
+                                    && local.as_ref() == b"txBody"
+                                    && !root_seen
+                            }
+                            ResolveResult::Bound(Namespace(uri)) if depth == 1 => {
+                                let next = match local.as_ref() {
+                                    b"bodyPr" if child_order == 0 => 1,
+                                    b"lstStyle" if child_order == 1 => 2,
+                                    b"p" if child_order == 1 || child_order == 2 => 3,
+                                    _ => 0,
+                                };
+                                let qualified = uri == A_NS.as_bytes() && next != 0;
+                                if qualified {
+                                    child_order = next;
+                                }
+                                qualified
+                            }
+                            _ => false,
+                        };
+                        if !qualified
+                            || all_attributes(start)?
+                                .iter()
+                                .any(|(name, _)| name != "xmlns" && !name.starts_with("xmlns:"))
+                        {
+                            unsupported = true;
+                            break;
+                        }
+                        root_seen = true;
+                        if matches!(event, Event::Start(_)) {
+                            depth += 1;
+                        }
+                    }
+                    Event::End(_) => {
+                        depth -= 1;
+                    }
+                    Event::Text(text) if text.iter().all(u8::is_ascii_whitespace) => {}
+                    Event::Eof => break,
+                    _ => {
+                        unsupported = true;
+                        break;
+                    }
+                }
+                buffer.clear();
+            }
+            unsupported || !root_seen || depth != 0 || child_order != 3
         } else {
             false
         };
@@ -3551,6 +3599,31 @@ mod style_tests {
                     .unwrap(),
                 saved
             );
+        }
+    }
+
+    #[test]
+    fn fx209_picture_placeholder_empty_shell_refuses_owned_or_opaque_source() {
+        let (p_ns, a_ns) = (super::P_NS, super::A_NS);
+        for body in [
+            "<q:txBody xmlns:q='http://schemas.openxmlformats.org/presentationml/2006/main' xmlns:d='http://schemas.openxmlformats.org/drawingml/2006/main' keep='&#65;'><d:bodyPr/><d:lstStyle/><d:p/></q:txBody>",
+            "<q:txBody xmlns:q='http://schemas.openxmlformats.org/presentationml/2006/main' xmlns:d='http://schemas.openxmlformats.org/drawingml/2006/main'><d:bodyPr lIns='100'/><d:lstStyle/><d:p/></q:txBody>",
+            "<q:txBody xmlns:q='http://schemas.openxmlformats.org/presentationml/2006/main' xmlns:d='http://schemas.openxmlformats.org/drawingml/2006/main'><d:bodyPr/><d:lstStyle xmlns:d='urn:foreign'/><d:p/></q:txBody>",
+            "<q:txBody xmlns:q='http://schemas.openxmlformats.org/presentationml/2006/main' xmlns:d='http://schemas.openxmlformats.org/drawingml/2006/main' xmlns:e='urn:producer'><d:bodyPr/><d:lstStyle/><d:p e:keep='&#65;'/></q:txBody>",
+            "<q:txBody xmlns:q='http://schemas.openxmlformats.org/presentationml/2006/main' xmlns:d='http://schemas.openxmlformats.org/drawingml/2006/main' xmlns:e='urn:producer'><d:bodyPr/><d:lstStyle/><e:opaque/><d:p/></q:txBody>",
+            "<q:txBody xmlns:q='http://schemas.openxmlformats.org/presentationml/2006/main' xmlns:d='http://schemas.openxmlformats.org/drawingml/2006/main'><d:bodyPr/><d:lstStyle/><d:p><d:r><d:t>text</d:t></d:r></d:p></q:txBody>",
+        ] {
+            let raw = format!(
+                "<p:sp xmlns:p='{p_ns}' xmlns:a='{a_ns}'><p:nvSpPr><p:cNvPr id='19' name='Imported'/><p:cNvSpPr/><p:nvPr><p:ph type='pic' idx='4'/></p:nvPr></p:nvSpPr><p:spPr/>{body}</p:sp>"
+            );
+            let shape = CT_Shape::from_xml(raw.as_bytes()).unwrap();
+            let before = shape.to_xml().unwrap();
+            assert!(
+                matches!(shape.fill_picture("rIdImage", CT_Transform2D::default()),
+                Err(oxml_core::OxmlError::InvalidValue(message)) if message == "picture placeholder text body contains source that a picture cannot retain"),
+                "F209_EMPTY_SHELL_SOURCE_REFUSED {body}"
+            );
+            assert_eq!(shape.to_xml().unwrap(), before);
         }
     }
 

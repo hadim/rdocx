@@ -8957,3 +8957,216 @@ def test_fx205_imported_universal_spacing_remains_present(lexical, expected):
     assert int(run.font.spacing) == 127
     reopened = Presentation.from_bytes(imported.to_bytes())
     assert int(reopened.slides[0].shapes[0].text_frame.paragraphs[0].runs[0].font.spacing) == 127
+
+
+# F-X209 controls start on the claimed installed capability surface.
+@pytest.mark.parametrize("operation", [
+    "master-logo", "layout-logo", "layout-hide", "master-background",
+    "master-title-style", "layout-rename", "layout-duplicate", "layout-remove",
+    "layout-master", "layout-usage", "layout-follow-background", "slide-hide",
+    "theme-color", "theme-font", "apply-theme", "import-master",
+])
+def test_fx209_part_owned_authoring_capabilities_persist(operation):
+    from rpptx import Presentation, Inches
+    from rpptx.dml.color import RGBColor
+    prs = Presentation()
+    layout = prs.slide_layouts[0]
+    master = prs.slide_master
+    if operation == "master-logo":
+        master.shapes.add_picture(_tiny_png(), Inches(0.1), Inches(0.1))
+        assert len(master.shapes) > 0
+    elif operation == "layout-logo":
+        layout.shapes.add_picture(_tiny_png(), Inches(0.1), Inches(0.1))
+        assert len(layout.shapes) > 0
+    elif operation == "layout-hide":
+        layout.show_master_shapes = False
+        assert layout.show_master_shapes is False
+    elif operation == "master-background":
+        master.background.fill.solid()
+        master.background.fill.fore_color.rgb = RGBColor(17, 34, 51)
+        assert str(master.background.fill.fore_color.rgb) == "112233"
+    elif operation == "master-title-style":
+        master.text_styles.title.font.name = "Carlito"
+        assert master.text_styles.title.font.name == "Carlito"
+    elif operation == "layout-rename":
+        layout.name = "Owned layout"
+        assert layout.name == "Owned layout"
+    elif operation == "layout-duplicate":
+        count = len(prs.slide_layouts)
+        copied = prs.slide_layouts.duplicate(layout)
+        assert len(prs.slide_layouts) == count + 1
+        assert copied.name == prs.slide_layouts[0].name
+    elif operation == "layout-remove":
+        count = len(prs.slide_layouts)
+        prs.slide_layouts.remove(layout)
+        assert len(prs.slide_layouts) == count - 1
+    elif operation == "layout-master":
+        assert layout.slide_master == master
+    elif operation == "layout-usage":
+        prs.slides.add_slide(layout)
+        assert len(prs.slide_layouts[0].used_by_slides) == 1
+    elif operation == "layout-follow-background":
+        layout.follow_master_background = False
+        assert layout.follow_master_background is False
+    elif operation == "slide-hide":
+        slide = prs.slides.add_slide(layout)
+        slide.show_master_shapes = False
+        assert slide.show_master_shapes is False
+    elif operation == "theme-color":
+        master.theme.colors["accent1"] = RGBColor(17, 34, 51)
+        assert str(prs.slide_master.theme.colors["accent1"]) == "112233"
+    elif operation == "theme-font":
+        master.theme.fonts.major.latin = "Carlito"
+        assert prs.slide_master.theme.fonts.major.latin == "Carlito"
+    else:
+        source = Presentation()
+        source_bytes = source.to_bytes()
+        before = len(prs.slide_masters)
+        prs.apply_theme(source_bytes, import_masters=operation == "import-master")
+        assert len(prs.slide_masters) == before + int(operation == "import-master")
+    reopened = Presentation.from_bytes(prs.to_bytes())
+    assert len(reopened.slide_masters) == len(prs.slide_masters)
+    if operation == "layout-rename":
+        assert reopened.slide_layouts[0].name == "Owned layout"
+    if operation == "theme-color":
+        assert str(reopened.slide_master.theme.colors["accent1"]) == "112233"
+    if operation == "theme-font":
+        assert reopened.slide_master.theme.fonts.major.latin == "Carlito"
+
+
+def test_fx209_layout_lifecycle_keeps_surviving_handles_and_refuses_used_owner():
+    from rpptx import Presentation, RpptxError, StaleElementError
+    prs = Presentation()
+    layouts = prs.slide_layouts
+    source = layouts[0]
+    survivor = layouts[1]
+    master = source.slide_master
+    source_name, survivor_name = source.name, survivor.name
+    copied = layouts.duplicate(source)
+    assert source.name == source_name and survivor.name == survivor_name
+    assert source.slide_master == master and copied.slide_master == master
+    assert len(prs.slide_layouts) == 12
+    prs.slide_layouts.remove(source)
+    with pytest.raises(StaleElementError, match="SlideLayoutCollection.remove"):
+        _ = source.name
+    assert survivor.name == survivor_name and prs.slide_layouts[0] == survivor
+    assert copied.slide_master == master
+    slide = prs.slides.add_slide(copied)
+    before = prs.to_bytes()
+    with pytest.raises(RpptxError, match="used|inbound"):
+        prs.slide_layouts.remove(copied)
+    assert prs.to_bytes() == before
+    assert slide.slide_layout == copied and copied.name == source_name
+    reopened = Presentation.from_bytes(before)
+    assert len(reopened.slide_layouts) == 11
+    assert reopened.slides[0].slide_layout.name == source_name
+
+
+@pytest.mark.parametrize("script", ["logos", "deck-theme", "brand-potx"])
+def test_fx209_original_three_branding_scripts_render_and_preserve_content(script, tmp_path):
+    from rpptx import Presentation, Pt
+    from rpptx.dml.color import RGBColor
+    prs = Presentation()
+    if script == "logos":
+        master = prs.slide_master
+        master.shapes.add_picture(_tiny_png(0x20, 0x80, 0xE0), Pt(20), Pt(20), Pt(40), Pt(40))
+        prs.slide_layouts[0].show_master_shapes = False
+        prs.slide_layouts[1].shapes.add_picture(_tiny_png(0xE0, 0x20, 0x40), Pt(100), Pt(20), Pt(40), Pt(40))
+        for index in [0, 6, 1]:
+            prs.slides.add_slide(prs.slide_layouts[index])
+        from PIL import Image
+        import io
+        pages = [Image.open(io.BytesIO(blob)).convert("RGB") for blob in prs.render_slides(dpi=72)]
+        assert len(pages) == 3
+        assert pages[0].getpixel((40, 40)) != (0x20, 0x80, 0xE0)
+        assert pages[1].getpixel((40, 40)) == (0x20, 0x80, 0xE0)
+        assert pages[2].getpixel((40, 40)) == (0x20, 0x80, 0xE0)
+        assert pages[2].getpixel((120, 40)) == (0xE0, 0x20, 0x40)
+    else:
+        slide = prs.slides.add_slide(prs.slide_layouts[0])
+        slide.shapes.title.text = "Retained branded heading"
+        if script == "deck-theme":
+            prs.slide_master.theme.colors["accent1"] = RGBColor(17, 34, 51)
+            prs.slide_master.theme.fonts.major.latin = "Carlito"
+        else:
+            brand = Presentation()
+            brand.slide_master.theme.colors["accent1"] = RGBColor(17, 34, 51)
+            brand.slide_master.theme.fonts.major.latin = "Carlito"
+            path = tmp_path / "brand.potx"
+            brand.save(path)
+            prs.apply_theme(path)
+        assert prs.slides[0].shapes.title.text == "Retained branded heading"
+        assert str(prs.slide_master.theme.colors["accent1"]) == "112233"
+        assert prs.slide_master.theme.fonts.major.latin == "Carlito"
+        assert len(prs.render_slides(dpi=72)) == 1
+    pdf = prs.to_pdf()
+    assert pdf.startswith(b"%PDF-") and len(pdf) > 1000
+    path = tmp_path / (script + ".pptx")
+    prs.save(path)
+    reopened = Presentation(path)
+    assert len(reopened.slides) == len(prs.slides)
+    if script != "logos":
+        assert reopened.slides[0].shapes.title.text == "Retained branded heading"
+        assert str(reopened.slide_master.theme.colors["accent1"]) == "112233"
+        assert reopened.slide_master.theme.fonts.major.latin == "Carlito"
+
+
+def test_fx209_master_style_fonts_bullets_levels_and_live_proxies_persist():
+    from rpptx import Presentation, Pt
+    from rpptx.dml.color import RGBColor
+    prs = Presentation()
+    master = prs.slide_master
+    styles = master.text_styles
+    title = styles.title[0]
+    font = title.font
+    font.name = "Carlito"
+    font.size = Pt(40)
+    font.color.rgb = RGBColor(17, 34, 51)
+    assert font.name == "Carlito" and font.size == Pt(40)
+    assert str(font.color.rgb) == "112233"
+    for level in range(1, 6):
+        paragraph = styles.body.level(level)
+        paragraph.font.name = "Carlito"
+        paragraph.font.size = Pt(28 - level)
+        paragraph.bullet = "•"
+        paragraph.bullet_color = RGBColor(51, 34, 17)
+        paragraph.left_indent = Pt(level * 12)
+        paragraph.first_line_indent = Pt(-6)
+    styles.other.font.name = "Carlito"
+    saved = prs.to_bytes()
+    font.name = "Carlito"
+    assert prs.to_bytes() == saved
+    for bad in [0, 10]:
+        with pytest.raises(ValueError, match="level"):
+            styles.body.level(bad)
+        assert prs.to_bytes() == saved
+    reopened = Presentation.from_bytes(saved)
+    assert reopened.slide_master.text_styles.title.font.name == "Carlito"
+    assert reopened.slide_master.text_styles.title.font.size == Pt(40)
+    for level in range(1, 6):
+        paragraph = reopened.slide_master.text_styles.body.level(level)
+        assert paragraph.bullet == "•"
+        assert str(paragraph.bullet_color) == "332211"
+        assert paragraph.font.size == Pt(28 - level)
+        assert paragraph.left_indent == Pt(level * 12) and paragraph.first_line_indent == Pt(-6)
+
+
+def test_fx209_master_layout_placeholders_share_physical_owner_and_persist():
+    from rpptx import Presentation
+    prs = Presentation()
+    owners = [prs.slide_master, prs.slide_layouts[0]]
+    for index, owner in enumerate(owners):
+        shape = next(shape for shape in owner.shapes if shape.is_placeholder)
+        idx = shape.placeholder_format.idx
+        placeholder = owner.placeholders[idx]
+        assert placeholder.shape_id == shape.shape_id
+        placeholder.text = f"Physical placeholder {index}"
+        assert next(shape for shape in owner.shapes if shape.shape_id == placeholder.shape_id).text == f"Physical placeholder {index}"
+        with pytest.raises(IndexError):
+            _ = owner.placeholders[999999]
+    saved = prs.to_bytes()
+    reopened = Presentation.from_bytes(saved)
+    for index, owner in enumerate([reopened.slide_master, reopened.slide_layouts[0]]):
+        shape = next(shape for shape in owner.shapes if shape.is_placeholder)
+        assert owner.placeholders[shape.placeholder_format.idx].text == f"Physical placeholder {index}"
+    assert reopened.to_bytes() == saved

@@ -3952,3 +3952,21 @@ Text watermark opacity coverage includes exact named refusals for zero, one and 
 Missing-operation Base controls precede new public routes. Installed current-source controls verify typed payloads, atomic JSON conversion, live property ownership, immutable equation and fragment snapshots, and qualified checkbox scalar/font selection. Strict typing and stubtest run against the authenticated wheel while the complete installed PowerPoint distribution remains unchanged.
 
 Text controls compare accepted Paragraph and story snapshots across body, tables, controls and related stories. CLI plain and JSON views retain aliases, tabs, direct and simple-field newlines, and closed complex cached-field page and column controls. Nested instruction, deleted and moveFrom content stays suppressed. Malformed related stories retain main text and the existing ordered omission diagnostic. Markdown keeps literal whitespace and physical field, control, revision and hard-break boundaries. Export controls inspect owned ODT space elements and EPUB content rather than relying on lexical XML substrings.
+
+## PowerPoint master and theme controls
+
+Installed public controls decide every part-owner property and the three branding
+scripts: master logo with title suppression and alternate-layout logo, shared
+accent/heading font editing, and POTX theme application retaining slide content.
+Native controls compare physical image/link scopes, copy-on-write replacement,
+geometry, direct shape order, timing-target refusal, complete source bytes and
+saved/reopened ownership. Master level controls cover title/body/other fonts,
+levels1 through5 bullets/colour/indents, no-op and invalid-level atomicity.
+
+Selective import controls cover PPTX, POTX and THMX, format-scheme images, fresh
+master/layout closure, MC policy, qualified opaque references, foreign/rebound
+owners, unsupported dependencies, explicit partial mapping and exact unrelated
+source. Deterministic PDF/PNG, actual native repair-free open and pinned
+LibreOffice round-trip accompany appearance claims. Current wheel member/origin
+proofs, strict typing, stubtest, WASM, hashes and affected verified archives are
+separate required gates.

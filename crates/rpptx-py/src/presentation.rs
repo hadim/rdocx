@@ -1527,6 +1527,46 @@ impl PyPresentation {
         )
     }
 
+    /// Applies selected branding schemes, optionally importing a fresh master graph.
+    #[pyo3(signature = (source, *, source_master=None, import_masters=false, layout_map=None))]
+    fn apply_theme(
+        &mut self,
+        py: Python<'_>,
+        source: &Bound<'_, PyAny>,
+        source_master: Option<usize>,
+        import_masters: bool,
+        layout_map: Option<Vec<(usize, usize)>>,
+    ) -> PyResult<()> {
+        let bytes = if source.is_instance_of::<PyBytes>() {
+            source.extract::<Vec<u8>>()?
+        } else {
+            let path = source.extract::<PathBuf>()?;
+            std::fs::read(path)
+                .map_err(|error| pyo3::exceptions::PyOSError::new_err(error.to_string()))?
+        };
+        let package = rpptx::OpcPackage::from_reader(std::io::Cursor::new(bytes))
+            .map_err(|error| rpptx_to_pyerr(py, error.into()))?;
+        let mut candidate = self.inner.clone();
+        candidate
+            .apply_theme(
+                &package,
+                source_master,
+                import_masters,
+                layout_map.as_deref().unwrap_or(&[]),
+            )
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        let proofs = self.unchanged_owners()?;
+        let prepared = self.prepare_owners(
+            &candidate,
+            "Presentation.apply_theme",
+            &proofs,
+            false,
+            import_masters,
+            import_masters,
+        )?;
+        self.publish_owners(candidate, prepared)
+    }
+
     #[pyo3(signature = (*, id, name, user_id, provider_id, initials = None))]
     fn add_comment_author(
         &mut self,
@@ -1673,15 +1713,23 @@ pub(crate) enum SlideOwnerEdit {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+enum PartIdentity {
+    Slide(u32),
+    Layout(String),
+    Master(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum PhysicalOwner {
+    Master(String),
     Slide(u32),
     Shape {
-        slide: u32,
+        slide: PartIdentity,
         id: Option<u32>,
         kind: rpptx::ShapeKind,
     },
     Cell {
-        slide: u32,
+        slide: PartIdentity,
         table: Option<u32>,
         row: usize,
         column: usize,
@@ -1727,7 +1775,7 @@ fn owner_addresses(inner: &rpptx::Presentation) -> PyResult<Vec<OwnerAddress>> {
     use oxml_py_support::PathSeg;
     fn children(
         shape: rpptx::ShapeRef<'_>,
-        slide: u32,
+        slide: PartIdentity,
         path: smallvec::SmallVec<[PathSeg; 5]>,
         out: &mut Vec<OwnerAddress>,
     ) -> PyResult<()> {
@@ -1738,7 +1786,7 @@ fn owner_addresses(inner: &rpptx::Presentation) -> PyResult<Vec<OwnerAddress>> {
         })?;
         out.push(OwnerAddress {
             physical: PhysicalOwner::Shape {
-                slide,
+                slide: slide.clone(),
                 id: shape.non_visual_id(),
                 kind: shape.kind(),
             },
@@ -1764,7 +1812,7 @@ fn owner_addresses(inner: &rpptx::Presentation) -> PyResult<Vec<OwnerAddress>> {
                     })?;
                     out.push(OwnerAddress {
                         physical: PhysicalOwner::Cell {
-                            slide,
+                            slide: slide.clone(),
                             table: shape.non_visual_id(),
                             row,
                             column,
@@ -1783,7 +1831,7 @@ fn owner_addresses(inner: &rpptx::Presentation) -> PyResult<Vec<OwnerAddress>> {
                     pyo3::exceptions::PyMemoryError::new_err("owner path allocation failed")
                 })?;
                 nested.push(PathSeg::Shape(index));
-                children(child, slide, nested, out)?;
+                children(child, slide.clone(), nested, out)?;
             }
         }
         Ok(())
@@ -1802,7 +1850,7 @@ fn owner_addresses(inner: &rpptx::Presentation) -> PyResult<Vec<OwnerAddress>> {
         for (shape_index, shape) in slide.shapes().enumerate() {
             children(
                 shape,
-                slide.id(),
+                PartIdentity::Slide(slide.id()),
                 smallvec![PathSeg::Slide(index), PathSeg::Shape(shape_index)],
                 &mut out,
             )?;
@@ -1822,6 +1870,57 @@ fn owner_addresses(inner: &rpptx::Presentation) -> PyResult<Vec<OwnerAddress>> {
             layout_index: Some(index),
             table: false,
         });
+    }
+    for index in 0..inner.layout_count() {
+        let part = inner
+            .layout_part_name(index)
+            .expect("layout inventory")
+            .to_owned();
+        for (shape_index, _) in inner
+            .layout(index)
+            .expect("layout inventory")
+            .common_slide_data
+            .shape_tree
+            .children
+            .iter()
+            .enumerate()
+        {
+            children(
+                inner
+                    .part_shape_at(rpptx::ShapeOwner::Layout(index), &[shape_index])
+                    .map_err(|e| PyValueError::new_err(e.to_string()))?,
+                PartIdentity::Layout(part.clone()),
+                smallvec![PathSeg::Layout(index), PathSeg::Shape(shape_index)],
+                &mut out,
+            )?;
+        }
+    }
+    for index in 0..inner.master_count() {
+        let part = inner
+            .slide_master_part_name(index)
+            .map_err(|e| PyValueError::new_err(e.to_string()))?
+            .ok_or_else(|| PyValueError::new_err("master owner absent"))?;
+        out.try_reserve(1).map_err(|_| {
+            pyo3::exceptions::PyMemoryError::new_err("master owner allocation failed")
+        })?;
+        out.push(OwnerAddress {
+            physical: PhysicalOwner::Master(part.clone()),
+            path: smallvec![PathSeg::Master(index)],
+            layout_index: None,
+            table: false,
+        });
+        if let Some(master) = inner.master(index) {
+            for shape_index in 0..master.common_slide_data.shape_tree.children.len() {
+                children(
+                    inner
+                        .part_shape_at(rpptx::ShapeOwner::Master(index), &[shape_index])
+                        .map_err(|e| PyValueError::new_err(e.to_string()))?,
+                    PartIdentity::Master(part.clone()),
+                    smallvec![PathSeg::Master(index), PathSeg::Shape(shape_index)],
+                    &mut out,
+                )?;
+            }
+        }
     }
     Ok(out)
 }
@@ -1924,6 +2023,10 @@ impl PyPresentation {
                 .iter()
                 .position(|seg| matches!(seg, PathSeg::Slide(_)))?,
             PhysicalOwner::Layout(_) => return Some(captured.clone()),
+            PhysicalOwner::Master(_) => captured
+                .segs
+                .iter()
+                .position(|seg| matches!(seg, PathSeg::Master(_)))?,
         };
         let suffix = captured.segs.iter().skip(end + 1).copied();
         path.segs = owner.address.path.clone();
@@ -2011,7 +2114,12 @@ impl PyPresentation {
         }
         let physical = segs
             .iter()
-            .filter(|seg| matches!(seg, PathSeg::Slide(_) | PathSeg::Shape(_)))
+            .filter(|seg| {
+                matches!(
+                    seg,
+                    PathSeg::Slide(_) | PathSeg::Layout(_) | PathSeg::Master(_) | PathSeg::Shape(_)
+                )
+            })
             .copied()
             .collect::<smallvec::SmallVec<[PathSeg; 5]>>();
         let cell = segs.iter().any(|seg| matches!(seg, PathSeg::Row(_)))
@@ -2024,7 +2132,11 @@ impl PyPresentation {
         } else {
             physical.clone()
         };
-        let owner = match owner_at(&owner_path, None) {
+        let direct_owner = match owner_path.as_slice() {
+            [PathSeg::Layout(index)] => owner_at(&[], Some(*index)),
+            _ => owner_at(&owner_path, None),
+        };
+        let owner = match direct_owner {
             Some(owner) => owner,
             None => {
                 // Opaque AlternateContent fallback inspection keeps the existing
@@ -2053,8 +2165,11 @@ impl PyPresentation {
             .copied()
             .into_iter()
             .collect::<smallvec::SmallVec<[PathSeg; 5]>>();
-        let slide = owner_at(&slide_path, None)
-            .ok_or_else(|| pyo3::exceptions::PyIndexError::new_err("slide owner is absent"))?;
+        let slide = match slide_path.as_slice() {
+            [PathSeg::Layout(index)] => owner_at(&[], Some(*index)),
+            _ => owner_at(&slide_path, None),
+        }
+        .ok_or_else(|| pyo3::exceptions::PyIndexError::new_err("part owner is absent"))?;
         let mut scopes = smallvec::SmallVec::<[oxml_py_support::RevisionState; 4]>::new();
         scopes.push(slide.owner.clone());
         if !owner.owner.same_state(&slide.owner) {
@@ -2409,9 +2524,10 @@ impl PyPresentation {
                             .and_then(|shape| shape.text_frame())
                 }
                 // Footer publication does not change notes or any table cell.
-                PhysicalOwner::Slide(_) | PhysicalOwner::Cell { .. } | PhysicalOwner::Layout(_) => {
-                    false
-                }
+                PhysicalOwner::Slide(_)
+                | PhysicalOwner::Cell { .. }
+                | PhysicalOwner::Layout(_)
+                | PhysicalOwner::Master(_) => false,
             };
             proofs.push(OwnerSurvival {
                 generation: old.owner.generation(),
@@ -2436,6 +2552,27 @@ impl PyPresentation {
             text_changed: false,
             grid_changed: false,
         }));
+        Ok(proofs)
+    }
+
+    /// Retires one removed layout and its descendants, preserving exact surviving part owners.
+    pub(crate) fn removed_layout_owners(&self, removed: usize) -> PyResult<Vec<OwnerSurvival>> {
+        use oxml_py_support::PathSeg;
+        let mut proofs = self.unchanged_owners()?;
+        proofs.retain(|proof| proof.layout_index != Some(removed)
+            && !matches!(proof.destination.first(), Some(PathSeg::Layout(index)) if *index == removed));
+        for proof in &mut proofs {
+            if let Some(index) = &mut proof.layout_index
+                && *index > removed
+            {
+                *index -= 1;
+            }
+            if let Some(PathSeg::Layout(index)) = proof.destination.first_mut()
+                && *index > removed
+            {
+                *index -= 1;
+            }
+        }
         Ok(proofs)
     }
 
@@ -2572,7 +2709,7 @@ impl PyPresentation {
                         .and_then(|cell| cell.text_frame());
                     before != after
                 }
-                PhysicalOwner::Layout(_) => false,
+                PhysicalOwner::Layout(_) | PhysicalOwner::Master(_) => false,
             };
         }
         Ok(proofs)
@@ -2590,7 +2727,12 @@ impl PyPresentation {
         let table_path = path
             .segs
             .iter()
-            .filter(|seg| matches!(seg, PathSeg::Slide(_) | PathSeg::Shape(_)))
+            .filter(|seg| {
+                matches!(
+                    seg,
+                    PathSeg::Slide(_) | PathSeg::Layout(_) | PathSeg::Master(_) | PathSeg::Shape(_)
+                )
+            })
             .copied()
             .collect::<smallvec::SmallVec<[PathSeg; 5]>>();
         let mut proofs = self.unchanged_owners()?;
@@ -2634,7 +2776,12 @@ impl PyPresentation {
         let table_path = current
             .segs
             .iter()
-            .filter(|seg| matches!(seg, PathSeg::Slide(_) | PathSeg::Shape(_)))
+            .filter(|seg| {
+                matches!(
+                    seg,
+                    PathSeg::Slide(_) | PathSeg::Layout(_) | PathSeg::Master(_) | PathSeg::Shape(_)
+                )
+            })
             .copied()
             .collect::<smallvec::SmallVec<[PathSeg; 5]>>();
         let table = self

@@ -1638,6 +1638,48 @@ fn background_set_and_clear_preserve_theme_references_and_raw_xml() {
         br#"<z:solidFill xmlns:z="http://schemas.openxmlformats.org/drawingml/2006/main"><z:srgbClr val="102030"/></z:solidFill>"#,
     )
     .unwrap();
+    // A modeled selected reference is writable. Its opaque outer source stays exact.
+    let mut modeled = CT_Slide::from_xml(reference_xml.as_bytes()).unwrap();
+    modeled.set_background(fill.clone()).unwrap();
+    let background = modeled.common_slide_data.background.as_ref().unwrap();
+    assert_eq!(
+        background.rendering(),
+        &BackgroundRendering::Properties(Some(Box::new(fill.clone())))
+    );
+    let old_start = reference_before
+        .windows(b"<q:bgRef".len())
+        .position(|v| v == b"<q:bgRef")
+        .unwrap();
+    let old_end = reference_before
+        .windows(b"</q:bgRef>".len())
+        .position(|v| v == b"</q:bgRef>")
+        .unwrap()
+        + b"</q:bgRef>".len();
+    assert!(
+        background
+            .raw_xml()
+            .starts_with(&reference_before[..old_start])
+    );
+    assert!(background.raw_xml().ends_with(&reference_before[old_end..]));
+    let saved = modeled.to_xml().unwrap();
+    modeled.set_background(fill.clone()).unwrap();
+    assert_eq!(modeled.to_xml().unwrap(), saved);
+    assert_eq!(CT_Slide::from_xml(&saved).unwrap().to_xml().unwrap(), saved);
+
+    // The refusal case owns an opaque attribute directly on the replaced reference.
+    let opaque_reference_xml = reference_xml.replace(
+        "<q:bgRef idx=\"1001\">",
+        "<q:bgRef idx=\"1001\" x:owner='&#65;'>",
+    );
+    assert_ne!(opaque_reference_xml, reference_xml);
+    reference = CT_Slide::from_xml(opaque_reference_xml.as_bytes()).unwrap();
+    let reference_before = reference
+        .common_slide_data
+        .background
+        .as_ref()
+        .unwrap()
+        .raw_xml()
+        .to_vec();
     assert!(reference.set_background(fill.clone()).is_err());
     reference.clear_background();
     assert_eq!(

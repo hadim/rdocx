@@ -13,7 +13,7 @@ use rpptx::{GradientFill, GradientGeometry, PathGradientKind};
 use crate::presentation::PyPresentation;
 use crate::shape::{
     ANGLE_UNITS_PER_DEGREE, ANGLE_UNITS_PER_TURN, MAX_COORDINATE, image_bytes, length,
-    shape_mut_at, shape_ref_at, slide_index,
+    shape_mut_at, shape_owner, shape_ref_at,
 };
 use crate::table::{cell_mut_at, cell_ref_at};
 use crate::{normalize_index, rpptx_to_pyerr, validate_path};
@@ -119,11 +119,12 @@ fn current_fill(
         }
         FillTarget::Background => presentation
             .inner
-            .slide(slide_index(&presentation.current_path(path).ok_or_else(
-                || PyIndexError::new_err("slide owner is absent"),
-            )?)?)
-            .ok_or_else(|| PyIndexError::new_err("slide index out of range"))?
-            .background_fill()
+            .background_fill_at(shape_owner(
+                &presentation
+                    .current_path(path)
+                    .ok_or_else(|| PyIndexError::new_err("background owner is absent"))?,
+            )?)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?
             .cloned(),
         FillTarget::TableCell => cell_ref_at(presentation, path)
             .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?
@@ -140,7 +141,7 @@ fn fill_owner(
     let current = presentation
         .current_path(path)
         .ok_or_else(|| PyIndexError::new_err("fill owner is absent"))?;
-    let slide_index = slide_index(&current)?;
+    let owner = shape_owner(&current)?;
     let shape_path = current
         .segs
         .iter()
@@ -150,11 +151,8 @@ fn fill_owner(
         })
         .collect();
     Ok(match target {
-        FillTarget::Shape => rpptx::FillOwnerLocation::Shape {
-            slide_index,
-            shape_path,
-        },
-        FillTarget::Background => rpptx::FillOwnerLocation::SlideBackground { slide_index },
+        FillTarget::Shape => rpptx::FillOwnerLocation::OwnedShape { owner, shape_path },
+        FillTarget::Background => rpptx::FillOwnerLocation::OwnedBackground { owner },
         FillTarget::TableCell => {
             let row = current
                 .segs
@@ -172,8 +170,8 @@ fn fill_owner(
                     _ => None,
                 })
                 .ok_or_else(|| PyValueError::new_err("cell column is absent"))?;
-            rpptx::FillOwnerLocation::TableCell {
-                slide_index,
+            rpptx::FillOwnerLocation::OwnedTableCell {
+                owner,
                 shape_path,
                 row,
                 column,

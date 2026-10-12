@@ -25,6 +25,9 @@ from rpptx import (
     ValidationIssue,
 )
 from rpptx._rpptx import (
+    ThemeColors,
+    MasterTextStyles,
+    TextStyleList,
     AdjustmentCollection,
     Background,
     Cell,
@@ -622,7 +625,7 @@ def fx208_authoring_signatures(presentation: Presentation, slide: Slide) -> None
     assert_type(master, SlideMaster)
     theme = master.theme
     assert_type(theme, Theme)
-    assert_type(theme.colors, dict[str, RGBColor | None])
+    assert_type(theme.colors, ThemeColors)
     assert_type(theme.fonts.major.latin, str)
     assert_type(theme.fonts.minor.east_asian, str)
     transition = slide.transition
@@ -670,3 +673,25 @@ def _fx205_typed_parity_surface(prs: Presentation) -> None:
     assert_type(prs.to_pdfa(profile="pdfa-2b", fonts=[]), bytes)
     assert_type(prs.to_handout_pdf(slides_per_page=6, fonts=[]), bytes)
     assert_type(prs.to_odp(), tuple[bytes, list[tuple[str, str]]])
+
+
+def _fx209_part_owned_typed_surface(prs: Presentation) -> None:
+    master = prs.slide_master
+    layout = prs.slide_layouts[0]
+    assert_type(master.text_styles, MasterTextStyles)
+    assert_type(master.text_styles.body, TextStyleList)
+    assert_type(master.text_styles.body.level(1), Paragraph)
+    assert_type(layout.used_by_slides, tuple[Slide, ...])
+    assert_type(layout.show_master_shapes, bool | None)
+    layout.show_master_shapes = False
+    layout.follow_master_background = True
+    copied = prs.slide_layouts.duplicate(layout)
+    assert_type(copied, SlideLayout)
+    prs.slide_layouts.remove(copied)
+    colors = master.theme.colors
+    assert_type(colors.keys(), tuple[str, ...])
+    assert_type(colors["accent1"], RGBColor | None)
+    colors["accent1"] = RGBColor(17, 34, 51)
+    master.theme.fonts.major.latin = "Carlito"
+    assert_type(prs.apply_theme(prs.to_bytes(), source_master=0,
+                               import_masters=False, layout_map=[]), None)

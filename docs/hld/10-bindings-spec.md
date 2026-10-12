@@ -3513,3 +3513,37 @@ Document exposes HTML and Markdown, CLI-equivalent text and owned TextReport, ty
 Template input accepts a string-keyed dict of bounded JSON values. Bool precedes integer conversion. Nonfinite values, cyclic containers, out-of-range integers and arbitrary objects refuse before publication. FragmentConflictPolicy exposes independent style, numbering and related-part reuse choices. ContentLocation and DocumentFragment retain physical source boundaries. Checked insertion uses the native fragment path and excludes final section properties by default.
 
 CustomFileTime validates explicit RFC3339 text. CustomProperties returns immutable typed snapshots and stages checked set/delete operations. AppProperties and presence-sensitive track_revisions are live document-owned handles. Equations return immutable source snapshots, ordered per-child conversion results and native loss diagnostics. Tag and alias control updates stage all selected qualified values once. Runtime constructors, explicit exports and strict stubs describe the same public classes and defaults.
+
+## Live PowerPoint masters and layouts
+
+Presentation.slide_masters and slide_master expose live physical part owners.
+SlideMaster exposes slide_layouts, shapes, placeholders, background, theme and
+text_styles. SlideLayout exposes writable name, shapes, placeholders, background,
+optional show_master_shapes, follow_master_background, slide_master and actual
+used_by_slides. Duplicate and remove operate on the live layout collection.
+Used or unsafe layout removal refuses without publishing revisions.
+
+Theme.colors is a live twelve-slot scalar RGB mapping. Named assignment edits
+the resolved theme resource, so shared theme owners see the same change. Major
+and minor font sets expose writable Latin, East Asian and complex-script faces.
+Value edits preserve owner inventories. Qualified source patches retain
+unselected opaque bytes and refuse unsafe selected rewrites.
+
+MasterTextStyles.title, body and other expose nine direct paragraph-formatting
+levels through TextStyleList. Indexing is zero-based and level(n) is one-based.
+The font property selects the first level. Levels reuse checked Paragraph/Font
+formatting, including font colour, bullet choice/colour and indents. They do not
+represent a text-bearing frame and do not synthesize content for text methods.
+
+Presentation.apply_theme accepts local path or bytes, optional source_master,
+import_masters and explicit layout_map pairs. Imported source closure is staged
+and reopened before one success-only causal publication. Property changes retain
+existing physical owners. Layout removal retires the removed owner and
+descendants while surviving owners resolve their current positions through the
+existing provider. Errors name the operation and retain source and revisions.
+
+The native CT_Picture.hidden query is an additive pre-1.0 API. It reads the
+qualified drawing owner's explicit true or 1 flag without changing retained
+source XML or public struct fields. Picture rendering honors that flag when
+Office saves master visibility into layout-owned pictures. Foreign or rebound
+lookalikes do not supply the flag. This adds no Python hidden property.

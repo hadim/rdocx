@@ -7113,7 +7113,7 @@ Require scoped verification and independent zero-defect, zero-smell review.
 
 Resolve [Issue312](https://github.com/tensorbee/rdocx/issues/312) in S91,
 part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
-coverage checklist. Address shape edits and image relationships by owning slide/layout/master part. Add persisted master/layout backgrounds and shapes, master text styles, layout rename/duplicate/delete with usage refusal, showMasterSp, theme colours/fonts and apply_theme from deck, potx or thmx with optional masters/layouts. Verify logo inheritance, branded backgrounds and theme application without losing slide content.
+coverage checklist. Address shape edits and image relationships by owning slide/layout/master part. Add persisted master/layout backgrounds and shapes, master text styles, layout rename/duplicate/delete with usage refusal, showMasterSp, theme colours/fonts and apply_theme from deck, potx or thmx with optional masters/layouts. Verify logo inheritance, branded backgrounds and theme application without losing slide content. Selected import preserves destination theme root source and direct slide content, validates qualified opaque references and transports actual namespace/MC closure. Optional master import allocates fresh part/ID scopes, while explicit layout mapping retargets only the owning slide relationship.
 
 **Depends on**: F-X205, F-X206, F-X208.
 **Test gate**: regression. Reproduce each missing operation or reported defect

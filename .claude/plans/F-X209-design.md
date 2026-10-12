@@ -1,6 +1,6 @@
 # F-X209, Edit PowerPoint masters layouts and themes
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X205, F-X206, F-X208
@@ -114,12 +114,12 @@ serialize after X205, X206 and X208 completion. No worktree is claimed yet.
 
 ## Implementation checklist
 
-- [ ] Resolve exact owner record and live handle design after prerequisites.
-- [ ] Resolve selective theme import and preserve/refuse policy.
-- [ ] Approve source claims, riders and expected output behavior.
-- [ ] Reproduce missing public scripts before implementation.
-- [ ] Implement and verify every Issue312 item with native oracle evidence.
-- [ ] Obtain clean independent review and validated prepared handoff.
+- [x] Resolve exact owner record and live handle design after prerequisites.
+- [x] Resolve selective theme import and preserve/refuse policy.
+- [x] Approve source claims, riders and expected output behavior.
+- [x] Reproduce missing public scripts before implementation.
+- [x] Implement and verify every Issue312 item with native oracle evidence.
+- [x] Obtain clean independent review and validated prepared handoff.
 
 ## Open questions
 
@@ -143,7 +143,7 @@ Loader uses presentation master order, relationship type/internal checks, and th
 
 Use one concrete owner discriminator in the existing native file: ShapeOwner::Slide(usize), Layout(usize), Master(usize). Two new actual consumers, master/layout authoring, justify extending the existing slide authoring route. Change ShapesMut at7193 from slide_index to this checked owner plus existing group path. Keep current slide constructors/API signatures delegating to that actual route. Proposed additive entry point shapes_mut_at(&mut self, owner:ShapeOwner)->Result<ShapesMut<'_>> and shape_at(&self,owner:ShapeOwner,path:&[usize])->Result<ShapeRef<'_>> / shape_mut_at(&mut self,owner:ShapeOwner,path:&[usize])->Result<ShapeMut<'_>>. Missing owner/path is a checked error. These own actual lookup, dirty/source comparison and validation work, not a forwarding facade layer.
 
-Do not change ShapeMut's representation. It already borrows exact ShapeTreeChild at7822, including group descendants through child_mut at7837. No redundant slide or master index on that borrow. ShapesMut::append at7284 selects owner tree and uses existing append_new_member, retaining per-part shape-ID allocation and group geometry. IDs are unique within the owning part, not globally across the deck. Layout cloning into a fresh part can retain its internally unique IDs and connector endpoints, since they occupy a new scope. Duplicating children within an existing part allocates fresh IDs and remaps local connector references. Never indiscriminately renumber a new part's opaque raw IDs.
+Reuse the actual claim provider representation. The integrated F-X206 provider already uses ShapeMutOwner::Presentation with the owning Presentation, slide selection and group path, or its existing Child variant. Extend that existing selection to ShapeOwner for slide, layout and master scopes. The donor-era direct-child-borrow description does not describe the claimed provider. Do not add a second mutable representation or redundant owner state. ShapesMut::append at7284 selects owner tree and uses existing append_new_member, retaining per-part shape-ID allocation and group geometry. IDs are unique within the owning part, not globally across the deck. Layout cloning into a fresh part can retain its internally unique IDs and connector endpoints, since they occupy a new scope. Duplicating children within an existing part allocates fresh IDs and remaps local connector references. Never indiscriminately renumber a new part's opaque raw IDs.
 
 Part-aware picture insertion must use owning master/layout/slide relationships, existing MediaStore byte deduplication, and owner-aware shape tree selection, not add_picture's slide-only append_picture at3385. Extend the real implementation, stage relationships and child together, then publish. X205's set_picture_fill and qualified FillOwnerLocation reuse this SAME owner discriminator and checked shape/cell paths. Gradient and background properties reuse X205 fill classes. The borrowed ShapeMut needs no picture relationship setter that guesses a slide.
 
@@ -221,3 +221,7 @@ unqualified external payload retention cannot replace complete package graph
 checks and explicit unsupported-dependency refusals. Index/global-revision
 Python proxies must consume F-X206's causal owner provider. Contributor native
 and rendering claims remain unverified local acceptance gates.
+
+## Qualified hidden-picture round-trip boundary
+
+The actual pinned LibreOffice save transports master visibility into a qualified cNvPr hidden attribute on retained layout pictures. The existing CT_Picture receives an additive hidden getter over its preserved qualified drawing owner. The existing picture resolver omits only explicit true or 1 owners. Missing and false flags remain visible, foreign or rebound lookalikes do not supply the flag, and retained raw XML is unchanged. This closes the original branded-logo round-trip predicate without expanding unrelated shape kinds or changing existing public struct fields.

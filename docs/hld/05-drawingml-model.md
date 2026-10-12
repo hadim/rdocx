@@ -470,10 +470,16 @@ paragraph formatting and allocates an identity unique across slide, layout and
 master fields. No automatic date operation reads a clock or locale. The caller
 supplies automatic cached text explicitly.
 
-Each presentation master exposes its own relationship-resolved Theme. Read-only
-colors include all twelve scheme slots as the existing scalar RGB values. Major
-and minor font sets expose Latin, East Asian and complex-script typefaces. An
-absent slot remains absent instead of borrowing a different master's theme.
+Each presentation master exposes its own relationship-resolved Theme. Live
+colours include all twelve scheme slots as the existing scalar RGB values, with
+checked absolute RGB assignment. Major and minor font sets expose writable
+Latin, East Asian and complex-script typefaces. An absent slot remains absent
+instead of borrowing a different master's theme. Theme edits patch selected
+qualified source attributes and remove only recognised colour transforms when
+assigning absolute RGB. Unsafe selected opaque content refuses. Unselected
+lexical attributes, supplemental mappings and format scheme source remain exact.
+Selected scheme transfer closes actual namespace and compatibility policy from
+its source owner without changing the destination theme root.
 
 ## Direct script and spacing properties
 
