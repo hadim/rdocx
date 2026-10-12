@@ -55,7 +55,7 @@ pub(crate) fn length(py: Python<'_>, value: Option<rpptx::Emu>) -> PyResult<Opti
 /// Reads the bytes of a path, a bytes-like object, or a binary file-like object.
 ///
 /// A file-like object is rewound first when it can seek, as python-pptx does.
-fn image_bytes(image_file: &Bound<'_, PyAny>) -> PyResult<(Vec<u8>, String)> {
+pub(crate) fn image_bytes(image_file: &Bound<'_, PyAny>) -> PyResult<(Vec<u8>, String)> {
     fn blob(data: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
         match data.cast::<PyBytes>() {
             Ok(bytes) => Ok(bytes.as_bytes().to_vec()),

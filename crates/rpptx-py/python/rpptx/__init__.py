@@ -35,6 +35,7 @@ class ReplacementCountError(RpptxError):
 
 
 from ._rpptx import Comment, CommentAuthor, CommentReply, Presentation
+from ._rpptx import EmbeddedFontFace, EmbeddedTypeface
 from ._rpptx import BoundingBox, TextFrameLayout, TextLineLayout, ValidationIssue
 
 __all__ = [
@@ -50,6 +51,8 @@ __all__ = [
     "Comment",
     "CommentAuthor",
     "CommentReply",
+    "EmbeddedFontFace",
+    "EmbeddedTypeface",
     "Presentation",
     "Pt",
     "RGBColor",

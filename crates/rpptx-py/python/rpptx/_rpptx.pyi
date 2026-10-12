@@ -32,9 +32,11 @@ from .util import Length as _Length
 
 _Path = str | _os.PathLike[str]
 _ImageFile = _Path | bytes | _IO[bytes]
+_FontFaceKind = _Literal["regular", "bold", "italic", "bold_italic"]
 __all__ = [
     "Presentation", "CommentAuthor", "Comment", "CommentReply",
     "BoundingBox", "TextLineLayout", "TextFrameLayout", "ValidationIssue",
+    "EmbeddedTypeface", "EmbeddedFontFace",
     "SlideLayout", "SlideLayoutCollection", "Slide", "Background",
     "SlideCollection", "Shape", "ShapeCollection", "PlaceholderCollection",
     "Image", "AdjustmentCollection", "FillFormat", "LineFormat", "LineEndFormat",
@@ -155,6 +157,38 @@ class ValidationIssue:
 
 
 @_final
+class EmbeddedFontFace:
+    def __new__(cls, *, _private: _Never) -> EmbeddedFontFace: ...
+    @property
+    def kind(self) -> _FontFaceKind: ...
+    @property
+    def relationship_id(self) -> str: ...
+    @property
+    def part_name(self) -> str | None: ...
+    @property
+    def format(self) -> _Literal["eot", "compressed_eot", "sfnt", "unknown"]: ...
+    @property
+    def stored_len(self) -> int: ...
+    @property
+    def data(self) -> bytes | None: ...
+
+
+@_final
+class EmbeddedTypeface:
+    def __new__(cls, *, _private: _Never) -> EmbeddedTypeface: ...
+    @property
+    def typeface(self) -> str: ...
+    @property
+    def panose(self) -> str | None: ...
+    @property
+    def pitch_family(self) -> int | None: ...
+    @property
+    def charset(self) -> int | None: ...
+    @property
+    def faces(self) -> tuple[EmbeddedFontFace, ...]: ...
+
+
+@_final
 class Presentation:
     def __new__(cls, path: _Path | None = None) -> Presentation: ...
     @staticmethod
@@ -193,6 +227,29 @@ class Presentation:
         provider_id: str,
         initials: str | None = None,
     ) -> None: ...
+    @property
+    def embedded_fonts(self) -> tuple[EmbeddedTypeface, ...]: ...
+    def embed_font(
+        self,
+        typeface: str,
+        font: _ImageFile,
+        kind: _FontFaceKind = "regular",
+        *,
+        license: str,
+        authorized: bool,
+    ) -> None: ...
+    def remove_embedded_font(
+        self, typeface: str, kind: _FontFaceKind
+    ) -> EmbeddedFontFace | None: ...
+    def remove_font(self, typeface: str) -> EmbeddedTypeface | None: ...
+    @property
+    def embed_true_type_fonts(self) -> bool: ...
+    @embed_true_type_fonts.setter
+    def embed_true_type_fonts(self, value: bool) -> None: ...
+    @property
+    def save_subset_fonts(self) -> bool: ...
+    @save_subset_fonts.setter
+    def save_subset_fonts(self, value: bool) -> None: ...
     @property
     def slide_layouts(self) -> SlideLayoutCollection: ...
     @property

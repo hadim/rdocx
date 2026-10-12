@@ -4689,3 +4689,74 @@ def test_issue_158_deck_fixture_acceptance(tmp_path):
         close = sum(max(errors[offset:offset + 3]) <= 24 for offset in range(0, len(errors), 3))
         assert close / (len(errors) / 3) >= min_close, label
         assert sum(errors) / len(errors) <= max_mean, label
+
+
+def _caladea(face):
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[3]
+    return root / "crates" / "oxml-layout" / "fonts" / f"Caladea-{face}.ttf"
+
+
+def test_font_embedding_embeds_lists_and_removes_faces_with_an_explicit_license(tmp_path):
+    import rpptx
+    from rpptx import EmbeddedFontFace, EmbeddedTypeface, Presentation
+
+    prs = Presentation()
+    regular = _caladea("Regular")
+    bold = _caladea("Bold").read_bytes()
+    with pytest.raises(TypeError):
+        prs.embed_font("Caladea", regular, license="OFL-1.1")
+    with pytest.raises(rpptx.RpptxError, match="explicit caller authorization"):
+        prs.embed_font("Caladea", regular, license="OFL-1.1", authorized=False)
+    with pytest.raises(rpptx.RpptxError, match="exact license identity"):
+        prs.embed_font("Caladea", regular, license=" ", authorized=True)
+    with pytest.raises(rpptx.RpptxError, match="sfnt"):
+        prs.embed_font("Caladea", b"not a font", license="OFL-1.1", authorized=True)
+    with pytest.raises(ValueError, match="bold_italic"):
+        prs.embed_font("Caladea", regular, "heavy", license="OFL-1.1", authorized=True)
+    assert prs.embedded_fonts == ()
+
+    prs.embed_font("Caladea", regular, license="OFL-1.1", authorized=True)
+    prs.embed_font("Caladea", io.BytesIO(bold), "bold", license="OFL-1.1", authorized=True)
+    assert prs.embed_true_type_fonts is True
+    path = tmp_path / "fonts.pptx"
+    prs.save(path)
+
+    reopened = Presentation(path)
+    (font,) = reopened.embedded_fonts
+    assert isinstance(font, EmbeddedTypeface)
+    assert (font.typeface, font.panose, font.pitch_family, font.charset) == (
+        "Caladea", "02040503050406030204", 18, 0,
+    )
+    assert [face.kind for face in font.faces] == ["regular", "bold"]
+    assert all(isinstance(face, EmbeddedFontFace) and face.format == "eot" for face in font.faces)
+    assert font.faces[0].data == regular.read_bytes()
+    assert font.faces[1].data == bold
+    with zipfile.ZipFile(path) as archive:
+        names = set(archive.namelist())
+        content_types = archive.read("[Content_Types].xml").decode()
+        relationships = archive.read("ppt/_rels/presentation.xml.rels").decode()
+        presentation_xml = archive.read("ppt/presentation.xml").decode()
+    assert {"ppt/fonts/font1.fntdata", "ppt/fonts/font2.fntdata"} <= names
+    assert 'Extension="fntdata" ContentType="application/x-fontdata"' in content_types
+    assert relationships.count("/relationships/font\"") == 2
+    assert 'embedTrueTypeFonts="1"' in presentation_xml
+
+    removed = reopened.remove_embedded_font("Caladea", "regular")
+    assert removed is not None and removed.kind == "regular"
+    assert reopened.remove_embedded_font("Caladea", "italic") is None
+    assert [face.kind for face in reopened.embedded_fonts[0].faces] == ["bold"]
+    removed_font = reopened.remove_font("Caladea")
+    assert removed_font is not None and removed_font.typeface == "Caladea"
+    assert reopened.remove_font("Caladea") is None
+    reopened.embed_true_type_fonts = False
+    reopened.save_subset_fonts = False
+    data = reopened.to_bytes()
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        assert not any(name.startswith("ppt/fonts/") for name in archive.namelist())
+        presentation_xml = archive.read("ppt/presentation.xml").decode()
+    assert "embeddedFontLst" not in presentation_xml
+    assert "embedTrueTypeFonts" not in presentation_xml
+    assert "saveSubsetFonts" not in presentation_xml
+    assert Presentation.from_bytes(data).validate() == ()
