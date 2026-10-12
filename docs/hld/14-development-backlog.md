@@ -7670,7 +7670,15 @@ Resolve Issue360 with admitted PR361. Expose existing native Word font embedding
 ### F-X221, Prepare Word 0.17.0 and PowerPoint 0.15.0 minor releases
 
 **Size**: L
-**Depends on**: F-X193, F-X194, F-X195, F-X196, F-X197, F-X198, F-X199, F-X200, F-X201, F-X202, F-X203, F-X204, F-X205, F-X206, F-X207, F-X208, F-X209, F-X210, F-X211, F-X212, F-X213, F-X214, F-X215, F-X216, F-X217, F-X218, F-X220
+**Depends on**: F-X193, F-X194, F-X195, F-X196, F-X197, F-X198, F-X199, F-X200, F-X201, F-X202, F-X203, F-X204, F-X205, F-X206, F-X207, F-X208, F-X209, F-X210, F-X211, F-X212, F-X213, F-X214, F-X215, F-X216, F-X217, F-X218, F-X220, F-X222
 **Test gate**: release regression
 
 Prepare matching minor Rust/CLI/Python families after every included S91 repair completes. Update exact stable seven-package Word family to0.17.0 and exact fifteen-package shared/PowerPoint family to0.15.0, with corresponding binding projects, internal pins/lock and meaningful authenticated family release notes. Use existing unified allowlists and release pipeline. Qualify current-source archives below10MiB, exact installed wheel/metadata/runtime/typing on Python3.9/3.12, both WASM graphs and reviewed-SHA build-only hosted artifacts. Current registry/tag facts are checked, then rechecked at release. Shared/PowerPoint publishes before Word consumes it. Preparation does not publish. Final integrated verification/review and close precede separate immediate exact-main-SHA release approvals for each family. Bibliography, navigation, full-range watermark and standalone authoring remain S92, and discussion264/281 stay open.
+
+### F-X222, Restore linear Word story range inventory and empty owners
+
+**Size**: M
+**Depends on**: F-X203, F-X213
+**Test gate**: regression
+
+Resolve Issue362 and assess PR363 at immutable0b9a3cccc1b31bac7ec4108c923faa176b072c47. Build each story source once for complete range paragraph discovery, batch namespace scopes and scan each owner/control from its owned excerpt. Preserve physical identities, order, de-duplication, exact namespace-complete paragraph output, comment replay and text-box cache coordinates. Reuse one paragraph inventory for evaluator range pairing and bookmark name counts, retaining independent failure behavior. Valid self-closing story owners contribute zero paragraphs and do not break comments or page-field updates. Qualify actual large-table source-build counts, old/new semantic and byte equivalence across every story family, hostile ownership/offset refusals and measured release-mode scaling through native, installed Python and CLI field/TOC paths. Existing successful output and49 hashes remain unchanged. Empty-owner support is a separately labelled behavior repair. Do not copy donor archive measurements.

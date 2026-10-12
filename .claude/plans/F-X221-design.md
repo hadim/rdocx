@@ -3,7 +3,7 @@
 **Status**: approved
 **Sprint**: S91
 **Size**: L
-**Depends on**: F-X193, F-X194, F-X195, F-X196, F-X197, F-X198, F-X199, F-X200, F-X201, F-X202, F-X203, F-X204, F-X205, F-X206, F-X207, F-X208, F-X209, F-X210, F-X211, F-X212, F-X213, F-X214, F-X215, F-X216, F-X217, F-X218, F-X220
+**Depends on**: F-X193, F-X194, F-X195, F-X196, F-X197, F-X198, F-X199, F-X200, F-X201, F-X202, F-X203, F-X204, F-X205, F-X206, F-X207, F-X208, F-X209, F-X210, F-X211, F-X212, F-X213, F-X214, F-X215, F-X216, F-X217, F-X218, F-X220, F-X222
 **Test gate**: release regression
 **Implementation**: not claimed, no version or publication changes
 

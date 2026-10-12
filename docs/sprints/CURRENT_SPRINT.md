@@ -6,8 +6,8 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 now contains twenty-eight active stories, twenty completed, four running,
-four approved pending implementation. The latest bounded intake includes39 issues and29 PRs, plus final minor-release preparation.
+S91 now contains twenty-nine active stories, twenty completed, four running,
+five approved pending implementation. The latest bounded intake includes40 issues and30 PRs, plus final minor-release preparation.
 
 ## Spec references
 
@@ -51,6 +51,7 @@ four approved pending implementation. The latest bounded intake includes39 issue
 | F-X218 | Export presentations as semantic HTML and Markdown | L | pending | - |
 | F-X220 | Embed fonts through both native and public package families | L | in-progress | codex |
 | F-X221 | Prepare Word 0.17.0 and PowerPoint 0.15.0 minor releases | L | pending | - |
+| F-X222 | Restore linear Word story range inventory and empty owners | M | pending | - |
 
 ## Carried to S92, user scope decision
 
@@ -61,7 +62,7 @@ style selection and F9/save, but ordinary reopen and acceptance remain pending.
 F-283 retains its approved navigation contract and dependency on F-X200.
 Neither story is completed or part of S91 close acceptance. S92 is planned,
 not opened. The existing S92 template and form programme remains planned.
-All twenty-nine current PRs and thirty-nine included issues remain in S91.
+All thirty current PRs and forty included issues remain in S91.
 
 ## Sequencing note
 
@@ -1141,3 +1142,7 @@ F-X220 owns font embedding across native Word/PowerPoint, both Python packages a
 F-X221 prepares both next minor families after all27 repair stories complete: Word crates/Python0.17.0 and shared/PowerPoint crates/Python0.15.0. Fresh registry/tag receipt verifies published0.16.0/0.14.0 and absent next versions/tags. Preparation uses existing exact7/15 crate allowlists, new matching wheels/metadata, meaningful authenticated family notes and reviewed-SHA build-only rehearsal. No versions are changed yet and no publication is claimed. Final full sprint verification, clean sprint review and close remain due. Publication follows the exact reviewed main merge through separate release approval for each family, shared/PowerPoint first.
 
 Twenty of28 active stories are complete. F-X204, F-X215, F-X217 and the low-level F-X220 model phase are running in isolated worktrees with disjoint file leases. F-X211, F-X216, F-X218 and F-X221 remain approved and pending. Bibliography, navigation, standalone authoring and full-range text watermark work remain deferred to S92. Required evidence and carried dirty work are retained.
+
+## User-admitted PR363 and Issue362
+
+The user folds PR363 at0b9a3cccc1b31bac7ec4108c923faa176b072c47 and linked Issue362 into S91. F-X222 owns linear range inventory, evaluator reuse, actual field/TOC scaling and valid empty comments. Full immutable patch and all comments/reviews are assessed at /private/tmp/S91-intake-admission-362-363. No existing PR head advanced. Current included scope is40 issues and30 PRs, excluding open discussion264/281. There are29 stories,20 completed,4 running and5 approved pending. F222 waits for F204's Word source handover. F221 follows all28 repairs. Deferred S92 scope is unchanged.
