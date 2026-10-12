@@ -77,6 +77,106 @@ fn html_public_import_saves_reopens_and_remains_editable() {
     );
 }
 
+/// The text and the underline, strike, bold and italic of each run of the
+/// first paragraph of each shape on the first slide of an HTML import.
+#[cfg(feature = "default-template")]
+fn html_marked_runs(html: &str) -> Vec<Vec<(String, [bool; 4])>> {
+    use oxml_drawing::text::{TextRun, TextStrike, TextUnderline};
+    use rpptx_oxml::shape_tree::ShapeTreeChild;
+    use rpptx_oxml::slide_parts::CT_Slide;
+
+    let imported = rpptx::Presentation::from_html(html, &[]).expect("HTML imports");
+    let bytes = imported.presentation.to_bytes().expect("HTML deck saves");
+    let package = open_opc(&bytes, "HTML import");
+    let slide = CT_Slide::from_xml(package.get_part("/ppt/slides/slide1.xml").unwrap()).unwrap();
+    slide
+        .common_slide_data
+        .shape_tree
+        .children
+        .iter()
+        .filter_map(|child| match child {
+            ShapeTreeChild::Shape(shape) => shape.text_body.as_ref(),
+            _ => None,
+        })
+        .map(|body| {
+            body.paragraphs()[0]
+                .runs
+                .iter()
+                .filter_map(|run| match run {
+                    TextRun::Run(run) => Some(run),
+                    _ => None,
+                })
+                .map(|run| {
+                    let properties = run.properties.clone().unwrap_or_default();
+                    (
+                        run.text.value.clone(),
+                        [
+                            properties
+                                .underline
+                                .is_some_and(|underline| underline != TextUnderline::None),
+                            properties
+                                .strike
+                                .is_some_and(|strike| strike != TextStrike::None),
+                            properties.bold == Some(true),
+                            properties.italic == Some(true),
+                        ],
+                    )
+                })
+                .collect()
+        })
+        .collect()
+}
+
+#[test]
+#[cfg(feature = "default-template")]
+fn html_import_keeps_the_space_around_an_emphasised_span_outside_it() {
+    const PLAIN: [bool; 4] = [false; 4];
+    const U: [bool; 4] = [true, false, false, false];
+    const S: [bool; 4] = [false, true, false, false];
+    const B: [bool; 4] = [false, false, true, false];
+    const I: [bool; 4] = [false, false, false, true];
+    let box_html = |body: &str, top: u32| {
+        format!(
+            "<div style='position:absolute;left:10px;top:{top}px;width:400px;height:40px'><p>{body}</p></div>"
+        )
+    };
+    let html = format!(
+        "<section data-slide>{}{}{}</section>",
+        box_html(
+            "see <u>u</u> then <s>s</s> then <b>b</b> then <i>i</i> end",
+            10
+        ),
+        box_html("<u>u</u> <s>s</s>", 60),
+        box_html("<u>u </u>tail", 110),
+    );
+    let runs = |items: &[(&str, [bool; 4])]| {
+        items
+            .iter()
+            .map(|(text, marks)| ((*text).to_owned(), *marks))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        html_marked_runs(&html),
+        [
+            runs(&[
+                ("see ", PLAIN),
+                ("u", U),
+                (" then ", PLAIN),
+                ("s", S),
+                (" then ", PLAIN),
+                ("b", B),
+                (" then ", PLAIN),
+                ("i", I),
+                (" end", PLAIN),
+            ]),
+            // A space between two spans is in neither of them.
+            runs(&[("u", U), (" ", PLAIN), ("s", S)]),
+            // A space written inside the span stays in it, as a browser draws it.
+            runs(&[("u ", U), ("tail", PLAIN)]),
+        ]
+    );
+}
+
 #[cfg(feature = "render")]
 fn source_built_pdf_for_import() -> Vec<u8> {
     use lopdf::content::{Content, Operation};

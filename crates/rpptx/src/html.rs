@@ -1156,6 +1156,10 @@ fn write_paragraphs(frame: &mut TextFrame<'_>, paragraphs: &[ParagraphModel]) ->
         }
         let mut pending_space = false;
         let mut emitted = false;
+        // The formatting of the text the pending collapsed space was written
+        // in, and whether the last run was written in that same text.
+        let mut space_properties: Option<CT_TextCharacterProperties> = None;
+        let mut space_ends_last_run = false;
         for piece in &model.pieces {
             match piece {
                 InlinePiece::Break => {
@@ -1170,17 +1174,46 @@ fn write_paragraphs(frame: &mut TextFrame<'_>, paragraphs: &[ParagraphModel]) ->
                     style,
                     target,
                 } => {
-                    let text = collapse_text(text, &mut pending_space, emitted);
-                    if text.is_empty() {
-                        continue;
-                    }
-                    let mut run = CT_RegularTextRun::new(text);
                     let mut properties = character_properties(style)?;
                     if let Some(relationship_id) = target {
                         let mut hyperlink = TextHyperlink::default();
                         hyperlink.relationship_id = Some(relationship_id.clone());
                         properties.hyperlink_click = Some(hyperlink);
                     }
+                    // A collapsed space before differently formatted text
+                    // stays with the text it was written in, as a browser
+                    // lays it out, rather than becoming the first character
+                    // of an underlined, struck or linked run.
+                    if pending_space
+                        && emitted
+                        && let Some(space) = space_properties.take_if(|space| {
+                            *space != properties
+                                && text.chars().any(|character| !character.is_whitespace())
+                        })
+                    {
+                        if space_ends_last_run
+                            && let Some(TextRun::Run(last)) = paragraph.runs.last_mut()
+                        {
+                            last.text.value.push(' ');
+                        } else {
+                            let mut run = CT_RegularTextRun::new(" ");
+                            if space != CT_TextCharacterProperties::default() {
+                                run.properties = Some(space);
+                            }
+                            paragraph.runs.push(TextRun::Run(run));
+                        }
+                        pending_space = false;
+                    }
+                    let was_pending = pending_space;
+                    let text = collapse_text(text, &mut pending_space, emitted);
+                    if pending_space && (!was_pending || !text.is_empty()) {
+                        space_ends_last_run = !text.is_empty();
+                        space_properties = Some(properties.clone());
+                    }
+                    if text.is_empty() {
+                        continue;
+                    }
+                    let mut run = CT_RegularTextRun::new(text);
                     if properties != CT_TextCharacterProperties::default() {
                         run.properties = Some(properties);
                     }
