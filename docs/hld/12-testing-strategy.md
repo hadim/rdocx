@@ -3922,3 +3922,27 @@ Latent hf-only state must not paint fields. Actual native artifacts and repair
 status accompany output claims. Python requires current wheel member and origin
 proofs, strict typing and stubtest. CLI requires safe publication and help tests.
 WASM, deterministic hashes and affected verified archives remain separate gates.
+
+## Word live-story and page-authoring controls
+
+Section controls compare inherited resolved geometry without cloned story
+references and validate even-story/settings publication as one transaction.
+Installed controls cover all six slots, default and explicit paragraph styles,
+localized IDs and names, absent styles, linkage and stale handles. Rich owner
+controls prove field and image insertion in the actual footer, note or cell
+part, owner-local relationships, separate PAGE and NUMPAGES runs and exact
+save/reopen source. Foreign, stale, malformed and unsupported note boundaries
+require deciding atomic refusals with unchanged source and revisions.
+
+Border controls retain comments, CDATA, aliases and foreign attributes, remove
+only selected qualified theme selectors and reject duplicate recognized edges.
+DrawingML text controls inspect both real text branches and actual affine
+paint. Image controls exercise zero, half and full alpha, rotated bounds,
+repeat replacement, removal, relationship pruning and changed-owner refusal.
+Styled and plain footnote and endnote markers compare size and baseline rise
+in cold and warm output, including signed explicit position shifts. Native
+Word open/save/reopen and pinned unattended LibreOffice observations remain
+independent authorities. Native host font substitution is recorded, never
+substituted into deterministic expectations.
+
+Text watermark opacity coverage includes exact named refusals for zero, one and a non-half interior value on absent and existing owners, with byte-identical package and settings. Qualified half-opacity controls select one WPS paint or one fallback-only type136 textpath paint, retain the inactive physical source and refuse foreign or rebound projection. Native endpoint failures remain evidence for the explicit limitation, not passed acceptance.

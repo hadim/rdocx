@@ -22,6 +22,7 @@ pub struct PyRun {
     document: Py<PyDocument>,
     path: ContentPath,
     run_path: rdocx::AcceptedRunPath,
+    related: Option<rdocx::ContentLocation>,
 }
 
 impl PyRun {
@@ -29,11 +30,13 @@ impl PyRun {
         document: Py<PyDocument>,
         path: ContentPath,
         run_path: rdocx::AcceptedRunPath,
+        related: Option<rdocx::ContentLocation>,
     ) -> Self {
         Self {
             document,
             path,
             run_path,
+            related,
         }
     }
 
@@ -46,7 +49,18 @@ impl PyRun {
                 "Re-fetch it with paragraph.runs[i].",
             )
             .map_err(|error| stale_to_pyerr(py, error))?;
-        path_indices(&self.path)
+        let (_, index) = path_indices(&self.path)?;
+        Ok((
+            match &self.related {
+                Some(location) => ParagraphLocation::Related(location.clone()),
+                None => paragraph_location(&self.path)?,
+            },
+            index,
+        ))
+    }
+
+    pub(crate) fn belongs_to(&self, py: Python<'_>, document: &Py<PyDocument>) -> bool {
+        self.document.bind(py).is(document.bind(py))
     }
 
     /// Apply one edit to this run where it lives, in the body or in a cell.
@@ -54,29 +68,11 @@ impl PyRun {
         let (location, _) = self.validate(py)?;
         let mut document = self.document.borrow_mut(py);
         let mut candidate = document.inner.clone_for_staging();
-        match location {
-            ParagraphLocation::Body(index) => candidate
-                .paragraph_mut(index)
-                .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
-                .edit_run(&self.run_path, edit),
-            ParagraphLocation::Cell {
-                table,
-                row,
-                cell,
-                paragraph,
-            } => {
-                let mut table = candidate
-                    .table_mut(table)
-                    .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
-                let mut cell = table
-                    .cell(row, cell)
-                    .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?;
-                cell.paragraph_mut(paragraph)
-                    .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
-                    .edit_run(&self.run_path, edit)
-            }
-        }
-        .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
+        location
+            .edit(&mut candidate, |paragraph| {
+                paragraph.edit_run(&self.run_path, edit)
+            })
+            .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
         document.inner = candidate;
         Ok(())
     }
@@ -88,28 +84,54 @@ impl PyRun {
     fn text(&self, py: Python<'_>) -> PyResult<String> {
         let (location, run_index) = self.validate(py)?;
         let document = self.document.borrow(py);
-        match location {
-            ParagraphLocation::Body(index) => document
-                .inner
-                .paragraph(index)
-                .and_then(|paragraph| paragraph.run(run_index).map(|run| run.text())),
-            ParagraphLocation::Cell {
-                table,
-                row,
-                cell,
-                paragraph,
-            } => document.inner.table(table).and_then(|table| {
-                let cell = table.cell(row, cell)?;
-                let paragraph = cell.paragraph(paragraph)?;
+        location
+            .read(&document.inner, |paragraph| {
                 paragraph.run(run_index).map(|run| run.text())
-            }),
-        }
-        .ok_or_else(|| PyIndexError::new_err("run index out of range"))
+            })
+            .map_err(|error| crate::rdocx_to_pyerr(py, error))?
+            .ok_or_else(|| PyIndexError::new_err("run index out of range"))
     }
 
     #[setter]
     fn set_text(&self, py: Python<'_>, text: &str) -> PyResult<()> {
         self.edit(py, |run| run.set_text(text))
+    }
+
+    #[pyo3(signature = (data, filename, width = None, height = None))]
+    fn add_picture(
+        &self,
+        py: Python<'_>,
+        data: &[u8],
+        filename: &str,
+        width: Option<&Bound<'_, PyAny>>,
+        height: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<()> {
+        let (location, index) = self.validate(py)?;
+        let width = crate::document::checked_section_length(width, "picture width")?
+            .map(rdocx::Length::emu);
+        let height = crate::document::checked_section_length(height, "picture height")?
+            .map(rdocx::Length::emu);
+        let mut document = self.document.borrow_mut(py);
+        let position = rdocx::StoryRunPosition {
+            location: location
+                .native(&document.inner)
+                .map_err(|error| crate::rdocx_to_pyerr(py, error))?,
+            run_index: index + 1,
+        };
+        let mut candidate = document.inner.clone_for_staging();
+        candidate
+            .insert_picture_at(&position, data, filename, width, height)
+            .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
+        let prepared = document
+            .revisions
+            .prepare_scopes("Run.add_picture", &[], &[])
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document.inner = candidate;
+        Ok(())
     }
 
     // A tab is appended inside this run, so no run index moves and live
@@ -118,38 +140,35 @@ impl PyRun {
         self.edit(py, |run| run.add_tab())
     }
 
+    #[pyo3(signature = (kind = "line"))]
+    fn add_break(&self, py: Python<'_>, kind: &str) -> PyResult<()> {
+        let kind = match kind {
+            "line" => rdocx::BreakKind::Line,
+            "page" => rdocx::BreakKind::Page,
+            "column" => rdocx::BreakKind::Column,
+            _ => {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "break kind must be line, page or column",
+                ));
+            }
+        };
+        self.edit(py, |run| run.add_break(kind))
+    }
+
     #[pyo3(signature = (instruction, cached_result = ""))]
     fn add_field(&self, py: Python<'_>, instruction: &str, cached_result: &str) -> PyResult<()> {
         let (location, _) = self.validate(py)?;
         let mut document = self.document.borrow_mut(py);
         let mut candidate = document.inner.clone_for_staging();
-        let mut added = Ok(());
-        let edit =
-            |run: &mut rdocx::run::Run<'_>| added = run.add_field(instruction, cached_result);
-        match location {
-            ParagraphLocation::Body(index) => candidate
-                .paragraph_mut(index)
-                .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
-                .edit_run(&self.run_path, edit),
-            ParagraphLocation::Cell {
-                table,
-                row,
-                cell,
-                paragraph,
-            } => {
-                let mut table = candidate
-                    .table_mut(table)
-                    .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
-                let mut cell = table
-                    .cell(row, cell)
-                    .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?;
-                cell.paragraph_mut(paragraph)
-                    .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
-                    .edit_run(&self.run_path, edit)
-            }
-        }
-        .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
-        added.map_err(|error| crate::rdocx_to_pyerr(py, error))?;
+        location
+            .edit(&mut candidate, |paragraph| {
+                let mut added = Ok(());
+                paragraph.edit_run(&self.run_path, |run| {
+                    added = run.add_field(instruction, cached_result)
+                })?;
+                added
+            })
+            .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
         let prepared = document
             .revisions
             .prepare_scopes("Run.add_field", &[], &[])
@@ -167,29 +186,9 @@ impl PyRun {
         let (location, run_index) = self.validate(py)?;
         let mut document = self.document.borrow_mut(py);
         let mut candidate = document.inner.clone_for_staging();
-        let removed = match location {
-            ParagraphLocation::Body(index) => candidate
-                .paragraph_mut(index)
-                .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
-                .remove_run(run_index),
-            ParagraphLocation::Cell {
-                table,
-                row,
-                cell,
-                paragraph,
-            } => {
-                let mut table = candidate
-                    .table_mut(table)
-                    .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
-                let mut cell = table
-                    .cell(row, cell)
-                    .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?;
-                cell.paragraph_mut(paragraph)
-                    .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?
-                    .remove_run(run_index)
-            }
-        };
-        removed.map_err(|error| crate::rdocx_to_pyerr(py, error))?;
+        location
+            .edit(&mut candidate, |paragraph| paragraph.remove_run(run_index))
+            .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
         let prepared = document
             .revisions
             .prepare_scopes("Run.remove", &[], &[])
@@ -211,6 +210,7 @@ impl PyRun {
                 self.document.clone_ref(py),
                 self.path.clone(),
                 self.run_path.clone(),
+                self.related.clone(),
             ),
         )
     }
@@ -238,13 +238,19 @@ impl PyRun {
 pub struct PyRunCollection {
     document: Py<PyDocument>,
     paragraph_path: ContentPath,
+    related: Option<rdocx::ContentLocation>,
 }
 
 impl PyRunCollection {
-    pub(crate) fn new(document: Py<PyDocument>, paragraph_path: ContentPath) -> Self {
+    pub(crate) fn new(
+        document: Py<PyDocument>,
+        paragraph_path: ContentPath,
+        related: Option<rdocx::ContentLocation>,
+    ) -> Self {
         Self {
             document,
             paragraph_path,
+            related,
         }
     }
 
@@ -257,29 +263,18 @@ impl PyRunCollection {
                 "Re-fetch it with paragraph.runs.",
             )
             .map_err(|error| stale_to_pyerr(py, error))?;
-        paragraph_location(&self.paragraph_path)
+        match &self.related {
+            Some(location) => Ok(ParagraphLocation::Related(location.clone())),
+            None => paragraph_location(&self.paragraph_path),
+        }
     }
 
     fn len(&self, py: Python<'_>) -> PyResult<usize> {
         let location = self.validate(py)?;
         let document = self.document.borrow(py);
-        match location {
-            ParagraphLocation::Body(index) => document
-                .inner
-                .paragraph(index)
-                .map(|paragraph| paragraph.run_count()),
-            ParagraphLocation::Cell {
-                table,
-                row,
-                cell,
-                paragraph,
-            } => document.inner.table(table).and_then(|table| {
-                let cell = table.cell(row, cell)?;
-                cell.paragraph(paragraph)
-                    .map(|paragraph| paragraph.run_count())
-            }),
-        }
-        .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))
+        location
+            .read(&document.inner, |paragraph| paragraph.run_count())
+            .map_err(|error| crate::rdocx_to_pyerr(py, error))
     }
 
     fn item(&self, py: Python<'_>, index: usize) -> PyResult<Py<PyRun>> {
@@ -288,26 +283,21 @@ impl PyRunCollection {
             let document = self.document.borrow(py);
             let mut segments = self.paragraph_path.segs.clone();
             segments.push(PathSeg::Run(index));
-            let run_path = match location {
-                ParagraphLocation::Body(paragraph) => document
-                    .inner
-                    .paragraph(paragraph)
-                    .and_then(|paragraph| paragraph.run_path(index)),
-                ParagraphLocation::Cell {
-                    table,
-                    row,
-                    cell,
-                    paragraph,
-                } => document.inner.table(table).and_then(|table| {
-                    let cell = table.cell(row, cell)?;
-                    cell.paragraph(paragraph)
-                        .and_then(|paragraph| paragraph.run_path(index))
-                }),
-            }
-            .ok_or_else(|| PyIndexError::new_err("run index out of range"))?;
+            let run_path = location
+                .read(&document.inner, |paragraph| paragraph.run_path(index))
+                .map_err(|error| crate::rdocx_to_pyerr(py, error))?
+                .ok_or_else(|| PyIndexError::new_err("run index out of range"))?;
             (document.revisions.capture(segments), run_path)
         };
-        Py::new(py, PyRun::new(self.document.clone_ref(py), path, run_path))
+        Py::new(
+            py,
+            PyRun::new(
+                self.document.clone_ref(py),
+                path,
+                run_path,
+                self.related.clone(),
+            ),
+        )
     }
 }
 
@@ -347,6 +337,7 @@ impl PyRunCollection {
             PyRunIterator {
                 document: self.document.clone_ref(py),
                 paragraph_path: self.paragraph_path.clone(),
+                related: self.related.clone(),
                 index: 0,
             },
         )
@@ -357,6 +348,7 @@ impl PyRunCollection {
 struct PyRunIterator {
     document: Py<PyDocument>,
     paragraph_path: ContentPath,
+    related: Option<rdocx::ContentLocation>,
     index: usize,
 }
 
@@ -367,8 +359,11 @@ impl PyRunIterator {
     }
 
     fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<Py<PyRun>>> {
-        let collection =
-            PyRunCollection::new(self.document.clone_ref(py), self.paragraph_path.clone());
+        let collection = PyRunCollection::new(
+            self.document.clone_ref(py),
+            self.paragraph_path.clone(),
+            self.related.clone(),
+        );
         let len = collection.len(py)?;
         if self.index >= len {
             return Ok(None);

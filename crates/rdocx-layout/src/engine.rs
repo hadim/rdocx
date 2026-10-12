@@ -9662,8 +9662,17 @@ fn layout_paragraph_with_source_and_table(
                     let marker = num_state
                         .note_label(NoteRef { stream, id: *id })
                         .to_string();
-                    let sup_size = font_size * 0.58;
-                    let sup_offset = font_size * 0.33; // raise baseline
+                    // Explicit vertical alignment has already resolved size and
+                    // rise above. Default note superscripting must happen once,
+                    // while retaining an explicit half-point position shift.
+                    let (sup_size, sup_offset) = if matches!(
+                        effective_rpr.vert_align.as_deref(),
+                        Some("superscript" | "subscript")
+                    ) {
+                        (font_size, baseline_offset)
+                    } else {
+                        (font_size * 0.58, font_size * 0.33 + baseline_offset)
+                    };
                     let shaped = fm.shape_text(font_id, &marker, sup_size)?;
                     let sup_metrics = fm.metrics(font_id, sup_size)?;
                     let revision_marker = input.revision_view == RevisionView::Tracked
@@ -11003,14 +11012,49 @@ fn collect_anchored_drawings(
                         }
                     }
                     None if anchor.embed_id.is_empty() => continue,
-                    None => block::AnchoredContent::Image {
-                        media_id: media
-                            .id_for_relationship_with_diagnostic(&anchor.embed_id, diagnostics),
-                    },
+                    None => {
+                        let media_id = media
+                            .id_for_relationship_with_diagnostic(&anchor.embed_id, diagnostics);
+                        if let Some((opacity, rotation)) = anchor.picture_effects() {
+                            let width = anchor.extent_cx.to_pt();
+                            let height = anchor.extent_cy.to_pt();
+                            let image = media.media().get(&media_id);
+                            block::AnchoredContent::Group(GroupElement {
+                                transform: Transform::rotate_about(
+                                    rotation,
+                                    width / 2.0,
+                                    height / 2.0,
+                                ),
+                                clip: None,
+                                opacity,
+                                effects: Vec::new(),
+                                children: vec![PositionedElement::Image {
+                                    rect: Rect {
+                                        x: 0.0,
+                                        y: 0.0,
+                                        width,
+                                        height,
+                                    },
+                                    data: image.map_or_else(Vec::new, |image| image.data.clone()),
+                                    content_type: image.map_or_else(String::new, |image| {
+                                        image.content_type.clone()
+                                    }),
+                                    media_id,
+                                }],
+                            })
+                        } else {
+                            block::AnchoredContent::Image { media_id }
+                        }
+                    }
                 }
             };
 
             out.push(block::AnchoredDrawing {
+                rotation_degrees: if shape.is_some() {
+                    anchor.shape_rotation_degrees().unwrap_or(0.0)
+                } else {
+                    0.0
+                },
                 behind_doc: anchor.behind_doc,
                 rel_h: anchor.pos_h_relative_from,
                 off_h: anchor.pos_h_offset.to_pt(),
@@ -13023,6 +13067,12 @@ fn resolve_run_color(
     rpr: &rdocx_oxml::properties::CT_RPr,
     theme: Option<&rdocx_oxml::theme::Theme>,
 ) -> Color {
+    if let Some((hex, alpha)) = rpr.solid_text_fill() {
+        let mut color = Color::from_hex(&hex);
+        color.a = alpha;
+        return color;
+    }
+
     // If theme color is specified, resolve it from the theme
     if let Some(ref theme_name) = rpr.color_theme
         && let Some(theme) = theme
@@ -17022,6 +17072,62 @@ mod tests {
             NoteStream::Endnote => input.endnotes = part,
         }
         input
+    }
+
+    #[test]
+    fn fx201_styled_note_references_shrink_and_raise_exactly_once() {
+        for stream in [NoteStream::Footnote, NoteStream::Endnote] {
+            for (styled, position) in [(false, 0), (true, 0), (false, 4), (true, 4), (true, -4)] {
+                let mut input = note_reference_cache_input(stream, false);
+                input.document.body.content = vec![input.document.body.content[20].clone()];
+                let BodyContent::Paragraph(paragraph) = &mut input.document.body.content[0] else {
+                    unreachable!()
+                };
+                let marker = paragraph.runs.last_mut().unwrap();
+                marker.properties = Some(CT_RPr {
+                    sz: Some(rdocx_oxml::units::HalfPoint(40)),
+                    vert_align: styled.then(|| "superscript".into()),
+                    position: Some(position),
+                    ..Default::default()
+                });
+                let mut engine = Engine::new_deterministic().unwrap();
+                for _ in 0..2 {
+                    let output = engine.layout(&input).unwrap();
+                    let mut markers = Vec::new();
+                    let mut body_baselines = Vec::new();
+                    for page in &output.pages {
+                        oxml_layout::walk(&page.elements, &mut |element, _| match element {
+                            PositionedElement::Text(run) if run.note.is_some() => {
+                                markers.push((run.font_size, run.origin.y))
+                            }
+                            PositionedElement::MultilingualText(run) if run.note.is_some() => {
+                                markers.push((run.font_size, run.origin.y))
+                            }
+                            PositionedElement::Text(run) if run.text.starts_with("note") => {
+                                body_baselines.push(run.origin.y)
+                            }
+                            PositionedElement::MultilingualText(run)
+                                if run.logical_text.starts_with("note") =>
+                            {
+                                body_baselines.push(run.origin.y)
+                            }
+                            _ => {}
+                        });
+                    }
+                    assert_eq!(markers.len(), 1);
+                    assert!(!body_baselines.is_empty());
+                    assert!(
+                        (markers[0].0 - 11.6).abs() < 1e-9,
+                        "{stream:?} styled={styled} {markers:?}"
+                    );
+                    assert!(
+                        (body_baselines[0] - markers[0].1 - (6.6 + position as f64 / 2.0)).abs()
+                            < 1e-9,
+                        "{stream:?} styled={styled} {markers:?}"
+                    );
+                }
+            }
+        }
     }
 
     fn assert_note_reference_does_not_poison_later_hits(stream: NoteStream) {
@@ -22357,6 +22463,7 @@ mod tests {
             true,
         );
         paragraph.anchored.push(block::AnchoredDrawing {
+            rotation_degrees: 0.0,
             behind_doc: true,
             rel_h: rdocx_oxml::drawing::ST_RelativeFromH::Page,
             off_h: 0.0,
@@ -22494,6 +22601,7 @@ mod tests {
             true,
         );
         paragraph.anchored.push(block::AnchoredDrawing {
+            rotation_degrees: 0.0,
             behind_doc: false,
             rel_h: rdocx_oxml::drawing::ST_RelativeFromH::Page,
             off_h: 20.0,
@@ -26119,5 +26227,47 @@ mod tests {
             let fresh = Engine::new_deterministic().unwrap().layout(&input).unwrap();
             assert_layout_results_equal(&warm, &fresh);
         }
+    }
+    #[test]
+    fn fx201_text_fill_alpha_survives_style_merge_and_qualified_overrides() {
+        let fill = |prefix: &str, namespace: &str, hex: &str, alpha: u32| {
+            CT_RPr {
+            revision_xml: vec![format!("<{prefix}:textFill xmlns:{prefix}=\"{namespace}\"><{prefix}:solidFill><{prefix}:srgbClr {prefix}:val=\"{hex}\"><{prefix}:alpha {prefix}:val=\"{alpha}\"/></{prefix}:srgbClr></{prefix}:solidFill></{prefix}:textFill>").into_bytes()],
+            revision_xml_positions: vec![(41, 0)],
+            ..CT_RPr::default()
+        }
+        };
+        let namespace = "http://schemas.microsoft.com/office/word/2010/wordml";
+        let inherited = fill("w14", namespace, "123456", 50_000);
+        let mut effective = CT_RPr::default();
+        effective.merge_from(&inherited);
+        assert_eq!(resolve_run_color(&effective, None).a, 0.5);
+        assert_eq!(
+            resolve_run_color(&effective, None).r,
+            Color::from_hex("123456").r
+        );
+        let direct = fill("alias", namespace, "AABBCC", 25_000);
+        effective.merge_from(&direct);
+        assert_eq!(resolve_run_color(&effective, None).a, 0.25);
+        assert_eq!(
+            resolve_run_color(&effective, None).r,
+            Color::from_hex("AABBCC").r
+        );
+        let foreign = fill("w14", "urn:foreign", "FF0000", 0);
+        let original = foreign.revision_xml.clone();
+        effective.merge_from(&foreign);
+        assert_eq!(resolve_run_color(&effective, None).a, 0.25);
+        assert_eq!(foreign.revision_xml, original);
+        assert!(
+            fill("w14", namespace, "123456", 100_001)
+                .solid_text_fill()
+                .is_none()
+        );
+        assert_eq!(direct.revision_xml.len(), 1);
+        assert!(
+            String::from_utf8(direct.revision_xml[0].clone())
+                .unwrap()
+                .contains("xmlns:alias")
+        );
     }
 }

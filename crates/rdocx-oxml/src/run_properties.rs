@@ -488,6 +488,105 @@ pub struct CT_RPr {
 
 #[allow(non_snake_case)]
 impl CT_RPr {
+    /// Resolve qualified solid text fill retained as opaque source.
+    /// Other extension representations retain their source without being guessed.
+    pub fn solid_text_fill(&self) -> Option<(String, f64)> {
+        const NS: &[u8] = b"http://schemas.microsoft.com/office/word/2010/wordml";
+        for raw in &self.revision_xml {
+            let mut probe = quick_xml::NsReader::from_reader(raw.as_slice());
+            let Ok((namespace, event)) = probe.read_resolved_event() else {
+                continue;
+            };
+            if !matches!(namespace, quick_xml::name::ResolveResult::Bound(ns) if ns.as_ref() == NS)
+                || !matches!(event, Event::Start(ref element) if element.local_name().as_ref() == b"textFill")
+            {
+                continue;
+            }
+            let mut reader = quick_xml::NsReader::from_reader(raw.as_slice());
+            let mut path = Vec::new();
+            let mut color = None;
+            let mut alpha = 1.0;
+            let mut valid = true;
+            loop {
+                let (namespace, event) = reader.read_resolved_event().ok()?;
+                match event {
+                    Event::Start(ref element) | Event::Empty(ref element) => {
+                        let name = element.local_name().as_ref().to_vec();
+                        let qualified = matches!(namespace, quick_xml::name::ResolveResult::Bound(ns) if ns.as_ref() == NS);
+                        if !qualified {
+                            valid = false;
+                        }
+                        path.push(name);
+                        let expected: &[&[u8]] = &[b"textFill", b"solidFill", b"srgbClr", b"alpha"];
+                        if path.len() > expected.len()
+                            || !path
+                                .iter()
+                                .zip(expected)
+                                .all(|(actual, expected)| actual.as_slice() == *expected)
+                        {
+                            valid = false;
+                        }
+                        if path.len() == 3 || path.len() == 4 {
+                            let mut value = None;
+                            for attribute in element.attributes() {
+                                let attribute = attribute.ok()?;
+                                let (ns, local) =
+                                    reader.resolver().resolve_attribute(attribute.key);
+                                if matches!(ns, quick_xml::name::ResolveResult::Bound(ns) if ns.as_ref() == NS)
+                                    && local.as_ref() == b"val"
+                                {
+                                    if value.is_some() {
+                                        valid = false;
+                                    }
+                                    value = Some(
+                                        attribute
+                                            .decoded_and_normalized_value(
+                                                quick_xml::XmlVersion::Implicit1_0,
+                                                reader.decoder(),
+                                            )
+                                            .ok()?
+                                            .into_owned(),
+                                    );
+                                }
+                            }
+                            if path.len() == 3 {
+                                let hex = value?;
+                                if hex.len() != 6
+                                    || !hex.bytes().all(|byte| byte.is_ascii_hexdigit())
+                                    || color.is_some()
+                                {
+                                    valid = false;
+                                }
+                                color = Some(hex);
+                            } else {
+                                let amount: u32 = value?.parse().ok()?;
+                                if amount > 100_000 {
+                                    valid = false;
+                                }
+                                alpha = f64::from(amount) / 100_000.0;
+                            }
+                        }
+                        if matches!(event, Event::Empty(_)) {
+                            path.pop();
+                        }
+                    }
+                    Event::End(_) => {
+                        path.pop();
+                    }
+                    Event::Eof => break,
+                    Event::Text(ref text) if text.as_ref().iter().all(u8::is_ascii_whitespace) => {}
+                    _ => {
+                        valid = false;
+                    }
+                }
+            }
+            if valid && let Some(color) = color {
+                return Some((color, alpha));
+            }
+        }
+        None
+    }
+
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
         Self::from_xml_with_prefixes(reader, &["w".to_owned()])
     }
@@ -1407,6 +1506,32 @@ impl CT_RPr {
     /// Merge another CT_RPr into this one (non-None fields override).
     /// Used for style inheritance.
     pub fn merge_from(&mut self, other: &CT_RPr) {
+        // Only a recognized semantic solid fill participates in style precedence.
+        // Opaque extension children are not transported into an effective style.
+        if let Some((color, alpha)) = other.solid_text_fill() {
+            let mut retained = Vec::new();
+            let mut positions = Vec::new();
+            for (index, raw) in self.revision_xml.iter().enumerate() {
+                let probe = CT_RPr {
+                    revision_xml: vec![raw.clone()],
+                    ..CT_RPr::default()
+                };
+                if probe.solid_text_fill().is_none() {
+                    retained.push(raw.clone());
+                    positions.push(
+                        self.revision_xml_positions
+                            .get(index)
+                            .copied()
+                            .unwrap_or((RPR_END_SLOT, 0)),
+                    );
+                }
+            }
+            let amount = (alpha * 100_000.0).round() as u32;
+            retained.push(format!("<w14:textFill xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w14:solidFill><w14:srgbClr w14:val=\"{color}\"><w14:alpha w14:val=\"{amount}\"/></w14:srgbClr></w14:solidFill></w14:textFill>").into_bytes());
+            positions.push((RPR_END_SLOT, 0));
+            self.revision_xml = retained;
+            self.revision_xml_positions = positions;
+        }
         if other.style_id.is_some() {
             self.style_id = other.style_id.clone();
         }

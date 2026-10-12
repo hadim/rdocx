@@ -551,6 +551,34 @@ pub struct CT_Settings {
 }
 
 impl CT_Settings {
+    /// Change only the owned background-display toggle, retaining its opaque payload.
+    pub fn set_display_background_shape(&mut self, enabled: bool) -> Result<()> {
+        let source = self.to_xml()?;
+        let occurrences = find_top_level_children(&source, b"displayBackgroundShape")?;
+        if occurrences.len() > 1 {
+            return Err(OxmlError::InvalidValue(
+                "cannot rewrite ambiguous w:displayBackgroundShape".to_owned(),
+            ));
+        }
+        let replacement = match occurrences.first() {
+            Some((raw, inherited)) => rewrite_word_root_attribute(
+                raw,
+                inherited,
+                b"val",
+                if enabled { "1" } else { "0" },
+            )?,
+            None => write_toggle_setting("w:displayBackgroundShape", enabled)?,
+        };
+        self.source_xml = Some(rewrite_ordered_child(
+            &source,
+            SETTINGS_ORDER,
+            b"displayBackgroundShape",
+            &replacement,
+            is_word_element,
+        )?);
+        Ok(())
+    }
+
     pub fn new() -> Self {
         Self::default()
     }
@@ -2660,6 +2688,80 @@ pub(crate) fn capture_empty_element(element: &BytesStart<'_>) -> Result<Vec<u8>>
     let mut raw = Vec::new();
     Writer::new(&mut raw).write_event(Event::Empty(element.to_owned().into_owned()))?;
     Ok(raw)
+}
+
+/// Replace one qualified scalar attribute without serializing producer bytes.
+pub(crate) fn rewrite_word_root_attribute(
+    raw: &[u8],
+    inherited: &[String],
+    local: &[u8],
+    value: &str,
+) -> Result<Vec<u8>> {
+    let mut reader = Reader::from_reader(raw);
+    let element = loop {
+        match reader.read_event()? {
+            Event::Start(element) | Event::Empty(element) => break element,
+            Event::Decl(_) | Event::Comment(_) | Event::PI(_) => {}
+            Event::Text(text) if text.as_ref().iter().all(u8::is_ascii_whitespace) => {}
+            _ => return Err(OxmlError::InvalidValue("missing property root".to_owned())),
+        }
+    };
+    let prefixes = word_prefixes_at(&element, inherited)?;
+    let mut owned = None;
+    for attribute in element.attributes() {
+        let attribute = attribute.map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
+        if is_word_attribute(attribute.key.as_ref(), local, &prefixes) {
+            if owned.is_some() {
+                return Err(OxmlError::InvalidValue(
+                    "duplicate expanded property attribute".to_owned(),
+                ));
+            }
+            let start = (attribute.value.as_ref().as_ptr() as usize)
+                .checked_sub(raw.as_ptr() as usize)
+                .ok_or_else(|| {
+                    OxmlError::InvalidValue("attribute source was not retained".to_owned())
+                })?;
+            let end = start + attribute.value.len();
+            if end > raw.len() {
+                return Err(OxmlError::InvalidValue(
+                    "attribute source was not retained".to_owned(),
+                ));
+            }
+            owned = Some((start, end));
+        }
+    }
+    let mut output = raw.to_vec();
+    if let Some((start, end)) = owned {
+        output.splice(start..end, value.bytes());
+    } else {
+        let prefix = prefixes.iter().find(|prefix| !prefix.is_empty());
+        let (prefix, declaration) =
+            match prefix {
+                Some(prefix) => (prefix.clone(), String::new()),
+                None => {
+                    let mut prefix = "pagePropertyWord".to_owned();
+                    while element.attributes().flatten().any(|attribute| {
+                        attribute.key.as_ref() == format!("xmlns:{prefix}").as_bytes()
+                    }) {
+                        prefix.push('x');
+                    }
+                    let declaration = format!(" xmlns:{prefix}=\"{W_NS}\"");
+                    (prefix, declaration)
+                }
+            };
+        let end = reader.buffer_position() as usize;
+        let insert = if raw.get(end.saturating_sub(2)) == Some(&b'/') {
+            end - 2
+        } else {
+            end - 1
+        };
+        let attribute = format!(
+            "{declaration} {prefix}:{}=\"{value}\"",
+            std::str::from_utf8(local)?
+        );
+        output.splice(insert..insert, attribute.bytes());
+    }
+    Ok(output)
 }
 
 pub(crate) fn word_value(element: &BytesStart<'_>, prefixes: &[String]) -> Option<String> {

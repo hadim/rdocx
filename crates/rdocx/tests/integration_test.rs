@@ -5778,7 +5778,7 @@ fn section_aware_watermark_pages_select_the_requested_variant() {
             rdocx::TextWatermarkOptions::default(),
         )
         .unwrap();
-    assert!(!document.even_and_odd_headers());
+    assert!(document.even_and_odd_headers());
     document
         .section_mut(0)
         .unwrap()

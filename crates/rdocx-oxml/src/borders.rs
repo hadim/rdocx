@@ -53,6 +53,42 @@ impl CT_BorderEdge {
         }
     }
 
+    /// Select a literal color and remove only qualified competing theme selectors.
+    pub fn set_literal_color(&mut self, color: &str) -> Result<()> {
+        let generated;
+        let raw = if let Some(raw) = &self.source_xml {
+            raw.as_slice()
+        } else {
+            let mut start = BytesStart::new("w:border");
+            start.push_attribute(("xmlns:w", W_NS));
+            self.write_xml_attrs(&mut start);
+            let mut writer = Writer::new(Vec::new());
+            writer.write_event(Event::Empty(start))?;
+            generated = writer.into_inner();
+            generated.as_slice()
+        };
+        let mut reader = quick_xml::NsReader::from_reader(raw);
+        let (_, event) = reader.read_resolved_event()?;
+        let root = match event {
+            Event::Start(root) | Event::Empty(root) => root,
+            _ => return Err(OxmlError::InvalidValue("border source root missing".into())),
+        };
+        let mut remove = Vec::new();
+        for attribute in root.attributes() {
+            let attribute = attribute?;
+            let (namespace, local) = reader.resolver().resolve_attribute(attribute.key);
+            if matches!(namespace, quick_xml::name::ResolveResult::Bound(namespace) if namespace.as_ref() == W_NS.as_bytes())
+                && matches!(local.as_ref(), b"themeColor" | b"themeTint" | b"themeShade")
+            {
+                remove.push(std::str::from_utf8(attribute.key.as_ref())?.to_owned());
+            }
+        }
+        self.extra_attributes
+            .retain(|(key, _)| !remove.contains(key));
+        self.color = Some(color.to_owned());
+        Ok(())
+    }
+
     pub fn from_xml_attrs(e: &BytesStart) -> Result<Self> {
         let mut edge = CT_BorderEdge::new(ST_Border::None);
 

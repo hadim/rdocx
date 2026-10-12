@@ -23,6 +23,70 @@ fn path_index(
         .ok_or_else(|| PyIndexError::new_err(format!("{kind} index is missing")))
 }
 
+#[derive(Clone)]
+enum TableLocation {
+    Body(usize),
+    Related(rdocx::ContentLocation),
+}
+impl TableLocation {
+    fn new(index: usize, related: &Option<rdocx::ContentLocation>) -> Self {
+        related.as_ref().map_or(Self::Body(index), |location| {
+            Self::Related(location.clone())
+        })
+    }
+    fn refreshed(
+        document: &rdocx::Document,
+        location: &rdocx::ContentLocation,
+    ) -> rdocx::Result<rdocx::ContentLocation> {
+        let owner = location.story();
+        let story = document
+            .stories()?
+            .into_iter()
+            .find(|story| {
+                story.kind() == owner.kind()
+                    && story.part_name() == owner.part_name()
+                    && story.owner_index() == owner.owner_index()
+            })
+            .ok_or_else(|| rdocx::Error::Other("rich table owner disappeared".to_owned()))?;
+        Ok(rdocx::ContentLocation::new(
+            story,
+            location.item_kind(),
+            location.index_path().to_vec(),
+        ))
+    }
+    fn read<T>(
+        &self,
+        document: &rdocx::Document,
+        read: impl FnOnce(rdocx::TableRef<'_>) -> T,
+    ) -> rdocx::Result<T> {
+        match self {
+            Self::Body(index) => document
+                .table(*index)
+                .map(read)
+                .ok_or_else(|| rdocx::Error::Other("table index out of range".to_owned())),
+            Self::Related(location) => {
+                document.read_story_table(&Self::refreshed(document, location)?, read)
+            }
+        }
+    }
+    fn edit<T>(
+        &self,
+        document: &mut rdocx::Document,
+        edit: impl FnOnce(&mut rdocx::Table<'_>) -> rdocx::Result<T>,
+    ) -> rdocx::Result<T> {
+        match self {
+            Self::Body(index) => edit(
+                &mut document
+                    .table_mut(*index)
+                    .ok_or_else(|| rdocx::Error::Other("table index out of range".to_owned()))?,
+            ),
+            Self::Related(location) => {
+                document.edit_story_table(&Self::refreshed(document, location)?, edit)
+            }
+        }
+    }
+}
+
 fn table_index(path: &ContentPath) -> PyResult<usize> {
     path_index(
         path,
@@ -308,13 +372,35 @@ impl PyTableIterator {
 pub struct PyTable {
     document: Py<PyDocument>,
     path: ContentPath,
+    related: Option<rdocx::ContentLocation>,
 }
 
 impl PyTable {
     pub(crate) fn new(document: Py<PyDocument>, path: ContentPath) -> Self {
-        Self { document, path }
+        Self {
+            document,
+            path,
+            related: None,
+        }
     }
 
+    pub(crate) fn for_story(
+        document: Py<PyDocument>,
+        path: ContentPath,
+        location: rdocx::ContentLocation,
+    ) -> Self {
+        Self {
+            document,
+            path,
+            related: Some(location),
+        }
+    }
+    fn read<T>(&self, py: Python<'_>, read: impl FnOnce(rdocx::TableRef<'_>) -> T) -> PyResult<T> {
+        let index = self.validate(py)?;
+        TableLocation::new(index, &self.related)
+            .read(&self.document.borrow(py).inner, read)
+            .map_err(|error| rdocx_to_pyerr(py, error))
+    }
     pub(crate) fn validate(&self, py: Python<'_>) -> PyResult<usize> {
         let document = self.document.borrow(py);
         self.path
@@ -339,28 +425,25 @@ impl PyTable {
     ) -> PyResult<T> {
         let index = self.validate(py)?;
         let mut document = self.document.borrow_mut(py);
-        let mut table = document
-            .inner
-            .table_mut(index)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
-        edit(&mut table).map_err(|error| rdocx_to_pyerr(py, error))
+        let mut candidate = document.inner.clone_for_staging();
+        let result = TableLocation::new(index, &self.related)
+            .edit(&mut candidate, edit)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        document.inner = candidate;
+        Ok(result)
     }
 
     /// Resolve possibly negative row and cell indexes against this table.
     fn cell_coordinates(&self, py: Python<'_>, row: isize, col: isize) -> PyResult<(usize, usize)> {
-        let table_index = self.validate(py)?;
-        let document = self.document.borrow(py);
-        let table = document
-            .inner
-            .table(table_index)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
-        let row = normalize_index(row, table.row_count(), "row")?;
-        let col = normalize_index(
-            col,
-            table.row(row).map(|row| row.cell_count()).unwrap_or(0),
-            "cell",
-        )?;
-        Ok((row, col))
+        self.read(py, |table| {
+            let row = normalize_index(row, table.row_count(), "row")?;
+            let col = normalize_index(
+                col,
+                table.row(row).map(|row| row.cell_count()).unwrap_or(0),
+                "cell",
+            )?;
+            Ok((row, col))
+        })?
     }
 }
 
@@ -371,7 +454,11 @@ impl PyTable {
         self.validate(py)?;
         Py::new(
             py,
-            PyRowCollection::new(self.document.clone_ref(py), self.path.clone()),
+            PyRowCollection::new(
+                self.document.clone_ref(py),
+                self.path.clone(),
+                self.related.clone(),
+            ),
         )
     }
 
@@ -383,41 +470,29 @@ impl PyTable {
             PathSeg::Row(row),
             PathSeg::Cell(col)
         ]);
-        Py::new(py, PyCell::new(self.document.clone_ref(py), path))
+        Py::new(
+            py,
+            PyCell::new(self.document.clone_ref(py), path, self.related.clone()),
+        )
     }
 
     #[getter]
     fn style(&self, py: Python<'_>) -> PyResult<Option<String>> {
-        let index = self.validate(py)?;
-        Ok(self
-            .document
-            .borrow(py)
-            .inner
-            .table(index)
-            .and_then(|table| table.style_id().map(str::to_owned)))
+        self.read(py, |table| table.style_id().map(str::to_owned))
     }
 
     #[setter]
     fn set_style(&self, py: Python<'_>, value: &str) -> PyResult<()> {
-        let index = self.validate(py)?;
-        self.document
-            .borrow_mut(py)
-            .inner
-            .table_mut(index)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?
-            .set_style(value);
-        Ok(())
+        self.edit(py, |table| {
+            table.set_style(value);
+            Ok(())
+        })
     }
 
     #[getter]
     fn indent(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
-        let index = self.validate(py)?;
-        self.document
-            .borrow(py)
-            .inner
-            .table(index)
-            .and_then(|table| table.indent())
-            .map(|length| length_object(py, length))
+        self.read(py, |table| table.indent())?
+            .map(|value| length_object(py, value))
             .transpose()
     }
 
@@ -430,12 +505,7 @@ impl PyTable {
 
     #[getter]
     fn alignment(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
-        let index = self.validate(py)?;
-        self.document
-            .borrow(py)
-            .inner
-            .table(index)
-            .and_then(|table| table.alignment())
+        self.read(py, |table| table.alignment())?
             .and_then(alignment_to_int)
             .map(|value| enum_object(py, "WD_TABLE_ALIGNMENT", value))
             .transpose()
@@ -443,39 +513,26 @@ impl PyTable {
 
     #[setter]
     fn set_alignment(&self, py: Python<'_>, value: i32) -> PyResult<()> {
-        let index = self.validate(py)?;
         let value = alignment_from_int(value)?;
-        self.document
-            .borrow_mut(py)
-            .inner
-            .table_mut(index)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?
-            .set_alignment(value);
-        Ok(())
+        self.edit(py, |table| {
+            table.set_alignment(value);
+            Ok(())
+        })
     }
 
     #[getter]
     fn width(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
-        let index = self.validate(py)?;
-        self.document
-            .borrow(py)
-            .inner
-            .table(index)
-            .and_then(|table| table.width())
+        self.read(py, |table| table.width())?
             .map(|value| length_object(py, value))
             .transpose()
     }
 
     #[setter]
     fn set_width(&self, py: Python<'_>, value: i64) -> PyResult<()> {
-        let index = self.validate(py)?;
-        self.document
-            .borrow_mut(py)
-            .inner
-            .table_mut(index)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?
-            .set_width(rdocx::Length::emu(value));
-        Ok(())
+        self.edit(py, |table| {
+            table.set_width(rdocx::Length::emu(value));
+            Ok(())
+        })
     }
 
     #[pyo3(signature = (style, *, size, color))]
@@ -512,25 +569,15 @@ impl PyTable {
 
     fn border(&self, py: Python<'_>, edge: &str) -> PyResult<Option<BorderSnapshot>> {
         let edge = table_border_edge(edge)?;
-        let index = self.validate(py)?;
-        self.document
-            .borrow(py)
-            .inner
-            .table(index)
-            .and_then(|table| table.border(edge).map(|border| border_snapshot(py, border)))
-            .transpose()
+        self.read(py, |table| {
+            table.border(edge).map(|border| border_snapshot(py, border))
+        })?
+        .transpose()
     }
 
     #[getter]
     fn cell_margins(&self, py: Python<'_>) -> PyResult<Option<MarginSnapshot>> {
-        let index = self.validate(py)?;
-        let margins = self
-            .document
-            .borrow(py)
-            .inner
-            .table(index)
-            .and_then(|table| table.cell_margins());
-        margins
+        self.read(py, |table| table.cell_margins())?
             .map(|margins| margin_snapshot(py, margins))
             .transpose()
     }
@@ -556,15 +603,8 @@ impl PyTable {
 
     #[getter]
     fn grid_widths<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
-        let index = self.validate(py)?;
         let widths = self
-            .document
-            .borrow(py)
-            .inner
-            .table(index)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?
-            .grid_widths();
-        let widths = widths
+            .read(py, |table| table.grid_widths())?
             .into_iter()
             .map(|width| length_object(py, width))
             .collect::<PyResult<Vec<_>>>()?;
@@ -581,15 +621,7 @@ impl PyTable {
     }
 
     fn set_column_width(&self, py: Python<'_>, column: isize, width: i64) -> PyResult<()> {
-        let index = self.validate(py)?;
-        let columns = self
-            .document
-            .borrow(py)
-            .inner
-            .table(index)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?
-            .grid_widths()
-            .len();
+        let columns = self.read(py, |table| table.grid_widths().len())?;
         let column = normalize_index(column, columns, "column")?;
         let applied = self.edit(py, |table| {
             Ok(table.set_column_width(column, rdocx::Length::emu(width)))
@@ -615,14 +647,13 @@ impl PyTable {
         let mut document = self.document.borrow_mut(py);
         let mut candidate = document.inner.clone_for_staging();
         let changed = {
-            let mut table = candidate
-                .table_mut(table_index)
-                .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
-            let before = table.row(row).map(|row| row.cell_count());
-            table
-                .set_cell_grid_span_checked(row, col, span)
-                .map_err(|error| rdocx_to_pyerr(py, error))?;
-            table.row(row).map(|row| row.cell_count()) != before
+            TableLocation::new(table_index, &self.related)
+                .edit(&mut candidate, |table| {
+                    let before = table.row(row).map(|row| row.cell_count());
+                    table.set_cell_grid_span_checked(row, col, span)?;
+                    Ok(table.row(row).map(|row| row.cell_count()) != before)
+                })
+                .map_err(|error| rdocx_to_pyerr(py, error))?
         };
         if changed {
             let prepared = document
@@ -657,18 +688,23 @@ impl PyTable {
         let result = {
             let mut document = self.document.borrow_mut(py);
             let mut candidate = document.inner.clone_for_staging();
-            let row_count = candidate
-                .table(table_index)
-                .ok_or_else(|| PyIndexError::new_err("table index out of range"))?
-                .row_count();
+            let row_count = TableLocation::new(table_index, &self.related)
+                .read(&candidate, |table| table.row_count())
+                .map_err(|error| rdocx_to_pyerr(py, error))?;
             let source = normalize_index(index, row_count, "row")?;
             let insert_at = at.unwrap_or(source + 1);
             if insert_at > row_count {
                 return Err(PyIndexError::new_err("row insertion index out of range"));
             }
-            let inserted = candidate
-                .clone_table_row(table_index, source, insert_at)
-                .map_err(|error| rdocx_to_pyerr(py, error))?;
+            let inserted = match &self.related {
+                Some(location) => {
+                    let location = TableLocation::refreshed(&candidate, location)
+                        .map_err(|error| rdocx_to_pyerr(py, error))?;
+                    candidate.clone_story_table_row(&location, source, insert_at)
+                }
+                None => candidate.clone_table_row(table_index, source, insert_at),
+            }
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
             let prepared = document
                 .revisions
                 .prepare_scopes("Table.clone_row", &[], &[])
@@ -679,7 +715,10 @@ impl PyTable {
                 .revisions
                 .capture_prepared(&prepared, segments)
                 .map_err(oxml_py_support::revision_to_pyerr)?;
-            let result = Py::new(py, PyRow::new(self.document.clone_ref(py), path))?;
+            let result = Py::new(
+                py,
+                PyRow::new(self.document.clone_ref(py), path, self.related.clone()),
+            )?;
             document
                 .revisions
                 .commit_scopes(prepared)
@@ -694,14 +733,19 @@ impl PyTable {
         let table_index = self.validate(py)?;
         let mut document = self.document.borrow_mut(py);
         let mut candidate = document.inner.clone_for_staging();
-        let row_count = candidate
-            .table(table_index)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?
-            .row_count();
-        let row_index = normalize_index(index, row_count, "row")?;
-        candidate
-            .remove_table_row(table_index, row_index)
+        let row_count = TableLocation::new(table_index, &self.related)
+            .read(&candidate, |table| table.row_count())
             .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let row_index = normalize_index(index, row_count, "row")?;
+        match &self.related {
+            Some(location) => {
+                let location = TableLocation::refreshed(&candidate, location)
+                    .map_err(|error| rdocx_to_pyerr(py, error))?;
+                candidate.remove_story_table_row(&location, row_index)
+            }
+            None => candidate.remove_table_row(table_index, row_index),
+        }
+        .map_err(|error| rdocx_to_pyerr(py, error))?;
         let prepared = document
             .revisions
             .prepare_scopes("Table.remove_row", &[], &[])
@@ -719,13 +763,19 @@ impl PyTable {
 pub struct PyRowCollection {
     document: Py<PyDocument>,
     table_path: ContentPath,
+    related: Option<rdocx::ContentLocation>,
 }
 
 impl PyRowCollection {
-    fn new(document: Py<PyDocument>, table_path: ContentPath) -> Self {
+    fn new(
+        document: Py<PyDocument>,
+        table_path: ContentPath,
+        related: Option<rdocx::ContentLocation>,
+    ) -> Self {
         Self {
             document,
             table_path,
+            related,
         }
     }
     fn validate(&self, py: Python<'_>) -> PyResult<usize> {
@@ -741,19 +791,19 @@ impl PyRowCollection {
     }
     fn len(&self, py: Python<'_>) -> PyResult<usize> {
         let index = self.validate(py)?;
-        self.document
-            .borrow(py)
-            .inner
-            .table(index)
-            .map(|table| table.row_count())
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))
+        TableLocation::new(index, &self.related)
+            .read(&self.document.borrow(py).inner, |table| table.row_count())
+            .map_err(|error| rdocx_to_pyerr(py, error))
     }
     fn item(&self, py: Python<'_>, index: usize) -> PyResult<Py<PyRow>> {
         self.validate(py)?;
         let mut segments = self.table_path.segs.clone();
         segments.push(PathSeg::Row(index));
         let path = self.document.borrow(py).revisions.capture(segments);
-        Py::new(py, PyRow::new(self.document.clone_ref(py), path))
+        Py::new(
+            py,
+            PyRow::new(self.document.clone_ref(py), path, self.related.clone()),
+        )
     }
 }
 
@@ -791,6 +841,7 @@ impl PyRowCollection {
             PyRowIterator {
                 document: self.document.clone_ref(py),
                 table_path: self.table_path.clone(),
+                related: self.related.clone(),
                 index: 0,
             },
         )
@@ -802,6 +853,7 @@ struct PyRowIterator {
     document: Py<PyDocument>,
     table_path: ContentPath,
     index: usize,
+    related: Option<rdocx::ContentLocation>,
 }
 
 #[pymethods]
@@ -811,7 +863,11 @@ impl PyRowIterator {
     }
 
     fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<Py<PyRow>>> {
-        let collection = PyRowCollection::new(self.document.clone_ref(py), self.table_path.clone());
+        let collection = PyRowCollection::new(
+            self.document.clone_ref(py),
+            self.table_path.clone(),
+            self.related.clone(),
+        );
         if self.index >= collection.len(py)? {
             return Ok(None);
         }
@@ -825,11 +881,20 @@ impl PyRowIterator {
 pub struct PyRow {
     document: Py<PyDocument>,
     path: ContentPath,
+    related: Option<rdocx::ContentLocation>,
 }
 
 impl PyRow {
-    fn new(document: Py<PyDocument>, path: ContentPath) -> Self {
-        Self { document, path }
+    fn new(
+        document: Py<PyDocument>,
+        path: ContentPath,
+        related: Option<rdocx::ContentLocation>,
+    ) -> Self {
+        Self {
+            document,
+            path,
+            related,
+        }
     }
     fn validate(&self, py: Python<'_>) -> PyResult<(usize, usize)> {
         let document = self.document.borrow(py);
@@ -845,15 +910,14 @@ impl PyRow {
 
     fn read<T>(&self, py: Python<'_>, read: impl FnOnce(rdocx::RowRef<'_>) -> T) -> PyResult<T> {
         let (table, row) = self.validate(py)?;
-        let document = self.document.borrow(py);
-        let table = document
-            .inner
-            .table(table)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
-        let row = table
-            .row(row)
-            .ok_or_else(|| PyIndexError::new_err("row index out of range"))?;
-        Ok(read(row))
+        TableLocation::new(table, &self.related)
+            .read(&self.document.borrow(py).inner, |table| {
+                let row = table
+                    .row(row)
+                    .ok_or_else(|| PyIndexError::new_err("row index out of range"))?;
+                Ok(read(row))
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?
     }
 
     /// Apply one checked native row edit that moves no content, so live
@@ -865,14 +929,17 @@ impl PyRow {
     ) -> PyResult<()> {
         let (table, row) = self.validate(py)?;
         let mut document = self.document.borrow_mut(py);
-        let mut table = document
-            .inner
-            .table_mut(table)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
-        let mut row = table
-            .row(row)
-            .ok_or_else(|| PyIndexError::new_err("row index out of range"))?;
-        edit(&mut row).map_err(|error| rdocx_to_pyerr(py, error))
+        let mut candidate = document.inner.clone_for_staging();
+        TableLocation::new(table, &self.related)
+            .edit(&mut candidate, |table| {
+                let mut row = table
+                    .row(row)
+                    .ok_or_else(|| rdocx::Error::Other("row index out of range".to_owned()))?;
+                edit(&mut row)
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        document.inner = candidate;
+        Ok(())
     }
 }
 
@@ -883,7 +950,11 @@ impl PyRow {
         self.validate(py)?;
         Py::new(
             py,
-            PyCellCollection::new(self.document.clone_ref(py), self.path.clone()),
+            PyCellCollection::new(
+                self.document.clone_ref(py),
+                self.path.clone(),
+                self.related.clone(),
+            ),
         )
     }
 
@@ -961,11 +1032,20 @@ impl PyRow {
 pub struct PyCellCollection {
     document: Py<PyDocument>,
     row_path: ContentPath,
+    related: Option<rdocx::ContentLocation>,
 }
 
 impl PyCellCollection {
-    fn new(document: Py<PyDocument>, row_path: ContentPath) -> Self {
-        Self { document, row_path }
+    fn new(
+        document: Py<PyDocument>,
+        row_path: ContentPath,
+        related: Option<rdocx::ContentLocation>,
+    ) -> Self {
+        Self {
+            document,
+            row_path,
+            related,
+        }
     }
     fn validate(&self, py: Python<'_>) -> PyResult<(usize, usize)> {
         let document = self.document.borrow(py);
@@ -980,11 +1060,11 @@ impl PyCellCollection {
     }
     fn len(&self, py: Python<'_>) -> PyResult<usize> {
         let (table, row) = self.validate(py)?;
-        self.document
-            .borrow(py)
-            .inner
-            .table(table)
-            .and_then(|table| table.row(row).map(|row| row.cell_count()))
+        TableLocation::new(table, &self.related)
+            .read(&self.document.borrow(py).inner, |table| {
+                table.row(row).map(|row| row.cell_count())
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?
             .ok_or_else(|| PyIndexError::new_err("row index out of range"))
     }
     fn item(&self, py: Python<'_>, index: usize) -> PyResult<Py<PyCell>> {
@@ -992,7 +1072,10 @@ impl PyCellCollection {
         let mut segments = self.row_path.segs.clone();
         segments.push(PathSeg::Cell(index));
         let path = self.document.borrow(py).revisions.capture(segments);
-        Py::new(py, PyCell::new(self.document.clone_ref(py), path))
+        Py::new(
+            py,
+            PyCell::new(self.document.clone_ref(py), path, self.related.clone()),
+        )
     }
 }
 
@@ -1030,6 +1113,7 @@ impl PyCellCollection {
             PyCellIterator {
                 document: self.document.clone_ref(py),
                 row_path: self.row_path.clone(),
+                related: self.related.clone(),
                 index: 0,
             },
         )
@@ -1041,6 +1125,7 @@ struct PyCellIterator {
     document: Py<PyDocument>,
     row_path: ContentPath,
     index: usize,
+    related: Option<rdocx::ContentLocation>,
 }
 
 #[pymethods]
@@ -1050,7 +1135,11 @@ impl PyCellIterator {
     }
 
     fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<Py<PyCell>>> {
-        let collection = PyCellCollection::new(self.document.clone_ref(py), self.row_path.clone());
+        let collection = PyCellCollection::new(
+            self.document.clone_ref(py),
+            self.row_path.clone(),
+            self.related.clone(),
+        );
         if self.index >= collection.len(py)? {
             return Ok(None);
         }
@@ -1064,11 +1153,43 @@ impl PyCellIterator {
 pub struct PyCell {
     document: Py<PyDocument>,
     path: ContentPath,
+    related: Option<rdocx::ContentLocation>,
 }
 
 impl PyCell {
-    fn new(document: Py<PyDocument>, path: ContentPath) -> Self {
-        Self { document, path }
+    fn physical_story(
+        &self,
+        py: Python<'_>,
+        document: &rdocx::Document,
+        table: usize,
+        row: usize,
+        cell: usize,
+    ) -> PyResult<rdocx::StoryId> {
+        match &self.related {
+            Some(location) => {
+                let location = TableLocation::refreshed(document, location)
+                    .map_err(|error| rdocx_to_pyerr(py, error))?;
+                document
+                    .story_table_cell(&location, row, cell)
+                    .map_err(|error| rdocx_to_pyerr(py, error))
+            }
+            None => document
+                .cell_paragraph_story_location(table, row, cell, 0)
+                .map(|location| location.story().clone())
+                .map_err(|error| rdocx_to_pyerr(py, error)),
+        }
+    }
+
+    fn new(
+        document: Py<PyDocument>,
+        path: ContentPath,
+        related: Option<rdocx::ContentLocation>,
+    ) -> Self {
+        Self {
+            document,
+            path,
+            related,
+        }
     }
     fn validate(&self, py: Python<'_>) -> PyResult<(usize, usize, usize)> {
         let document = self.document.borrow(py);
@@ -1088,15 +1209,14 @@ impl PyCell {
 
     fn read<T>(&self, py: Python<'_>, read: impl FnOnce(rdocx::CellRef<'_>) -> T) -> PyResult<T> {
         let (table, row, cell) = self.validate(py)?;
-        let document = self.document.borrow(py);
-        let table = document
-            .inner
-            .table(table)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
-        let cell = table
-            .cell(row, cell)
-            .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?;
-        Ok(read(cell))
+        TableLocation::new(table, &self.related)
+            .read(&self.document.borrow(py).inner, |table| {
+                let cell = table
+                    .cell(row, cell)
+                    .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?;
+                Ok(read(cell))
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?
     }
 
     /// Apply one checked native cell edit that moves no content, so live
@@ -1108,14 +1228,17 @@ impl PyCell {
     ) -> PyResult<()> {
         let (table, row, cell) = self.validate(py)?;
         let mut document = self.document.borrow_mut(py);
-        let mut table = document
-            .inner
-            .table_mut(table)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
-        let mut cell = table
-            .cell(row, cell)
-            .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?;
-        edit(&mut cell).map_err(|error| rdocx_to_pyerr(py, error))
+        let mut candidate = document.inner.clone_for_staging();
+        TableLocation::new(table, &self.related)
+            .edit(&mut candidate, |table| {
+                let mut cell = table
+                    .cell(row, cell)
+                    .ok_or_else(|| rdocx::Error::Other("cell index out of range".to_owned()))?;
+                edit(&mut cell)
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        document.inner = candidate;
+        Ok(())
     }
 }
 
@@ -1130,32 +1253,133 @@ impl PyCell {
         new: &str,
         expect: Option<usize>,
     ) -> PyResult<usize> {
-        let cell = self.validate(py)?;
+        let (table, row, cell) = self.validate(py)?;
+        let related = match &self.related {
+            Some(location) => {
+                let document = self.document.borrow(py);
+                let location = TableLocation::refreshed(&document.inner, location)
+                    .map_err(|error| rdocx_to_pyerr(py, error))?;
+                Some(
+                    document
+                        .inner
+                        .story_table_cell(&location, row, cell)
+                        .map_err(|error| rdocx_to_pyerr(py, error))?,
+                )
+            }
+            None => None,
+        };
         self.document
             .borrow_mut(py)
-            .scoped_replacement(py, "Cell.replace_text", |document| {
-                document.try_replace_text_in_cell(cell, None, old, new, expect)
+            .scoped_replacement(py, "Cell.replace_text", |document| match related.as_ref() {
+                Some(story) => document.try_replace_text_in_story_cell(story, old, new, expect),
+                None => {
+                    document.try_replace_text_in_cell((table, row, cell), None, old, new, expect)
+                }
             })
     }
 
     #[getter]
     fn text(&self, py: Python<'_>) -> PyResult<String> {
+        self.read(py, |cell| cell.text())
+    }
+    #[getter]
+    fn tables<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
         let (table, row, cell) = self.validate(py)?;
-        self.document
-            .borrow(py)
+        let document = self.document.borrow(py);
+        let story = self.physical_story(py, &document.inner, table, row, cell)?;
+        let mut tables = Vec::new();
+        for item in document
             .inner
-            .table(table)
-            .and_then(|table| table.cell(row, cell).map(|cell| cell.text()))
-            .ok_or_else(|| PyIndexError::new_err("cell index out of range"))
+            .story_items(&story)
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+        {
+            if item.kind() == rdocx::StoryItemKind::Table {
+                let location = item.location().clone();
+                let path = document
+                    .revisions
+                    .capture(smallvec![PathSeg::Body(location.index_path()[0])]);
+                tables.push(Py::new(
+                    py,
+                    PyTable::for_story(self.document.clone_ref(py), path, location),
+                )?);
+            }
+        }
+        PyTuple::new(py, tables)
+    }
+    fn add_table(&self, py: Python<'_>, rows: usize, cols: usize) -> PyResult<Py<PyTable>> {
+        let (table, row, cell) = self.validate(py)?;
+        let mut document = self.document.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        let story = self.physical_story(py, &candidate, table, row, cell)?;
+        let before = candidate
+            .story_items(&story)
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .into_iter()
+            .filter(|item| item.kind() == rdocx::StoryItemKind::Table)
+            .count();
+        TableLocation::new(table, &self.related)
+            .edit(&mut candidate, |table| {
+                table
+                    .cell(row, cell)
+                    .ok_or_else(|| rdocx::Error::Other("cell index out of range".to_owned()))?
+                    .add_table_checked(rows, cols)?;
+                Ok(())
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let story = self.physical_story(py, &candidate, table, row, cell)?;
+        let tables = candidate
+            .story_items(&story)
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .into_iter()
+            .filter(|item| item.kind() == rdocx::StoryItemKind::Table)
+            .map(|item| item.location().clone())
+            .collect::<Vec<_>>();
+        if tables.len() != before + 1 {
+            return Err(PyValueError::new_err(
+                "nested table insertion did not retain physical owner correspondence",
+            ));
+        }
+        let location = tables
+            .last()
+            .cloned()
+            .ok_or_else(|| PyValueError::new_err("nested table was not published"))?;
+        let prepared = document
+            .revisions
+            .prepare_scopes("Cell.add_table", &[], &[])
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        let path = document
+            .revisions
+            .capture_prepared(
+                &prepared,
+                smallvec![PathSeg::Body(location.index_path()[0])],
+            )
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        let result = Py::new(
+            py,
+            PyTable::for_story(self.document.clone_ref(py), path, location),
+        )?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document.inner = candidate;
+        Ok(result)
     }
     #[setter]
     fn set_text(&self, py: Python<'_>, value: &str) -> PyResult<()> {
         let (table, row, cell) = self.validate(py)?;
         let mut document = self.document.borrow_mut(py);
         let mut candidate = document.inner.clone_for_staging();
-        let inner = &mut candidate;
-        py.detach(|| inner.try_set_cell_text(table, row, cell, value))
-            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        match &self.related {
+            Some(_) => TableLocation::new(table, &self.related).edit(&mut candidate, |table| {
+                table
+                    .cell(row, cell)
+                    .ok_or_else(|| rdocx::Error::Other("cell index out of range".to_owned()))?
+                    .try_set_text(value)
+            }),
+            None => candidate.try_set_cell_text(table, row, cell, value),
+        }
+        .map_err(|error| rdocx_to_pyerr(py, error))?;
         let prepared = document
             .revisions
             .prepare_scopes("Cell.text", &[], &[])
@@ -1172,7 +1396,11 @@ impl PyCell {
         self.validate(py)?;
         Py::new(
             py,
-            PyCellParagraphCollection::new(self.document.clone_ref(py), self.path.clone()),
+            PyCellParagraphCollection::new(
+                self.document.clone_ref(py),
+                self.path.clone(),
+                self.related.clone(),
+            ),
         )
     }
     fn add_paragraph(&self, py: Python<'_>, text: &str) -> PyResult<Py<PyParagraph>> {
@@ -1180,17 +1408,16 @@ impl PyCell {
         let result = {
             let mut document = self.document.borrow_mut(py);
             let mut candidate = document.inner.clone_for_staging();
-            let paragraph = {
-                let mut table = candidate
-                    .table_mut(table)
-                    .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
-                let mut cell = table
-                    .cell(row, cell)
-                    .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?;
-                let paragraph = cell.paragraph_count();
-                cell.add_paragraph(text);
-                paragraph
-            };
+            let paragraph = TableLocation::new(table, &self.related)
+                .edit(&mut candidate, |table| {
+                    let mut cell = table
+                        .cell(row, cell)
+                        .ok_or_else(|| rdocx::Error::Other("cell index out of range".to_owned()))?;
+                    let paragraph = cell.paragraph_count();
+                    cell.add_paragraph(text);
+                    Ok(paragraph)
+                })
+                .map_err(|error| rdocx_to_pyerr(py, error))?;
             let prepared = document
                 .revisions
                 .prepare_scopes("Cell.add_paragraph", &[], &[])
@@ -1207,7 +1434,18 @@ impl PyCell {
                     ],
                 )
                 .map_err(oxml_py_support::revision_to_pyerr)?;
-            let result = Py::new(py, PyParagraph::new(self.document.clone_ref(py), path))?;
+            let paragraph = match &self.related {
+                Some(location) => {
+                    let location = TableLocation::refreshed(&candidate, location)
+                        .map_err(|error| rdocx_to_pyerr(py, error))?;
+                    let location = candidate
+                        .story_table_cell_paragraph_location(&location, row, cell, paragraph)
+                        .map_err(|error| rdocx_to_pyerr(py, error))?;
+                    PyParagraph::for_story(self.document.clone_ref(py), path, location)
+                }
+                None => PyParagraph::new(self.document.clone_ref(py), path),
+            };
+            let result = Py::new(py, paragraph)?;
             document
                 .revisions
                 .commit_scopes(prepared)
@@ -1219,58 +1457,30 @@ impl PyCell {
     }
     #[getter]
     fn width(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
-        let (table, row, cell) = self.validate(py)?;
-        self.document
-            .borrow(py)
-            .inner
-            .table(table)
-            .and_then(|table| table.cell(row, cell).and_then(|cell| cell.width()))
+        self.read(py, |cell| cell.width())?
             .map(|value| length_object(py, value))
             .transpose()
     }
     #[setter]
     fn set_width(&self, py: Python<'_>, value: i64) -> PyResult<()> {
-        let (table, row, cell) = self.validate(py)?;
-        let mut document = self.document.borrow_mut(py);
-        let mut table = document
-            .inner
-            .table_mut(table)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
-        table
-            .cell(row, cell)
-            .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?
-            .set_width(rdocx::Length::emu(value));
-        Ok(())
+        self.edit(py, |cell| {
+            cell.set_width(rdocx::Length::emu(value));
+            Ok(())
+        })
     }
     #[getter]
     fn vertical_alignment(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
-        let (table, row, cell) = self.validate(py)?;
-        self.document
-            .borrow(py)
-            .inner
-            .table(table)
-            .and_then(|table| {
-                table
-                    .cell(row, cell)
-                    .and_then(|cell| cell.vertical_alignment())
-            })
+        self.read(py, |cell| cell.vertical_alignment())?
             .map(|value| enum_object(py, "WD_CELL_VERTICAL_ALIGNMENT", vertical_to_int(value)))
             .transpose()
     }
     #[setter]
     fn set_vertical_alignment(&self, py: Python<'_>, value: i32) -> PyResult<()> {
-        let (table, row, cell) = self.validate(py)?;
         let value = vertical_from_int(value)?;
-        let mut document = self.document.borrow_mut(py);
-        let mut table = document
-            .inner
-            .table_mut(table)
-            .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
-        table
-            .cell(row, cell)
-            .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?
-            .set_vertical_alignment(value);
-        Ok(())
+        self.edit(py, |cell| {
+            cell.set_vertical_alignment(value);
+            Ok(())
+        })
     }
 
     #[getter]
@@ -1353,13 +1563,19 @@ impl PyCell {
 pub struct PyCellParagraphCollection {
     document: Py<PyDocument>,
     cell_path: ContentPath,
+    related: Option<rdocx::ContentLocation>,
 }
 
 impl PyCellParagraphCollection {
-    fn new(document: Py<PyDocument>, cell_path: ContentPath) -> Self {
+    fn new(
+        document: Py<PyDocument>,
+        cell_path: ContentPath,
+        related: Option<rdocx::ContentLocation>,
+    ) -> Self {
         Self {
             document,
             cell_path,
+            related,
         }
     }
     fn validate(&self, py: Python<'_>) -> PyResult<(usize, usize, usize)> {
@@ -1379,11 +1595,11 @@ impl PyCellParagraphCollection {
     }
     fn len(&self, py: Python<'_>) -> PyResult<usize> {
         let (table, row, cell) = self.validate(py)?;
-        self.document
-            .borrow(py)
-            .inner
-            .table(table)
-            .and_then(|table| table.cell(row, cell).map(|cell| cell.paragraph_count()))
+        TableLocation::new(table, &self.related)
+            .read(&self.document.borrow(py).inner, |table| {
+                table.cell(row, cell).map(|cell| cell.paragraph_count())
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?
             .ok_or_else(|| PyIndexError::new_err("cell index out of range"))
     }
     fn item(&self, py: Python<'_>, index: usize) -> PyResult<Py<PyParagraph>> {
@@ -1391,7 +1607,26 @@ impl PyCellParagraphCollection {
         let mut segments = self.cell_path.segs.clone();
         segments.push(PathSeg::Para(index));
         let path = self.document.borrow(py).revisions.capture(segments);
-        Py::new(py, PyParagraph::new(self.document.clone_ref(py), path))
+        let related = match &self.related {
+            Some(location) => {
+                let (_, row, cell) = self.validate(py)?;
+                let document = self.document.borrow(py);
+                let location = TableLocation::refreshed(&document.inner, location)
+                    .map_err(|error| rdocx_to_pyerr(py, error))?;
+                Some(
+                    document
+                        .inner
+                        .story_table_cell_paragraph_location(&location, row, cell, index)
+                        .map_err(|error| rdocx_to_pyerr(py, error))?,
+                )
+            }
+            None => None,
+        };
+        let paragraph = match related {
+            Some(location) => PyParagraph::for_story(self.document.clone_ref(py), path, location),
+            None => PyParagraph::new(self.document.clone_ref(py), path),
+        };
+        Py::new(py, paragraph)
     }
 }
 
@@ -1429,6 +1664,7 @@ impl PyCellParagraphCollection {
             PyCellParagraphIterator {
                 document: self.document.clone_ref(py),
                 cell_path: self.cell_path.clone(),
+                related: self.related.clone(),
                 index: 0,
             },
         )
@@ -1440,6 +1676,7 @@ struct PyCellParagraphIterator {
     document: Py<PyDocument>,
     cell_path: ContentPath,
     index: usize,
+    related: Option<rdocx::ContentLocation>,
 }
 
 #[pymethods]
@@ -1449,8 +1686,11 @@ impl PyCellParagraphIterator {
     }
 
     fn __next__(&mut self, py: Python<'_>) -> PyResult<Option<Py<PyParagraph>>> {
-        let collection =
-            PyCellParagraphCollection::new(self.document.clone_ref(py), self.cell_path.clone());
+        let collection = PyCellParagraphCollection::new(
+            self.document.clone_ref(py),
+            self.cell_path.clone(),
+            self.related.clone(),
+        );
         if self.index >= collection.len(py)? {
             return Ok(None);
         }

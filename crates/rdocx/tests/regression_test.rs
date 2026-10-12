@@ -399143,3 +399143,1209 @@ fn fx200_native_partial_and_all_border_clear_preserve_nonremoved_owner_payload()
         assert_eq!(document.to_bytes().unwrap(), saved);
     }
 }
+
+#[test]
+fn fx201_inserted_sections_inherit_only_resolved_geometry() {
+    use rdocx_oxml::{ST_PageOrientation, units::Twips};
+    for index in [0_usize, 1, 2] {
+        let mut document = Document::new();
+        document.add_paragraph("geometry source");
+        document.insert_section(1).unwrap();
+        for ordinal in 0..2 {
+            let mut section = document.section_mut(ordinal).unwrap();
+            section
+                .set_page_size(Length::twips(12240), Length::twips(15840))
+                .unwrap();
+            section.set_orientation(ST_PageOrientation::Landscape);
+            section
+                .set_margins(
+                    Length::twips(1080),
+                    Length::twips(1152),
+                    Length::twips(1296),
+                    Length::twips(1584),
+                )
+                .unwrap();
+            section.set_gutter(Length::twips(288)).unwrap();
+            section
+                .set_header_footer_distance(Length::twips(432), Length::twips(576))
+                .unwrap();
+            section.set_columns(2, Length::twips(720)).unwrap();
+            section.set_page_number_start(7).unwrap();
+            section.set_different_first_page(true);
+        }
+        let previous = document
+            .section(index.saturating_sub(1))
+            .unwrap()
+            .properties()
+            .clone();
+        document.insert_section(index).unwrap();
+        let inserted = document.section(index).unwrap().properties().clone();
+        assert_eq!(inserted.page_width, previous.page_width);
+        assert_eq!(inserted.page_height, previous.page_height);
+        assert_eq!(inserted.orientation, previous.orientation);
+        assert_eq!(inserted.margin_top, previous.margin_top);
+        assert_eq!(inserted.margin_right, previous.margin_right);
+        assert_eq!(inserted.margin_bottom, previous.margin_bottom);
+        assert_eq!(inserted.margin_left, previous.margin_left);
+        assert_eq!(inserted.gutter, Some(Twips(288)));
+        assert_eq!(inserted.header_distance, previous.header_distance);
+        assert_eq!(inserted.footer_distance, previous.footer_distance);
+        assert!(inserted.columns.is_none());
+        assert!(inserted.page_number.is_none());
+        assert!(inserted.title_pg.is_none());
+        assert!(inserted.header_refs.is_empty() && inserted.footer_refs.is_empty());
+        let saved = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&saved).unwrap();
+        assert_eq!(reopened.section(index).unwrap().properties(), &inserted);
+        let before = document.to_bytes().unwrap();
+        assert!(document.insert_section(4).is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+}
+
+#[test]
+fn fx201_even_story_creation_publishes_settings_and_owner_together() {
+    let mut document = Document::new();
+    document.add_paragraph("even furniture");
+    let before = document.to_bytes().unwrap();
+    assert!(
+        document
+            .create_section_story(4, HeaderFooterKind::Footer, HdrFtrType::Even)
+            .is_err()
+    );
+    assert!(!document.even_and_odd_headers());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    document
+        .create_section_story(0, HeaderFooterKind::Footer, HdrFtrType::Even)
+        .unwrap();
+    assert!(document.even_and_odd_headers());
+    assert!(
+        document
+            .section_story(0, HeaderFooterKind::Footer, HdrFtrType::Even)
+            .unwrap()
+            .is_some()
+    );
+    document.set_even_and_odd_headers(false).unwrap();
+    assert!(!document.even_and_odd_headers());
+    document
+        .create_section_story(0, HeaderFooterKind::Footer, HdrFtrType::Even)
+        .unwrap();
+    assert!(document.even_and_odd_headers());
+    let saved = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&saved).unwrap();
+    assert!(reopened.even_and_odd_headers());
+    assert!(
+        reopened
+            .section_story(0, HeaderFooterKind::Footer, HdrFtrType::Even)
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn fx201_section_validation_reports_explicit_sizes_without_mutating_source() {
+    use rdocx::ValidationSeverity;
+    let xml = format!(
+        r#"<w:document xmlns:w="{W_NS}" xmlns:e="urn:producer"><w:body><w:p><w:pPr><w:sectPr><w:pgSz w:w="12240"/><e:proof keep="yes"/></w:sectPr></w:pPr></w:p><w:p><w:pPr><w:sectPr><w:pgSz w:w="0" w:h="15840"/></w:sectPr></w:pPr></w:p><w:sectPr/></w:body></w:document>"#
+    );
+    let mut document = document_with_content_controls(&xml);
+    let before = document.to_bytes().unwrap();
+    let report = document.validate_sections();
+    assert_eq!(report.findings.len(), 2);
+    assert_eq!(report.findings[0].severity, ValidationSeverity::Warning);
+    assert_eq!(
+        report.findings[0].message,
+        "section 0 has incomplete page size: width or height is missing"
+    );
+    assert_eq!(report.findings[1].severity, ValidationSeverity::Error);
+    assert_eq!(
+        report.findings[1].message,
+        "section 1 has nonpositive page size"
+    );
+    assert!(!report.is_valid());
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let reopened = Document::from_bytes(&before).unwrap();
+    assert_eq!(reopened.validate_sections(), report);
+    assert!(Document::new().validate_sections().is_valid());
+}
+
+#[test]
+fn fx201_rich_related_paragraphs_and_note_boundaries_publish_atomically() {
+    let mut document = Document::new();
+    document.add_paragraph("body");
+    let footer = document
+        .create_section_story(0, HeaderFooterKind::Footer, HdrFtrType::Default)
+        .unwrap();
+    document
+        .insert_content(
+            &ContentLocation::end(footer.clone()),
+            f254_paragraph("initial footer"),
+        )
+        .unwrap();
+    let footer = document
+        .section_story(0, HeaderFooterKind::Footer, HdrFtrType::Default)
+        .unwrap()
+        .unwrap()
+        .story()
+        .clone();
+    let location = f254_item(&document, &footer, 0);
+    let source = format!(
+        r#"<q:p xmlns:q="{W_NS}" xmlns:e="urn:producer" e:owner="retained"><e:before keep="exact"/><!--opaque--><q:r><q:rPr><q:b/></q:rPr><q:t>Page </q:t></q:r><e:after keep="exact"/></q:p>"#
+    );
+    document
+        .replace_story_content(
+            &location,
+            ContentFragment::paragraph(CT_P::from_xml_fragment(source.as_bytes()).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+    let footer = document
+        .section_story(0, HeaderFooterKind::Footer, HdrFtrType::Default)
+        .unwrap()
+        .unwrap()
+        .story()
+        .clone();
+    let location = f254_item(&document, &footer, 0);
+    document
+        .edit_story_paragraph(&location, |paragraph| {
+            paragraph.add_run("of ").bold(true);
+            Ok(())
+        })
+        .unwrap();
+    let footer = document
+        .section_story(0, HeaderFooterKind::Footer, HdrFtrType::Default)
+        .unwrap()
+        .unwrap()
+        .story()
+        .clone();
+    let location = f254_item(&document, &footer, 0);
+    assert_eq!(
+        document
+            .read_story_paragraph(&location, |paragraph| paragraph.text())
+            .unwrap(),
+        "Page of "
+    );
+    let source = document.story_range_paragraph_snapshot(&location).unwrap();
+    let xml = String::from_utf8_lossy(source.xml());
+    for opaque in [
+        r#"e:owner="retained""#,
+        r#"<e:before keep="exact"/>"#,
+        "<!--opaque-->",
+        r#"<e:after keep="exact"/>"#,
+    ] {
+        assert!(xml.contains(opaque), "{xml}");
+    }
+    let before = document.to_bytes().unwrap();
+    let image_error = document
+        .insert_picture_at(
+            &StoryRunPosition {
+                location: location.clone(),
+                run_index: 1,
+            },
+            b"invalid image",
+            "bad.png",
+            Some(Length::emu(127000)),
+            Some(Length::emu(127000)),
+        )
+        .unwrap_err();
+    assert!(
+        image_error
+            .to_string()
+            .contains("picture image bytes are unsupported")
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    assert_eq!(
+        Document::from_bytes(&before).unwrap().to_bytes().unwrap(),
+        before
+    );
+    assert!(
+        document
+            .create_footnote_at(
+                &StoryRunPosition {
+                    location: location.clone(),
+                    run_index: 0
+                },
+                "invalid footer note"
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("body or body-table")
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let body = document.paragraph_story_location(0).unwrap().unwrap();
+    let id = document
+        .create_footnote_at(
+            &StoryRunPosition {
+                location: body,
+                run_index: 0,
+            },
+            "checked note",
+        )
+        .unwrap();
+    assert_eq!(document.footnotes(), vec![(id, "checked note".to_owned())]);
+    assert_eq!(document.paragraphs()[0].text(), "body");
+    let before = document.to_bytes().unwrap();
+    let body = document.paragraph_story_location(0).unwrap().unwrap();
+    assert!(
+        document
+            .create_endnote_at(
+                &StoryRunPosition {
+                    location: body,
+                    run_index: 999
+                },
+                "invalid boundary"
+            )
+            .is_err()
+    );
+    assert_eq!(document.to_bytes().unwrap(), before);
+    let mut reopened = Document::from_bytes(&before).unwrap();
+    assert_eq!(reopened.footnotes(), vec![(id, "checked note".to_owned())]);
+    reopened.remove_footnote(id).unwrap();
+    assert!(reopened.footnotes().is_empty());
+    assert_eq!(reopened.paragraphs()[0].text(), "body");
+}
+
+#[test]
+fn fx201_related_table_cells_resolve_physical_parts_and_nested_owners() {
+    use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc};
+    let mut document = Document::new();
+    document.add_paragraph("body untouched");
+    document
+        .add_table(1, 1)
+        .cell(0, 0)
+        .unwrap()
+        .try_set_text("body cell")
+        .unwrap();
+    let footer = document
+        .create_section_story(0, HeaderFooterKind::Footer, HdrFtrType::Default)
+        .unwrap();
+    let mut table = CT_Tbl::new();
+    let mut row = CT_Row::new();
+    row.cells.push(CT_Tc::new());
+    row.cells.push(CT_Tc::new());
+    table.rows.push(row);
+    document
+        .insert_content(
+            &ContentLocation::end(footer),
+            ContentFragment::table(table).unwrap(),
+        )
+        .unwrap();
+    let footer = document
+        .section_story(0, HeaderFooterKind::Footer, HdrFtrType::Default)
+        .unwrap()
+        .unwrap()
+        .story()
+        .clone();
+    let table = f254_item(&document, &footer, 0);
+    document
+        .edit_story_table(&table, |table| {
+            table.cell(0, 0).unwrap().try_set_text("footer cell")?;
+            table
+                .cell(0, 1)
+                .unwrap()
+                .add_table_checked(1, 1)?
+                .cell(0, 0)
+                .unwrap()
+                .try_set_text("nested footer")?;
+            Ok(())
+        })
+        .unwrap();
+    let footer = document
+        .section_story(0, HeaderFooterKind::Footer, HdrFtrType::Default)
+        .unwrap()
+        .unwrap()
+        .story()
+        .clone();
+    let table = f254_item(&document, &footer, 0);
+    let paragraph = document
+        .story_table_cell_paragraph_location(&table, 0, 0, 0)
+        .unwrap();
+    assert_eq!(paragraph.story().part_name(), footer.part_name());
+    assert_eq!(
+        document
+            .read_story_paragraph(&paragraph, |paragraph| paragraph.text())
+            .unwrap(),
+        "footer cell"
+    );
+    document
+        .edit_story_paragraph(&paragraph, |paragraph| {
+            paragraph.add_run(" styled").bold(true);
+            Ok(())
+        })
+        .unwrap();
+    let footer = document
+        .section_story(0, HeaderFooterKind::Footer, HdrFtrType::Default)
+        .unwrap()
+        .unwrap()
+        .story()
+        .clone();
+    let table = f254_item(&document, &footer, 0);
+    let cell = document.story_table_cell(&table, 0, 0).unwrap();
+    assert_eq!(
+        document
+            .try_replace_text_in_story_cell(&cell, "footer", "owned", Some(1))
+            .unwrap(),
+        Ok(1)
+    );
+    let saved = document.to_bytes().unwrap();
+    let reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(
+        reopened.table(0).unwrap().cell(0, 0).unwrap().text(),
+        "body cell"
+    );
+    assert_eq!(reopened.paragraphs()[0].text(), "body untouched");
+    let footer = reopened
+        .section_story(0, HeaderFooterKind::Footer, HdrFtrType::Default)
+        .unwrap()
+        .unwrap()
+        .story()
+        .clone();
+    let table = f254_item(&reopened, &footer, 0);
+    assert_eq!(
+        reopened
+            .read_story_table(&table, |table| table.cell(0, 0).unwrap().text())
+            .unwrap(),
+        "owned cell styled"
+    );
+    let cells = reopened
+        .stories()
+        .unwrap()
+        .into_iter()
+        .filter(|story| {
+            story.kind() == StoryKind::TableCell && story.part_name() == footer.part_name()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(cells.len(), 3);
+    let mut texts = Vec::new();
+    for cell in cells {
+        for item in reopened.story_items(&cell).unwrap() {
+            if item.kind() == StoryItemKind::Paragraph {
+                texts.push(
+                    reopened
+                        .read_story_paragraph(item.location(), |paragraph| paragraph.text())
+                        .unwrap(),
+                );
+            }
+        }
+    }
+    assert!(texts.iter().any(|text| text == "nested footer"));
+}
+
+#[test]
+fn fx201_page_color_keeps_background_and_settings_opaque_source_atomically() {
+    let mut original = Document::new();
+    original.add_paragraph("page source");
+    original.set_update_fields_on_open(Some(true)).unwrap();
+    let bytes = original.to_bytes().unwrap();
+    let mut package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    let main = String::from_utf8(package.get_part("word/document.xml").unwrap().to_vec()).unwrap();
+    let background = format!(
+        r#"<q:background xmlns:q="{W_NS}" xmlns:e="urn:page" q:color='112233' e:stamp='keep'><e:payload><![CDATA[opaque <page>]]></e:payload><!--background keep--></q:background>"#
+    );
+    package.set_part(
+        "word/document.xml",
+        main.replacen("<w:body>", &format!("{background}<w:body>"), 1)
+            .into_bytes(),
+    );
+    let settings = format!(
+        r#"<q:settings xmlns:q="{W_NS}" xmlns:e="urn:page" e:root='keep'><q:displayBackgroundShape q:val='0' e:stamp='keep'><!--display keep--><e:payload/></q:displayBackgroundShape><e:unknown><![CDATA[settings <opaque>]]></e:unknown></q:settings>"#
+    );
+    package.set_part("word/settings.xml", settings.into_bytes());
+    let mut input = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut input).unwrap();
+    let mut document = Document::from_bytes(input.get_ref()).unwrap();
+    document.set_page_color("AABBCC").unwrap();
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let main = String::from_utf8(package.get_part("word/document.xml").unwrap().to_vec()).unwrap();
+    assert!(main.contains("q:color='AABBCC' e:stamp='keep'"));
+    assert!(
+        main.contains("<e:payload><![CDATA[opaque <page>]]></e:payload><!--background keep-->")
+    );
+    let settings =
+        String::from_utf8(package.get_part("word/settings.xml").unwrap().to_vec()).unwrap();
+    assert!(settings.contains("q:val='1' e:stamp='keep'"));
+    assert!(settings.contains("<!--display keep--><e:payload/>"));
+    assert!(settings.contains("<e:unknown><![CDATA[settings <opaque>]]></e:unknown>"));
+    assert!(settings.contains("e:root='keep'"));
+    for color in ["bad", "#123456", "GG0000"] {
+        assert!(
+            document
+                .set_page_color(color)
+                .unwrap_err()
+                .to_string()
+                .contains("six hexadecimal")
+        );
+        assert_eq!(document.to_bytes().unwrap(), saved);
+    }
+    let mut reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(reopened.to_bytes().unwrap(), saved);
+    reopened.set_page_color("AABBCC").unwrap();
+    assert_eq!(reopened.to_bytes().unwrap(), saved);
+}
+
+#[test]
+fn fx201_page_border_edges_keep_opaque_owners_and_refuse_before_mutation() {
+    let source = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:f="urn:page-border"><w:body><w:p><w:r><w:t>body stays</w:t></w:r></w:p><w:sectPr><w:pgBorders w:display="firstPage" w:offsetFrom="page" f:root="keep"><w:top w:val="single" w:sz="8" w:themeColor="accent1" w:themeTint="AA" w:themeShade="11" f:themeColor="foreign" f:edge='keep'><f:payload><![CDATA[opaque <edge>]]></f:payload></w:top><w:left w:val="double"/><f:other>  exact  </f:other></w:pgBorders></w:sectPr></w:body></w:document>"#;
+    for duplicate in [
+        "<w:top w:val=\"double\"/>",
+        "<w:top w:val=\"double\"><f:keep/></w:top>",
+    ] {
+        let duplicated = source.replace("</w:pgBorders>", &format!("{duplicate}</w:pgBorders>"));
+        assert!(
+            rdocx_oxml::document::CT_Document::from_xml(duplicated.as_bytes())
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate recognized page border edge")
+        );
+    }
+    let mut document = document_with_content_controls(source);
+    for edge in ["top", "left", "bottom", "right"] {
+        document
+            .section_mut(0)
+            .unwrap()
+            .set_page_border(edge, "double", 16, 4, "AABBCC")
+            .unwrap();
+    }
+    let saved = document.to_bytes().unwrap();
+    let xml = document_xml(&mut document);
+    assert!(!xml.contains("w:themeColor="));
+    assert!(!xml.contains("w:themeTint="));
+    assert!(!xml.contains("w:themeShade="));
+    assert!(xml.contains("f:themeColor=\"foreign\""));
+    assert!(xml.contains("f:root=\"keep\""));
+    assert!(xml.contains("f:edge='keep'"));
+    assert!(xml.contains("<f:payload><![CDATA[opaque <edge>]]></f:payload>"));
+    assert!(xml.contains("<f:other>  exact  </f:other>"), "{xml}");
+    assert!(xml.contains("w:display=\"firstPage\""));
+    assert!(xml.contains("w:offsetFrom=\"page\""));
+    for edge in ["top", "left", "bottom", "right"] {
+        let section = document.sections().next().unwrap();
+        let borders = section.page_borders().unwrap();
+        let border = match edge {
+            "top" => borders.top.as_ref(),
+            "left" => borders.left.as_ref(),
+            "bottom" => borders.bottom.as_ref(),
+            _ => borders.right.as_ref(),
+        }
+        .unwrap();
+        assert_eq!(border.sz, Some(16));
+        assert_eq!(border.space, Some(4));
+        assert_eq!(border.color.as_deref(), Some("AABBCC"));
+    }
+    for (edge, style, width, space, color) in [
+        ("foreign", "single", 8, 0, "000000"),
+        ("top", "invalid", 8, 0, "000000"),
+        ("top", "single", 1, 0, "000000"),
+        ("top", "single", 97, 0, "000000"),
+        ("top", "single", 8, 32, "000000"),
+        ("top", "single", 8, 0, "invalid"),
+    ] {
+        assert!(
+            document
+                .section_mut(0)
+                .unwrap()
+                .set_page_border(edge, style, width, space, color)
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), saved);
+    }
+    let mut reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(reopened.to_bytes().unwrap(), saved);
+    reopened
+        .section_mut(0)
+        .unwrap()
+        .set_page_border("top", "double", 16, 4, "AABBCC")
+        .unwrap();
+    assert_eq!(reopened.to_bytes().unwrap(), saved);
+}
+
+#[test]
+fn fx201_drawingml_watermark_styles_both_text_owners_and_paints_alpha() {
+    use rdocx::{HdrFtrType, HeaderFooterKind, Length, TextWatermarkOptions};
+    for opacity in [0.0, 0.25, 1.0] {
+        let mut absent = Document::new();
+        absent.add_paragraph("no header allocated");
+        let before = absent.to_bytes().unwrap();
+        let error = absent
+            .set_drawingml_text_watermark_for(
+                0,
+                HdrFtrType::Default,
+                "REFUSED",
+                TextWatermarkOptions {
+                    opacity,
+                    ..TextWatermarkOptions::default()
+                },
+                Length::pt(48.0),
+            )
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "DrawingML text watermark opacity other than 0.5 is unsupported by the qualified native text-fill representation"
+        );
+        assert_eq!(absent.to_bytes().unwrap(), before);
+        assert!(
+            absent
+                .section_story(0, HeaderFooterKind::Header, HdrFtrType::Default)
+                .unwrap()
+                .is_none()
+        );
+    }
+    let mut document = Document::new();
+    document.add_paragraph("The body must stay above the real watermark.");
+    document.set_page_color("FFFFEE").unwrap();
+    for edge in ["top", "left", "bottom", "right"] {
+        document
+            .section_mut(0)
+            .unwrap()
+            .set_page_border(edge, "single", 8, 4, "112233")
+            .unwrap();
+    }
+    let header = document
+        .create_section_story(0, HeaderFooterKind::Header, HdrFtrType::Default)
+        .unwrap();
+    document
+        .insert_content(
+            &rdocx::ContentLocation::end(header),
+            f254_paragraph("Unrelated header stays"),
+        )
+        .unwrap();
+    let options = TextWatermarkOptions {
+        width: Length::pt(360.0),
+        height: Length::pt(90.0),
+        rotation_degrees: 315.0,
+        color: "808080".into(),
+        font_family: Some("Carlito".into()),
+        opacity: 0.5,
+    };
+    document
+        .set_drawingml_text_watermark_for(
+            0,
+            HdrFtrType::Default,
+            "CONFIDENTIAL",
+            options.clone(),
+            Length::pt(48.0),
+        )
+        .unwrap();
+    let saved = document.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let story = document
+        .section_story(0, HeaderFooterKind::Header, HdrFtrType::Default)
+        .unwrap()
+        .unwrap();
+    let part = story.story().part_name().to_owned();
+    let xml = String::from_utf8(package.get_part(&part).unwrap().to_vec()).unwrap();
+    if let Ok(directory) = std::env::var("RDOCX_FX201_NATIVE_OUTPUT_DIR") {
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            std::path::Path::new(&directory).join("capability-first-save-DIAGNOSTIC.docx"),
+            &saved,
+        )
+        .unwrap();
+    }
+    for opacity in [0.0, 0.25, 1.0] {
+        let error = document
+            .set_drawingml_text_watermark_for(
+                0,
+                HdrFtrType::Default,
+                "REFUSED",
+                TextWatermarkOptions {
+                    opacity,
+                    ..TextWatermarkOptions::default()
+                },
+                Length::pt(48.0),
+            )
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "DrawingML text watermark opacity other than 0.5 is unsupported by the qualified native text-fill representation"
+        );
+        assert_eq!(document.to_bytes().unwrap(), saved);
+    }
+    let watermark_source = zip_entries(&document.to_bytes().unwrap());
+    let watermark_header = watermark_source
+        .iter()
+        .find(|(name, _)| name.starts_with("word/header") && name.ends_with(".xml"))
+        .unwrap()
+        .1;
+    assert!(
+        String::from_utf8_lossy(watermark_header)
+            .contains("<a:prstTxWarp prst=\"textPlain\"><a:avLst/></a:prstTxWarp>")
+    );
+    assert!(xml.contains("Unrelated header stays"));
+    assert!(xml.contains(
+        "Requires=\"wps w16\" xmlns:w16=\"http://schemas.microsoft.com/office/word/2018/wordml\""
+    ));
+    assert_eq!(xml.matches("<mc:Choice ").count(), 1);
+    assert_eq!(xml.matches("<mc:Fallback>").count(), 1);
+    assert_eq!(xml.matches("<w14:gradFill>").count(), 0);
+    let first_start = xml.find("<mc:Choice ").unwrap();
+    let first_end =
+        first_start + xml[first_start..].find("</mc:Choice>").unwrap() + "</mc:Choice>".len();
+    let mut fallback_xml = xml.clone();
+    fallback_xml.replace_range(first_start..first_end, "");
+    let mut fallback_package = package.clone();
+    fallback_package.set_part(&part, fallback_xml.into_bytes());
+    let mut fallback_bytes = std::io::Cursor::new(Vec::new());
+    fallback_package.write_to(&mut fallback_bytes).unwrap();
+    let fallback_document = Document::from_bytes(fallback_bytes.get_ref()).unwrap();
+    let fallback_svg = fallback_document
+        .render_page_to_svg_deterministic(0)
+        .unwrap()
+        .unwrap()
+        .svg;
+    assert!(fallback_svg.contains("CONFIDENTIAL"), "{fallback_svg}");
+    assert!(fallback_svg.contains(" opacity=\"0.5\""), "{fallback_svg}");
+    let fallback_layout = fallback_document.layout_deterministic().unwrap();
+    let mut fallback_half_paints = 0;
+    let mut pending = fallback_layout.layout.pages[0]
+        .elements
+        .iter()
+        .map(|element| (element, 1.0))
+        .collect::<Vec<_>>();
+    while let Some((element, opacity)) = pending.pop() {
+        match element {
+            oxml_layout::PositionedElement::MarkedContent { children, .. } => {
+                pending.extend(children.iter().map(|child| (child, opacity)));
+            }
+            oxml_layout::PositionedElement::Group(group) => {
+                pending.extend(
+                    group
+                        .children
+                        .iter()
+                        .map(|child| (child, opacity * group.opacity)),
+                );
+            }
+            oxml_layout::PositionedElement::Text(run) if run.text == "CONFIDENTIAL" => {
+                assert_eq!(opacity * run.color.a, 0.5);
+                fallback_half_paints += 1;
+            }
+            oxml_layout::PositionedElement::MultilingualText(run)
+                if run.logical_text == "CONFIDENTIAL" =>
+            {
+                assert_eq!(opacity * run.color.a, 0.5);
+                fallback_half_paints += 1;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        fallback_half_paints, 1,
+        "{:?}",
+        fallback_layout.layout.pages[0].elements
+    );
+    assert_eq!(fallback_svg.matches("CONFIDENTIAL").count(), 1);
+    // A rebound modern owner remains opaque and cannot be projected beside
+    // the one admitted VML fallback. Inspect actual paint, not one inventory.
+    for changed in [
+        xml.replacen(
+            "<mc:Choice ",
+            "<mc:Choice xmlns:mc=\"urn:foreign-choice\" ",
+            1,
+        ),
+        xml.replacen(
+            "<wp:anchor ",
+            "<wp:anchor xmlns:wp=\"urn:foreign-anchor\" ",
+            1,
+        ),
+    ] {
+        let mut changed_package = package.clone();
+        changed_package.set_part(&part, changed.as_bytes().to_vec());
+        let mut changed_bytes = std::io::Cursor::new(Vec::new());
+        changed_package.write_to(&mut changed_bytes).unwrap();
+        let mut changed_document = Document::from_bytes(changed_bytes.get_ref()).unwrap();
+        let selected = rdocx_oxml::header_footer::CT_HdrFtr::from_xml(changed.as_bytes()).unwrap();
+        assert_eq!(selected.watermarks().len(), 1);
+        assert!(
+            selected
+                .paragraphs
+                .iter()
+                .flat_map(|paragraph| &paragraph.runs)
+                .all(|run| run.alt_drawings.is_empty())
+        );
+        let changed_layout = changed_document.layout_deterministic().unwrap();
+        let mut paints = 0;
+        oxml_layout::walk(
+            &changed_layout.layout.pages[0].elements,
+            &mut |element, _| {
+                let text = match element {
+                    oxml_layout::PositionedElement::Text(run) => Some(run.text.as_str()),
+                    oxml_layout::PositionedElement::MultilingualText(run) => {
+                        Some(run.logical_text.as_str())
+                    }
+                    _ => None,
+                };
+                if text == Some("CONFIDENTIAL") {
+                    paints += 1;
+                }
+            },
+        );
+        assert_eq!(paints, 1);
+        let changed_svg = changed_document
+            .render_page_to_svg_deterministic(0)
+            .unwrap()
+            .unwrap()
+            .svg;
+        assert_eq!(changed_svg.matches("CONFIDENTIAL").count(), 1);
+        assert!(changed_svg.contains(" opacity=\"0.5\""));
+        let roundtrip = changed_document.to_bytes().unwrap();
+        let roundtrip =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&roundtrip)).unwrap();
+        assert_eq!(roundtrip.get_part(&part).unwrap(), changed.as_bytes());
+    }
+    assert_eq!(xml.matches("CONFIDENTIAL").count(), 2);
+    assert_eq!(xml.matches("w14:val=\"50000\"").count(), 1);
+    assert_eq!(xml.matches("w:ascii=\"Carlito\"").count(), 1);
+    assert_eq!(xml.matches("w:sz w:val=\"96\"").count(), 1);
+    assert!(xml.contains("behindDoc=\"1\""));
+    assert_eq!(xml.matches("relativeFrom=\"page\"").count(), 2);
+    assert!(xml.contains("<wp:wrapNone/>"));
+    let svg = document
+        .render_page_to_svg_deterministic(0)
+        .unwrap()
+        .unwrap()
+        .svg;
+    assert!(svg.contains("CONFIDENTIAL"), "{svg}");
+    assert_eq!(svg.matches("CONFIDENTIAL").count(), 1);
+    assert!(svg.contains("fill-opacity=\"0.5\""), "{svg}");
+    let layout = document.layout_deterministic().unwrap();
+    let mut painted_rotations = Vec::new();
+    oxml_layout::walk(
+        &layout.layout.pages[0].elements,
+        &mut |element, transform| {
+            let text = match element {
+                oxml_layout::PositionedElement::Text(run) => Some(run.text.as_str()),
+                oxml_layout::PositionedElement::MultilingualText(run) => {
+                    Some(run.logical_text.as_str())
+                }
+                _ => None,
+            };
+            if text.is_some_and(|text| text.contains("CONFIDENTIAL")) {
+                painted_rotations.push((transform.a, transform.b, transform.c, transform.d));
+            }
+        },
+    );
+    assert_eq!(painted_rotations.len(), 1);
+    for (a, b, c, d) in painted_rotations {
+        assert!((a - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-12);
+        assert!((b + std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-12);
+        assert!((c - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-12);
+        assert!((d - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-12);
+    }
+
+    let mut reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(reopened.to_bytes().unwrap(), saved);
+    reopened
+        .set_drawingml_text_watermark_for(
+            0,
+            HdrFtrType::Default,
+            "REPLACED",
+            options.clone(),
+            Length::pt(48.0),
+        )
+        .unwrap();
+    let replaced = reopened.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&replaced)).unwrap();
+    let xml = String::from_utf8(package.get_part(&part).unwrap().to_vec()).unwrap();
+    assert!(!xml.contains("CONFIDENTIAL"));
+    assert_eq!(xml.matches("REPLACED").count(), 2);
+    assert!(xml.contains("Unrelated header stays"));
+    let mut invalid = options.clone();
+    invalid.opacity = f64::NAN;
+    assert!(
+        reopened
+            .set_drawingml_text_watermark_for(
+                0,
+                HdrFtrType::Default,
+                "bad",
+                invalid,
+                Length::pt(48.0)
+            )
+            .is_err()
+    );
+    assert_eq!(reopened.to_bytes().unwrap(), replaced);
+    let mut changed_package = package;
+    changed_package.set_part(&part,xml.replace("<wps:bodyPr","<foreign:payload xmlns:foreign=\"urn:opaque\"><![CDATA[keep <opaque>]]></foreign:payload><wps:bodyPr").into_bytes());
+    let mut changed = std::io::Cursor::new(Vec::new());
+    changed_package.write_to(&mut changed).unwrap();
+    let mut changed = Document::from_bytes(changed.get_ref()).unwrap();
+    let before = changed.to_bytes().unwrap();
+    assert!(
+        changed
+            .set_drawingml_text_watermark_for(
+                0,
+                HdrFtrType::Default,
+                "must refuse",
+                options,
+                Length::pt(48.0)
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("externally changed source")
+    );
+    assert_eq!(changed.to_bytes().unwrap(), before);
+    if let Ok(directory) = std::env::var("RDOCX_FX201_NATIVE_OUTPUT_DIR") {
+        let directory = std::path::Path::new(&directory);
+        std::fs::create_dir_all(directory).unwrap();
+        // Separate declared host-supported input. The original Carlito
+        // control and its native substitution evidence remain unchanged.
+        let mut calibri = Document::from_bytes(&saved).unwrap();
+        calibri
+            .set_drawingml_text_watermark_for(
+                0,
+                HdrFtrType::Default,
+                "CONFIDENTIAL",
+                TextWatermarkOptions {
+                    width: Length::pt(360.0),
+                    height: Length::pt(90.0),
+                    rotation_degrees: 315.0,
+                    color: "808080".into(),
+                    font_family: Some("Calibri".into()),
+                    opacity: 0.5,
+                },
+                Length::pt(48.0),
+            )
+            .unwrap();
+        let calibri_bytes = calibri.to_bytes().unwrap();
+        let calibri_package =
+            oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&calibri_bytes)).unwrap();
+        let calibri_xml = String::from_utf8_lossy(calibri_package.get_part(&part).unwrap());
+        assert_eq!(calibri_xml.matches("w:ascii=\"Calibri\"").count(), 1);
+        assert_eq!(calibri_xml.matches("CONFIDENTIAL").count(), 2);
+        std::fs::write(
+            directory.join("page-watermark-Calibri.docx"),
+            &calibri_bytes,
+        )
+        .unwrap();
+        std::fs::write(directory.join("page-watermark.docx"), saved).unwrap();
+        std::fs::write(directory.join("page-watermark.svg"), svg).unwrap();
+        std::fs::write(
+            directory.join("page-watermark.pdf"),
+            document.to_pdf_deterministic().unwrap(),
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn fx201_drawingml_image_watermark_effects_removal_and_opaque_refusal() {
+    use rdocx::{HdrFtrType, HeaderFooterKind, ImageWatermarkOptions, Length};
+    const PNG: &[u8] = &[
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
+        0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 8, 29, 99, 96, 96, 96, 248, 15, 0,
+        1, 4, 1, 0, 30, 115, 156, 64, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ];
+    let mut document = Document::new();
+    document.add_paragraph("Watermark image body");
+    document.set_page_color("E8F0FF").unwrap();
+    for edge in ["top", "left", "bottom", "right"] {
+        document
+            .section_mut(0)
+            .unwrap()
+            .set_page_border(edge, "single", 8, 4, "204060")
+            .unwrap();
+    }
+
+    let header = document
+        .create_section_story(0, HeaderFooterKind::Header, HdrFtrType::Default)
+        .unwrap();
+    document
+        .insert_content(
+            &rdocx::ContentLocation::end(header.clone()),
+            f254_paragraph("KEEP unrelated header"),
+        )
+        .unwrap();
+    let options = ImageWatermarkOptions {
+        width: Length::pt(120.0),
+        height: Length::pt(60.0),
+        rotation_degrees: 30.0,
+        opacity: 0.5,
+    };
+    document
+        .set_drawingml_image_watermark_for(
+            0,
+            HdrFtrType::Default,
+            PNG,
+            "watermark.png",
+            options.clone(),
+        )
+        .unwrap();
+    let saved = document.to_bytes().unwrap();
+    let part = header.part_name();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    let xml = String::from_utf8(package.get_part(part).unwrap().to_vec()).unwrap();
+    if let Ok(directory) = std::env::var("RDOCX_FX201_NATIVE_OUTPUT_DIR") {
+        let directory = std::path::Path::new(&directory);
+        std::fs::create_dir_all(directory).unwrap();
+        // Diagnostic artifacts precede deciding replacement/removal assertions.
+        std::fs::write(directory.join("image-first-save-DIAGNOSTIC.docx"), &saved).unwrap();
+        std::fs::write(
+            directory.join("image-owner-first-save-DIAGNOSTIC.xml"),
+            &xml,
+        )
+        .unwrap();
+    }
+    assert!(xml.contains("KEEP unrelated header"));
+    assert!(xml.contains("alphaModFix amt=\"50000\""));
+    assert!(xml.contains("xfrm rot=\"1800000\""));
+    let mut reader = quick_xml::NsReader::from_str(&xml);
+    let mut owned_doc_pr = 0;
+    loop {
+        let (namespace, event) = reader.read_resolved_event().unwrap();
+        match event {
+            quick_xml::events::Event::Empty(element) | quick_xml::events::Event::Start(element)
+                if matches!(namespace, quick_xml::name::ResolveResult::Bound(namespace) if namespace.as_ref() == b"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing")
+                    && element.local_name().as_ref() == b"docPr" =>
+            {
+                if element.attributes().any(|attribute| {
+                    let attribute = attribute.unwrap();
+                    attribute.key.as_ref() == b"name"
+                        && attribute.value.as_ref() == b"RDOCX DrawingML Watermark"
+                }) {
+                    owned_doc_pr += 1;
+                }
+            }
+            quick_xml::events::Event::Eof => break,
+            _ => {}
+        }
+    }
+    assert_eq!(owned_doc_pr, 1);
+    let svg = document
+        .render_page_to_svg_deterministic(0)
+        .unwrap()
+        .unwrap()
+        .svg;
+    assert!(svg.contains("opacity=\"0.5\""), "{svg}");
+    let layout = document.layout_deterministic().unwrap();
+    let mut image_rotations = Vec::new();
+    oxml_layout::walk(
+        &layout.layout.pages[0].elements,
+        &mut |element, transform| {
+            if matches!(element, oxml_layout::PositionedElement::Image { .. }) {
+                image_rotations.push((transform.a, transform.b, transform.c, transform.d));
+            }
+        },
+    );
+    assert!(!image_rotations.is_empty());
+    for (a, b, c, d) in image_rotations {
+        assert!((a - 30_f64.to_radians().cos()).abs() < 1e-12);
+        assert!((b - 0.5).abs() < 1e-12);
+        assert!((c + 0.5).abs() < 1e-12);
+        assert!((d - a).abs() < 1e-12);
+    }
+    let mut reopened = Document::from_bytes(&saved).unwrap();
+    assert_eq!(reopened.to_bytes().unwrap(), saved);
+    for opacity in [0.0, 1.0] {
+        let mut selected = options.clone();
+        selected.opacity = opacity;
+        reopened
+            .set_drawingml_image_watermark_for(
+                0,
+                HdrFtrType::Default,
+                PNG,
+                "watermark.png",
+                selected,
+            )
+            .unwrap();
+        let bytes = reopened.to_bytes().unwrap();
+        let p = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+        if let Ok(directory) = std::env::var("RDOCX_FX201_NATIVE_OUTPUT_DIR") {
+            std::fs::write(
+                std::path::Path::new(&directory)
+                    .join(format!("image-owner-opacity-{opacity}-DIAGNOSTIC.xml")),
+                p.get_part(part).unwrap(),
+            )
+            .unwrap();
+        }
+
+        assert_eq!(
+            p.get_part_rels(part)
+                .unwrap()
+                .items
+                .iter()
+                .filter(|r| r.rel_type.ends_with("/image"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            Document::from_bytes(&bytes).unwrap().to_bytes().unwrap(),
+            bytes
+        );
+    }
+    let before = reopened.to_bytes().unwrap();
+    let mut invalid = options.clone();
+    invalid.opacity = f64::NAN;
+    assert!(
+        reopened
+            .set_drawingml_image_watermark_for(0, HdrFtrType::Default, PNG, "bad.png", invalid)
+            .is_err()
+    );
+    assert_eq!(reopened.to_bytes().unwrap(), before);
+    let mut opaque = package;
+    opaque.set_part(
+        part,
+        xml.replace(
+            "<pic:spPr>",
+            "<pic:spPr><q:keep xmlns:q=\"urn:opaque\">literal</q:keep>",
+        )
+        .into_bytes(),
+    );
+    let mut cursor = std::io::Cursor::new(Vec::new());
+    opaque.write_to(&mut cursor).unwrap();
+    let mut opaque = Document::from_bytes(cursor.get_ref()).unwrap();
+    let before = opaque.to_bytes().unwrap();
+    assert!(
+        opaque
+            .remove_drawingml_watermark_for(0, HdrFtrType::Default)
+            .unwrap_err()
+            .to_string()
+            .contains("externally changed source")
+    );
+    assert_eq!(opaque.to_bytes().unwrap(), before);
+    reopened
+        .remove_drawingml_watermark_for(0, HdrFtrType::Default)
+        .unwrap();
+    let removed = reopened.to_bytes().unwrap();
+    let package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&removed)).unwrap();
+    let xml = String::from_utf8(package.get_part(part).unwrap().to_vec()).unwrap();
+    assert!(xml.contains("KEEP unrelated header"));
+    assert!(!xml.contains("RDOCX DrawingML Watermark"));
+    assert!(
+        package
+            .get_part_rels(part)
+            .is_none_or(|rels| rels.items.iter().all(|r| !r.rel_type.ends_with("/image")))
+    );
+    reopened
+        .remove_drawingml_watermark_for(0, HdrFtrType::Default)
+        .unwrap();
+    assert_eq!(reopened.to_bytes().unwrap(), removed);
+    if let Ok(directory) = std::env::var("RDOCX_FX201_NATIVE_OUTPUT_DIR") {
+        let directory = std::path::Path::new(&directory);
+        std::fs::create_dir_all(directory).unwrap();
+        std::fs::write(directory.join("image-watermark.docx"), saved).unwrap();
+        std::fs::write(directory.join("image-watermark.svg"), svg).unwrap();
+        std::fs::write(
+            directory.join("image-watermark.pdf"),
+            document.to_pdf_deterministic().unwrap(),
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn fx201_custom_note_marks_and_special_records_survive_checked_authoring() {
+    use rdocx::{NoteFamily, NoteSpecialRecord};
+    for family in [NoteFamily::Footnote, NoteFamily::Endnote] {
+        let mut document = Document::new();
+        document.add_paragraph("reference owner");
+        for (record, text) in [
+            (NoteSpecialRecord::Separator, "separator source"),
+            (
+                NoteSpecialRecord::ContinuationSeparator,
+                "continuation source",
+            ),
+            (NoteSpecialRecord::ContinuationNotice, "notice source"),
+        ] {
+            let mut paragraph = CT_P::new();
+            paragraph.add_run(text);
+            document
+                .set_note_special_record(family, record, vec![paragraph])
+                .unwrap();
+        }
+        let before = document.to_bytes().unwrap();
+        let reference = document.paragraph_story_location(0).unwrap().unwrap();
+        let error = match family {
+            NoteFamily::Footnote => document.create_footnote_with_mark(&reference, "refused", ""),
+            NoteFamily::Endnote => document.create_endnote_with_mark(&reference, "refused", ""),
+        }
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("custom note mark must not be empty")
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+        let id = match family {
+            NoteFamily::Footnote => {
+                document.create_footnote_with_mark(&reference, "custom note", "*")
+            }
+            NoteFamily::Endnote => {
+                document.create_endnote_with_mark(&reference, "custom note", "*")
+            }
+        }
+        .unwrap();
+        let saved = document.to_bytes().unwrap();
+        let members = zip_entries(&saved);
+        let notes = match family {
+            NoteFamily::Footnote => "word/footnotes.xml",
+            NoteFamily::Endnote => "word/endnotes.xml",
+        };
+        let xml = String::from_utf8_lossy(&members[notes]);
+        for text in [
+            "separator source",
+            "continuation source",
+            "notice source",
+            "custom note",
+            "*",
+        ] {
+            assert!(xml.contains(text), "{xml}");
+        }
+        let main = String::from_utf8_lossy(&members["word/document.xml"]);
+        assert!(main.contains("customMarkFollows=\"1\""), "{main}");
+        assert!(main.contains("reference owner"));
+        let mut reopened = Document::from_bytes(&saved).unwrap();
+        assert_eq!(reopened.to_bytes().unwrap(), saved);
+        match family {
+            NoteFamily::Footnote => reopened.remove_footnote(id).unwrap(),
+            NoteFamily::Endnote => reopened.remove_endnote(id).unwrap(),
+        }
+        let deleted = reopened.to_bytes().unwrap();
+        let members = zip_entries(&deleted);
+        let xml = String::from_utf8_lossy(&members[notes]);
+        for text in ["separator source", "continuation source", "notice source"] {
+            assert!(xml.contains(text));
+        }
+        assert!(!xml.contains("custom note"));
+        assert!(
+            !String::from_utf8_lossy(&members["word/document.xml"]).contains("customMarkFollows")
+        );
+        assert_eq!(
+            Document::from_bytes(&deleted).unwrap().to_bytes().unwrap(),
+            deleted
+        );
+    }
+}
+
+#[test]
+fn fx201_explicit_picture_dimensions_keep_qualified_vector_input() {
+    let image = br#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1" fill="red"/></svg>"#;
+    let mut document = Document::new();
+    document.add_paragraph("vector owner");
+    let location = document.paragraph_story_location(0).unwrap().unwrap();
+    document
+        .insert_picture_at(
+            &StoryRunPosition {
+                location,
+                run_index: 1,
+            },
+            image,
+            "vector.svg",
+            Some(Length::emu(127000)),
+            Some(Length::emu(127000)),
+        )
+        .unwrap();
+    let saved = document.to_bytes().unwrap();
+    let members = zip_entries(&saved);
+    assert_eq!(
+        members
+            .values()
+            .filter(|value| value.as_slice() == image)
+            .count(),
+        1
+    );
+    assert!(String::from_utf8_lossy(&members["word/document.xml"]).contains("vector owner"));
+    assert_eq!(
+        Document::from_bytes(&saved).unwrap().to_bytes().unwrap(),
+        saved
+    );
+}

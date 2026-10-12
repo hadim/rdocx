@@ -82,6 +82,13 @@ class Pt(Length):
         return super().__new__(cls, int(points * cls._EMUS_PER_PT))
 
 
+class Twips(Length):
+    """A length constructed from twentieths of a point."""
+
+    def __new__(cls, twips: float) -> "Twips":
+        return super().__new__(cls, int(twips * cls._EMUS_PER_TWIP))
+
+
 class Emu(Length):
     """A length constructed directly from English Metric Units."""
 

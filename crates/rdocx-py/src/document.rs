@@ -803,6 +803,1145 @@ impl PyHeaderFooterVariant {
     }
 }
 
+#[pyclass(name = "SectionHandle")]
+pub struct PySectionHandle {
+    document: Py<PyDocument>,
+    index: usize,
+    path: oxml_py_support::ContentPath,
+}
+
+impl PySectionHandle {
+    fn validate(&self, py: Python<'_>) -> PyResult<()> {
+        let document = self.document.borrow(py);
+        self.path
+            .validate_scopes(
+                &document.revisions,
+                "section",
+                "Re-fetch it with document.section(index).",
+            )
+            .map_err(|error| crate::stale_to_pyerr(py, error))?;
+        if self.index >= document.inner.section_count() {
+            return Err(PyIndexError::new_err("section index out of range"));
+        }
+        Ok(())
+    }
+
+    fn snapshot(&self, py: Python<'_>) -> PyResult<PySection> {
+        self.validate(py)?;
+        Ok(section_snapshot(
+            self.document
+                .borrow(py)
+                .inner
+                .section(self.index)
+                .expect("validated section"),
+        ))
+    }
+
+    fn geometry(&mut self, py: Python<'_>, name: &str, value: Bound<'_, PyAny>) -> PyResult<()> {
+        self.validate(py)?;
+        let value = checked_section_length(Some(&value), name)?;
+        let mut document = self.document.borrow_mut(py);
+        document.update_section(
+            py,
+            self.index,
+            None,
+            if name == "page_width" {
+                value.map(|v| v.into_pyobject(py).unwrap().into_any())
+            } else {
+                None
+            },
+            if name == "page_height" {
+                value.map(|v| v.into_pyobject(py).unwrap().into_any())
+            } else {
+                None
+            },
+            if name == "margin_top" {
+                value.map(|v| v.into_pyobject(py).unwrap().into_any())
+            } else {
+                None
+            },
+            if name == "margin_right" {
+                value.map(|v| v.into_pyobject(py).unwrap().into_any())
+            } else {
+                None
+            },
+            if name == "margin_bottom" {
+                value.map(|v| v.into_pyobject(py).unwrap().into_any())
+            } else {
+                None
+            },
+            if name == "margin_left" {
+                value.map(|v| v.into_pyobject(py).unwrap().into_any())
+            } else {
+                None
+            },
+            if name == "gutter" {
+                value.map(|v| v.into_pyobject(py).unwrap().into_any())
+            } else {
+                None
+            },
+            None,
+            None,
+            None,
+            if name == "header_distance" {
+                value.map(|v| v.into_pyobject(py).unwrap().into_any())
+            } else {
+                None
+            },
+            if name == "footer_distance" {
+                value.map(|v| v.into_pyobject(py).unwrap().into_any())
+            } else {
+                None
+            },
+            None,
+            None,
+        )?;
+        Ok(())
+    }
+
+    fn furniture(
+        &self,
+        py: Python<'_>,
+        kind: rdocx::HeaderFooterKind,
+        variant: rdocx::HdrFtrType,
+    ) -> PyResult<PyHeaderFooter> {
+        self.validate(py)?;
+        Ok(PyHeaderFooter {
+            document: self.document.clone_ref(py),
+            index: self.index,
+            kind,
+            variant,
+            path: self.path.clone(),
+        })
+    }
+}
+
+#[pymethods]
+impl PySectionHandle {
+    #[getter]
+    fn page_width(&self, py: Python<'_>) -> PyResult<Option<i64>> {
+        Ok(self.snapshot(py)?.page_width)
+    }
+    #[setter]
+    fn set_page_width(&mut self, py: Python<'_>, value: Bound<'_, PyAny>) -> PyResult<()> {
+        self.geometry(py, "page_width", value)
+    }
+    #[getter]
+    fn page_height(&self, py: Python<'_>) -> PyResult<Option<i64>> {
+        Ok(self.snapshot(py)?.page_height)
+    }
+    #[setter]
+    fn set_page_height(&mut self, py: Python<'_>, value: Bound<'_, PyAny>) -> PyResult<()> {
+        self.geometry(py, "page_height", value)
+    }
+    #[getter]
+    fn margin_top(&self, py: Python<'_>) -> PyResult<Option<i64>> {
+        Ok(self.snapshot(py)?.margin_top)
+    }
+    #[setter]
+    fn set_margin_top(&mut self, py: Python<'_>, value: Bound<'_, PyAny>) -> PyResult<()> {
+        self.geometry(py, "margin_top", value)
+    }
+    #[getter]
+    fn margin_right(&self, py: Python<'_>) -> PyResult<Option<i64>> {
+        Ok(self.snapshot(py)?.margin_right)
+    }
+    #[setter]
+    fn set_margin_right(&mut self, py: Python<'_>, value: Bound<'_, PyAny>) -> PyResult<()> {
+        self.geometry(py, "margin_right", value)
+    }
+    #[getter]
+    fn margin_bottom(&self, py: Python<'_>) -> PyResult<Option<i64>> {
+        Ok(self.snapshot(py)?.margin_bottom)
+    }
+    #[setter]
+    fn set_margin_bottom(&mut self, py: Python<'_>, value: Bound<'_, PyAny>) -> PyResult<()> {
+        self.geometry(py, "margin_bottom", value)
+    }
+    #[getter]
+    fn margin_left(&self, py: Python<'_>) -> PyResult<Option<i64>> {
+        Ok(self.snapshot(py)?.margin_left)
+    }
+    #[setter]
+    fn set_margin_left(&mut self, py: Python<'_>, value: Bound<'_, PyAny>) -> PyResult<()> {
+        self.geometry(py, "margin_left", value)
+    }
+    #[getter]
+    fn gutter(&self, py: Python<'_>) -> PyResult<Option<i64>> {
+        Ok(self.snapshot(py)?.gutter)
+    }
+    #[setter]
+    fn set_gutter(&mut self, py: Python<'_>, value: Bound<'_, PyAny>) -> PyResult<()> {
+        self.geometry(py, "gutter", value)
+    }
+    #[getter]
+    fn header_distance(&self, py: Python<'_>) -> PyResult<Option<i64>> {
+        Ok(self.snapshot(py)?.header_distance)
+    }
+    #[setter]
+    fn set_header_distance(&mut self, py: Python<'_>, value: Bound<'_, PyAny>) -> PyResult<()> {
+        self.geometry(py, "header_distance", value)
+    }
+    #[getter]
+    fn footer_distance(&self, py: Python<'_>) -> PyResult<Option<i64>> {
+        Ok(self.snapshot(py)?.footer_distance)
+    }
+    #[setter]
+    fn set_footer_distance(&mut self, py: Python<'_>, value: Bound<'_, PyAny>) -> PyResult<()> {
+        self.geometry(py, "footer_distance", value)
+    }
+    #[getter]
+    fn orientation(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        Ok(self.snapshot(py)?.orientation)
+    }
+    #[setter]
+    fn set_orientation(&mut self, py: Python<'_>, value: &str) -> PyResult<()> {
+        self.validate(py)?;
+        self.document.borrow_mut(py).update_section(
+            py,
+            self.index,
+            Some(value),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )?;
+        Ok(())
+    }
+    #[getter]
+    fn different_first_page_header_footer(&self, py: Python<'_>) -> PyResult<bool> {
+        Ok(self.snapshot(py)?.different_first_page.unwrap_or(false))
+    }
+    #[setter]
+    fn set_different_first_page_header_footer(
+        &mut self,
+        py: Python<'_>,
+        value: bool,
+    ) -> PyResult<()> {
+        self.validate(py)?;
+        self.document.borrow_mut(py).update_section(
+            py,
+            self.index,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(value),
+            None,
+        )?;
+        Ok(())
+    }
+    #[pyo3(signature = (family, *, format="decimal", start=None, restart="continuous", placement=None))]
+    fn set_note_policy(
+        &mut self,
+        py: Python<'_>,
+        family: &str,
+        format: &str,
+        start: Option<&Bound<'_, PyAny>>,
+        restart: &str,
+        placement: Option<&str>,
+    ) -> PyResult<()> {
+        self.validate(py)?;
+        let (family, policy) = checked_note_policy(family, format, start, restart, placement)?;
+        let mut document = self.document.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        candidate
+            .section_mut(self.index)
+            .ok_or_else(|| PyIndexError::new_err("section index out of range"))?
+            .set_note_policy(family, policy)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        candidate
+            .to_bytes()
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let prepared = document
+            .revisions
+            .prepare_scopes("SectionHandle.set_note_policy", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        let next = document
+            .revisions
+            .capture_prepared(&prepared, smallvec![])
+            .map_err(revision_to_pyerr)?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        document.inner = candidate;
+        self.path = next;
+        Ok(())
+    }
+
+    #[pyo3(signature = (edge, *, style="single", width=8, space=0, color="000000"))]
+    fn set_page_border(
+        &mut self,
+        py: Python<'_>,
+        edge: &str,
+        style: &str,
+        width: u32,
+        space: u32,
+        color: &str,
+    ) -> PyResult<()> {
+        self.validate(py)?;
+        let mut document = self.document.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        candidate
+            .section_mut(self.index)
+            .ok_or_else(|| PyIndexError::new_err("section index out of range"))?
+            .set_page_border(edge, style, width, space, color)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        candidate
+            .to_bytes()
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let prepared = document
+            .revisions
+            .prepare_scopes("SectionHandle.set_page_border", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        let next = document
+            .revisions
+            .capture_prepared(&prepared, smallvec![])
+            .map_err(revision_to_pyerr)?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        document.inner = candidate;
+        self.path = next;
+        Ok(())
+    }
+
+    /// Author actual DrawingML text, with styled real text in both representations.
+    #[allow(clippy::too_many_arguments)] // Keep explicit checked public watermark operands.
+    #[pyo3(signature = (text, *, width, height, font_size, variant="default", rotation=315.0, color="D9D9D9", font_family="Calibri", opacity=0.5))]
+    fn set_text_watermark(
+        &mut self,
+        py: Python<'_>,
+        text: &str,
+        width: &Bound<'_, PyAny>,
+        height: &Bound<'_, PyAny>,
+        font_size: &Bound<'_, PyAny>,
+        variant: &str,
+        rotation: f64,
+        color: &str,
+        font_family: &str,
+        opacity: f64,
+    ) -> PyResult<()> {
+        self.validate(py)?;
+        let variant = match variant {
+            "default" => rdocx::HdrFtrType::Default,
+            "first" => rdocx::HdrFtrType::First,
+            "even" => rdocx::HdrFtrType::Even,
+            _ => {
+                return Err(PyValueError::new_err(
+                    "watermark variant must be default, first or even",
+                ));
+            }
+        };
+        let width = checked_section_length(Some(width), "watermark width")?.unwrap();
+        let height = checked_section_length(Some(height), "watermark height")?.unwrap();
+        let font_size = checked_section_length(Some(font_size), "watermark font size")?.unwrap();
+        let mut document = self.document.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        candidate
+            .set_drawingml_text_watermark_for(
+                self.index,
+                variant,
+                text,
+                rdocx::TextWatermarkOptions {
+                    width: rdocx::Length::emu(width),
+                    height: rdocx::Length::emu(height),
+                    rotation_degrees: rotation,
+                    color: color.to_owned(),
+                    font_family: Some(font_family.to_owned()),
+                    opacity,
+                },
+                rdocx::Length::emu(font_size),
+            )
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let prepared = document
+            .revisions
+            .prepare_scopes("SectionHandle.set_text_watermark", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        let next = document
+            .revisions
+            .capture_prepared(&prepared, smallvec![])
+            .map_err(revision_to_pyerr)?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        document.inner = candidate;
+        self.path = next;
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)] // Explicit checked watermark operands.
+    #[pyo3(signature = (data, filename, *, width, height, variant="default", rotation=0.0, opacity=0.5))]
+    fn set_image_watermark(
+        &mut self,
+        py: Python<'_>,
+        data: &[u8],
+        filename: &str,
+        width: &Bound<'_, PyAny>,
+        height: &Bound<'_, PyAny>,
+        variant: &str,
+        rotation: f64,
+        opacity: f64,
+    ) -> PyResult<()> {
+        self.validate(py)?;
+        let variant = match variant {
+            "default" => rdocx::HdrFtrType::Default,
+            "first" => rdocx::HdrFtrType::First,
+            "even" => rdocx::HdrFtrType::Even,
+            _ => {
+                return Err(PyValueError::new_err(
+                    "watermark variant must be default, first or even",
+                ));
+            }
+        };
+        let width = checked_section_length(Some(width), "watermark width")?.unwrap();
+        let height = checked_section_length(Some(height), "watermark height")?.unwrap();
+        let mut document = self.document.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        candidate
+            .set_drawingml_image_watermark_for(
+                self.index,
+                variant,
+                data,
+                filename,
+                rdocx::ImageWatermarkOptions {
+                    width: rdocx::Length::emu(width),
+                    height: rdocx::Length::emu(height),
+                    rotation_degrees: rotation,
+                    opacity,
+                },
+            )
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let prepared = document
+            .revisions
+            .prepare_scopes("SectionHandle.set_image_watermark", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        let next = document
+            .revisions
+            .capture_prepared(&prepared, smallvec![])
+            .map_err(revision_to_pyerr)?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        document.inner = candidate;
+        self.path = next;
+        Ok(())
+    }
+
+    #[pyo3(signature = (*, variant="default"))]
+    fn remove_watermark(&mut self, py: Python<'_>, variant: &str) -> PyResult<()> {
+        self.validate(py)?;
+        let variant = match variant {
+            "default" => rdocx::HdrFtrType::Default,
+            "first" => rdocx::HdrFtrType::First,
+            "even" => rdocx::HdrFtrType::Even,
+            _ => {
+                return Err(PyValueError::new_err(
+                    "watermark variant must be default, first or even",
+                ));
+            }
+        };
+        let mut document = self.document.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        candidate
+            .remove_drawingml_watermark_for(self.index, variant)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let prepared = document
+            .revisions
+            .prepare_scopes("SectionHandle.remove_watermark", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        let next = document
+            .revisions
+            .capture_prepared(&prepared, smallvec![])
+            .map_err(revision_to_pyerr)?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        document.inner = candidate;
+        self.path = next;
+        Ok(())
+    }
+
+    #[getter]
+    fn header(&self, py: Python<'_>) -> PyResult<PyHeaderFooter> {
+        self.furniture(
+            py,
+            rdocx::HeaderFooterKind::Header,
+            rdocx::HdrFtrType::Default,
+        )
+    }
+    #[getter]
+    fn first_page_header(&self, py: Python<'_>) -> PyResult<PyHeaderFooter> {
+        self.furniture(
+            py,
+            rdocx::HeaderFooterKind::Header,
+            rdocx::HdrFtrType::First,
+        )
+    }
+    #[getter]
+    fn even_page_header(&self, py: Python<'_>) -> PyResult<PyHeaderFooter> {
+        self.furniture(py, rdocx::HeaderFooterKind::Header, rdocx::HdrFtrType::Even)
+    }
+    #[getter]
+    fn footer(&self, py: Python<'_>) -> PyResult<PyHeaderFooter> {
+        self.furniture(
+            py,
+            rdocx::HeaderFooterKind::Footer,
+            rdocx::HdrFtrType::Default,
+        )
+    }
+    #[getter]
+    fn first_page_footer(&self, py: Python<'_>) -> PyResult<PyHeaderFooter> {
+        self.furniture(
+            py,
+            rdocx::HeaderFooterKind::Footer,
+            rdocx::HdrFtrType::First,
+        )
+    }
+    #[getter]
+    fn even_page_footer(&self, py: Python<'_>) -> PyResult<PyHeaderFooter> {
+        self.furniture(py, rdocx::HeaderFooterKind::Footer, rdocx::HdrFtrType::Even)
+    }
+}
+
+fn checked_note_policy(
+    family: &str,
+    format: &str,
+    start: Option<&Bound<'_, PyAny>>,
+    restart: &str,
+    placement: Option<&str>,
+) -> PyResult<(rdocx::NoteFamily, rdocx::NotePolicy)> {
+    let family = match family {
+        "footnote" => rdocx::NoteFamily::Footnote,
+        "endnote" => rdocx::NoteFamily::Endnote,
+        _ => {
+            return Err(PyValueError::new_err(
+                "note family must be footnote or endnote",
+            ));
+        }
+    };
+    let format = match format {
+        "decimal" => rdocx::NoteNumberFormat::Decimal,
+        "upperRoman" => rdocx::NoteNumberFormat::UpperRoman,
+        "lowerRoman" => rdocx::NoteNumberFormat::LowerRoman,
+        "upperLetter" => rdocx::NoteNumberFormat::UpperLetter,
+        "lowerLetter" => rdocx::NoteNumberFormat::LowerLetter,
+        _ => return Err(PyValueError::new_err("unsupported note number format")),
+    };
+    let start = match start {
+        None => 1,
+        Some(value) if value.is_instance_of::<PyBool>() => {
+            return Err(PyTypeError::new_err(
+                "note numbering start must be an integer, not bool",
+            ));
+        }
+        Some(value) => value.extract::<u32>()?,
+    };
+    let restart = match restart {
+        "continuous" => rdocx::NoteRestart::Continuous,
+        "eachSect" => rdocx::NoteRestart::EachSection,
+        "eachPage" => rdocx::NoteRestart::EachPage,
+        _ => return Err(PyValueError::new_err("unsupported note restart")),
+    };
+    let placement = match placement {
+        None if family == rdocx::NoteFamily::Footnote => rdocx::NotePlacement::PageBottom,
+        None => rdocx::NotePlacement::DocumentEnd,
+        Some("pageBottom") => rdocx::NotePlacement::PageBottom,
+        Some("beneathText") => rdocx::NotePlacement::BeneathText,
+        Some("sectEnd") => rdocx::NotePlacement::SectionEnd,
+        Some("docEnd") => rdocx::NotePlacement::DocumentEnd,
+        _ => return Err(PyValueError::new_err("unsupported note placement")),
+    };
+    Ok((
+        family,
+        rdocx::NotePolicy {
+            format,
+            start,
+            restart,
+            placement,
+        },
+    ))
+}
+
+fn related_table_fragment(rows: usize, cols: usize) -> PyResult<rdocx::ContentFragment> {
+    use rdocx_oxml::table::{
+        CT_Row, CT_Tbl, CT_TblGrid, CT_TblGridCol, CT_TblPr, CT_TblWidth, CT_Tc,
+    };
+    if rows == 0 || cols == 0 {
+        return Err(PyValueError::new_err("table dimensions must be positive"));
+    }
+    let columns = i32::try_from(cols)
+        .map_err(|_| PyOverflowError::new_err("table column count is too large"))?;
+    let width = 9360 / columns;
+    if width == 0 {
+        return Err(PyValueError::new_err(
+            "table columns must be at least one twip wide",
+        ));
+    }
+    let mut table = CT_Tbl::new();
+    table.properties = Some(CT_TblPr {
+        width: Some(CT_TblWidth::dxa(width * columns)),
+        ..Default::default()
+    });
+    table.grid = Some(CT_TblGrid {
+        columns: (0..cols)
+            .map(|_| CT_TblGridCol {
+                width: rdocx_oxml::units::Twips(width),
+            })
+            .collect(),
+        ..Default::default()
+    });
+    for _ in 0..rows {
+        let mut row = CT_Row::new();
+        row.cells.extend((0..cols).map(|_| CT_Tc::new()));
+        table.rows.push(row);
+    }
+    rdocx::ContentFragment::table(table).map_err(|error| PyValueError::new_err(error.to_string()))
+}
+
+#[pyclass(name = "HeaderFooter")]
+pub struct PyHeaderFooter {
+    document: Py<PyDocument>,
+    index: usize,
+    kind: rdocx::HeaderFooterKind,
+    variant: rdocx::HdrFtrType,
+    path: oxml_py_support::ContentPath,
+}
+
+impl PyHeaderFooter {
+    fn validate(&self, py: Python<'_>) -> PyResult<()> {
+        self.path
+            .validate_scopes(
+                &self.document.borrow(py).revisions,
+                "header/footer",
+                "Re-fetch it from document.section(index).",
+            )
+            .map_err(|error| crate::stale_to_pyerr(py, error))?;
+        Ok(())
+    }
+}
+
+#[pymethods]
+impl PyHeaderFooter {
+    #[getter]
+    fn is_linked_to_previous(&self, py: Python<'_>) -> PyResult<bool> {
+        self.validate(py)?;
+        Ok(self
+            .document
+            .borrow(py)
+            .inner
+            .section_story(self.index, self.kind, self.variant)
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .is_none_or(|story| story.is_inherited()))
+    }
+    #[setter]
+    fn set_is_linked_to_previous(&mut self, py: Python<'_>, value: bool) -> PyResult<()> {
+        self.validate(py)?;
+        if self.is_linked_to_previous(py)? == value {
+            return Ok(());
+        }
+        let mut document = self.document.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        if value {
+            candidate.inherit_section_story(self.index, self.kind, self.variant)
+        } else if candidate
+            .section_story(self.index, self.kind, self.variant)
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .is_none()
+        {
+            candidate
+                .create_section_story(self.index, self.kind, self.variant)
+                .map(|_| ())
+        } else {
+            candidate
+                .unlink_section_story(self.index, self.kind, self.variant)
+                .map(|_| ())
+        }
+        .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let prepared = document
+            .revisions
+            .prepare_scopes("HeaderFooter.is_linked_to_previous", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        let next = document
+            .revisions
+            .capture_prepared(&prepared, smallvec![])
+            .map_err(revision_to_pyerr)?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        document.inner = candidate;
+        self.path = next;
+        Ok(())
+    }
+    #[getter]
+    fn paragraphs<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        self.validate(py)?;
+        let document = self.document.borrow(py);
+        let mut result = Vec::new();
+        if let Some(story) = document
+            .inner
+            .section_story(self.index, self.kind, self.variant)
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+        {
+            for item in document
+                .inner
+                .story_items(story.story())
+                .map_err(|error| rdocx_to_pyerr(py, error))?
+            {
+                if item.kind() == rdocx::StoryItemKind::Paragraph {
+                    let location = item.location().clone();
+                    let path = document
+                        .revisions
+                        .capture(smallvec![PathSeg::Para(location.index_path()[0])]);
+                    result.push(Py::new(
+                        py,
+                        PyParagraph::for_story(self.document.clone_ref(py), path, location),
+                    )?);
+                }
+            }
+        }
+        PyTuple::new(py, result)
+    }
+    #[pyo3(signature = (text = "", style = None))]
+    fn add_paragraph(
+        &mut self,
+        py: Python<'_>,
+        text: &str,
+        style: Option<&str>,
+    ) -> PyResult<Py<PyParagraph>> {
+        self.validate(py)?;
+        let mut document = self.document.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        let style = match style {
+            Some(value) => Some(style_id_of_type(
+                &candidate,
+                value,
+                rdocx::StyleType::Paragraph,
+            )?),
+            None => {
+                let wanted = if self.kind == rdocx::HeaderFooterKind::Header {
+                    "Header"
+                } else {
+                    "Footer"
+                };
+                candidate
+                    .styles()
+                    .into_iter()
+                    .find(|style| {
+                        style.style_type() == rdocx::StyleType::Paragraph
+                            && (style.style_id() == wanted
+                                || style
+                                    .name()
+                                    .is_some_and(|name| name.eq_ignore_ascii_case(wanted)))
+                    })
+                    .map(|style| style.style_id().to_owned())
+            }
+        };
+        let story = match candidate
+            .section_story(self.index, self.kind, self.variant)
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+        {
+            Some(story) => story.story().clone(),
+            None => candidate
+                .create_section_story(self.index, self.kind, self.variant)
+                .map_err(|error| rdocx_to_pyerr(py, error))?,
+        };
+        let mut paragraph = rdocx_oxml::text::CT_P::new();
+        if !text.is_empty() {
+            paragraph.add_run(text);
+        }
+        if let Some(style) = style {
+            paragraph.properties = Some(rdocx::CT_PPr {
+                style_id: Some(style),
+                ..Default::default()
+            });
+        }
+        let index = candidate
+            .story_items(&story)
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .len();
+        candidate
+            .insert_content(
+                &rdocx::ContentLocation::end(story.clone()),
+                rdocx::ContentFragment::paragraph(paragraph)
+                    .map_err(|error| rdocx_to_pyerr(py, error))?,
+            )
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let current = candidate
+            .section_story(self.index, self.kind, self.variant)
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .ok_or_else(|| PyValueError::new_err("header/footer disappeared during insertion"))?;
+        let location = rdocx::ContentLocation::new(
+            current.story().clone(),
+            rdocx::StoryItemKind::Paragraph,
+            vec![index],
+        );
+        let prepared = document
+            .revisions
+            .prepare_scopes("HeaderFooter.add_paragraph", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        let path = document
+            .revisions
+            .capture_prepared(&prepared, smallvec![PathSeg::Para(index)])
+            .map_err(revision_to_pyerr)?;
+        let next = document
+            .revisions
+            .capture_prepared(&prepared, smallvec![])
+            .map_err(revision_to_pyerr)?;
+        let result = Py::new(
+            py,
+            PyParagraph::for_story(self.document.clone_ref(py), path, location),
+        )?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        document.inner = candidate;
+        self.path = next;
+        Ok(result)
+    }
+    #[getter]
+    fn tables<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        self.validate(py)?;
+        let document = self.document.borrow(py);
+        let mut tables = Vec::new();
+        if let Some(story) = document
+            .inner
+            .section_story(self.index, self.kind, self.variant)
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+        {
+            for item in document
+                .inner
+                .story_items(story.story())
+                .map_err(|error| rdocx_to_pyerr(py, error))?
+            {
+                if item.kind() == rdocx::StoryItemKind::Table {
+                    let location = item.location().clone();
+                    let path = document
+                        .revisions
+                        .capture(smallvec![PathSeg::Body(location.index_path()[0])]);
+                    tables.push(Py::new(
+                        py,
+                        PyTable::for_story(self.document.clone_ref(py), path, location),
+                    )?);
+                }
+            }
+        }
+        PyTuple::new(py, tables)
+    }
+    fn add_table(&mut self, py: Python<'_>, rows: usize, cols: usize) -> PyResult<Py<PyTable>> {
+        self.validate(py)?;
+        let fragment = related_table_fragment(rows, cols)?;
+        let mut document = self.document.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        let story = match candidate
+            .section_story(self.index, self.kind, self.variant)
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+        {
+            Some(story) => story.story().clone(),
+            None => candidate
+                .create_section_story(self.index, self.kind, self.variant)
+                .map_err(|error| rdocx_to_pyerr(py, error))?,
+        };
+        let index = candidate
+            .story_items(&story)
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .len();
+        candidate
+            .insert_content(&rdocx::ContentLocation::end(story), fragment)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let story = candidate
+            .section_story(self.index, self.kind, self.variant)
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .ok_or_else(|| PyValueError::new_err("header/footer disappeared during insertion"))?;
+        let location = rdocx::ContentLocation::new(
+            story.story().clone(),
+            rdocx::StoryItemKind::Table,
+            vec![index],
+        );
+        let prepared = document
+            .revisions
+            .prepare_scopes("HeaderFooter.add_table", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        let path = document
+            .revisions
+            .capture_prepared(&prepared, smallvec![PathSeg::Body(index)])
+            .map_err(revision_to_pyerr)?;
+        let next = document
+            .revisions
+            .capture_prepared(&prepared, smallvec![])
+            .map_err(revision_to_pyerr)?;
+        let result = Py::new(
+            py,
+            PyTable::for_story(self.document.clone_ref(py), path, location),
+        )?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        document.inner = candidate;
+        self.path = next;
+        Ok(result)
+    }
+}
+
+#[pyclass(name = "FootnoteEndnote")]
+pub struct PyNote {
+    document: Py<PyDocument>,
+    id: i32,
+    endnote: bool,
+    path: oxml_py_support::ContentPath,
+}
+impl PyNote {
+    fn story(&self, py: Python<'_>) -> PyResult<rdocx::StoryId> {
+        let document = self.document.borrow(py);
+        self.path
+            .validate_scopes(
+                &document.revisions,
+                "note",
+                "Re-fetch the note after structural mutation.",
+            )
+            .map_err(|error| crate::stale_to_pyerr(py, error))?;
+        let story = if self.endnote {
+            document.inner.endnote_story(self.id)
+        } else {
+            document.inner.footnote_story(self.id)
+        };
+        story
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .ok_or_else(|| PyValueError::new_err("note owner no longer exists"))
+    }
+}
+#[pymethods]
+impl PyNote {
+    #[getter]
+    fn id(&self) -> i32 {
+        self.id
+    }
+    #[getter]
+    fn paragraphs<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let story = self.story(py)?;
+        let document = self.document.borrow(py);
+        let mut paragraphs = Vec::new();
+        for item in document
+            .inner
+            .story_items(&story)
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+        {
+            if item.kind() == rdocx::StoryItemKind::Paragraph {
+                let location = item.location().clone();
+                let path = document
+                    .revisions
+                    .capture(smallvec![PathSeg::Para(location.index_path()[0])]);
+                paragraphs.push(Py::new(
+                    py,
+                    PyParagraph::for_story(self.document.clone_ref(py), path, location),
+                )?);
+            }
+        }
+        PyTuple::new(py, paragraphs)
+    }
+    fn delete(&self, py: Python<'_>) -> PyResult<()> {
+        self.story(py)?;
+        let mut document = self.document.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        if self.endnote {
+            candidate.remove_endnote(self.id)
+        } else {
+            candidate.remove_footnote(self.id)
+        }
+        .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let prepared = document
+            .revisions
+            .prepare_scopes("Note.delete", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        document.inner = candidate;
+        Ok(())
+    }
+    #[getter]
+    fn tables<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        let story = self.story(py)?;
+        let document = self.document.borrow(py);
+        let mut tables = Vec::new();
+        for item in document
+            .inner
+            .story_items(&story)
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+        {
+            if item.kind() == rdocx::StoryItemKind::Table {
+                let location = item.location().clone();
+                let path = document
+                    .revisions
+                    .capture(smallvec![PathSeg::Body(location.index_path()[0])]);
+                tables.push(Py::new(
+                    py,
+                    PyTable::for_story(self.document.clone_ref(py), path, location),
+                )?);
+            }
+        }
+        PyTuple::new(py, tables)
+    }
+    #[pyo3(signature=(text=""))]
+    fn add_paragraph(&mut self, py: Python<'_>, text: &str) -> PyResult<Py<PyParagraph>> {
+        let story = self.story(py)?;
+        let mut paragraph = rdocx_oxml::text::CT_P::new();
+        if !text.is_empty() {
+            paragraph.add_run(text);
+        }
+        let mut document = self.document.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        let index = candidate
+            .story_items(&story)
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .len();
+        candidate
+            .insert_content(
+                &rdocx::ContentLocation::end(story),
+                rdocx::ContentFragment::paragraph(paragraph)
+                    .map_err(|error| rdocx_to_pyerr(py, error))?,
+            )
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let story = if self.endnote {
+            candidate.endnote_story(self.id)
+        } else {
+            candidate.footnote_story(self.id)
+        }
+        .map_err(|error| rdocx_to_pyerr(py, error))?
+        .ok_or_else(|| PyValueError::new_err("note disappeared during insertion"))?;
+        let location =
+            rdocx::ContentLocation::new(story, rdocx::StoryItemKind::Paragraph, vec![index]);
+        let prepared = document
+            .revisions
+            .prepare_scopes("Note.add_paragraph", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        let path = document
+            .revisions
+            .capture_prepared(&prepared, smallvec![PathSeg::Para(index)])
+            .map_err(revision_to_pyerr)?;
+        let next = document
+            .revisions
+            .capture_prepared(&prepared, smallvec![])
+            .map_err(revision_to_pyerr)?;
+        let result = Py::new(
+            py,
+            PyParagraph::for_story(self.document.clone_ref(py), path, location),
+        )?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        document.inner = candidate;
+        self.path = next;
+        Ok(result)
+    }
+    fn add_table(&mut self, py: Python<'_>, rows: usize, cols: usize) -> PyResult<Py<PyTable>> {
+        let story = self.story(py)?;
+        let fragment = related_table_fragment(rows, cols)?;
+        let mut document = self.document.borrow_mut(py);
+        let mut candidate = document.inner.clone_for_staging();
+        let index = candidate
+            .story_items(&story)
+            .map_err(|error| rdocx_to_pyerr(py, error))?
+            .len();
+        candidate
+            .insert_content(&rdocx::ContentLocation::end(story), fragment)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let story = if self.endnote {
+            candidate.endnote_story(self.id)
+        } else {
+            candidate.footnote_story(self.id)
+        }
+        .map_err(|error| rdocx_to_pyerr(py, error))?
+        .ok_or_else(|| PyValueError::new_err("note disappeared during insertion"))?;
+        let location = rdocx::ContentLocation::new(story, rdocx::StoryItemKind::Table, vec![index]);
+        let prepared = document
+            .revisions
+            .prepare_scopes("Note.add_table", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        let path = document
+            .revisions
+            .capture_prepared(&prepared, smallvec![PathSeg::Body(index)])
+            .map_err(revision_to_pyerr)?;
+        let next = document
+            .revisions
+            .capture_prepared(&prepared, smallvec![])
+            .map_err(revision_to_pyerr)?;
+        let result = Py::new(
+            py,
+            PyTable::for_story(self.document.clone_ref(py), path, location),
+        )?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        document.inner = candidate;
+        self.path = next;
+        Ok(result)
+    }
+}
+
+#[pyclass(name = "Settings")]
+pub struct PySettings {
+    document: Py<PyDocument>,
+}
+#[pymethods]
+impl PySettings {
+    #[getter]
+    fn odd_and_even_pages_header_footer(&self, py: Python<'_>) -> bool {
+        self.document.borrow(py).inner.even_and_odd_headers()
+    }
+    #[setter]
+    fn set_odd_and_even_pages_header_footer(&self, py: Python<'_>, value: bool) -> PyResult<()> {
+        let mut document = self.document.borrow_mut(py);
+        if document.inner.even_and_odd_headers() == value {
+            return Ok(());
+        }
+        let mut candidate = document.inner.clone_for_staging();
+        candidate
+            .set_even_and_odd_headers(value)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let prepared = document
+            .revisions
+            .prepare_scopes("Settings.odd_and_even_pages_header_footer", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        document.inner = candidate;
+        Ok(())
+    }
+}
+
 #[pyclass(name = "Section", frozen, get_all, eq, skip_from_py_object)]
 #[derive(Clone, PartialEq, Eq)]
 pub struct PySection {
@@ -1748,6 +2887,89 @@ pub struct PyDocument {
 }
 
 impl PyDocument {
+    fn create_note(
+        slf: &Bound<'_, Self>,
+        py: Python<'_>,
+        reference: &Bound<'_, PyAny>,
+        text: &str,
+        endnote: bool,
+    ) -> PyResult<Py<PyNote>> {
+        let owner = slf.clone().unbind();
+        let (location, run_index) = if let Ok(reference) = reference.cast::<PyParagraph>() {
+            let paragraph = reference.borrow();
+            if !paragraph.belongs_to(py, &owner) {
+                return Err(PyValueError::new_err(
+                    "note reference belongs to a different document",
+                ));
+            }
+            let location = paragraph.validate(py)?;
+            let document = slf.borrow();
+            let run_index = location
+                .read(&document.inner, |paragraph| paragraph.run_count())
+                .map_err(|error| rdocx_to_pyerr(py, error))?;
+            (
+                location
+                    .native(&document.inner)
+                    .map_err(|error| rdocx_to_pyerr(py, error))?,
+                run_index,
+            )
+        } else if let Ok(reference) = reference.cast::<crate::run::PyRun>() {
+            let run = reference.borrow();
+            if !run.belongs_to(py, &owner) {
+                return Err(PyValueError::new_err(
+                    "note reference belongs to a different document",
+                ));
+            }
+            let (location, index) = run.validate(py)?;
+            let document = slf.borrow();
+            (
+                location
+                    .native(&document.inner)
+                    .map_err(|error| rdocx_to_pyerr(py, error))?,
+                index + 1,
+            )
+        } else {
+            return Err(PyTypeError::new_err(
+                "note reference must be a Paragraph or Run",
+            ));
+        };
+        let mut document = slf.borrow_mut();
+        let mut candidate = document.inner.clone_for_staging();
+        let position = rdocx::StoryRunPosition {
+            location,
+            run_index,
+        };
+        let id = if endnote {
+            candidate.create_endnote_at(&position, text)
+        } else {
+            candidate.create_footnote_at(&position, text)
+        }
+        .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let prepared = document
+            .revisions
+            .prepare_scopes("Document.add_note", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        let path = document
+            .revisions
+            .capture_prepared(&prepared, smallvec![])
+            .map_err(revision_to_pyerr)?;
+        let result = Py::new(
+            py,
+            PyNote {
+                document: owner,
+                id,
+                endnote,
+                path,
+            },
+        )?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        document.inner = candidate;
+        Ok(result)
+    }
+
     fn from_document(inner: rdocx::Document) -> Self {
         Self {
             inner,
@@ -2023,7 +3245,8 @@ impl PyDocument {
             }
             let paragraph_index = match paragraph.validate(py)? {
                 crate::paragraph::ParagraphLocation::Body(index) => index,
-                crate::paragraph::ParagraphLocation::Cell { .. } => {
+                crate::paragraph::ParagraphLocation::Cell { .. }
+                | crate::paragraph::ParagraphLocation::Related(_) => {
                     return Err(PyValueError::new_err(
                         "content handle is not a direct body child",
                     ));
@@ -2259,6 +3482,22 @@ fn body_index_argument(value: &Bound<'_, PyAny>, message: &'static str) -> PyRes
             error
         }
     })
+}
+
+pub(crate) fn checked_section_length(
+    value: Option<&Bound<'_, PyAny>>,
+    name: &str,
+) -> PyResult<Option<i64>> {
+    value
+        .map(|value| {
+            if value.is_instance_of::<PyBool>() {
+                return Err(PyTypeError::new_err(format!(
+                    "{name} must be an integer EMU length, not bool"
+                )));
+            }
+            value.extract::<i64>()
+        })
+        .transpose()
 }
 
 fn section_snapshot(section: rdocx::SectionRef<'_>) -> PySection {
@@ -3039,21 +4278,31 @@ impl PyDocument {
         py: Python<'_>,
         index: usize,
         orientation: Option<&str>,
-        page_width: Option<i64>,
-        page_height: Option<i64>,
-        margin_top: Option<i64>,
-        margin_right: Option<i64>,
-        margin_bottom: Option<i64>,
-        margin_left: Option<i64>,
-        gutter: Option<i64>,
+        page_width: Option<Bound<'_, PyAny>>,
+        page_height: Option<Bound<'_, PyAny>>,
+        margin_top: Option<Bound<'_, PyAny>>,
+        margin_right: Option<Bound<'_, PyAny>>,
+        margin_bottom: Option<Bound<'_, PyAny>>,
+        margin_left: Option<Bound<'_, PyAny>>,
+        gutter: Option<Bound<'_, PyAny>>,
         column_count: Option<u32>,
-        column_spacing: Option<i64>,
+        column_spacing: Option<Bound<'_, PyAny>>,
         page_number_start: Option<u32>,
-        header_distance: Option<i64>,
-        footer_distance: Option<i64>,
+        header_distance: Option<Bound<'_, PyAny>>,
+        footer_distance: Option<Bound<'_, PyAny>>,
         different_first_page: Option<bool>,
         break_type: Option<&str>,
     ) -> PyResult<PySection> {
+        let page_width = checked_section_length(page_width.as_ref(), "page_width")?;
+        let page_height = checked_section_length(page_height.as_ref(), "page_height")?;
+        let margin_top = checked_section_length(margin_top.as_ref(), "margin_top")?;
+        let margin_right = checked_section_length(margin_right.as_ref(), "margin_right")?;
+        let margin_bottom = checked_section_length(margin_bottom.as_ref(), "margin_bottom")?;
+        let margin_left = checked_section_length(margin_left.as_ref(), "margin_left")?;
+        let gutter = checked_section_length(gutter.as_ref(), "gutter")?;
+        let column_spacing = checked_section_length(column_spacing.as_ref(), "column_spacing")?;
+        let header_distance = checked_section_length(header_distance.as_ref(), "header_distance")?;
+        let footer_distance = checked_section_length(footer_distance.as_ref(), "footer_distance")?;
         let orientation = orientation
             .map(|value| {
                 ST_PageOrientation::from_str(value)
@@ -3203,6 +4452,135 @@ impl PyDocument {
             .nth(index)
             .map(section_snapshot)
             .expect("the updated section exists"))
+    }
+
+    #[pyo3(signature = (reference, text = ""))]
+    fn add_footnote(
+        slf: &Bound<'_, Self>,
+        py: Python<'_>,
+        reference: &Bound<'_, PyAny>,
+        text: &str,
+    ) -> PyResult<Py<PyNote>> {
+        Self::create_note(slf, py, reference, text, false)
+    }
+    #[pyo3(signature = (reference, text = ""))]
+    fn add_endnote(
+        slf: &Bound<'_, Self>,
+        py: Python<'_>,
+        reference: &Bound<'_, PyAny>,
+        text: &str,
+    ) -> PyResult<Py<PyNote>> {
+        Self::create_note(slf, py, reference, text, true)
+    }
+
+    #[pyo3(signature = (family, *, format="decimal", start=None, restart="continuous", placement=None))]
+    fn set_note_policy(
+        &mut self,
+        py: Python<'_>,
+        family: &str,
+        format: &str,
+        start: Option<&Bound<'_, PyAny>>,
+        restart: &str,
+        placement: Option<&str>,
+    ) -> PyResult<()> {
+        let (family, policy) = checked_note_policy(family, format, start, restart, placement)?;
+        let mut candidate = self.inner.clone_for_staging();
+        candidate
+            .set_note_policy(family, policy)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let prepared = self
+            .revisions
+            .prepare_scopes("Document.set_note_policy", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        self.revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        self.inner = candidate;
+        Ok(())
+    }
+
+    fn set_page_color(&mut self, py: Python<'_>, color: &str) -> PyResult<()> {
+        let mut candidate = self.inner.clone_for_staging();
+        candidate
+            .set_page_color(color)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let prepared = self
+            .revisions
+            .prepare_scopes("Document.set_page_color", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        self.revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        self.inner = candidate;
+        Ok(())
+    }
+
+    /// Author the existing native VML compatibility watermark.
+    fn set_text_watermark(&mut self, py: Python<'_>, text: &str) -> PyResult<()> {
+        let mut candidate = self.inner.clone_for_staging();
+        candidate
+            .set_text_watermark(text)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let prepared = self
+            .revisions
+            .prepare_scopes("Document.set_text_watermark", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        self.revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        self.inner = candidate;
+        Ok(())
+    }
+
+    /// Author the existing native VML image watermark, with checked EMU dimensions.
+    fn set_image_watermark(
+        &mut self,
+        py: Python<'_>,
+        data: &[u8],
+        filename: &str,
+        width: &Bound<'_, PyAny>,
+        height: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let width = checked_section_length(Some(width), "watermark width")?
+            .ok_or_else(|| PyTypeError::new_err("watermark width is required"))?;
+        let height = checked_section_length(Some(height), "watermark height")?
+            .ok_or_else(|| PyTypeError::new_err("watermark height is required"))?;
+        let mut candidate = self.inner.clone_for_staging();
+        candidate
+            .set_image_watermark(
+                data,
+                filename,
+                rdocx::Length::emu(width),
+                rdocx::Length::emu(height),
+            )
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let prepared = self
+            .revisions
+            .prepare_scopes("Document.set_image_watermark", &[], &[])
+            .map_err(revision_to_pyerr)?;
+        self.revisions
+            .commit_scopes(prepared)
+            .map_err(revision_to_pyerr)?;
+        self.inner = candidate;
+        Ok(())
+    }
+
+    fn section(slf: &Bound<'_, Self>, index: usize) -> PyResult<PySectionHandle> {
+        let document = slf.borrow();
+        if index >= document.inner.section_count() {
+            return Err(PyIndexError::new_err("section index out of range"));
+        }
+        Ok(PySectionHandle {
+            document: slf.clone().unbind(),
+            index,
+            path: document.revisions.capture(smallvec![]),
+        })
+    }
+    #[getter]
+    fn settings(slf: &Bound<'_, Self>) -> PySettings {
+        PySettings {
+            document: slf.clone().unbind(),
+        }
     }
 
     fn insert_section(&mut self, py: Python<'_>, index: usize) -> PyResult<()> {

@@ -530,6 +530,15 @@ pub struct TextBoxOptions {
     pub fill_color: Option<String>,
 }
 
+/// Appearance of one section-variant image watermark.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageWatermarkOptions {
+    pub width: Length,
+    pub height: Length,
+    pub rotation_degrees: f64,
+    pub opacity: f64,
+}
+
 /// Appearance of one section-variant text watermark.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextWatermarkOptions {
@@ -737,6 +746,137 @@ fn apply_picture_anchor(anchor: &mut CT_Anchor, options: PictureAnchor) {
     anchor.dist_l = rdocx_oxml::units::Emu(options.distance_left.to_emu());
     anchor.dist_r = rdocx_oxml::units::Emu(options.distance_right.to_emu());
     anchor.relative_height = options.relative_height;
+}
+
+// Locate only the unchanged API-owned alternate representation. Raw unrelated
+// header content and any edits outside this exact owner remain outside the splice.
+fn drawingml_watermark_span(xml: &[u8]) -> Result<Option<(Range<usize>, u32)>> {
+    let mut reader = quick_xml::NsReader::from_reader(xml);
+    let mut depth = 0usize;
+    struct WatermarkOwner {
+        start: usize,
+        depth: usize,
+        marker: Option<(u32, String)>,
+    }
+    let mut alternate: Option<WatermarkOwner> = None;
+    let mut selected = None;
+    loop {
+        let start = reader.buffer_position() as usize;
+        let (namespace, event) = reader
+            .read_resolved_event()
+            .map_err(|error| Error::Other(format!("watermark owner scan failed: {error}")))?;
+        match event {
+            Event::Start(ref element) | Event::Empty(ref element) => {
+                let local = element.local_name();
+                let namespace = match namespace {
+                    quick_xml::name::ResolveResult::Bound(namespace) => namespace.as_ref().to_vec(),
+                    _ => Vec::new(),
+                };
+                if namespace == b"http://schemas.openxmlformats.org/markup-compatibility/2006"
+                    && local.as_ref() == b"AlternateContent"
+                    && alternate.is_none()
+                {
+                    alternate = Some(WatermarkOwner {
+                        start,
+                        depth,
+                        marker: None,
+                    });
+                }
+                if namespace == b"http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                    && local.as_ref() == b"drawing"
+                    && alternate.is_none()
+                {
+                    alternate = Some(WatermarkOwner {
+                        start,
+                        depth,
+                        marker: None,
+                    });
+                }
+                if namespace
+                    == b"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+                    && local.as_ref() == b"docPr"
+                {
+                    let mut name = None;
+                    let mut id = None;
+                    let mut description = None;
+                    for attribute in element.attributes() {
+                        let attribute = attribute.map_err(rdocx_oxml::OxmlError::from)?;
+                        let value = attribute
+                            .decoded_and_normalized_value(
+                                quick_xml::XmlVersion::Implicit1_0,
+                                element.decoder(),
+                            )
+                            .map_err(rdocx_oxml::OxmlError::from)?
+                            .into_owned();
+                        match attribute.key.as_ref() {
+                            b"name" => name = Some(value),
+                            b"id" => id = value.parse::<u32>().ok(),
+                            b"descr" => description = Some(value),
+                            _ => {}
+                        }
+                    }
+                    if name.as_deref() == Some("RDOCX DrawingML Watermark") {
+                        let owner = alternate.as_mut().ok_or_else(|| {
+                            Error::Other("watermark identity is outside its alternate owner".into())
+                        })?;
+                        if owner.marker.is_some() {
+                            return Err(Error::Other(
+                                "duplicate watermark identity is unsupported".into(),
+                            ));
+                        }
+                        owner.marker = Some((
+                            id.ok_or_else(|| {
+                                Error::Other("watermark drawing identity is invalid".into())
+                            })?,
+                            description.ok_or_else(|| {
+                                Error::Other("watermark source qualification is missing".into())
+                            })?,
+                        ));
+                    }
+                }
+                if matches!(event, Event::Start(_)) {
+                    depth += 1;
+                }
+            }
+            Event::End(_) => {
+                depth = depth
+                    .checked_sub(1)
+                    .ok_or_else(|| Error::Other("watermark owner depth is invalid".into()))?;
+                if alternate.as_ref().is_some_and(|owner| owner.depth == depth) {
+                    let owner = alternate.take().unwrap();
+                    let start = owner.start;
+                    if let Some((id, description)) = owner.marker {
+                        if selected.is_some() {
+                            return Err(Error::Other(
+                                "multiple API watermark owners are unsupported".into(),
+                            ));
+                        }
+                        let end = reader.buffer_position() as usize;
+                        let text = std::str::from_utf8(&xml[start..end])
+                            .map_err(|error| Error::Other(error.to_string()))?;
+                        let attribute = format!(" descr=\"{description}\"");
+                        let checksum = description
+                            .strip_prefix("rdocx-watermark-text-v1:")
+                            .or_else(|| description.strip_prefix("rdocx-watermark-image-v1:"))
+                            .and_then(|value| value.parse::<u64>().ok())
+                            .ok_or_else(|| {
+                                Error::Other("watermark source qualification is invalid".into())
+                            })?;
+                        if text.matches(&attribute).count() != 1
+                            || structural_fingerprint(text.replacen(&attribute, "", 1).as_bytes())?
+                                != checksum
+                        {
+                            return Err(Error::Other("API watermark has opaque or externally changed source, replacement refused".into()));
+                        }
+                        selected = Some((start..end, id));
+                    }
+                }
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+    }
+    Ok(selected)
 }
 
 fn authored_text_box_alternate_content(
@@ -1017,6 +1157,7 @@ pub struct ReplacementCountMismatch {
 
 enum ScopedReplacementTarget<'a> {
     Item(&'a ContentLocation),
+    RelatedCell(&'a StoryId),
     Cell {
         coordinates: (usize, usize, usize),
         paragraph: Option<usize>,
@@ -3651,6 +3792,35 @@ impl<'a> SectionRef<'a> {
     }
 }
 
+/// Severity of a document section validation finding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValidationSeverity {
+    Error,
+    Warning,
+}
+
+/// One stable section validation fact, in document order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidationFinding {
+    pub severity: ValidationSeverity,
+    pub message: String,
+}
+
+/// Read-only validation results over the current document.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValidationReport {
+    pub findings: Vec<ValidationFinding>,
+}
+
+impl ValidationReport {
+    /// Warnings do not invalidate a document.
+    pub fn is_valid(&self) -> bool {
+        self.findings
+            .iter()
+            .all(|finding| finding.severity != ValidationSeverity::Error)
+    }
+}
+
 /// A mutable borrowed view of one section in document order.
 pub struct Section<'a> {
     ordinal: usize,
@@ -3945,6 +4115,51 @@ impl Section<'_> {
     /// Set this section's page border frame.
     pub fn set_page_borders(&mut self, borders: CT_PageBorders) {
         self.inner.page_borders = Some(Box::new(borders));
+    }
+
+    /// Edit one page-frame edge without replacing other edges or opaque owners.
+    /// Width is in eighth-points and spacing in points, as specified by OOXML.
+    pub fn set_page_border(
+        &mut self,
+        edge: &str,
+        style: &str,
+        width: u32,
+        space: u32,
+        color: &str,
+    ) -> Result<()> {
+        let style = rdocx_oxml::shared::ST_Border::from_str(style)?;
+        if !(2..=96).contains(&width) || space > 31 {
+            return Err(Error::Other(
+                "page border width must be 2..96 eighth-points and spacing 0..31 points".into(),
+            ));
+        }
+        if color.len() != 6 || !color.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(Error::Other(
+                "page border color requires six hexadecimal digits".into(),
+            ));
+        }
+        if !matches!(edge, "top" | "left" | "bottom" | "right") {
+            return Err(Error::Other(
+                "page border edge must be top, left, bottom or right".into(),
+            ));
+        }
+        let borders = self.inner.page_borders.get_or_insert_with(Box::default);
+        let slot = match edge {
+            "top" => &mut borders.top,
+            "left" => &mut borders.left,
+            "bottom" => &mut borders.bottom,
+            "right" => &mut borders.right,
+            _ => unreachable!(),
+        };
+        let mut border = slot
+            .clone()
+            .unwrap_or_else(|| rdocx_oxml::borders::CT_BorderEdge::new(style));
+        border.set_literal_color(color)?;
+        border.val = style;
+        border.sz = Some(width);
+        border.space = Some(space);
+        *slot = Some(border);
+        Ok(())
     }
 
     /// Borrow this section's margin line numbering.
@@ -18064,6 +18279,74 @@ impl Document {
         Ok(())
     }
 
+    /// Insert an inline picture at one checked physical run boundary.
+    /// The media, owning relationship and drawing are published together.
+    pub fn insert_picture_at(
+        &mut self,
+        position: &StoryRunPosition,
+        image_data: &[u8],
+        image_filename: &str,
+        width: Option<Length>,
+        height: Option<Length>,
+    ) -> Result<()> {
+        let format = oxml_media::ImageFormat::sniff(image_data)
+            .ok_or_else(|| Error::Other("picture image bytes are unsupported".to_owned()))?;
+        if matches!(
+            format,
+            oxml_media::ImageFormat::Png
+                | oxml_media::ImageFormat::Jpeg
+                | oxml_media::ImageFormat::Gif
+                | oxml_media::ImageFormat::Bmp
+                | oxml_media::ImageFormat::Webp
+        ) && oxml_media::probe(image_data).is_none()
+        {
+            return Err(Error::Other(
+                "picture image bytes are unsupported".to_owned(),
+            ));
+        }
+        let (width, height) = match (width, height) {
+            (Some(width), Some(height)) if width.to_emu() > 0 && height.to_emu() > 0 => {
+                (width, height)
+            }
+            (None, None) => {
+                let size = oxml_media::probe(image_data)
+                    .and_then(|info| info.native_size(72.0))
+                    .ok_or_else(|| Error::UnavailableImageDimensions {
+                        filename: image_filename.to_owned(),
+                    })?;
+                (Length::emu(size.width_emu), Length::emu(size.height_emu))
+            }
+            _ => {
+                return Err(Error::Other(
+                    "picture dimensions require two positive lengths or neither".to_owned(),
+                ));
+            }
+        };
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        candidate.story_range_paragraph_snapshot(&position.location)?;
+        let relationship = candidate.add_image_relationship_checked(
+            position.location.story.part_name(),
+            image_data,
+            image_filename,
+        )?;
+        let mut inline = CT_Inline::new(&relationship, width.to_emu(), height.to_emu());
+        inline.doc_pr_id = candidate.identifiers.reserve_drawing_id()?;
+        let mut paragraph = CT_P::new();
+        paragraph.runs.push(CT_R {
+            alt_drawings: Vec::new(),
+            properties: None,
+            content: vec![RunContent::Drawing(CT_Drawing::inline(inline))],
+            extra_xml: Vec::new(),
+            extra_xml_positions: Vec::new(),
+        });
+        close_typed_story_drawing_namespaces(&mut paragraph)?;
+        candidate.insert_story_run_staged(position, paragraph.runs.remove(0))?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
     /// Insert an inline picture paragraph after checked story content.
     ///
     /// Omitting `after` appends to the story. Width and height must either both
@@ -18646,6 +18929,199 @@ impl Document {
     }
 
     /// Replace the visible text of one checked story item atomically.
+    /// Replace one checked story item in its actual package owner.
+    ///
+    /// The item kind, physical story and surrounding bytes remain unchanged.
+    /// Relationship-bearing content must already belong to this story part.
+    pub fn replace_story_content(
+        &mut self,
+        location: &ContentLocation,
+        fragment: ContentFragment,
+    ) -> Result<()> {
+        if location.is_end
+            || location.item_kind != fragment.kind
+            || location.item_kind == StoryItemKind::PreservedNode
+        {
+            return Err(Error::Other(
+                "story replacement requires the same modeled item kind".to_owned(),
+            ));
+        }
+        reject_section_owning_content_fragment(&fragment)?;
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let (source, item) = if location.item_kind == StoryItemKind::Paragraph {
+            candidate.story_range_paragraph_source(location)?
+        } else {
+            candidate.story_item_source(location)?
+        };
+        if item.kind != location.item_kind {
+            return Err(StoryError::KindMismatch {
+                expected: location.item_kind,
+                actual: item.kind,
+            }
+            .into());
+        }
+        let part_name = source.part_name.clone();
+        let scope = story_namespace_scope_at(&source.xml, item.full.start)?;
+        let mut xml = source.xml.into_owned();
+        let replacement = content_fragment_for_insertion(&candidate, &location.story, &fragment)?;
+        let replacement = close_content_fragment_namespaces(&replacement, &scope)?;
+        xml.splice(item.full, replacement);
+        set_story_source_xml(&mut candidate, &part_name, xml)?;
+        candidate.reconcile_comment_removal(self)?;
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    fn story_table_model(&self, location: &ContentLocation) -> Result<CT_Tbl> {
+        if location.item_kind != StoryItemKind::Table || location.is_end {
+            return Err(Error::Other(
+                "rich table needs an existing table location".to_owned(),
+            ));
+        }
+        let (source, item) = self.story_item_source(location)?;
+        let scope = story_namespace_scope_at(&source.xml, item.full.start)?;
+        let closed = close_content_fragment_namespaces(&source.xml[item.full], &scope)?;
+        let mut wrapped =
+            format!(r#"<w:document xmlns:w="{WORD_NAMESPACE}"><w:body>"#).into_bytes();
+        wrapped.extend_from_slice(&closed);
+        wrapped.extend_from_slice(b"</w:body></w:document>");
+        let mut parsed = CT_Document::from_xml(&wrapped)?;
+        if parsed.body.content.len() != 1 {
+            return Err(Error::Other(
+                "rich table has ambiguous physical content".to_owned(),
+            ));
+        }
+        match parsed.body.content.remove(0) {
+            BodyContent::Table(table) => Ok(table),
+            _ => Err(Error::Other(
+                "rich table source is not a qualified table".to_owned(),
+            )),
+        }
+    }
+
+    /// Read owned facts from one source-qualified table.
+    #[doc(hidden)]
+    pub fn read_story_table<T>(
+        &self,
+        location: &ContentLocation,
+        read: impl FnOnce(TableRef<'_>) -> T,
+    ) -> Result<T> {
+        let table = self.story_table_model(location)?;
+        Ok(read(TableRef { inner: &table }))
+    }
+
+    /// Edit one source-qualified table and publish it atomically.
+    #[doc(hidden)]
+    pub fn edit_story_table<T>(
+        &mut self,
+        location: &ContentLocation,
+        edit: impl FnOnce(&mut Table<'_>) -> Result<T>,
+    ) -> Result<T> {
+        let mut table = self.story_table_model(location)?;
+        let result = edit(&mut Table { inner: &mut table })?;
+        self.replace_story_content(location, ContentFragment::table(table)?)?;
+        Ok(result)
+    }
+
+    /// Resolve one related table cell through its actual enclosing physical table.
+    #[doc(hidden)]
+    pub fn story_table_cell(
+        &self,
+        location: &ContentLocation,
+        row: usize,
+        cell: usize,
+    ) -> Result<StoryId> {
+        let mut table = self.story_table_model(location)?;
+        let selected = TableRef { inner: &table }
+            .cell(row, cell)
+            .map(|cell| cell.inner as *const CT_Tc)
+            .ok_or_else(|| Error::Other("rich table cell index is out of range".to_owned()))?;
+        let (source, item) = self.story_item_source(location)?;
+        let owners = scan_story_owners(&source.xml, source.root_kind)?
+            .into_iter()
+            .filter(|owner| {
+                owner.kind == StoryKind::TableCell
+                    && item.full.start < owner.full.start
+                    && owner.full.end < item.full.end
+            })
+            .collect::<Vec<_>>();
+        let mut found = None;
+        for (index, owner) in owners.iter().enumerate() {
+            let mut ordinal = index;
+            let modeled = nth_cell_in_table(&mut table, &mut ordinal).ok_or_else(|| {
+                Error::Other("rich table cell source correspondence is incomplete".to_owned())
+            })?;
+            if std::ptr::eq(selected, modeled) {
+                found = Some(owner);
+            }
+        }
+        let mut beyond = owners.len();
+        if nth_cell_in_table(&mut table, &mut beyond).is_some() {
+            return Err(Error::Other(
+                "rich table has unqualified modeled cells".to_owned(),
+            ));
+        }
+        let owner = found.ok_or_else(|| {
+            Error::Other("rich table cell has no unique physical owner".to_owned())
+        })?;
+        let story = StoryId {
+            kind: owner.kind,
+            part_name: source.part_name.clone(),
+            owner_index: owner.owner_index,
+            fingerprint: owner.fingerprint,
+        };
+        Ok(story)
+    }
+
+    /// Resolve one paragraph through its actual checked related table cell owner.
+    #[doc(hidden)]
+    pub fn story_table_cell_paragraph_location(
+        &self,
+        location: &ContentLocation,
+        row: usize,
+        cell: usize,
+        paragraph: usize,
+    ) -> Result<ContentLocation> {
+        let story = self.story_table_cell(location, row, cell)?;
+        let (source, owner) = self.story_source_and_owner(&story)?;
+        let spans = story_range_paragraph_spans(&source.xml, &owner, &story)?;
+        let (location, _) = spans.into_iter().nth(paragraph).ok_or_else(|| {
+            Error::Other("rich table cell paragraph index is out of range".to_owned())
+        })?;
+        self.story_range_paragraph_snapshot(&location)?;
+        Ok(location)
+    }
+
+    /// Read owned facts from one source-qualified rich paragraph.
+    #[doc(hidden)]
+    pub fn read_story_paragraph<T>(
+        &self,
+        location: &ContentLocation,
+        read: impl FnOnce(ParagraphRef<'_>) -> T,
+    ) -> Result<T> {
+        let snapshot = self.story_range_paragraph_snapshot(location)?;
+        let paragraph = CT_P::from_xml_fragment(snapshot.xml())?;
+        Ok(read(ParagraphRef { inner: &paragraph }))
+    }
+
+    /// Edit one source-qualified rich paragraph and publish it atomically.
+    #[doc(hidden)]
+    pub fn edit_story_paragraph<T>(
+        &mut self,
+        location: &ContentLocation,
+        edit: impl FnOnce(&mut Paragraph<'_>) -> Result<T>,
+    ) -> Result<T> {
+        let snapshot = self.story_range_paragraph_snapshot(location)?;
+        let mut paragraph = CT_P::from_xml_fragment(snapshot.xml())?;
+        let result = edit(&mut Paragraph {
+            inner: &mut paragraph,
+        })?;
+        self.replace_story_content(location, ContentFragment::paragraph(paragraph)?)?;
+        Ok(result)
+    }
+
     pub fn set_story_text(&mut self, location: &ContentLocation, value: &str) -> Result<()> {
         let mut candidate = self.clone_for_staging();
         candidate.flush_to_package()?;
@@ -19222,6 +19698,37 @@ impl Document {
         self.document.background_xml.is_some()
     }
 
+    /// Publish page color and the relationship-resolved display setting together.
+    pub fn set_page_color(&mut self, color: &str) -> Result<()> {
+        if !is_rgb_hex(color) {
+            return Err(Error::Other(
+                "page color must be six hexadecimal digits".to_owned(),
+            ));
+        }
+        let mut candidate = self.settings_mutation_candidate()?;
+        if let Some(background) = candidate.document.background_xml.as_ref() {
+            let source = candidate
+                .package
+                .get_part(&candidate.doc_part_name)
+                .ok_or_else(|| Error::Other("main document part is missing".to_owned()))?;
+            let scope = document_namespace_scopes(source)?
+                .root_declarations
+                .into_iter()
+                .collect();
+            candidate.document.background_xml =
+                Some(close_content_fragment_namespaces(background, &scope)?);
+        }
+        candidate.document.set_background_color(color)?;
+        candidate
+            .settings
+            .get_or_insert_with(CT_Settings::new)
+            .set_display_background_shape(true)?;
+        candidate.invalidate_layout();
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
     /// Whether any document section carries layout formatting.
     ///
     /// This includes the final body section and sections attached to paragraph
@@ -19341,8 +19848,34 @@ impl Document {
                 "footnote reference must identify a direct body paragraph".to_owned(),
             ));
         }
+        let run_index = self.read_story_paragraph(reference, |paragraph| paragraph.run_count())?;
+        self.create_footnote_at(
+            &StoryRunPosition {
+                location: reference.clone(),
+                run_index,
+            },
+            text,
+        )
+    }
+
+    /// Create a note and reference together at a checked body or table-cell run boundary.
+    pub fn create_footnote_at(&mut self, position: &StoryRunPosition, text: &str) -> Result<i32> {
+        if !matches!(
+            position.location.story.kind(),
+            StoryKind::Body | StoryKind::TableCell
+        ) || position.location.story.part_name() != self.doc_part_name
+        {
+            return Err(Error::Other(
+                "note references require body or body-table content".to_owned(),
+            ));
+        }
         let mut candidate = self.clone_for_staging();
-        candidate.story_paragraph_mut(reference)?;
+        candidate
+            .read_story_paragraph(&position.location, |paragraph| paragraph.run_count())?
+            .checked_sub(position.run_index)
+            .ok_or_else(|| {
+                Error::Other("note reference run boundary is out of range".to_owned())
+            })?;
         let occupied = candidate
             .footnotes
             .footnotes
@@ -19380,7 +19913,7 @@ impl Document {
             id,
             custom_mark: None,
         }];
-        candidate.story_paragraph_mut(reference)?.runs.push(run);
+        candidate.insert_story_run_staged(position, run)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
         Ok(id)
@@ -19394,8 +19927,34 @@ impl Document {
                 "endnote reference must identify a direct body paragraph".to_owned(),
             ));
         }
+        let run_index = self.read_story_paragraph(reference, |paragraph| paragraph.run_count())?;
+        self.create_endnote_at(
+            &StoryRunPosition {
+                location: reference.clone(),
+                run_index,
+            },
+            text,
+        )
+    }
+
+    /// Create a note and reference together at a checked body or table-cell run boundary.
+    pub fn create_endnote_at(&mut self, position: &StoryRunPosition, text: &str) -> Result<i32> {
+        if !matches!(
+            position.location.story.kind(),
+            StoryKind::Body | StoryKind::TableCell
+        ) || position.location.story.part_name() != self.doc_part_name
+        {
+            return Err(Error::Other(
+                "note references require body or body-table content".to_owned(),
+            ));
+        }
         let mut candidate = self.clone_for_staging();
-        candidate.story_paragraph_mut(reference)?;
+        candidate
+            .read_story_paragraph(&position.location, |paragraph| paragraph.run_count())?
+            .checked_sub(position.run_index)
+            .ok_or_else(|| {
+                Error::Other("note reference run boundary is out of range".to_owned())
+            })?;
         candidate.flush_to_package()?;
         let existing_part = candidate.note_part_name(StoryKind::Endnote)?;
         let part_name = candidate.reserve_document_part_bundle(
@@ -19442,7 +20001,7 @@ impl Document {
             id,
             custom_mark: None,
         }];
-        candidate.story_paragraph_mut(reference)?.runs.push(run);
+        candidate.insert_story_run_staged(position, run)?;
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
         Ok(id)
@@ -20480,6 +21039,84 @@ impl Document {
         Ok(true)
     }
 
+    /// Copy one row within a checked related table, freshening its identities once.
+    #[doc(hidden)]
+    pub fn clone_story_table_row(
+        &mut self,
+        location: &ContentLocation,
+        source: usize,
+        insert_at: usize,
+    ) -> Result<usize> {
+        let mut candidate = self.clone_for_staging();
+        let mut table = candidate.story_table_model(location)?;
+        if source >= table.rows.len() || insert_at > table.rows.len() {
+            return Err(Error::Other(
+                "rich table row copy index is out of range".to_owned(),
+            ));
+        }
+        let copied = candidate.fresh_table_row_copy(table.rows[source].clone())?;
+        for (position, _) in &mut table.extra_xml {
+            if *position >= insert_at {
+                *position += 1;
+            }
+        }
+        for (position, _, _) in &mut table.content_controls {
+            if *position >= insert_at {
+                *position += 1;
+            }
+        }
+        table.rows.insert(insert_at, copied);
+        validate_table_topology(&table)?;
+        candidate.replace_story_content(location, ContentFragment::table(table)?)?;
+        self.commit_staged_mutation(candidate);
+        Ok(insert_at)
+    }
+
+    /// Remove one row from a checked related table while preserving owned boundaries.
+    #[doc(hidden)]
+    pub fn remove_story_table_row(
+        &mut self,
+        location: &ContentLocation,
+        row_index: usize,
+    ) -> Result<bool> {
+        let mut candidate = self.clone_for_staging();
+        let mut table = candidate.story_table_model(location)?;
+        if row_index >= table.rows.len() {
+            return Err(Error::Other(
+                "rich table row index is out of range".to_owned(),
+            ));
+        }
+        if table.rows.len() == 1 {
+            return Err(Error::Other(
+                "a table keeps at least one row, so its only row cannot be removed".to_owned(),
+            ));
+        }
+        restart_merges_continued_below(&mut table, row_index)?;
+        let raw_before = table
+            .extra_xml
+            .iter()
+            .filter(|(position, _)| *position == row_index)
+            .count();
+        for (position, _) in &mut table.extra_xml {
+            if *position > row_index {
+                *position -= 1;
+            }
+        }
+        for (position, raw, _) in &mut table.content_controls {
+            if *position > row_index {
+                if *position == row_index + 1 {
+                    *raw += raw_before;
+                }
+                *position -= 1;
+            }
+        }
+        table.rows.remove(row_index);
+        validate_table_topology(&table)?;
+        candidate.replace_story_content(location, ContentFragment::table(table)?)?;
+        self.commit_staged_mutation(candidate);
+        Ok(true)
+    }
+
     /// Set one body's table cell text through a checked package transaction.
     #[doc(hidden)]
     pub fn try_set_cell_text(
@@ -20711,6 +21348,51 @@ impl Document {
     /// the paragraph's position among the control's paragraphs. Comment
     /// operations and scoped literal replacement accept this form. Returns
     /// `None` when the index is out of range or the paragraph belongs to a
+    /// Resolve a modeled body cell paragraph to its checked physical story owner.
+    #[doc(hidden)]
+    pub fn cell_paragraph_story_location(
+        &self,
+        table: usize,
+        row: usize,
+        cell: usize,
+        paragraph: usize,
+    ) -> Result<ContentLocation> {
+        let mut candidate = self.clone_for_staging();
+        let selected = candidate
+            .table(table)
+            .and_then(|table| table.cell(row, cell).map(|cell| cell.inner as *const CT_Tc))
+            .ok_or_else(|| Error::Other("cell index is out of range".to_owned()))?;
+        let xml = candidate.document.to_xml()?;
+        for owner in scan_story_owners(&xml, StoryKind::Body)?
+            .into_iter()
+            .filter(|owner| owner.kind == StoryKind::TableCell)
+        {
+            let (content, mut ordinal) = modeled_main_cell_route(&xml, &owner)?;
+            let modeled = match candidate.document.body.content.get_mut(content) {
+                Some(BodyContent::Table(table)) => nth_cell_in_table(table, &mut ordinal),
+                Some(BodyContent::ContentControl(control)) => {
+                    nth_cell_in_control(control, &mut ordinal)
+                }
+                _ => None,
+            };
+            if modeled.is_some_and(|cell| std::ptr::eq(selected, cell)) {
+                let story = StoryId {
+                    kind: owner.kind,
+                    part_name: candidate.doc_part_name.clone(),
+                    owner_index: owner.owner_index,
+                    fingerprint: owner.fingerprint,
+                };
+                let location =
+                    ContentLocation::new(story, StoryItemKind::Paragraph, vec![paragraph]);
+                candidate.story_range_paragraph_snapshot(&location)?;
+                return Ok(location);
+            }
+        }
+        Err(Error::Other(
+            "cell has no checked physical story owner".to_owned(),
+        ))
+    }
+
     /// nested control or table beyond this two-segment path.
     pub fn paragraph_story_location(
         &self,
@@ -21499,6 +22181,416 @@ impl Document {
         candidate.invalidate_layout();
         let reopened = candidate.prepare_and_reopen_staged()?;
         self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    /// Set real DrawingML watermark text in one explicit header variant.
+    /// Only unchanged API-owned DrawingML is replaced. Opaque edits refuse atomically.
+    pub fn set_drawingml_text_watermark_for(
+        &mut self,
+        section_index: usize,
+        hdr_type: HdrFtrType,
+        text: &str,
+        options: TextWatermarkOptions,
+        font_size: Length,
+    ) -> Result<()> {
+        validate_text_watermark_options(&options)?;
+        if options.opacity != 0.5 {
+            return Err(Error::Other(
+                "DrawingML text watermark opacity other than 0.5 is unsupported by the qualified native text-fill representation".into(),
+            ));
+        }
+        let font_emu = font_size.to_emu();
+        if font_emu <= 0 || font_emu % 6350 != 0 || font_emu / 6350 > 3276 {
+            return Err(Error::Other(
+                "watermark font size requires positive half-points up to 1638 points".into(),
+            ));
+        }
+        let mut candidate = self.clone_for_staging();
+        let story =
+            match candidate.section_story(section_index, HeaderFooterKind::Header, hdr_type)? {
+                Some(story) => story.story,
+                None => candidate.create_section_story(
+                    section_index,
+                    HeaderFooterKind::Header,
+                    hdr_type,
+                )?,
+            };
+        candidate.flush_to_package()?;
+        let original = candidate
+            .package
+            .get_part(&story.part_name)
+            .ok_or_else(|| Error::Other("watermark header source is missing".into()))?
+            .to_vec();
+        let owned = drawingml_watermark_span(&original)?;
+        let drawing_id = match &owned {
+            Some((_, id)) => *id,
+            None => candidate.identifiers.reserve_drawing_id()?,
+        };
+        let box_options = TextBoxOptions {
+            width: options.width,
+            height: options.height,
+            anchor: PictureAnchor {
+                horizontal_relative_from: DrawingHorizontalRelativeFrom::Page,
+                horizontal_offset: Length::emu(0),
+                horizontal_alignment: Some(DrawingHorizontalAlignment::Center),
+                vertical_relative_from: DrawingVerticalRelativeFrom::Page,
+                vertical_offset: Length::emu(0),
+                vertical_alignment: Some(DrawingVerticalAlignment::Center),
+                wrap: DrawingWrap::None,
+                distance_top: Length::emu(0),
+                distance_bottom: Length::emu(0),
+                distance_left: Length::emu(0),
+                distance_right: Length::emu(0),
+                relative_height: 0,
+                behind_text: true,
+            },
+            rotation_degrees: options.rotation_degrees,
+            text_direction: TextBoxDirection::Horizontal,
+            fill_color: None,
+        };
+        let mut alternate = String::from_utf8(authored_text_box_alternate_content(
+            drawing_id,
+            text,
+            &box_options,
+        )?)
+        .map_err(|error| Error::Other(error.to_string()))?;
+        // Plain text warp keeps the watermark as real DrawingML shape text.
+        // It also lets importers preserve the shape rotation instead of
+        // projecting this owner as an unrotated Writer text frame.
+        alternate = alternate.replace(
+            "<wps:bodyPr vert=\"horz\"/>",
+            "<wps:bodyPr vert=\"horz\"><a:prstTxWarp prst=\"textPlain\"><a:avLst/></a:prstTxWarp></wps:bodyPr>",
+        );
+        let family = options.font_family.as_deref().unwrap_or("Calibri");
+        let family = quick_xml::escape::escape(family);
+        let color = &options.color;
+        let alpha = (options.opacity * 100_000.0).round() as u32;
+        let size = font_emu / 6350;
+        let properties = format!(
+            "<w:rPr><w:rFonts w:ascii=\"{family}\" w:hAnsi=\"{family}\" w:eastAsia=\"{family}\" w:cs=\"{family}\"/><w:color w:val=\"{color}\"/><w:sz w:val=\"{size}\"/><w:szCs w:val=\"{size}\"/><w14:textFill xmlns:w14=\"http://schemas.microsoft.com/office/word/2010/wordml\"><w14:solidFill><w14:srgbClr w14:val=\"{color}\"><w14:alpha w14:val=\"{alpha}\"/></w14:srgbClr></w14:solidFill></w14:textFill></w:rPr>"
+        );
+        if alternate.matches("<w:r>").count() != 2 {
+            return Err(Error::Other(
+                "watermark requires both real text representations".into(),
+            ));
+        }
+        alternate = alternate.replace("<w:r>", &format!("<w:r>{properties}"));
+        alternate = alternate.replace(
+            &format!("name=\"Text Box {drawing_id}\""),
+            "name=\"RDOCX DrawingML Watermark\"",
+        );
+        // Word preserves solid text-fill opacity, while the supported WPS
+        // importer preserves the equivalent constant-gradient opacity. Keep
+        // both real text owners under their actual declared capability choices.
+        let choice_start = alternate
+            .find("<mc:Choice Requires=\"wps\">")
+            .ok_or_else(|| Error::Other("watermark capability choice is missing".into()))?;
+        let choice_end = alternate[choice_start..]
+            .find("</mc:Choice>")
+            .map(|offset| choice_start + offset + "</mc:Choice>".len())
+            .ok_or_else(|| Error::Other("watermark capability choice is incomplete".into()))?;
+        let original_choice = &alternate[choice_start..choice_end];
+        let word_choice = original_choice.replacen("Requires=\"wps\"", "Requires=\"wps w16\" xmlns:w16=\"http://schemas.microsoft.com/office/word/2018/wordml\"", 1);
+        alternate.replace_range(choice_start..choice_end, &word_choice);
+        let mut fallback = String::from_utf8(
+            VmlWatermark::Text {
+                text: text.to_owned(),
+                width_pt: options.width.to_pt(),
+                height_pt: options.height.to_pt(),
+                rotation_degrees: options.rotation_degrees,
+                color: options.color.clone(),
+                font_family: options.font_family.clone(),
+                opacity: options.opacity,
+            }
+            .to_pict_xml(),
+        )
+        .map_err(|_| Error::Other("watermark textpath source is not UTF-8".into()))?;
+        // Word's authored type 136 uses this formula-driven straight text path.
+        // Keep the legacy VML authoring writer unchanged and adapt only this fallback.
+        let shape_type_start = fallback
+            .find("<v:shapetype ")
+            .ok_or_else(|| Error::Other("watermark textpath shape type is missing".into()))?;
+        let shape_type_end = fallback[shape_type_start..]
+            .find("</v:shapetype>")
+            .map(|offset| shape_type_start + offset + "</v:shapetype>".len())
+            .ok_or_else(|| Error::Other("watermark textpath shape type is incomplete".into()))?;
+        let shape_type = concat!(
+            "<v:shapetype id=\"rdocx-watermark-type-text\" coordsize=\"21600,21600\" o:spt=\"136\" adj=\"10800\" path=\"m@7,l@8,m@5,21600l@6,21600e\">",
+            "<v:formulas><v:f eqn=\"sum #0 0 10800\"/><v:f eqn=\"prod #0 2 1\"/><v:f eqn=\"sum 21600 0 @1\"/><v:f eqn=\"sum 0 0 @2\"/><v:f eqn=\"sum 21600 0 @3\"/><v:f eqn=\"if @0 @3 0\"/><v:f eqn=\"if @0 21600 @1\"/><v:f eqn=\"if @0 0 @2\"/><v:f eqn=\"if @0 @4 21600\"/><v:f eqn=\"mid @5 @6\"/><v:f eqn=\"mid @8 @5\"/><v:f eqn=\"mid @7 @8\"/><v:f eqn=\"mid @6 @7\"/><v:f eqn=\"sum @6 0 @5\"/></v:formulas>",
+            "<v:path textpathok=\"t\" o:connecttype=\"custom\" o:connectlocs=\"@9,0;@10,10800;@11,21600;@12,10800\" o:connectangles=\"270,180,90,0\"/><v:textpath on=\"t\" fitshape=\"t\"/><v:handles><v:h position=\"#0,bottomRight\" xrange=\"6629,14971\"/></v:handles><o:lock v:ext=\"edit\" text=\"t\" shapetype=\"t\"/></v:shapetype>"
+        );
+        fallback.replace_range(shape_type_start..shape_type_end, shape_type);
+        fallback = fallback
+            .replace(
+                "font-size:1pt",
+                &format!("font-size:{}pt", font_size.to_pt()),
+            )
+            .replace("relative:margin", "relative:page")
+            .replace(
+                &format!("fillcolor=\"{color}\""),
+                &format!("fillcolor=\"#{color}\""),
+            )
+            .replace(
+                "id=\"rdocx-watermark\"",
+                &format!("id=\"rdocx-watermark-{drawing_id}\""),
+            )
+            .replace(
+                "rdocx-watermark-type-text",
+                &format!("rdocx-watermark-type-text-{drawing_id}"),
+            );
+        let fallback_start = alternate
+            .find("<mc:Fallback>")
+            .ok_or_else(|| Error::Other("watermark fallback source is missing".into()))?;
+        let fallback_end = alternate[fallback_start..]
+            .find("</mc:Fallback>")
+            .map(|offset| fallback_start + offset + "</mc:Fallback>".len())
+            .ok_or_else(|| Error::Other("watermark fallback source is incomplete".into()))?;
+        alternate.replace_range(
+            fallback_start..fallback_end,
+            &format!("<mc:Fallback>{fallback}</mc:Fallback>"),
+        );
+        let checksum = structural_fingerprint(alternate.as_bytes())?;
+        alternate = alternate.replace(
+            "name=\"RDOCX DrawingML Watermark\"",
+            &format!(
+                "name=\"RDOCX DrawingML Watermark\" descr=\"rdocx-watermark-text-v1:{checksum}\""
+            ),
+        );
+        let alternate = alternate.into_bytes();
+        // Validate the actual style projection before publishing either representation.
+        let drawing =
+            rdocx_oxml::drawing::parse_alternate_content(&alternate, &[]).ok_or_else(|| {
+                Error::Other("watermark DrawingML representation did not reopen".into())
+            })?;
+        if let Some((span, _)) = owned {
+            let mut updated = original.clone();
+            updated.splice(span.clone(), alternate);
+            candidate
+                .package
+                .set_part(&story.part_name, updated.clone());
+            candidate.prune_replaced_watermark_media(
+                &story.part_name,
+                &original[span],
+                &updated,
+            )?;
+        } else {
+            let mut paragraph = CT_P::new();
+            paragraph.runs.push(CT_R {
+                properties: None,
+                content: Vec::new(),
+                extra_xml: vec![alternate],
+                extra_xml_positions: vec![0],
+                alt_drawings: vec![drawing],
+            });
+            candidate.append_authored_paragraph_to_story(&story, paragraph)?;
+        }
+        candidate.invalidate_layout();
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    /// Set a page-centered DrawingML image in the selected actual header owner.
+    pub fn set_drawingml_image_watermark_for(
+        &mut self,
+        section_index: usize,
+        hdr_type: HdrFtrType,
+        image_data: &[u8],
+        image_filename: &str,
+        options: ImageWatermarkOptions,
+    ) -> Result<()> {
+        if options.width.to_emu() <= 0
+            || options.height.to_emu() <= 0
+            || !options.rotation_degrees.is_finite()
+            || !options.opacity.is_finite()
+            || !(0.0..=1.0).contains(&options.opacity)
+        {
+            return Err(Error::Other(
+                "watermark image geometry or opacity is invalid".into(),
+            ));
+        }
+        if oxml_media::probe(image_data).is_none() {
+            return Err(Error::Other("watermark image bytes are unsupported".into()));
+        }
+        let mut candidate = self.clone_for_staging();
+        let story =
+            match candidate.section_story(section_index, HeaderFooterKind::Header, hdr_type)? {
+                Some(story) => story.story,
+                None => candidate.create_section_story(
+                    section_index,
+                    HeaderFooterKind::Header,
+                    hdr_type,
+                )?,
+            };
+        candidate.flush_to_package()?;
+        let original = candidate
+            .package
+            .get_part(&story.part_name)
+            .ok_or_else(|| Error::Other("watermark header source is missing".into()))?
+            .to_vec();
+        let owned = drawingml_watermark_span(&original)?;
+        let id = match &owned {
+            Some((_, id)) => *id,
+            None => candidate.identifiers.reserve_drawing_id()?,
+        };
+        // Retire only the already qualified API owner before allocating its
+        // replacement. Otherwise final relationship canonicalization can reuse
+        // the retired ID after the new owner's fingerprint has been written.
+        if let Some((span, _)) = &owned {
+            let mut without_owner = original.clone();
+            without_owner.drain(span.clone());
+            candidate
+                .package
+                .set_part(&story.part_name, without_owner.clone());
+            candidate.prune_replaced_watermark_media(
+                &story.part_name,
+                &original[span.clone()],
+                &without_owner,
+            )?;
+        }
+        let relationship = candidate.add_image_relationship_checked(
+            &story.part_name,
+            image_data,
+            image_filename,
+        )?;
+        let mut anchor = CT_Anchor::background(
+            &relationship,
+            options.width.to_emu(),
+            options.height.to_emu(),
+        );
+        anchor.doc_pr_id = id;
+        anchor.name = Some("RDOCX DrawingML Watermark".into());
+        anchor.description = None;
+        anchor.pos_h_align = Some(rdocx_oxml::drawing::AnchorAlignH::Center);
+        anchor.pos_v_align = Some(rdocx_oxml::drawing::AnchorAlignV::Center);
+        let mut writer = Writer::new(Vec::new());
+        CT_Drawing::anchor(anchor).to_xml(&mut writer)?;
+        let mut drawing =
+            String::from_utf8(writer.into_inner()).map_err(|e| Error::Other(e.to_string()))?;
+        drawing = drawing.replacen("<w:drawing>", "<w:drawing xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\" xmlns:wp=\"http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:pic=\"http://schemas.openxmlformats.org/drawingml/2006/picture\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\">", 1);
+        let blip = format!("<a:blip r:embed=\"{relationship}\"/>");
+        let alpha = (options.opacity * 100_000.0).round() as u32;
+        if !drawing.contains(&blip) || !drawing.contains("<a:xfrm>") {
+            return Err(Error::Other(
+                "watermark image writer shape is unsupported".into(),
+            ));
+        }
+        drawing = drawing.replacen(
+            &blip,
+            &format!(
+                "<a:blip r:embed=\"{relationship}\"><a:alphaModFix amt=\"{alpha}\"/></a:blip>"
+            ),
+            1,
+        );
+        let rotation = (options.rotation_degrees.rem_euclid(360.0) * 60_000.0).round() as i32;
+        drawing = drawing.replacen("<a:xfrm>", &format!("<a:xfrm rot=\"{rotation}\">"), 1);
+        let checksum = structural_fingerprint(drawing.as_bytes())?;
+        drawing = drawing.replacen(
+            "name=\"RDOCX DrawingML Watermark\"",
+            &format!(
+                "name=\"RDOCX DrawingML Watermark\" descr=\"rdocx-watermark-image-v1:{checksum}\""
+            ),
+            1,
+        );
+        if let Some((span, _)) = owned {
+            let mut updated = original.clone();
+            updated.splice(span.clone(), drawing.into_bytes());
+            candidate
+                .package
+                .set_part(&story.part_name, updated.clone());
+        } else {
+            let mut paragraph = CT_P::new();
+            paragraph.runs.push(CT_R {
+                properties: None,
+                content: Vec::new(),
+                extra_xml: vec![drawing.into_bytes()],
+                extra_xml_positions: vec![0],
+                alt_drawings: Vec::new(),
+            });
+            candidate.append_authored_paragraph_to_story(&story, paragraph)?;
+        }
+        candidate.invalidate_layout();
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    /// Remove only a source-qualified API watermark, keeping its surrounding content.
+    pub fn remove_drawingml_watermark_for(
+        &mut self,
+        section_index: usize,
+        hdr_type: HdrFtrType,
+    ) -> Result<()> {
+        let Some(story) = self.section_story(section_index, HeaderFooterKind::Header, hdr_type)?
+        else {
+            return Ok(());
+        };
+        let mut candidate = self.clone_for_staging();
+        candidate.flush_to_package()?;
+        let original = candidate
+            .package
+            .get_part(&story.story.part_name)
+            .ok_or_else(|| Error::Other("watermark header source is missing".into()))?
+            .to_vec();
+        let Some((span, _)) = drawingml_watermark_span(&original)? else {
+            return Ok(());
+        };
+        let mut updated = original.clone();
+        updated.drain(span.clone());
+        candidate
+            .package
+            .set_part(&story.story.part_name, updated.clone());
+        candidate.prune_replaced_watermark_media(
+            &story.story.part_name,
+            &original[span],
+            &updated,
+        )?;
+        candidate.invalidate_layout();
+        let reopened = candidate.prepare_and_reopen_staged()?;
+        self.commit_staged_mutation(reopened);
+        Ok(())
+    }
+
+    fn prune_replaced_watermark_media(
+        &mut self,
+        part: &str,
+        removed: &[u8],
+        updated: &[u8],
+    ) -> Result<()> {
+        let removed_ids = xml_relationship_ids_in_order(removed)?;
+        let referenced = xml_relationship_ids_in_order(updated)?
+            .into_iter()
+            .collect::<HashSet<_>>();
+        for id in removed_ids {
+            if referenced.contains(&id) {
+                continue;
+            }
+            let image_part = self
+                .package
+                .get_part_rels(part)
+                .and_then(|rels| {
+                    rels.items.iter().find(|rel| {
+                        rel.id == id
+                            && rel.rel_type == rel_types::IMAGE
+                            && relationship_is_internal(rel)
+                    })
+                })
+                .map(|rel| OpcPackage::resolve_rel_target(part, &rel.target));
+            if let Some(preserved) = self
+                .identifiers
+                .preserved_relationship_ids
+                .get_mut(&relationship_owner_identity(part))
+            {
+                preserved.remove(&id);
+            }
+            if let Some(image_part) = image_part {
+                self.identifiers
+                    .preserved_part_names
+                    .remove(&part_name_identity(&image_part));
+            }
+        }
+        self.prune_authored_story_relationships(part, &referenced);
         Ok(())
     }
 
@@ -24142,6 +25234,31 @@ impl Document {
             })
     }
 
+    /// Report explicit invalid or one-sided section page sizes without normalizing source.
+    pub fn validate_sections(&self) -> ValidationReport {
+        let mut findings = Vec::new();
+        for section in self.sections() {
+            let properties = section.properties();
+            if properties.page_width.is_some_and(|size| size.0 <= 0)
+                || properties.page_height.is_some_and(|size| size.0 <= 0)
+            {
+                findings.push(ValidationFinding {
+                    severity: ValidationSeverity::Error,
+                    message: format!("section {} has nonpositive page size", section.ordinal()),
+                });
+            } else if properties.page_width.is_some() != properties.page_height.is_some() {
+                findings.push(ValidationFinding {
+                    severity: ValidationSeverity::Warning,
+                    message: format!(
+                        "section {} has incomplete page size: width or height is missing",
+                        section.ordinal()
+                    ),
+                });
+            }
+        }
+        ValidationReport { findings }
+    }
+
     /// Resolve the effective header or footer story for one section variant.
     pub fn section_story(
         &self,
@@ -24200,31 +25317,58 @@ impl Document {
         if let Some(story) = self.section_story(section_index, kind, hdr_type)?
             && !story.is_inherited()
         {
-            let first_page_is_enabled = self
-                .section(section_index)
-                .is_some_and(|section| section.properties().title_pg.unwrap_or(false));
-            if hdr_type != HdrFtrType::First || first_page_is_enabled {
+            let enabled = match hdr_type {
+                HdrFtrType::Default => true,
+                HdrFtrType::First => self
+                    .section(section_index)
+                    .is_some_and(|section| section.properties().title_pg.unwrap_or(false)),
+                HdrFtrType::Even => self.even_and_odd_headers(),
+            };
+            if enabled {
                 return Ok(story.story);
             }
-            let mut candidate = self.clone_for_staging();
-            candidate
-                .section_mut(section_index)
-                .ok_or_else(|| {
-                    Error::Other(format!("section index {section_index} is out of range"))
-                })?
-                .inner
-                .title_pg = Some(true);
+            let mut candidate = if hdr_type == HdrFtrType::Even {
+                self.settings_mutation_candidate()?
+            } else {
+                self.clone_for_staging()
+            };
+            match hdr_type {
+                HdrFtrType::First => {
+                    candidate
+                        .section_mut(section_index)
+                        .ok_or_else(|| {
+                            Error::Other(format!("section index {section_index} is out of range"))
+                        })?
+                        .inner
+                        .title_pg = Some(true);
+                }
+                HdrFtrType::Even => candidate
+                    .settings
+                    .get_or_insert_with(CT_Settings::new)
+                    .set_even_and_odd_headers(true)?,
+                HdrFtrType::Default => {}
+            }
             let reopened = candidate.prepare_and_reopen_staged()?;
             let result = reopened
                 .section_story(section_index, kind, hdr_type)?
                 .map(|section_story| section_story.story)
                 .ok_or_else(|| {
-                    Error::Other("existing first-page story was not published".to_owned())
+                    Error::Other("existing section story was not published".to_owned())
                 })?;
             self.commit_staged_mutation(reopened);
             return Ok(result);
         }
-        let mut candidate = self.clone_for_staging();
+        let mut candidate = if hdr_type == HdrFtrType::Even {
+            self.settings_mutation_candidate()?
+        } else {
+            self.clone_for_staging()
+        };
+        if hdr_type == HdrFtrType::Even {
+            candidate
+                .settings
+                .get_or_insert_with(CT_Settings::new)
+                .set_even_and_odd_headers(true)?;
+        }
         candidate.flush_to_package()?;
         let story = candidate.install_empty_section_story(section_index, kind, hdr_type)?;
         candidate.reconcile_comment_removal(self)?;
@@ -24610,9 +25754,41 @@ impl Document {
                 "section index {index} is out of bounds for insertion into {count} sections"
             )));
         }
+        // Copy resolved geometry only. Relationship owners and other section
+        // policies belong to the old section and must not be cloned.
+        let previous = self
+            .section(index.saturating_sub(1))
+            .map(|s| s.properties());
+        let mut inserted = empty_section_properties();
+        inserted.page_width = Some(previous.and_then(|s| s.page_width).unwrap_or(Twips(12240)));
+        inserted.page_height = Some(previous.and_then(|s| s.page_height).unwrap_or(Twips(15840)));
+        inserted.orientation = Some(
+            previous
+                .and_then(|s| s.orientation)
+                .unwrap_or(ST_PageOrientation::Portrait),
+        );
+        inserted.margin_top = Some(previous.and_then(|s| s.margin_top).unwrap_or(Twips(1440)));
+        inserted.margin_right = Some(previous.and_then(|s| s.margin_right).unwrap_or(Twips(1440)));
+        inserted.margin_bottom = Some(
+            previous
+                .and_then(|s| s.margin_bottom)
+                .unwrap_or(Twips(1440)),
+        );
+        inserted.margin_left = Some(previous.and_then(|s| s.margin_left).unwrap_or(Twips(1440)));
+        inserted.gutter = Some(previous.and_then(|s| s.gutter).unwrap_or(Twips(0)));
+        inserted.header_distance = Some(
+            previous
+                .and_then(|s| s.header_distance)
+                .unwrap_or(Twips(720)),
+        );
+        inserted.footer_distance = Some(
+            previous
+                .and_then(|s| s.footer_distance)
+                .unwrap_or(Twips(720)),
+        );
         self.invalidate_layout();
         if count == 0 {
-            self.document.body.sect_pr = Some(empty_section_properties());
+            self.document.body.sect_pr = Some(inserted);
             return Ok(());
         }
         if index == count {
@@ -24628,7 +25804,7 @@ impl Document {
                 .body
                 .content
                 .push(BodyContent::Paragraph(paragraph));
-            self.document.body.sect_pr = Some(empty_section_properties());
+            self.document.body.sect_pr = Some(inserted);
             return Ok(());
         }
 
@@ -24643,7 +25819,7 @@ impl Document {
         };
         let mut paragraph = CT_P::new();
         paragraph.properties = Some(CT_PPr {
-            sect_pr: Some(empty_section_properties()),
+            sect_pr: Some(inserted),
             ..CT_PPr::default()
         });
         self.document
@@ -27557,6 +28733,23 @@ impl Document {
         )
     }
 
+    /// Replace literal text only in one checked related physical table cell.
+    #[doc(hidden)]
+    pub fn try_replace_text_in_story_cell(
+        &mut self,
+        story: &StoryId,
+        placeholder: &str,
+        replacement: &str,
+        expected: Option<usize>,
+    ) -> Result<std::result::Result<usize, ReplacementCountMismatch>> {
+        self.try_replace_scoped(
+            ScopedReplacementTarget::RelatedCell(story),
+            placeholder,
+            replacement,
+            expected,
+        )
+    }
+
     fn try_replace_scoped(
         &mut self,
         target: ScopedReplacementTarget<'_>,
@@ -27580,6 +28773,15 @@ impl Document {
                 }
                 candidate.story_range_paragraph_source(location)?;
                 (location.story.clone(), Some(location.clone()), None)
+            }
+            ScopedReplacementTarget::RelatedCell(story) => {
+                if story.kind() != StoryKind::TableCell {
+                    return Err(Error::Other(
+                        "scoped cell replacement needs a table-cell owner".to_owned(),
+                    ));
+                }
+                candidate.story_source_and_owner(story)?;
+                (story.clone(), None, None)
             }
             ScopedReplacementTarget::Cell {
                 coordinates: (table, row, cell),
@@ -36620,7 +37822,7 @@ mod tests {
         const WORD_SHA256: &str =
             "5046f7a0f2305518ec8a0c439b2df482790f29c05e41f6f5ef1d49dbb5473348";
         const POWERPOINT_SHA256: &str =
-            "8edda1371d1da30b937108fc1cfa3366467c9dbeb90934391c160b532781eef1";
+            "0e3b27ea9a0750a4df4818d8d3f2a36234e31e56fa7b287b3d93a6517e88f158";
 
         let data = f158_chart_data(2);
         let evidence_dir = std::env::temp_dir();

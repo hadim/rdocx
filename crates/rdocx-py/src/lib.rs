@@ -14,10 +14,11 @@ use oxml_py_support::StaleElementError;
 
 use document::{
     PyBookmark, PyBoundingBox, PyComment, PyComparisonDiagnostic, PyContentFragment,
-    PyCoreProperties, PyDocument, PyHeaderFooterVariant, PyHyperlink,
-    PyLayoutBackedFieldUpdateReport, PyLayoutFragment, PyLayoutPage, PyListLevel, PyRevision,
-    PyRunPosition, PyRunRange, PySection, PyStory, PyStoryItem, PyStoryRunPosition,
-    PyStoryRunRange, PyStyle, PySvgDiagnostic, PySvgRenderResult, PyTocRebuildReport,
+    PyCoreProperties, PyDocument, PyHeaderFooter, PyHeaderFooterVariant, PyHyperlink,
+    PyLayoutBackedFieldUpdateReport, PyLayoutFragment, PyLayoutPage, PyListLevel, PyNote,
+    PyRevision, PyRunPosition, PyRunRange, PySection, PySectionHandle, PySettings, PyStory,
+    PyStoryItem, PyStoryRunPosition, PyStoryRunRange, PyStyle, PySvgDiagnostic, PySvgRenderResult,
+    PyTocRebuildReport,
 };
 use formatting::{PyColorFormat, PyFont, PyParagraphFormat};
 use paragraph::{PyParagraph, PyParagraphCollection};
@@ -156,6 +157,10 @@ fn _rdocx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyHyperlink>()?;
     module.add_class::<PyHeaderFooterVariant>()?;
     module.add_class::<PySection>()?;
+    module.add_class::<PySectionHandle>()?;
+    module.add_class::<PyHeaderFooter>()?;
+    module.add_class::<PySettings>()?;
+    module.add_class::<PyNote>()?;
     module.add_class::<PyStyle>()?;
     module.add_class::<PyListLevel>()?;
     module.add_class::<PyParagraph>()?;

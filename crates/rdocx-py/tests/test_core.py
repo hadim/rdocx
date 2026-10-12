@@ -2406,7 +2406,7 @@ def test_insert_and_remove_section_restructure_the_body():
         _ = held.text
 
     assert [section.is_final for section in document.sections] == [False, True]
-    assert document.sections[1].margin_top is None
+    assert document.sections[1].margin_top == Inches(1)
     assert document.update_section(1, margin_top=Inches(1)).margin_right == Inches(1)
     document.update_section(
         1,
@@ -4250,3 +4250,593 @@ def test_rebuild_toc_single_entry_preserves_opaque_properties_and_reopens():
         assert saved.count(b'w:fldCharType="end"') == 1
         document = rdocx.Document.from_bytes(document.to_bytes())
         assert _document_xml(document) == saved
+
+
+def test_fx201_existing_section_geometry_positive_and_atomic_index():
+    import rdocx
+    from rdocx import Inches
+
+    document = rdocx.Document()
+    document.add_paragraph("section geometry")
+    updated = document.update_section(
+        0, page_width=Inches(8.5), page_height=Inches(11),
+        orientation="landscape", margin_top=Inches(0.75),
+        margin_right=Inches(0.8), margin_bottom=Inches(0.9),
+        margin_left=Inches(1.1), gutter=Inches(0.2),
+        header_distance=Inches(0.3), footer_distance=Inches(0.4),
+    )
+    assert (updated.page_width, updated.page_height) == (Inches(11), Inches(8.5))
+    assert updated.orientation == "landscape"
+    assert rdocx.Document.from_bytes(document.to_bytes()).sections[0] == updated
+    before = document.to_bytes()
+    with pytest.raises(IndexError, match="section index out of range"):
+        document.insert_section(2)
+    assert document.to_bytes() == before
+
+
+def test_fx201_inserted_section_inherits_resolved_geometry():
+    import rdocx
+    from rdocx import Inches
+
+    document = rdocx.Document()
+    document.add_paragraph("first section")
+    previous = document.update_section(
+        0, page_width=Inches(8.5), page_height=Inches(11),
+        orientation="landscape", margin_top=Inches(0.75),
+        margin_right=Inches(0.8), margin_bottom=Inches(0.9),
+        margin_left=Inches(1.1), gutter=Inches(0.2),
+        header_distance=Inches(0.3), footer_distance=Inches(0.4),
+        column_count=2, page_number_start=7, different_first_page=True,
+    )
+    assert previous.page_width == Inches(11)
+    assert previous.orientation == "landscape"
+    document.insert_section(1)
+    assert len(document.sections) == 2
+    inserted = document.sections[1]
+    fields = ("page_width", "page_height", "orientation", "margin_top",
+              "margin_right", "margin_bottom", "margin_left", "gutter",
+              "header_distance", "footer_distance")
+    assert tuple(getattr(inserted, f) for f in fields) == tuple(
+        getattr(previous, f) for f in fields
+    ), "F201 inserted section must inherit resolved geometry"
+    assert inserted.column_count is None
+    assert inserted.page_number_start is None
+    assert not inserted.different_first_page
+    assert rdocx.Document.from_bytes(document.to_bytes()).sections[1] == inserted
+
+
+def test_fx201_even_footer_creation_enables_setting_atomically():
+    import rdocx
+    from xml.etree import ElementTree as ET
+
+    document = rdocx.Document()
+    document.add_paragraph("section footer")
+    default = document.create_section_story(0, "footer", "default")
+    assert default.kind == "footer"
+    assert _story_part(document, default)
+    before = document.to_bytes()
+    with pytest.raises(IndexError, match="section index out of range"):
+        document.create_section_story(9, "footer", "even")
+    assert document.to_bytes() == before
+    even = document.create_section_story(0, "footer", "even")
+    assert even.kind == "footer"
+    assert _story_part(document, even)
+    variant = next(v for v in document.header_footer_variants
+                   if v.section_index == 0 and v.kind == "footer" and v.variant == "even")
+    assert variant.story == even and not variant.inherited
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as archive:
+        settings = ET.fromstring(archive.read("word/settings.xml"))
+    word = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    enabled = settings.find(word + "evenAndOddHeaders")
+    assert enabled is not None and enabled.get(word + "val", "1") not in (
+        "0", "false", "off"
+    ), "F201 even footer creation must enable evenAndOddHeaders"
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert any(v.section_index == 0 and v.variant == "even" and v.story is not None
+               for v in reopened.header_footer_variants)
+
+
+def test_fx201_twips_constructor_and_section_length_equivalence():
+    import rdocx
+
+    assert rdocx.Twips(1440) == rdocx.Inches(1)
+    assert rdocx.Twips(1.75) == 1111
+    assert rdocx.Twips(-1.75) == -1111
+    document = rdocx.Document()
+    document.add_paragraph("length control")
+    section = document.update_section(0, margin_top=rdocx.Twips(1440))
+    assert section.margin_top == rdocx.Pt(72)
+    before = document.to_bytes()
+    for bad in (True, 1.5, 2**64):
+        with pytest.raises((TypeError, OverflowError, ValueError, rdocx.RdocxError)):
+            document.update_section(0, margin_top=bad)
+        assert document.to_bytes() == before
+    assert document.update_section(0, margin_top=-635).margin_top == -635
+    assert document.update_section(0, margin_top=-1).margin_top == 0
+    assert document.update_section(0, margin_top=634).margin_top == 0
+    before = document.to_bytes()
+    for name in ("page_width", "page_height", "margin_top", "margin_right", "margin_bottom", "margin_left", "gutter", "header_distance", "footer_distance"):
+        with pytest.raises(TypeError):
+            setattr(document.section(0), name, None)
+        assert document.to_bytes() == before
+    with pytest.raises(TypeError):
+        document.section(0).orientation = None
+    assert document.to_bytes() == before
+
+
+def test_fx201_live_section_footer_uses_actual_related_owner():
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("body retained")
+    section = document.section(0)
+    assert section.footer.paragraphs == ()
+    section.footer.is_linked_to_previous = False
+    footer = document.section(0).footer
+    paragraph = footer.add_paragraph("Page ")
+    paragraph.runs[0].font.bold = True
+    paragraph.add_run("1").add_field("PAGE", "1")
+    footer = document.section(0).footer
+    assert footer.paragraphs[0].text == "Page 11"
+    assert document.paragraphs[0].text == "body retained"
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as archive:
+        footers = [n for n in archive.namelist() if re.fullmatch(r"word/footer\d+\.xml", n)]
+        assert len(footers) == 1
+        assert b"PAGE" in archive.read(footers[0])
+        assert b"Page " not in archive.read("word/document.xml")
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert reopened.section(0).footer.paragraphs[0].text == "Page 11"
+
+
+def test_fx201_note_reference_creation_uses_checked_paragraph():
+    import rdocx
+
+    document = rdocx.Document()
+    reference = document.add_paragraph("reference")
+    note = document.add_footnote(reference, "note content")
+    assert note.paragraphs[0].text == "note content"
+    with pytest.raises(rdocx.StaleElementError):
+        _ = reference.text
+    saved = document.to_bytes()
+    with zipfile.ZipFile(io.BytesIO(saved)) as archive:
+        assert b"note content" in archive.read("word/footnotes.xml")
+        assert b"footnoteReference" in archive.read("word/document.xml")
+    note.delete()
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as archive:
+        assert b"footnoteReference" not in archive.read("word/document.xml")
+    before = document.to_bytes()
+    foreign = rdocx.Document().add_paragraph("foreign")
+    with pytest.raises(ValueError, match="different document"):
+        document.add_footnote(foreign, "refused")
+    assert document.to_bytes() == before
+
+
+def test_fx201_settings_and_run_break_are_owned():
+    import rdocx
+    from xml.etree import ElementTree as ET
+
+    document = rdocx.Document()
+    document.add_paragraph("break before").runs[0].add_break("page")
+    document.settings.odd_and_even_pages_header_footer = True
+    assert document.settings.odd_and_even_pages_header_footer
+    saved = document.to_bytes()
+    word = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    with zipfile.ZipFile(io.BytesIO(saved)) as archive:
+        main = ET.fromstring(archive.read("word/document.xml"))
+        assert any(e.get(word + "type") == "page" for e in main.iter(word + "br"))
+        assert ET.fromstring(archive.read("word/settings.xml")).find(word + "evenAndOddHeaders") is not None
+    reopened = rdocx.Document.from_bytes(saved)
+    assert reopened.settings.odd_and_even_pages_header_footer
+
+
+def test_fx201_note_policy_scopes_preserve_notes_and_refuse_atomically():
+    import rdocx
+    from xml.etree import ElementTree as ET
+
+    document = rdocx.Document()
+    reference = document.add_paragraph("note reference")
+    document.add_footnote(reference, "retained footnote")
+    document.set_note_policy("footnote", format="lowerRoman", start=4, restart="eachPage", placement="beneathText")
+    section = document.section(0)
+    section.set_note_policy("endnote", format="upperLetter", start=2, restart="eachSect", placement="sectEnd")
+    saved = document.to_bytes()
+    word = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    with zipfile.ZipFile(io.BytesIO(saved)) as archive:
+        notes = archive.read("word/footnotes.xml")
+        assert b"retained footnote" in notes
+        settings = ET.fromstring(archive.read("word/settings.xml"))
+        policy = settings.find(word + "footnotePr")
+        assert policy is not None
+        assert policy.find(word + "numFmt").get(word + "val") == "lowerRoman"
+        assert policy.find(word + "numStart").get(word + "val") == "4"
+        assert policy.find(word + "numRestart").get(word + "val") == "eachPage"
+        assert policy.find(word + "pos").get(word + "val") == "beneathText"
+        main = ET.fromstring(archive.read("word/document.xml"))
+        override = main.find(".//" + word + "sectPr/" + word + "endnotePr")
+        assert override is not None
+        assert override.find(word + "numFmt").get(word + "val") == "upperLetter"
+        assert override.find(word + "numStart").get(word + "val") == "2"
+    for bad in (True, 1.5, -1, 2**64, 0):
+        with pytest.raises((TypeError, ValueError, OverflowError, rdocx.RdocxError)):
+            document.set_note_policy("footnote", start=bad)
+        assert document.to_bytes() == saved
+    with pytest.raises(rdocx.RdocxError, match="placement is invalid"):
+        section.set_note_policy("footnote", placement="docEnd")
+    assert document.to_bytes() == saved
+    reopened = rdocx.Document.from_bytes(saved)
+    with zipfile.ZipFile(io.BytesIO(reopened.to_bytes())) as archive:
+        assert archive.read("word/footnotes.xml") == notes
+
+
+def test_fx201_nested_tables_use_actual_body_and_footer_cell_owners():
+    import rdocx
+    from xml.etree import ElementTree as ET
+
+    document = rdocx.Document()
+    document.add_paragraph("body retained")
+    table = document.add_table(1, 1)
+    nested = table.cell(0, 0).add_table(1, 1)
+    nested.cell(0, 0).text = "nested body"
+    assert document.tables[0].cell(0, 0).tables[0].cell(0, 0).text == "nested body"
+    footer = document.section(0).footer
+    table = footer.add_table(1, 1)
+    nested = table.cell(0, 0).add_table(1, 1)
+    nested.cell(0, 0).text = "nested footer"
+    before = document.to_bytes()
+    cell = document.section(0).footer.tables[0].cell(0, 0)
+    with pytest.raises(rdocx.RdocxError, match="dimensions must be positive"):
+        cell.add_table(0, 1)
+    assert document.to_bytes() == before
+    reopened = rdocx.Document.from_bytes(before)
+    assert reopened.paragraphs[0].text == "body retained"
+    assert reopened.tables[0].cell(0, 0).tables[0].cell(0, 0).text == "nested body"
+    assert reopened.section(0).footer.tables[0].cell(0, 0).tables[0].cell(0, 0).text == "nested footer"
+    word = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    with zipfile.ZipFile(io.BytesIO(before)) as archive:
+        footers = [n for n in archive.namelist() if re.fullmatch(r"word/footer\d+\.xml", n)]
+        assert len(footers) == 1
+        for name in ("word/document.xml", footers[0]):
+            for cell in ET.fromstring(archive.read(name)).iter(word + "tc"):
+                assert list(cell)[-1].tag == word + "p"
+
+
+def test_fx201_live_page_border_edges_and_page_color_preserve_source():
+    import rdocx
+    from rdocx import Document
+    document = Document()
+    document.add_paragraph("page body remains")
+    section = document.section(0)
+    for edge in ("top", "left", "bottom", "right"):
+        section.set_page_border(edge, style="double", width=16, space=4, color="123456")
+    document.set_page_color("AABBCC")
+    saved = document.to_bytes()
+    from lxml import etree
+    import zipfile
+    import io
+    root = etree.fromstring(zipfile.ZipFile(io.BytesIO(saved)).read("word/document.xml"))
+    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+    assert root.find("w:background", ns).get("{%s}color" % ns["w"]) == "AABBCC"
+    borders = root.find("w:body/w:sectPr/w:pgBorders", ns)
+    assert borders is not None
+    assert [etree.QName(child).localname for child in borders] == ["top", "left", "bottom", "right"]
+    for border in borders:
+        assert border.get("{%s}val" % ns["w"]) == "double"
+        assert border.get("{%s}sz" % ns["w"]) == "16"
+    section = document.section(0)
+    with pytest.raises(rdocx.RdocxError, match="page border width"):
+        section.set_page_border("top", width=1)
+    assert document.to_bytes() == saved
+    assert Document.from_bytes(saved).to_bytes() == saved
+
+
+def test_fx201_section_drawingml_text_watermark_preserves_real_text_and_refusals():
+    import rdocx
+    from rdocx import Document
+    import io
+    import zipfile
+    from lxml import etree
+    document = Document()
+    document.add_paragraph("body stays")
+    section = document.section(0)
+    section.header.add_paragraph("other header")
+    section = document.section(0)
+    section.set_text_watermark("CONFIDENTIAL", width=4572000, height=1143000,
+                               font_size=609600, font_family="Carlito", opacity=0.5)
+    saved = document.to_bytes()
+    package = zipfile.ZipFile(io.BytesIO(saved))
+    header = next(name for name in package.namelist() if name.startswith("word/header") and name.endswith(".xml"))
+    root = etree.fromstring(package.read(header))
+    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+          "w14": "http://schemas.microsoft.com/office/word/2010/wordml",
+          "wp": "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing",
+          "mc": "http://schemas.openxmlformats.org/markup-compatibility/2006",
+          "v": "urn:schemas-microsoft-com:vml"}
+    assert root.xpath("count(.//w:t[text()='CONFIDENTIAL'])", namespaces=ns) == 1
+    assert root.xpath("count(.//w14:alpha[@w14:val='50000'])", namespaces=ns) == 1
+    assert root.xpath("count(.//wp:anchor[@behindDoc='1'])", namespaces=ns) == 1
+    choices = root.xpath(".//mc:AlternateContent/mc:Choice", namespaces=ns)
+    assert [choice.get("Requires") for choice in choices] == ["wps w16"]
+    assert choices[0].nsmap["w16"] == "http://schemas.microsoft.com/office/word/2018/wordml"
+    assert choices[0].xpath("count(.//w14:solidFill)", namespaces=ns) == 1
+    assert root.xpath(".//mc:Fallback//v:textpath/@string", namespaces=ns) == ["CONFIDENTIAL"]
+    assert root.xpath(".//mc:Fallback//v:fill/@opacity", namespaces=ns) == ["0.5"]
+    assert root.xpath("count(.//mc:Fallback//v:shapetype[@o:spt='136'])", namespaces={**ns, "o": "urn:schemas-microsoft-com:office:office"}) == 1
+    assert "other header" in "".join(root.xpath(".//w:t/text()", namespaces=ns))
+    assert Document.from_bytes(saved).to_bytes() == saved
+    for unsupported in (0.0, 0.25, 1.0):
+        with pytest.raises(rdocx.RdocxError, match="^DrawingML text watermark opacity other than 0\\.5 is unsupported by the qualified native text-fill representation$"):
+            section.set_text_watermark("bad", width=4572000, height=1143000, font_size=609600, opacity=unsupported)
+        assert document.to_bytes() == saved
+        absent = Document()
+        absent.add_paragraph("no header")
+        absent_saved = absent.to_bytes()
+        with pytest.raises(rdocx.RdocxError, match="^DrawingML text watermark opacity other than 0\\.5 is unsupported by the qualified native text-fill representation$"):
+            absent.section(0).set_text_watermark("bad", width=4572000, height=1143000, font_size=609600, opacity=unsupported)
+        assert absent.to_bytes() == absent_saved
+    for invalid in (float("nan"), -0.1, 1.1):
+        with pytest.raises(rdocx.RdocxError, match="watermark opacity"):
+            section.set_text_watermark("bad", width=4572000, height=1143000, font_size=609600, opacity=invalid)
+        assert document.to_bytes() == saved
+    with pytest.raises(TypeError):
+        section.set_text_watermark("bad", width=True, height=1143000, font_size=609600)
+    assert document.to_bytes() == saved
+    section.set_text_watermark("REPLACED", width=4572000, height=1143000, font_size=609600)
+    replaced = document.to_bytes()
+    root = etree.fromstring(zipfile.ZipFile(io.BytesIO(replaced)).read(header))
+    assert root.xpath("count(.//w:t[text()='REPLACED'])", namespaces=ns) == 1
+    assert not root.xpath(".//w:t[text()='CONFIDENTIAL']", namespaces=ns)
+
+
+@pytest.mark.parametrize("style_mode", ("standard", "localized", "absent"))
+def test_fx201_all_six_story_slots_resolve_real_paragraph_style_ids(style_mode):
+    import rdocx
+    from rdocx import Document
+    from lxml import etree
+    word = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    document = Document()
+    document.add_paragraph("body unchanged")
+    source = io.BytesIO(document.to_bytes())
+    result = io.BytesIO()
+    header_id = "Kopfzeile" if style_mode == "localized" else "Header"
+    footer_id = "PiedDePage" if style_mode == "localized" else "Footer"
+    title_id = "TitreLocal" if style_mode == "localized" else "Title"
+    title_name = "Titre local" if style_mode == "localized" else "Title"
+    with zipfile.ZipFile(source) as original, zipfile.ZipFile(result, "w") as changed:
+        for info in original.infolist():
+            data = original.read(info.filename)
+            if info.filename == "word/styles.xml":
+                root = etree.fromstring(data)
+                for style in list(root):
+                    if style.tag == word + "style" and style.get(word + "styleId") in ("Header", "Footer", "Title"):
+                        root.remove(style)
+                values = [(title_id, title_name)]
+                if style_mode != "absent":
+                    values.extend(((header_id, "Header"), (footer_id, "Footer")))
+                for style_id, name in values:
+                    style = etree.SubElement(root, word + "style", {word + "type": "paragraph", word + "styleId": style_id})
+                    etree.SubElement(style, word + "name", {word + "val": name})
+                data = etree.tostring(root)
+            changed.writestr(info, data)
+    document = Document.from_bytes(result.getvalue())
+    slots = ("header", "first_page_header", "even_page_header", "footer", "first_page_footer", "even_page_footer")
+    for slot in slots:
+        owner = getattr(document.section(0), slot)
+        assert owner.paragraphs == ()
+        owner.add_paragraph(slot + " default")
+        owner = getattr(document.section(0), slot)
+        owner.add_paragraph(slot + " explicit", style=title_name)
+        saved = document.to_bytes()
+        owner = getattr(document.section(0), slot)
+        with pytest.raises(KeyError, match="missing paragraph style"):
+            owner.add_paragraph("not published", style="missing paragraph style")
+        assert document.to_bytes() == saved
+    saved = document.to_bytes()
+    with zipfile.ZipFile(io.BytesIO(saved)) as archive:
+        all_paragraphs = []
+        for name in archive.namelist():
+            if re.fullmatch(r"word/(header|footer)\d+\.xml", name):
+                all_paragraphs.extend(etree.fromstring(archive.read(name)).iter(word + "p"))
+        for slot in slots:
+            for suffix in ("default", "explicit"):
+                expected = slot + " " + suffix
+                matches = [p for p in all_paragraphs if "".join(p.itertext()) == expected]
+                assert len(matches) == 1
+                style = matches[0].find(word + "pPr/" + word + "pStyle")
+                expected_id = title_id if suffix == "explicit" else None if style_mode == "absent" else header_id if "header" in slot else footer_id
+                assert (None if style is None else style.get(word + "val")) == expected_id
+        assert b"body unchanged" in archive.read("word/document.xml")
+    reopened = Document.from_bytes(saved)
+    assert reopened.to_bytes() == saved
+    for slot in slots:
+        texts = [p.text for p in getattr(reopened.section(0), slot).paragraphs]
+        assert slot + " default" in texts and slot + " explicit" in texts
+
+
+@pytest.mark.parametrize("host", ("footer", "footer-cell", "footnote", "endnote", "body-cell"))
+def test_fx201_owned_rich_picture_is_inserted_with_its_owner_relationship(host):
+    import rdocx
+    from rdocx import Document
+    from lxml import etree
+    document = Document()
+    document.add_paragraph("body retained")
+    if host == "footer":
+        paragraph = document.section(0).footer.add_paragraph("owner text")
+    elif host == "footer-cell":
+        table = document.section(0).footer.add_table(1, 1)
+        table.cell(0, 0).text = "owner text"
+        paragraph = document.section(0).footer.tables[0].cell(0, 0).paragraphs[0]
+    elif host == "body-cell":
+        table = document.add_table(1, 1)
+        table.cell(0, 0).text = "owner text"
+        paragraph = document.tables[0].cell(0, 0).paragraphs[0]
+    else:
+        reference = document.paragraphs[0].runs[0]
+        note = getattr(document, "add_" + host)(reference, "owner text")
+        paragraph = note.paragraphs[0]
+    run = paragraph.runs[0]
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="image"):
+        run.add_picture(b"not an image", "invalid.png", width=127000, height=127000)
+    assert document.to_bytes() == before
+    image = _one_pixel_png(b"\xff\x00\x00")
+    run.add_picture(image, "owner.png", width=127000, height=127000)
+    with pytest.raises(rdocx.StaleElementError):
+        _ = run.text
+    saved = document.to_bytes()
+    ns = {"a": "http://schemas.openxmlformats.org/drawingml/2006/main", "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships"}
+    relationship_ns = "{http://schemas.openxmlformats.org/package/2006/relationships}"
+    with zipfile.ZipFile(io.BytesIO(saved)) as archive:
+        owner = "word/document.xml" if host == "body-cell" else "word/footnotes.xml" if host == "footnote" else "word/endnotes.xml" if host == "endnote" else next(n for n in archive.namelist() if re.fullmatch(r"word/footer\d+\.xml", n))
+        root = etree.fromstring(archive.read(owner))
+        embeds = root.xpath(".//a:blip/@r:embed", namespaces=ns)
+        assert len(embeds) == 1
+        rel_name = posixpath.dirname(owner) + "/_rels/" + posixpath.basename(owner) + ".rels"
+        rels = etree.fromstring(archive.read(rel_name))
+        matching = [rel for rel in rels if rel.tag == relationship_ns + "Relationship" and rel.get("Id") == embeds[0]]
+        assert len(matching) == 1 and matching[0].get("Type").endswith("/image")
+        target = posixpath.normpath(posixpath.join(posixpath.dirname(owner), matching[0].get("Target")))
+        assert archive.read(target) == image
+        assert b"owner text" in archive.read(owner)
+        if host != "body-cell":
+            assert b"owner text" not in archive.read("word/document.xml")
+        assert b"body retained" in archive.read("word/document.xml")
+    assert Document.from_bytes(saved).to_bytes() == saved
+
+
+def test_fx201_rich_footer_keeps_page_and_total_fields_separate():
+    import rdocx
+    from rdocx import Document
+    from lxml import etree
+    document = Document()
+    document.add_paragraph("body retained")
+    document.section(0).footer.add_paragraph("Page ")
+    paragraph = document.section(0).footer.paragraphs[0]
+    paragraph.runs[0].font.bold = True
+    paragraph.add_run("").add_field("PAGE", "1")
+    paragraph = document.section(0).footer.paragraphs[0]
+    paragraph.add_run(" of ")
+    paragraph = document.section(0).footer.paragraphs[0]
+    paragraph.add_run("").add_field("NUMPAGES", "1")
+    paragraph = document.section(0).footer.paragraphs[0]
+    paragraph.add_run(" logo").add_picture(_one_pixel_png(b"\xff\x00\x00"), "footer-logo.png", width=127000, height=127000)
+    document.section(0).footer.add_table(1, 1).cell(0, 0).text = "footer table"
+    document.add_footnote(document.paragraphs[0].runs[0], "footnote retained")
+    document.add_endnote(document.paragraphs[0].runs[0], "endnote retained")
+    saved = document.to_bytes()
+    with zipfile.ZipFile(io.BytesIO(saved)) as archive:
+        footer = next(n for n in archive.namelist() if re.fullmatch(r"word/footer\d+\.xml", n))
+        word = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+        root = etree.fromstring(archive.read(footer))
+        instructions = [node.get(word + "instr").strip() for node in root.iter(word + "fldSimple")]
+        assert instructions == ["PAGE", "NUMPAGES"]
+        assert ["".join(node.itertext()) for node in root.iter(word + "fldSimple")] == ["1", "1"]
+        assert len(list(root.iter(word + "r"))) >= 7
+        assert root.find(".//" + word + "rPr/" + word + "b") is not None
+        assert b"PAGE" not in archive.read("word/document.xml")
+    assert Document.from_bytes(saved).to_bytes() == saved
+    svg = document.render_page_to_svg(0)
+    assert svg is not None and "Page" in svg.svg and "footer" in svg.svg and "table" in svg.svg
+    import os
+    directory = os.environ.get("RDOCX_FX201_NATIVE_OUTPUT_DIR")
+    if directory:
+        from pathlib import Path
+        target = Path(directory)
+        target.mkdir(parents=True, exist_ok=True)
+        (target / "installed-rich-footer-notes.docx").write_bytes(saved)
+        (target / "installed-rich-footer-notes.svg").write_text(svg.svg)
+
+
+def test_fx201_image_watermark_repeat_removal_and_invalid_opacity_are_owned():
+    import rdocx
+    from rdocx import Document
+    document = Document()
+    document.add_paragraph("body retained")
+    document.section(0).header.add_paragraph("unrelated header")
+    section = document.section(0)
+    image = _one_pixel_png()
+    for opacity in (0.5, 0.0, 1.0):
+        section.set_image_watermark(image, "mark.png", width=1524000, height=762000, rotation=30.0, opacity=opacity)
+        saved = document.to_bytes()
+        with zipfile.ZipFile(io.BytesIO(saved)) as archive:
+            header = next(n for n in archive.namelist() if re.fullmatch(r"word/header\d+\.xml", n))
+            xml = archive.read(header)
+            assert b"unrelated header" in xml
+            assert f'amt="{round(opacity * 100000)}"'.encode() in xml
+            assert b'rot="1800000"' in xml
+            assert len([n for n in archive.namelist() if n.startswith("word/media/")]) == 1
+        assert Document.from_bytes(saved).to_bytes() == saved
+    for opacity in (float("nan"), -0.1, 1.1):
+        with pytest.raises(rdocx.RdocxError, match="geometry or opacity"):
+            section.set_image_watermark(image, "bad.png", width=1524000, height=762000, opacity=opacity)
+        assert document.to_bytes() == saved
+    section.remove_watermark()
+    removed = document.to_bytes()
+    with zipfile.ZipFile(io.BytesIO(removed)) as archive:
+        assert b"unrelated header" in archive.read(header)
+        assert b"RDOCX DrawingML Watermark" not in archive.read(header)
+        assert not [n for n in archive.namelist() if n.startswith("word/media/")]
+    section.remove_watermark()
+    assert document.to_bytes() == removed
+
+
+def test_fx201_all_six_story_slots_keep_inherited_and_unlinked_physical_owners():
+    import rdocx
+    document = rdocx.Document()
+    document.add_paragraph("body retained")
+    document.insert_section(1)
+    document.insert_section(2)
+    slots = ("header", "first_page_header", "even_page_header", "footer", "first_page_footer", "even_page_footer")
+    for slot in slots:
+        getattr(document.section(0), slot).add_paragraph(slot + " original")
+        inherited = getattr(document.section(1), slot)
+        assert inherited.is_linked_to_previous
+        assert slot + " original" in [p.text for p in inherited.paragraphs]
+        inherited.add_paragraph(slot + " shared")
+        assert slot + " shared" in [p.text for p in getattr(document.section(0), slot).paragraphs]
+        held = getattr(document.section(0), slot).paragraphs[0]
+        local = getattr(document.section(1), slot)
+        local.is_linked_to_previous = False
+        assert not getattr(document.section(1), slot).is_linked_to_previous
+        getattr(document.section(1), slot).add_paragraph(slot + " local")
+        assert slot + " local" not in [p.text for p in getattr(document.section(0), slot).paragraphs]
+        assert slot + " local" in [p.text for p in getattr(document.section(2), slot).paragraphs]
+        with pytest.raises(rdocx.StaleElementError):
+            _ = held.text
+        local = getattr(document.section(1), slot)
+        local.is_linked_to_previous = True
+        assert getattr(document.section(1), slot).is_linked_to_previous
+        assert slot + " local" not in [p.text for p in getattr(document.section(2), slot).paragraphs]
+    saved = document.to_bytes()
+    reopened = rdocx.Document.from_bytes(saved)
+    assert reopened.to_bytes() == saved
+    for slot in slots:
+        assert slot + " shared" in [p.text for p in getattr(reopened.section(2), slot).paragraphs]
+    assert reopened.settings.odd_and_even_pages_header_footer
+
+
+@pytest.mark.parametrize("family", ("footnote", "endnote"))
+def test_fx201_checked_note_cell_boundary_preserves_other_owners_and_refuses_stale_and_header(family):
+    import rdocx
+    document = rdocx.Document()
+    document.add_paragraph("body retained")
+    table = document.add_table(1, 1)
+    table.cell(0, 0).text = "cell reference"
+    reference = document.tables[0].cell(0, 0).paragraphs[0].runs[0]
+    note = getattr(document, "add_" + family)(reference, family + " content")
+    assert note.paragraphs[0].text == family + " content"
+    before = document.to_bytes()
+    with pytest.raises(rdocx.StaleElementError):
+        getattr(document, "add_" + family)(reference, "stale refused")
+    assert document.to_bytes() == before
+    note.delete()
+    assert family.encode() + b"Reference" not in _document_xml(document)
+    header = document.section(0).header.add_paragraph("not a note host")
+    before = document.to_bytes()
+    with pytest.raises(rdocx.RdocxError, match="body or body-table"):
+        getattr(document, "add_" + family)(header, "header refused")
+    assert document.to_bytes() == before
+    foreign = rdocx.Document().add_paragraph("foreign")
+    with pytest.raises(ValueError, match="different document"):
+        getattr(document, "add_" + family)(foreign, "foreign refused")
+    assert document.to_bytes() == before
+    assert rdocx.Document.from_bytes(before).to_bytes() == before

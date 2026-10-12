@@ -474,3 +474,21 @@ dimension mismatch, or a dropped bounded shape. LibreOffice is the CI oracle
 only because PowerPoint is not scriptable on runners, so SSIM regressions are
 review-required rather than automatic failures. A pinned native PowerPoint
 representative review is the hard manual fidelity gate.
+
+
+### Checked Word section and related-story authoring
+
+Word exposes immutable section snapshots alongside live section handles. Live
+handles address the six header and footer slots, rich paragraphs, runs, tables
+and cells in the actual related owner. Notes support checked main-story run
+boundaries and independent footnote and endnote policies. Section insertion
+inherits resolved geometry without copying story relationships. Page colour,
+per-edge borders and real DrawingML text or image watermarks are checked
+authoring operations. Legacy VML compatibility remains a distinct path.
+
+The authoring contract requires staged publication and preservation of unknown
+source. Unsupported opaque routes refuse atomically. Google import is optional
+evidence, with no compatibility guarantee. Native Office typeface substitution
+is reported separately from the deterministic library font policy.
+
+DrawingML text watermark authoring supports only opacity 0.5. Other text opacity requests return a named atomic unsupported error. Legacy VML text and DrawingML image opacity retain their separate contracts.

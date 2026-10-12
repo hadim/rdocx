@@ -314,6 +314,9 @@ pub struct CT_Anchor {
     /// Raw XML bytes for the entire wp:anchor element (used for round-trip preservation).
     /// When present, to_xml uses this instead of structured serialization.
     pub raw_xml: Option<Vec<u8>>,
+    /// Inherited scope used only for semantic projection, never emitted over raw source.
+    #[doc(hidden)]
+    pub source_namespace_bindings: Vec<(String, String)>,
     /// Shape content, when the anchor holds a `wps:wsp` rather than a picture.
     pub shape: Option<CT_Shape>,
 }
@@ -349,35 +352,117 @@ pub struct CT_Shape {
 /// The caller keeps the raw bytes for write back, so whatever comes out of
 /// here must not be serialised again or the element ends up duplicated.
 pub fn parse_alternate_content(raw: &[u8], inherited_prefixes: &[String]) -> Option<CT_Drawing> {
-    let mut reader = Reader::from_reader(raw);
+    let raw = crate::text::raw_with_external_bindings(raw, &namespace_bindings(inherited_prefixes))
+        .ok()?;
+    let mut reader = NsReader::from_reader(raw.as_slice());
     reader.config_mut().trim_text(false);
-    let mut buf = Vec::new();
+    let mut buffer = Vec::new();
+    let mut depth = 0_usize;
     let mut in_choice = false;
-    let mut prefixes = inherited_prefixes.to_vec();
-
     loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(ref e)) => {
-                let name = e.name();
-                let local = name.as_ref();
-                if matches_local_name(local, b"AlternateContent") {
-                    prefixes = crate::numbering::word_prefixes_at(e, &prefixes).ok()?;
-                } else if matches_local_name(local, b"Choice") {
-                    prefixes = crate::numbering::word_prefixes_at(e, &prefixes).ok()?;
-                    in_choice = true;
-                } else if in_choice && matches_local_name(local, b"drawing") {
-                    let drawing_prefixes = crate::numbering::word_prefixes_at(e, &prefixes).ok()?;
-                    return CT_Drawing::from_xml_with_prefixes(&mut reader, &drawing_prefixes).ok();
+        let offset = reader.buffer_position() as usize;
+        let (namespace, event) = reader.read_resolved_event_into(&mut buffer).ok()?;
+        match event {
+            Event::Start(ref element) => {
+                let name = element.name();
+                let local = name.local_name();
+                if depth == 0
+                    && !(namespace_matches(&namespace, crate::namespace::MC_NS, b"mc")
+                        && local.as_ref() == b"AlternateContent")
+                {
+                    return None;
+                }
+                if depth == 1 {
+                    in_choice = namespace_matches(&namespace, crate::namespace::MC_NS, b"mc")
+                        && local.as_ref() == b"Choice";
+                }
+                if depth == 2
+                    && in_choice
+                    && namespace_matches(&namespace, crate::namespace::W_NS, b"w")
+                    && local.as_ref() == b"drawing"
+                {
+                    let mut bindings = Vec::new();
+                    for (prefix, namespace) in reader.resolver().bindings() {
+                        let prefix = match prefix {
+                            PrefixDeclaration::Default => "",
+                            PrefixDeclaration::Named(prefix) => std::str::from_utf8(prefix).ok()?,
+                        };
+                        let namespace = quick_xml::escape::unescape(
+                            std::str::from_utf8(namespace.as_ref()).ok()?,
+                        )
+                        .ok()?;
+                        bindings.push((prefix.to_owned(), namespace.into_owned()));
+                    }
+                    let name = element.name().as_ref().to_vec();
+                    reader
+                        .read_to_end_into(quick_xml::name::QName(&name), &mut Vec::new())
+                        .ok()?;
+                    let physical = &raw[offset..reader.buffer_position() as usize];
+                    let scoped =
+                        crate::text::raw_with_external_bindings(physical, &bindings).ok()?;
+                    let mut qualified = NsReader::from_reader(scoped.as_slice());
+                    let mut owner_buffer = Vec::new();
+                    let mut owner_depth = 0_usize;
+                    let mut owners = 0_usize;
+                    loop {
+                        let (owner_namespace, owner_event) =
+                            qualified.read_resolved_event_into(&mut owner_buffer).ok()?;
+                        match owner_event {
+                            Event::Start(ref owner) | Event::Empty(ref owner)
+                                if owner_depth == 1
+                                    && matches!(
+                                        owner.local_name().as_ref(),
+                                        b"anchor" | b"inline"
+                                    ) =>
+                            {
+                                if !namespace_matches(&owner_namespace, drawing_ns::WP, b"wp") {
+                                    return None;
+                                }
+                                owners += 1;
+                                if matches!(owner_event, Event::Start(_)) {
+                                    owner_depth += 1;
+                                }
+                            }
+                            Event::Start(_) => owner_depth += 1,
+                            Event::End(_) => owner_depth = owner_depth.saturating_sub(1),
+                            Event::Eof => break,
+                            _ => {}
+                        }
+                        owner_buffer.clear();
+                    }
+                    if owners != 1 {
+                        return None;
+                    }
+                    let prefixes: Vec<_> = bindings
+                        .iter()
+                        .map(|(prefix, namespace)| {
+                            crate::numbering::namespace_binding(prefix, namespace)
+                        })
+                        .collect();
+                    let mut projection = Reader::from_reader(physical);
+                    let mut start_buffer = Vec::new();
+                    let Event::Start(start) = projection.read_event_into(&mut start_buffer).ok()?
+                    else {
+                        return None;
+                    };
+                    let prefixes = crate::numbering::word_prefixes_at(&start, &prefixes).ok()?;
+                    let drawing =
+                        CT_Drawing::from_xml_with_prefixes(&mut projection, &prefixes).ok()?;
+                    return (drawing.anchor.is_some() || drawing.inline.is_some())
+                        .then_some(drawing);
+                }
+                depth += 1;
+            }
+            Event::End(_) => {
+                depth = depth.saturating_sub(1);
+                if depth == 1 {
+                    in_choice = false;
                 }
             }
-            Ok(Event::End(ref e)) if matches_local_name(e.name().as_ref(), b"Choice") => {
-                in_choice = false;
-            }
-            Ok(Event::Eof) => break,
-            Err(_) => break,
+            Event::Eof => break,
             _ => {}
         }
-        buf.clear();
+        buffer.clear();
     }
     None
 }
@@ -469,6 +554,212 @@ fn parse_shape_props(raw: &[u8]) -> (Option<String>, Option<String>) {
 }
 
 impl CT_Anchor {
+    /// Read only the selected qualified WPS shape transform, without guessing
+    /// rotations from extension or picture payloads.
+    pub fn shape_rotation_degrees(&self) -> Option<f64> {
+        let scoped = crate::text::raw_with_external_bindings(
+            self.raw_xml.as_deref()?,
+            &self.source_namespace_bindings,
+        )
+        .ok()?;
+        let mut reader = NsReader::from_reader(scoped.as_slice());
+        let mut path = Vec::new();
+        let expected = [
+            (drawing_ns::WP, "anchor"),
+            (drawing_ns::A, "graphic"),
+            (drawing_ns::A, "graphicData"),
+            (
+                "http://schemas.microsoft.com/office/word/2010/wordprocessingShape",
+                "wsp",
+            ),
+            (
+                "http://schemas.microsoft.com/office/word/2010/wordprocessingShape",
+                "spPr",
+            ),
+            (drawing_ns::A, "xfrm"),
+        ];
+        let mut rotation = None;
+        loop {
+            let (namespace, event) = reader.read_resolved_event().ok()?;
+            match event {
+                Event::Start(ref element) | Event::Empty(ref element) => {
+                    let namespace = match namespace {
+                        ResolveResult::Bound(namespace) => namespace.as_ref().to_vec(),
+                        _ => Vec::new(),
+                    };
+                    path.push((namespace, element.local_name().as_ref().to_vec()));
+                    if path.len() == expected.len()
+                        && path
+                            .iter()
+                            .zip(expected)
+                            .all(|((namespace, local), (uri, name))| {
+                                namespace == uri.as_bytes() && local == name.as_bytes()
+                            })
+                    {
+                        for attribute in element.attributes() {
+                            let attribute = attribute.ok()?;
+                            if attribute.key.as_ref() == b"rot" {
+                                if rotation.is_some() {
+                                    return None;
+                                }
+                                let amount: i32 = attribute
+                                    .decoded_and_normalized_value(
+                                        XmlVersion::Implicit1_0,
+                                        element.decoder(),
+                                    )
+                                    .ok()?
+                                    .parse()
+                                    .ok()?;
+                                rotation = Some(f64::from(amount) / 60_000.0);
+                            }
+                        }
+                    }
+                    if matches!(event, Event::Empty(_)) {
+                        path.pop();
+                    }
+                }
+                Event::End(_) => {
+                    path.pop();
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        rotation
+    }
+
+    /// Resolve effects only from this anchor's qualified physical picture owner.
+    /// Missing effects keep the ordinary image path unchanged.
+    pub fn picture_effects(&self) -> Option<(f64, f64)> {
+        let scoped = crate::text::raw_with_external_bindings(
+            self.raw_xml.as_deref()?,
+            &self.source_namespace_bindings,
+        )
+        .ok()?;
+        let mut reader = NsReader::from_reader(scoped.as_slice());
+        let mut path = Vec::new();
+        let mut opacity = None;
+        let mut rotation = None;
+        loop {
+            let (namespace, event) = reader.read_resolved_event().ok()?;
+            match event {
+                Event::Start(ref element) | Event::Empty(ref element) => {
+                    let uri = match namespace {
+                        ResolveResult::Bound(uri) => uri.as_ref().to_vec(),
+                        _ => Vec::new(),
+                    };
+                    path.push((uri, element.local_name().as_ref().to_vec()));
+                    let matches = |expected: &[(&str, &str)]| {
+                        path.len() == expected.len()
+                            && path.iter().zip(expected).all(
+                                |((uri, local), (expected_uri, expected_local))| {
+                                    uri == expected_uri.as_bytes()
+                                        && local == expected_local.as_bytes()
+                                },
+                            )
+                    };
+                    let prefix = &[
+                        (
+                            "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing",
+                            "anchor",
+                        ),
+                        (
+                            "http://schemas.openxmlformats.org/drawingml/2006/main",
+                            "graphic",
+                        ),
+                        (
+                            "http://schemas.openxmlformats.org/drawingml/2006/main",
+                            "graphicData",
+                        ),
+                        (
+                            "http://schemas.openxmlformats.org/drawingml/2006/picture",
+                            "pic",
+                        ),
+                    ];
+                    let alpha_path = [
+                        prefix[0],
+                        prefix[1],
+                        prefix[2],
+                        prefix[3],
+                        (
+                            "http://schemas.openxmlformats.org/drawingml/2006/picture",
+                            "blipFill",
+                        ),
+                        (
+                            "http://schemas.openxmlformats.org/drawingml/2006/main",
+                            "blip",
+                        ),
+                        (
+                            "http://schemas.openxmlformats.org/drawingml/2006/main",
+                            "alphaModFix",
+                        ),
+                    ];
+                    let transform_path = [
+                        prefix[0],
+                        prefix[1],
+                        prefix[2],
+                        prefix[3],
+                        (
+                            "http://schemas.openxmlformats.org/drawingml/2006/picture",
+                            "spPr",
+                        ),
+                        (
+                            "http://schemas.openxmlformats.org/drawingml/2006/main",
+                            "xfrm",
+                        ),
+                    ];
+                    let alpha = matches(&alpha_path);
+                    let transform = matches(&transform_path);
+                    if alpha || transform {
+                        for attribute in element.attributes() {
+                            let attribute = attribute.ok()?;
+                            if alpha && attribute.key.as_ref() == b"amt" {
+                                if opacity.is_some() {
+                                    return None;
+                                }
+                                let amount: u32 = attribute
+                                    .decoded_and_normalized_value(
+                                        XmlVersion::Implicit1_0,
+                                        element.decoder(),
+                                    )
+                                    .ok()?
+                                    .parse()
+                                    .ok()?;
+                                if amount > 100_000 {
+                                    return None;
+                                }
+                                opacity = Some(f64::from(amount) / 100_000.0);
+                            } else if transform && attribute.key.as_ref() == b"rot" {
+                                if rotation.is_some() {
+                                    return None;
+                                }
+                                let amount: i32 = attribute
+                                    .decoded_and_normalized_value(
+                                        XmlVersion::Implicit1_0,
+                                        element.decoder(),
+                                    )
+                                    .ok()?
+                                    .parse()
+                                    .ok()?;
+                                rotation = Some(f64::from(amount) / 60_000.0);
+                            }
+                        }
+                    }
+                    if matches!(event, Event::Empty(_)) {
+                        path.pop();
+                    }
+                }
+                Event::End(_) => {
+                    path.pop();
+                }
+                Event::Eof => break,
+                _ => {}
+            }
+        }
+        (opacity.is_some() || rotation.is_some())
+            .then_some((opacity.unwrap_or(1.0), rotation.unwrap_or(0.0)))
+    }
+
     /// Create an anchor for a full-page background image.
     pub fn background(embed_id: &str, page_width_emu: i64, page_height_emu: i64) -> Self {
         CT_Anchor {
@@ -495,6 +786,7 @@ impl CT_Anchor {
             name: Some("Background".to_string()),
             source_rect: None,
             raw_xml: None,
+            source_namespace_bindings: Vec::new(),
             shape: None,
         }
     }
@@ -763,6 +1055,7 @@ impl CT_Anchor {
             name,
             source_rect,
             raw_xml: None, // Will be set by CT_Drawing::from_xml
+            source_namespace_bindings: Vec::new(),
             shape,
         })
     }
@@ -1654,6 +1947,30 @@ impl CT_Drawing {
                                         image_relationship_ids(&scoped_raw)?;
                                     anc.chart_rel_id = chart_relationship_id(&scoped_raw)?;
                                     anc.raw_xml = Some(raw);
+                                    // Projection scope excludes only prefixes absent from the
+                                    // entire physical owner, including opaque values and text.
+                                    // Default bindings and all referenced foreign bindings stay.
+                                    let decoded_raw = anc.raw_xml.as_ref().and_then(|raw| {
+                                        std::str::from_utf8(raw).ok().and_then(|xml| {
+                                            quick_xml::escape::unescape(xml)
+                                                .ok()
+                                                .map(|xml| xml.into_owned())
+                                        })
+                                    });
+                                    anc.source_namespace_bindings = bindings
+                                        .iter()
+                                        .filter(|(prefix, _)| {
+                                            prefix.is_empty()
+                                                || decoded_raw
+                                                    .as_ref()
+                                                    .is_none_or(|decoded| decoded.contains(prefix))
+                                                || anc.raw_xml.as_ref().is_some_and(|raw| {
+                                                    raw.windows(prefix.len())
+                                                        .any(|bytes| bytes == prefix.as_bytes())
+                                                })
+                                        })
+                                        .cloned()
+                                        .collect();
                                     anchor = Some(anc);
                                     break;
                                 }
@@ -2514,5 +2831,120 @@ mod tests {
                 .chart_rel_id,
             None
         );
+    }
+    #[test]
+    fn fx201_picture_effects_use_qualified_source_chain_and_keep_physical_xml() {
+        let raw = br#"<q:anchor><g:graphic><g:graphicData><p:pic><p:blipFill><g:blip><g:alphaModFix amt="50000"/></g:blip></p:blipFill><p:spPr><g:xfrm rot="1800000"/></p:spPr></p:pic></g:graphicData></g:graphic></q:anchor>"#.to_vec();
+        let mut anchor = CT_Anchor::background("rId0", 127000, 127000);
+        anchor.raw_xml = Some(raw.clone());
+        anchor.source_namespace_bindings = vec![
+            ("q".into(), drawing_ns::WP.into()),
+            ("g".into(), drawing_ns::A.into()),
+            (
+                "p".into(),
+                "http://schemas.openxmlformats.org/drawingml/2006/picture".into(),
+            ),
+        ];
+        assert_eq!(anchor.picture_effects(), Some((0.5, 30.0)));
+        assert_eq!(anchor.raw_xml.as_ref(), Some(&raw));
+        let parse_raw = String::from_utf8(raw.clone())
+            .unwrap()
+            .replace("<q:anchor>", "<q:anchor><q:docPr id=\"5\"/>");
+        let declaration = format!(
+            "<w:drawing xmlns:w=\"{}\" xmlns:q=\"{}\" xmlns:g=\"{}\" xmlns:p=\"http://schemas.openxmlformats.org/drawingml/2006/picture\"{}>{}</w:drawing>",
+            crate::namespace::W_NS,
+            drawing_ns::WP,
+            drawing_ns::A,
+            " xmlns:unused=\"urn:unused\"",
+            parse_raw
+        );
+        let parsed = parse_drawing(&declaration);
+        let without_unused =
+            parse_drawing(&declaration.replace(" xmlns:unused=\"urn:unused\"", ""));
+        assert_eq!(parsed, without_unused);
+        let parsed_anchor = parsed.anchor.as_ref().unwrap();
+        assert_eq!(parsed_anchor.raw_xml.as_deref(), Some(parse_raw.as_bytes()));
+        assert_eq!(parsed_anchor.picture_effects(), Some((0.5, 30.0)));
+        assert!(
+            !parsed_anchor
+                .source_namespace_bindings
+                .iter()
+                .any(|(prefix, _)| prefix == "unused")
+        );
+        let foreign_binding = parse_drawing(&declaration.replace(drawing_ns::A, "urn:foreign"));
+        assert_ne!(parsed, foreign_binding);
+        assert_eq!(
+            foreign_binding.anchor.as_ref().unwrap().picture_effects(),
+            None
+        );
+        assert_eq!(
+            foreign_binding.anchor.as_ref().unwrap().raw_xml.as_deref(),
+            Some(parse_raw.as_bytes())
+        );
+        let opaque_value = declaration.replace("<q:anchor>", "<q:anchor opaque=\"unused:fact\">");
+        let opaque = parse_drawing(&opaque_value);
+        assert!(
+            opaque
+                .anchor
+                .as_ref()
+                .unwrap()
+                .source_namespace_bindings
+                .iter()
+                .any(|(prefix, uri)| prefix == "unused" && uri == "urn:unused")
+        );
+        let entity_value =
+            declaration.replace("<q:anchor>", "<q:anchor opaque=\"un&#117;sed:fact\">");
+        let entity_owner = parse_drawing(&entity_value);
+        assert!(
+            entity_owner
+                .anchor
+                .as_ref()
+                .unwrap()
+                .source_namespace_bindings
+                .iter()
+                .any(|(prefix, uri)| prefix == "unused" && uri == "urn:unused")
+        );
+        assert_ne!(
+            entity_owner,
+            parse_drawing(&entity_value.replace("urn:unused", "urn:foreign-used"))
+        );
+        let mut entity_saved = Writer::new(Vec::new());
+        entity_owner.to_xml(&mut entity_saved).unwrap();
+        assert!(
+            String::from_utf8(entity_saved.into_inner())
+                .unwrap()
+                .contains("opaque=\"un&#117;sed:fact\"")
+        );
+        let mut saved = Writer::new(Vec::new());
+        opaque.to_xml(&mut saved).unwrap();
+        assert!(
+            String::from_utf8(saved.into_inner())
+                .unwrap()
+                .contains("opaque=\"unused:fact\"")
+        );
+        let foreign = String::from_utf8(raw.clone())
+            .unwrap()
+            .replace("<g:alphaModFix", "<f:alphaModFix xmlns:f=\"urn:foreign\"")
+            .replace("<g:xfrm", "<f:xfrm xmlns:f=\"urn:foreign\"");
+        anchor.raw_xml = Some(foreign.as_bytes().to_vec());
+        assert_eq!(anchor.picture_effects(), None);
+        assert_eq!(anchor.raw_xml.as_deref(), Some(foreign.as_bytes()));
+        anchor.raw_xml = Some(
+            String::from_utf8(raw.clone())
+                .unwrap()
+                .replace("amt=\"50000\"", "amt=\"100001\"")
+                .into_bytes(),
+        );
+        assert_eq!(anchor.picture_effects(), None);
+        anchor.raw_xml = Some(
+            String::from_utf8(raw)
+                .unwrap()
+                .replace(
+                    "<g:alphaModFix amt=\"50000\"/>",
+                    "<g:alphaModFix amt=\"50000\"/><g:alphaModFix amt=\"50000\"/>",
+                )
+                .into_bytes(),
+        );
+        assert_eq!(anchor.picture_effects(), None);
     }
 }

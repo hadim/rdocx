@@ -3,7 +3,7 @@
 from .enum import MSO_THEME_COLOR
 from .enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_ROW_HEIGHT_RULE, WD_TABLE_ALIGNMENT
 from .enum.text import WD_ALIGN_PARAGRAPH, WD_UNDERLINE
-from .shared import Cm, Emu, Inches, Length, Mm, Pt, RGBColor
+from .shared import Cm, Emu, Inches, Length, Mm, Pt, RGBColor, Twips
 
 
 class RdocxError(Exception):
@@ -59,6 +59,10 @@ from ._rdocx import (
     Font,
     ColorFormat,
     HeaderFooterVariant,
+    HeaderFooter,
+    SectionHandle,
+    Settings,
+    FootnoteEndnote,
     Hyperlink,
     LayoutFragment,
     LayoutBackedFieldUpdateReport,
@@ -104,6 +108,10 @@ __all__ = [
     "Font",
     "ColorFormat",
     "HeaderFooterVariant",
+    "HeaderFooter",
+    "SectionHandle",
+    "Settings",
+    "FootnoteEndnote",
     "Hyperlink",
     "Inches",
     "LayoutError",
@@ -137,6 +145,7 @@ __all__ = [
     "Style",
     "SvgDiagnostic",
     "SvgRenderResult",
+    "Twips",
     "Table",
     "TableCollection",
     "TocRebuildReport",

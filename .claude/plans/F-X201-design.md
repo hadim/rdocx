@@ -1,6 +1,6 @@
 # F-X201, Complete Python section stories and page authoring
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X206
@@ -129,12 +129,12 @@ X203, X192 and F-283 before assigning the wave. No new source module or crate.
 
 ## Implementation checklist
 
-- [ ] Finalize exact live Section/Story handle signatures and native gaps.
-- [ ] Approve validation ownership and measured expected hash changes.
-- [ ] Claim after source conflicts clear and reproduce actual defects.
-- [ ] Implement geometry and even-story atomicity, then rich APIs.
-- [ ] Run all Issue304 acceptance, scoped riders and independent microscope.
-- [ ] Prepare a validated feature-local handoff.
+- [x] Finalize exact live Section/Story handle signatures and native gaps.
+- [x] Approve validation ownership and measured expected hash changes.
+- [x] Claim after source conflicts clear and reproduce actual defects.
+- [x] Implement geometry and even-story atomicity, then rich APIs.
+- [x] Run all Issue304 acceptance, scoped riders and independent microscope.
+- [x] Prepare a validated feature-local handoff.
 
 ## Open questions
 

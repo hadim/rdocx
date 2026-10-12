@@ -628,6 +628,11 @@ impl Document {
             rdocx_oxml::text::FieldForm::Complex,
             Vec::new(),
         )?;
+        self.insert_field(position, field)
+    }
+
+    /// Insert a field at one checked physical run boundary without replacing its owner.
+    pub fn insert_field(&mut self, position: &crate::StoryRunPosition, field: Field) -> Result<()> {
         let mut run = CT_R::new("");
         run.content = vec![RunContent::Field(field)];
         let mut candidate = self.clone_for_staging();

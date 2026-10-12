@@ -2756,6 +2756,19 @@ fn anchored_elements(
             produced.extend(render_shape_text(text, geometry, rect, media));
         }
     }
+    if anchor.rotation_degrees != 0.0 {
+        produced = vec![PositionedElement::Group(oxml_layout::GroupElement {
+            transform: oxml_layout::Transform::rotate_about(
+                anchor.rotation_degrees,
+                rect.x + rect.width / 2.0,
+                rect.y + rect.height / 2.0,
+            ),
+            clip: None,
+            opacity: 1.0,
+            effects: Vec::new(),
+            children: produced,
+        })];
+    }
     produced
         .into_iter()
         .map(|element| PositionedElement::MarkedContent {
@@ -8135,6 +8148,7 @@ mod tests {
             ..page.clone()
         };
         let anchor = |behind_doc| AnchoredDrawing {
+            rotation_degrees: 0.0,
             behind_doc,
             rel_h: ST_RelativeFromH::Column,
             off_h: 5.0,
@@ -8493,6 +8507,7 @@ mod tests {
 
     fn wrapping_drawing(rel_v: ST_RelativeFromV) -> AnchoredDrawing {
         AnchoredDrawing {
+            rotation_degrees: 0.0,
             behind_doc: false,
             rel_h: ST_RelativeFromH::Margin,
             off_h: 0.0,

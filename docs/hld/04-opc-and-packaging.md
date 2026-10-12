@@ -1797,3 +1797,26 @@ package and cache. Projection never rebinds opaque content to make insertion
 possible. Simple cache expansion closes each replayed subtree over the owner's
 namespace scope and validates the staged part before publication. Opened and
 self-closing simple owners use the same ownership and refusal checks.
+
+
+### Checked related-story publication
+
+Rich Word authoring resolves the physical paragraph or table owner before
+allocating media or relationships. A picture run and its owner relationship,
+or a note record and its main-story reference, publish in one reopened
+candidate. Related tables and nested cells retain their actual part paths.
+New sections inherit resolved page geometry without copying header or footer
+references. Creating an even-page story enables the corresponding settings
+flag in the same candidate. Failed validation or reopen changes no source,
+identifier allocation or public revision.
+
+DrawingML watermark identity belongs to the selected header representation.
+Replacement and removal require an unchanged fingerprint covering the complete
+API-owned source, including relationship operands. Replacement retires the
+qualified old owner and unreferenced image relationship before allocating the
+new image, so final canonicalization cannot invalidate that fingerprint.
+Pruning removes only API-owned media with no remaining package references.
+Unrelated producer relationships and opaque owners survive. Namespace context
+used for drawing projection remains separate from physical saved XML.
+
+DrawingML text watermark compatibility preserves one WPS choice and a real VML type136 textpath fallback in the same physical owner. Inactive fallback projection cannot paint a second watermark. Half-opacity is admitted before header, relationship or drawing-identity allocation, and other requested text opacity values refuse atomically.

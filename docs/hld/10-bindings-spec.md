@@ -3448,3 +3448,31 @@ extensions and compatibility branches survive supported edits.
 The footer CLI uses explicit date caches and safe output publication without
 overwriting its input. Inspect reports each master's theme, footer policy and
 displayed numbering separately from physical slide identity.
+
+## Live Word sections and rich related owners
+
+`Document.sections` remains a tuple of immutable snapshots. `Document.section`
+returns a checked `SectionHandle` with geometry, first-page flags, note policy
+and six `HeaderFooter` accessors. Absent story reads create no package part.
+Mutation uses the effective inherited owner or creates one explicit absent
+slot. Unlinking an absent slot creates an explicit empty owner, while linking
+removes the explicit reference. Structural publication refreshes the mutating
+owner and makes previously fetched element handles stale.
+
+`HeaderFooter.paragraphs` and `tables` return ordinary rich element handles.
+`add_paragraph` resolves explicit paragraph styles by actual ID or name. Its
+default is the actual Header or Footer paragraph style when present, otherwise
+no direct style. `add_table` and nested `Cell.add_table` use checked physical
+story boundaries. `FootnoteEndnote` exposes paragraphs, tables, rich additions
+and deletion. Note creation accepts a same-document paragraph end or accepted
+run boundary and rejects invalid note hosts before publication.
+
+Page colour and per-edge page-border setters preserve opaque source. Real text
+watermarks retain styled text in both DrawingML and VML fallback branches.
+Image watermarks retain actual image bytes with checked bounds, rotation and
+opacity. Replacement and removal affect only the unchanged API-owned header
+representation. Legacy VML setters remain separately named compatibility
+methods. Length operands reject bool, floats and overflow rather than coercing
+Python values. `Twips` converts a checked signed twip count to EMU.
+
+SectionHandle.set_text_watermark admits only opacity 0.5. Other valid-range values raise the named unsupported RdocxError before publishing any story, linkage or source change. Legacy native VML methods and image watermark opacity are unchanged.

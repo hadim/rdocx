@@ -2494,3 +2494,35 @@ in that same layout pass. Physical page indices remain independent. Split uses
 centered incoming or outgoing clips. Cover moves the incoming page and uncover
 moves the outgoing page, with checked effect-specific directions. Invalid
 parameters remain diagnostic instead of silently selecting another effect.
+
+## Authored Word page appearance and note references
+
+Qualified Word2010 solid text fill projects an RGB colour and alpha while
+retaining its original extension source. Gradient representations remain opaque. Style merging transports this
+semantic fill with direct-property precedence, without copying arbitrary
+opaque extensions. Anchored DrawingML text rotates around its resolved local
+centre. Authored text watermarks use the standard `textPlain` text warp in
+DrawingML body properties while retaining real styled text and the VML
+fallback. A declared Word2018 capability choice retains solid text fill, with a
+native Word-compatible type136 textpath VML fallback in the same physical owner.
+Only the selected branch projects paint. The complete source owner is fingerprinted
+before publication. Text watermark authoring admits only opacity 0.5, with a named
+atomic unsupported error for other valid-range values before any owner allocation.
+Legacy VML authoring and image opacity retain their separate contracts. Full-range
+DrawingML text opacity is deferred to F-X219 in S92.
+Generic text boxes retain their existing representation. Picture
+alpha and rotation are projected only from the admitted picture chain, then use the existing image group opacity and affine paint
+path. Ordinary pictures with no effects retain their existing representation.
+
+Explicit superscript or subscript note references use the font size and
+baseline offset already resolved from effective run properties. A reference
+without those vertical styles receives default note superscripting once.
+Explicit half-point position shifts remain additive. Both note streams use
+the same rule for cold and cached layout.
+
+A selected page-border edge retains complete child source. Authoring an
+explicit literal colour removes only its qualified theme colour selectors.
+Foreign attributes and opaque children remain exact. Duplicate recognized
+edges refuse rather than silently selecting or adding another edge. Native
+print-background preferences and host font substitution do not establish
+repository paint parity.

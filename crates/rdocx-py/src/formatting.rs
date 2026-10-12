@@ -286,6 +286,7 @@ pub struct PyFont {
     document: Py<PyDocument>,
     path: ContentPath,
     run_path: rdocx::AcceptedRunPath,
+    related: Option<rdocx::ContentLocation>,
 }
 
 impl PyFont {
@@ -293,11 +294,13 @@ impl PyFont {
         document: Py<PyDocument>,
         path: ContentPath,
         run_path: rdocx::AcceptedRunPath,
+        related: Option<rdocx::ContentLocation>,
     ) -> Self {
         Self {
             document,
             path,
             run_path,
+            related,
         }
     }
 
@@ -319,7 +322,13 @@ impl PyFont {
                 _ => None,
             })
             .ok_or_else(|| PyIndexError::new_err("run index is missing"))?;
-        Ok((paragraph_location(&self.path)?, run))
+        Ok((
+            match &self.related {
+                Some(location) => ParagraphLocation::Related(location.clone()),
+                None => paragraph_location(&self.path)?,
+            },
+            run,
+        ))
     }
 
     fn snapshot(&self, py: Python<'_>) -> PyResult<FontSnapshot> {
@@ -341,23 +350,12 @@ pub(crate) fn run_snapshot(
     run_index: usize,
 ) -> PyResult<FontSnapshot> {
     let document = document.borrow(py);
-    let snapshot = match location {
-        ParagraphLocation::Body(index) => document
-            .inner
-            .paragraph(index)
-            .and_then(|paragraph| paragraph.run(run_index).map(FontSnapshot::from_run)),
-        ParagraphLocation::Cell {
-            table,
-            row,
-            cell,
-            paragraph,
-        } => document.inner.table(table).and_then(|table| {
-            let cell = table.cell(row, cell)?;
-            let paragraph = cell.paragraph(paragraph)?;
+    location
+        .read(&document.inner, |paragraph| {
             paragraph.run(run_index).map(FontSnapshot::from_run)
-        }),
-    };
-    snapshot.ok_or_else(|| PyIndexError::new_err("run index out of range"))
+        })
+        .map_err(|error| crate::rdocx_to_pyerr(py, error))?
+        .ok_or_else(|| PyIndexError::new_err("run index out of range"))
 }
 
 /// Apply one run property update at a run location the caller has validated.
@@ -369,39 +367,13 @@ pub(crate) fn apply_run_update(
     update: FontUpdate<'_>,
 ) -> PyResult<()> {
     let mut document = document.borrow_mut(py);
-    let mut update_result = Ok(());
-    match location {
-        ParagraphLocation::Body(index) => {
-            let mut paragraph = document
-                .inner
-                .paragraph_mut(index)
-                .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
-            paragraph
-                .edit_run(run_path, |run| update_result = update.apply(run))
-                .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
-        }
-        ParagraphLocation::Cell {
-            table,
-            row,
-            cell,
-            paragraph,
-        } => {
-            let mut table = document
-                .inner
-                .table_mut(table)
-                .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
-            let mut cell = table
-                .cell(row, cell)
-                .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?;
-            let mut paragraph = cell
-                .paragraph_mut(paragraph)
-                .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
-            paragraph
-                .edit_run(run_path, |run| update_result = update.apply(run))
-                .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
-        }
-    }
-    update_result.map_err(|error| crate::rdocx_to_pyerr(py, error))
+    location
+        .edit(&mut document.inner, |paragraph| {
+            let mut result = Ok(());
+            paragraph.edit_run(run_path, |run| result = update.apply(run))?;
+            result
+        })
+        .map_err(|error| crate::rdocx_to_pyerr(py, error))
 }
 
 #[pymethods]
@@ -570,6 +542,7 @@ impl PyFont {
                 document: self.document.clone_ref(py),
                 path: self.path.clone(),
                 run_path: self.run_path.clone(),
+                related: self.related.clone(),
             },
         )
     }
@@ -683,6 +656,7 @@ pub struct PyColorFormat {
     document: Py<PyDocument>,
     path: ContentPath,
     run_path: rdocx::AcceptedRunPath,
+    related: Option<rdocx::ContentLocation>,
 }
 
 impl PyColorFormat {
@@ -691,6 +665,7 @@ impl PyColorFormat {
             self.document.clone_ref(py),
             self.path.clone(),
             self.run_path.clone(),
+            self.related.clone(),
         )
     }
 }
@@ -938,11 +913,16 @@ impl PyTabStop {
 pub struct PyTabStops {
     document: Py<PyDocument>,
     path: ContentPath,
+    related: Option<rdocx::ContentLocation>,
 }
 
 impl PyTabStops {
     fn format(&self, py: Python<'_>) -> PyParagraphFormat {
-        PyParagraphFormat::new(self.document.clone_ref(py), self.path.clone())
+        PyParagraphFormat::new(
+            self.document.clone_ref(py),
+            self.path.clone(),
+            self.related.clone(),
+        )
     }
 
     fn snapshots(&self, py: Python<'_>) -> PyResult<Vec<PyTabStop>> {
@@ -966,32 +946,9 @@ impl PyTabStops {
                 })
                 .collect()
         };
-        match location {
-            ParagraphLocation::Body(index) => read(
-                document
-                    .inner
-                    .paragraph(index)
-                    .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?,
-            ),
-            ParagraphLocation::Cell {
-                table,
-                row,
-                cell,
-                paragraph,
-            } => {
-                let table = document
-                    .inner
-                    .table(table)
-                    .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
-                let cell = table
-                    .cell(row, cell)
-                    .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?;
-                read(
-                    cell.paragraph(paragraph)
-                        .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?,
-                )
-            }
-        }
+        location
+            .read(&document.inner, read)
+            .map_err(|error| crate::rdocx_to_pyerr(py, error))?
     }
 }
 
@@ -1052,11 +1009,20 @@ impl PyTabStops {
 pub struct PyParagraphFormat {
     document: Py<PyDocument>,
     path: ContentPath,
+    related: Option<rdocx::ContentLocation>,
 }
 
 impl PyParagraphFormat {
-    pub(crate) fn new(document: Py<PyDocument>, path: ContentPath) -> Self {
-        Self { document, path }
+    pub(crate) fn new(
+        document: Py<PyDocument>,
+        path: ContentPath,
+        related: Option<rdocx::ContentLocation>,
+    ) -> Self {
+        Self {
+            document,
+            path,
+            related,
+        }
     }
 
     fn validate(&self, py: Python<'_>) -> PyResult<ParagraphLocation> {
@@ -1068,7 +1034,10 @@ impl PyParagraphFormat {
                 "Re-fetch it with paragraph.paragraph_format.",
             )
             .map_err(|error| stale_to_pyerr(py, error))?;
-        paragraph_location(&self.path)
+        match &self.related {
+            Some(location) => Ok(ParagraphLocation::Related(location.clone())),
+            None => paragraph_location(&self.path),
+        }
     }
 
     fn snapshot(&self, py: Python<'_>) -> PyResult<ParagraphSnapshot> {
@@ -1089,23 +1058,9 @@ pub(crate) fn paragraph_snapshot(
     location: ParagraphLocation,
 ) -> PyResult<ParagraphSnapshot> {
     let document = document.borrow(py);
-    let snapshot = match location {
-        ParagraphLocation::Body(index) => document
-            .inner
-            .paragraph(index)
-            .map(ParagraphSnapshot::from_paragraph),
-        ParagraphLocation::Cell {
-            table,
-            row,
-            cell,
-            paragraph,
-        } => document.inner.table(table).and_then(|table| {
-            let cell = table.cell(row, cell)?;
-            cell.paragraph(paragraph)
-                .map(ParagraphSnapshot::from_paragraph)
-        }),
-    };
-    snapshot.ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))
+    location
+        .read(&document.inner, ParagraphSnapshot::from_paragraph)
+        .map_err(|error| crate::rdocx_to_pyerr(py, error))
 }
 
 /// Apply one paragraph property update at a location the caller has validated.
@@ -1116,38 +1071,9 @@ pub(crate) fn apply_paragraph_update(
     update: ParagraphUpdate,
 ) -> PyResult<()> {
     let mut document = document.borrow_mut(py);
-    match location {
-        ParagraphLocation::Body(index) => {
-            let mut paragraph = document
-                .inner
-                .paragraph_mut(index)
-                .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
-            update
-                .apply(&mut paragraph)
-                .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
-        }
-        ParagraphLocation::Cell {
-            table,
-            row,
-            cell,
-            paragraph,
-        } => {
-            let mut table = document
-                .inner
-                .table_mut(table)
-                .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
-            let mut cell = table
-                .cell(row, cell)
-                .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?;
-            let mut paragraph = cell
-                .paragraph_mut(paragraph)
-                .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
-            update
-                .apply(&mut paragraph)
-                .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
-        }
-    }
-    Ok(())
+    location
+        .edit(&mut document.inner, |paragraph| update.apply(paragraph))
+        .map_err(|error| crate::rdocx_to_pyerr(py, error))
 }
 
 #[pymethods]
@@ -1247,6 +1173,7 @@ impl PyParagraphFormat {
         Ok(PyTabStops {
             document: self.document.clone_ref(py),
             path: self.path.clone(),
+            related: self.related.clone(),
         })
     }
 

@@ -1437,14 +1437,24 @@ impl CT_SectPr {
                     let edge = |child: &BytesStart| {
                         CT_BorderEdge::from_xml_attrs_with_prefixes(child, &prefixes)
                     };
-                    if is_word_element(name.as_ref(), b"top", &prefixes) {
-                        borders.top = Some(edge(child)?);
+                    let slot = if is_word_element(name.as_ref(), b"top", &prefixes) {
+                        Some(&mut borders.top)
                     } else if is_word_element(name.as_ref(), b"left", &prefixes) {
-                        borders.left = Some(edge(child)?);
+                        Some(&mut borders.left)
                     } else if is_word_element(name.as_ref(), b"bottom", &prefixes) {
-                        borders.bottom = Some(edge(child)?);
+                        Some(&mut borders.bottom)
                     } else if is_word_element(name.as_ref(), b"right", &prefixes) {
-                        borders.right = Some(edge(child)?);
+                        Some(&mut borders.right)
+                    } else {
+                        None
+                    };
+                    if let Some(slot) = slot {
+                        if slot.is_some() {
+                            return Err(OxmlError::InvalidValue(
+                                "duplicate recognized page border edge".into(),
+                            ));
+                        }
+                        *slot = Some(edge(child)?);
                     } else {
                         borders
                             .extra_xml
@@ -1455,12 +1465,60 @@ impl CT_SectPr {
                     }
                 }
                 Ok(Event::Start(ref child)) => {
-                    borders
-                        .extra_xml
-                        .push(crate::text::raw_with_external_bindings(
-                            &capture_element(reader, child)?,
-                            owner_bindings,
-                        )?);
+                    let prefixes = word_prefixes_at(child, word_prefixes)?;
+                    let name = child.name();
+                    let slot = if is_word_element(name.as_ref(), b"top", &prefixes) {
+                        Some(&mut borders.top)
+                    } else if is_word_element(name.as_ref(), b"left", &prefixes) {
+                        Some(&mut borders.left)
+                    } else if is_word_element(name.as_ref(), b"bottom", &prefixes) {
+                        Some(&mut borders.bottom)
+                    } else if is_word_element(name.as_ref(), b"right", &prefixes) {
+                        Some(&mut borders.right)
+                    } else {
+                        None
+                    };
+                    let mut edge = if slot.is_some() {
+                        Some(CT_BorderEdge::from_xml_attrs_with_prefixes(
+                            child, &prefixes,
+                        )?)
+                    } else {
+                        None
+                    };
+                    let mut bindings = owner_bindings.to_vec();
+                    for (prefix, uri) in namespace_bindings(&prefixes) {
+                        bindings.retain(|(name, _)| name != &prefix);
+                        bindings.push((prefix, uri));
+                    }
+                    for prefix in prefixes.iter().filter(|prefix| !prefix.starts_with('\0')) {
+                        if !bindings.iter().any(|(name, _)| name == prefix) {
+                            bindings.push((
+                                prefix.clone(),
+                                "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                                    .into(),
+                            ));
+                        }
+                    }
+                    let raw = crate::text::raw_with_external_bindings(
+                        &capture_element(reader, child)?,
+                        if slot.is_some() {
+                            &bindings
+                        } else {
+                            owner_bindings
+                        },
+                    )?;
+                    if let Some(slot) = slot {
+                        if slot.is_some() {
+                            return Err(OxmlError::InvalidValue(
+                                "duplicate recognized page border edge".into(),
+                            ));
+                        }
+                        let mut edge = edge.take().unwrap();
+                        edge.source_xml = Some(raw);
+                        *slot = Some(edge);
+                    } else {
+                        borders.extra_xml.push(raw);
+                    }
                 }
                 Ok(Event::End(ref end))
                     if matches_local_name(end.name().as_ref(), b"pgBorders") =>
@@ -2884,6 +2942,28 @@ pub struct CT_Document {
 
 #[allow(non_snake_case)]
 impl CT_Document {
+    /// Set the owned background color while retaining every producer byte outside its value.
+    pub fn set_background_color(&mut self, color: &str) -> Result<()> {
+        if color.len() != 6 || !color.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(OxmlError::InvalidValue(
+                "page color must be six hexadecimal digits".to_owned(),
+            ));
+        }
+        let mut prefixes = vec!["w".to_owned()];
+        for (name, namespace) in &self.extra_namespaces {
+            if namespace == W_NS {
+                prefixes.push(name.strip_prefix("xmlns:").unwrap_or("").to_owned());
+            }
+        }
+        self.background_xml = Some(match &self.background_xml {
+            Some(raw) => {
+                crate::settings::rewrite_word_root_attribute(raw, &prefixes, b"color", color)?
+            }
+            None => format!("<w:background xmlns:w=\"{W_NS}\" w:color=\"{color}\"/>").into_bytes(),
+        });
+        Ok(())
+    }
+
     pub fn new() -> Self {
         CT_Document {
             body: CT_Body::new(),

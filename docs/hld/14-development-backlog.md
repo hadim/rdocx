@@ -6910,6 +6910,18 @@ Resolve [Issue304](https://github.com/tensorbee/rdocx/issues/304) in S91,
 part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
 coverage checklist. Repair inherited section geometry, orientation dimension swaps and incomplete pgSz validation. Enable even-page stories coherently. Add live header/footer paragraphs, tables, pictures and fields, first-page/link controls, footnote/endnote creation, deletion and numbering, run page/column breaks, page colour, watermarks and borders. Accept documented Length values without silent unit confusion.
 
+Live section handles coexist with immutable snapshots. The six story slots
+resolve ordinary rich elements in their physical owners, with checked styles,
+fields, pictures, nested tables and note references. New section geometry does
+not clone related-story references. DrawingML text and image watermarks retain
+real text or image source and checked rotation and alpha. Source-qualified
+replacement refuses changed opaque owners. Styled note references shrink and
+raise once, preserving explicit position shifts. Native typeface substitution
+and print-background preferences are reported separately from deterministic
+repository paint.
+
+The new DrawingML text watermark route admits only opacity 0.5 and refuses other requested values atomically. F-X219 retains the full-range DrawingML text opacity work in S92. Legacy VML text opacity and DrawingML image opacity remain unchanged.
+
 **Depends on**: F-X206.
 **Test gate**: regression. Reproduce each missing operation or reported defect
 through the installed public API on the claimed Base before implementation.
