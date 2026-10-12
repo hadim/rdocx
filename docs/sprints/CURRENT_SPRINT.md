@@ -6,8 +6,8 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 now contains twenty-six active stories, eleven completed, two running,
-thirteen approved pending implementation. Rolling contribution intake is reopened at the user's latest instruction.
+S91 now contains twenty-six active stories, thirteen completed, two running,
+eleven approved pending implementation. Rolling contribution intake is reopened at the user's latest instruction.
 
 ## Spec references
 
@@ -17,7 +17,7 @@ thirteen approved pending implementation. Rolling contribution intake is reopene
 - `docs/hld/08-rendering-spec.md`, PDF backend, rasteriser, shape text, tables and Word bookmark field pagination, for fonts and shared metrics.
 - `docs/hld/10-bindings-spec.md`, Python API shape and invalidation, for table, colour and render parity.
 - `docs/hld/12-testing-strategy.md`, binding tests and checked Word scoped literal replacement, for installed public regressions and atomic failures.
-- `docs/hld/14-development-backlog.md`, F-X193 through F-X213, for exact acceptance and test gates.
+- `docs/hld/14-development-backlog.md`, F-X193 through F-X218, for exact acceptance and test gates.
 
 ## The wave
 
@@ -30,14 +30,14 @@ thirteen approved pending implementation. Rolling contribution intake is reopene
 | F-X197 | Unify Python colour inputs and font colour formats | L | done | - |
 | F-X198 | Preserve alternate text-box copies during scoped replacement | M | done | - |
 | F-X199 | Model namespace-qualified empty table cell margins | S | done | - |
-| F-X200 | Complete Python Word formatting and list parity | L | in-progress | codex |
+| F-X200 | Complete Python Word formatting and list parity | L | done | - |
 | F-X201 | Complete Python section stories and page authoring | L | in-progress | codex |
 | F-X202 | Complete Word tables pictures and internal links | L | pending | - |
 | F-X203 | Complete Python Word document operations and validation | L | pending | - |
 | F-X204 | Complete shared CLI one-shot editing commands | L | pending | - |
 | F-X205 | Complete Python PowerPoint text fill and export parity | L | pending | - |
 | F-X206 | Complete PowerPoint shape authoring and live handles | L | done | - |
-| F-X207 | Persist PowerPoint autofit and implement fit_text | L | in-progress | codex |
+| F-X207 | Persist PowerPoint autofit and implement fit_text | L | done | - |
 | F-X208 | Author PowerPoint footer fields themes and transitions | L | in-progress | codex |
 | F-X209 | Edit PowerPoint masters layouts and themes | L | pending | - |
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | done | - |
@@ -59,7 +59,7 @@ style selection and F9/save, but ordinary reopen and acceptance remain pending.
 F-283 retains its approved navigation contract and dependency on F-X200.
 Neither story is completed or part of S91 close acceptance. S92 is planned,
 not opened. The existing S92 template and form programme remains planned.
-All twenty-two current PRs and twenty-eight included issues remain in S91.
+All twenty-eight current PRs and thirty-eight included issues remain in S91.
 
 ## Sequencing note
 
@@ -73,9 +73,9 @@ The wave plan is recorded in S91-run.json after design and conflict analysis.
 ## Rolling contribution intake reopened
 
 The user reopened issue and PR intake after parking bibliography and navigation
-at S92. The current read-only GitHub inventory contains thirty open issues and
-twenty-two open PRs. Excluding Issues264 and281 leaves twenty-eight included
-issues. New Issues339 and340 have matching PR342 andPR341 respectively.
+at S92. The current read-only GitHub inventory contains forty open issues and
+twenty-eight open PRs. Excluding Issues264 and281 leaves thirty-eight included
+issues. At reopening, Issues339 and340 had matching PR342 andPR341 respectively.
 Assess each full immutable contribution once and bind it to an acceptance owner.
 Issue339 andPR342 extend the existing all-story text contract in F-X203.
 Issue340 andPR341 have an approved bounded TOC repair, F-X213, separate
@@ -85,14 +85,16 @@ The prior twenty-six issues and nineteen PRs remain included. New arrivals and
 advanced heads are reconciled at implementation, integration and final close
 checkpoints. Final closure requires complete issue acceptance and explicit
 integrated or superseded PR resolution. Keep Issues264 and281 open.
-Read-only intake is retained at /private/tmp/S91-intake-reopened-20261011.
+The original reopening intake is retained at /private/tmp/S91-intake-reopened-20261011.
+The latest unchanged inventory is /private/tmp/S91-intake-refresh-20261012T025600Z/receipt.json.
 Earlier frozen-intake paragraphs are historical and superseded by this decision.
 The 2026-10-11 18:43 UTC refresh found no new records or changed PR heads.
 All current records retain the acceptance owners in SPRINT_PLAN.md.
 
 PR302 entered the rolling intake at immutable head
 `30e4a93df7549990c5838da9c95866d19f1247b0`, adding independent F-X199.
-It has no linked issue and is now ready for review, contributed by `pedroassumpcao`.
+It has no linked issue and was contributed by `pedroassumpcao`.
+Its F-X199 repair is completed and integrated.
 Before implementation its head advanced to
 `7ac2851cb61b5e7b26427004517cc0cd4db0dbd9`. The native patch is unchanged.
 Archive records will use actual integrated local measurements.
@@ -1049,46 +1051,35 @@ handoff. Ten stories are completed, three running and thirteen approved.
 Final integrated full verification and sprint review remain due.
 
 
-## Parallel closure update, 2026-10-12 02:55 BST
+## Parallel closure update, 2026-10-12
 
-Eleven of26 active stories are completed, two are running and13 approved
-stories await their exclusive source and dependency boundaries. Authenticated
-intake at01:55:15 UTC remains38 included issues and28 PRs, with no arrivals,
-changed records or advanced heads. Issues264 and281 remain excluded.
-Receipt: /private/tmp/S91-intake-refresh-20261012T015500Z/receipt.json.
+Thirteen of26 active stories are completed. F-X201 Word section and story
+authoring and F-X208 PowerPoint footer, theme and transition authoring are
+running in separate worktrees. Eleven approved stories await their completed
+dependencies and exclusive source boundaries. Ten carryovers remain at S92.
 
-F-X206 is integrated at72e5eac9 and completed at the scoped dependency
-checkpoint. Its actual current checks pass11 crates, Clippy, focused native
-controls, both WASM graphs, fresh installed PPT8, strict typing, stubtest,
-eight verified archives and two exact policy successors. Both serialization
-controls reproduce the reviewed package identities. All49 hashes match.
-Independent reviews53 to59 cover the final source and metadata projection.
-Integrated crate, HLD, README and plan bytes exactly match the qualified worker.
-Five worker commits retain separate behavior attribution. Original failed
-receipts remain failed, with successful affected successors recorded separately.
-The structured handoff is consumed. Full sprint verification remains due.
+Authenticated intake at02:53:59 UTC contains38 included issues and28 PRs,
+with no arrivals, changed records or advanced heads. Discussion Issues264
+and281 remain excluded and open. Receipt:
+/private/tmp/S91-intake-refresh-20261012T025600Z/receipt.json.
 
-F-X200 has clean owned-provider, compiler-closure and archive reviews65 to67.
-Its actual current source passes focused native controls, a fresh Word wheel,
-five installed regressions, strict typing, stubtest and three verified archives.
-All eight affected metadata and policy rows pass. Independent collection of
-all49 actual sample hashes reproduces exactly the two reviewed namespace
-changes and matches the approved candidate. Its labelled implementation and
-handoff are being prepared. ROOT adopts the exclusive baseline after source
-integration and confirms the integrated hash gate before completion.
+F-X200 integrates atdb72c4b2 and F-X207 atc47fe338. Their validated handoffs
+are consumed. Independent source, namespace, archive and composition reviews
+are clean. The scoped integrated checkpoint passes seven actual commands,
+including all-target/all-feature Word/PPT native and binding compilation,
+the exact namespace and transformed-owner regressions and all49 hashes.
+The separately labelled F-X200 two-entry Word XML namespace baseline is
+adopted atf92610f8. No other hash delta is introduced. Current source and
+process cleanup are authenticated in the composed checkpoint receipt.
 
-F-X207 has clean owned-provider, constructor, fixture and metadata reviews11
-to14. Actual current source passes namespace preservation and refusal,
-combined transformed-anchor controls, Clippy, both WASM graphs, a fresh PPT
-wheel, fifteen installed regressions, strict typing and stubtest. Four current
-verified archives and all nine affected metadata, policy and hash rows pass.
-All49 hashes match the unchanged baseline. Its labelled implementation and
-handoff are being prepared. All20 current Word package and distribution
-metadata members remain preserved through the PPT installation.
+F-X206, F-X200 and F-X207 clean integrated worktrees are removed without
+force. Their branches remain through sprint review and close. Required
+scratch, sample, review and wheel evidence is preserved with original paths.
+The three unused build caches removed total93987950592 allocated bytes,
+about87GiB. Active worker and canonical verification caches remain required.
 
-The clean completed F-X206 worktree was removed without force. Its branch
-remains. All1715 required scratch evidence files,285763684 logical bytes,
-are retained externally with their original path preserved by a symlink.
-The unused build cache removal frees42123436032 allocated bytes, about39GiB.
-Active Word and PPT worker caches remain. Final full verification, sprint
-review and close remain due.
+F-X201 geometry/even-footer controls and focused independent review pass.
+F-X208 native footer and displayed-number controls pass. Their remaining
+full issue-linked implementation and acceptance are ongoing, with no feature
+completion claim. Final integrated full verification, sprint review,
+contributor reconciliation and close preflight remain due.

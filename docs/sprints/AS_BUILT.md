@@ -19083,3 +19083,43 @@ push, main merge, tag or publication is claimed.
 **Hash harness.** Unchanged. All49 actual owned-source entries match the accepted font baseline, which is identical on the integrated tree. The separately attributed two Word namespace changes remain F-X200 owned and pending. Full integrated sprint verification and review remain due.
 
 **Notes for future sessions.** Keep work/f-x206-codex and its five labelled commits through sprint verification and close. Original union, source capsules, reviewed archives, failed receipts and backup refs remain retained. Clean integrated worktrees may be removed without force. No GitHub closure, push, main merge, tag or publication is claimed.
+
+### F-X200, Complete Python Word formatting and list parity
+
+**Sprint.** S91
+**Completed.** 2026-10-12, scoped dependency checkpoint
+**Size.** L, estimated4 to5 days, actual not recorded
+
+**What was built.** Python Word formatting, tabs, tables, lists and rich paragraph import retain source-owned properties and live handle rules. Native shared-definition counters, selected table behavior, EPUB counter rendering and ODT loss reporting have separately attributed behavior. Imported paragraph XML retains inherited namespace scope.
+
+**Non-obvious choices.** Three labelled production commits separate foundation APIs, counter and format behavior, and namespace transport. Namespace transport changes exactly two Word XML hash entries. No completed font, TOC, shape or autofit provider is copied or overwritten.
+
+**Deviations from the design plan.** No product deviation. Independently reviewed compiler closure and exact archive measurement metadata corrections retain original failed receipts. Current qualification is explicitly composite with source-equivalent earlier scoped evidence, rather than a claim of repeated whole-suite execution.
+
+**Spec sections touched.** HLD02 Python capability scope, HLD07 defaults and list resolution, HLD08 numbering, HLD12 authenticated controls, HLD10 bindings and invalidation, and HLD14 delivered acceptance. Integration review69 confirms both Word formatting and PowerPoint autofit semantics in shared HLD sections.
+
+**Tests.** Retained scoped formatting188 and genuine Base controls are source-qualified. Current six focused native controls, fresh Word wheel and five installed regressions, strict typing and stubtest pass. Three affected verified archive dry runs pass. Eight exact metadata and policy rows pass, preserving archive member identities and existing compression tolerance. Independent reviews65 to69 report zero defects and zero smells. ROOT integrationdb72c4b2 preserves all qualified owned source bytes and consumes the structured handoff. Actual integrated receiptd5cb5a419bd7c97e4430df168c3027cd95b79966cf3d9e428de5759abbbdd3cd records seven qualified commands at2d2f4b8f133e3a4c1a097154d39119552d8050ec, including the combined all-feature/all-target four-crate check, exact Word namespace and PPT transformed-owner regressions, hash49, prose, adapter drift and diff. Source guards remain exact and all owned process groups are gone and reaped.
+
+**Hash harness.** Exactly two reviewed Word XML namespace-transport hashes change, feature_showcase9d3418ef8ef11cbcd64acb40b6f2d54648f985050138181bfb32531c8eecf48f and report8df95515887d2b7c7f5604db9c99f5cf2dcbce6a2ea2e202799adf6885c68ec4. The other47 entries remain exact. ROOT adopts candidate342d09cd in separately labelled commitf92610f8 after source integration. The actual integrated hash check matches all49 approved entries at baseline342d09cd7dc7ff66535c5cf257132c53992aa801aad0759204da42ad5935cc49. Full sprint verification and review remain due.
+
+**Notes for future sessions.** Claim7c9b46a3, source05350868 and handoff-only tipcace82d1 retain actual ancestor validation. Keep work/f-x200-codex through final verification and close. The clean integrated worktree is removed without force, preserving all required scratch, samples, historical reviews and authenticated external wheel. Cleanup removes31932473344 allocated cache bytes. Detailed evidence remains under /private/tmp/S91-F-X200-owned-history-adoption-prepared and /private/tmp/S91-F-X200-integration-checkpoint. No GitHub closure, push, main merge, tag or publication is claimed.
+
+### F-X207, Persist PowerPoint autofit and implement fit_text
+
+**Sprint.** S91
+**Completed.** 2026-10-12, scoped dependency checkpoint
+**Size.** L, estimated4 to5 days, actual not recorded
+
+**What was built.** Explicit normal autofit stores owned font and line-space scale values, preserves unknown XML and supports fit_text with caller fonts. Current namespace admission retains inherited and opaque content and refuses foreign or rebound owners atomically. Transformed nested owners retain their painted anchors.
+
+**Non-obvious choices.** One labelled production commit isolates explicit autofit behavior from completed provider206. Native physical containment and allocated9823EMU extent remain separately classified. Positive and negative paint predicates retain their unchanged thresholds.
+
+**Deviations from the design plan.** No product deviation. Reviewed constructor and external namespace-fixture compatibility corrections retain original failures and unchanged assertions. Current qualification is explicitly composite with authenticated earlier paint and native evidence. Package metadata successors confer no new publication credit.
+
+**Spec sections touched.** HLD06 PresentationML ownership, HLD08 explicit refresh and unchanged stored-value rendering, HLD10 native and Python surfaces, and HLD14 delivered acceptance. Section-only composition preserves completed shared providers and F-X200 formatting.
+
+**Tests.** Genuine four public Base failures remain retained. Source-qualified native22 Q/S, fourteen authoring controls and42 positive and126 negative paint controls support the contract. Actual current changed-crate checks, namespace and transformed-anchor controls, Clippy and both WASM graphs pass. Fresh PPT wheel passes fifteen installed regressions, qualified opaque and inherited successes, foreign owner refusals, strict typing and stubtest. All twenty current Word installed members remain exact. Four verified archives and nine metadata, policy and hash rows pass. Independent reviews11 to14 and composite qualification15 are preserved. ROOT integrationc47fe338 consumes the handoff and preserves every qualified source byte. Actual integrated receiptd5cb5a419bd7c97e4430df168c3027cd95b79966cf3d9e428de5759abbbdd3cd records seven qualified commands at2d2f4b8f133e3a4c1a097154d39119552d8050ec, including the combined all-feature/all-target four-crate check, exact Word namespace and PPT transformed-owner regressions, hash49, prose, adapter drift and diff. Source guards remain exact and all owned process groups are gone and reaped.
+
+**Hash harness.** Worker49 entries match its unchanged accepted baseline2bd99ae6. The integrated prefix uses the separately reviewed F-X200 two-entry namespace candidate. The actual integrated hash check matches all49 approved entries at baseline342d09cd7dc7ff66535c5cf257132c53992aa801aad0759204da42ad5935cc49. No PowerPoint hash delta is adopted. Full sprint verification and review remain due.
+
+**Notes for future sessions.** Claim8f57b6ac, sourceb67d211f and handoff-only tip3ad8b611 retain actual ancestor validation. Keep work/f-x207-codex through final verification and close. Clean integrated worktree removal without force retains531 required scratch and sample files, original absolute paths and authenticated external wheel. Cleanup removes19932041216 allocated cache bytes. Current scoped receipts remain under /private/tmp/S91-F-X207-completed206-localized-rebind-1 and /private/tmp/S91-F-X207-integration-checkpoint. No GitHub closure, push, main merge, tag or publication is claimed.

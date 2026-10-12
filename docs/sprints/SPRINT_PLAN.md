@@ -2136,7 +2136,7 @@ review, package checks and exact-SHA publication approval remain required.
 
 **Goal**: finish completed stories and all included issue/PR repairs. The user
 parks the separate S90 bibliography and navigation carryovers at S92. Rolling
-intake includes twenty-eight issues and twenty-two PRs, excluding only the
+intake includes thirty-eight issues and twenty-eight PRs, excluding only the
 requirements discussions264 and281.
 
 | F-ID | Title | Size |
@@ -2162,25 +2162,34 @@ requirements discussions264 and281.
 | F-X211 | Complete Python script compatibility and safe XML access | L |
 | F-X212 | Align native accessibility with visible paragraph content | M |
 | F-X213 | Preserve TOC entry boundary paragraphs during rebuild | M |
+| F-X214 | Bound recursive PowerPoint parsing and traversal | L |
+| F-X215 | Create charts in Python and replace existing chart data | L |
+| F-X216 | Import complete slides and merge decks with source formatting | L |
+| F-X217 | Import HTML and Markdown through public Word surfaces | L |
+| F-X218 | Export presentations as semantic HTML and Markdown | L |
 
-**Current delivery checkpoint**: eight of twenty-one active stories are
-completed and integrated, F-X193, F-X194, F-X195, F-X196, F-X197, F-X198,
-F-X199 and F-X212. F-X200, F-X206, F-X207, F-X210 and F-X213 are in progress.
-Eight stories have approved designs and await implementation. F-X192 and
-F-283 move to S92, with their contracts, dirty worker work, reviews and
-required evidence retained. Their completion is no longer required to close
-S91. F-X195 completed its scoped provider gates and dependency checkpoint.
-F-X197 completes the scoped dependency prefix with reviewed live colours,
-installed Python coverage, native checks, unchanged rendering hashes,
-verified packaging and policy acceptance.
-No design question remains outstanding. Final integrated verification,
-sprint review and verified sprint close remain outstanding.
+**Current delivery checkpoint**: thirteen of twenty-six active stories are
+completed and integrated, F-X193 through F-X200, F-X206, F-X207, F-X210,
+F-X212 and F-X213. F-X201 and F-X208 are running in separate worktrees.
+Eleven approved stories await their completed dependencies and exclusive
+source boundaries. F-X192 and F-283 remain at S92 with their contracts,
+dirty worker work, reviews and required evidence retained. Their completion
+is not required to close S91. No design question remains outstanding.
+
+F-X200 and F-X207 complete their scoped integration checkpoint with seven
+actual composed checks, including both exact native regressions and all49
+approved hashes. F-X200 owns the two reviewed Word XML namespace changes.
+All other completed providers retain their qualified acceptance. The durable
+resolution evidence is in AS_BUILT.md and the current status is in
+CURRENT_SPRINT.md and BACKLOG.md. Final integrated full verification,
+sprint review and verified sprint close remain outstanding. No GitHub issue
+or PR closure is claimed by scoped completion.
 
 **Rolling resolution scope reopened by the user**: all current open issues and
 PRs join S91, except [Issue264](https://github.com/tensorbee/rdocx/issues/264)
 and [Issue281](https://github.com/tensorbee/rdocx/issues/281). Keep those two
-requirements discussions open. The fresh inventory contains thirty open issues
-and twenty-two PRs, twenty-eight included issues after exclusions. The previous
+requirements discussions open. The latest inventory contains forty open issues
+and twenty-eight PRs, thirty-eight included issues after exclusions. The previous
 nineteen PRs and twenty-six included issues retain their existing owners below.
 Issue339 andPR342 extend F-X203 all-story text acceptance. Issue340 andPR341
 are assigned to approved F-X213, a bounded TOC rebuild repair separate from
@@ -2193,7 +2202,9 @@ The 2026-10-11 09:50:39 UTC refresh found no new records. PR342 advanced
 to `9fd0b8da374b8c641e7ab89c0bd3d76bd2f4519a`. Its updated contribution
 remains assigned to F-X203. Its immutable update has been assessed against
 the existing approved contract, with remaining acceptance controls retained.
-All twenty-eight included issues and twenty-two PRs match this resolution map.
+All thirty-eight included issues and twenty-eight PRs have the acceptance
+owners in this resolution map. The 2026-10-12 02:53:59 UTC refresh found no
+new or changed records.
 The 2026-10-11 18:43 UTC refresh found no additions or changed PR heads.
 
 | Included issues | Included PRs | S91 acceptance owners | Resolution work |
@@ -2202,23 +2213,28 @@ The 2026-10-11 18:43 UTC refresh found no additions or changed PR heads.
 | [295](https://github.com/tensorbee/rdocx/issues/295), [300](https://github.com/tensorbee/rdocx/issues/300) | [317](https://github.com/tensorbee/rdocx/pull/317) | F-X194 | Cell text frames and signed removable table indentation, completed with scoped acceptance. |
 | [296](https://github.com/tensorbee/rdocx/issues/296), [297](https://github.com/tensorbee/rdocx/issues/297) | [315](https://github.com/tensorbee/rdocx/pull/315) | F-X195 | Caller fonts and variable styles across layout and output, completed with scoped acceptance. |
 | [298](https://github.com/tensorbee/rdocx/issues/298) | [317](https://github.com/tensorbee/rdocx/pull/317) | F-X196, F-X212 | CLI validation and native accessibility complete with scoped acceptance. |
-| [299](https://github.com/tensorbee/rdocx/issues/299) | [317](https://github.com/tensorbee/rdocx/pull/317) | F-X197 | Shared Python colour inputs and font colour formats. |
+| [299](https://github.com/tensorbee/rdocx/issues/299) | [317](https://github.com/tensorbee/rdocx/pull/317) | F-X197 | Shared Python colour inputs and font colour formats, completed with scoped acceptance. |
 | [301](https://github.com/tensorbee/rdocx/issues/301) | [317](https://github.com/tensorbee/rdocx/pull/317) | F-X198, F-X202 | Atomic refusal complete. Synchronized alternate-copy editing remains. |
 | No linked issue | [302](https://github.com/tensorbee/rdocx/pull/302) | F-X199 | Qualified empty cell margins, completed. |
-| [303](https://github.com/tensorbee/rdocx/issues/303), [321](https://github.com/tensorbee/rdocx/issues/321) | [320](https://github.com/tensorbee/rdocx/pull/320), [336](https://github.com/tensorbee/rdocx/pull/336) | F-X200, consumes F-X197 | Word formatting, lists and native shared numbering counters. |
+| [303](https://github.com/tensorbee/rdocx/issues/303), [321](https://github.com/tensorbee/rdocx/issues/321) | [320](https://github.com/tensorbee/rdocx/pull/320), [336](https://github.com/tensorbee/rdocx/pull/336) | F-X200, consumes F-X197 | Word formatting, lists and native shared numbering counters, completed with scoped acceptance. |
 | [304](https://github.com/tensorbee/rdocx/issues/304) | [328](https://github.com/tensorbee/rdocx/pull/328), [343](https://github.com/tensorbee/rdocx/pull/343) | F-X201 | Section stories and page authoring, including checked related-story picture media ownership. |
 | [305](https://github.com/tensorbee/rdocx/issues/305) | [322](https://github.com/tensorbee/rdocx/pull/322), [343](https://github.com/tensorbee/rdocx/pull/343) | F-X202, consumes F-X194 and F-X198 | Word tables, pictures, internal links and alternate-copy synchronization, with atomic related-story Run picture insertion. |
-| [306](https://github.com/tensorbee/rdocx/issues/306), [332](https://github.com/tensorbee/rdocx/issues/332), [334](https://github.com/tensorbee/rdocx/issues/334), [339](https://github.com/tensorbee/rdocx/issues/339) | [325](https://github.com/tensorbee/rdocx/pull/325), [342](https://github.com/tensorbee/rdocx/pull/342) | F-X203 | Document operations, validation, Markdown emphasis and list/table boundaries, fresh Word-compatible settings, qualified all-story tabs/breaks and atomic visible control replacement. |
+| [306](https://github.com/tensorbee/rdocx/issues/306), [332](https://github.com/tensorbee/rdocx/issues/332), [334](https://github.com/tensorbee/rdocx/issues/334), [339](https://github.com/tensorbee/rdocx/issues/339) | [325](https://github.com/tensorbee/rdocx/pull/325), [342](https://github.com/tensorbee/rdocx/pull/342), [354](https://github.com/tensorbee/rdocx/pull/354) | F-X203 | Document operations, validation, Markdown emphasis and list/table boundaries, fresh Word-compatible settings, qualified all-story tabs/breaks and atomic visible control replacement. |
 | [307](https://github.com/tensorbee/rdocx/issues/307) | [330](https://github.com/tensorbee/rdocx/pull/330) | F-X204 | Shared CLI editing commands after their API providers. |
 | [308](https://github.com/tensorbee/rdocx/issues/308) | [318](https://github.com/tensorbee/rdocx/pull/318) | F-X205, consumes F-X194 and F-X197 | PowerPoint text, fill, properties, media and export parity. |
-| [309](https://github.com/tensorbee/rdocx/issues/309), [323](https://github.com/tensorbee/rdocx/issues/323) | [326](https://github.com/tensorbee/rdocx/pull/326), [335](https://github.com/tensorbee/rdocx/pull/335), [317](https://github.com/tensorbee/rdocx/pull/317) | F-X206 | Shape authoring, live handles, group transforms and diagnosed member-local render recovery. |
-| [310](https://github.com/tensorbee/rdocx/issues/310) | [329](https://github.com/tensorbee/rdocx/pull/329) | F-X207 | Autofit and fit_text with shared font measurement. |
+| [309](https://github.com/tensorbee/rdocx/issues/309), [323](https://github.com/tensorbee/rdocx/issues/323) | [326](https://github.com/tensorbee/rdocx/pull/326), [335](https://github.com/tensorbee/rdocx/pull/335), [317](https://github.com/tensorbee/rdocx/pull/317) | F-X206 | Shape authoring, live handles, group transforms and diagnosed member-local render recovery, completed with scoped acceptance. |
+| [310](https://github.com/tensorbee/rdocx/issues/310) | [329](https://github.com/tensorbee/rdocx/pull/329) | F-X207 | Autofit and fit_text with shared font measurement, completed with scoped acceptance. |
 | [311](https://github.com/tensorbee/rdocx/issues/311) | [324](https://github.com/tensorbee/rdocx/pull/324) | F-X208 | Footer fields, themes and transitions. |
 | [312](https://github.com/tensorbee/rdocx/issues/312) | [327](https://github.com/tensorbee/rdocx/pull/327) | F-X209 | Masters, layouts and themes after F-X208. |
-| [313](https://github.com/tensorbee/rdocx/issues/313) | [319](https://github.com/tensorbee/rdocx/pull/319) | F-X210, consumes F-X195 | Approved metric-compatible fonts and bullet fallbacks, including the approved 3968-byte checkbox subset. |
+| [313](https://github.com/tensorbee/rdocx/issues/313) | [319](https://github.com/tensorbee/rdocx/pull/319) | F-X210, consumes F-X195 | Metric-compatible fonts and bullet fallbacks, including the approved 3968-byte checkbox subset, completed with scoped acceptance. |
 | [314](https://github.com/tensorbee/rdocx/issues/314) | Contributions above | All applicable S91 owners | Umbrella checklist, each provider credited once. |
 | [316](https://github.com/tensorbee/rdocx/issues/316), [331](https://github.com/tensorbee/rdocx/issues/331), [337](https://github.com/tensorbee/rdocx/issues/337) | [333](https://github.com/tensorbee/rdocx/pull/333), [336](https://github.com/tensorbee/rdocx/pull/336), [338](https://github.com/tensorbee/rdocx/pull/338) | F-X211, consumes completed providers | Frozen script corpus, safe XML, residual handles and bounded native control/text-box parsing. |
-| [340](https://github.com/tensorbee/rdocx/issues/340) | [341](https://github.com/tensorbee/rdocx/pull/341) | F-X213 | Entry-owned and single-paragraph TOC rebuild, retained opaque properties and namespace closure, no extra blank entries. |
+| [340](https://github.com/tensorbee/rdocx/issues/340) | [341](https://github.com/tensorbee/rdocx/pull/341) | F-X213 | Entry-owned and single-paragraph TOC rebuild, retained opaque properties and namespace closure, completed with scoped acceptance. |
+| [344](https://github.com/tensorbee/rdocx/issues/344) | [355](https://github.com/tensorbee/rdocx/pull/355) | F-X214 | Bounded PowerPoint parsing and traversal, approved pending implementation. |
+| [345](https://github.com/tensorbee/rdocx/issues/345), [346](https://github.com/tensorbee/rdocx/issues/346) | [356](https://github.com/tensorbee/rdocx/pull/356) | F-X215 | Python chart creation and preservation-aware data replacement, approved pending implementation. |
+| [347](https://github.com/tensorbee/rdocx/issues/347), [348](https://github.com/tensorbee/rdocx/issues/348), [349](https://github.com/tensorbee/rdocx/issues/349) | [357](https://github.com/tensorbee/rdocx/pull/357) | F-X216 | Complete slide graph import, source formatting and deck merge, approved pending implementation. |
+| [350](https://github.com/tensorbee/rdocx/issues/350), [351](https://github.com/tensorbee/rdocx/issues/351) | [359](https://github.com/tensorbee/rdocx/pull/359) | F-X217 | Public Word HTML and CommonMark import, approved pending completed F-X200 and F-X203. |
+| [352](https://github.com/tensorbee/rdocx/issues/352), [353](https://github.com/tensorbee/rdocx/issues/353) | [358](https://github.com/tensorbee/rdocx/pull/358) | F-X218 | Semantic presentation HTML and Markdown export, approved pending completed F-X205 and F-X206. |
 
 PR343 entered at `c6a78f683f327be8d7674af509874f74945080f3`, based directly
 on main `733ce6f7b2b816c5760692abf5c99d68b29ae897`. Its full immutable
