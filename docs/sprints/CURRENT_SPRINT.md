@@ -6,7 +6,7 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 now contains twenty-nine active stories, twenty completed, five running,
+S91 now contains twenty-nine active stories, twenty-one completed, four running,
 four approved pending implementation. The latest bounded intake includes40 issues and30 PRs, plus final minor-release preparation.
 
 ## Spec references
@@ -34,7 +34,7 @@ four approved pending implementation. The latest bounded intake includes40 issue
 | F-X201 | Complete Python section stories and page authoring | L | done | - |
 | F-X202 | Complete Word tables pictures and internal links | L | done | - |
 | F-X203 | Complete Python Word document operations and validation | L | done | - |
-| F-X204 | Complete shared CLI one-shot editing commands | L | in-progress | codex |
+| F-X204 | Complete shared CLI one-shot editing commands | L | done | - |
 | F-X205 | Complete Python PowerPoint text fill and export parity | L | done | - |
 | F-X206 | Complete PowerPoint shape authoring and live handles | L | done | - |
 | F-X207 | Persist PowerPoint autofit and implement fit_text | L | done | - |
@@ -1148,3 +1148,8 @@ Twenty of28 active stories are complete. F-X204, F-X215, F-X217 and the low-leve
 The user folds PR363 at0b9a3cccc1b31bac7ec4108c923faa176b072c47 and linked Issue362 into S91. F-X222 owns linear range inventory, evaluator reuse, actual field/TOC scaling and valid empty comments. Full immutable patch and all comments/reviews are assessed at /private/tmp/S91-intake-admission-362-363. No existing PR head advanced. Current included scope is40 issues and30 PRs, excluding open discussion264/281. There are29 stories,20 completed,4 running and5 approved pending. F222 waits for F204's Word source handover. F221 follows all28 repairs. Deferred S92 scope is unchanged.
 
 F-X222 is claimed in its isolated worker after F204 returned the narrow native inventory and evaluator regions. Five repair stories are running and four approved stories wait. F204 retains report, regex and public consumer regions. The integrated composition will be reconciled and independently reviewed.
+
+
+## F-X204 scoped completion, 2026-10-12
+
+Twenty-one of29 stories are completed. The shared one-shot CLI repair integrates in deff731718d60e2fc172dacbffcd8ffc657752d3 with complete field reports, strict civil timestamps, ordered counted replacement maps and atomic publication. The reviewed worker passes native, installed, typing, unattended LibreOffice, verified archive and policy controls. All eight actual focused integration checks pass, including49 unchanged deterministic hashes. This is a dependency-prefix checkpoint. Final full verification and sprint review remain due. Scope remains40 included issues and30 PRs, excluding open discussion264/281. Bibliography and other deferred work remain in S92.

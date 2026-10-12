@@ -19267,3 +19267,23 @@ push, main merge, tag or publication is claimed.
 **Spec sections touched.** Exactly HLD02,06,08,10,12 and14, preserving completed Word and PowerPoint contracts.
 
 **Notes for future sessions.** Keep work/f-x214-codex through final verification and close. Preserve required evidence before clean worktree retirement. Bibliography remains F-X192 in S92. No GitHub closure, push, main merge, tag, publication or whole-fixture pixel parity is claimed.
+
+
+### F-X204, Complete shared CLI one-shot editing commands
+
+**Completed.** 2026-10-12, S91 scoped dependency-prefix checkpoint
+**Size.** L, actual not recorded
+
+**What was built.** Issue307 and adapted PR330 complete shared one-shot editing commands. Ordered counted replacement maps, full ordinary and layout field reports, strict Gregorian civil timestamps and source basename/full-path field context use checked native candidates and atomic publication. Python report allocation completes before publication, preserving held owners and complete bytes after allocation refusal.
+
+**Non-obvious choices.** Existing source-owned operations supply CLI and Python behavior. Genuine inherited image fixtures now have valid PNG bytes and CRCs without weakening the production decoder. HLD03 ownership remains unchanged. Archive measurements come from actual verified local packages, with five exact same-length README rows and17 other measurement tuples preserved.
+
+**Tests.** Genuine Base failures and original failed attempts remain retained. Qualified native and public composites cover2396 Word regression passes, ordinary and layout report controls, counted-map gates, fresh installed bindings, allocation-failure rollback, strict typing, both WASM graphs and pinned oracle successors. Four LibreOffice26.2.5.2 controls run unattended with isolated profiles. Five patched cargo publication dry runs verify their archives and abort upload. All five archives stay below10MiB. Exact final policy successors pass without relabelling earlier failures.
+
+**Integrated evidence.** Implementationf1649abd and prepared tipb29396b0 integrate into deff731718d60e2fc172dacbffcd8ffc657752d3. The final full product review3 and correction review2 report zero defects and zero smells. The actual eight-check dependency checkpoint passes combined native/CLI all-target/all-feature compilation, both counted-map gates, complete Word field reports,49 deterministic hashes, prose, adapters and formatting. Receipt and guarded sources remain in /private/tmp/rdocx-s91/.claude/scratch/F-X204-integration.
+
+**Hash harness.** All49 approved deterministic outputs match the unchanged baseline. Final full sprint verification and sprint review remain due.
+
+**Spec sections touched.** HLD02,04,08,10 and14. Conditional HLD03 remains unchanged because operation ownership and dependency direction did not change.
+
+**Notes for future sessions.** Keep work/f-x204-codex through final verification and close. Preserve required evidence before clean worktree retirement. The canonical target currently points to the worker cache and must be transferred before retirement. Bibliography remains S92. No GitHub closure, push, main merge, tag or publication is claimed.

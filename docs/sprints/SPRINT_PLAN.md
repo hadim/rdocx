@@ -2170,9 +2170,8 @@ requirements discussions264 and281.
 | F-X220 | Embed fonts through both native and public package families | L |
 | F-X221 | Prepare Word 0.17.0 and PowerPoint 0.15.0 minor releases | L |
 
-**Current delivery checkpoint**: twenty of twenty-eight active stories are
-completed and integrated, F-X193 through F-X203, F-X205 through
-F-X210, F-X212, F-X213 and F-X214. Remaining issue and PR repairs follow
+**Current delivery checkpoint**: twenty-one of twenty-nine active stories are
+completed and integrated, F-X193 through F-X210, F-X212, F-X213 and F-X214. Remaining issue and PR repairs follow
 completed dependencies and exclusive source boundaries. CURRENT_SPRINT.md
 records active owners and execution states. F-X192 and F-283 remain at S92 with their contracts,
 dirty worker work, reviews and required evidence retained. Standalone authoring
