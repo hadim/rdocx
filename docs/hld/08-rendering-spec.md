@@ -1278,6 +1278,16 @@ read-only and never refreshes an owner implicitly.
 
 ## Performance
 
+PresentationML parsing and supported authoring use
+`rpptx_oxml::MAX_PRESENTATION_NESTING`, currently32. Group lineage, flattening,
+timeline group geometry and renderer group lowering use explicit stacks in
+source order. Layout admission validates slide, layout and master trees, and
+render admission validates caller-created resolved group graphs before copying
+them. Named errors past the bound preserve the existing transform order,
+clip correspondence and staged authoring atomicity. Unchecked constructors
+do not guarantee arbitrary malformed graphs are safe.
+
+
 `Document` keeps normal-font and deterministic `WordLayoutResult` values in
 separate `Mutex<Option<Arc<_>>>` caches. `layout`, option-taking accepted
 layout, `render_page_to_png`, `render_all_pages`, `to_pdf`, and `layout_page`

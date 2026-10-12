@@ -347,17 +347,26 @@ fn collect_non_visual_ids(children: &[ShapeTreeChild], occupied: &mut HashSet<u3
 
 /// One preserved `mc:AlternateContent` subtree with its render fallback.
 #[allow(non_camel_case_types)]
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct CT_AlternateContent {
-    raw_xml: Vec<u8>,
+    raw_source: std::sync::Arc<[u8]>,
+    raw_range: Range<usize>,
     chart_choice: Option<Box<CT_GraphicFrame>>,
     selected_fallback: Option<Vec<ShapeTreeChild>>,
+}
+
+impl PartialEq for CT_AlternateContent {
+    fn eq(&self, other: &Self) -> bool {
+        self.raw_xml() == other.raw_xml()
+            && self.chart_choice == other.chart_choice
+            && self.selected_fallback == other.selected_fallback
+    }
 }
 
 impl CT_AlternateContent {
     /// Returns the original subtree used as the sole serialisation source.
     pub fn raw_xml(&self) -> &[u8] {
-        &self.raw_xml
+        &self.raw_source[self.raw_range.clone()]
     }
 
     /// Returns ordered typed members from the immediate `mc:Fallback` branch.
@@ -382,104 +391,15 @@ impl CT_AlternateContent {
     }
 
     fn from_fragment(xml: &[u8], inherited: &[(String, String)]) -> Result<Self> {
-        let mut reader = Reader::from_reader(xml);
-        let mut buffer = Vec::new();
-        loop {
-            match reader.read_event_into(&mut buffer)? {
-                Event::Start(start) => {
-                    let namespaces =
-                        NamespaceBindings::from_entries(inherited).with_start(&start)?;
-                    if local_name(start.name().as_ref()) != b"AlternateContent"
-                        || namespaces.element_uri(start.name().as_ref()) != Some(MC_NS)
-                    {
-                        return Err(unexpected(&start));
-                    }
-                    return Self::from_reader(&mut reader, &namespaces, xml);
-                }
-                Event::Empty(start) => {
-                    let namespaces =
-                        NamespaceBindings::from_entries(inherited).with_start(&start)?;
-                    if local_name(start.name().as_ref()) != b"AlternateContent"
-                        || namespaces.element_uri(start.name().as_ref()) != Some(MC_NS)
-                    {
-                        return Err(unexpected(&start));
-                    }
-                    return Ok(Self {
-                        raw_xml: xml.to_vec(),
-                        chart_choice: None,
-                        selected_fallback: None,
-                    });
-                }
-                Event::Eof => {
-                    return Err(OxmlError::MissingElement("mc:AlternateContent".to_owned()));
-                }
-                _ => {}
-            }
-            buffer.clear();
-        }
-    }
-
-    fn from_reader(
-        reader: &mut Reader<&[u8]>,
-        namespaces: &NamespaceBindings,
-        raw_xml: &[u8],
-    ) -> Result<Self> {
-        let mut chart_choice = None;
-        let mut selected_fallback = None;
-        let mut buffer = Vec::new();
-        loop {
-            match reader.read_event_into(&mut buffer)? {
-                Event::Start(child) => {
-                    let child_namespaces = namespaces.with_start(&child)?;
-                    let is_fallback = local_name(child.name().as_ref()) == b"Fallback"
-                        && child_namespaces.element_uri(child.name().as_ref()) == Some(MC_NS);
-                    let is_choice = local_name(child.name().as_ref()) == b"Choice"
-                        && child_namespaces.element_uri(child.name().as_ref()) == Some(MC_NS);
-                    let raw = capture_element(reader, &child)?;
-                    if is_choice && chart_choice.is_none() {
-                        chart_choice = parse_chart_choice(&raw, &child_namespaces.entries())?;
-                    } else if is_fallback {
-                        if selected_fallback.is_some() {
-                            return Err(duplicate_fallback());
-                        }
-                        selected_fallback = Some(parse_compatibility_members(
-                            &raw,
-                            &child_namespaces.entries(),
-                            b"Fallback",
-                        )?);
-                    }
-                }
-                Event::Empty(child) => {
-                    let child_namespaces = namespaces.with_start(&child)?;
-                    if local_name(child.name().as_ref()) == b"Fallback"
-                        && child_namespaces.element_uri(child.name().as_ref()) == Some(MC_NS)
-                    {
-                        if selected_fallback.is_some() {
-                            return Err(duplicate_fallback());
-                        }
-                        selected_fallback = Some(Vec::new());
-                    }
-                }
-                Event::End(end) if local_name(end.name().as_ref()) == b"AlternateContent" => {
-                    return Ok(Self {
-                        raw_xml: raw_xml.to_vec(),
-                        chart_choice,
-                        selected_fallback,
-                    });
-                }
-                Event::Eof => {
-                    return Err(OxmlError::MissingElement(
-                        "closing mc:AlternateContent".to_owned(),
-                    ));
-                }
-                _ => {}
-            }
-            buffer.clear();
-        }
+        let (owner, _, _) = parse_shape_frames(xml, inherited, ShapeParseRoot::Alternate)?;
+        let ParsedShapeOwner::Alternate(alternate) = owner else {
+            unreachable!("the selected root is alternate content")
+        };
+        Ok(alternate)
     }
 
     fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
-        writer.get_mut().write_all(&self.raw_xml)?;
+        writer.get_mut().write_all(self.raw_xml())?;
         Ok(())
     }
 }
@@ -812,6 +732,34 @@ fn capture_style_child(
     Ok(())
 }
 
+/// Validates recognized group and compatibility owners, returning their deepest level.
+/// The shape-tree bookkeeping root is not a counted owner. Selected fallback
+/// owners share their alternate-content parent's counter.
+pub fn validate_shape_nesting(children: &[ShapeTreeChild]) -> Result<usize> {
+    let mut pending = children
+        .iter()
+        .rev()
+        .map(|child| (child, 0usize))
+        .collect::<Vec<_>>();
+    let mut deepest = 0;
+    while let Some((child, parent_depth)) = pending.pop() {
+        let descendants = match child {
+            ShapeTreeChild::GroupShape(group) => Some(group.children.as_slice()),
+            ShapeTreeChild::AlternateContent(alternate) => {
+                Some(alternate.selected_fallback().unwrap_or(&[]))
+            }
+            _ => None,
+        };
+        if let Some(descendants) = descendants {
+            let depth = parent_depth + 1;
+            crate::check_presentation_nesting("group and alternate content", depth)?;
+            deepest = deepest.max(depth);
+            pending.extend(descendants.iter().rev().map(|child| (child, depth)));
+        }
+    }
+    Ok(deepest)
+}
+
 /// The recursive group-shape form used inside a shape tree.
 #[allow(non_camel_case_types)]
 #[derive(Clone, Debug, PartialEq)]
@@ -821,6 +769,7 @@ pub struct CT_GroupShape {
     group_properties: GroupProperties,
     raw_attributes: RawAttributes,
     raw_children: OrderedRawChildren,
+    header_comments: [Vec<Vec<u8>>; 2],
 }
 
 /// The ordered `p:spTree` root shared by slides, layouts, and masters.
@@ -832,6 +781,7 @@ pub struct CT_ShapeTree {
     group_properties: GroupProperties,
     raw_attributes: RawAttributes,
     raw_children: OrderedRawChildren,
+    header_comments: [Vec<Vec<u8>>; 2],
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -879,6 +829,7 @@ struct ParsedGroup {
     children: Vec<ShapeTreeChild>,
     raw_attributes: RawAttributes,
     raw_children: OrderedRawChildren,
+    header_comments: [Vec<Vec<u8>>; 2],
 }
 
 impl CT_Shape {
@@ -1800,6 +1751,7 @@ impl CT_ShapeTree {
             children: Vec::new(),
             raw_attributes: Vec::new(),
             raw_children: OrderedRawChildren::default(),
+            header_comments: Default::default(),
         }
     }
 
@@ -1900,6 +1852,7 @@ impl CT_ShapeTree {
             group_properties: parsed.group_properties,
             raw_attributes: parsed.raw_attributes,
             raw_children: parsed.raw_children,
+            header_comments: parsed.header_comments,
         })
     }
 
@@ -1916,6 +1869,7 @@ impl CT_ShapeTree {
     }
 
     pub(crate) fn write_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        validate_shape_nesting(&self.children)?;
         write_group(
             writer,
             GroupKind::ShapeTree,
@@ -1924,6 +1878,7 @@ impl CT_ShapeTree {
             &self.children,
             &self.raw_attributes,
             &self.raw_children,
+            &self.header_comments,
             true,
         )
     }
@@ -2015,6 +1970,7 @@ impl CT_GroupShape {
             },
             raw_attributes: Vec::new(),
             raw_children: OrderedRawChildren::default(),
+            header_comments: Default::default(),
         };
         group
             .set_name(name)
@@ -2063,6 +2019,7 @@ impl CT_GroupShape {
             group_properties: parsed.group_properties,
             raw_attributes: parsed.raw_attributes,
             raw_children: parsed.raw_children,
+            header_comments: parsed.header_comments,
         }
     }
 
@@ -2172,6 +2129,8 @@ impl CT_GroupShape {
 
     /// Serialises a self-contained group-shape fragment with fixed prefixes.
     pub fn to_xml(&self) -> Result<Vec<u8>> {
+        let depth = 1 + validate_shape_nesting(&self.children)?;
+        crate::check_presentation_nesting("group and alternate content", depth)?;
         let mut writer = Writer::new(Vec::new());
         self.write_xml_internal(&mut writer, true)?;
         Ok(writer.into_inner())
@@ -2190,110 +2149,321 @@ impl CT_GroupShape {
             &self.children,
             &self.raw_attributes,
             &self.raw_children,
+            &self.header_comments,
             declare_namespaces,
         )
     }
 }
 
-fn parse_group(xml: &[u8], inherited: &[(String, String)], kind: GroupKind) -> Result<ParsedGroup> {
+struct GroupParseFrame {
+    non_visual: Option<NonVisualGroupProperties>,
+    properties: Option<GroupProperties>,
+    children: Vec<ShapeTreeChild>,
+    raw_attributes: RawAttributes,
+    raw_children: OrderedRawChildren,
+    header_comments: [Vec<Vec<u8>>; 2],
+    state: usize,
+}
+
+enum ShapeParseOwner {
+    Group(Box<GroupParseFrame>),
+    Alternate {
+        start: usize,
+        chart_choice: Option<Box<CT_GraphicFrame>>,
+        fallback: Option<Vec<ShapeTreeChild>>,
+    },
+    Fallback(Vec<ShapeTreeChild>),
+}
+
+struct ShapeParseFrame {
+    namespaces: NamespaceBindings,
+    depth: usize,
+    owner: ShapeParseOwner,
+}
+
+enum ParsedShapeOwner {
+    Group(Box<ParsedGroup>),
+    Alternate(CT_AlternateContent),
+    Fallback(Vec<ShapeTreeChild>),
+}
+
+#[derive(Clone, Copy)]
+enum ShapeParseRoot {
+    Group(GroupKind),
+    Alternate,
+}
+
+impl ShapeParseFrame {
+    fn group(start: &BytesStart<'_>, namespaces: NamespaceBindings, depth: usize) -> Result<Self> {
+        crate::check_presentation_nesting("group and alternate content", depth)?;
+        namespaces.reject_writer_conflicts(&["p", "a", "mc"])?;
+        let raw_attributes =
+            self_contained_attributes(start, FIXED_SHAPE_TREE_PREFIXES, &namespaces.entries())?;
+        Ok(Self {
+            namespaces,
+            depth,
+            owner: ShapeParseOwner::Group(Box::new(GroupParseFrame {
+                non_visual: None,
+                properties: None,
+                children: Vec::new(),
+                raw_attributes,
+                raw_children: OrderedRawChildren::default(),
+                header_comments: Default::default(),
+                state: 0,
+            })),
+        })
+    }
+
+    fn finish(self, source: &std::sync::Arc<[u8]>, end: usize) -> Result<ParsedShapeOwner> {
+        match self.owner {
+            ShapeParseOwner::Group(group) => Ok(ParsedShapeOwner::Group(Box::new(ParsedGroup {
+                non_visual_group_properties: required(group.non_visual, "p:nvGrpSpPr")?,
+                group_properties: required(group.properties, "p:grpSpPr")?,
+                children: group.children,
+                raw_attributes: group.raw_attributes,
+                raw_children: group.raw_children,
+                header_comments: group.header_comments,
+            }))),
+            ShapeParseOwner::Alternate {
+                start,
+                chart_choice,
+                fallback,
+            } => Ok(ParsedShapeOwner::Alternate(CT_AlternateContent {
+                raw_source: std::sync::Arc::clone(source),
+                raw_range: start..end,
+                chart_choice,
+                selected_fallback: fallback,
+            })),
+            ShapeParseOwner::Fallback(children) => Ok(ParsedShapeOwner::Fallback(children)),
+        }
+    }
+
+    fn attach(&mut self, owner: ParsedShapeOwner) -> Result<()> {
+        let child = match owner {
+            ParsedShapeOwner::Group(group) => {
+                ShapeTreeChild::GroupShape(Box::new(CT_GroupShape::from_parsed(*group)))
+            }
+            ParsedShapeOwner::Alternate(alternate) => {
+                ShapeTreeChild::AlternateContent(Box::new(alternate))
+            }
+            ParsedShapeOwner::Fallback(children) => {
+                let ShapeParseOwner::Alternate { fallback, .. } = &mut self.owner else {
+                    return Err(OxmlError::InvalidValue(
+                        "mc:Fallback requires an immediate mc:AlternateContent owner".to_owned(),
+                    ));
+                };
+                if fallback.is_some() {
+                    return Err(duplicate_fallback());
+                }
+                *fallback = Some(children);
+                return Ok(());
+            }
+        };
+        match &mut self.owner {
+            ShapeParseOwner::Group(group) => group.children.push(child),
+            ShapeParseOwner::Fallback(children) => children.push(child),
+            ShapeParseOwner::Alternate { .. } => {
+                return Err(OxmlError::InvalidValue(
+                    "mc:AlternateContent requires an immediate branch owner".to_owned(),
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Recursive owners use one cursor. Only leaf or opaque boundaries are captured.
+fn parse_shape_frames(
+    xml: &[u8],
+    inherited: &[(String, String)],
+    root: ShapeParseRoot,
+) -> Result<(ParsedShapeOwner, usize, usize)> {
     let mut reader = Reader::from_reader(xml);
+    let source: std::sync::Arc<[u8]> = std::sync::Arc::from(xml);
+    let mut frames: Vec<ShapeParseFrame> = Vec::new();
     let mut buffer = Vec::new();
+    let mut visits = 0;
+    let mut captured_bytes = 0;
     loop {
-        match reader.read_event_into(&mut buffer)? {
-            Event::Start(start) => {
-                let namespaces = NamespaceBindings::from_entries(inherited).with_start(&start)?;
-                if local_name(start.name().as_ref()) != kind.local_name()
-                    || namespaces.element_uri(start.name().as_ref()) != Some(P_NS)
-                {
-                    return Err(unexpected(&start));
+        let start_position = reader.buffer_position() as usize;
+        let event = reader.read_event_into(&mut buffer)?;
+        visits += 1;
+        let empty = matches!(&event, Event::Empty(_));
+        match event {
+            Event::Start(start) | Event::Empty(start) => {
+                let namespaces = match frames.last() {
+                    Some(frame) => frame.namespaces.with_start(&start)?,
+                    None => NamespaceBindings::from_entries(inherited).with_start(&start)?,
+                };
+                let name = local_name(start.name().as_ref()).to_vec();
+                let uri = namespaces.element_uri(start.name().as_ref());
+                if frames.is_empty() {
+                    let frame = match root {
+                        ShapeParseRoot::Group(kind)
+                            if name == kind.local_name() && uri == Some(P_NS) =>
+                        {
+                            let depth = usize::from(matches!(kind, GroupKind::GroupShape));
+                            ShapeParseFrame::group(&start, namespaces, depth)?
+                        }
+                        ShapeParseRoot::Alternate
+                            if name == b"AlternateContent" && uri == Some(MC_NS) =>
+                        {
+                            crate::check_presentation_nesting("group and alternate content", 1)?;
+                            ShapeParseFrame {
+                                namespaces,
+                                depth: 1,
+                                owner: ShapeParseOwner::Alternate {
+                                    start: start_position,
+                                    chart_choice: None,
+                                    fallback: None,
+                                },
+                            }
+                        }
+                        _ => return Err(unexpected(&start)),
+                    };
+                    if empty {
+                        return Ok((
+                            frame.finish(&source, reader.buffer_position() as usize)?,
+                            visits,
+                            captured_bytes,
+                        ));
+                    }
+                    frames.push(frame);
+                } else {
+                    let parent = frames.last_mut().expect("the current owner is retained");
+                    let can_descend = match &parent.owner {
+                        ShapeParseOwner::Group(group) => group.state == 2,
+                        ShapeParseOwner::Fallback(_) => true,
+                        ShapeParseOwner::Alternate { .. } => false,
+                    };
+                    let group = can_descend && uri == Some(P_NS) && name == b"grpSp";
+                    let alternate =
+                        can_descend && uri == Some(MC_NS) && name == b"AlternateContent";
+                    if group || alternate {
+                        let depth = parent.depth + 1;
+                        crate::check_presentation_nesting("group and alternate content", depth)?;
+                        let frame = if group {
+                            ShapeParseFrame::group(&start, namespaces, depth)?
+                        } else {
+                            ShapeParseFrame {
+                                namespaces,
+                                depth,
+                                owner: ShapeParseOwner::Alternate {
+                                    start: start_position,
+                                    chart_choice: None,
+                                    fallback: None,
+                                },
+                            }
+                        };
+                        if empty {
+                            parent.attach(
+                                frame.finish(&source, reader.buffer_position() as usize)?,
+                            )?;
+                        } else {
+                            frames.push(frame);
+                        }
+                    } else if matches!(parent.owner, ShapeParseOwner::Alternate { .. })
+                        && uri == Some(MC_NS)
+                        && name == b"Fallback"
+                    {
+                        let ShapeParseOwner::Alternate { fallback, .. } = &parent.owner else {
+                            unreachable!()
+                        };
+                        if fallback.is_some() {
+                            return Err(duplicate_fallback());
+                        }
+                        let frame = ShapeParseFrame {
+                            namespaces,
+                            depth: parent.depth,
+                            owner: ShapeParseOwner::Fallback(Vec::new()),
+                        };
+                        if empty {
+                            parent.attach(
+                                frame.finish(&source, reader.buffer_position() as usize)?,
+                            )?;
+                        } else {
+                            frames.push(frame);
+                        }
+                    } else {
+                        let raw = if empty {
+                            capture_empty_element(&start)?
+                        } else {
+                            capture_element(&mut reader, &start)?
+                        };
+                        captured_bytes += raw.len();
+                        match &mut parent.owner {
+                            ShapeParseOwner::Group(group) => capture_group_child(
+                                &name,
+                                uri,
+                                raw,
+                                &namespaces,
+                                &mut group.non_visual,
+                                &mut group.properties,
+                                &mut group.children,
+                                &mut group.raw_children,
+                                &mut group.state,
+                            )?,
+                            ShapeParseOwner::Fallback(children) => {
+                                if let Some(child) =
+                                    parse_shape_tree_child(&name, uri, &raw, &namespaces)?
+                                {
+                                    children.push(child);
+                                }
+                            }
+                            ShapeParseOwner::Alternate { chart_choice, .. } => {
+                                if uri == Some(MC_NS) && name == b"Choice" && chart_choice.is_none()
+                                {
+                                    *chart_choice =
+                                        parse_chart_choice(&raw, &namespaces.entries())?;
+                                }
+                            }
+                        }
+                    }
                 }
-                namespaces.reject_writer_conflicts(&["p", "a", "mc"])?;
-                return parse_group_children(&mut reader, &start, &namespaces, kind);
             }
-            Event::Empty(start) => {
-                let namespaces = NamespaceBindings::from_entries(inherited).with_start(&start)?;
-                if local_name(start.name().as_ref()) != kind.local_name()
-                    || namespaces.element_uri(start.name().as_ref()) != Some(P_NS)
-                {
-                    return Err(unexpected(&start));
+            Event::End(_) => {
+                let frame = frames.pop().ok_or_else(|| {
+                    OxmlError::InvalidValue(
+                        "shape owner closing element has no open owner".to_owned(),
+                    )
+                })?;
+                let owner = frame.finish(&source, reader.buffer_position() as usize)?;
+                if let Some(parent) = frames.last_mut() {
+                    parent.attach(owner)?;
+                } else {
+                    return Ok((owner, visits, captured_bytes));
                 }
-                return Err(OxmlError::MissingElement(format!(
-                    "{} requires p:nvGrpSpPr and p:grpSpPr",
-                    kind.tag()
-                )));
             }
-            Event::Eof => return Err(OxmlError::MissingElement(kind.tag().to_owned())),
+            Event::Comment(_) | Event::PI(_) => {
+                if let Some(frame) = frames.last_mut()
+                    && let ShapeParseOwner::Group(group) = &mut frame.owner
+                {
+                    let raw = xml[start_position..reader.buffer_position() as usize].to_vec();
+                    captured_bytes += raw.len();
+                    if group.state < 2 {
+                        group.header_comments[group.state].push(raw);
+                    } else {
+                        group.raw_children.push(group.children.len(), raw);
+                    }
+                }
+            }
+            Event::Eof => {
+                return Err(OxmlError::MissingElement(
+                    "closing shape-tree owner".to_owned(),
+                ));
+            }
             _ => {}
         }
         buffer.clear();
     }
 }
 
-fn parse_group_children(
-    reader: &mut Reader<&[u8]>,
-    start: &BytesStart<'_>,
-    namespaces: &NamespaceBindings,
-    kind: GroupKind,
-) -> Result<ParsedGroup> {
-    let raw_attributes =
-        self_contained_attributes(start, FIXED_SHAPE_TREE_PREFIXES, &namespaces.entries())?;
-    let mut non_visual = None;
-    let mut group_properties = None;
-    let mut children = Vec::new();
-    let mut raw_children = OrderedRawChildren::default();
-    let mut state = 0usize;
-    let mut buffer = Vec::new();
-    loop {
-        match reader.read_event_into(&mut buffer)? {
-            Event::Start(child) => {
-                let child_namespaces = namespaces.with_start(&child)?;
-                let name = local_name(child.name().as_ref()).to_vec();
-                let uri = child_namespaces.element_uri(child.name().as_ref());
-                let raw = capture_element(reader, &child)?;
-                capture_group_child(
-                    &name,
-                    uri,
-                    raw,
-                    &child_namespaces,
-                    &mut non_visual,
-                    &mut group_properties,
-                    &mut children,
-                    &mut raw_children,
-                    &mut state,
-                )?;
-            }
-            Event::Empty(child) => {
-                let child_namespaces = namespaces.with_start(&child)?;
-                let name = local_name(child.name().as_ref()).to_vec();
-                let uri = child_namespaces.element_uri(child.name().as_ref());
-                let raw = capture_empty_element(&child)?;
-                capture_group_child(
-                    &name,
-                    uri,
-                    raw,
-                    &child_namespaces,
-                    &mut non_visual,
-                    &mut group_properties,
-                    &mut children,
-                    &mut raw_children,
-                    &mut state,
-                )?;
-            }
-            Event::End(end) if local_name(end.name().as_ref()) == kind.local_name() => break,
-            Event::Eof => {
-                return Err(OxmlError::MissingElement(format!("closing {}", kind.tag())));
-            }
-            _ => {}
-        }
-        buffer.clear();
-    }
-    Ok(ParsedGroup {
-        non_visual_group_properties: required(non_visual, "p:nvGrpSpPr")?,
-        group_properties: required(group_properties, "p:grpSpPr")?,
-        children,
-        raw_attributes,
-        raw_children,
-    })
+fn parse_group(xml: &[u8], inherited: &[(String, String)], kind: GroupKind) -> Result<ParsedGroup> {
+    let (owner, _, _) = parse_shape_frames(xml, inherited, ShapeParseRoot::Group(kind))?;
+    let ParsedShapeOwner::Group(group) = owner else {
+        unreachable!("the selected root is a group")
+    };
+    Ok(*group)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2347,87 +2517,6 @@ fn capture_group_child(
     Ok(())
 }
 
-fn parse_compatibility_members(
-    xml: &[u8],
-    inherited: &[(String, String)],
-    expected_name: &[u8],
-) -> Result<Vec<ShapeTreeChild>> {
-    let mut reader = Reader::from_reader(xml);
-    let mut buffer = Vec::new();
-    loop {
-        match reader.read_event_into(&mut buffer)? {
-            Event::Start(start) => {
-                let namespaces = NamespaceBindings::from_entries(inherited).with_start(&start)?;
-                if local_name(start.name().as_ref()) != expected_name
-                    || namespaces.element_uri(start.name().as_ref()) != Some(MC_NS)
-                {
-                    return Err(unexpected(&start));
-                }
-                return parse_compatibility_reader(&mut reader, &namespaces, expected_name);
-            }
-            Event::Empty(start) => {
-                let namespaces = NamespaceBindings::from_entries(inherited).with_start(&start)?;
-                if local_name(start.name().as_ref()) != expected_name
-                    || namespaces.element_uri(start.name().as_ref()) != Some(MC_NS)
-                {
-                    return Err(unexpected(&start));
-                }
-                return Ok(Vec::new());
-            }
-            Event::Eof => {
-                return Err(OxmlError::MissingElement(format!(
-                    "mc:{}",
-                    String::from_utf8_lossy(expected_name)
-                )));
-            }
-            _ => {}
-        }
-        buffer.clear();
-    }
-}
-
-fn parse_compatibility_reader(
-    reader: &mut Reader<&[u8]>,
-    namespaces: &NamespaceBindings,
-    expected_name: &[u8],
-) -> Result<Vec<ShapeTreeChild>> {
-    let mut children = Vec::new();
-    let mut buffer = Vec::new();
-    loop {
-        match reader.read_event_into(&mut buffer)? {
-            Event::Start(child) => {
-                let child_namespaces = namespaces.with_start(&child)?;
-                let name = local_name(child.name().as_ref()).to_vec();
-                let uri = child_namespaces.element_uri(child.name().as_ref());
-                let raw = capture_element(reader, &child)?;
-                if let Some(child) = parse_shape_tree_child(&name, uri, &raw, &child_namespaces)? {
-                    children.push(child);
-                }
-            }
-            Event::Empty(child) => {
-                let child_namespaces = namespaces.with_start(&child)?;
-                let name = local_name(child.name().as_ref()).to_vec();
-                let uri = child_namespaces.element_uri(child.name().as_ref());
-                let raw = capture_empty_element(&child)?;
-                if let Some(child) = parse_shape_tree_child(&name, uri, &raw, &child_namespaces)? {
-                    children.push(child);
-                }
-            }
-            Event::End(end) if local_name(end.name().as_ref()) == expected_name => {
-                return Ok(children);
-            }
-            Event::Eof => {
-                return Err(OxmlError::MissingElement(format!(
-                    "closing mc:{}",
-                    String::from_utf8_lossy(expected_name)
-                )));
-            }
-            _ => {}
-        }
-        buffer.clear();
-    }
-}
-
 fn parse_shape_tree_child(
     name: &[u8],
     uri: Option<&str>,
@@ -2466,6 +2555,7 @@ fn write_group<W: Write>(
     children: &[ShapeTreeChild],
     attributes: &RawAttributes,
     raw_children: &OrderedRawChildren,
+    header_comments: &[Vec<Vec<u8>>; 2],
     declare_namespaces: bool,
 ) -> Result<()> {
     let mut start = BytesStart::new(kind.tag());
@@ -2479,7 +2569,9 @@ fn write_group<W: Write>(
     }
     push_attributes(&mut start, attributes);
     writer.write_event(Event::Start(start))?;
+    emit_raw(writer, header_comments[0].iter().map(Vec::as_slice))?;
     non_visual.write_xml(writer)?;
+    emit_raw(writer, header_comments[1].iter().map(Vec::as_slice))?;
     group_properties.write_xml(writer)?;
     for (index, child) in children.iter().enumerate() {
         emit_raw(writer, raw_children.at(index))?;
@@ -3820,5 +3912,104 @@ mod style_tests {
         let before = unstyled.clone();
         assert!(!unstyled.set_effect_reference_index(0));
         assert_eq!(unstyled, before);
+    }
+}
+
+#[cfg(test)]
+mod fx214_frame_controls {
+    use super::*;
+    const ROOT: &str = r#"<q:spTree xmlns:q="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:f="urn:foreign"><!--before--><q:nvGrpSpPr><q:cNvPr id="1"/><q:cNvGrpSpPr/><q:nvPr/></q:nvGrpSpPr><?preserve after-nonvisual?><q:grpSpPr/>"#;
+    fn owner(children: &str) -> String {
+        format!("{ROOT}{children}</q:spTree>")
+    }
+    fn alternate(depth: usize, payload: &str) -> String {
+        format!(
+            "{}{}{}",
+            "<mc:AlternateContent><mc:Fallback>".repeat(depth),
+            payload,
+            "</mc:Fallback></mc:AlternateContent>".repeat(depth)
+        )
+    }
+    #[test]
+    fn fx214_qualified_empty_mixed_and_foreign_owners_preserve_source() {
+        let payload = r#"<f:grpSp f:keep='&#65;'><f:grpSp/></f:grpSp><!--between--><f:opaque/>"#;
+        let source = owner(payload);
+        let parsed = CT_ShapeTree::from_xml(source.as_bytes()).unwrap();
+        let saved = String::from_utf8(parsed.to_xml().unwrap()).unwrap();
+        assert!(saved.contains(payload));
+        assert!(saved.contains("<!--before-->"));
+        assert!(saved.contains("<?preserve after-nonvisual?>"));
+        let scope = owner(&alternate(32, payload));
+        let parsed = CT_ShapeTree::from_xml(scope.as_bytes()).unwrap();
+        assert_eq!(validate_shape_nesting(&parsed.children).unwrap(), 32);
+        assert!(
+            String::from_utf8(parsed.to_xml().unwrap())
+                .unwrap()
+                .contains(&alternate(32, payload))
+        );
+        let source = owner(&alternate(32, "<mc:AlternateContent/>"));
+        let error = CT_ShapeTree::from_xml(source.as_bytes())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("limit 32, offending depth 33"), "{error}");
+        let rebound = owner(r#"<q:grpSp xmlns:q="urn:foreign"><q:grpSp/></q:grpSp>"#);
+        assert!(
+            CT_ShapeTree::from_xml(rebound.as_bytes())
+                .unwrap()
+                .children
+                .is_empty()
+        );
+    }
+    #[test]
+    fn fx214_cursor_work_and_shared_compatibility_source_are_linear() {
+        let leaf = r#"<f:opaque f:keep='&#65;'><!--leaf--></f:opaque>"#;
+        let input = |breadth| owner(&alternate(32, &leaf.repeat(breadth)));
+        let one = input(1);
+        let small = input(64);
+        let large = input(128);
+        let (_, base_events, base_bytes) = parse_shape_frames(
+            one.as_bytes(),
+            &[],
+            ShapeParseRoot::Group(GroupKind::ShapeTree),
+        )
+        .unwrap();
+        let (small_owner, small_events, small_bytes) = parse_shape_frames(
+            small.as_bytes(),
+            &[],
+            ShapeParseRoot::Group(GroupKind::ShapeTree),
+        )
+        .unwrap();
+        let (_, large_events, large_bytes) = parse_shape_frames(
+            large.as_bytes(),
+            &[],
+            ShapeParseRoot::Group(GroupKind::ShapeTree),
+        )
+        .unwrap();
+        assert_eq!(
+            large_events - base_events,
+            (small_events - base_events) * 127 / 63
+        );
+        assert_eq!(
+            large_bytes - base_bytes,
+            (small_bytes - base_bytes) * 127 / 63
+        );
+        let ParsedShapeOwner::Group(group) = small_owner else {
+            panic!("group root");
+        };
+        let ShapeTreeChild::AlternateContent(first) = &group.children[0] else {
+            panic!("AC root");
+        };
+        let mut current = first.as_ref();
+        let mut count = 1;
+        while let Some(ShapeTreeChild::AlternateContent(next)) =
+            current.selected_fallback().and_then(|v| v.first())
+        {
+            assert!(std::sync::Arc::ptr_eq(&first.raw_source, &next.raw_source));
+            assert_eq!(next.raw_source.len(), small.len());
+            current = next;
+            count += 1;
+        }
+        assert_eq!(count, 32);
+        assert_eq!(first.raw_xml(), alternate(32, &leaf.repeat(64)).as_bytes());
     }
 }

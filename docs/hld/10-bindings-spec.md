@@ -2700,6 +2700,15 @@ surface. Python, WASM, and CLI consumers gain no advanced table surface here.
 
 ## Native PowerPoint collaboration and navigation
 
+Native parsing and supported authoring admit recognized PresentationML nesting
+through32 and reject33 before descent or publication. Group and compatibility
+owners share a counter, while timing wrappers do not increase node depth.
+Python retains the existing `XmlError` mapping for malformed producing parts,
+and CLI text, inspect and validate use the same checked native opening route.
+No Python signature or stub changes are required. The additive OXML constant
+and validator retain existing public constructors and raw/equality access.
+
+
 The native pre-1.0 `rpptx::Presentation` facade exposes ordered modern comment
 authors, comments, threaded replies, sections, and mutable notes-master and
 handout-master header-footer settings. `CommentAuthor`, `Comment`,

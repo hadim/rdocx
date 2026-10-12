@@ -536,6 +536,24 @@ impl<'a> ResolveCtx<'a> {
         mut fonts: Option<&mut FontManager>,
         mut identities: Option<&mut Vec<ResolvedShapeIdentity>>,
     ) -> Result<(ResolvedSlide, ResolvedSlideTextDirections), ResolveError> {
+        for (kind, tree) in [
+            ("slide shape tree", &self.slide.common_slide_data.shape_tree),
+            (
+                "layout shape tree",
+                &self.layout.common_slide_data.shape_tree,
+            ),
+            (
+                "master shape tree",
+                &self.master.common_slide_data.shape_tree,
+            ),
+        ] {
+            rpptx_oxml::shape_tree::validate_shape_nesting(&tree.children).map_err(|error| {
+                ResolveError::ConcreteValue {
+                    kind,
+                    detail: error.to_string(),
+                }
+            })?;
+        }
         let mut slide = ResolvedSlide {
             unresolved_member_count: 0,
             size,
@@ -862,7 +880,7 @@ impl<'a> ResolveCtx<'a> {
             FlattenedSource::Background => &[],
         };
         let mut containing_group_ids = Vec::new();
-        find_group_lineage(children, child, &mut Vec::new(), &mut containing_group_ids);
+        find_group_lineage(children, child, &[], &mut containing_group_ids);
         ResolvedShapeIdentity {
             source,
             shape_id: child.non_visual_id(),
@@ -3511,34 +3529,31 @@ fn push_unmatched(keys: &mut Vec<PlaceholderKey>, key: PlaceholderKey) {
 fn find_group_lineage(
     children: &[ShapeTreeChild],
     target: &ShapeTreeChild,
-    lineage: &mut Vec<u32>,
+    lineage: &[u32],
     found: &mut Vec<u32>,
 ) -> bool {
-    for child in children {
+    let mut pending = children
+        .iter()
+        .rev()
+        .map(|c| (c, lineage.to_vec()))
+        .collect::<Vec<_>>();
+    while let Some((child, mut ancestors)) = pending.pop() {
         if std::ptr::eq(child, target) {
-            *found = lineage.clone();
+            *found = ancestors;
             return true;
         }
-        match child {
+        let descendants = match child {
             ShapeTreeChild::GroupShape(group) => {
                 if let Some(id) = child.non_visual_id() {
-                    lineage.push(id);
+                    ancestors.push(id);
                 }
-                if find_group_lineage(&group.children, target, lineage, found) {
-                    return true;
-                }
-                if child.non_visual_id().is_some() {
-                    lineage.pop();
-                }
+                Some(group.children.as_slice())
             }
-            ShapeTreeChild::AlternateContent(alternate) => {
-                if let Some(fallback) = alternate.selected_fallback()
-                    && find_group_lineage(fallback, target, lineage, found)
-                {
-                    return true;
-                }
-            }
-            _ => {}
+            ShapeTreeChild::AlternateContent(alternate) => alternate.selected_fallback(),
+            _ => None,
+        };
+        if let Some(descendants) = descendants {
+            pending.extend(descendants.iter().rev().map(|c| (c, ancestors.clone())));
         }
     }
     false
@@ -3706,33 +3721,40 @@ fn collect_timeline_group_geometries(
     parent_to_page: Transform,
     geometries: &mut BTreeMap<u32, TimelineGroupGeometry>,
 ) {
-    for child in children {
+    let mut pending = children
+        .iter()
+        .rev()
+        .map(|c| (c, parent_to_page))
+        .collect::<Vec<_>>();
+    while let Some((child, parent)) = pending.pop() {
         match child {
             ShapeTreeChild::GroupShape(group) => {
                 let child_to_parent = group
                     .group_transform()
                     .and_then(group_affine)
                     .map_or(Transform::IDENTITY, |(transform, _)| transform);
-                if let Some((group_id, geometry)) = child
+                if let Some((id, geometry)) = child
                     .non_visual_id()
                     .zip(group.group_transform().and_then(group_extent_geometry))
                 {
                     geometries.insert(
-                        group_id,
+                        id,
                         TimelineGroupGeometry {
-                            normalized_to_page: geometry.then(parent_to_page),
+                            normalized_to_page: geometry.then(parent),
                         },
                     );
                 }
-                collect_timeline_group_geometries(
-                    &group.children,
-                    child_to_parent.then(parent_to_page),
-                    geometries,
+                pending.extend(
+                    group
+                        .children
+                        .iter()
+                        .rev()
+                        .map(|c| (c, child_to_parent.then(parent))),
                 );
             }
             ShapeTreeChild::AlternateContent(alternate) => {
                 if let Some(fallback) = alternate.selected_fallback() {
-                    collect_timeline_group_geometries(fallback, parent_to_page, geometries);
+                    pending.extend(fallback.iter().rev().map(|c| (c, parent)));
                 }
             }
             _ => {}
@@ -3951,22 +3973,27 @@ fn collect_owned_items<'a>(
     path: &[usize],
     output: &mut Vec<(Vec<usize>, FlattenedItem<'a>)>,
 ) {
-    for (ordinal, child) in children.iter().enumerate() {
-        let mut path = path.to_vec();
-        path.push(ordinal);
+    let mut pending = children
+        .iter()
+        .enumerate()
+        .rev()
+        .map(|(ordinal, c)| {
+            let mut own_path = path.to_vec();
+            own_path.push(ordinal);
+            (c, parent, issues, own_path)
+        })
+        .collect::<Vec<_>>();
+    while let Some((child, parent, issues, path)) = pending.pop() {
         if let ShapeTreeChild::GroupShape(group) = child {
             let (transform, own_issues) = group
                 .group_transform()
                 .and_then(group_affine)
                 .unwrap_or((Transform::IDENTITY, GROUP_ZERO_X | GROUP_ZERO_Y));
-            collect_owned_items(
-                &group.children,
-                source,
-                transform.then(parent),
-                issues | own_issues,
-                &path,
-                output,
-            );
+            pending.extend(group.children.iter().enumerate().rev().map(|(ordinal, c)| {
+                let mut own_path = path.clone();
+                own_path.push(ordinal);
+                (c, transform.then(parent), issues | own_issues, own_path)
+            }));
         } else {
             let mut leaf = Vec::new();
             push_flattened_shape(&mut leaf, source, child, parent, issues);
@@ -3999,48 +4026,36 @@ fn emit_tree_inner<'a>(
     emitted_latent: &mut Vec<PlaceholderKey>,
     output: &mut Vec<FlattenedItem<'a>>,
 ) {
-    for child in children {
+    let mut pending = children
+        .iter()
+        .rev()
+        .map(|c| (c, parent_transform, parent_issues))
+        .collect::<Vec<_>>();
+    while let Some((child, parent, inherited_issues)) = pending.pop() {
         match child {
             ShapeTreeChild::GroupShape(group) => {
                 let (transform, issues) = group
                     .group_transform()
                     .and_then(group_affine)
                     .unwrap_or((Transform::IDENTITY, 0));
-                emit_tree_inner(
-                    &group.children,
-                    rules,
-                    transform.then(parent_transform),
-                    parent_issues | issues,
-                    emitted_latent,
-                    output,
+                pending.extend(
+                    group
+                        .children
+                        .iter()
+                        .rev()
+                        .map(|c| (c, transform.then(parent), inherited_issues | issues)),
                 );
             }
-            ShapeTreeChild::AlternateContent(alternate) => {
-                if alternate.chart_choice().is_some() {
-                    emit_leaf(
-                        child,
-                        rules,
-                        parent_transform,
-                        parent_issues,
-                        emitted_latent,
-                        output,
-                    );
-                } else if let Some(fallback) = alternate.selected_fallback() {
-                    emit_tree_inner(
-                        fallback,
-                        rules,
-                        parent_transform,
-                        parent_issues,
-                        emitted_latent,
-                        output,
-                    );
+            ShapeTreeChild::AlternateContent(alternate) if alternate.chart_choice().is_none() => {
+                if let Some(fallback) = alternate.selected_fallback() {
+                    pending.extend(fallback.iter().rev().map(|c| (c, parent, inherited_issues)));
                 }
             }
             _ => emit_leaf(
                 child,
                 rules,
-                parent_transform,
-                parent_issues,
+                parent,
+                inherited_issues,
                 emitted_latent,
                 output,
             ),
@@ -4845,6 +4860,93 @@ mod tests {
         assert!(
             (actual - expected).abs() < 1.0e-10,
             "expected {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn fx214_manual_shape_tree_admission_and_iterative_affine_order() {
+        use rpptx_oxml::shape_tree::CT_GroupShape;
+        let leaf = shape_with_details(
+            None,
+            None,
+            "<a:xfrm><a:off x=\"12700\" y=\"25400\"/><a:ext cx=\"38100\" cy=\"50800\"/></a:xfrm>",
+            None,
+        );
+        let mut fixture = Fixture::new(&leaf, "", "");
+        let leaf = fixture
+            .slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .remove(0);
+        let mut child = leaf;
+        for id in 0..32 {
+            let mut group = CT_GroupShape::new_empty(100 + id, "Nested");
+            group.children.push(child);
+            child = ShapeTreeChild::GroupShape(Box::new(group));
+        }
+        fixture
+            .slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .push(child);
+        let ctx = fixture.context();
+        let resolved = ctx.resolve_slide((960.0, 540.0)).unwrap();
+        assert_eq!(resolved.shapes.len(), 1);
+        assert_eq!(
+            resolved.shapes[0].bounds,
+            Rect {
+                x: 1.0,
+                y: 2.0,
+                width: 3.0,
+                height: 4.0
+            }
+        );
+        assert_eq!(resolved.shapes[0].group_transform, Transform::IDENTITY);
+        let flat = ctx.flatten();
+        let FlattenedItem::Shape { child, .. } = flat.last().unwrap() else {
+            panic!("shape leaf");
+        };
+        let lineage = Vec::new();
+        let mut found = Vec::new();
+        assert!(super::find_group_lineage(
+            &fixture.slide.common_slide_data.shape_tree.children,
+            child,
+            &lineage,
+            &mut found
+        ));
+        assert_eq!(found, (100..132).rev().collect::<Vec<_>>());
+        let child = fixture
+            .slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .remove(0);
+        let mut outer = CT_GroupShape::new_empty(132, "Refused");
+        outer.children.push(child);
+        fixture
+            .slide
+            .common_slide_data
+            .shape_tree
+            .children
+            .push(ShapeTreeChild::GroupShape(Box::new(outer)));
+        let error = fixture
+            .context()
+            .resolve_slide((960.0, 540.0))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("slide shape tree") && error.contains("offending depth 33"),
+            "{error}"
+        );
+        assert!(
+            fixture
+                .slide
+                .to_xml()
+                .unwrap_err()
+                .to_string()
+                .contains("offending depth 33")
         );
     }
 

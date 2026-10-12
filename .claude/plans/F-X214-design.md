@@ -1,12 +1,12 @@
 # F-X214, Bound recursive PowerPoint parsing and traversal
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: L
 **Depends on**: none
 **Issue**: 344
 **Test gate**: regression
-**Implementation**: not claimed, no code or execution
+**Implementation**: claimed on work/f-x214-codex at639d354eeee67592bb32da6fd62cb88b7d900530. Current parser and traversal body is source13. Scoped installed, native, archive and repository-policy qualification is complete.
 
 ## Problem
 
@@ -72,12 +72,12 @@ Expected unchanged for accepted ordinary inputs and render output. Intentional b
 
 ## Implementation checklist
 
-- [ ] Independently review the draft and approve the shared depth/counting policy.
-- [ ] Preserve genuine Base subprocess failures and valid positive setup.
-- [ ] Implement single-pass bounded parsing and safe authored traversal.
-- [ ] Prove raw retention, atomic refusal, linear work and release timing.
-- [ ] Run full changed-crate scoped gates, pinned corpus and native legal-deck checks.
-- [ ] Update only listed HLD files and obtain zero-finding working review.
+- [x] Independently review the draft and approve the shared depth/counting policy.
+- [x] Preserve genuine Base subprocess failures and valid positive setup.
+- [x] Implement single-pass bounded parsing and safe authored traversal.
+- [x] Prove raw retention, atomic refusal, linear work and release timing.
+- [x] Run full changed-crate scoped gates, pinned corpus and native legal-deck checks.
+- [x] Update only listed HLD files and obtain zero-finding working review.
 
 ## Open questions
 

@@ -744,6 +744,30 @@ pub(crate) fn layout_resolved_slide_with_diagnostics(
     shape_states: Option<&[rpptx_layout::timeline::EvaluatedShapeState]>,
     diagnostics: &mut Vec<String>,
 ) -> Result<PageFrame, RenderInputError> {
+    // Resolved content can also be supplied by a native caller. Validate its
+    // concrete group graph before cloning or lowering recursively.
+    for shape in &slide.shapes {
+        if let ResolvedContent::Group(root) = &shape.content {
+            let mut pending = vec![(root, 1usize)];
+            while let Some((group, depth)) = pending.pop() {
+                if depth > rpptx_oxml::MAX_PRESENTATION_NESTING {
+                    return Err(RenderInputError::TextLayout {
+                        detail: format!(
+                            "render resolved group nesting exceeds limit {}, offending depth {depth}",
+                            rpptx_oxml::MAX_PRESENTATION_NESTING
+                        ),
+                    });
+                }
+                pending.extend(group.children.iter().filter_map(|child| {
+                    if let PositionedElement::Group(group) = child {
+                        Some((group, depth + 1))
+                    } else {
+                        None
+                    }
+                }));
+            }
+        }
+    }
     let mut elements = Vec::new();
     let mut background_paint = None;
     match slide.background.as_ref() {
@@ -840,6 +864,37 @@ pub(crate) fn layout_resolved_slide_with_diagnostics(
     Ok(page)
 }
 
+// The owned renderer graph is finalized in document order without recursive
+// Clone calls. Admission above has checked the source graph before this work.
+fn copy_resolved_group(root: &GroupElement) -> GroupElement {
+    let shallow = |group: &GroupElement| GroupElement {
+        transform: group.transform,
+        clip: group.clip.clone(),
+        opacity: group.opacity,
+        effects: group.effects.clone(),
+        children: Vec::with_capacity(group.children.len()),
+    };
+    let mut pending = vec![(root, 0usize, shallow(root))];
+    loop {
+        let (source, next, output) = pending.last_mut().expect("open renderer group");
+        if let Some(child) = source.children.get(*next) {
+            *next += 1;
+            if let PositionedElement::Group(group) = child {
+                pending.push((group, 0, shallow(group)));
+            } else {
+                output.children.push(child.clone());
+            }
+        } else {
+            let (_, _, group) = pending.pop().expect("completed renderer group");
+            if let Some((_, _, output)) = pending.last_mut() {
+                output.children.push(PositionedElement::Group(group));
+            } else {
+                return group;
+            }
+        }
+    }
+}
+
 fn lower_shape(
     input: &RenderInput,
     shape: &ResolvedShape,
@@ -913,7 +968,7 @@ fn lower_shape(
             )?);
         }
         ResolvedContent::Group(group) => {
-            children.push(PositionedElement::Group(group.clone()));
+            children.push(PositionedElement::Group(copy_resolved_group(group)));
         }
         _ => {}
     }
@@ -2017,6 +2072,74 @@ mod tests {
         ResolvedRunStyle, ResolvedShape, ResolvedTable, ResolvedTableBorder, ResolvedTableCell,
         ResolvedTableRow, ResolvedTextBody, ResolvedTextRun, TextAnchor, TextDirection, TextInsets,
     };
+
+    #[test]
+    fn fx214_manual_renderer_groups_preserve_affine_order_and_refuse_depth33() {
+        let build = |depth| {
+            let mut group = GroupElement {
+                transform: Transform::IDENTITY,
+                clip: None,
+                opacity: 0.75,
+                effects: Vec::new(),
+                children: Vec::new(),
+            };
+            for index in 1..depth {
+                group = GroupElement {
+                    transform: Transform {
+                        e: index as f64,
+                        f: -(index as f64),
+                        ..Transform::IDENTITY
+                    },
+                    clip: None,
+                    opacity: 0.5,
+                    effects: Vec::new(),
+                    children: vec![PositionedElement::Group(group)],
+                };
+            }
+            group
+        };
+        let root = build(32);
+        assert_eq!(copy_resolved_group(&root), root);
+        let mut shape = shape(
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 72.0,
+                height: 72.0,
+            },
+            ResolvedGeometry::Rectangle,
+            None,
+            None,
+        );
+        shape.content = ResolvedContent::Group(root);
+        let mut input = RenderInput {
+            slides: vec![ResolvedSlide {
+                unresolved_member_count: 0,
+                size: (960.0, 540.0),
+                background: None,
+                shapes: vec![shape],
+                diagnostics: Vec::new(),
+            }],
+            media: HashMap::new(),
+            fonts: Vec::new(),
+            metadata: None,
+        };
+        assert_eq!(
+            layout_presentation_deterministic(&input)
+                .unwrap()
+                .pages
+                .len(),
+            1
+        );
+        input.slides[0].shapes[0].content = ResolvedContent::Group(build(33));
+        let error = layout_presentation_deterministic(&input)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("render resolved group nesting exceeds limit 32, offending depth 33"),
+            "{error}"
+        );
+    }
 
     const IMAGE_RELATIONSHIP: &str =
         "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";

@@ -7608,7 +7608,7 @@ while the complete F-283 navigation contract stays parked at S92.
 **Depends on**: none
 **Test gate**: regression
 
-Resolve Issues344 captured at2026-10-11 18:56UTC. One shared nesting limit covers group, AlternateContent and timing cycles. Parse each subtree once with linear work. CLI and Python return a named checked error past the limit without abort. Parsed and authored trees at the limit extract text and render safely, including layout and renderer walkers. Release tests prove each cycle at and beyond the limit, and at-limit open, extract and render complete in well under one second.
+Resolve Issue344 with the public shared nesting limit32. The first recognized owner counts as1, depth33 is a checked refusal, and opaque XML cannot supply condition metadata or grow the selected namespace stack. One shared nesting limit covers group, AlternateContent and timing cycles. Parse each subtree once with linear work. CLI and Python return a named checked error past the limit without abort. Parsed and authored trees at the limit extract text and render safely, including layout and renderer walkers. Release tests prove each cycle at and beyond the limit, and at-limit open, extract and render complete in well under one second.
 
 ### F-X215, Create charts in Python and replace existing chart data
 

@@ -12677,8 +12677,22 @@ fn append_new_member(
     group: &[usize],
     build: impl FnOnce(u32) -> Result<ShapeTreeChild>,
 ) -> Result<usize> {
+    rpptx_oxml::shape_tree::validate_shape_nesting(&tree.children)
+        .map_err(|error| invalid_shape_mutation("append shape", error.to_string()))?;
     let id = ShapeIdAllocator::scan(tree).allocate();
     let member = build(id)?;
+    let depth = group.len()
+        + rpptx_oxml::shape_tree::validate_shape_nesting(std::slice::from_ref(&member))
+            .map_err(|error| invalid_shape_mutation("append shape", error.to_string()))?;
+    if depth > rpptx_oxml::MAX_PRESENTATION_NESTING {
+        return Err(invalid_shape_mutation(
+            "append shape",
+            format!(
+                "group and alternate content nesting exceeds limit {}, offending depth {depth}",
+                rpptx_oxml::MAX_PRESENTATION_NESTING
+            ),
+        ));
+    }
     let count = if group.is_empty() {
         tree.children.len()
     } else {
@@ -27733,6 +27747,8 @@ impl ShapesMut<'_> {
         const OPERATION: &str = "group shapes";
         let group_path = self.group.clone();
         let tree = self.tree();
+        rpptx_oxml::shape_tree::validate_shape_nesting(&tree.children)
+            .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()))?;
         let id = ShapeIdAllocator::scan(tree).allocate();
         let mut members = Members::at(tree, &group_path)
             .ok_or_else(|| invalid_shape_mutation(OPERATION, "the collection is not a group"))?;
@@ -27760,6 +27776,25 @@ impl ShapesMut<'_> {
                     format!("shape {index} has no position and size of its own"),
                 ));
             }
+        }
+        let selected_depth = sorted
+            .iter()
+            .try_fold(0usize, |deepest, index| {
+                rpptx_oxml::shape_tree::validate_shape_nesting(std::slice::from_ref(
+                    &members.children()[*index],
+                ))
+                .map(|depth| deepest.max(depth))
+            })
+            .map_err(|error| invalid_shape_mutation(OPERATION, error.to_string()))?;
+        let depth = group_path.len() + 1 + selected_depth;
+        if depth > rpptx_oxml::MAX_PRESENTATION_NESTING {
+            return Err(invalid_shape_mutation(
+                OPERATION,
+                format!(
+                    "group and alternate content nesting exceeds limit {}, offending depth {depth}",
+                    rpptx_oxml::MAX_PRESENTATION_NESTING
+                ),
+            ));
         }
         let place = sorted[0];
         members.group_span(place, sorted.len(), id, &format!("Group {id}"))?;

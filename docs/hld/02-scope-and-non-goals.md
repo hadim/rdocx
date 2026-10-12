@@ -101,6 +101,16 @@ autofit, tables, connectors, hyperlinks, slide-number fields and backgrounds.
 `rpptx` and `rdocx` as crates, `rpptx-cli` and `rdocx-cli`, `rpptx-wasm` and a
 rewritten `rdocx-wasm`, and `rdocx-py` and `rpptx-py` wheels on PyPI.
 
+### Bounded PresentationML nesting
+
+Recognized groups and compatibility owners share a nesting limit of32.
+Recognized timing nodes use the same limit, with their list and common-node
+wrappers excluded from the count. The first owner counts as1. Valid inputs
+at32 remain readable and renderable, with supported authoring routes checked.
+Depth33 returns a named
+checked error before descent or publication. Opaque foreign XML remains source,
+not another modeled owner or timing condition.
+
 ## Explicitly not in v1
 
 Each of these is **preserved verbatim on round-trip**. Nothing in this list

@@ -1007,9 +1007,9 @@ choice is rejected. Clearing removes only a direct `p:bgPr` background, so theme
 references and opaque producer payloads remain untouched.
 
 An ordinary `CT_Shape` owns its required `p:spPr` as a public boxed
-`CT_ShapeProperties`. The allocation keeps recursive group parsing within the
-normal test-thread stack even when a master contains deeply nested shapes with
-large text bodies. Field access remains direct through `Box` dereferencing.
+`CT_ShapeProperties`. The allocation keeps individual shape projections small.
+Explicit bounded parser frames handle group descent. Field access remains direct
+through `Box` dereferencing.
 Modelled transform, geometry, fill, line, and effect children write with fixed
 prefixes in schema order. Unsupported attributes and children remain in the
 shape-properties ordered raw slots.
@@ -1032,11 +1032,29 @@ pub enum ShapeTreeChild {
 }
 
 pub struct CT_AlternateContent {
-    raw_xml: Vec<u8>,
+    raw_source: std::sync::Arc<[u8]>,
+    raw_range: std::ops::Range<usize>,
     chart_choice: Option<Box<CT_GraphicFrame>>,
     selected_fallback: Option<Vec<ShapeTreeChild>>,
 }
 ```
+
+`MAX_PRESENTATION_NESTING` is a public additive constant set to32.
+`validate_shape_nesting` validates supported typed trees without recursive
+descent. Group and compatibility owners share one counter, starting at1.
+Timing nodes have their own counter with the same bound. Their list and
+common-node wrappers are transparent to the count. Explicit parser frames
+select only concrete schema paths with their actual namespace scope. Unknown
+subtrees are captured once, so opaque descendants cannot select timing metadata
+or grow a namespace snapshot stack. Empty condition lists retain the existing
+empty model. Errors name the cycle, limit and offending depth, and facade
+opening adds the producing part.
+
+The compatibility and unsupported timing models privately share immutable
+source buffers through byte ranges. Their public raw accessors and logical
+equality compare the selected bytes, not the complete shared buffer. These
+private storage changes and required-header comment slots do not change public
+constructors or public model fields.
 
 `CT_AlternateContent` selects ordered typed members only from its one immediate
 `mc:Fallback` child. It resolves the branch by namespace URI and uses the same

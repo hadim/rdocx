@@ -1754,6 +1754,20 @@ saved in logical order.
 
 ## The deck corpus
 
+Presentation nesting controls cover groups, compatibility content and timing
+nodes at32 and33, mixed owners, alias/default/rebound namespaces, opaque
+lookalikes and exact raw retention. Public authored and manual trees exercise
+layout and render admission with full-package atomic refusal. Selected cursor
+event and disjoint capture counts supplement release measurements of genuine
+open, text extraction and deterministic rendering, with every sample below1s
+and median below0.5s. CLI text, inspect and validate plus isolated installed
+Python processes must return checked errors without aborting. The existing50
+pinned corpus inputs retain their parser, round-trip and python-pptx1.0.2
+object/visual controls. A moderate legal nested deck must open, save and reopen
+in pinned native PowerPoint without repair. Hostile depth33 inputs are not
+native Office fixtures.
+
+
 Fifty real `.pptx` files are stored outside the published crates and fetched by
 `scripts/fetch_pptx_corpus.py` into the ignored `corpus/pptx` directory. The
 tracked manifest pins each URL, producer, relative path, and SHA-256. It

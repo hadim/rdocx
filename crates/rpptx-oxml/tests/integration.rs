@@ -5978,3 +5978,40 @@ fn direct_expanded_children(xml: &[u8]) -> Vec<(Vec<u8>, Vec<u8>)> {
     }
     children
 }
+
+/// Issue 344: the time node parser reads each node once, in place. A command
+/// it cannot model is kept whole, and parsing goes on after it.
+#[test]
+fn an_unmodelled_command_is_kept_whole_and_its_siblings_still_parse() {
+    use rpptx_oxml::timing::{CT_Timing, TimingNode};
+
+    let command = r#"<p:cmd type="call" cmd="play"><p:cBhvr><p:tgtEl><p:spTgt spid="9"/></p:tgtEl></p:cBhvr><p:x/></p:cmd>"#;
+    let xml = format!(
+        r#"<p:timing xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:tnLst><p:par><p:cTn id="1"><p:childTnLst>{command}<p:par><p:cTn id="3" fill="hold"/></p:par></p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>"#
+    );
+    let timing = CT_Timing::from_xml(xml.as_bytes()).unwrap();
+    let TimingNode::Parallel(root) = &timing.nodes()[0] else {
+        panic!("{:?}", timing.nodes());
+    };
+    let children = &root.common.children;
+    assert_eq!(children.len(), 2, "{children:?}");
+    let TimingNode::Unsupported(kept) = &children[0] else {
+        panic!("{children:?}");
+    };
+    assert_eq!(kept.local_name, "cmd");
+    assert_eq!(kept.raw_xml(), command.as_bytes());
+    let TimingNode::Parallel(sibling) = &children[1] else {
+        panic!("{children:?}");
+    };
+    assert_eq!(sibling.common.id, 3);
+}
+
+/// Issue 344: an empty `p:par` used to panic the parser.
+#[test]
+fn an_empty_parallel_time_node_is_an_error_not_a_panic() {
+    use rpptx_oxml::timing::CT_Timing;
+
+    let xml = br#"<p:timing xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:tnLst><p:par><p:cTn id="1"><p:childTnLst><p:par/></p:childTnLst></p:cTn></p:par></p:tnLst></p:timing>"#;
+    let error = CT_Timing::from_xml(xml).unwrap_err();
+    assert!(error.to_string().contains("p:cTn"), "{error}");
+}
