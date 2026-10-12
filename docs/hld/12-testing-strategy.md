@@ -3982,6 +3982,24 @@ LibreOffice round-trip accompany appearance claims. Current wheel member/origin
 proofs, strict typing, stubtest, WASM, hashes and affected verified archives are
 separate required gates.
 
+## Word story inventory controls
+
+Complete source inventories compare the prior successful algorithm across body,
+cells, controls, text boxes, headers, notes, comments and namespace aliases.
+Counters require one materialization and owner scan per physical source, batched
+namespace discovery and one evaluator paragraph listing. Empty qualified owners
+have positive listing, no-op update, save/reopen and installed Python/CLI
+controls. Foreign ownership and invalid excerpt offsets have refusal controls.
+
+Performance measurements use release builds of actual Base and result on the
+same host, first-sample warm-up exclusion and repeated scaled inputs. Saved
+package equivalence is checked independently of elapsed time. Doubling input
+with a fixed field count and doubling TOC fields are separate measurements.
+Per-bookmark REF lookups and single-location mutation scans remain explicit,
+so complete-inventory scaling does not imply global linearity. Current-source
+wheels, strict typing, WASM, deterministic hashes and verified Word archives
+are separate gates.
+
 ## Word table, picture and paired-owner controls
 
 Table controls distinguish logical grid columns from physical cell vectors, reference-before and reference-after insertion, omitted boundaries, unequal widths, rectangular merges, empty vertical-merge rows and unmerged split no-ops. Invalid topology, opaque formatting cloning and late owner failures require exact whole-package rollback. Native and installed controls preserve source properties, bookmarks, related owners and reopen behavior.

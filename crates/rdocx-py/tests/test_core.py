@@ -5589,3 +5589,52 @@ def test_fx204_field_report_allocation_failure_discards_candidate(monkeypatch):
     report = empty.update_all_fields()
     assert report.total_updated == 0 and report.evaluations == ()
     assert held.text == "still live" and empty.to_bytes() == before
+
+
+def test_fx222_public_empty_comment_and_noop_fields_preserve_source():
+    import xml.etree.ElementTree as ET
+    import rdocx
+
+    namespace = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+    seed = rdocx.Document()
+    seed.add_paragraph("Commented text")
+    comment_id = seed.add_comment_on_text("Commented", author="Ada", text="note")
+    assert len(seed.comments) == 1
+    source = io.BytesIO(seed.to_bytes())
+    output = io.BytesIO()
+    original_comments = None
+    with zipfile.ZipFile(source) as source_zip, zipfile.ZipFile(output, "w") as result_zip:
+        for info in source_zip.infolist():
+            data = source_zip.read(info.filename)
+            if info.filename == "word/comments.xml":
+                root_start = data.index(b"<w:comments")
+                content_start = data.index(b">", root_start) + 1
+                empty = (
+                    f'<q:comment xmlns:q="{namespace}" xmlns:x="urn:opaque" '
+                    f'q:id="{comment_id + 1}" q:author="Ada" x:keep="original"/>'
+                ).encode()
+                data = data[:content_start] + empty + data[content_start:]
+                parsed = ET.fromstring(data)
+                assert len(parsed.findall(f"{{{namespace}}}comment")) == 2
+                original_comments = data
+            result_zip.writestr(info, data)
+    assert original_comments is not None
+    document = rdocx.Document.from_bytes(output.getvalue())
+    held = document.paragraphs[0]
+    before = document.to_bytes()
+    comments = {comment.id: comment for comment in document.comments}
+    assert set(comments) == {comment_id, comment_id + 1}
+    assert comments[comment_id].text == "note"
+    assert comments[comment_id + 1].text == ""
+    assert comments[comment_id + 1].anchor is None
+    assert document.story_items
+    assert held.text == "Commented text"
+    assert document.update_page_fields() == 0
+    assert document.update_fields() == 0
+    assert document.rebuild_toc().entry_count == 0
+    assert held.text == "Commented text"
+    assert document.to_bytes() == before
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert {comment.id for comment in reopened.comments} == set(comments)
+    with zipfile.ZipFile(io.BytesIO(reopened.to_bytes())) as saved:
+        assert saved.read("word/comments.xml") == original_comments

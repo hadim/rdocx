@@ -1,6 +1,6 @@
 # F-X222, Restore linear Word story range inventory and empty owners
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: M
 **Depends on**: F-X203, F-X213
@@ -77,11 +77,11 @@ All49 existing sample outputs must remain unchanged. Successful old/new field an
 
 ## Implementation checklist
 
-- [ ] Capture genuine Base failures, exact reference outputs and release timings.
-- [ ] Adapt the three assessed native carriers and existing callers.
-- [ ] Qualify source-build counts, exact ownership/equivalence, empty comments and public field/TOC paths.
-- [ ] Measure performance and actual archive, preserving original failed receipts.
-- [ ] Obtain clean independent microscope and scoped verify, update listed HLD and prepare handoff.
+- [x] Capture genuine Base failures, exact reference outputs and release timings.
+- [x] Adapt the three assessed native carriers and existing callers.
+- [x] Qualify source-build counts, exact ownership/equivalence, empty comments and public field/TOC paths.
+- [x] Measure performance and actual archive, preserving original failed receipts.
+- [x] Obtain clean independent microscope and scoped verify, update listed HLD and prepare handoff.
 
 ## Open questions
 

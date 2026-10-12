@@ -1195,6 +1195,12 @@ invariants when the reader moves to `oxml-media`.
 
 ## Package integrity
 
+A qualified self-closing Word comment owner has an empty paragraph inventory.
+Its record and opaque attributes remain byte-preserved through listing, field
+updates and save/reopen. Namespace ownership and excerpt bounds are checked
+before source offsets become editable coordinates. Foreign lookalikes do not
+become story owners, and invalid scopes return errors.
+
 Both facades expose a `validate()` that is cheap, non-panicking, and run
 automatically under `debug_assertions` before `save`. It checks dangling
 relationship ids, missing content-type overrides, relationship targets that

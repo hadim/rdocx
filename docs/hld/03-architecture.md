@@ -866,6 +866,13 @@ placements. Field indices follow preorder through instructions and cached result
 Cached children have their own display placement. Instruction operands inherit
 only their owning field's placement. Locks propagate to descendants.
 
+Complete story-range discovery materializes each physical source once per operation.
+Owner, control and namespace scopes are discovered in batches, then paragraph
+excerpts reuse checked source offsets. Cache projection shares those owned
+source/span facts. The evaluator reuses one paragraph listing for range pairing
+and bookmark-name counts, with independent failure handling for each. This
+operation-local inventory adds no global cache or revision invalidation state.
+
 Physical source identity covers modeled paragraphs, tables, controls, headers,
 footers, notes and selected typed text boxes. Actual OPC names remain distinct
 from logical source paths. Rich related-story and text-box bodies replace their

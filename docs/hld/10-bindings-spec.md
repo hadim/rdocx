@@ -1292,7 +1292,11 @@ Python exposes story and story item snapshots, including each item's `xml` as
 bytes. Cached complex-field text agrees between owned bulk snapshots and direct
 native reads when the field spans sibling runs or nests inside another field.
 Snapshot reads preserve source locations, XML, direct-body coordinates and the
-document revision, leaving held live handles valid. Nested instruction caches
+document revision, leaving held live handles valid. Valid empty comment owners
+remain visible as empty comments without an anchor. Reading them, listing story
+items and performing no-op field or TOC updates preserve package bytes and live
+paragraph handles. The native operation-local source inventory changes no
+public snapshot identity or binding signature. Nested instruction caches
 remain distinct from their enclosing field's visible result. Story links retain
 physical source ordering and relationship scope through the same bounded excerpt
 projection. `Document.set_story_text` takes a `StoryItem` snapshot and resolves its

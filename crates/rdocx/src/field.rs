@@ -13220,7 +13220,9 @@ impl<'a> Evaluator<'a> {
             .collect();
         // Main bookmark ranges keep their established accepted projection.
         // Related ranges are admitted only by the checked physical inventory.
-        if let Ok(ranges) = document.story_ranges() {
+        // One paragraph inventory serves the ranges and the name counts.
+        let paragraphs = document.story_range_paragraphs().ok();
+        if let Some(Ok(ranges)) = paragraphs.as_deref().map(Document::story_ranges_in) {
             for range in ranges {
                 let crate::StoryRangeKind::Bookmark { name, .. } = range.kind() else {
                     continue;
@@ -13241,7 +13243,7 @@ impl<'a> Evaluator<'a> {
                 }
             }
         }
-        if let Ok(paragraphs) = document.story_range_paragraphs() {
+        if let Some(paragraphs) = paragraphs {
             let mut names = HashMap::<String, usize>::new();
             for (_, xml) in paragraphs {
                 if let Ok(paragraph) = CT_P::from_xml_fragment(&xml) {
@@ -16899,6 +16901,31 @@ fn weekday(value: FieldDateTime) -> usize {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fx222_evaluator_reuses_one_owned_paragraph_inventory() {
+        let mut document = Document::new();
+        document
+            .add_paragraph("")
+            .add_run("")
+            .add_field("DATE", "old")
+            .unwrap();
+        let mut table = document.add_table(32, 8);
+        for row in 0..32 {
+            for column in 0..8 {
+                table
+                    .cell(row, column)
+                    .unwrap()
+                    .set_text(&format!("cell {row} {column}"));
+            }
+        }
+        let document = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+        crate::document::STORY_SOURCE_BUILDS.set(0);
+        let context = FieldEvaluationContext::default();
+        let evaluator = Evaluator::new(&document, &context);
+        assert!(evaluator.bookmarks.is_empty());
+        assert_eq!(crate::document::STORY_SOURCE_BUILDS.get(), 1);
+    }
+
     use rdocx_oxml::document::BodyContent;
     use rdocx_oxml::properties::CT_PPr;
     use rdocx_oxml::table::{CT_Row, CT_Tbl, CT_Tc};
