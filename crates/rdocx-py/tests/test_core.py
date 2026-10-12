@@ -610,6 +610,54 @@ def test_fonts_embed_list_and_remove_faces_with_explicit_licences(tmp_path):
         assert not any(name.startswith("word/fonts/") for name in archive.namelist())
 
 
+def test_renders_draw_the_faces_the_font_table_embeds(tmp_path):
+    import re
+    from pathlib import Path
+
+    import rdocx
+
+    fonts = Path(__file__).parents[2] / "oxml-layout" / "fonts"
+
+    def renamed(path, old, new):
+        data = path.read_bytes()
+        for encoding in ("ascii", "utf-16-be"):
+            data = data.replace(old.encode(encoding), new.encode(encoding))
+        return data
+
+    licence = rdocx.FontEmbeddingLicense(authorized=True, identity="Apache-2.0: Caladea")
+    document = rdocx.Document()
+    document.add_paragraph("").add_run("Embedded regular").font.name = "Embedia"
+    bold = document.paragraphs[-1].add_run(" and bold")
+    bold.font.name = "Embedia"
+    document.paragraphs[-1].runs[-1].font.bold = True
+    document.embed_font(
+        "Embedia", renamed(fonts / "Caladea-Regular.ttf", "Caladea", "Embedia"), license=licence
+    )
+    document.embed_font(
+        "Embedia",
+        renamed(fonts / "Caladea-Bold.ttf", "Caladea", "Embedia"),
+        "bold",
+        license=licence,
+    )
+    document.save(tmp_path / "embedded.docx")
+    reopened = rdocx.Document(tmp_path / "embedded.docx")
+    face_name = re.compile(rb"/Embedia(-Bold)?(?![A-Za-z0-9-])")
+    pdf = reopened.to_pdf()
+    assert {match.group(0) for match in face_name.finditer(pdf)} == {
+        b"/Embedia",
+        b"/Embedia-Bold",
+    }
+
+    # A caller font of the same family wins over the embedded face.
+    caller = renamed(fonts / "Carlito-Regular.ttf", "Carlito", "Embedia")
+    with_caller = reopened.to_pdf(fonts=[("Embedia", caller)])
+    assert with_caller != pdf
+    assert {match.group(0) for match in face_name.finditer(with_caller)} == {
+        b"/Embedia",
+        b"/Embedia-Bold",
+    }
+
+
 def test_embed_font_reads_bytes_like_objects_and_binary_files(tmp_path):
     from pathlib import Path
 

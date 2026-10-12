@@ -4771,6 +4771,44 @@ def test_font_embedding_embeds_lists_and_removes_faces_with_an_explicit_license(
     assert Presentation.from_bytes(data).validate() == ()
 
 
+def _renamed_caladea(face, name):
+    """A bundled Caladea face whose family is renamed to ``name``, same length."""
+    assert len(name) == len("Caladea")
+    data = _caladea(face).read_bytes()
+    for encoding in ("ascii", "utf-16-be"):
+        data = data.replace("Caladea".encode(encoding), name.encode(encoding))
+    return data
+
+
+def test_renders_draw_the_faces_the_deck_embeds(tmp_path):
+    from rpptx import FontEmbeddingLicense, Presentation
+    from rpptx.util import Inches
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    slide.shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(1)).text_frame.text = (
+        "Embedded regular"
+    )
+    prs.slides[0].shapes[-1].text_frame.add_paragraph().text = "and bold"
+    paragraphs = prs.slides[0].shapes[-1].text_frame.paragraphs
+    regular, bold = (paragraph.runs[0] for paragraph in paragraphs)
+    regular.font.name = "Embedia"
+    bold.font.name = "Embedia"
+    bold.font.bold = True
+    face_name = re.compile(rb"/Embedia(-Bold)?(?![A-Za-z0-9-])")
+    assert not face_name.search(prs.to_pdf())
+
+    licensed = FontEmbeddingLicense(authorized=True, identity="Apache-2.0: Caladea")
+    prs.embed_font("Embedia", _renamed_caladea("Regular", "Embedia"), license=licensed)
+    prs.embed_font("Embedia", _renamed_caladea("Bold", "Embedia"), "bold", license=licensed)
+    prs.save(tmp_path / "embedded.pptx")
+    pdf = Presentation(tmp_path / "embedded.pptx").to_pdf()
+    assert {match.group(0) for match in face_name.finditer(pdf)} == {
+        b"/Embedia",
+        b"/Embedia-Bold",
+    }
+
+
 def test_embed_font_reads_bytes_like_objects_and_binary_files():
     from rpptx import FontEmbeddingLicense, Presentation
 
