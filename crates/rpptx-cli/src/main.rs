@@ -134,34 +134,40 @@ enum FontCommand {
         json: bool,
     },
     /// Embed one face of a TrueType or OpenType font file
+    ///
+    /// The embedded font entry is created when it does not exist, and the
+    /// presentation's embedTrueTypeFonts setting is turned on, which
+    /// PowerPoint requires before it uses embedded fonts.
     Embed {
         file: PathBuf,
-        /// Font file holding one face
-        #[arg(long)]
-        font: PathBuf,
+        /// TrueType or OpenType file holding one face
+        font_file: PathBuf,
         /// Typeface name slides use, normally the font's family name
         #[arg(long)]
-        typeface: String,
-        #[arg(long, value_enum, default_value = "regular")]
+        name: String,
+        /// Face to embed: regular, bold, italic, or bold_italic
+        #[arg(long, value_name = "FACE", value_enum, default_value = "regular")]
         face: FontFace,
-        /// Exact identity of the license that allows embedding
+        /// Confirm that the font license allows embedding it in the presentation
         #[arg(long)]
-        license: String,
-        /// Confirm that the license allows embedding this font
+        license_authorized: bool,
+        /// Exact license identity, such as "OFL-1.1: Example Sans"
         #[arg(long)]
-        authorized: bool,
+        license_identity: String,
         #[arg(long, short = 'o')]
         output: PathBuf,
         /// Output the operation record as JSON
         #[arg(long)]
         json: bool,
     },
-    /// Remove one face, or a whole embedded font when no face is given
+    /// Remove one embedded face, or the whole embedded font without --face
     Remove {
         file: PathBuf,
+        /// Typeface name of the embedded font
         #[arg(long)]
-        typeface: String,
-        #[arg(long, value_enum)]
+        name: String,
+        /// Embedded face to remove: regular, bold, italic, or bold_italic
+        #[arg(long, value_name = "FACE", value_enum)]
         face: Option<FontFace>,
         #[arg(long, short = 'o')]
         output: PathBuf,
@@ -169,14 +175,14 @@ enum FontCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Set the presentation font flags
-    SetFlags {
+    /// Set the font embedding settings of the presentation
+    Settings {
         file: PathBuf,
-        /// Whether PowerPoint uses the embedded fonts
-        #[arg(long)]
+        /// Use and keep the embedded TrueType fonts: true or false
+        #[arg(long, value_name = "BOOL")]
         embed_true_type_fonts: Option<bool>,
-        /// Whether PowerPoint embeds only used characters when it saves
-        #[arg(long)]
+        /// Embed only the characters in use when PowerPoint saves: true or false
+        #[arg(long, value_name = "BOOL")]
         save_subset_fonts: Option<bool>,
         #[arg(long, short = 'o')]
         output: PathBuf,
@@ -431,39 +437,39 @@ fn run_cli() {
             FontCommand::List { file, json } => commands::font_list(&file, json),
             FontCommand::Embed {
                 file,
-                font,
-                typeface,
+                font_file,
+                name,
                 face,
-                license,
-                authorized,
+                license_authorized,
+                license_identity,
                 output,
                 json,
             } => commands::font_embed(
                 &file,
                 commands::FontInput {
-                    font: &font,
-                    typeface: &typeface,
+                    font_file: &font_file,
+                    name: &name,
                     kind: face.into(),
-                    license: &license,
-                    authorized,
+                    license_identity: &license_identity,
+                    license_authorized,
                 },
                 &output,
                 json,
             ),
             FontCommand::Remove {
                 file,
-                typeface,
+                name,
                 face,
                 output,
                 json,
-            } => commands::font_remove(&file, &typeface, face.map(Into::into), &output, json),
-            FontCommand::SetFlags {
+            } => commands::font_remove(&file, &name, face.map(Into::into), &output, json),
+            FontCommand::Settings {
                 file,
                 embed_true_type_fonts,
                 save_subset_fonts,
                 output,
                 json,
-            } => commands::font_set_flags(
+            } => commands::font_settings(
                 &file,
                 embed_true_type_fonts,
                 save_subset_fonts,

@@ -2096,19 +2096,20 @@ fn comment_mutations_fail_without_creating_output() {
 }
 
 #[test]
-fn font_commands_embed_list_remove_and_flag_fonts() {
+fn font_commands_embed_list_remove_and_set_font_settings() {
     let temp = TempWorkspace::new("fonts");
     let input = temp.path.join("input.pptx");
     let regular = temp.path.join("regular.pptx");
     let bold = temp.path.join("bold.pptx");
     let face_removed = temp.path.join("face-removed.pptx");
     let font_removed = temp.path.join("font-removed.pptx");
-    let flagged = temp.path.join("flagged.pptx");
+    let configured = temp.path.join("configured.pptx");
     let refused = temp.path.join("refused.pptx");
     write_deck(&input, &["first"]);
     let fonts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../oxml-layout/fonts");
     let caladea_regular = fonts.join("Caladea-Regular.ttf");
     let caladea_bold = fonts.join("Caladea-Bold.ttf");
+    let regular_len = fs::metadata(&caladea_regular).unwrap().len();
     let arg = |path: &Path| path.to_str().unwrap().to_owned();
     let json_of = |output: Output| -> serde_json::Value {
         assert!(
@@ -2118,6 +2119,24 @@ fn font_commands_embed_list_remove_and_flag_fonts() {
         );
         serde_json::from_slice(&output.stdout).unwrap()
     };
+    let embed = |source: &Path, font: &Path, face: &str, output: &Path, extra: &[&str]| {
+        let mut args = vec![
+            "font".to_owned(),
+            "embed".to_owned(),
+            arg(source),
+            arg(font),
+            "--name".to_owned(),
+            "Caladea".to_owned(),
+            "--face".to_owned(),
+            face.to_owned(),
+            "--license-identity".to_owned(),
+            "OFL-1.1".to_owned(),
+            "--output".to_owned(),
+            arg(output),
+        ];
+        args.extend(extra.iter().map(|value| (*value).to_owned()));
+        cli(&args.iter().map(String::as_str).collect::<Vec<_>>())
+    };
 
     let listed = cli(&["font", "list", &arg(&input)]);
     assert_eq!(
@@ -2125,68 +2144,40 @@ fn font_commands_embed_list_remove_and_flag_fonts() {
         "(no embedded fonts)\n"
     );
 
-    let unauthorized = cli(&[
-        "font",
-        "embed",
-        &arg(&input),
-        "--font",
-        &arg(&caladea_regular),
-        "--typeface",
-        "Caladea",
-        "--license",
-        "OFL-1.1",
-        "--output",
-        &arg(&refused),
-    ]);
+    // Without --license-authorized the facade refuses and nothing is written.
+    let unauthorized = embed(&input, &caladea_regular, "regular", &refused, &[]);
     assert!(!unauthorized.status.success());
     assert!(
         String::from_utf8_lossy(&unauthorized.stderr).contains("explicit caller authorization")
     );
     assert!(!refused.exists());
 
-    let record = json_of(cli(&[
-        "font",
-        "embed",
-        &arg(&input),
-        "--font",
-        &arg(&caladea_regular),
-        "--typeface",
-        "Caladea",
-        "--license",
-        "OFL-1.1",
-        "--authorized",
-        "--output",
-        &arg(&regular),
-        "--json",
-    ]));
+    let record = json_of(embed(
+        &input,
+        &caladea_regular,
+        "regular",
+        &regular,
+        &["--license-authorized", "--json"],
+    ));
     assert_eq!(
         record,
         json!({
             "schema": 1,
             "action": "embed",
-            "typeface": "Caladea",
+            "name": "Caladea",
             "face": "regular",
             "part": "/ppt/fonts/font1.fntdata",
-            "license": "OFL-1.1",
+            "byte_count": regular_len,
             "output": arg(&regular),
         })
     );
-    let embedded = cli(&[
-        "font",
-        "embed",
-        &arg(&regular),
-        "--font",
-        &arg(&caladea_bold),
-        "--typeface",
-        "Caladea",
-        "--face",
+    let embedded = embed(
+        &regular,
+        &caladea_bold,
         "bold",
-        "--license",
-        "OFL-1.1",
-        "--authorized",
-        "--output",
-        &arg(&bold),
-    ]);
+        &bold,
+        &["--license-authorized"],
+    );
     assert!(embedded.status.success());
     assert_eq!(
         String::from_utf8(embedded.stdout).unwrap(),
@@ -2194,7 +2185,6 @@ fn font_commands_embed_list_remove_and_flag_fonts() {
     );
 
     let listed = cli(&["font", "list", &arg(&bold)]);
-    let regular_len = fs::metadata(&caladea_regular).unwrap().len();
     let lines = String::from_utf8(listed.stdout).unwrap();
     let lines = lines.lines().collect::<Vec<_>>();
     assert_eq!(lines.len(), 2, "{lines:?}");
@@ -2205,16 +2195,14 @@ fn font_commands_embed_list_remove_and_flag_fonts() {
     );
     assert!(lines[1].starts_with("Caladea\tbold\teot\t"), "{lines:?}");
     let listed = json_of(cli(&["font", "list", &arg(&bold), "--json"]));
-    assert_eq!(listed["embed_true_type_fonts"], json!(true));
-    assert_eq!(listed["fonts"][0]["typeface"], json!("Caladea"));
-    assert_eq!(listed["fonts"][0]["pitch_family"], json!(18));
-    assert_eq!(listed["fonts"][0]["faces"][1]["face"], json!("bold"));
-    assert!(
-        listed["fonts"][0]["faces"][0]["stored_bytes"]
-            .as_u64()
-            .unwrap()
-            > regular_len
-    );
+    assert_eq!(listed["settings"]["embed_true_type_fonts"], json!(true));
+    let font = &listed["fonts"][0];
+    assert_eq!(font["name"], json!("Caladea"));
+    assert_eq!(font["pitch_family"], json!(18));
+    assert_eq!(font["embedded"][1]["face"], json!("bold"));
+    assert_eq!(font["embedded"][0]["format"], json!("eot"));
+    assert_eq!(font["embedded"][0]["byte_count"], json!(regular_len));
+    assert!(font["embedded"][0]["stored_byte_count"].as_u64().unwrap() > regular_len);
 
     let package = OpcPackage::open(&bold).unwrap();
     assert_eq!(
@@ -2236,7 +2224,7 @@ fn font_commands_embed_list_remove_and_flag_fonts() {
         "font",
         "remove",
         &arg(&bold),
-        "--typeface",
+        "--name",
         "Caladea",
         "--face",
         "regular",
@@ -2244,7 +2232,8 @@ fn font_commands_embed_list_remove_and_flag_fonts() {
         &arg(&face_removed),
         "--json",
     ]));
-    assert_eq!(record["faces"], json!(["regular"]));
+    assert_eq!(record["name"], json!("Caladea"));
+    assert_eq!(record["face"], json!("regular"));
     let package = OpcPackage::open(&face_removed).unwrap();
     assert!(package.get_part("/ppt/fonts/font1.fntdata").is_none());
     assert!(package.get_part("/ppt/fonts/font2.fntdata").is_some());
@@ -2253,7 +2242,7 @@ fn font_commands_embed_list_remove_and_flag_fonts() {
         "font",
         "remove",
         &arg(&face_removed),
-        "--typeface",
+        "--name",
         "Caladea",
         "--face",
         "italic",
@@ -2267,13 +2256,13 @@ fn font_commands_embed_list_remove_and_flag_fonts() {
         "font",
         "remove",
         &arg(&face_removed),
-        "--typeface",
+        "--name",
         "Caladea",
         "--output",
         &arg(&font_removed),
         "--json",
     ]));
-    assert_eq!(record["faces"], json!(["bold"]));
+    assert_eq!(record["face"], json!(null));
     let package = OpcPackage::open(&font_removed).unwrap();
     assert!(
         !package
@@ -2284,29 +2273,32 @@ fn font_commands_embed_list_remove_and_flag_fonts() {
 
     let record = json_of(cli(&[
         "font",
-        "set-flags",
+        "settings",
         &arg(&font_removed),
         "--embed-true-type-fonts",
         "false",
         "--save-subset-fonts",
         "true",
         "--output",
-        &arg(&flagged),
+        &arg(&configured),
         "--json",
     ]));
-    assert_eq!(record["embed_true_type_fonts"], json!(false));
-    assert_eq!(record["save_subset_fonts"], json!(true));
-    let presentation = Presentation::open(&flagged).unwrap();
+    assert_eq!(record["action"], json!("set"));
+    assert_eq!(
+        record["settings"],
+        json!({ "embed_true_type_fonts": false, "save_subset_fonts": true })
+    );
+    let presentation = Presentation::open(&configured).unwrap();
     assert!(!presentation.embed_true_type_fonts());
     assert!(presentation.save_subset_fonts());
     assert!(presentation.validate().is_empty());
-    let no_flag = cli(&[
+    let no_setting = cli(&[
         "font",
-        "set-flags",
-        &arg(&flagged),
+        "settings",
+        &arg(&configured),
         "--output",
         &arg(&refused),
     ]);
-    assert!(!no_flag.status.success());
+    assert!(!no_setting.status.success());
     assert!(!refused.exists());
 }

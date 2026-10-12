@@ -4700,25 +4700,34 @@ def _caladea(face):
 
 def test_font_embedding_embeds_lists_and_removes_faces_with_an_explicit_license(tmp_path):
     import rpptx
-    from rpptx import EmbeddedFontFace, EmbeddedTypeface, Presentation
+    from rpptx import EmbeddedFontFace, EmbeddedTypeface, FontEmbeddingLicense, Presentation
 
     prs = Presentation()
     regular = _caladea("Regular")
     bold = _caladea("Bold").read_bytes()
+    licensed = FontEmbeddingLicense(authorized=True, identity="OFL-1.1")
+    assert (licensed.authorized, licensed.identity) == (True, "OFL-1.1")
+    with pytest.raises(TypeError):
+        FontEmbeddingLicense(identity="OFL-1.1")
     with pytest.raises(TypeError):
         prs.embed_font("Caladea", regular, license="OFL-1.1")
     with pytest.raises(rpptx.RpptxError, match="explicit caller authorization"):
-        prs.embed_font("Caladea", regular, license="OFL-1.1", authorized=False)
+        prs.embed_font(
+            "Caladea", regular,
+            license=FontEmbeddingLicense(authorized=False, identity="OFL-1.1"),
+        )
     with pytest.raises(rpptx.RpptxError, match="exact license identity"):
-        prs.embed_font("Caladea", regular, license=" ", authorized=True)
+        prs.embed_font(
+            "Caladea", regular, license=FontEmbeddingLicense(authorized=True, identity=" "),
+        )
     with pytest.raises(rpptx.RpptxError, match="sfnt"):
-        prs.embed_font("Caladea", b"not a font", license="OFL-1.1", authorized=True)
+        prs.embed_font("Caladea", b"not a font", license=licensed)
     with pytest.raises(ValueError, match="bold_italic"):
-        prs.embed_font("Caladea", regular, "heavy", license="OFL-1.1", authorized=True)
+        prs.embed_font("Caladea", regular, "heavy", license=licensed)
     assert prs.embedded_fonts == ()
 
-    prs.embed_font("Caladea", regular, license="OFL-1.1", authorized=True)
-    prs.embed_font("Caladea", io.BytesIO(bold), "bold", license="OFL-1.1", authorized=True)
+    prs.embed_font("Caladea", regular, license=licensed)
+    prs.embed_font("Caladea", io.BytesIO(bold), "bold", license=licensed)
     assert prs.embed_true_type_fonts is True
     path = tmp_path / "fonts.pptx"
     prs.save(path)

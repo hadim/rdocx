@@ -116,6 +116,34 @@ impl PyComment {
     }
 }
 
+/// The caller's explicit authorization and exact license identity for one
+/// embedded font face. Neither has a default, so authorization is always a
+/// deliberate argument.
+#[pyclass(
+    name = "FontEmbeddingLicense",
+    frozen,
+    get_all,
+    eq,
+    skip_from_py_object
+)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyFontEmbeddingLicense {
+    pub authorized: bool,
+    pub identity: String,
+}
+
+#[pymethods]
+impl PyFontEmbeddingLicense {
+    #[new]
+    #[pyo3(signature = (*, authorized, identity))]
+    fn new(authorized: bool, identity: String) -> Self {
+        Self {
+            authorized,
+            identity,
+        }
+    }
+}
+
 /// One embedded face as the package stores it.
 #[pyclass(name = "EmbeddedFontFace", frozen, eq, skip_from_py_object)]
 #[derive(Clone, PartialEq, Eq)]
@@ -526,25 +554,25 @@ impl PyPresentation {
     }
 
     /// Embeds one face of a TrueType or OpenType font from a path, bytes, or
-    /// a binary file-like object. The caller states the license identity and
+    /// a binary file-like object. The license states the identity and
     /// authorizes the embedding explicitly.
-    #[pyo3(signature = (typeface, font, kind = "regular", *, license, authorized))]
+    #[pyo3(signature = (typeface, font, kind = "regular", *, license))]
     fn embed_font(
         &mut self,
         py: Python<'_>,
         typeface: &str,
         font: &Bound<'_, PyAny>,
         kind: &str,
-        license: String,
-        authorized: bool,
+        license: PyRef<'_, PyFontEmbeddingLicense>,
     ) -> PyResult<()> {
         let kind = embedded_font_kind(kind)?;
         let (data, _) = image_bytes(font)?;
         let font = rpptx::EmbeddedFont::new(
             kind,
             data,
-            rpptx::FontEmbeddingLicense::new(authorized, license),
+            rpptx::FontEmbeddingLicense::new(license.authorized, license.identity.clone()),
         );
+        drop(license);
         py.detach(|| self.inner.embed_font(typeface, font))
             .map_err(|error| rpptx_to_pyerr(py, error))?;
         self.revisions.bump();

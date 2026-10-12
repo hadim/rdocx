@@ -15,7 +15,7 @@ use pyo3::types::PyType;
 use oxml_py_support::{ContentPath, PathSeg, StaleElementError};
 use presentation::{
     PyComment, PyCommentAuthor, PyCommentReply, PyEmbeddedFontFace, PyEmbeddedTypeface,
-    PyPresentation, PyValidationIssue,
+    PyFontEmbeddingLicense, PyPresentation, PyValidationIssue,
 };
 
 pub(crate) fn normalize_index(index: isize, len: usize, kind: &str) -> PyResult<usize> {
@@ -135,6 +135,7 @@ fn _rpptx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyValidationIssue>()?;
     module.add_class::<PyEmbeddedTypeface>()?;
     module.add_class::<PyEmbeddedFontFace>()?;
+    module.add_class::<PyFontEmbeddingLicense>()?;
     slide::register(module)?;
     shape::register(module)?;
     dml::register(module)?;

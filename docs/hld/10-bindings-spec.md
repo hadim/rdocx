@@ -2461,8 +2461,9 @@ when nothing reaches it. `set_embed_true_type_fonts` and
 `set_save_subset_fonts` write `1` or remove the attribute.
 
 Python exposes the same surface as `Presentation.embedded_fonts`,
-`embed_font(typeface, font, kind="regular", *, license, authorized)` with a
-path, bytes, or binary file, `remove_embedded_font(typeface, kind)`,
+`embed_font(typeface, font, kind="regular", *, license)` with a path, bytes,
+or binary file and a `FontEmbeddingLicense(*, authorized, identity)` whose
+arguments have no default, as in rdocx, `remove_embedded_font(typeface, kind)`,
 `remove_font(typeface)`, and the read-write `embed_true_type_fonts` and
 `save_subset_fonts` properties. Face kinds are `regular`, `bold`, `italic`,
 and `bold_italic`. `rpptx font` exposes it on the command line, as described
@@ -3020,17 +3021,21 @@ slide, and output path. The commands use the additive
 `Presentation::resolve_comment` and `Presentation::remove_comment` facade
 methods, which rest on the new `Comment::remove_reply`.
 
-`font` lists, embeds, and removes embedded fonts and sets the presentation font
-flags. `list` prints one line per face with the typeface, the face, the stored
-format, the stored byte count, and the part, and its JSON adds the panose,
-pitch family, character set, relationship id, and both flags. `embed` takes a
-font file with one face, `--typeface`, `--face` (`regular` by default, `bold`,
-`italic`, or `bold_italic`), the license identity in `--license`, and the
-`--authorized` flag, without which it fails. `remove` takes `--typeface` and
-removes one `--face` or, without it, the whole font. `set-flags` takes
-`--embed-true-type-fonts` and `--save-subset-fonts` as `true` or `false`, at
-least one of them. Every mutation requires an explicit output, refuses an
-existing one, and publishes through the shared staged output set.
+`font` lists, embeds, and removes embedded fonts and sets the font embedding
+settings, with the shape of `rdocx font`. `list` prints one line per face with
+the typeface, the face, the stored format, the stored byte count, and the part.
+Its JSON lists each font's `name`, panose, pitch family, character set, and
+`embedded` faces, each with its `face`, relationship id, part, format,
+decoded `byte_count`, and `stored_byte_count`, beside a `settings` object.
+`embed` takes the font file after the presentation, `--name` for the typeface,
+`--face` (`regular` by default, `bold`, `italic`, or `bold_italic`),
+`--license-identity`, and `--license-authorized`, without which the facade
+refuses the embedding. `remove` takes `--name` and removes one `--face` or,
+without it, the whole font. `settings` takes `--embed-true-type-fonts` and
+`--save-subset-fonts` as `true` or `false`, at least one of them, and its
+record carries the resulting `settings` object. Every mutation requires an
+explicit output, refuses an existing one, and publishes through the shared
+staged output set.
 
 Shared range parsing, output-path defaulting, and JSON envelope rules live in
 `oxml-cli-support`. Ranges are positive, one-based, comma-separated values and

@@ -36,7 +36,7 @@ _FontFaceKind = _Literal["regular", "bold", "italic", "bold_italic"]
 __all__ = [
     "Presentation", "CommentAuthor", "Comment", "CommentReply",
     "BoundingBox", "TextLineLayout", "TextFrameLayout", "ValidationIssue",
-    "EmbeddedTypeface", "EmbeddedFontFace",
+    "EmbeddedTypeface", "EmbeddedFontFace", "FontEmbeddingLicense",
     "SlideLayout", "SlideLayoutCollection", "Slide", "Background",
     "SlideCollection", "Shape", "ShapeCollection", "PlaceholderCollection",
     "Image", "AdjustmentCollection", "FillFormat", "LineFormat", "LineEndFormat",
@@ -157,6 +157,15 @@ class ValidationIssue:
 
 
 @_final
+class FontEmbeddingLicense:
+    def __new__(cls, *, authorized: bool, identity: str) -> FontEmbeddingLicense: ...
+    @property
+    def authorized(self) -> bool: ...
+    @property
+    def identity(self) -> str: ...
+
+
+@_final
 class EmbeddedFontFace:
     def __new__(cls, *, _private: _Never) -> EmbeddedFontFace: ...
     @property
@@ -235,8 +244,7 @@ class Presentation:
         font: _ImageFile,
         kind: _FontFaceKind = "regular",
         *,
-        license: str,
-        authorized: bool,
+        license: FontEmbeddingLicense,
     ) -> None: ...
     def remove_embedded_font(
         self, typeface: str, kind: _FontFaceKind

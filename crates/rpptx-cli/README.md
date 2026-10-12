@@ -14,7 +14,7 @@ replaces text, and produces deterministic fixed output.
 - Selected-slide rendering, thumbnails, text diff, replacement, and validation.
 - Modern comment thread listing, addition, replies, resolution, and removal.
 - Embedded font listing, embedding with an explicit license, removal, and the
-  presentation font flags.
+  font embedding settings.
 - Scriptable output covers slide order, notes, comments, recursive group
   content, relationship-backed media, and deterministic rendering diagnostics.
 

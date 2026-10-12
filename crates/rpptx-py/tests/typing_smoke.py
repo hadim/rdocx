@@ -9,6 +9,7 @@ from rpptx import (
     CommentReply,
     EmbeddedFontFace,
     EmbeddedTypeface,
+    FontEmbeddingLicense,
     Inches,
     Length,
     MSO_ANCHOR,
@@ -506,10 +507,12 @@ def exercise_rpptx_text_layout_types(presentation: Presentation) -> None:
 
 
 def exercise_rpptx_font_embedding_types(presentation: Presentation, font: Path) -> None:
-    presentation.embed_font("Caladea", font, license="OFL-1.1", authorized=True)
-    presentation.embed_font(
-        "Caladea", font.read_bytes(), "bold", license="OFL-1.1", authorized=True
-    )
+    license = FontEmbeddingLicense(authorized=True, identity="OFL-1.1")
+    authorized: bool = license.authorized
+    identity: str = license.identity
+    presentation.embed_font("Caladea", font, license=license)
+    presentation.embed_font("Caladea", font.read_bytes(), "bold", license=license)
+    (authorized, identity)
     fonts: tuple[EmbeddedTypeface, ...] = presentation.embedded_fonts
     for entry in fonts:
         typeface: str = entry.typeface
@@ -552,6 +555,7 @@ if TYPE_CHECKING:
     CommentReply()  # type: ignore[call-arg]
     EmbeddedFontFace()  # type: ignore[call-arg]
     EmbeddedTypeface()  # type: ignore[call-arg]
+    FontEmbeddingLicense()  # type: ignore[call-arg]
     Column()  # type: ignore[call-arg]
     ColumnCollection()  # type: ignore[call-arg]
     Font()  # type: ignore[call-arg]
