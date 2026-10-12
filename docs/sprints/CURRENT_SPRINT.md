@@ -6,8 +6,8 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 now contains twenty-nine active stories, twenty-one completed, four running,
-four approved pending implementation. The latest bounded intake includes40 issues and30 PRs, plus final minor-release preparation.
+S91 now contains twenty-nine active stories, twenty-one completed, five running,
+three approved pending implementation. The latest bounded intake includes40 issues and30 PRs, plus final minor-release preparation.
 
 ## Spec references
 
@@ -48,7 +48,7 @@ four approved pending implementation. The latest bounded intake includes40 issue
 | F-X215 | Create charts in Python and replace existing chart data | L | in-progress | codex |
 | F-X216 | Import complete slides and merge decks with source formatting | L | pending | - |
 | F-X217 | Import HTML and Markdown through public Word surfaces | L | in-progress | codex |
-| F-X218 | Export presentations as semantic HTML and Markdown | L | pending | - |
+| F-X218 | Export presentations as semantic HTML and Markdown | L | in-progress | codex |
 | F-X220 | Embed fonts through both native and public package families | L | in-progress | codex |
 | F-X221 | Prepare Word 0.17.0 and PowerPoint 0.15.0 minor releases | L | pending | - |
 | F-X222 | Restore linear Word story range inventory and empty owners | M | in-progress | codex |
@@ -1153,3 +1153,8 @@ F-X222 is claimed in its isolated worker after F204 returned the narrow native i
 ## F-X204 scoped completion, 2026-10-12
 
 Twenty-one of29 stories are completed. The shared one-shot CLI repair integrates in deff731718d60e2fc172dacbffcd8ffc657752d3 with complete field reports, strict civil timestamps, ordered counted replacement maps and atomic publication. The reviewed worker passes native, installed, typing, unattended LibreOffice, verified archive and policy controls. All eight actual focused integration checks pass, including49 unchanged deterministic hashes. This is a dependency-prefix checkpoint. Final full verification and sprint review remain due. Scope remains40 included issues and30 PRs, excluding open discussion264/281. Bibliography and other deferred work remain in S92.
+
+
+## F-X218 isolated native phase, 2026-10-12
+
+F-X218 is claimed after completed dependencies. Initial exclusive leases: crates/rpptx/src/html.rs, crates/rpptx/src/lib.rs, html registration and narrow read metadata only, crates/rpptx/tests/integration.rs, inline semantic controls only. The approved full acceptance remains unchanged. Existing font, chart and Word inventory providers stay under their current owners. Public bindings, CLI and shared HLD changes require explicit phased handover.

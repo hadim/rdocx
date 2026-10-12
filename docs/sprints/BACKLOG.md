@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 232 | 217 | 5 | 6 |
-| **Total** | **557** | **491** | **5** | **57** |
+| X, Cross-cutting | 232 | 217 | 6 | 5 |
+| **Total** | **557** | **491** | **6** | **56** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -776,7 +776,7 @@ HLD14 contract before adopting contributor changes.
 | F-X215 | Create charts in Python and replace existing chart data | S91 | L | in-progress |
 | F-X216 | Import complete slides and merge decks with source formatting | S91 | L | pending |
 | F-X217 | Import HTML and Markdown through public Word surfaces | S91 | L | in-progress |
-| F-X218 | Export presentations as semantic HTML and Markdown | S91 | L | pending |
+| F-X218 | Export presentations as semantic HTML and Markdown | S91 | L | in-progress |
 | F-X219 | Qualify full-range text watermark interoperability | S92 | M | pending |
 | F-X220 | Embed fonts through both native and public package families | S91 | L | in-progress |
 | F-X221 | Prepare Word 0.17.0 and PowerPoint 0.15.0 minor releases | S91 | L | pending |
