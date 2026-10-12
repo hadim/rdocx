@@ -6792,8 +6792,9 @@ pub struct EmbeddedFontFace {
     pub part_name: Option<String>,
     pub format: EmbeddedFontFormat,
     pub stored_len: usize,
-    /// The sfnt bytes, when the stored form can be decoded.
-    pub data: Option<Vec<u8>>,
+    /// The sfnt bytes, when the stored form can be decoded. Faces that
+    /// reference one part share its decoded bytes.
+    pub data: Option<std::sync::Arc<[u8]>>,
 }
 
 /// One `p:embeddedFont` entry and its faces in schema order.
@@ -6809,6 +6810,9 @@ pub struct EmbeddedTypeface {
 impl Presentation {
     /// Returns the embedded fonts of `p:embeddedFontLst` in list order.
     pub fn embedded_fonts(&self) -> Vec<EmbeddedTypeface> {
+        // Each part decodes once, however many faces reference it, so a
+        // list that repeats one large part costs no more than the part.
+        let mut decoded = HashMap::new();
         self.presentation
             .embedded_fonts()
             .iter()
@@ -6819,7 +6823,9 @@ impl Presentation {
                 charset: entry.charset,
                 faces: entry
                     .faces()
-                    .map(|(kind, relationship_id)| self.embedded_font_face(kind, relationship_id))
+                    .map(|(kind, relationship_id)| {
+                        self.embedded_font_face(kind, relationship_id, &mut decoded)
+                    })
                     .collect(),
             })
             .collect()
@@ -6942,7 +6948,7 @@ impl Presentation {
         else {
             return Ok(None);
         };
-        let removed = self.embedded_font_face(kind, &relationship_id);
+        let removed = self.embedded_font_face(kind, &relationship_id, &mut HashMap::new());
         let mut staged = self.clone();
         let entry = staged
             .presentation
@@ -7015,13 +7021,22 @@ impl Presentation {
         &self,
         kind: EmbeddedFontKind,
         relationship_id: &str,
+        decoded: &mut HashMap<String, DecodedEmbeddedFont>,
     ) -> EmbeddedFontFace {
         let part_name = self.embedded_font_target(relationship_id);
         let stored = part_name
             .as_deref()
             .and_then(|part_name| self.package.get_part(part_name));
-        let (format, data) =
-            stored.map_or((EmbeddedFontFormat::Unknown, None), decode_embedded_font);
+        let (format, data) = match (part_name.as_deref(), stored) {
+            (Some(part_name), Some(stored)) => decoded
+                .entry(part_name.to_owned())
+                .or_insert_with(|| {
+                    let (format, data) = decode_embedded_font(stored);
+                    (format, data.map(std::sync::Arc::from))
+                })
+                .clone(),
+            _ => (EmbeddedFontFormat::Unknown, None),
+        };
         EmbeddedFontFace {
             kind,
             relationship_id: relationship_id.to_owned(),
@@ -7134,6 +7149,10 @@ fn validate_font_embedding_license(
 }
 
 /// Classifies a stored font part and decodes it to sfnt bytes when it can.
+/// A font part's stored form and its decoded sfnt bytes, shared by every face
+/// that references the part.
+type DecodedEmbeddedFont = (EmbeddedFontFormat, Option<std::sync::Arc<[u8]>>);
+
 fn decode_embedded_font(bytes: &[u8]) -> (EmbeddedFontFormat, Option<Vec<u8>>) {
     if SfntTables::parse(bytes).is_ok() {
         return (EmbeddedFontFormat::Sfnt, Some(bytes.to_vec()));
@@ -14878,6 +14897,51 @@ fn max_resolved_sample_retention_count() -> usize {
     MAX_RESOLVED_SAMPLE_COUNT.get()
 }
 
+/// Decodes the faces of `p:embeddedFontLst` for the renderer, one font file
+/// per face under its `p:font` typeface, so a run naming that typeface draws
+/// the embedded face. Bold and italic faces are picked by their own weight
+/// and style. MicroType Express faces and parts that decode to no font are
+/// skipped and keep the fallback. A part decodes once, for the first face
+/// that references it, so a hostile list repeating one part costs one copy.
+#[cfg(feature = "render")]
+fn embedded_render_fonts(
+    package: &OpcPackage,
+    presentation_part: &str,
+    presentation: &CT_Presentation,
+    relationships: &Relationships,
+) -> Vec<oxml_layout::FontFile> {
+    let mut seen = HashSet::new();
+    let mut fonts = Vec::new();
+    for entry in presentation.embedded_fonts() {
+        for (_, relationship_id) in entry.faces() {
+            let Some(relationship) =
+                relationships
+                    .get_by_id(relationship_id)
+                    .filter(|relationship| {
+                        relationship.rel_type == rel_types::FONT
+                            && !relationship_is_external(relationship)
+                    })
+            else {
+                continue;
+            };
+            let part_name = OpcPackage::resolve_rel_target(presentation_part, &relationship.target);
+            let Some(stored) = package.get_part(&part_name) else {
+                continue;
+            };
+            if !seen.insert(part_name) {
+                continue;
+            }
+            if let (_, Some(data)) = decode_embedded_font(stored) {
+                fonts.push(oxml_layout::FontFile {
+                    family: entry.typeface.clone(),
+                    data,
+                });
+            }
+        }
+    }
+    fonts
+}
+
 #[cfg(feature = "render")]
 fn prepare_render_context(
     package: &OpcPackage,
@@ -14970,7 +15034,17 @@ fn prepare_render_slides(
     PREPARED_FONT_MANAGER_COUNT.with(|count| count.set(count.get() + 1));
     let mut font_manager = FontManager::new_deterministic()
         .map_err(|error| render_failure(format!("deterministic fonts: {error}")))?;
-    font_manager.load_additional_fonts(fonts);
+    // One list, caller fonts first, so a caller face wins a typeface the deck
+    // also embeds. A second `load_additional_fonts` call would drop the first
+    // set, so the embedded faces join the same list.
+    let mut fonts = fonts.to_vec();
+    fonts.extend(embedded_render_fonts(
+        package,
+        &presentation_part,
+        &presentation,
+        presentation_relationships,
+    ));
+    font_manager.load_additional_fonts(&fonts);
     let mut resolved_slides = Vec::with_capacity(presentation.slide_ids.len());
     let mut text_directions = Vec::with_capacity(presentation.slide_ids.len());
     let mut prepared_slides = Vec::with_capacity(presentation.slide_ids.len());
@@ -15124,7 +15198,7 @@ fn prepare_render_slides(
         input: RenderInput {
             slides: resolved_slides,
             media,
-            fonts: fonts.to_vec(),
+            fonts,
             metadata: None,
             first_slide_number: presentation.first_slide_number() as usize,
         },

@@ -33672,6 +33672,241 @@ fn the_eot_header_reads_names_from_a_windows_symbol_encoded_name_table() {
     );
 }
 
+/// A bundled Caladea face renamed to `name`, a seven-letter family no host and
+/// no bundled font carries, so a PDF naming it can only have drawn this face.
+/// The swap keeps every string length and touches only the `name` table.
+fn renamed_caladea_face(face: &str, name: &str) -> Vec<u8> {
+    assert_eq!(name.len(), "Caladea".len());
+    let mut font = caladea_face(face);
+    let table_count = usize::from(u16::from_be_bytes([font[4], font[5]]));
+    let record = (0..table_count)
+        .map(|index| 12 + index * 16)
+        .find(|record| &font[*record..*record + 4] == b"name")
+        .expect("name table");
+    let offset = u32::from_be_bytes(font[record + 8..record + 12].try_into().unwrap()) as usize;
+    let length = u32::from_be_bytes(font[record + 12..record + 16].try_into().unwrap()) as usize;
+    let utf16 = |text: &str| {
+        text.encode_utf16()
+            .flat_map(u16::to_be_bytes)
+            .collect::<Vec<_>>()
+    };
+    for (from, to) in [
+        ("Caladea".as_bytes().to_vec(), name.as_bytes().to_vec()),
+        (utf16("Caladea"), utf16(name)),
+    ] {
+        let table = &mut font[offset..offset + length];
+        let mut at = 0;
+        while let Some(found) = table[at..]
+            .windows(from.len())
+            .position(|window| window == from)
+        {
+            table[at + found..at + found + from.len()].copy_from_slice(&to);
+            at += found + from.len();
+        }
+    }
+    font
+}
+
+/// Whether `pdf` holds the PDF name `name` as a whole token.
+fn pdf_has_name(pdf: &[u8], name: &[u8]) -> bool {
+    pdf.windows(name.len() + 1).enumerate().any(|(at, window)| {
+        window[0] == b'/'
+            && &window[1..] == name
+            && pdf
+                .get(at + name.len() + 1)
+                .is_none_or(|next| !next.is_ascii_alphanumeric() && *next != b'-')
+    })
+}
+
+/// GitHub issue #360. rpptx's own renders draw a face the deck embeds, the
+/// bold face for a bold run, from uncompressed EOT and from a raw sfnt part.
+#[test]
+#[cfg(all(feature = "render", feature = "default-template"))]
+fn renders_draw_the_faces_the_deck_embeds() {
+    use rpptx::{EmbeddedFont, EmbeddedFontKind};
+
+    let mut source = Presentation::new().unwrap();
+    source.add_slide(0).unwrap();
+    let mut slide = source.slide_mut(0).unwrap();
+    let mut textbox = slide
+        .add_textbox(Emu(457_200), Emu(914_400), Emu(8_229_600), Emu(914_400))
+        .unwrap();
+    textbox.set_text("Embedded regular").unwrap();
+    let mut frame = textbox.text_frame().unwrap();
+    let mut paragraph = frame.paragraph_mut(0).unwrap();
+    paragraph
+        .run_mut(0)
+        .unwrap()
+        .set_font(Some(TextFont::new("Embedia").unwrap()));
+    let mut bold = paragraph.add_run(" and bold");
+    bold.set_font(Some(TextFont::new("Embedia").unwrap()));
+    let mut properties = bold.properties().cloned().unwrap_or_default();
+    properties.bold = Some(true);
+    bold.set_properties(properties);
+    let fallback_pdf = source.to_pdf_deterministic().unwrap();
+    let fallback_png = source.slide_png_deterministic(0, 48.0).unwrap();
+    assert!(!pdf_has_name(&fallback_pdf, b"Embedia"));
+
+    for (kind, face) in [
+        (EmbeddedFontKind::Regular, "Regular"),
+        (EmbeddedFontKind::Bold, "Bold"),
+    ] {
+        source
+            .embed_font(
+                "Embedia",
+                EmbeddedFont::new(
+                    kind,
+                    renamed_caladea_face(face, "Embedia"),
+                    open_font_license(),
+                ),
+            )
+            .unwrap();
+    }
+    let embedded = Presentation::from_bytes(&source.to_bytes().unwrap()).unwrap();
+    let pdf = embedded.to_pdf_deterministic().unwrap();
+    assert!(pdf_has_name(&pdf, b"Embedia"), "the regular face");
+    assert!(pdf_has_name(&pdf, b"Embedia-Bold"), "the bold face");
+    assert!(!pdf_has_name(&pdf, b"Carlito"), "no substitute");
+    assert_ne!(
+        embedded.slide_png_deterministic(0, 48.0).unwrap(),
+        fallback_png
+    );
+
+    // An XOR-obfuscated EOT part draws the same face.
+    let mut package = open_opc(&source.to_bytes().unwrap(), "#360 XOR EOT");
+    let mut xor = package
+        .get_part("/ppt/fonts/font1.fntdata")
+        .unwrap()
+        .to_vec();
+    let flags = u32_le_at(&xor, 12) | 0x1000_0000;
+    xor[12..16].copy_from_slice(&flags.to_le_bytes());
+    let eot_size = u32_le_at(&xor, 0) as usize;
+    let font_data_size = u32_le_at(&xor, 4) as usize;
+    for byte in &mut xor[eot_size - font_data_size..eot_size] {
+        *byte ^= 0x50;
+    }
+    package.set_part("/ppt/fonts/font1.fntdata", xor);
+    let xor = Presentation::from_bytes(&write_package(&package, "#360 XOR EOT", "write")).unwrap();
+    assert_eq!(
+        xor.embedded_fonts()[0].faces[0].format,
+        rpptx::EmbeddedFontFormat::Eot
+    );
+    assert!(pdf_has_name(
+        &xor.to_pdf_deterministic().unwrap(),
+        b"Embedia"
+    ));
+
+    // A raw sfnt part, as other producers write, draws the same face.
+    let mut package = open_opc(&source.to_bytes().unwrap(), "#360 raw sfnt");
+    package.set_part(
+        "/ppt/fonts/font1.fntdata",
+        renamed_caladea_face("Regular", "Embedia"),
+    );
+    let raw = Presentation::from_bytes(&write_package(&package, "#360 raw sfnt", "write")).unwrap();
+    assert!(pdf_has_name(
+        &raw.to_pdf_deterministic().unwrap(),
+        b"Embedia"
+    ));
+}
+
+/// GitHub issue #360. A hostile font list or font part fails cleanly: a part
+/// that many faces repeat decodes once for the listing and once for the
+/// render, and headers whose sizes overrun the part decode to nothing.
+#[test]
+#[cfg(all(feature = "render", feature = "default-template"))]
+fn hostile_embedded_font_parts_and_lists_fail_cleanly() {
+    use rpptx::{EmbeddedFontFormat, EmbeddedFontKind};
+
+    let mut presentation = caladea_deck(&[EmbeddedFontKind::Regular]);
+    presentation.add_slide(0).unwrap();
+    let source = presentation.to_bytes().unwrap();
+    let mut package = open_opc(&source, "#360 repeated part");
+    let xml =
+        String::from_utf8(package.get_part("/ppt/presentation.xml").unwrap().to_vec()).unwrap();
+    let start = xml.find("<p:embeddedFont>").unwrap();
+    let end = xml.find("</p:embeddedFontLst>").unwrap();
+    let entry = &xml[start..end];
+    let repeated = (0..2_000)
+        .map(|index| entry.replace("typeface=\"Caladea\"", &format!("typeface=\"T{index}\"")))
+        .collect::<String>();
+    package.set_part(
+        "/ppt/presentation.xml",
+        format!("{}{repeated}{}", &xml[..start], &xml[end..]).into_bytes(),
+    );
+    let repeated =
+        Presentation::from_bytes(&write_package(&package, "#360 repeated", "write")).unwrap();
+    let fonts = repeated.embedded_fonts();
+    assert_eq!(fonts.len(), 2_000);
+    let first = fonts[0].faces[0].data.clone().unwrap();
+    assert!(fonts.iter().all(|font| {
+        font.faces[0]
+            .data
+            .as_ref()
+            .is_some_and(|data| std::sync::Arc::ptr_eq(data, &first))
+    }));
+    let (input, _) = repeated.render_deterministic().unwrap();
+    assert_eq!(input.fonts.len(), 1, "one part, one decoded face");
+    assert_eq!(input.fonts[0].family, "T0");
+
+    let eot = open_opc(&source, "#360 eot")
+        .get_part("/ppt/fonts/font1.fntdata")
+        .unwrap()
+        .to_vec();
+    let mut huge_font_data = eot.clone();
+    huge_font_data[4..8].copy_from_slice(&0xFFFF_FFF0_u32.to_le_bytes());
+    let mut huge_eot = eot.clone();
+    huge_eot[0..4].copy_from_slice(&u32::MAX.to_le_bytes());
+    let mut compressed = eot.clone();
+    compressed[12..16].copy_from_slice(&0x4_u32.to_le_bytes());
+    let mut xor_garbage = eot.clone();
+    xor_garbage[12..16].copy_from_slice(&0x1000_0000_u32.to_le_bytes());
+    let mut many_tables = caladea_face("Regular");
+    many_tables[4..6].copy_from_slice(&0xFFFF_u16.to_le_bytes());
+    let mut no_tables = caladea_face("Regular");
+    no_tables[4..6].copy_from_slice(&0_u16.to_be_bytes());
+    let mut directory_overrun = caladea_face("Regular");
+    directory_overrun.truncate(64);
+    for (label, part, format) in [
+        (
+            "huge FontDataSize",
+            huge_font_data,
+            EmbeddedFontFormat::Unknown,
+        ),
+        ("huge EOTSize", huge_eot, EmbeddedFontFormat::Unknown),
+        (
+            "MicroType Express",
+            compressed,
+            EmbeddedFontFormat::CompressedEot,
+        ),
+        ("XOR garbage", xor_garbage, EmbeddedFontFormat::Eot),
+        ("numTables 0xFFFF", many_tables, EmbeddedFontFormat::Unknown),
+        ("numTables 0", no_tables, EmbeddedFontFormat::Unknown),
+        (
+            "truncated sfnt",
+            directory_overrun,
+            EmbeddedFontFormat::Unknown,
+        ),
+        (
+            "truncated EOT",
+            eot[..30].to_vec(),
+            EmbeddedFontFormat::Unknown,
+        ),
+        ("empty part", Vec::new(), EmbeddedFontFormat::Unknown),
+    ] {
+        let mut package = open_opc(&source, label);
+        package.set_part("/ppt/fonts/font1.fntdata", part);
+        let hostile = Presentation::from_bytes(&write_package(&package, label, "write")).unwrap();
+        let face = &hostile.embedded_fonts()[0].faces[0];
+        assert_eq!(
+            (face.format, face.data.is_none()),
+            (format, true),
+            "{label}"
+        );
+        let (input, _) = hostile.render_deterministic().unwrap();
+        assert!(input.fonts.is_empty(), "{label}");
+    }
+}
+
 type DeckFontPartState = (
     String,
     String,

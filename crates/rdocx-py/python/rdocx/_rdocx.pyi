@@ -1047,7 +1047,8 @@ class Document:
         directory whose ``.ttf``, ``.otf`` and ``.ttc`` files are named after
         their family. When both are given, the directory fonts follow the
         ``fonts`` pairs. Those fonts come before every other font source, as
-        ``rdocx convert --font-dir`` does, and a family they do not provide
+        ``rdocx convert --font-dir`` does, so a caller font wins over an
+        embedded face of the same family, and a family they do not provide
         resolves as without them. A missing ``font_dir`` raises
         ``FileNotFoundError`` and a file ``NotADirectoryError``. The PNG, image
         and SVG render methods, ``layout`` and ``layout_page`` take the same two

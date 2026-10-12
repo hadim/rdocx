@@ -156,7 +156,7 @@ pub struct PyEmbeddedFontFace {
     part_name: Option<String>,
     format: &'static str,
     stored_len: usize,
-    data: Option<Vec<u8>>,
+    data: Option<std::sync::Arc<[u8]>>,
 }
 
 impl From<rpptx::EmbeddedFontFace> for PyEmbeddedFontFace {

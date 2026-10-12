@@ -29873,9 +29873,11 @@ impl Document {
     ) -> rdocx_layout::LayoutInput {
         let mut input = self.build_layout_input();
         input.revision_view = options.revision_view;
-        input
-            .fonts
-            .extend(rdocx_layout::FontFile::from_refs(font_files));
+        // Caller faces load before the embedded ones so they win a family
+        // both supply, as an installed font is reported to win in Office.
+        let embedded = std::mem::take(&mut input.fonts);
+        input.fonts = rdocx_layout::FontFile::from_refs(font_files);
+        input.fonts.extend(embedded);
         input
     }
 
@@ -30765,26 +30767,39 @@ impl Document {
     fn extract_embedded_fonts(&self) -> Vec<rdocx_layout::FontFile> {
         if let (Some(table), Some(owner)) = (&self.font_table, &self.font_table_part_name) {
             let relationships = self.package.get_part_rels(owner);
-            return table
-                .fonts()
-                .iter()
-                .flat_map(|font| {
-                    font.embedded_fonts.iter().filter_map(|embedded| {
-                        let relationship = relationships?.items.iter().find(|relationship| {
-                            relationship.id == embedded.relationship_id
-                                && relationship.rel_type == rel_types::FONT
+            // A part decodes once, for the first face that references it, so
+            // a hostile table repeating one part costs one copy.
+            let mut seen = std::collections::HashSet::new();
+            let mut fonts = Vec::new();
+            for font in table.fonts() {
+                for embedded in &font.embedded_fonts {
+                    let Some(relationship) = relationships
+                        .and_then(|relationships| {
+                            relationships.get_by_id(&embedded.relationship_id)
+                        })
+                        .filter(|relationship| {
+                            relationship.rel_type == rel_types::FONT
                                 && relationship_is_internal(relationship)
-                        })?;
-                        let part_name = OpcPackage::resolve_rel_target(owner, &relationship.target);
-                        let data = self.package.get_part(&part_name)?;
-                        let data = deobfuscate_odttf_with_key(data, &embedded.font_key)?;
-                        Some(rdocx_layout::FontFile {
+                        })
+                    else {
+                        continue;
+                    };
+                    let part_name = OpcPackage::resolve_rel_target(owner, &relationship.target);
+                    let Some(data) = self.package.get_part(&part_name) else {
+                        continue;
+                    };
+                    if !seen.insert(part_name) {
+                        continue;
+                    }
+                    if let Some(data) = deobfuscate_odttf_with_key(data, &embedded.font_key) {
+                        fonts.push(rdocx_layout::FontFile {
                             family: font.name.clone(),
                             data,
-                        })
-                    })
-                })
-                .collect();
+                        });
+                    }
+                }
+            }
+            return fonts;
         }
 
         let mut fonts = Vec::new();
@@ -32826,28 +32841,33 @@ fn deobfuscate_odttf_with_key(data: &[u8], font_key: &str) -> Option<Vec<u8>> {
     }
     let guid = font_key_bytes(font_key)?;
 
-    let candidates = odttf_key_candidates(&guid);
-    let decoded: Vec<Vec<u8>> = candidates
-        .iter()
-        .map(|key| {
-            let mut result = data.to_vec();
-            // XOR the first 32 bytes with the 16-byte key, applied twice.
-            for (i, byte) in result.iter_mut().take(32).enumerate() {
-                *byte ^= key[i % 16];
-            }
-            result
-        })
-        .collect();
+    // Only the first 32 bytes are obfuscated, so each key is tried on that
+    // header alone and the part is copied once, for the key that fits.
+    // XOR the header with the 16-byte key, applied twice.
+    let unmask = |key: &[u8; 16]| {
+        let mut header = [0u8; 32];
+        for (index, byte) in header.iter_mut().enumerate() {
+            *byte = data[index] ^ key[index % 16];
+        }
+        header
+    };
+    let candidates = odttf_key_candidates(&guid).map(|key| unmask(&key));
 
     // A well-formed table directory pins down which key was used. Fall back to
     // the weaker signature check for fonts whose header arithmetic is wrong —
     // subsetting tools do emit those — so they still load rather than being
     // dropped entirely.
-    decoded
+    let header = candidates
         .iter()
-        .find(|d| has_consistent_sfnt_header(d))
-        .or_else(|| decoded.iter().find(|d| looks_like_sfnt(d)))
-        .cloned()
+        .find(|header| has_consistent_sfnt_header(header.as_slice()))
+        .or_else(|| {
+            candidates
+                .iter()
+                .find(|header| looks_like_sfnt(header.as_slice()))
+        })?;
+    let mut result = data.to_vec();
+    result[..32].copy_from_slice(header);
+    Some(result)
 }
 
 /// The two candidate XOR keys for ODTTF deobfuscation, most likely first.
@@ -44331,6 +44351,63 @@ mod odttf_tests {
             *b = u8::from_str_radix(&GUID_HEX[i * 2..i * 2 + 2], 16).unwrap();
         }
         g
+    }
+
+    /// GitHub issue #360. Hostile headers decode to nothing without a panic,
+    /// and a part that many font-table records repeat decodes once.
+    #[test]
+    fn hostile_odttf_headers_and_repeated_parts_fail_cleanly() {
+        let key = format!(
+            "{{{}-{}-{}-{}-{}}}",
+            &GUID_HEX[..8],
+            &GUID_HEX[8..12],
+            &GUID_HEX[12..16],
+            &GUID_HEX[16..20],
+            &GUID_HEX[20..]
+        );
+        for num_tables in [0xFFFF_u16, 0] {
+            let mut font = fake_font();
+            font[4..6].copy_from_slice(&num_tables.to_be_bytes());
+            for candidate in odttf_key_candidates(&guid_bytes()) {
+                let hostile = obfuscate(&font, &candidate);
+                assert_eq!(deobfuscate_odttf_with_key(&hostile, &key), None);
+            }
+        }
+        assert_eq!(deobfuscate_odttf_with_key(&fake_font()[..31], &key), None);
+        assert_eq!(deobfuscate_odttf_with_key(&[], &key), None);
+
+        const CARLITO: &[u8] = include_bytes!("../../oxml-layout/fonts/Carlito-Regular.ttf");
+        let mut document = Document::new();
+        document
+            .embed_font(
+                "Embedded",
+                EmbeddedFont::new(
+                    EmbeddedFontKind::Regular,
+                    CARLITO.to_vec(),
+                    key.clone(),
+                    FontEmbeddingLicense::new(true, "OFL-1.1: Carlito"),
+                ),
+            )
+            .unwrap();
+        let mut package =
+            OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+        let xml =
+            String::from_utf8(package.get_part("/word/fontTable.xml").unwrap().to_vec()).unwrap();
+        let start = xml.find("<w:font w:name=\"Embedded\"").unwrap();
+        let end = start + xml[start..].find("</w:font>").unwrap() + "</w:font>".len();
+        let repeated = (0..2_000)
+            .map(|index| xml[start..end].replace("\"Embedded\"", &format!("\"F{index}\"")))
+            .collect::<String>();
+        package.set_part(
+            "/word/fontTable.xml",
+            format!("{}{repeated}{}", &xml[..start], &xml[end..]).into_bytes(),
+        );
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let repeated = Document::from_bytes(&bytes.into_inner()).unwrap();
+        let fonts = repeated.extract_embedded_fonts();
+        assert_eq!(fonts.len(), 1, "one part, one decoded face");
+        assert_eq!(fonts[0].family, "F0");
     }
 
     #[test]

@@ -1265,6 +1265,13 @@ field, so authorization is always an explicit argument. The three settings
 toggles are `bool | None` properties where `None` removes the toggle. None of
 these calls invalidates content handles.
 
+Every render draws the embedded faces for their font-table record name, each
+part decoded once for the first record that references it. Caller fonts, from
+the `*_with_fonts` methods, `font_dir=`, or `--font-dir`, load before the
+embedded faces and win a family both supply. A caller font registered under a
+name its face does not carry resolves through an alias, which comes after the
+faces' own family names, so an embedded face of that family still wins there.
+
 The CLI gains a `font` command group. `font list FILE [--json]` lists each
 record with its embedded faces and the three settings, reporting a face's
 byte count rather than its bytes. `font embed FILE FONT_FILE --name NAME
@@ -2867,6 +2874,19 @@ face left. `remove_font` removes the whole entry. Both drop a relationship that
 no face and no preserved presentation XML still references, and prune its part
 when nothing reaches it. `set_embed_true_type_fonts` and
 `set_save_subset_fonts` write `1` or remove the attribute.
+Faces that reference one part share its decoded bytes, so a list repeating a
+part costs one decode.
+
+The deterministic renders, `to_pdf_deterministic`, the PNG renders, text
+layout, and the notes and handout pages, draw each decodable face for runs
+whose typeface is its `p:font` typeface: uncompressed EOT, XOR-obfuscated
+EOT, and a bare sfnt. Bold and italic runs pick the face whose own weight and
+style match, as caller fonts are picked. A MicroType Express face cannot be
+decoded and keeps the fallback. Each part decodes once, for the first face that
+references it. Caller fonts, where a render accepts them, load before the
+embedded faces and win a family both supply, the precedence rdocx documents
+for its caller fonts. Office is commonly reported to prefer an installed font
+over an embedded one of the same name. That is not verified here.
 
 Python exposes the same surface as `Presentation.embedded_fonts`,
 `embed_font(typeface, font, kind="regular", *, license)` with a path, bytes,
