@@ -2987,7 +2987,7 @@ or tag authority.
 
 ## CLIs
 
-`rpptx-cli` extends the seven-command `rdocx-cli` surface with `inspect`,
+`rpptx-cli` follows the `rdocx-cli` command shape with `inspect`,
 `text`, `convert`, `diff`, `replace`, `validate`, `render`, `thumbnail`,
 `outline`, `comment`, and `font`. It uses clap derive and `serde_json` for
 `--json`.
