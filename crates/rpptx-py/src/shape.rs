@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use oxml_py_support::{ContentPath, PathSeg};
 use pyo3::exceptions::{PyIndexError, PyNotImplementedError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyByteArray, PyBytes, PyIterator, PyList, PySlice, PyString, PyTuple};
+use pyo3::types::{
+    PyAny, PyByteArray, PyBytes, PyIterator, PyList, PyMemoryView, PySlice, PyString, PyTuple,
+};
 use smallvec::smallvec;
 
 use crate::dml::{FillTarget, PyFillFormat, PyLineFormat, PyShadowFormat};
@@ -52,17 +54,24 @@ pub(crate) fn length(py: Python<'_>, value: Option<rpptx::Emu>) -> PyResult<Opti
         .transpose()
 }
 
-/// Reads the bytes of a path, a bytes-like object, or a binary file-like object.
+/// Reads the bytes of a path, bytes, a bytearray, a memoryview, or a binary
+/// file-like object.
 ///
 /// A file-like object is rewound first when it can seek, as python-pptx does.
 pub(crate) fn image_bytes(image_file: &Bound<'_, PyAny>) -> PyResult<(Vec<u8>, String)> {
     fn blob(data: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
+        if data.is_instance_of::<PyMemoryView>() {
+            return blob(&data.call_method0("tobytes")?);
+        }
         match data.cast::<PyBytes>() {
             Ok(bytes) => Ok(bytes.as_bytes().to_vec()),
             Err(_) => data.extract::<Vec<u8>>(),
         }
     }
-    if image_file.is_instance_of::<PyBytes>() || image_file.is_instance_of::<PyByteArray>() {
+    if image_file.is_instance_of::<PyBytes>()
+        || image_file.is_instance_of::<PyByteArray>()
+        || image_file.is_instance_of::<PyMemoryView>()
+    {
         return Ok((blob(image_file)?, "image".to_owned()));
     }
     if image_file.hasattr("read")? {

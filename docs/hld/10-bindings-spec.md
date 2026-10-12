@@ -1009,14 +1009,16 @@ back off after embedding. Removing the last embedded face leaves the toggle as
 it is.
 
 Python exposes the same surface on `Document`. The `fonts` property returns
-`FontDefinition` snapshots whose `embedded_fonts` are `EmbeddedFont` values
+read-only `FontDefinition` snapshots, which Python code cannot construct,
+whose `embedded_fonts` are `EmbeddedFont` values
 with the face `kind` (`regular`, `bold`, `italic`, or `bold_italic`), the
 deobfuscated `data`, the `font_key`, `subsetted`, and a `FontEmbeddingLicense`.
 `set_font(name, *, alternate_name, family, pitch)` adds or replaces a record
 and keeps its embedded faces. `remove_font(name)` and
 `remove_embedded_font(font_name, kind)` return the removed snapshot
 or `None`. `embed_font(font_name, font, kind="regular", *, license, font_key=None,
-subsetted=False)` takes the font bytes or a path, and `license` is a
+subsetted=False)` takes bytes, a bytearray, a memoryview, a binary file
+object, or a path, as rpptx does, and `license` is a
 `FontEmbeddingLicense(authorized=..., identity=...)` with no default for either
 field, so authorization is always an explicit argument. The three settings
 toggles are `bool | None` properties where `None` removes the toggle. None of
@@ -2498,7 +2500,7 @@ when nothing reaches it. `set_embed_true_type_fonts` and
 
 Python exposes the same surface as `Presentation.embedded_fonts`,
 `embed_font(typeface, font, kind="regular", *, license)` with a path, bytes,
-or binary file and a `FontEmbeddingLicense(*, authorized, identity)` whose
+a bytearray, a memoryview, or a binary file and a `FontEmbeddingLicense(*, authorized, identity)` whose
 arguments have no default, as in rdocx, `remove_embedded_font(typeface, kind)`,
 `remove_font(typeface)`, and the read-write `embed_true_type_fonts` and
 `save_subset_fonts` properties. Face kinds are `regular`, `bold`, `italic`,

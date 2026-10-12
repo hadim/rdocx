@@ -208,6 +208,10 @@ def exercise_rdocx_types(path: Path) -> None:
     font_license = FontEmbeddingLicense(authorized=True, identity="Apache-2.0: Caladea")
     document.set_font("Caladea", family="roman", pitch="variable")
     document.embed_font("Caladea", b"font", license=font_license)
+    document.embed_font("Caladea", bytearray(b"font"), "italic", license=font_license)
+    document.embed_font("Caladea", memoryview(b"font"), license=font_license)
+    with open("Caladea-Bold.ttf", "rb") as font_handle:
+        document.embed_font("Caladea", font_handle, "bold_italic", license=font_license)
     document.embed_font(
         "Caladea", Path("Caladea-Bold.ttf"), "bold", license=font_license, font_key=None
     )
@@ -369,7 +373,9 @@ if TYPE_CHECKING:
     CellCollection()  # type: ignore[call-arg]
     CellParagraphCollection()  # type: ignore[call-arg]
     CoreProperties()  # type: ignore[call-arg]
+    EmbeddedFont()  # type: ignore[call-arg]
     Font()  # type: ignore[call-arg]
+    FontDefinition()  # type: ignore[call-arg]
     Paragraph()  # type: ignore[call-arg]
     ParagraphCollection()  # type: ignore[call-arg]
     ParagraphFormat()  # type: ignore[call-arg]

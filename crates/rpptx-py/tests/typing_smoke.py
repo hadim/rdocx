@@ -512,6 +512,10 @@ def exercise_rpptx_font_embedding_types(presentation: Presentation, font: Path) 
     identity: str = license.identity
     presentation.embed_font("Caladea", font, license=license)
     presentation.embed_font("Caladea", font.read_bytes(), "bold", license=license)
+    presentation.embed_font("Caladea", bytearray(font.read_bytes()), "italic", license=license)
+    presentation.embed_font("Caladea", memoryview(font.read_bytes()), license=license)
+    with font.open("rb") as handle:
+        presentation.embed_font("Caladea", handle, "bold_italic", license=license)
     (authorized, identity)
     fonts: tuple[EmbeddedTypeface, ...] = presentation.embedded_fonts
     for entry in fonts:

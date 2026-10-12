@@ -32,6 +32,7 @@ from .util import Length as _Length
 
 _Path = str | _os.PathLike[str]
 _ImageFile = _Path | bytes | _IO[bytes]
+_FontFile = _Path | bytes | bytearray | memoryview | _IO[bytes]
 _FontFaceKind = _Literal["regular", "bold", "italic", "bold_italic"]
 __all__ = [
     "Presentation", "CommentAuthor", "Comment", "CommentReply",
@@ -241,7 +242,7 @@ class Presentation:
     def embed_font(
         self,
         typeface: str,
-        font: _ImageFile,
+        font: _FontFile,
         kind: _FontFaceKind = "regular",
         *,
         license: FontEmbeddingLicense,

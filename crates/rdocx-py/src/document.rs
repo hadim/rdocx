@@ -8,7 +8,7 @@ use pyo3::exceptions::{
     PyValueError,
 };
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyBytes, PyList, PyTuple};
+use pyo3::types::{PyAny, PyByteArray, PyBytes, PyList, PyMemoryView, PyTuple};
 use smallvec::smallvec;
 
 use rdocx_oxml::{ST_PageOrientation, ST_SectionType};
@@ -945,6 +945,44 @@ impl PyFontEmbeddingLicense {
     }
 }
 
+/// Reads font bytes from bytes, a bytearray, a memoryview, a binary
+/// file-like object, or a path, as rpptx does. A file-like object is rewound
+/// first when it can seek.
+fn font_file_bytes(font: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
+    fn blob(data: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
+        if let Ok(bytes) = data.cast::<PyBytes>() {
+            return Ok(bytes.as_bytes().to_vec());
+        }
+        if let Ok(bytes) = data.cast::<PyByteArray>() {
+            return Ok(bytes.to_vec());
+        }
+        if data.is_instance_of::<PyMemoryView>() {
+            return blob(&data.call_method0("tobytes")?);
+        }
+        Err(PyTypeError::new_err(
+            "font file object must return bytes from read()",
+        ))
+    }
+    if font.is_instance_of::<PyBytes>()
+        || font.is_instance_of::<PyByteArray>()
+        || font.is_instance_of::<PyMemoryView>()
+    {
+        return blob(font);
+    }
+    if font.hasattr("read")? {
+        if font.hasattr("seek")? {
+            font.call_method1("seek", (0,))?;
+        }
+        return blob(&font.call_method0("read")?);
+    }
+    let path: PathBuf = font.extract().map_err(|_| {
+        PyTypeError::new_err(
+            "font must be bytes, a bytearray, a memoryview, a binary file, or a path to a font file",
+        )
+    })?;
+    Ok(std::fs::read(path)?)
+}
+
 impl From<rdocx::FontEmbeddingLicense> for PyFontEmbeddingLicense {
     fn from(value: rdocx::FontEmbeddingLicense) -> Self {
         Self {
@@ -954,7 +992,8 @@ impl From<rdocx::FontEmbeddingLicense> for PyFontEmbeddingLicense {
     }
 }
 
-/// One embedded face of a font-table record, with its deobfuscated bytes.
+/// One embedded face of a font-table record, with its deobfuscated bytes. A
+/// read-only snapshot that `Document.fonts` and the removals return.
 #[pyclass(name = "EmbeddedFont", frozen, eq, skip_from_py_object)]
 #[derive(Clone, PartialEq, Eq)]
 pub struct PyEmbeddedFont {
@@ -967,24 +1006,6 @@ pub struct PyEmbeddedFont {
 
 #[pymethods]
 impl PyEmbeddedFont {
-    #[new]
-    #[pyo3(signature = (*, kind, data, font_key, subsetted, license))]
-    fn new(
-        kind: &str,
-        data: Vec<u8>,
-        font_key: String,
-        subsetted: bool,
-        license: PyRef<'_, PyFontEmbeddingLicense>,
-    ) -> PyResult<Self> {
-        Ok(Self {
-            kind: embedded_font_kind_from_name(kind)?,
-            data,
-            font_key,
-            subsetted,
-            license: license.clone(),
-        })
-    }
-
     #[getter]
     fn kind(&self) -> &'static str {
         embedded_font_kind_name(self.kind)
@@ -1023,7 +1044,8 @@ impl From<rdocx::EmbeddedFont> for PyEmbeddedFont {
     }
 }
 
-/// One font-table record and the faces embedded for it.
+/// One font-table record and the faces embedded for it. A read-only snapshot
+/// that `Document.fonts` and `remove_font` return.
 #[pyclass(name = "FontDefinition", frozen, eq, skip_from_py_object)]
 #[derive(Clone, PartialEq, Eq)]
 pub struct PyFontDefinition {
@@ -1036,24 +1058,6 @@ pub struct PyFontDefinition {
 
 #[pymethods]
 impl PyFontDefinition {
-    #[new]
-    #[pyo3(signature = (*, name, alternate_name = None, family = None, pitch = None, embedded_fonts = Vec::new()))]
-    fn new(
-        name: String,
-        alternate_name: Option<String>,
-        family: Option<String>,
-        pitch: Option<String>,
-        embedded_fonts: Vec<PyRef<'_, PyEmbeddedFont>>,
-    ) -> Self {
-        Self {
-            name,
-            alternate_name,
-            family,
-            pitch,
-            embedded_fonts: embedded_fonts.iter().map(|font| (**font).clone()).collect(),
-        }
-    }
-
     #[getter]
     fn name(&self) -> &str {
         &self.name
@@ -2967,15 +2971,7 @@ impl PyDocument {
         subsetted: bool,
     ) -> PyResult<()> {
         let kind = embedded_font_kind_from_name(kind)?;
-        let data = match font.cast::<PyBytes>() {
-            Ok(bytes) => bytes.as_bytes().to_vec(),
-            Err(_) => {
-                let path: PathBuf = font.extract().map_err(|_| {
-                    PyTypeError::new_err("font must be bytes or a path to a font file")
-                })?;
-                std::fs::read(path)?
-            }
-        };
+        let data = font_file_bytes(font)?;
         let font_key = font_key.unwrap_or_else(|| rdocx::EmbeddedFont::derive_font_key(&data));
         let embedded = rdocx::EmbeddedFont::new(
             kind,

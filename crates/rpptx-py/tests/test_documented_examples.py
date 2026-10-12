@@ -4769,3 +4769,21 @@ def test_font_embedding_embeds_lists_and_removes_faces_with_an_explicit_license(
     assert "embedTrueTypeFonts" not in presentation_xml
     assert "saveSubsetFonts" not in presentation_xml
     assert Presentation.from_bytes(data).validate() == ()
+
+
+def test_embed_font_reads_bytes_like_objects_and_binary_files():
+    from rpptx import FontEmbeddingLicense, Presentation
+
+    path = _caladea("Regular")
+    regular = path.read_bytes()
+    licensed = FontEmbeddingLicense(authorized=True, identity="Apache-2.0: Caladea")
+    prs = Presentation()
+    with path.open("rb") as handle:
+        handle.read(16)
+        prs.embed_font("Caladea", handle, license=licensed)
+    prs.embed_font("Caladea", bytearray(regular), "bold", license=licensed)
+    prs.embed_font("Caladea", memoryview(regular), "italic", license=licensed)
+    prs.embed_font("Caladea", io.BytesIO(regular), "bold_italic", license=licensed)
+    (font,) = Presentation.from_bytes(prs.to_bytes()).embedded_fonts
+    assert [face.kind for face in font.faces] == ["regular", "bold", "italic", "bold_italic"]
+    assert all(face.data == regular for face in font.faces)

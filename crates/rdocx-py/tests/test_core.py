@@ -610,6 +610,34 @@ def test_fonts_embed_list_and_remove_faces_with_explicit_licences(tmp_path):
         assert not any(name.startswith("word/fonts/") for name in archive.namelist())
 
 
+def test_embed_font_reads_bytes_like_objects_and_binary_files(tmp_path):
+    from pathlib import Path
+
+    import rdocx
+
+    path = Path(__file__).parents[2] / "oxml-layout" / "fonts" / "Caladea-Regular.ttf"
+    regular = path.read_bytes()
+    licence = rdocx.FontEmbeddingLicense(authorized=True, identity="Apache-2.0: Caladea")
+    document = rdocx.Document()
+    with path.open("rb") as handle:
+        handle.read(16)
+        document.embed_font("Caladea", handle, license=licence)
+    document.embed_font("Caladea", bytearray(regular), "bold", license=licence)
+    document.embed_font("Caladea", memoryview(regular), "italic", license=licence)
+    document.embed_font("Caladea", io.BytesIO(regular), "bold_italic", license=licence)
+    with pytest.raises(TypeError, match="memoryview"):
+        document.embed_font("Caladea", 42, license=licence)
+    for snapshot in (rdocx.EmbeddedFont, rdocx.FontDefinition):
+        with pytest.raises(TypeError):
+            snapshot()
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    caladea = next(font for font in reopened.fonts if font.name == "Caladea")
+    assert [face.kind for face in caladea.embedded_fonts] == [
+        "regular", "bold", "italic", "bold_italic",
+    ]
+    assert all(face.data == regular for face in caladea.embedded_fonts)
+
+
 def _one_pixel_png(pixel=b"\xff\xff\xff"):
     def chunk(kind, data):
         crc = struct.pack(">I", zlib.crc32(kind + data))

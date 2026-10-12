@@ -1,13 +1,20 @@
 import datetime as _datetime
 import os as _os
 from collections.abc import Iterator as _Iterator, Sequence as _Sequence
-from typing import Literal as _Literal, NoReturn as _Never, final as _final, overload as _overload
+from typing import (
+    IO as _IO,
+    Literal as _Literal,
+    NoReturn as _Never,
+    final as _final,
+    overload as _overload,
+)
 
 from . import shared as _shared
 from .enum import table as _table
 from .enum import text as _text
 
 _Path = str | _os.PathLike[str]
+_FontFile = _Path | bytes | bytearray | memoryview | _IO[bytes]
 _RevisionView = _Literal["accepted", "tracked"]
 _EmbeddedFontKind = _Literal["regular", "bold", "italic", "bold_italic"]
 _BorderStyle = _Literal[
@@ -601,15 +608,7 @@ class FontEmbeddingLicense:
 
 @_final
 class EmbeddedFont:
-    def __new__(
-        cls,
-        *,
-        kind: _EmbeddedFontKind,
-        data: bytes,
-        font_key: str,
-        subsetted: bool,
-        license: FontEmbeddingLicense,
-    ) -> EmbeddedFont: ...
+    def __new__(cls, *, _private: _Never) -> EmbeddedFont: ...
     @property
     def kind(self) -> _EmbeddedFontKind: ...
     @property
@@ -624,15 +623,7 @@ class EmbeddedFont:
 
 @_final
 class FontDefinition:
-    def __new__(
-        cls,
-        *,
-        name: str,
-        alternate_name: str | None = None,
-        family: str | None = None,
-        pitch: str | None = None,
-        embedded_fonts: _Sequence[EmbeddedFont] = ...,
-    ) -> FontDefinition: ...
+    def __new__(cls, *, _private: _Never) -> FontDefinition: ...
     @property
     def name(self) -> str: ...
     @property
@@ -827,7 +818,7 @@ class Document:
     def embed_font(
         self,
         font_name: str,
-        font: bytes | _Path,
+        font: _FontFile,
         kind: _EmbeddedFontKind = "regular",
         *,
         license: FontEmbeddingLicense,
@@ -836,7 +827,8 @@ class Document:
     ) -> None:
         """Embed a TrueType or OpenType face as one face of ``font_name``.
 
-        ``font`` is the font bytes or a path to the font file. ``license``
+        ``font`` is the font bytes, a bytearray, a memoryview, a binary file
+        object, or a path to the font file. ``license``
         must authorize the embedding explicitly and name the exact licence.
         ``font_key`` is a braced uppercase GUID, derived from the font bytes
         when omitted. A missing font-table record is created. Embedding turns
