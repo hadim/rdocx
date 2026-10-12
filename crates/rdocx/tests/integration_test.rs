@@ -2065,6 +2065,137 @@ mod theme_and_embedded_font_tests {
         );
     }
 
+    fn settings_text(bytes: &[u8]) -> String {
+        let package = OpcPackage::from_reader(std::io::Cursor::new(bytes)).unwrap();
+        String::from_utf8(package.get_part("/word/settings.xml").unwrap().to_vec()).unwrap()
+    }
+
+    #[test]
+    fn derived_font_keys_are_deterministic_valid_guids() {
+        let carlito = EmbeddedFont::derive_font_key(CARLITO);
+        assert_eq!(carlito, EmbeddedFont::derive_font_key(CARLITO));
+        assert_ne!(carlito, EmbeddedFont::derive_font_key(CALADEA));
+        assert_eq!(carlito.len(), 38);
+        assert!(carlito.starts_with('{') && carlito.ends_with('}'));
+        assert!(carlito[1..37].split('-').map(str::len).eq([8, 4, 4, 4, 12]));
+        assert!(
+            carlito[1..37]
+                .chars()
+                .all(|character| character == '-' || matches!(character, '0'..='9' | 'A'..='F'))
+        );
+
+        let derived = |data: &[u8]| {
+            let mut document = Document::new();
+            document
+                .embed_font(
+                    "Corpus Sans",
+                    EmbeddedFont::new(
+                        EmbeddedFontKind::Regular,
+                        data.to_vec(),
+                        EmbeddedFont::derive_font_key(data),
+                        license(true, "Apache-2.0: Carlito"),
+                    ),
+                )
+                .unwrap();
+            document.to_bytes().unwrap()
+        };
+        let first = derived(CARLITO);
+        assert_eq!(first, derived(CARLITO));
+        let reopened = Document::from_bytes(&first).unwrap();
+        let embedded = &reopened
+            .fonts()
+            .into_iter()
+            .find(|font| font.name == "Corpus Sans")
+            .unwrap()
+            .embedded_fonts[0]
+            .clone();
+        assert_eq!(embedded.font_key, carlito);
+        assert_eq!(embedded.data, CARLITO);
+    }
+
+    #[test]
+    fn embedding_creates_a_missing_record_and_turns_on_embed_true_type_fonts() {
+        let mut document = Document::new();
+        assert_eq!(document.embed_true_type_fonts(), None);
+        assert!(
+            document
+                .embed_font(
+                    " ",
+                    EmbeddedFont::new(
+                        EmbeddedFontKind::Regular,
+                        CARLITO.to_vec(),
+                        FONT_KEY,
+                        license(true, "Apache-2.0: Carlito"),
+                    ),
+                )
+                .is_err()
+        );
+        let before = document.to_bytes().unwrap();
+        let denied = EmbeddedFont::new(
+            EmbeddedFontKind::Regular,
+            CARLITO.to_vec(),
+            FONT_KEY,
+            license(false, "Apache-2.0: Carlito"),
+        );
+        assert!(document.embed_font("New Font", denied).is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+        assert!(document.fonts().iter().all(|font| font.name != "New Font"));
+
+        document.embed_font("New Font", embedded_font()).unwrap();
+        let record = document
+            .fonts()
+            .into_iter()
+            .find(|font| font.name == "New Font")
+            .unwrap();
+        assert_eq!(record.alternate_name, None);
+        assert_eq!(record.family, None);
+        assert_eq!(record.embedded_fonts, vec![embedded_font()]);
+        assert_eq!(document.embed_true_type_fonts(), Some(true));
+        let bytes = document.to_bytes().unwrap();
+        assert!(settings_text(&bytes).contains("<w:embedTrueTypeFonts/>"));
+
+        let mut reopened = Document::from_bytes(&bytes).unwrap();
+        assert_eq!(reopened.embed_true_type_fonts(), Some(true));
+        reopened.set_embed_true_type_fonts(false).unwrap();
+        reopened.set_embed_system_fonts(false).unwrap();
+        reopened.set_save_subset_fonts(true).unwrap();
+        let switched_off = reopened.to_bytes().unwrap();
+        let settings = settings_text(&switched_off);
+        assert!(settings.contains(r#"<w:embedTrueTypeFonts w:val="false"/>"#));
+        assert!(settings.contains(r#"<w:embedSystemFonts w:val="false"/>"#));
+        assert!(settings.contains("<w:saveSubsetFonts/>"));
+        let reopened = Document::from_bytes(&switched_off).unwrap();
+        assert_eq!(reopened.embed_true_type_fonts(), Some(false));
+        assert_eq!(reopened.embed_system_fonts(), Some(false));
+        assert_eq!(reopened.save_subset_fonts(), Some(true));
+
+        let mut again = reopened;
+        assert_eq!(again.remove_embed_system_fonts().unwrap(), Some(false));
+        assert_eq!(again.embed_system_fonts(), None);
+        again
+            .embed_font(
+                "New Font",
+                EmbeddedFont::new(
+                    EmbeddedFontKind::Bold,
+                    CALADEA.to_vec(),
+                    EmbeddedFont::derive_font_key(CALADEA),
+                    license(true, "Apache-2.0: Caladea"),
+                ),
+            )
+            .unwrap();
+        assert_eq!(again.embed_true_type_fonts(), Some(true));
+        assert_eq!(
+            again
+                .fonts()
+                .into_iter()
+                .find(|font| font.name == "New Font")
+                .unwrap()
+                .embedded_fonts
+                .len(),
+            2
+        );
+    }
+
     #[test]
     fn font_table_preserves_unknown_children_and_relationship_attributes() {
         let mut document = Document::new();

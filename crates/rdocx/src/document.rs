@@ -318,6 +318,28 @@ impl EmbeddedFont {
         self.subsetted = subsetted;
         self
     }
+
+    /// Derive a deterministic OOXML font key from the font bytes.
+    ///
+    /// The key is the first 16 bytes of the SHA-256 of `data`, written as an
+    /// uppercase braced GUID, so the same font always gets the same key and
+    /// the same package bytes.
+    pub fn derive_font_key(data: &[u8]) -> String {
+        use sha2::{Digest, Sha256};
+        let digest = Sha256::digest(data);
+        let hex: String = digest[..16]
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect();
+        format!(
+            "{{{}-{}-{}-{}-{}}}",
+            &hex[0..8],
+            &hex[8..12],
+            &hex[12..16],
+            &hex[16..20],
+            &hex[20..32]
+        )
+    }
 }
 
 impl From<EmbeddedFontKind> for FontFaceKind {
@@ -24892,6 +24914,51 @@ impl Document {
         self.stage_settings_removal(CT_Settings::remove_remove_date_and_time)
     }
 
+    /// Return the `w:embedTrueTypeFonts` toggle from the settings part.
+    pub fn embed_true_type_fonts(&self) -> Option<bool> {
+        self.settings.as_ref()?.embed_true_type_fonts()
+    }
+
+    /// Set the `w:embedTrueTypeFonts` toggle in the relationship-resolved settings part.
+    pub fn set_embed_true_type_fonts(&mut self, value: bool) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_embed_true_type_fonts(value))
+    }
+
+    /// Remove the `w:embedTrueTypeFonts` toggle, pruning an empty part this facade created.
+    pub fn remove_embed_true_type_fonts(&mut self) -> Result<Option<bool>> {
+        self.stage_settings_removal(CT_Settings::remove_embed_true_type_fonts)
+    }
+
+    /// Return the `w:embedSystemFonts` toggle from the settings part.
+    pub fn embed_system_fonts(&self) -> Option<bool> {
+        self.settings.as_ref()?.embed_system_fonts()
+    }
+
+    /// Set the `w:embedSystemFonts` toggle in the relationship-resolved settings part.
+    pub fn set_embed_system_fonts(&mut self, value: bool) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_embed_system_fonts(value))
+    }
+
+    /// Remove the `w:embedSystemFonts` toggle, pruning an empty part this facade created.
+    pub fn remove_embed_system_fonts(&mut self) -> Result<Option<bool>> {
+        self.stage_settings_removal(CT_Settings::remove_embed_system_fonts)
+    }
+
+    /// Return the `w:saveSubsetFonts` toggle from the settings part.
+    pub fn save_subset_fonts(&self) -> Option<bool> {
+        self.settings.as_ref()?.save_subset_fonts()
+    }
+
+    /// Set the `w:saveSubsetFonts` toggle in the relationship-resolved settings part.
+    pub fn set_save_subset_fonts(&mut self, value: bool) -> Result<()> {
+        self.stage_settings_mutation(|settings| settings.set_save_subset_fonts(value))
+    }
+
+    /// Remove the `w:saveSubsetFonts` toggle, pruning an empty part this facade created.
+    pub fn remove_save_subset_fonts(&mut self) -> Result<Option<bool>> {
+        self.stage_settings_removal(CT_Settings::remove_save_subset_fonts)
+    }
+
     /// Return the `w:mirrorMargins` toggle from the settings part.
     pub fn mirror_margins(&self) -> Option<bool> {
         self.settings.as_ref()?.mirror_margins()
@@ -25468,7 +25535,18 @@ impl Document {
     }
 
     /// Embed caller-provided font bytes after explicit license authorization.
+    ///
+    /// A missing font-table record named `font_name` is created bare, with no
+    /// alternate name, family or pitch. Embedding also turns on
+    /// `w:embedTrueTypeFonts`: Word uses an embedded face without it, but the
+    /// toggle is what makes Word keep embedding fonts when it saves the
+    /// document again. `set_embed_true_type_fonts(false)` turns it back off.
+    /// Every check runs before the document changes, and a refused embed
+    /// changes nothing.
     pub fn embed_font(&mut self, font_name: &str, embedded: EmbeddedFont) -> Result<()> {
+        if font_name.trim().is_empty() {
+            return Err(Error::Other("font name must not be empty".to_owned()));
+        }
         if !embedded.license.authorized {
             return Err(Error::Other(
                 "font embedding requires explicit caller authorization".to_owned(),
@@ -25506,13 +25584,20 @@ impl Document {
         let mut candidate = self.font_table_mutation_candidate()?;
         let table = candidate
             .font_table
+            .as_mut()
+            .expect("font-table mutation candidate has a model");
+        if !table.fonts().iter().any(|font| font.name == font_name) {
+            table.set_font(font_name.to_owned(), None, None, None);
+        }
+        let table = candidate
+            .font_table
             .as_ref()
             .expect("font-table mutation candidate has a model");
         let font = table
             .fonts()
             .iter()
             .find(|font| font.name == font_name)
-            .ok_or_else(|| Error::Other(format!("font-table record {font_name} does not exist")))?;
+            .expect("font-table record exists after staging");
         let kind = FontFaceKind::from(embedded.kind);
         let existing = font
             .embedded_fonts
@@ -25634,6 +25719,16 @@ impl Document {
             .to_xml()?;
         candidate.font_table_dirty = true;
         candidate.invalidate_layout();
+        let candidate = if candidate.embed_true_type_fonts() == Some(true) {
+            candidate
+        } else {
+            let mut settings_candidate = candidate.settings_mutation_candidate()?;
+            settings_candidate
+                .settings
+                .get_or_insert_with(CT_Settings::new)
+                .set_embed_true_type_fonts(true)?;
+            settings_candidate
+        };
         self.commit_staged_mutation(candidate);
         Ok(())
     }
