@@ -34000,6 +34000,92 @@ fn a_caller_font_wins_over_an_embedded_face_of_the_same_typeface() {
     );
 }
 
+/// A caller font only named after the typeface, the file `Embedia.ttf` of
+/// `--font-dir` that holds Carlito, wins over the face the deck embeds for
+/// that typeface, as it does on a deck that embeds no font. The Carlito face
+/// is renamed `Labeled` so it is told apart from the bundled Carlito.
+#[test]
+#[cfg(all(feature = "render", feature = "default-template"))]
+fn a_caller_font_named_after_a_typeface_wins_over_its_embedded_face() {
+    use rpptx::{EmbeddedFont, EmbeddedFontKind};
+
+    let embedded_face = renamed_caladea_face("Regular", "Embedia");
+    let carlito = renamed_face(
+        fs::read(workspace_root().join("crates/oxml-layout/fonts/Carlito-Regular.ttf"))
+            .expect("bundled Carlito face"),
+        "Carlito",
+        "Labeled",
+    );
+    let caller = [("Embedia", carlito.as_slice())];
+    let mut source = Presentation::new().unwrap();
+    source.add_slide(0).unwrap();
+    let mut slide = source.slide_mut(0).unwrap();
+    let mut textbox = slide
+        .add_textbox(Emu(457_200), Emu(914_400), Emu(8_229_600), Emu(914_400))
+        .unwrap();
+    textbox.set_text("Caller or embedded").unwrap();
+    let mut frame = textbox.text_frame().unwrap();
+    frame
+        .paragraph_mut(0)
+        .unwrap()
+        .run_mut(0)
+        .unwrap()
+        .set_font(Some(TextFont::new("Embedia").unwrap()));
+    source
+        .embed_font(
+            "Embedia",
+            EmbeddedFont::new(
+                EmbeddedFontKind::Regular,
+                embedded_face.clone(),
+                open_font_license(),
+            ),
+        )
+        .unwrap();
+    let bytes = source.to_bytes().unwrap();
+    let deck = Presentation::from_bytes(&bytes).unwrap();
+    let mut plain = Presentation::from_bytes(&bytes).unwrap();
+    plain
+        .remove_font("Embedia")
+        .unwrap()
+        .expect("embedded typeface");
+    let plain = Presentation::from_bytes(&plain.to_bytes().unwrap()).unwrap();
+    let drawn = |deck: &Presentation, fonts: &[(&str, &[u8])]| {
+        let (_, layout) = deck.render_deterministic_with_fonts(fonts).unwrap();
+        layout
+            .fonts
+            .iter()
+            .map(|font| {
+                if *font.data == *embedded_face {
+                    "embedded"
+                } else if *font.data == *carlito {
+                    "caller"
+                } else {
+                    "another face"
+                }
+            })
+            .filter(|face| *face != "another face")
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(drawn(&deck, &[]), ["embedded"]);
+    assert_eq!(drawn(&plain, &caller), ["caller"]);
+    assert_eq!(drawn(&deck, &caller), ["caller"]);
+    let png = |deck: &Presentation| {
+        deck.slide_png_deterministic_with_fonts(0, 50.0, &caller)
+            .unwrap()
+            .expect("slide PNG")
+    };
+    assert_eq!(png(&deck), png(&plain));
+    assert_ne!(
+        png(&deck),
+        deck.slide_png_deterministic(0, 50.0).unwrap().unwrap()
+    );
+    assert_eq!(
+        deck.to_pdf_deterministic_with_fonts(&caller).unwrap(),
+        plain.to_pdf_deterministic_with_fonts(&caller).unwrap()
+    );
+}
+
 /// GitHub issue #360. A hostile font list or font part fails cleanly: a part
 /// that many faces repeat decodes once for the listing and once for the
 /// render, and headers whose sizes overrun the part decode to nothing.
