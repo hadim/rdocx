@@ -484,6 +484,10 @@ pub enum Error {
         message: String,
     },
 
+    /// A font face that cannot be embedded, worded like the rdocx refusal.
+    #[error("{0}")]
+    InvalidFontEmbedding(String),
+
     #[error("{operation} failed: {message}")]
     InvalidEmbeddedMutation {
         operation: &'static str,
@@ -4715,16 +4719,17 @@ impl Presentation {
     /// `typeface` should be the family name of the font, since that is the
     /// name slides use and PowerPoint matches.
     pub fn embed_font(&mut self, typeface: &str, font: EmbeddedFont) -> Result<()> {
-        let operation = "embed font";
-        validate_font_embedding_license(&font.license)
-            .map_err(|message| invalid_presentation_mutation(operation, message))?;
-        let mut entry = CT_EmbeddedFontListEntry::new(typeface)
-            .map_err(|error| invalid_presentation_mutation(operation, error.to_string()))?;
-        let sfnt = SfntTables::parse(&font.data)
-            .map_err(|message| invalid_presentation_mutation(operation, message))?;
+        validate_font_embedding_license(&font.license).map_err(Error::InvalidFontEmbedding)?;
+        let mut entry = CT_EmbeddedFontListEntry::new(typeface).map_err(|error| {
+            Error::InvalidFontEmbedding(match error {
+                OxmlError::InvalidValue(message) => message,
+                other => other.to_string(),
+            })
+        })?;
+        let sfnt = SfntTables::parse(&font.data).map_err(Error::InvalidFontEmbedding)?;
         let eot = sfnt
             .embedded_open_type()
-            .map_err(|message| invalid_presentation_mutation(operation, message))?;
+            .map_err(Error::InvalidFontEmbedding)?;
 
         let mut staged = self.clone();
         let presentation_part = staged.presentation_part.clone();
@@ -4795,7 +4800,7 @@ impl Presentation {
                 staged
                     .presentation
                     .push_embedded_font(entry)
-                    .map_err(|error| invalid_presentation_mutation(operation, error.to_string()))?;
+                    .map_err(|error| Error::InvalidFontEmbedding(error.to_string()))?;
             }
         }
         if let Some(previous) = existing.filter(|previous| *previous != relationship_id) {
