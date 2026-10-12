@@ -403,3 +403,10 @@ def fx195_caller_font_render_signatures(document: Document, directory: Path) -> 
     assert_type(document.layout(fonts=fonts, font_dirs=dirs), tuple[LayoutFragment, ...])
     assert_type(document.layout_page(0, fonts=fonts, font_dirs=dirs), LayoutPage | None)
     assert_type(document.to_pdf(font_dir=directory), bytes)
+
+
+def fx200_checked_list_factory_signatures(document: Document) -> None:
+    assert_type(document.add_bullet_list_item("item"), Paragraph)
+    assert_type(document.add_bullet_list_item("item", level=8), Paragraph)
+    assert_type(document.add_numbered_list_item("item"), Paragraph)
+    assert_type(document.add_numbered_list_item("item", level=8), Paragraph)

@@ -399086,3 +399086,60 @@ fn toc_entry_overlay_refuses_to_clear_opaque_style_and_stop_owners() {
         }
     }
 }
+
+#[test]
+fn fx200_native_partial_and_all_border_clear_preserve_nonremoved_owner_payload() {
+    use rdocx::paragraph::{BorderStyle, ParagraphBorderEdge};
+    let source = r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:q="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:f="urn:f"><w:body><w:p><w:pPr><q:pBdr f:root='&#65;'><q:start q:val='single' f:remove='yes'><f:remove/></q:start><q:left q:val='double'/><q:bottom q:val='single' f:keep='&#66;'><f:keep>  body  </f:keep></q:bottom><!--keep--><f:sibling>  exact  </f:sibling><f:left f:val='foreign'/></q:pBdr></w:pPr><w:r><w:t>unchanged</w:t></w:r></w:p></w:body></w:document>"#;
+    for clear_all in [false, true] {
+        let mut document = document_with_content_controls(source);
+        {
+            let mut paragraph = document.paragraph_mut(0).unwrap();
+            if clear_all {
+                paragraph.clear_borders();
+            } else {
+                paragraph.set_border_value(ParagraphBorderEdge::Left, None);
+                paragraph.set_border(
+                    ParagraphBorderEdge::Bottom,
+                    BorderStyle::Double,
+                    12,
+                    "112233",
+                );
+            }
+        }
+        let saved = document.to_bytes().unwrap();
+        let xml = document_xml(&mut document);
+        assert!(!xml.contains("<q:start") && !xml.contains("<q:left"));
+        assert!(!xml.contains("f:remove='yes'") && !xml.contains("<f:remove/>"));
+        for exact in [
+            "f:root='&#65;'",
+            "<!--keep-->",
+            "<f:sibling>  exact  </f:sibling>",
+            "<f:left f:val='foreign'/>",
+        ] {
+            assert!(xml.contains(exact), "{xml}");
+        }
+        if clear_all {
+            assert!(!xml.contains("<q:bottom") && !xml.contains("<f:keep>"));
+        } else {
+            assert!(xml.contains("f:keep='&#66;'") && xml.contains("<f:keep>  body  </f:keep>"));
+        }
+        let mut reopened = Document::from_bytes(&saved).unwrap();
+        assert!(
+            reopened.paragraphs()[0]
+                .border(ParagraphBorderEdge::Left)
+                .is_none()
+        );
+        assert_eq!(reopened.paragraphs()[0].has_borders(), !clear_all);
+        if !clear_all {
+            let paragraphs = reopened.paragraphs();
+            let bottom = paragraphs[0].border(ParagraphBorderEdge::Bottom).unwrap();
+            assert_eq!(bottom.style(), "double");
+            assert_eq!(bottom.size_eighths_pt(), Some(12));
+            assert_eq!(bottom.color(), Some("112233"));
+        }
+        assert_eq!(reopened.paragraphs()[0].text(), "unchanged");
+        assert_eq!(reopened.to_bytes().unwrap(), saved);
+        assert_eq!(document.to_bytes().unwrap(), saved);
+    }
+}

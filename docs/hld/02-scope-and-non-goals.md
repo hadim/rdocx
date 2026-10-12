@@ -228,6 +228,17 @@ Public OXML types do not count as facade authoring. Save and reopen means that
 modeled state returns through the public `Document` surface, not merely that raw
 bytes remain in the ZIP package.
 
+Python Word formatting exposes direct optional font modes, caps, strike,
+hidden text, script font names, language and RTL, with checked signed character
+spacing. Paragraph formatting includes ordered tab stops, borders, shading,
+outline level and bidi. Document defaults, nine extended style arguments,
+checked list-item factories, instance start overrides and checklist levels
+have public binding surfaces. These remain narrower than the complete native
+style and numbering package models. Their capability rows retain `B` for that
+boundary, including source-preserved properties without a paint projection.
+Positioned paragraph frames and unimplemented special run effects retain their
+existing layout boundaries. Google Docs import remains best effort.
+
 | Capability ID | Family | Capability or property | Create | Read | Mutate | Remove | Save-reopen | Story | Layout | Render | Determinism | Native | Python | WASM | CLI | Classification | Evidence | Owner |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | DOCX-001 | package | DOCX open, save, and byte serialization | Y | Y | Y | NA | Y | package | Y | Y | Y | Y | Y | Y | Y | complete | implementation:`crates/rdocx/src/document.rs:1955` | - |

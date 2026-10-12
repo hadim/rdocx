@@ -454,6 +454,8 @@ fn generated_tab_leader(leader: crate::TabLeader) -> rdocx_oxml::shared::ST_TabL
         crate::TabLeader::Dot => rdocx_oxml::shared::ST_TabLeader::Dot,
         crate::TabLeader::Hyphen => rdocx_oxml::shared::ST_TabLeader::Hyphen,
         crate::TabLeader::Underscore => rdocx_oxml::shared::ST_TabLeader::Underscore,
+        crate::TabLeader::Heavy => rdocx_oxml::shared::ST_TabLeader::Heavy,
+        crate::TabLeader::MiddleDot => rdocx_oxml::shared::ST_TabLeader::MiddleDot,
     }
 }
 
@@ -4082,6 +4084,132 @@ fn word_value_attributes(xml: &[u8], elements: &[&[u8]]) -> Result<HashSet<Strin
     }
 }
 
+// The final direct owned numId is modeled. Earlier duplicates and Word-looking
+// descendants below opaque owners remain exact. Only the writer's redundant
+// canonical Word closure on the selected numPr/numId is comparison bookkeeping.
+fn fragment_style_numbering_projection(
+    style: &rdocx_oxml::styles::CT_Style,
+    mapped_num_id: Option<u32>,
+) -> Result<Vec<u8>> {
+    let mut writer = quick_xml::Writer::new(Vec::new());
+    style.to_xml(&mut writer)?;
+    let xml = writer.into_inner();
+    let prefix =
+        b"<w:fragment xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\">";
+    let mut wrapped = prefix.to_vec();
+    wrapped.extend_from_slice(&xml);
+    wrapped.extend_from_slice(b"</w:fragment>");
+    let mut reader = NsReader::from_reader(wrapped.as_slice());
+    let mut buffer = Vec::new();
+    struct ProjectionFrame {
+        owned: bool,
+        word_prefix: bool,
+        closure: Option<(usize, usize)>,
+    }
+    let mut path: Vec<ProjectionFrame> = Vec::new();
+    let expected: &[&[u8]] = &[b"fragment", b"style", b"pPr", b"numPr", b"numId"];
+    let mut selected = None;
+    loop {
+        let before = reader.buffer_position() as usize;
+        let event = reader.read_event_into(&mut buffer).map_err(|error| {
+            Error::Other(format!("invalid fragment style numbering XML: {error}"))
+        })?;
+        let is_start = matches!(&event, Event::Start(_));
+        let after = reader.buffer_position() as usize;
+        match event {
+            Event::Start(node) | Event::Empty(node) => {
+                let (namespace, local) = reader.resolver().resolve_element(node.name());
+                let owned = path.iter().all(|entry| entry.owned)
+                    && expected
+                        .get(path.len())
+                        .is_some_and(|expected| *expected == local.as_ref())
+                    && namespace_is_word(&namespace);
+                let (w_namespace, _) = reader
+                    .resolver()
+                    .resolve_element(quick_xml::name::QName(b"w:reference"));
+                let w_is_word = namespace_is_word(&w_namespace);
+                let mut closure = None;
+                if owned && matches!(path.len(), 3 | 4)
+                    && path.last().is_some_and(|parent| parent.word_prefix)
+                    && let Some((name_start, _value_start, value_end)) = attribute_source_span(&wrapped[before..after], b"xmlns:w")
+                    && &wrapped[before + name_start..before + value_end + 1]
+                        == b"xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\""
+                {
+                    let mut start = before + name_start;
+                    while start > before && wrapped[start - 1].is_ascii_whitespace() { start -= 1; }
+                    closure = Some((start - prefix.len(), before + value_end + 1 - prefix.len()));
+                }
+                if owned && path.len() == 4 {
+                    let (key, value) = resolved_element_attribute(
+                        &node,
+                        reader.resolver(),
+                        b"val",
+                        AttributeNamespace::Word,
+                    )?
+                    .ok_or_else(|| {
+                        Error::Other("fragment style numbering value is missing".into())
+                    })?;
+                    let (start, end) = attribute_value_span(&wrapped[before..after], &key)
+                        .ok_or_else(|| {
+                            Error::Other(
+                                "fragment style numbering attribute source was not found".into(),
+                            )
+                        })?;
+                    selected = Some((
+                        value,
+                        before + start - prefix.len(),
+                        before + end - prefix.len(),
+                        closure,
+                        path.last().and_then(|parent| parent.closure),
+                    ));
+                }
+                if is_start {
+                    path.push(ProjectionFrame {
+                        owned,
+                        word_prefix: w_is_word,
+                        closure,
+                    });
+                }
+            }
+            Event::End(_) => {
+                path.pop();
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let mut edits = Vec::new();
+    if let Some((value, start, end, leaf_closure, parent_closure)) = selected {
+        if Some(
+            value
+                .parse::<u32>()
+                .map_err(|_| Error::Other("invalid fragment style numbering ID".into()))?,
+        ) != style.ppr.as_ref().and_then(|properties| properties.num_id)
+        {
+            return Err(Error::Other(
+                "fragment style numbering projection disagrees with its owned reference".into(),
+            ));
+        }
+        if let Some(id) = mapped_num_id {
+            edits.push((start, end, id.to_string().into_bytes()));
+        }
+        for (start, end) in leaf_closure.into_iter().chain(parent_closure) {
+            edits.push((start, end, Vec::new()));
+        }
+    } else if mapped_num_id.is_some() {
+        return Err(Error::Other(
+            "fragment style has no owned numbering reference".into(),
+        ));
+    }
+    let mut xml = xml;
+    edits.sort_by_key(|edit| edit.0);
+    for (start, end, replacement) in edits.into_iter().rev() {
+        xml.splice(start..end, replacement);
+    }
+    Ok(xml)
+}
+
 fn remap_fragment_style_collisions(
     destination: &Document,
     fragment: &mut Document,
@@ -4101,29 +4229,23 @@ fn remap_fragment_style_collisions(
         let Some(existing) = destination.styles.get_by_id(&style.style_id) else {
             continue;
         };
-        let mut comparable_existing = existing.clone();
-        let mut comparable_source = style.clone();
-        let numbering_is_reusable =
-            match style.ppr.as_ref().and_then(|properties| properties.num_id) {
-                None => true,
-                Some(num_id) if reuse_equivalent_numbering => destination
-                    .equivalent_numbering_dependency_id(fragment, num_id)
-                    .is_some_and(|destination_num_id| {
-                        if let Some(properties) = comparable_existing.ppr.as_mut() {
-                            properties.num_id_raw = None;
-                        }
-                        if let Some(properties) = comparable_source.ppr.as_mut() {
-                            properties.num_id = Some(destination_num_id);
-                            properties.num_id_raw = None;
-                        }
-                        true
-                    }),
-                Some(_) => false,
-            };
-        if comparable_existing == comparable_source
-            && (reuse_equivalent || style.is_default)
-            && numbering_is_reusable
-        {
+        let source_num_id = style.ppr.as_ref().and_then(|properties| properties.num_id);
+        let reusable_num_id = source_num_id
+            .filter(|_| reuse_equivalent_numbering)
+            .and_then(|num_id| destination.equivalent_numbering_dependency_id(fragment, num_id));
+        let numbering_is_reusable = source_num_id.is_none() || reusable_num_id.is_some();
+        // Compare the source-owned projection with only the selected numbering
+        // reference remapped. Preservation snapshots and generated namespace
+        // closures are not new style facts, while opaque XML remains exact.
+        let styles_match = if existing == style {
+            true
+        } else if let Some(num_id) = reusable_num_id {
+            fragment_style_numbering_projection(existing, None)?
+                == fragment_style_numbering_projection(style, Some(num_id))?
+        } else {
+            false
+        };
+        if styles_match && (reuse_equivalent || style.is_default) && numbering_is_reusable {
             continue;
         }
         let mut ordinal = 1u64;
@@ -16660,6 +16782,68 @@ mod tests {
     use rdocx_oxml::text::{CT_P, CT_R, Field, FieldSwitch, RunContent};
 
     use super::*;
+
+    #[test]
+    fn fragment_style_numbering_reuse_retains_opaque_reference_facts() {
+        let word = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+        let build = |num_id, abstract_id, keep: &str| {
+            let mut document = Document::new();
+            document.add_list_definition(&[crate::ListLevel::decimal()]);
+            let numbering = format!(
+                r#"<w:numbering xmlns:w="{word}"><w:abstractNum w:abstractNumId="{abstract_id}"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum><w:num w:numId="{num_id}"><w:abstractNumId w:val="{abstract_id}"/></w:num></w:numbering>"#
+            );
+            document.numbering =
+                Some(rdocx_oxml::numbering::CT_Numbering::from_xml(numbering.as_bytes()).unwrap());
+            let styles = format!(
+                r#"<w:styles xmlns:w="{word}" xmlns:f="urn:fragment"><w:style w:type="paragraph" w:styleId="ImportedNumberStyle" f:owner="same"><w:name w:val="Imported"/><w:pPr f:keep="same"><w:numPr><w:numId w:val="{num_id}" f:keep="{keep}"><f:payload value="kept&#32;exact"><w:numId w:val="9"/></f:payload></w:numId></w:numPr></w:pPr></w:style></w:styles>"#
+            );
+            document.styles = rdocx_oxml::styles::CT_Styles::from_xml(styles.as_bytes()).unwrap();
+            document
+        };
+        let destination = build(1, 12, "A");
+        let mut source = build(9, 7, "A");
+        assert_eq!(
+            destination.equivalent_numbering_dependency_id(&source, 9),
+            Some(1)
+        );
+        assert_eq!(
+            fragment_style_numbering_projection(&source.styles.styles[0], Some(1)).unwrap(),
+            fragment_style_numbering_projection(&destination.styles.styles[0], None).unwrap(),
+        );
+        let before = source.styles.to_xml().unwrap();
+        assert!(
+            !remap_fragment_style_collisions(
+                &destination,
+                &mut source,
+                &mut Vec::new(),
+                true,
+                true
+            )
+            .unwrap()
+        );
+        assert_eq!(source.styles.to_xml().unwrap(), before);
+        assert!(source.styles.get_by_id("ImportedNumberStyle").is_some());
+        let mut changed = build(9, 7, "B");
+        assert!(
+            remap_fragment_style_collisions(
+                &destination,
+                &mut changed,
+                &mut Vec::new(),
+                true,
+                true
+            )
+            .unwrap()
+        );
+        assert!(
+            changed
+                .styles
+                .get_by_id("ImportedNumberStyleMerge1")
+                .is_some()
+        );
+        let xml = String::from_utf8(changed.styles.to_xml().unwrap()).unwrap();
+        assert!(xml.contains("f:keep=\"B\""), "{xml}");
+        assert!(xml.contains("kept&#32;exact"), "{xml}");
+    }
 
     #[test]
     fn pagination_cache_failure_keeps_every_receiver_field_and_part() {

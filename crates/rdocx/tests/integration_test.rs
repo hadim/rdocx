@@ -2294,7 +2294,7 @@ mod theme_and_embedded_font_tests {
         let source = root.join("source.docx");
         std::fs::write(&source, authored.to_bytes().unwrap()).unwrap();
         let status = std::process::Command::new("soffice")
-            .arg("--headless")
+            .args(["--headless", "--norestore", "--nodefault", "--nologo"])
             .arg(format!(
                 "-env:UserInstallation=file://{}",
                 profile.display()
@@ -5104,7 +5104,7 @@ fn odt_reader_matches_pinned_libreoffice_structure() {
     std::fs::write(&source, &odt).unwrap();
 
     let status = std::process::Command::new("soffice")
-        .arg("--headless")
+        .args(["--headless", "--norestore", "--nodefault", "--nologo"])
         .arg(format!(
             "-env:UserInstallation=file://{}",
             profile.display()
@@ -10328,7 +10328,7 @@ fn source_built_style_graph_matches_pinned_word_effective_formatting() {
         let source = root.join("source.docx");
         std::fs::write(&source, authored.to_bytes().unwrap()).unwrap();
         let status = std::process::Command::new("soffice")
-            .arg("--headless")
+            .args(["--headless", "--norestore", "--nodefault", "--nologo"])
             .arg(format!(
                 "-env:UserInstallation=file://{}",
                 profile.display()
@@ -10648,6 +10648,7 @@ fn table_style_updates_merge_nested_borders_and_margins() {
                         space: None,
                         color: Some("AABBCC".to_owned()),
                         extra_attributes: Vec::new(),
+                        source_xml: None,
                     }),
                     ..CT_TblBorders::default()
                 }),
@@ -18285,7 +18286,7 @@ mod f269_section_page_semantics {
         std::fs::write(&ours, document.to_pdf_deterministic().unwrap()).unwrap();
 
         let status = std::process::Command::new("soffice")
-            .arg("--headless")
+            .args(["--headless", "--norestore", "--nodefault", "--nologo"])
             .arg(format!(
                 "-env:UserInstallation=file://{}",
                 profile.display()
@@ -18903,7 +18904,7 @@ mod f267_table_style_conditional_tests {
         std::fs::write(&ours, document.to_pdf_deterministic().unwrap()).unwrap();
 
         let status = std::process::Command::new("soffice")
-            .arg("--headless")
+            .args(["--headless", "--norestore", "--nodefault", "--nologo"])
             .arg(format!(
                 "-env:UserInstallation=file://{}",
                 profile.display()
@@ -22386,6 +22387,15 @@ fn decimal_integer_measurements_round_to_the_nearest_integer() {
     let paragraph = &document.paragraphs()[0];
     assert_eq!(paragraph.indent_left(), Some(Length::twips(721)));
     assert_eq!(paragraph.space_before(), Some(Length::twips(120)));
+    let border = paragraph
+        .border(rdocx::paragraph::ParagraphBorderEdge::Top)
+        .unwrap();
+    assert_eq!(border.size_eighths_pt(), Some(4));
+    assert_eq!(border.space_points(), Some(2));
+    assert_eq!(
+        paragraph.tab_stop(0).unwrap().position(),
+        Length::twips(1440)
+    );
     let table = &document.tables()[0];
     assert_eq!(
         table.grid_widths(),
@@ -22416,15 +22426,14 @@ fn decimal_integer_measurements_round_to_the_nearest_integer() {
         assert_eq!(untouched.get_part(part), original.get_part(part), "{part}");
     }
 
-    // A re-serialized part writes the rounded integers.
+    // Re-serializing the part preserves unchanged source-owned border and tab leaves.
     document.add_paragraph("Edited");
     let edited =
         OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
     let body = std::str::from_utf8(edited.get_part("/word/document.xml").unwrap()).unwrap();
     for expected in [
-        r#"w:sz="4""#,
-        r#"w:space="2""#,
-        r#"w:pos="1440""#,
+        r#"<w:top w:val="single" w:sz="4.0" w:space="1.5"/>"#,
+        r#"<w:tab w:val="left" w:pos="1440.0"/>"#,
         r#"w:before="120""#,
         r#"w:line="276""#,
         r#"w:left="721""#,
@@ -22440,6 +22449,48 @@ fn decimal_integer_measurements_round_to_the_nearest_integer() {
     assert_eq!(
         body.matches(r#"<w:tcW w:w="4320" w:type="dxa"/>"#).count(),
         2
+    );
+    // Explicitly authored leaves have no imported lexical owner and write integers.
+    document
+        .add_paragraph("Authored measurements")
+        .border_bottom_with_space(BorderStyle::Single, 4, 2, "000000")
+        .add_tab_stop(TabAlignment::Left, Length::twips(1440));
+    let authored =
+        OpcPackage::from_reader(std::io::Cursor::new(document.to_bytes().unwrap())).unwrap();
+    let authored_body =
+        std::str::from_utf8(authored.get_part("/word/document.xml").unwrap()).unwrap();
+    assert!(
+        authored_body
+            .contains(r#"<w:bottom w:val="single" w:sz="4" w:space="2" w:color="000000"/>"#),
+        "{authored_body}"
+    );
+    assert_eq!(
+        authored_body
+            .matches(r#"<w:tab w:val="left" w:pos="1440"/>"#)
+            .count(),
+        1
+    );
+    assert_eq!(
+        authored_body
+            .matches(r#"<w:top w:val="single" w:sz="4.0" w:space="1.5"/>"#)
+            .count(),
+        1
+    );
+    assert_eq!(
+        authored_body
+            .matches(r#"<w:tab w:val="left" w:pos="1440.0"/>"#)
+            .count(),
+        1
+    );
+    let reopened = Document::from_bytes(&document.to_bytes().unwrap()).unwrap();
+    let reopened_paragraphs = reopened.paragraphs();
+    let authored_paragraph = reopened_paragraphs.last().unwrap();
+    let border = authored_paragraph.bottom_border().unwrap();
+    assert_eq!(border.size_eighths_pt(), Some(4));
+    assert_eq!(border.space_points(), Some(2));
+    assert_eq!(
+        authored_paragraph.tab_stop(0).unwrap().position(),
+        Length::twips(1440)
     );
     let styles = rdocx_oxml::CT_Styles::from_xml(original.get_part("/word/styles.xml").unwrap())
         .unwrap()
@@ -24428,5 +24479,43 @@ fn checked_table_indentation_accepts_signed_twips_and_removes_direct_indent() {
             document.table(0).unwrap().indent().unwrap().to_emu(),
             i64::from(twips) * 635
         );
+    }
+}
+
+#[test]
+fn fx200_checked_one_call_lists_validate_before_allocating_and_round_trip_all_levels() {
+    for numbered in [false, true] {
+        let mut document = Document::new();
+        let before = document.to_bytes().unwrap();
+        let invalid = if numbered {
+            document.try_add_numbered_list_item("bad", 9).map(|_| ())
+        } else {
+            document.try_add_bullet_list_item("bad", 9).map(|_| ())
+        };
+        assert!(invalid.is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+        let invalid = if numbered {
+            document
+                .try_add_numbered_list_item("bad\u{0}", 0)
+                .map(|_| ())
+        } else {
+            document.try_add_bullet_list_item("bad\u{0}", 0).map(|_| ())
+        };
+        assert!(invalid.is_err());
+        assert_eq!(document.to_bytes().unwrap(), before);
+        for level in 0..9 {
+            if numbered {
+                document.try_add_numbered_list_item("item", level).unwrap();
+            } else {
+                document.try_add_bullet_list_item("item", level).unwrap();
+            }
+        }
+        assert_eq!(document.paragraph_count(), 9);
+        let saved = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&saved).unwrap();
+        assert_eq!(reopened.paragraph_count(), 9);
+        assert_eq!(reopened.numbering_definitions().len(), 1);
+        assert_eq!(reopened.numbering_instances().len(), 1);
+        reopened.validate_numbering_graph().unwrap();
     }
 }

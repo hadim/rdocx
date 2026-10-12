@@ -165,6 +165,8 @@ fn _rdocx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyFont>()?;
     module.add_class::<PyColorFormat>()?;
     module.add_class::<PyParagraphFormat>()?;
+    module.add_class::<formatting::PyTabStops>()?;
+    module.add_class::<formatting::PyTabStop>()?;
     module.add_class::<PyTable>()?;
     module.add_class::<PyTableCollection>()?;
     module.add_class::<PyRow>()?;

@@ -6890,7 +6890,7 @@ deterministic hash harness to remain unchanged. Issues264 and281 stay excluded.
 
 Resolve [Issue303](https://github.com/tensorbee/rdocx/issues/303) in S91,
 part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
-coverage checklist. Expose superscript, subscript, caps, spacing, strike, hidden, language/script fonts and RTL. Add paragraph tabs, borders, shading, outline and bidi, extended style properties, document defaults, list helpers, restart/start overrides and checklists. Reuse F-X197 for both bindings' colour contract. Align plain-instance continuation with authenticated Word evidence through an explicitly reviewed change to the prior independent-instance contract. Preserve concrete source identity, explicit restarts, bounded supported constructs and authoritative navigation results.
+coverage checklist. Expose superscript, subscript, caps, spacing, strike, hidden, language/script fonts and RTL. Add paragraph tabs, borders, shading, outline and bidi, extended style properties, document defaults, list helpers, restart/start overrides and checklists. Reuse F-X197 for both bindings' colour contract. Plain instances share abstract-definition counts, while explicit override consumption and rearming retain concrete instance ownership. Opted-in section events defer base-start initialization without consuming an unused override on the first item. EPUB uses the selected native table context for counters, while ODT reports its bounded shared-continuation loss. Preserve concrete source identity, explicit restarts, bounded supported constructs and authoritative navigation results.
 
 **Depends on**: F-X197.
 **Test gate**: regression. Reproduce each missing operation or reported defect

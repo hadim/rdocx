@@ -331,6 +331,28 @@ style-link inspection, and byte-exact producer-extension retention across a
 modeled update. The complete `rdocx-oxml` and `rdocx` suites, public package dry
 runs, archive ceiling, and unchanged 49-entry hash harness complete the gate.
 
+The Word formatting gate exercises installed direct property matrices on body
+and cell-owned runs, including inherited, absent, explicit baseline and both
+vertical-mode transitions. It checks package XML, failed-input atomicity,
+retained live parents, structural retirement, save/reopen, strict typing and
+stubtest. Defaults, tab snapshots, nine style arguments, checked list factories
+and checklist definitions require source-built controls. Deterministic native
+paint uses an authenticated current CLI rather than an implicit Cargo fallback.
+Public OXML source changes require verified local-patched package archives,
+member/source inspection and actual size measurements.
+
+The shared-definition numbering differential pins Word 16.113.2 build
+16.113.26092012 and Poppler 26.01.0. Five saved and normally reopened native
+controls provide 156 exact markers across plain instances, explicit overrides,
+ancestor rearming, level restarts and section events. Counter tests compare
+these immutable printed observations without deriving expected markers from
+product layout. EPUB table-context controls use twelve distinct source-built
+cases, each with a native precondition, deterministic repetition, source
+preservation and save/reopen. Twelve loop cases remain one collected test.
+ODT loss diagnostics retain separate unsupported-export boundaries. These
+controls do not replace existing numbered REF, style-linked or producer-defined
+format assertions and do not authorize an unexplained hash delta.
+
 The style-linked numbering differential uses a source-built document and pins
 Microsoft Word 16.112.3 build 16.112.26083020 on macOS 26.6.2 build 25G83 with
 the `en-GB` locale. Twenty-seven exact Word records cover three levels across
@@ -356,10 +378,9 @@ distribution delta is 0.257661, and the maximum projection distance is
 0.038314. The recorded minimum synthetic-shift distance is 0.049960. Exact
 object-model records remain the text authority because global SSIM is unstable
 for sparse text pages. The public differential uses separate abstract
-definitions for independent instances. A focused regression records the
-intentional contract that distinct concrete `numId` values start independent
-counters even when they share one abstract definition, while this pinned Word
-build continues the shared definition across those instances.
+definitions for independent instances. The later shared-definition differential above supersedes the earlier
+isolated-instance counter qualification. Concrete instance identity remains
+source-owned, while the visible sequence is definition-owned.
 
 The legacy horizontal-rule reader regression classifies canonical, aliased,
 default, locally shadowed, and ancestor-bound Word, VML, and Office names by

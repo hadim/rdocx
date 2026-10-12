@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use oxml_py_support::{PathSeg, RevisionCounter, StaleElementError, revision_to_pyerr};
 use pyo3::exceptions::{PyIndexError, PyOverflowError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyAny, PyBytes, PyList, PyString, PyTuple};
+use pyo3::types::{PyAny, PyBool, PyBytes, PyFloat, PyList, PyMapping, PyString, PyTuple};
 use smallvec::smallvec;
 
 use rdocx_oxml::{ST_PageOrientation, ST_SectionType};
@@ -948,6 +948,18 @@ pub struct PyListLevel {
 
 #[pymethods]
 impl PyListLevel {
+    #[staticmethod]
+    #[pyo3(signature = (*, checked = false))]
+    fn checklist(checked: bool) -> Self {
+        Self {
+            format: "bullet".to_owned(),
+            text: Some(if checked { "☑" } else { "☐" }.to_owned()),
+            start: None,
+            left_indent: None,
+            hanging_indent: None,
+        }
+    }
+
     #[new]
     #[pyo3(signature = (*, format = "decimal", text = None, start = None, left_indent = None, hanging_indent = None))]
     fn new(
@@ -1002,51 +1014,265 @@ struct StyleFormatting {
     left_indent: Option<i64>,
     right_indent: Option<i64>,
     first_line_indent: Option<i64>,
+    alignment: Option<i32>,
+    line_spacing: Option<Py<PyAny>>,
+    underline: Option<Py<PyAny>>,
+    keep_with_next: Option<bool>,
+    keep_together: Option<bool>,
+    page_break_before: Option<bool>,
+    borders: Option<Py<PyAny>>,
+    shading: Option<Py<PyAny>>,
+    tab_stops: Option<Py<PyAny>>,
 }
 
 impl StyleFormatting {
-    /// The run properties, written as the `Font` setters write them on a run.
-    fn run_properties(&self) -> Option<rdocx::CT_RPr> {
-        let font = || self.font_name.clone();
-        let size = self
-            .font_size
-            .map(|emu| rdocx::HalfPoint::from_pt(rdocx::Length::emu(emu).to_pt()));
-        let properties = rdocx::CT_RPr {
-            font_ascii: font(),
-            font_hansi: font(),
-            font_east_asia: font(),
-            font_cs: font(),
-            bold: self.bold,
-            bold_cs: self.bold,
-            italic: self.italic,
-            italic_cs: self.italic,
-            sz: size,
-            sz_cs: size,
-            color: self
-                .color
-                .map(|(red, green, blue)| format!("{red:02X}{green:02X}{blue:02X}")),
-            ..rdocx::CT_RPr::default()
-        };
-        (properties != rdocx::CT_RPr::default()).then_some(properties)
+    fn run_properties(
+        &self,
+        py: Python<'_>,
+        existing: Option<&rdocx::CT_RPr>,
+    ) -> PyResult<Option<rdocx::CT_RPr>> {
+        let supplied = self.font_name.is_some()
+            || self.font_size.is_some()
+            || self.bold.is_some()
+            || self.italic.is_some()
+            || self.color.is_some()
+            || self.underline.is_some();
+        if !supplied {
+            return Ok(None);
+        }
+        let mut properties = existing.cloned().unwrap_or_default();
+        if let Some(name) = &self.font_name {
+            properties.font_ascii = Some(name.clone());
+            properties.font_hansi = Some(name.clone());
+            properties.font_east_asia = Some(name.clone());
+            properties.font_cs = Some(name.clone());
+        }
+        if let Some(emu) = self.font_size {
+            let half_points = emu / 6350;
+            let size = u32::try_from(half_points).map_err(|_| {
+                PyValueError::new_err("style font_size must fit nonnegative half-points")
+            })?;
+            if emu < 0 {
+                return Err(PyValueError::new_err("style font_size cannot be negative"));
+            }
+            properties.sz = Some(rdocx::HalfPoint(size));
+            properties.sz_cs = Some(rdocx::HalfPoint(size));
+        }
+        if let Some(value) = self.bold {
+            properties.bold = Some(value);
+            properties.bold_cs = Some(value);
+        }
+        if let Some(value) = self.italic {
+            properties.italic = Some(value);
+            properties.italic_cs = Some(value);
+        }
+        if let Some((r, g, b)) = self.color {
+            properties.color = Some(format!("{r:02X}{g:02X}{b:02X}"));
+        }
+        if let Some(value) = &self.underline {
+            let value = value.bind(py);
+            let code = if value.is_instance_of::<PyBool>() {
+                i32::from(value.extract::<bool>()?)
+            } else {
+                value.extract::<i32>()?
+            };
+            use rdocx_oxml::shared::ST_Underline;
+            properties.underline = Some(match code {
+                0 => ST_Underline::None,
+                1 => ST_Underline::Single,
+                2 => ST_Underline::Words,
+                3 => ST_Underline::Double,
+                4 => ST_Underline::Dotted,
+                6 => ST_Underline::Thick,
+                7 => ST_Underline::Dash,
+                9 => ST_Underline::DotDash,
+                10 => ST_Underline::DotDotDash,
+                11 => ST_Underline::Wave,
+                _ => return Err(PyValueError::new_err("unsupported underline style")),
+            });
+        }
+        Ok(Some(properties))
     }
 
-    /// The paragraph properties, written as the `ParagraphFormat` setters
-    /// write them, a negative first-line indent becoming a hanging one.
-    fn paragraph_properties(&self) -> Option<rdocx::CT_PPr> {
-        let twips = |value: Option<i64>| value.map(|emu| rdocx::Length::emu(emu).as_twips());
-        let first_line = twips(self.first_line_indent);
-        let properties = rdocx::CT_PPr {
-            space_before: twips(self.space_before),
-            space_after: twips(self.space_after),
-            ind_left: twips(self.left_indent),
-            ind_right: twips(self.right_indent),
-            ind_first_line: first_line.filter(|value| value.0 >= 0),
-            ind_hanging: first_line
-                .filter(|value| value.0 < 0)
-                .map(|value| rdocx::Twips(value.0.saturating_abs())),
-            ..rdocx::CT_PPr::default()
+    fn paragraph_properties(
+        &self,
+        py: Python<'_>,
+        existing: Option<&rdocx::CT_PPr>,
+    ) -> PyResult<Option<rdocx::CT_PPr>> {
+        let supplied = self.space_before.is_some()
+            || self.space_after.is_some()
+            || self.left_indent.is_some()
+            || self.right_indent.is_some()
+            || self.first_line_indent.is_some()
+            || self.alignment.is_some()
+            || self.line_spacing.is_some()
+            || self.keep_with_next.is_some()
+            || self.keep_together.is_some()
+            || self.page_break_before.is_some()
+            || self.borders.is_some()
+            || self.shading.is_some()
+            || self.tab_stops.is_some();
+        if !supplied {
+            return Ok(None);
+        }
+        let mut properties = existing.cloned().unwrap_or_default();
+        let twips = |emu: i64| -> PyResult<rdocx::Twips> {
+            i32::try_from(emu / 635)
+                .map(rdocx::Twips)
+                .map_err(|_| PyValueError::new_err("style length exceeds signed twip range"))
         };
-        (properties != rdocx::CT_PPr::default()).then_some(properties)
+        if let Some(value) = self.space_before {
+            properties.space_before = Some(twips(value)?);
+        }
+        if let Some(value) = self.space_after {
+            properties.space_after = Some(twips(value)?);
+        }
+        if let Some(value) = self.left_indent {
+            properties.ind_left = Some(twips(value)?);
+        }
+        if let Some(value) = self.right_indent {
+            properties.ind_right = Some(twips(value)?);
+        }
+        if let Some(value) = self.first_line_indent {
+            let value = twips(value)?.0;
+            properties.ind_first_line = (value >= 0).then_some(rdocx::Twips(value));
+            properties.ind_hanging = if value < 0 {
+                Some(rdocx::Twips(value.checked_abs().ok_or_else(|| {
+                    PyValueError::new_err("style hanging indent exceeds signed twip range")
+                })?))
+            } else {
+                None
+            };
+        }
+        if let Some(value) = self.alignment {
+            properties.jc = Some(match crate::formatting::alignment_from_int(value)? {
+                rdocx::Alignment::Left => rdocx_oxml::ST_Jc::Left,
+                rdocx::Alignment::Center => rdocx_oxml::ST_Jc::Center,
+                rdocx::Alignment::Right => rdocx_oxml::ST_Jc::Right,
+                rdocx::Alignment::Justify => rdocx_oxml::ST_Jc::Both,
+            });
+        }
+        if let Some(value) = &self.line_spacing {
+            let value = value.bind(py);
+            if value.is_instance_of::<PyFloat>() {
+                let multiple = value.extract::<f64>()?;
+                let twip = multiple * 240.0;
+                if !multiple.is_finite() || twip < i32::MIN as f64 || twip > i32::MAX as f64 {
+                    return Err(PyValueError::new_err(
+                        "style line_spacing must be finite and fit signed twips",
+                    ));
+                }
+                properties.line_spacing = Some(rdocx::Twips(twip as i32));
+                properties.line_rule = Some("auto".to_owned());
+            } else {
+                properties.line_spacing = Some(twips(value.extract()?)?);
+                properties.line_rule = Some("exact".to_owned());
+            }
+        }
+        if let Some(value) = self.keep_with_next {
+            properties.keep_next = Some(value);
+        }
+        if let Some(value) = self.keep_together {
+            properties.keep_lines = Some(value);
+        }
+        if let Some(value) = self.page_break_before {
+            properties.page_break_before = Some(value);
+        }
+        if let Some(value) = &self.shading {
+            let fill = crate::formatting::paragraph_color_hex(value.bind(py), "style shading")?;
+            let shading = properties.shading.get_or_insert_with(|| {
+                Box::new(rdocx_oxml::properties::CT_Shd {
+                    val: "clear".to_owned(),
+                    color: Some("auto".to_owned()),
+                    ..Default::default()
+                })
+            });
+            shading.fill = Some(fill);
+            shading.theme_fill = None;
+            shading.theme_fill_tint = None;
+            shading.theme_fill_shade = None;
+        }
+        if let Some(value) = &self.borders {
+            let mapping = value.bind(py).cast::<PyMapping>()?;
+            let items = mapping
+                .items()?
+                .extract::<Vec<(String, (String, u32, Py<PyAny>))>>()?;
+            if items.is_empty() {
+                properties.borders = None;
+            } else {
+                for (edge, (style, size, color)) in items {
+                    let edge = crate::formatting::paragraph_border_edge(&edge)?;
+                    let style = crate::table::border_style_from_name(&style)?;
+                    let color = crate::formatting::paragraph_color_hex(
+                        color.bind(py),
+                        "style borders color",
+                    )?;
+                    let borders = properties
+                        .borders
+                        .get_or_insert_with(|| Box::new(rdocx_oxml::CT_PBdr::default()));
+                    let slot = match edge {
+                        rdocx::ParagraphBorderEdge::Top => &mut borders.top,
+                        rdocx::ParagraphBorderEdge::Bottom => &mut borders.bottom,
+                        rdocx::ParagraphBorderEdge::Left => &mut borders.left,
+                        rdocx::ParagraphBorderEdge::Right => &mut borders.right,
+                        rdocx::ParagraphBorderEdge::Between => &mut borders.between,
+                        rdocx::ParagraphBorderEdge::Bar => &mut borders.bar,
+                    };
+                    use rdocx_oxml::ST_Border;
+                    let style = match style {
+                        rdocx::BorderStyle::None => ST_Border::None,
+                        rdocx::BorderStyle::Single => ST_Border::Single,
+                        rdocx::BorderStyle::Thick => ST_Border::Thick,
+                        rdocx::BorderStyle::Double => ST_Border::Double,
+                        rdocx::BorderStyle::Dotted => ST_Border::Dotted,
+                        rdocx::BorderStyle::Dashed => ST_Border::Dashed,
+                        rdocx::BorderStyle::DotDash => ST_Border::DotDash,
+                        rdocx::BorderStyle::Wave => ST_Border::Wave,
+                    };
+                    let border = slot.get_or_insert_with(|| rdocx_oxml::CT_BorderEdge::new(style));
+                    border.val = style;
+                    border.sz = Some(size);
+                    border.color = Some(color);
+                }
+            }
+        }
+        if let Some(value) = &self.tab_stops {
+            let entries = value.bind(py).extract::<Vec<(i64, i32, Option<i32>)>>()?;
+            let mut tabs = Vec::with_capacity(entries.len());
+            for (position, alignment, leader) in entries {
+                use rdocx_oxml::{ST_TabJc, ST_TabLeader};
+                let val = match crate::formatting::tab_alignment_from_int(alignment)? {
+                    rdocx::TabAlignment::Left => ST_TabJc::Left,
+                    rdocx::TabAlignment::Center => ST_TabJc::Center,
+                    rdocx::TabAlignment::Right => ST_TabJc::Right,
+                    rdocx::TabAlignment::Decimal => ST_TabJc::Decimal,
+                    rdocx::TabAlignment::Bar => ST_TabJc::Bar,
+                    rdocx::TabAlignment::Clear => ST_TabJc::Clear,
+                    rdocx::TabAlignment::Num => ST_TabJc::Num,
+                    rdocx::TabAlignment::List => ST_TabJc::List,
+                    rdocx::TabAlignment::Start => ST_TabJc::Start,
+                    rdocx::TabAlignment::End => ST_TabJc::End,
+                };
+                let leader =
+                    crate::formatting::tab_leader_from_int(leader)?.map(|value| match value {
+                        rdocx::TabLeader::None => ST_TabLeader::None,
+                        rdocx::TabLeader::Dot => ST_TabLeader::Dot,
+                        rdocx::TabLeader::Hyphen => ST_TabLeader::Hyphen,
+                        rdocx::TabLeader::Underscore => ST_TabLeader::Underscore,
+                        rdocx::TabLeader::Heavy => ST_TabLeader::Heavy,
+                        rdocx::TabLeader::MiddleDot => ST_TabLeader::MiddleDot,
+                    });
+                let mut tab = rdocx_oxml::CT_TabStop::new(val, twips(position)?);
+                tab.leader = leader;
+                tabs.push(tab);
+            }
+            tabs.sort_by_key(|tab| tab.pos.0);
+            properties.tabs = (!tabs.is_empty()).then_some(rdocx_oxml::CT_Tabs { tabs });
+            properties
+                .refresh_tabs_source(None)
+                .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        }
+        Ok(Some(properties))
     }
 }
 
@@ -2114,6 +2340,41 @@ fn style_snapshot(style: rdocx::style::Style<'_>) -> PyStyle {
 
 #[pymethods]
 impl PyDocument {
+    #[getter]
+    fn default_font_name(&self) -> Option<String> {
+        self.inner.default_font_name().map(str::to_owned)
+    }
+
+    #[setter]
+    fn set_default_font_name(&mut self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
+        self.inner
+            .set_default_font_name_value(value)
+            .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    #[getter]
+    fn default_font_size(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.inner
+            .default_font_size()
+            .map(|value| crate::length_object(py, value))
+            .transpose()
+    }
+
+    #[setter]
+    fn set_default_font_size(&mut self, py: Python<'_>, value: Option<i64>) -> PyResult<()> {
+        let value = value.map(rdocx::Length::emu);
+        if value.is_some_and(|value| {
+            value.to_emu() < 0 || u32::try_from(value.to_emu() / 6350).is_err()
+        }) {
+            return Err(PyValueError::new_err(
+                "Document.default_font_size must fit nonnegative half-points",
+            ));
+        }
+        self.inner
+            .set_default_font_size_value(value)
+            .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
     #[new]
     #[pyo3(signature = (path = None))]
     fn new(path: Option<PathBuf>, py: Python<'_>) -> PyResult<Self> {
@@ -3007,6 +3268,15 @@ impl PyDocument {
         left_indent = None,
         right_indent = None,
         first_line_indent = None,
+        alignment = None,
+        line_spacing = None,
+        underline = None,
+        keep_with_next = None,
+        keep_together = None,
+        page_break_before = None,
+        borders = None,
+        shading = None,
+        tab_stops = None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn add_style(
@@ -3027,6 +3297,15 @@ impl PyDocument {
         left_indent: Option<i64>,
         right_indent: Option<i64>,
         first_line_indent: Option<i64>,
+        alignment: Option<i32>,
+        line_spacing: Option<&Bound<'_, PyAny>>,
+        underline: Option<&Bound<'_, PyAny>>,
+        keep_with_next: Option<bool>,
+        keep_together: Option<bool>,
+        page_break_before: Option<bool>,
+        borders: Option<&Bound<'_, PyAny>>,
+        shading: Option<&Bound<'_, PyAny>>,
+        tab_stops: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<PyStyle> {
         let color = color
             .filter(|value| !value.is_none())
@@ -3076,6 +3355,21 @@ impl PyDocument {
             left_indent,
             right_indent,
             first_line_indent,
+            alignment,
+            line_spacing: line_spacing
+                .filter(|v| !v.is_none())
+                .map(|v| v.clone().unbind()),
+            underline: underline
+                .filter(|v| !v.is_none())
+                .map(|v| v.clone().unbind()),
+            keep_with_next,
+            keep_together,
+            page_break_before,
+            borders: borders.filter(|v| !v.is_none()).map(|v| v.clone().unbind()),
+            shading: shading.filter(|v| !v.is_none()).map(|v| v.clone().unbind()),
+            tab_stops: tab_stops
+                .filter(|v| !v.is_none())
+                .map(|v| v.clone().unbind()),
         };
         let mut builder = new_style(&style_id, name);
         if let Some(parent) = based_on {
@@ -3093,16 +3387,22 @@ impl PyDocument {
                 rdocx::StyleType::Paragraph,
             )?);
         }
-        if let Some(properties) = formatting.paragraph_properties() {
+        if let Some(properties) = formatting.paragraph_properties(py, None)? {
             if native_type == rdocx::StyleType::Character {
                 return Err(PyValueError::new_err(
                     "a character style takes no paragraph formatting",
                 ));
             }
-            builder = builder.paragraph_properties(properties);
+            builder = builder.replace_paragraph_properties(properties);
         }
-        if let Some(properties) = formatting.run_properties() {
+        if let Some(properties) = formatting.run_properties(py, None)? {
             builder = builder.run_properties(properties);
+            if let Some(name) = &formatting.font_name {
+                builder = builder.font(name);
+            }
+            if let Some((r, g, b)) = formatting.color {
+                builder = builder.color(&format!("{r:02X}{g:02X}{b:02X}"));
+            }
         }
         self.inner
             .add_style(builder)
@@ -3131,6 +3431,15 @@ impl PyDocument {
         left_indent = None,
         right_indent = None,
         first_line_indent = None,
+        alignment = None,
+        line_spacing = None,
+        underline = None,
+        keep_with_next = None,
+        keep_together = None,
+        page_break_before = None,
+        borders = None,
+        shading = None,
+        tab_stops = None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn set_style(
@@ -3149,6 +3458,15 @@ impl PyDocument {
         left_indent: Option<i64>,
         right_indent: Option<i64>,
         first_line_indent: Option<i64>,
+        alignment: Option<i32>,
+        line_spacing: Option<&Bound<'_, PyAny>>,
+        underline: Option<&Bound<'_, PyAny>>,
+        keep_with_next: Option<bool>,
+        keep_together: Option<bool>,
+        page_break_before: Option<bool>,
+        borders: Option<&Bound<'_, PyAny>>,
+        shading: Option<&Bound<'_, PyAny>>,
+        tab_stops: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<PyStyle> {
         let color = color
             .filter(|value| !value.is_none())
@@ -3189,17 +3507,40 @@ impl PyDocument {
             left_indent,
             right_indent,
             first_line_indent,
+            alignment,
+            line_spacing: line_spacing
+                .filter(|v| !v.is_none())
+                .map(|v| v.clone().unbind()),
+            underline: underline
+                .filter(|v| !v.is_none())
+                .map(|v| v.clone().unbind()),
+            keep_with_next,
+            keep_together,
+            page_break_before,
+            borders: borders.filter(|v| !v.is_none()).map(|v| v.clone().unbind()),
+            shading: shading.filter(|v| !v.is_none()).map(|v| v.clone().unbind()),
+            tab_stops: tab_stops
+                .filter(|v| !v.is_none())
+                .map(|v| v.clone().unbind()),
         };
-        if let Some(properties) = formatting.paragraph_properties() {
+        if let Some(properties) =
+            formatting.paragraph_properties(py, existing.paragraph_properties())?
+        {
             if style_type == rdocx::StyleType::Character {
                 return Err(PyValueError::new_err(
                     "a character style takes no paragraph formatting",
                 ));
             }
-            builder = builder.paragraph_properties(properties);
+            builder = builder.replace_paragraph_properties(properties);
         }
-        if let Some(properties) = formatting.run_properties() {
+        if let Some(properties) = formatting.run_properties(py, existing.run_properties())? {
             builder = builder.run_properties(properties);
+            if let Some(name) = &formatting.font_name {
+                builder = builder.font(name);
+            }
+            if let Some((r, g, b)) = formatting.color {
+                builder = builder.color(&format!("{r:02X}{g:02X}{b:02X}"));
+            }
         }
         self.inner
             .set_style(builder)
@@ -3243,10 +3584,100 @@ impl PyDocument {
             .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
-    fn add_numbering_instance(&mut self, py: Python<'_>, definition_id: u32) -> PyResult<u32> {
+    #[pyo3(signature = (definition_id, *, start = None, level = 0))]
+    fn add_numbering_instance(
+        &mut self,
+        py: Python<'_>,
+        definition_id: u32,
+        start: Option<i64>,
+        level: i64,
+    ) -> PyResult<u32> {
+        if !(0..=8).contains(&level) {
+            return Err(PyValueError::new_err("level must be between 0 and 8"));
+        }
+        if start.is_none() && level != 0 {
+            return Err(PyValueError::new_err("nonzero level requires start"));
+        }
+        let overrides = start
+            .map(|start| {
+                let start = u32::try_from(start)
+                    .map_err(|_| PyValueError::new_err("start must be between 0 and 4294967295"))?;
+                Ok::<_, PyErr>(rdocx::NumberingLevelOverride::new(level as u32).start(start))
+            })
+            .transpose()?
+            .into_iter()
+            .collect::<Vec<_>>();
         self.inner
-            .add_numbering_instance(definition_id, &[])
+            .add_numbering_instance(definition_id, &overrides)
             .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    #[pyo3(signature = (text, level = 0))]
+    fn add_bullet_list_item(
+        slf: Py<Self>,
+        py: Python<'_>,
+        text: &str,
+        level: i64,
+    ) -> PyResult<Py<PyParagraph>> {
+        if !(0..=8).contains(&level) {
+            return Err(PyValueError::new_err("level must be between 0 and 8"));
+        }
+        let mut document = slf.borrow_mut(py);
+        let index = document.inner.paragraph_count();
+        let mut candidate = document.inner.clone_for_staging();
+        candidate
+            .try_add_bullet_list_item(text, level as u32)
+            .map(|_| ())
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let prepared = document
+            .revisions
+            .prepare_scopes("Document.add_bullet_list_item", &[], &[])
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        let path = document
+            .revisions
+            .capture_prepared(&prepared, smallvec![PathSeg::Body(0), PathSeg::Para(index)])
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        let result = Py::new(py, PyParagraph::new(slf.clone_ref(py), path))?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document.inner = candidate;
+        Ok(result)
+    }
+
+    #[pyo3(signature = (text, level = 0))]
+    fn add_numbered_list_item(
+        slf: Py<Self>,
+        py: Python<'_>,
+        text: &str,
+        level: i64,
+    ) -> PyResult<Py<PyParagraph>> {
+        if !(0..=8).contains(&level) {
+            return Err(PyValueError::new_err("level must be between 0 and 8"));
+        }
+        let mut document = slf.borrow_mut(py);
+        let index = document.inner.paragraph_count();
+        let mut candidate = document.inner.clone_for_staging();
+        candidate
+            .try_add_numbered_list_item(text, level as u32)
+            .map(|_| ())
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let prepared = document
+            .revisions
+            .prepare_scopes("Document.add_numbered_list_item", &[], &[])
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        let path = document
+            .revisions
+            .capture_prepared(&prepared, smallvec![PathSeg::Body(0), PathSeg::Para(index)])
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        let result = Py::new(py, PyParagraph::new(slf.clone_ref(py), path))?;
+        document
+            .revisions
+            .commit_scopes(prepared)
+            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document.inner = candidate;
+        Ok(result)
     }
 
     fn link_style_to_numbering(
@@ -4695,6 +5126,7 @@ impl PartialEq for PyStoryItem {
     }
 }
 impl Eq for PyStoryItem {}
+
 fn collect_caller_fonts<'py>(
     py: Python<'py>,
     fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,

@@ -11,6 +11,33 @@ milestone for that reason.
 `merge_from` cascade shape, but the structure differs: this walks a **part
 hierarchy**, not a style graph.
 
+## Word defaults and source ownership
+
+Word formatting resolves document defaults, table context where applicable,
+paragraph styles and their basedOn chain, and direct paragraph or run values
+in precedence order. Editing `w:docDefaults` changes only its selected run
+property owner. It does not rewrite Normal or explicit named styles. Clearing
+an absent default leaves the package unchanged. Untouched owners retain exact
+source XML. A changed owner merges modeled values into its original root,
+retaining foreign attributes, quote and entity spellings, opaque children and
+schema order. Duplicate physical property owners retain an explicit empty
+final owner when clearing would otherwise revive an earlier value.
+
+Style updates stage checked values before publication. Explicit empty borders
+or tab stops clear their owned properties, while omitted arguments retain
+existing values. Border start/end aliases refer to the same semantic edges as
+left/right without changing the original QName or duplicating retained child
+payload. Unknown started wrappers remain opaque and cannot promote nested
+lookalike edges. Tabs preserve imported occurrence order and unsupported
+vocabulary. Checked public reads refuse unsupported tokens rather than
+reporting them as an absent leader or a left-aligned stop.
+
+EPUB counter traversal consumes the same selected table paragraph properties
+as native layout, including basedOn, default table style, conditional regions,
+accepted content, nested tables and direct suppression. It counts each accepted
+source paragraph once in document order. This shared semantic projection does
+not claim visual list parity inside exported tables.
+
 ## The output contract
 
 ```rust

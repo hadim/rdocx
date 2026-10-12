@@ -6099,7 +6099,14 @@ fn equivalent_abstract_numbering(left: &CT_AbstractNum, right: &CT_AbstractNum) 
     let mut right = right.clone();
     left.abstract_num_id = 0;
     right.abstract_num_id = 0;
-    left == right
+    // Parsed leaf snapshots record prior typed values. Compare the actual
+    // owned XML projection, including opaque attributes and children, rather
+    // than the preservation bookkeeping used to produce that projection.
+    let mut left_xml = quick_xml::Writer::new(Vec::new());
+    let mut right_xml = quick_xml::Writer::new(Vec::new());
+    left.to_xml(&mut left_xml).is_ok()
+        && right.to_xml(&mut right_xml).is_ok()
+        && left_xml.into_inner() == right_xml.into_inner()
 }
 
 fn equivalent_numbering_instance(left: &CT_Num, right: &CT_Num, abstract_num_id: u32) -> bool {
@@ -6112,9 +6119,11 @@ fn equivalent_numbering_instance(left: &CT_Num, right: &CT_Num, abstract_num_id:
     right.num_id = 0;
     left.abstract_num_id = abstract_num_id;
     right.abstract_num_id = abstract_num_id;
-    left.abstract_num_id_raw = None;
-    right.abstract_num_id_raw = None;
-    left == right
+    let mut left_xml = quick_xml::Writer::new(Vec::new());
+    let mut right_xml = quick_xml::Writer::new(Vec::new());
+    left.to_xml(&mut left_xml).is_ok()
+        && right.to_xml(&mut right_xml).is_ok()
+        && left_xml.into_inner() == right_xml.into_inner()
 }
 
 struct StorySource<'a> {
@@ -12520,9 +12529,11 @@ fn merge_style_update(
         authored.locked = existing.locked;
     }
     if let Some(properties) = &authored.ppr {
-        let mut updated = existing.ppr.clone().unwrap_or_default();
-        updated.merge_from(properties);
-        authored.ppr = Some(updated);
+        if cleared & style::REPLACE_PARAGRAPH_PROPERTIES == 0 {
+            let mut updated = existing.ppr.clone().unwrap_or_default();
+            updated.merge_from(properties);
+            authored.ppr = Some(updated);
+        }
     } else if cleared & style::CLEAR_PARAGRAPH_PROPERTIES == 0 {
         authored.ppr = existing.ppr.clone();
     }
@@ -22384,15 +22395,129 @@ impl Document {
         Ok(())
     }
 
+    /// The direct ASCII document default font, without changing Normal.
+    pub fn default_font_name(&self) -> Option<&str> {
+        self.styles
+            .doc_defaults
+            .as_ref()?
+            .rpr
+            .as_ref()?
+            .font_ascii
+            .as_deref()
+    }
+
+    /// Stage a general four-slot default-font update, preserving unrelated defaults.
+    pub fn set_default_font_name_value(&mut self, name: Option<&str>) -> Result<()> {
+        if name.is_none()
+            && self
+                .styles
+                .doc_defaults
+                .as_ref()
+                .and_then(|value| value.rpr.as_ref())
+                .is_none()
+        {
+            return Ok(());
+        }
+        if let Some(name) = name {
+            oxml_core::xml::reject_non_xml_characters("default_font_name", name)?;
+        }
+        let mut candidate = self.clone_for_staging();
+        candidate.reserve_styles_bundle()?;
+        let defaults = candidate
+            .styles
+            .doc_defaults
+            .get_or_insert_with(Default::default);
+        let properties = defaults.rpr.get_or_insert_with(Default::default);
+        properties.font_ascii = name.map(str::to_owned);
+        properties.font_hansi = name.map(str::to_owned);
+        properties.font_east_asia = name.map(str::to_owned);
+        properties.font_cs = name.map(str::to_owned);
+        properties.font_ascii_theme = None;
+        properties.font_hansi_theme = None;
+        properties.font_east_asia_theme = None;
+        properties.font_cs_theme = None;
+        if candidate.styles == self.styles {
+            return Ok(());
+        }
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// The normal-script direct default font size.
+    pub fn default_font_size(&self) -> Option<Length> {
+        self.styles
+            .doc_defaults
+            .as_ref()?
+            .rpr
+            .as_ref()?
+            .sz
+            .map(|size| Length::pt(size.to_pt()))
+    }
+
+    /// Set both normal and complex-script half-point defaults after preflight.
+    pub fn set_default_font_size_value(&mut self, size: Option<Length>) -> Result<()> {
+        let half_points = size
+            .map(|size| {
+                if size.to_emu() < 0 {
+                    return Err(Error::Other(
+                        "default_font_size cannot be negative".to_owned(),
+                    ));
+                }
+                u32::try_from(size.to_emu() / 6350)
+                    .map(rdocx_oxml::units::HalfPoint)
+                    .map_err(|_| {
+                        Error::Other("default_font_size exceeds half-point range".to_owned())
+                    })
+            })
+            .transpose()?;
+        if size.is_none()
+            && self
+                .styles
+                .doc_defaults
+                .as_ref()
+                .and_then(|value| value.rpr.as_ref())
+                .is_none()
+        {
+            return Ok(());
+        }
+        let mut candidate = self.clone_for_staging();
+        candidate.reserve_styles_bundle()?;
+        let defaults = candidate
+            .styles
+            .doc_defaults
+            .get_or_insert_with(Default::default);
+        let properties = defaults.rpr.get_or_insert_with(Default::default);
+        properties.sz = half_points;
+        properties.sz_cs = half_points;
+        if candidate.styles == self.styles {
+            return Ok(());
+        }
+        candidate.invalidate_layout();
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
     /// Add a bullet list item at the given indentation level (0-based).
     ///
     /// If no bullet list definition exists yet, one is created automatically.
     /// Returns a mutable `Paragraph` for further configuration.
     pub fn add_bullet_list_item(&mut self, text: &str, level: u32) -> Paragraph<'_> {
+        self.try_add_bullet_list_item(text, level)
+            .expect("the historical infallible list helper requires a valid document and level")
+    }
+
+    /// Checked counterpart. Invalid text, levels and package graphs leave the document unchanged.
+    pub fn try_add_bullet_list_item(&mut self, text: &str, level: u32) -> Result<Paragraph<'_>> {
+        if level > 8 {
+            return Err(Error::Other(
+                "list level must be between 0 and 8".to_owned(),
+            ));
+        }
+        oxml_core::xml::reject_non_xml_characters("text", text)?;
+        self.validate_numbering_graph()?;
         let mut candidate = self.clone_for_staging();
-        candidate
-            .reserve_numbering_bundle()
-            .expect("an in-memory document can allocate a numbering part");
+        candidate.reserve_numbering_bundle()?;
         candidate.invalidate_layout();
         // Find or create a bullet list numId
         let existing = candidate.numbering.as_ref().and_then(|numbering| {
@@ -22409,10 +22534,7 @@ impl Document {
         let num_id = if let Some(existing) = existing {
             existing.num_id
         } else {
-            let (abstract_id, num_id) = candidate
-                .identifiers
-                .reserve_numbering_ids()
-                .expect("an in-memory document cannot exhaust numbering identifiers");
+            let (abstract_id, num_id) = candidate.identifiers.reserve_numbering_ids()?;
             candidate.ensure_numbering().add_list_with_ids(
                 &[(rdocx_oxml::numbering::ST_NumberFormat::Bullet, Some(1))],
                 abstract_id,
@@ -22436,9 +22558,10 @@ impl Document {
             .body
             .content
             .push(BodyContent::Paragraph(p));
+        candidate.validate_numbering_graph()?;
         self.commit_staged_mutation(candidate);
         match self.document.body.content.last_mut().unwrap() {
-            BodyContent::Paragraph(p) => Paragraph { inner: p },
+            BodyContent::Paragraph(p) => Ok(Paragraph { inner: p }),
             _ => unreachable!(),
         }
     }
@@ -22448,10 +22571,21 @@ impl Document {
     /// If no numbered list definition exists yet, one is created automatically.
     /// Returns a mutable `Paragraph` for further configuration.
     pub fn add_numbered_list_item(&mut self, text: &str, level: u32) -> Paragraph<'_> {
+        self.try_add_numbered_list_item(text, level)
+            .expect("the historical infallible list helper requires a valid document and level")
+    }
+
+    /// Checked counterpart. Invalid text, levels and package graphs leave the document unchanged.
+    pub fn try_add_numbered_list_item(&mut self, text: &str, level: u32) -> Result<Paragraph<'_>> {
+        if level > 8 {
+            return Err(Error::Other(
+                "list level must be between 0 and 8".to_owned(),
+            ));
+        }
+        oxml_core::xml::reject_non_xml_characters("text", text)?;
+        self.validate_numbering_graph()?;
         let mut candidate = self.clone_for_staging();
-        candidate
-            .reserve_numbering_bundle()
-            .expect("an in-memory document can allocate a numbering part");
+        candidate.reserve_numbering_bundle()?;
         candidate.invalidate_layout();
         // Find or create a numbered list numId
         let existing = candidate.numbering.as_ref().and_then(|numbering| {
@@ -22468,10 +22602,7 @@ impl Document {
         let num_id = if let Some(existing) = existing {
             existing.num_id
         } else {
-            let (abstract_id, num_id) = candidate
-                .identifiers
-                .reserve_numbering_ids()
-                .expect("an in-memory document cannot exhaust numbering identifiers");
+            let (abstract_id, num_id) = candidate.identifiers.reserve_numbering_ids()?;
             candidate.ensure_numbering().add_list_with_ids(
                 &[(rdocx_oxml::numbering::ST_NumberFormat::Decimal, Some(1))],
                 abstract_id,
@@ -22495,9 +22626,10 @@ impl Document {
             .body
             .content
             .push(BodyContent::Paragraph(p));
+        candidate.validate_numbering_graph()?;
         self.commit_staged_mutation(candidate);
         match self.document.body.content.last_mut().unwrap() {
-            BodyContent::Paragraph(p) => Paragraph { inner: p },
+            BodyContent::Paragraph(p) => Ok(Paragraph { inner: p }),
             _ => unreachable!(),
         }
     }
@@ -31754,6 +31886,33 @@ mod tests {
     const FX087_CANDIDATE_SHA256: &str =
         "ab67b50393fc5258f7a3e9719344639d665feccc2615b13cab1915ea9a84566b";
 
+    #[test]
+    fn fx200_checked_one_call_lists_reject_malformed_graph_without_publication() {
+        for numbered in [false, true] {
+            let mut document = Document::new();
+            document.try_add_numbered_list_item("existing", 0).unwrap();
+            let duplicate = document.numbering.as_ref().unwrap().nums[0].clone();
+            document.numbering.as_mut().unwrap().nums.push(duplicate);
+            let numbering_before = document.numbering.as_ref().unwrap().to_xml().unwrap();
+            let count_before = document.paragraph_count();
+            let error = if numbered {
+                document.try_add_numbered_list_item("bad", 0).map(|_| ())
+            } else {
+                document.try_add_bullet_list_item("bad", 0).map(|_| ())
+            };
+            assert!(
+                error
+                    .unwrap_err()
+                    .to_string()
+                    .contains("duplicate numbering instance")
+            );
+            assert_eq!(
+                document.numbering.as_ref().unwrap().to_xml().unwrap(),
+                numbering_before
+            );
+            assert_eq!(document.paragraph_count(), count_before);
+        }
+    }
     #[test]
     fn pagination_update_publishes_one_atomic_candidate() {
         let mut document = Document::new();
@@ -41873,6 +42032,64 @@ mod tests {
     }
 
     #[test]
+    fn fragment_numbering_equivalence_compares_owned_leaf_projection() {
+        let xml = format!(
+            r#"<w:numbering xmlns:w="{WORD_NAMESPACE}" xmlns:f="urn:fragment"><w:abstractNum w:abstractNumId="7"><w:lvl w:ilvl="0"><w:start w:val="1" f:keep="A"><f:payload value="kept&#32;exact"/></w:start><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/></w:lvl></w:abstractNum><w:num w:numId="9"><w:abstractNumId w:val="7" f:keep="A"><f:payload value="kept&#32;exact"/></w:abstractNumId></w:num></w:numbering>"#
+        );
+        let parsed = CT_Numbering::from_xml(xml.as_bytes()).unwrap();
+        let original = parsed.clone();
+        let mut remapped = parsed.clone();
+        remapped.abstract_nums[0].abstract_num_id = 12;
+        remapped.nums[0].num_id = 14;
+        remapped.nums[0].abstract_num_id = 12;
+        // Reparsing refreshes snapshots, but keeps the same output XML facts.
+        let remapped = CT_Numbering::from_xml(&remapped.to_xml().unwrap()).unwrap();
+        assert!(equivalent_abstract_numbering(
+            &parsed.abstract_nums[0],
+            &remapped.abstract_nums[0]
+        ));
+        assert!(equivalent_numbering_instance(
+            &parsed.nums[0],
+            &remapped.nums[0],
+            7
+        ));
+        let mut changed = remapped.clone();
+        changed.abstract_nums[0].levels[0].start = Some(2);
+        assert!(!equivalent_abstract_numbering(
+            &parsed.abstract_nums[0],
+            &changed.abstract_nums[0]
+        ));
+        let mut changed = remapped.clone();
+        let raw = &mut changed.nums[0].abstract_num_id_raw.as_mut().unwrap().1;
+        *raw = String::from_utf8(raw.clone())
+            .unwrap()
+            .replace("f:keep=\"A\"", "f:keep=\"B\"")
+            .into_bytes();
+        assert!(!equivalent_numbering_instance(
+            &parsed.nums[0],
+            &changed.nums[0],
+            7
+        ));
+        let mut changed = remapped.clone();
+        changed.nums[0].abstract_num_id_raw = None;
+        assert!(!equivalent_numbering_instance(
+            &parsed.nums[0],
+            &changed.nums[0],
+            7
+        ));
+        let mut changed = remapped.clone();
+        changed.abstract_nums[0].levels[0].start_raw = None;
+        assert!(!equivalent_abstract_numbering(
+            &parsed.abstract_nums[0],
+            &changed.abstract_nums[0]
+        ));
+        assert_eq!(
+            parsed, original,
+            "equivalence checks cannot mutate either graph"
+        );
+    }
+
+    #[test]
     fn extreme_numbering_level_reader_fact_does_not_overflow() {
         let mut doc = Document::new();
         let num_id = doc.add_list_definition(&[ListLevel::decimal()]);
@@ -44225,6 +44442,126 @@ mod odttf_tests {
                 .iter()
                 .any(|d| d.message.contains("Font 'Aptos' is approximate"))
         );
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+    #[test]
+    fn fx200_complete_style_snapshot_clears_borders_and_tabs_without_losing_other_properties() {
+        let mut document = Document::new();
+        let properties = CT_PPr {
+            keep_next: Some(true),
+            tabs: Some(rdocx_oxml::borders::CT_Tabs {
+                tabs: vec![rdocx_oxml::borders::CT_TabStop {
+                    val: rdocx_oxml::shared::ST_TabJc::Right,
+                    pos: Twips(720),
+                    leader: None,
+                    source_occurrence: None,
+                }],
+            }),
+            borders: Some(Box::new(rdocx_oxml::borders::CT_PBdr {
+                top: Some(rdocx_oxml::borders::CT_BorderEdge::new(
+                    rdocx_oxml::shared::ST_Border::Single,
+                )),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        document
+            .add_style(StyleBuilder::paragraph("Fx200", "Fx200").paragraph_properties(properties))
+            .unwrap();
+        let mut cleared = document
+            .style("Fx200")
+            .unwrap()
+            .paragraph_properties()
+            .unwrap()
+            .clone();
+        cleared.tabs = None;
+        cleared.refresh_tabs_source(None).unwrap();
+        cleared.borders = None;
+        document
+            .set_style(
+                StyleBuilder::paragraph("Fx200", "Fx200")
+                    .replace_paragraph_properties(cleared.clone()),
+            )
+            .unwrap();
+        assert_eq!(
+            document.style("Fx200").unwrap().paragraph_properties(),
+            Some(&cleared)
+        );
+        assert_eq!(cleared.keep_next, Some(true));
+        assert!(cleared.tabs.is_none() && cleared.borders.is_none());
+        let bytes = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        let reopened_style = reopened.style("Fx200").unwrap();
+        let properties = reopened_style.paragraph_properties().unwrap();
+        assert!(properties.tabs.is_none() && properties.borders.is_none());
+        assert_eq!(properties.keep_next, Some(true));
+    }
+    #[test]
+    fn fx200_document_default_updates_are_checked_and_do_not_restyle_normal() {
+        let mut document = Document::new();
+        document.add_paragraph("retained");
+        let styles = document.styles.styles.clone();
+        // Compare imported metadata with an unchanged import of the same authored seed.
+        let unchanged_bytes = document.to_bytes().unwrap();
+        let mut unchanged = Document::from_bytes(&unchanged_bytes).unwrap();
+        let imported_styles = unchanged.styles.styles.clone();
+        let unchanged_reopened = Document::from_bytes(&unchanged.to_bytes().unwrap()).unwrap();
+        assert_eq!(unchanged_reopened.styles.styles, imported_styles);
+        document
+            .set_default_font_name_value(Some("Gelasio"))
+            .unwrap();
+        document
+            .set_default_font_size_value(Some(Length::pt(13.0)))
+            .unwrap();
+        assert_eq!(document.default_font_name(), Some("Gelasio"));
+        assert_eq!(document.default_font_size(), Some(Length::pt(13.0)));
+        let rpr = document
+            .styles
+            .doc_defaults
+            .as_ref()
+            .unwrap()
+            .rpr
+            .as_ref()
+            .unwrap();
+        assert_eq!(rpr.font_ascii, rpr.font_hansi);
+        assert_eq!(rpr.font_ascii, rpr.font_east_asia);
+        assert_eq!(rpr.font_ascii, rpr.font_cs);
+        assert!(rpr.font_ascii_theme.is_none() && rpr.font_cs_theme.is_none());
+        assert_eq!(rpr.sz, rpr.sz_cs);
+        assert_eq!(document.styles.styles, styles);
+        assert_eq!(document.paragraph(0).unwrap().text(), "retained");
+        let before = document.to_bytes().unwrap();
+        assert!(
+            document
+                .set_default_font_size_value(Some(Length::emu(-1)))
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+        let mut reopened = Document::from_bytes(&before).unwrap();
+        assert_eq!(reopened.default_font_name(), Some("Gelasio"));
+        assert_eq!(reopened.default_font_size(), Some(Length::pt(13.0)));
+        assert_eq!(reopened.styles.styles, imported_styles);
+        reopened.set_default_font_name_value(None).unwrap();
+        reopened.set_default_font_size_value(None).unwrap();
+        assert!(reopened.default_font_name().is_none() && reopened.default_font_size().is_none());
+        assert_eq!(reopened.styles.styles, imported_styles);
+        let cleared_reopened = Document::from_bytes(&reopened.to_bytes().unwrap()).unwrap();
+        assert_eq!(cleared_reopened.styles.styles, imported_styles);
+        assert!(
+            cleared_reopened.default_font_name().is_none()
+                && cleared_reopened.default_font_size().is_none()
+        );
+    }
+
+    #[test]
+    fn fx200_absent_default_getters_and_clears_do_not_materialize_defaults() {
+        let mut document = Document::new();
+        document.styles.doc_defaults = None;
+        let before = document.to_bytes().unwrap();
+        assert!(document.default_font_name().is_none() && document.default_font_size().is_none());
+        document.set_default_font_name_value(None).unwrap();
+        document.set_default_font_size_value(None).unwrap();
+        assert!(document.styles.doc_defaults.is_none());
         assert_eq!(document.to_bytes().unwrap(), before);
     }
 }

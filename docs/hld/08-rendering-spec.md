@@ -1461,9 +1461,22 @@ Roman, bullet, and `none` markers retain their established layout behavior.
 Other standard formats cross the package boundary without being collapsed to
 decimal. Until their visible formatter is implemented, layout and text exports
 emit no invented marker. One deterministic counter owner keys values by
-concrete `numId` and level. It applies configured starts, instance overrides,
-replacement levels, legal numbering, level restarts, and section restart
-policy while traversing body paragraphs and table cells in document order.
+abstract definition and level. Plain concrete instances of one definition
+continue its shared count. Distinct definitions remain independent, without
+coalescing matching nsid values. Concrete `numId` remains the source and display
+identity. Explicit startOverride consumption is tracked by concrete instance
+and level, separately from shared counts. First ordinary use applies it once.
+Replacement-level start and restart do not replace the definition's counter
+policy. An ancestor resets deeper shared counts according to the base restart
+owner, and rearms an override only for that ancestor's own concrete instance.
+A zero lvlRestart preserves the deeper count.
+
+An opted-in section event defers reinitialization until the definition's next
+numbered item. That item initializes the root from its base start, even when
+it is at a child level, and applies only the configured deeper resets. It
+preserves consumed override state and does not consume a previously unused
+override on this first section item. Subsequent items resume ordinary rules.
+Body paragraphs and accepted table cells share document-order traversal.
 `numId` zero suppresses only its paragraph and does not advance or corrupt a
 later sequence. Header and footer stories use independent counter state.
 
@@ -1471,7 +1484,12 @@ Each resolved marker carries its displayed level, complete displayed context,
 numeric forms with literal level text removed, source-derived punctuation
 between levels, and concrete instance identity. Numbered TOC sources and REF
 fields consume that result-local projection. They do not replay numbering or
-maintain a second counter implementation.
+maintain a second counter implementation. EPUB consumes the same selected
+counter context, including effective table styles and nested accepted owners.
+Its existing table writer retains visible flattening diagnostics. The ODT
+writer reports a selected shared-definition continuation loss when concrete
+list output cannot express it, without claiming unrestricted Word numbering
+parity in that format.
 
 Relationship-resolved embedded font faces enter `LayoutInput.fonts` under the
 font-table record name. Their OOXML font key deobfuscates the package bytes

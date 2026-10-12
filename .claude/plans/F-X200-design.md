@@ -1,6 +1,6 @@
 # F-X200, Complete Python Word formatting and list parity
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X197
@@ -233,13 +233,13 @@ before scoped acceptance. The failed original receipt remains unchanged.
 
 ## Implementation checklist
 
-- [ ] Resolve technical contracts and actual native gaps against prerequisites.
-- [ ] Approve complete issue acceptance, source claims and measured output policy.
-- [ ] Claim only after actual prerequisites and file conflicts clear.
-- [ ] Prove installed public Base regressions before production changes.
-- [ ] Implement every requested capability, stubs and existing-entrypoint tests.
-- [ ] Run scoped gates and exact applicable oracle/risk riders.
-- [ ] Obtain independent zero-defect, zero-smell review and prepare handoff.
+- [x] Resolve technical contracts and actual native gaps against prerequisites.
+- [x] Approve complete issue acceptance, source claims and measured output policy.
+- [x] Claim only after actual prerequisites and file conflicts clear.
+- [x] Prove installed public Base regressions before production changes.
+- [x] Implement every requested capability, stubs and existing-entrypoint tests.
+- [x] Run scoped gates and exact applicable oracle/risk riders.
+- [x] Obtain independent zero-defect, zero-smell review and prepare handoff.
 
 ## Open questions
 

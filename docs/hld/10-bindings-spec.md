@@ -215,6 +215,62 @@ doc.save_pdf("out.pdf")                        # documented as an rdocx extensio
   domain error maps to `StaleElementError`. `oxml-py-support` therefore remains
   independent of any Python base class.
 
+## Python Word formatting and checked list publication
+
+`Font` exposes optional superscript, subscript, small_caps, all_caps,
+double_strike, hidden and rtl. Superscript and subscript share one direct
+`w:vertAlign` source. True selects that mode, false clears only its own active
+mode, and None removes the direct mode. An absent mode reads None, while a
+direct baseline reads false for both. Clears on absent source insert no nodes.
+Language, language_east_asia, language_bidi, name_east_asia and
+name_complex_script edit their selected slots. General font name retains its
+established four-slot assignment. `character_spacing` accepts signed integer
+EMU or None and returns Length or None, validating signed twips before
+narrowing with truncation toward zero.
+
+`ParagraphFormat.tab_stops` is a live parent-bound collection with length,
+indexing, iteration, indexed deletion, add_tab_stop and clear_all. Returned
+TabStop values are immutable position/alignment/leader snapshots. Added stops
+insert before the first greater position and after equal positions, without
+sorting imported occurrences. Alignment includes List, Start and End.
+An absent leader reads SPACES, while an unsupported owned token raises an
+explicit error and remains preserved. Collection edits keep the paragraph
+handle live. Paragraph formatting also exposes border read/set/clear, shading,
+outline_level and bidi, with checked input and retained foreign payload.
+
+`Document.default_font_name` and `default_font_size` edit docDefaults without
+restyling Normal. Size uses Length or integer EMU and returns Length or None.
+`add_style` and `set_style` accept alignment, line_spacing, underline,
+keep_with_next, keep_together, page_break_before, borders, shading and tab_stops
+in addition to their existing arguments. Omitted values retain source, and
+explicit empty border/tab collections clear active owned entries. The selected
+Word border or tab container can remain empty to suppress earlier duplicate
+owners while retaining foreign attributes and opaque payload. Border clearing
+leaves no active owned edge, and tab clearing leaves no active owned tab.
+These retained containers do not represent active formatting. Invalid input or
+style graph changes fail before source publication.
+
+`add_numbering_instance(definition_id, *, start=None, level=0)` creates an
+instance of one existing definition. Start is a checked u32, including zero,
+and level is 0 through 8. A nonzero level without start is rejected.
+`add_bullet_list_item(text, level=0)` and
+`add_numbered_list_item(text, level=0)` use checked native factories and return
+a fresh Paragraph. `ListLevel.checklist(checked=False)` creates a real bullet
+level using the unchecked or checked glyph, not an ordinary text prefix.
+Structural factories stage the native candidate, validate state, allocate the
+returned Python handle against prepared owner state, then commit and publish.
+Failure, allocation refusal or no-op leaves source and revision state intact.
+Earlier handles retire under the existing causal document owner policy, while
+ordinary formatting edits retain live parents and fonts.
+
+The low-level `CT_BorderEdge.source_xml` field retains the original physical
+edge payload used by source-aware paragraph and style merges. Full public
+struct literals must supply it or use default update syntax. This is an
+intentional pre-1.0 Rust source break. List/Start/End tab enum variants also
+require exhaustive matches to cover their exact tokens. Start and End retain
+the existing left/right rendering mapping. List retains its established
+fallback and has no additional paint-parity claim.
+
 ## Python colour inputs and live font formats
 
 Both families accept `RGBColor`, legacy integer channel triples and exactly

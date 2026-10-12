@@ -2587,7 +2587,11 @@ def test_footer_with_text_tab_and_page_fields_is_built_for_one_section():
     document.paragraphs[2].add_run("Page ").add_field("PAGE", "1")
     document.paragraphs[2].add_run(" of ").add_field("NUMPAGES", "1")
     fragment = document.pop_content(document.find_content_index("Confidential"))
+    with pytest.raises(rdocx.StaleElementError):
+        document.insert_content(footer, fragment)
+    footer = _default_footer(document, 1)
     document.insert_content(footer, fragment)
+    footer = _default_footer(document, 1)
     assert [paragraph.text for paragraph in document.paragraphs] == [
         "First section.",
         "Second section.",
@@ -2596,6 +2600,7 @@ def test_footer_with_text_tab_and_page_fields_is_built_for_one_section():
 
     report = document.update_layout_backed_fields()
     assert (report.page_fields, report.num_pages_fields) == (0, 0)
+    footer = _default_footer(document, 1)
     xml = _story_part(document, footer)
     assert re.search(rb"<w:t>Confidential</w:t>\s*<w:tab/>", xml)
     for instruction in (b"PAGE", b"NUMPAGES"):
@@ -2617,7 +2622,11 @@ def test_section_stories_link_unlink_and_reject_bad_names_atomically():
     footer = document.create_section_story(1, "footer", "default")
     document.add_paragraph("Footer text")
     fragment = document.pop_content(document.find_content_index("Footer text"))
+    with pytest.raises(rdocx.StaleElementError):
+        document.insert_content(footer, fragment)
+    footer = _default_footer(document, 1)
     document.insert_content(footer, fragment)
+    footer = _default_footer(document, 1)
     before = document.to_bytes()
     for arguments, error in (
         ((1, "side", "default"), ValueError),
@@ -2638,15 +2647,21 @@ def test_section_stories_link_unlink_and_reject_bad_names_atomically():
         document.pop_content(footer)
     assert document.to_bytes() == before
 
-    assert document.link_section_story(0, "footer", "default", footer) == footer
+    linked = document.link_section_story(0, "footer", "default", footer)
+    footer = _default_footer(document, 1)
+    assert linked == footer
     assert _default_footer(document, 0) == footer
     copy = document.unlink_section_story(0, "footer", "default")
+    footer = _default_footer(document, 1)
     assert copy.part_name != footer.part_name
     assert _default_footer(document, 0) == copy
     assert _story_paragraph_texts(document, "footer") == ["Footer text", "Footer text"]
 
     [item] = [item for item in document.story_items if item.story == copy]
+    copy_part_name = copy.part_name
     popped = document.pop_content(item)
+    copy = next(story for story in document.stories if story.part_name == copy_part_name)
+    footer = _default_footer(document, 1)
     assert popped.kind == "paragraph"
     assert [item for item in document.story_items if item.story == copy] == []
     assert _default_footer(document, 1) == footer

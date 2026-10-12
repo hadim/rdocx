@@ -7,6 +7,87 @@ use crate::document::PyDocument;
 use crate::paragraph::{ParagraphLocation, paragraph_location};
 use crate::{color_hex, color_object, enum_object, length_object, stale_to_pyerr};
 
+type BorderSnapshot = (String, Option<u32>, Option<Py<PyAny>>);
+
+pub(crate) fn tab_alignment_from_int(value: i32) -> PyResult<rdocx::TabAlignment> {
+    match value {
+        0 => Ok(rdocx::TabAlignment::Left),
+        1 => Ok(rdocx::TabAlignment::Center),
+        2 => Ok(rdocx::TabAlignment::Right),
+        3 => Ok(rdocx::TabAlignment::Decimal),
+        4 => Ok(rdocx::TabAlignment::Bar),
+        6 => Ok(rdocx::TabAlignment::List),
+        7 => Ok(rdocx::TabAlignment::Clear),
+        102 => Ok(rdocx::TabAlignment::End),
+        103 => Ok(rdocx::TabAlignment::Num),
+        104 => Ok(rdocx::TabAlignment::Start),
+        _ => Err(PyValueError::new_err("unsupported tab alignment")),
+    }
+}
+
+fn tab_alignment_to_int(value: rdocx::TabAlignment) -> i32 {
+    match value {
+        rdocx::TabAlignment::Left => 0,
+        rdocx::TabAlignment::Center => 1,
+        rdocx::TabAlignment::Right => 2,
+        rdocx::TabAlignment::Decimal => 3,
+        rdocx::TabAlignment::Bar => 4,
+        rdocx::TabAlignment::List => 6,
+        rdocx::TabAlignment::Clear => 7,
+        rdocx::TabAlignment::End => 102,
+        rdocx::TabAlignment::Num => 103,
+        rdocx::TabAlignment::Start => 104,
+    }
+}
+
+pub(crate) fn tab_leader_from_int(value: Option<i32>) -> PyResult<Option<rdocx::TabLeader>> {
+    match value {
+        None | Some(0) => Ok(None),
+        Some(1) => Ok(Some(rdocx::TabLeader::Dot)),
+        Some(2) => Ok(Some(rdocx::TabLeader::Hyphen)),
+        Some(3) => Ok(Some(rdocx::TabLeader::Underscore)),
+        Some(4) => Ok(Some(rdocx::TabLeader::Heavy)),
+        Some(5) => Ok(Some(rdocx::TabLeader::MiddleDot)),
+        _ => Err(PyValueError::new_err("unsupported tab leader")),
+    }
+}
+
+fn tab_leader_to_int(value: Option<rdocx::TabLeader>) -> i32 {
+    match value {
+        None | Some(rdocx::TabLeader::None) => 0,
+        Some(rdocx::TabLeader::Dot) => 1,
+        Some(rdocx::TabLeader::Hyphen) => 2,
+        Some(rdocx::TabLeader::Underscore) => 3,
+        Some(rdocx::TabLeader::Heavy) => 4,
+        Some(rdocx::TabLeader::MiddleDot) => 5,
+    }
+}
+
+pub(crate) fn paragraph_border_edge(value: &str) -> PyResult<rdocx::ParagraphBorderEdge> {
+    match value {
+        "top" => Ok(rdocx::ParagraphBorderEdge::Top),
+        "bottom" => Ok(rdocx::ParagraphBorderEdge::Bottom),
+        "left" => Ok(rdocx::ParagraphBorderEdge::Left),
+        "right" => Ok(rdocx::ParagraphBorderEdge::Right),
+        "between" => Ok(rdocx::ParagraphBorderEdge::Between),
+        "bar" => Ok(rdocx::ParagraphBorderEdge::Bar),
+        _ => Err(PyValueError::new_err(
+            "paragraph border edge must be top, bottom, left, right, between or bar",
+        )),
+    }
+}
+
+pub(crate) fn paragraph_color_hex(value: &Bound<'_, PyAny>, parameter: &str) -> PyResult<String> {
+    if value
+        .extract::<String>()
+        .is_ok_and(|value| value.eq_ignore_ascii_case("auto"))
+    {
+        Ok("auto".to_owned())
+    } else {
+        color_hex(value, parameter)
+    }
+}
+
 pub(crate) fn alignment_from_int(value: i32) -> PyResult<rdocx::Alignment> {
     match value {
         0 => Ok(rdocx::Alignment::Left),
@@ -76,6 +157,19 @@ pub(crate) struct FontSnapshot {
     strike: Option<bool>,
     highlight: Option<String>,
     shading: Option<String>,
+    superscript: Option<bool>,
+    subscript: Option<bool>,
+    all_caps: Option<bool>,
+    small_caps: Option<bool>,
+    double_strike: Option<bool>,
+    hidden: Option<bool>,
+    rtl: Option<bool>,
+    language: Option<String>,
+    language_east_asia: Option<String>,
+    language_bidi: Option<String>,
+    name_east_asia: Option<String>,
+    name_complex_script: Option<String>,
+    character_spacing: Option<rdocx::Length>,
     pub(crate) style_id: Option<String>,
 }
 
@@ -94,6 +188,25 @@ impl FontSnapshot {
             strike: run.strike_value(),
             highlight: run.highlight_color().map(str::to_owned),
             shading: run.shading_fill().map(str::to_owned),
+            superscript: run.vert_align().map(|value| value == "superscript"),
+            subscript: run.vert_align().map(|value| value == "subscript"),
+            all_caps: run.all_caps_value(),
+            small_caps: run.small_caps_value(),
+            double_strike: run.double_strike_value(),
+            hidden: run.hidden_value(),
+            rtl: run.rtl_value(),
+            language: run.language().map(str::to_owned),
+            language_east_asia: run.language_east_asia().map(str::to_owned),
+            language_bidi: run.language_bidi().map(str::to_owned),
+            name_east_asia: run
+                .slot_font(rdocx::RunFontSlot::EastAsia)
+                .map(str::to_owned),
+            name_complex_script: run
+                .slot_font(rdocx::RunFontSlot::ComplexScript)
+                .map(str::to_owned),
+            character_spacing: run
+                .character_spacing()
+                .map(|value| rdocx::Length::twips(value.0)),
             style_id: run.style_id().map(str::to_owned),
         }
     }
@@ -110,11 +223,24 @@ pub(crate) enum FontUpdate<'a> {
     Strike(Option<bool>),
     Highlight(Option<&'a str>),
     Shading(Option<&'a str>),
+    Superscript(Option<bool>),
+    Subscript(Option<bool>),
+    AllCaps(Option<bool>),
+    SmallCaps(Option<bool>),
+    DoubleStrike(Option<bool>),
+    Hidden(Option<bool>),
+    Rtl(Option<bool>),
+    Language(Option<&'a str>),
+    LanguageEastAsia(Option<&'a str>),
+    LanguageBidi(Option<&'a str>),
+    NameEastAsia(Option<&'a str>),
+    NameComplexScript(Option<&'a str>),
+    CharacterSpacing(Option<rdocx::Length>),
     Style(Option<&'a str>),
 }
 
 impl FontUpdate<'_> {
-    fn apply(self, run: &mut rdocx::Run<'_>) {
+    fn apply(self, run: &mut rdocx::Run<'_>) -> rdocx::Result<()> {
         match self {
             Self::Name(value) => run.set_font_value(value),
             Self::Size(value) => run.set_size_value(value),
@@ -134,8 +260,24 @@ impl FontUpdate<'_> {
                 debug_assert!(applied);
             }
             Self::Shading(value) => run.set_shading_value(value),
+            Self::Superscript(value) => run.set_superscript_value(value),
+            Self::Subscript(value) => run.set_subscript_value(value),
+            Self::AllCaps(value) => run.set_all_caps_value(value),
+            Self::SmallCaps(value) => run.set_small_caps_value(value),
+            Self::DoubleStrike(value) => run.set_double_strike_value(value),
+            Self::Hidden(value) => run.set_hidden_value(value),
+            Self::Rtl(value) => run.set_rtl_value(value),
+            Self::Language(value) => run.set_language_value(value),
+            Self::LanguageEastAsia(value) => run.set_language_east_asia_value(value),
+            Self::LanguageBidi(value) => run.set_language_bidi_value(value),
+            Self::NameEastAsia(value) => run.set_slot_font(rdocx::RunFontSlot::EastAsia, value),
+            Self::NameComplexScript(value) => {
+                run.set_slot_font(rdocx::RunFontSlot::ComplexScript, value)
+            }
+            Self::CharacterSpacing(value) => return run.try_set_character_spacing_value(value),
             Self::Style(value) => run.set_style_value(value),
         }
+        Ok(())
     }
 }
 
@@ -227,6 +369,7 @@ pub(crate) fn apply_run_update(
     update: FontUpdate<'_>,
 ) -> PyResult<()> {
     let mut document = document.borrow_mut(py);
+    let mut update_result = Ok(());
     match location {
         ParagraphLocation::Body(index) => {
             let mut paragraph = document
@@ -234,7 +377,7 @@ pub(crate) fn apply_run_update(
                 .paragraph_mut(index)
                 .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
             paragraph
-                .edit_run(run_path, |run| update.apply(run))
+                .edit_run(run_path, |run| update_result = update.apply(run))
                 .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
         }
         ParagraphLocation::Cell {
@@ -254,15 +397,144 @@ pub(crate) fn apply_run_update(
                 .paragraph_mut(paragraph)
                 .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
             paragraph
-                .edit_run(run_path, |run| update.apply(run))
+                .edit_run(run_path, |run| update_result = update.apply(run))
                 .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
         }
     }
-    Ok(())
+    update_result.map_err(|error| crate::rdocx_to_pyerr(py, error))
 }
 
 #[pymethods]
 impl PyFont {
+    #[getter]
+    fn superscript(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+        Ok(self.snapshot(py)?.superscript)
+    }
+    #[setter]
+    fn set_superscript(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        self.apply(py, FontUpdate::Superscript(value))
+    }
+
+    #[getter]
+    fn subscript(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+        Ok(self.snapshot(py)?.subscript)
+    }
+    #[setter]
+    fn set_subscript(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        self.apply(py, FontUpdate::Subscript(value))
+    }
+
+    #[getter]
+    fn all_caps(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+        Ok(self.snapshot(py)?.all_caps)
+    }
+    #[setter]
+    fn set_all_caps(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        self.apply(py, FontUpdate::AllCaps(value))
+    }
+
+    #[getter]
+    fn small_caps(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+        Ok(self.snapshot(py)?.small_caps)
+    }
+    #[setter]
+    fn set_small_caps(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        self.apply(py, FontUpdate::SmallCaps(value))
+    }
+
+    #[getter]
+    fn double_strike(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+        Ok(self.snapshot(py)?.double_strike)
+    }
+    #[setter]
+    fn set_double_strike(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        self.apply(py, FontUpdate::DoubleStrike(value))
+    }
+
+    #[getter]
+    fn hidden(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+        Ok(self.snapshot(py)?.hidden)
+    }
+    #[setter]
+    fn set_hidden(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        self.apply(py, FontUpdate::Hidden(value))
+    }
+
+    #[getter]
+    fn rtl(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+        Ok(self.snapshot(py)?.rtl)
+    }
+    #[setter]
+    fn set_rtl(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        self.apply(py, FontUpdate::Rtl(value))
+    }
+
+    #[getter]
+    fn language(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        Ok(self.snapshot(py)?.language)
+    }
+    #[setter]
+    fn set_language(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
+        self.apply(py, FontUpdate::Language(value))
+    }
+
+    #[getter]
+    fn language_east_asia(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        Ok(self.snapshot(py)?.language_east_asia)
+    }
+    #[setter]
+    fn set_language_east_asia(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
+        self.apply(py, FontUpdate::LanguageEastAsia(value))
+    }
+
+    #[getter]
+    fn language_bidi(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        Ok(self.snapshot(py)?.language_bidi)
+    }
+    #[setter]
+    fn set_language_bidi(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
+        self.apply(py, FontUpdate::LanguageBidi(value))
+    }
+
+    #[getter]
+    fn name_east_asia(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        Ok(self.snapshot(py)?.name_east_asia)
+    }
+    #[setter]
+    fn set_name_east_asia(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
+        self.apply(py, FontUpdate::NameEastAsia(value))
+    }
+
+    #[getter]
+    fn name_complex_script(&self, py: Python<'_>) -> PyResult<Option<String>> {
+        Ok(self.snapshot(py)?.name_complex_script)
+    }
+    #[setter]
+    fn set_name_complex_script(&self, py: Python<'_>, value: Option<&str>) -> PyResult<()> {
+        self.apply(py, FontUpdate::NameComplexScript(value))
+    }
+
+    #[getter]
+    fn character_spacing(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.snapshot(py)?
+            .character_spacing
+            .map(|value| length_object(py, value))
+            .transpose()
+    }
+    #[setter]
+    fn set_character_spacing(&self, py: Python<'_>, value: Option<i64>) -> PyResult<()> {
+        // Validate before edit_run stages or publishes its accepted-run replacement.
+        if let Some(emu) = value {
+            i32::try_from(emu / 635).map_err(|_| {
+                PyValueError::new_err("Font.character_spacing exceeds signed twip range")
+            })?;
+        }
+        self.apply(
+            py,
+            FontUpdate::CharacterSpacing(value.map(rdocx::Length::emu)),
+        )
+    }
+
     #[getter]
     fn name(&self, py: Python<'_>) -> PyResult<Option<String>> {
         Ok(self.snapshot(py)?.name)
@@ -509,6 +781,15 @@ pub(crate) struct ParagraphSnapshot {
     keep_together: Option<bool>,
     page_break_before: Option<bool>,
     widow_control: Option<bool>,
+    borders: Vec<(
+        rdocx::ParagraphBorderEdge,
+        String,
+        Option<u32>,
+        Option<String>,
+    )>,
+    shading: Option<String>,
+    outline_level: Option<u32>,
+    rtl: Option<bool>,
 }
 
 impl ParagraphSnapshot {
@@ -528,6 +809,29 @@ impl ParagraphSnapshot {
             keep_together: paragraph.keep_together_value(),
             page_break_before: paragraph.page_break_before_value(),
             widow_control: paragraph.widow_control_value(),
+            borders: [
+                rdocx::ParagraphBorderEdge::Top,
+                rdocx::ParagraphBorderEdge::Bottom,
+                rdocx::ParagraphBorderEdge::Left,
+                rdocx::ParagraphBorderEdge::Right,
+                rdocx::ParagraphBorderEdge::Between,
+                rdocx::ParagraphBorderEdge::Bar,
+            ]
+            .into_iter()
+            .filter_map(|edge| {
+                paragraph.border(edge).map(|border| {
+                    (
+                        edge,
+                        border.style().to_owned(),
+                        border.size_eighths_pt(),
+                        border.color().map(str::to_owned),
+                    )
+                })
+            })
+            .collect(),
+            shading: paragraph.shading_fill().map(str::to_owned),
+            outline_level: paragraph.outline_level(),
+            rtl: paragraph.right_to_left_value(),
         }
     }
 }
@@ -547,10 +851,21 @@ pub(crate) enum ParagraphUpdate {
     KeepTogether(Option<bool>),
     PageBreakBefore(Option<bool>),
     WidowControl(Option<bool>),
+    AddTab(rdocx::TabAlignment, rdocx::Length, Option<rdocx::TabLeader>),
+    RemoveTab(usize),
+    ClearTabs,
+    Border(
+        rdocx::ParagraphBorderEdge,
+        Option<(rdocx::BorderStyle, u32, String)>,
+    ),
+    ClearBorders,
+    Shading(Option<String>),
+    OutlineLevel(Option<u32>),
+    Rtl(Option<bool>),
 }
 
 impl ParagraphUpdate {
-    fn apply(self, paragraph: &mut rdocx::Paragraph<'_>) {
+    fn apply(self, paragraph: &mut rdocx::Paragraph<'_>) -> rdocx::Result<()> {
         match self {
             Self::Style(value) => paragraph.set_style_value(value.as_deref()),
             Self::Numbering(value) => {
@@ -570,7 +885,166 @@ impl ParagraphUpdate {
             Self::KeepTogether(value) => paragraph.set_keep_together_value(value),
             Self::PageBreakBefore(value) => paragraph.set_page_break_before_value(value),
             Self::WidowControl(value) => paragraph.set_widow_control_value(value),
+            Self::AddTab(alignment, position, leader) => {
+                paragraph.try_add_tab_stop(alignment, position, leader)?;
+            }
+            Self::RemoveTab(index) => {
+                paragraph.try_remove_tab_stop(index)?;
+            }
+            Self::ClearTabs => paragraph.try_clear_tab_stops()?,
+            Self::Border(edge, value) => paragraph.set_border_value(
+                edge,
+                value
+                    .as_ref()
+                    .map(|(style, size, color)| (*style, *size, color.as_str())),
+            ),
+            Self::ClearBorders => paragraph.clear_borders(),
+            Self::Shading(value) => paragraph.set_shading_fill_value(value.as_deref()),
+            Self::OutlineLevel(value) => {
+                assert!(paragraph.set_outline_level_value(value));
+            }
+            Self::Rtl(value) => paragraph.set_right_to_left_value(value),
         }
+        Ok(())
+    }
+}
+
+/// An owned read-only snapshot. It has no mutable child-position identity.
+#[pyclass(name = "TabStop", frozen, from_py_object)]
+#[derive(Clone)]
+pub struct PyTabStop {
+    position: rdocx::Length,
+    alignment: rdocx::TabAlignment,
+    leader: Option<rdocx::TabLeader>,
+}
+
+#[pymethods]
+impl PyTabStop {
+    #[getter]
+    fn position(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        length_object(py, self.position)
+    }
+    #[getter]
+    fn alignment(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        enum_object(py, "WD_TAB_ALIGNMENT", tab_alignment_to_int(self.alignment))
+    }
+    #[getter]
+    fn leader(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        enum_object(py, "WD_TAB_LEADER", tab_leader_to_int(self.leader))
+    }
+}
+
+#[pyclass(name = "TabStops")]
+pub struct PyTabStops {
+    document: Py<PyDocument>,
+    path: ContentPath,
+}
+
+impl PyTabStops {
+    fn format(&self, py: Python<'_>) -> PyParagraphFormat {
+        PyParagraphFormat::new(self.document.clone_ref(py), self.path.clone())
+    }
+
+    fn snapshots(&self, py: Python<'_>) -> PyResult<Vec<PyTabStop>> {
+        let format = self.format(py);
+        let location = format.validate(py)?;
+        let document = self.document.borrow(py);
+        let read = |paragraph: rdocx::ParagraphRef<'_>| -> PyResult<Vec<PyTabStop>> {
+            (0..paragraph.tab_stop_count())
+                .map(|index| {
+                    let tab = paragraph
+                        .tab_stop(index)
+                        .expect("index is within native tab count");
+                    let (alignment, leader) = tab
+                        .checked_values()
+                        .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
+                    Ok(PyTabStop {
+                        position: tab.position(),
+                        alignment,
+                        leader,
+                    })
+                })
+                .collect()
+        };
+        match location {
+            ParagraphLocation::Body(index) => read(
+                document
+                    .inner
+                    .paragraph(index)
+                    .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?,
+            ),
+            ParagraphLocation::Cell {
+                table,
+                row,
+                cell,
+                paragraph,
+            } => {
+                let table = document
+                    .inner
+                    .table(table)
+                    .ok_or_else(|| PyIndexError::new_err("table index out of range"))?;
+                let cell = table
+                    .cell(row, cell)
+                    .ok_or_else(|| PyIndexError::new_err("cell index out of range"))?;
+                read(
+                    cell.paragraph(paragraph)
+                        .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?,
+                )
+            }
+        }
+    }
+}
+
+#[pymethods]
+impl PyTabStops {
+    fn __len__(&self, py: Python<'_>) -> PyResult<usize> {
+        Ok(self.snapshots(py)?.len())
+    }
+    fn __getitem__(&self, py: Python<'_>, index: isize) -> PyResult<PyTabStop> {
+        let tabs = self.snapshots(py)?;
+        let index = crate::normalize_index(index, tabs.len(), "tab stop")?;
+        Ok(tabs[index].clone())
+    }
+    fn __delitem__(&self, py: Python<'_>, index: isize) -> PyResult<()> {
+        let tabs = self.snapshots(py)?;
+        let index = crate::normalize_index(index, tabs.len(), "tab stop")?;
+        self.format(py).apply(py, ParagraphUpdate::RemoveTab(index))
+    }
+    fn __iter__(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let tabs = self
+            .snapshots(py)?
+            .into_iter()
+            .map(|tab| Py::new(py, tab))
+            .collect::<PyResult<Vec<_>>>()?;
+        pyo3::types::PyList::new(py, tabs)?
+            .call_method0("__iter__")
+            .map(Bound::unbind)
+    }
+    #[pyo3(signature = (position, alignment=0, leader=None))]
+    fn add_tab_stop(
+        &self,
+        py: Python<'_>,
+        position: i64,
+        alignment: i32,
+        leader: Option<i32>,
+    ) -> PyResult<PyTabStop> {
+        let position = i32::try_from(position / 635)
+            .map(rdocx::Length::twips)
+            .map_err(|_| {
+                PyValueError::new_err("TabStops.add_tab_stop(position) exceeds signed twip range")
+            })?;
+        let alignment = tab_alignment_from_int(alignment)?;
+        let leader = tab_leader_from_int(leader)?;
+        self.format(py)
+            .apply(py, ParagraphUpdate::AddTab(alignment, position, leader))?;
+        Ok(PyTabStop {
+            position,
+            alignment,
+            leader,
+        })
+    }
+    fn clear_all(&self, py: Python<'_>) -> PyResult<()> {
+        self.format(py).apply(py, ParagraphUpdate::ClearTabs)
     }
 }
 
@@ -648,7 +1122,9 @@ pub(crate) fn apply_paragraph_update(
                 .inner
                 .paragraph_mut(index)
                 .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
-            update.apply(&mut paragraph);
+            update
+                .apply(&mut paragraph)
+                .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
         }
         ParagraphLocation::Cell {
             table,
@@ -666,7 +1142,9 @@ pub(crate) fn apply_paragraph_update(
             let mut paragraph = cell
                 .paragraph_mut(paragraph)
                 .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
-            update.apply(&mut paragraph);
+            update
+                .apply(&mut paragraph)
+                .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
         }
     }
     Ok(())
@@ -674,6 +1152,104 @@ pub(crate) fn apply_paragraph_update(
 
 #[pymethods]
 impl PyParagraphFormat {
+    #[pyo3(signature = (edge, style, *, size, color))]
+    fn set_border(
+        &self,
+        py: Python<'_>,
+        edge: &str,
+        style: &str,
+        size: u32,
+        color: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        let edge = paragraph_border_edge(edge)?;
+        let style = crate::table::border_style_from_name(style)?;
+        let color = paragraph_color_hex(color, "ParagraphFormat.set_border(color)")?;
+        self.apply(
+            py,
+            ParagraphUpdate::Border(edge, Some((style, size, color))),
+        )
+    }
+
+    fn border(&self, py: Python<'_>, edge: &str) -> PyResult<Option<BorderSnapshot>> {
+        let edge = paragraph_border_edge(edge)?;
+        self.snapshot(py)?
+            .borders
+            .into_iter()
+            .find(|(candidate, _, _, _)| *candidate == edge)
+            .map(|(_, style, size, color)| {
+                Ok((
+                    style,
+                    size,
+                    color
+                        .as_deref()
+                        .map(|value| color_object(py, value))
+                        .transpose()?,
+                ))
+            })
+            .transpose()
+    }
+
+    fn clear_border(&self, py: Python<'_>, edge: &str) -> PyResult<()> {
+        self.apply(
+            py,
+            ParagraphUpdate::Border(paragraph_border_edge(edge)?, None),
+        )
+    }
+    fn clear_borders(&self, py: Python<'_>) -> PyResult<()> {
+        self.apply(py, ParagraphUpdate::ClearBorders)
+    }
+    #[getter]
+    fn shading(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        self.snapshot(py)?
+            .shading
+            .as_deref()
+            .map(|value| color_object(py, value))
+            .transpose()
+    }
+    #[setter]
+    fn set_shading(&self, py: Python<'_>, value: Option<&Bound<'_, PyAny>>) -> PyResult<()> {
+        let value = value
+            .filter(|value| !value.is_none())
+            .map(|value| paragraph_color_hex(value, "ParagraphFormat.shading"))
+            .transpose()?;
+        self.apply(py, ParagraphUpdate::Shading(value))
+    }
+    #[getter]
+    fn outline_level(&self, py: Python<'_>) -> PyResult<Option<u32>> {
+        Ok(self.snapshot(py)?.outline_level)
+    }
+    #[setter]
+    fn set_outline_level(&self, py: Python<'_>, value: Option<i64>) -> PyResult<()> {
+        let value = value
+            .map(|value| {
+                u32::try_from(value)
+                    .ok()
+                    .filter(|value| *value <= 9)
+                    .ok_or_else(|| {
+                        PyValueError::new_err("ParagraphFormat.outline_level must be 0..9 or None")
+                    })
+            })
+            .transpose()?;
+        self.apply(py, ParagraphUpdate::OutlineLevel(value))
+    }
+    #[getter]
+    fn rtl(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+        Ok(self.snapshot(py)?.rtl)
+    }
+    #[setter]
+    fn set_rtl(&self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        self.apply(py, ParagraphUpdate::Rtl(value))
+    }
+
+    #[getter]
+    fn tab_stops(&self, py: Python<'_>) -> PyResult<PyTabStops> {
+        self.validate(py)?;
+        Ok(PyTabStops {
+            document: self.document.clone_ref(py),
+            path: self.path.clone(),
+        })
+    }
+
     #[getter]
     fn alignment(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         self.snapshot(py)?
