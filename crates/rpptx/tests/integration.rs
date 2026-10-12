@@ -33676,8 +33676,13 @@ fn the_eot_header_reads_names_from_a_windows_symbol_encoded_name_table() {
 /// no bundled font carries, so a PDF naming it can only have drawn this face.
 /// The swap keeps every string length and touches only the `name` table.
 fn renamed_caladea_face(face: &str, name: &str) -> Vec<u8> {
-    assert_eq!(name.len(), "Caladea".len());
-    let mut font = caladea_face(face);
+    renamed_face(caladea_face(face), "Caladea", name)
+}
+
+/// `font` with its family `family` renamed to `name` of the same length. The
+/// swap keeps every string length and touches only the `name` table.
+fn renamed_face(mut font: Vec<u8>, family: &str, name: &str) -> Vec<u8> {
+    assert_eq!(name.len(), family.len());
     let table_count = usize::from(u16::from_be_bytes([font[4], font[5]]));
     let record = (0..table_count)
         .map(|index| 12 + index * 16)
@@ -33691,8 +33696,8 @@ fn renamed_caladea_face(face: &str, name: &str) -> Vec<u8> {
             .collect::<Vec<_>>()
     };
     for (from, to) in [
-        ("Caladea".as_bytes().to_vec(), name.as_bytes().to_vec()),
-        (utf16("Caladea"), utf16(name)),
+        (family.as_bytes().to_vec(), name.as_bytes().to_vec()),
+        (utf16(family), utf16(name)),
     ] {
         let table = &mut font[offset..offset + length];
         let mut at = 0;
@@ -33807,6 +33812,102 @@ fn renders_draw_the_faces_the_deck_embeds() {
         &raw.to_pdf_deterministic().unwrap(),
         b"Embedia"
     ));
+}
+
+/// The #315 caller fonts and the #360 embedded faces share one font list, the
+/// caller fonts first. A caller font of a typeface the deck embeds wins over
+/// the embedded face, and the embedded face draws when no caller font is given.
+#[test]
+#[cfg(all(feature = "render", feature = "default-template"))]
+fn a_caller_font_wins_over_an_embedded_face_of_the_same_typeface() {
+    use rpptx::{EmbeddedFont, EmbeddedFontKind};
+
+    let embedded_face = renamed_caladea_face("Regular", "Embedia");
+    let caller_face = renamed_face(
+        fs::read(workspace_root().join("crates/oxml-layout/fonts/Carlito-Regular.ttf"))
+            .expect("bundled Carlito face"),
+        "Carlito",
+        "Embedia",
+    );
+    let mut source = Presentation::new().unwrap();
+    source.add_slide(0).unwrap();
+    let mut slide = source.slide_mut(0).unwrap();
+    let mut textbox = slide
+        .add_textbox(Emu(457_200), Emu(914_400), Emu(8_229_600), Emu(914_400))
+        .unwrap();
+    textbox.set_text("Caller or embedded").unwrap();
+    let mut frame = textbox.text_frame().unwrap();
+    frame
+        .paragraph_mut(0)
+        .unwrap()
+        .run_mut(0)
+        .unwrap()
+        .set_font(Some(TextFont::new("Embedia").unwrap()));
+    source
+        .embed_font(
+            "Embedia",
+            EmbeddedFont::new(
+                EmbeddedFontKind::Regular,
+                embedded_face.clone(),
+                open_font_license(),
+            ),
+        )
+        .unwrap();
+    let deck = Presentation::from_bytes(&source.to_bytes().unwrap()).unwrap();
+    let face_name = |data: &[u8]| {
+        if data == embedded_face.as_slice() {
+            "embedded"
+        } else if data == caller_face.as_slice() {
+            "caller"
+        } else {
+            "another face"
+        }
+    };
+
+    let (input, layout) = deck.render_deterministic().unwrap();
+    assert_eq!(
+        input
+            .fonts
+            .iter()
+            .map(|font| (font.family.as_str(), face_name(&font.data)))
+            .collect::<Vec<_>>(),
+        [("Embedia", "embedded")]
+    );
+    assert_eq!(
+        layout
+            .fonts
+            .iter()
+            .filter(|font| font.family == "Embedia")
+            .map(|font| face_name(&font.data))
+            .collect::<Vec<_>>(),
+        ["embedded"]
+    );
+
+    let (input, layout) = deck
+        .render_deterministic_with_fonts(&[("Embedia", caller_face.as_slice())])
+        .unwrap();
+    assert_eq!(
+        input
+            .fonts
+            .iter()
+            .map(|font| (font.family.as_str(), face_name(&font.data)))
+            .collect::<Vec<_>>(),
+        [("Embedia", "caller"), ("Embedia", "embedded")]
+    );
+    assert_eq!(
+        layout
+            .fonts
+            .iter()
+            .filter(|font| font.family == "Embedia")
+            .map(|font| face_name(&font.data))
+            .collect::<Vec<_>>(),
+        ["caller"]
+    );
+    assert_ne!(
+        deck.to_pdf_deterministic_with_fonts(&[("Embedia", caller_face.as_slice())])
+            .unwrap(),
+        deck.to_pdf_deterministic().unwrap()
+    );
 }
 
 /// GitHub issue #360. A hostile font list or font part fails cleanly: a part
