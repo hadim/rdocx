@@ -28429,3 +28429,125 @@ fn the_eot_header_reads_names_from_a_windows_symbol_encoded_name_table() {
         style.as_slice()
     );
 }
+
+type DeckFontPartState = (
+    String,
+    String,
+    Option<String>,
+    Option<Vec<u8>>,
+    Option<String>,
+);
+
+/// The `p:embeddedFontLst` element of a package's presentation part, written
+/// with the `p` prefix, and each font relationship with its target bytes and
+/// content type.
+fn deck_embedded_font_state(package: &OpcPackage) -> Option<(String, Vec<DeckFontPartState>)> {
+    let main = OpcPackage::resolve_rel_target(
+        "/",
+        &package
+            .package_rels
+            .get_by_type(rel_types::DOCUMENT)?
+            .target,
+    );
+    let xml = String::from_utf8_lossy(package.get_part(&main)?).into_owned();
+    let marker = xml.find(":embeddedFontLst")?;
+    let start = xml[..marker].rfind('<')?;
+    let prefix = &xml[start + 1..marker];
+    let close = format!("</{prefix}:embeddedFontLst>");
+    let end = match xml[start..].find(&close) {
+        Some(offset) => start + offset + close.len(),
+        None => start + xml[start..].find("/>")? + 2,
+    };
+    let list = xml[start..end]
+        .replace(&format!("<{prefix}:"), "<p:")
+        .replace(&format!("</{prefix}:"), "</p:");
+    let parts = package
+        .get_part_rels(&main)
+        .map(|relationships| {
+            relationships
+                .items
+                .iter()
+                .filter(|relationship| relationship.rel_type == rel_types::FONT)
+                .map(|relationship| {
+                    let target = OpcPackage::resolve_rel_target(&main, &relationship.target);
+                    (
+                        relationship.id.clone(),
+                        relationship.target.clone(),
+                        relationship.target_mode.clone(),
+                        package.get_part(&target).map(<[u8]>::to_vec),
+                        package
+                            .content_types
+                            .content_type_for(&target)
+                            .map(str::to_owned),
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some((list, parts))
+}
+
+#[test]
+fn corpus_decks_keep_their_embedded_fonts_through_save_and_an_unrelated_edit() {
+    let corpus = corpus_dir();
+    if !corpus.is_dir() {
+        assert!(
+            std::env::var_os("RDOCX_PPTX_CORPUS_REQUIRED").is_none(),
+            "required corpus is missing at {}",
+            corpus.display()
+        );
+        eprintln!(
+            "embedded font corpus round trip skipped because {} is absent",
+            corpus.display()
+        );
+        return;
+    }
+    let mut paths = fs::read_dir(&corpus)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "pptx")
+        })
+        .collect::<Vec<_>>();
+    paths.sort();
+    let mut checked = 0;
+    for path in paths {
+        let deck = path.display().to_string();
+        let bytes = fs::read(&path).unwrap();
+        let source = open_opc(&bytes, &deck);
+        let Some(expected) = deck_embedded_font_state(&source) else {
+            continue;
+        };
+        checked += 1;
+        let source_xml = source.get_part("/ppt/presentation.xml").map(<[u8]>::to_vec);
+        let mut presentation = Presentation::from_bytes(&bytes).unwrap();
+        let saved = open_opc(&presentation.to_bytes().unwrap(), &deck);
+        assert_eq!(
+            deck_embedded_font_state(&saved).as_ref(),
+            Some(&expected),
+            "{deck}: save"
+        );
+        assert_eq!(
+            saved.get_part("/ppt/presentation.xml").map(<[u8]>::to_vec),
+            source_xml,
+            "{deck}: an unedited presentation part stays byte-identical"
+        );
+
+        // A slide-size change rewrites presentation.xml from the model.
+        let (width, height) = presentation
+            .slide_size()
+            .unwrap_or((Emu(9_144_000), Emu(6_858_000)));
+        presentation
+            .set_slide_size(Emu(width.0 + 12_700), height)
+            .unwrap();
+        presentation.core_properties_mut().title = Some("Embedded font round trip".to_owned());
+        let edited = open_opc(&presentation.to_bytes().unwrap(), &deck);
+        assert_eq!(
+            deck_embedded_font_state(&edited).as_ref(),
+            Some(&expected),
+            "{deck}: unrelated edit"
+        );
+    }
+    eprintln!("checked embedded fonts in {checked} corpus decks");
+}

@@ -2675,6 +2675,126 @@ mod theme_and_embedded_font_tests {
                 .is_some()
         );
     }
+
+    type FontPartState = (
+        String,
+        String,
+        Option<String>,
+        Option<Vec<u8>>,
+        Option<String>,
+    );
+
+    /// The font-table XML of a package with `w:embed*` faces, and each font
+    /// relationship with its target bytes and content type.
+    fn embedded_font_state(package: &OpcPackage) -> Option<(Vec<u8>, Vec<FontPartState>)> {
+        let main = OpcPackage::resolve_rel_target(
+            "/",
+            &package
+                .package_rels
+                .get_by_type(rel_types::DOCUMENT)?
+                .target,
+        );
+        let relationship = package
+            .get_part_rels(&main)?
+            .get_by_type(rel_types::FONT_TABLE)?;
+        let font_table = OpcPackage::resolve_rel_target(&main, &relationship.target);
+        let xml = package.get_part(&font_table)?.to_vec();
+        let text = String::from_utf8_lossy(&xml);
+        if ![
+            "embedRegular",
+            "embedBold",
+            "embedItalic",
+            "embedBoldItalic",
+        ]
+        .iter()
+        .any(|name| text.contains(&format!(":{name} ")))
+        {
+            return None;
+        }
+        let parts = package
+            .get_part_rels(&font_table)
+            .map(|relationships| {
+                relationships
+                    .items
+                    .iter()
+                    .filter(|relationship| relationship.rel_type == FONT_REL_TYPE)
+                    .map(|relationship| {
+                        let target =
+                            OpcPackage::resolve_rel_target(&font_table, &relationship.target);
+                        (
+                            relationship.id.clone(),
+                            relationship.target.clone(),
+                            relationship.target_mode.clone(),
+                            package.get_part(&target).map(<[u8]>::to_vec),
+                            package
+                                .content_types
+                                .content_type_for(&target)
+                                .map(str::to_owned),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        Some((xml, parts))
+    }
+
+    #[test]
+    fn corpus_documents_keep_their_embedded_fonts_through_save_and_an_unrelated_edit() {
+        let corpus = std::env::var_os("RDOCX_DOCX_CORPUS_DIR")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| {
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/docx")
+            });
+        if !corpus.is_dir() {
+            assert!(
+                std::env::var_os("RDOCX_DOCX_CORPUS_REQUIRED").is_none(),
+                "required corpus is missing at {}",
+                corpus.display()
+            );
+            eprintln!(
+                "embedded font corpus round trip skipped because {} is absent",
+                corpus.display()
+            );
+            return;
+        }
+        let mut paths = std::fs::read_dir(&corpus)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension == "docx")
+            })
+            .collect::<Vec<_>>();
+        paths.sort();
+        let mut checked = 0;
+        for path in paths {
+            let bytes = std::fs::read(&path).unwrap();
+            let source = OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+            let Some(expected) = embedded_font_state(&source) else {
+                continue;
+            };
+            checked += 1;
+            let mut document = Document::from_bytes(&bytes).unwrap();
+            let saved = document.to_bytes().unwrap();
+            let saved = OpcPackage::from_reader(std::io::Cursor::new(saved)).unwrap();
+            assert_eq!(
+                embedded_font_state(&saved).as_ref(),
+                Some(&expected),
+                "{}: save",
+                path.display()
+            );
+            document.add_paragraph("An unrelated paragraph added after the embedded fonts.");
+            let edited = document.to_bytes().unwrap();
+            let edited = OpcPackage::from_reader(std::io::Cursor::new(edited)).unwrap();
+            assert_eq!(
+                embedded_font_state(&edited).as_ref(),
+                Some(&expected),
+                "{}: unrelated edit",
+                path.display()
+            );
+        }
+        eprintln!("checked embedded fonts in {checked} corpus documents");
+    }
 }
 
 mod settings_and_properties_tests {
