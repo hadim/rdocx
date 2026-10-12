@@ -25572,11 +25572,7 @@ impl Document {
                 "font embedding license identity contains XML-normalized whitespace".to_owned(),
             ));
         }
-        if !looks_like_sfnt(&embedded.data) {
-            return Err(Error::Other(
-                "embedded font bytes are not a supported sfnt font".to_owned(),
-            ));
-        }
+        validate_embeddable_sfnt(&embedded.data).map_err(Error::Other)?;
         let guid = font_key_bytes(&embedded.font_key).ok_or_else(|| {
             Error::Other("embedded font key must be a 16-byte OOXML GUID".to_owned())
         })?;
@@ -30990,6 +30986,67 @@ fn odttf_key_candidates(guid: &[u8; 16]) -> [[u8; 16]; 2] {
     dotnet_reversed.reverse();
 
     [plain_reversed, dotnet_reversed]
+}
+
+/// Check that `data` is one TrueType or OpenType face that can be embedded:
+/// an sfnt table directory inside the bytes, with the `OS/2`, `head` and
+/// `name` tables, and no font collection.
+///
+/// rpptx applies the same rules before it writes an Embedded OpenType part.
+fn validate_embeddable_sfnt(data: &[u8]) -> std::result::Result<(), String> {
+    match data.first_chunk::<4>() {
+        Some(b"\x00\x01\x00\x00" | b"OTTO" | b"true") => {}
+        Some(b"ttcf") => {
+            return Err(
+                "a font collection cannot be embedded, pass one TrueType or OpenType face"
+                    .to_owned(),
+            );
+        }
+        _ => return Err("embedded font bytes are not a supported sfnt font".to_owned()),
+    }
+    let malformed = || "embedded font bytes have a malformed sfnt table directory".to_owned();
+    let read_u32 = |offset: usize| {
+        data.get(offset..offset + 4)
+            .map(|bytes| u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize)
+            .ok_or_else(malformed)
+    };
+    let table_count = data
+        .get(4..6)
+        .map(|bytes| usize::from(u16::from_be_bytes([bytes[0], bytes[1]])))
+        .ok_or_else(malformed)?;
+    if table_count == 0 || table_count > 512 {
+        return Err(malformed());
+    }
+    let table_len = |tag: &[u8; 4]| -> std::result::Result<Option<usize>, String> {
+        for index in 0..table_count {
+            let record = 12 + index * 16;
+            if data.get(record..record + 4).ok_or_else(malformed)? != tag {
+                continue;
+            }
+            let offset = read_u32(record + 8)?;
+            let length = read_u32(record + 12)?;
+            let end = offset.checked_add(length).ok_or_else(malformed)?;
+            return if end <= data.len() {
+                Ok(Some(length))
+            } else {
+                Err(malformed())
+            };
+        }
+        Ok(None)
+    };
+    let mut lengths = [0; 3];
+    for (length, tag) in lengths.iter_mut().zip([b"OS/2", b"head", b"name"]) {
+        *length = table_len(tag)?.ok_or_else(|| {
+            format!(
+                "embedded font has no {} table",
+                String::from_utf8_lossy(tag).trim_end()
+            )
+        })?;
+    }
+    if lengths[0] < 78 || lengths[1] < 12 {
+        return Err("embedded font has a truncated OS/2 or head table".to_owned());
+    }
+    Ok(())
 }
 
 /// Check that `data` opens with a plausible sfnt (TrueType/OpenType) header.

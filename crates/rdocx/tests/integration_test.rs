@@ -1984,6 +1984,53 @@ mod theme_and_embedded_font_tests {
     }
 
     #[test]
+    fn font_embedding_refuses_collections_and_faces_without_the_required_tables() {
+        let mut document = Document::new();
+        document.set_font(corpus_font()).unwrap();
+        let before = document.to_bytes().unwrap();
+        let table_record = |font: &[u8], tag: &[u8; 4]| {
+            let count = usize::from(u16::from_be_bytes([font[4], font[5]]));
+            (0..count)
+                .map(|index| 12 + index * 16)
+                .find(|record| &font[*record..*record + 4] == tag)
+                .unwrap()
+        };
+        let mut collection = CARLITO.to_vec();
+        collection[..4].copy_from_slice(b"ttcf");
+        let mut without_name = CARLITO.to_vec();
+        let record = table_record(&without_name, b"name");
+        without_name[record..record + 4].copy_from_slice(b"xxxx");
+        let mut out_of_bounds = CARLITO.to_vec();
+        let record = table_record(&out_of_bounds, b"OS/2");
+        out_of_bounds[record + 12..record + 16].copy_from_slice(&u32::MAX.to_be_bytes());
+        let mut truncated_os2 = CARLITO.to_vec();
+        truncated_os2[record + 12..record + 16].copy_from_slice(&40_u32.to_be_bytes());
+        for (data, message) in [
+            (collection, "a font collection cannot be embedded"),
+            (without_name, "embedded font has no name table"),
+            (out_of_bounds, "malformed sfnt table directory"),
+            (truncated_os2, "truncated OS/2 or head table"),
+            (CARLITO[..12].to_vec(), "malformed sfnt table directory"),
+            (b"not a font at all".to_vec(), "not a supported sfnt font"),
+        ] {
+            let error = document
+                .embed_font(
+                    "Corpus Sans",
+                    EmbeddedFont::new(
+                        EmbeddedFontKind::Regular,
+                        data,
+                        FONT_KEY,
+                        license(true, "Apache-2.0: Carlito"),
+                    ),
+                )
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(message), "{error}");
+            assert_eq!(document.to_bytes().unwrap(), before);
+        }
+    }
+
+    #[test]
     fn font_embedding_requires_explicit_authorization_and_license_identity() {
         let mut document = Document::new();
         document.set_font(corpus_font()).unwrap();
