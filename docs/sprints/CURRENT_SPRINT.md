@@ -6,8 +6,8 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 now contains twenty-nine active stories, twenty-one completed, five running,
-three approved pending implementation. The latest bounded intake includes40 issues and30 PRs, plus final minor-release preparation.
+S91 now contains twenty-nine active stories, twenty-one completed, six running,
+two approved pending implementation. The latest bounded intake includes40 issues and30 PRs, plus final minor-release preparation.
 
 ## Spec references
 
@@ -41,7 +41,7 @@ three approved pending implementation. The latest bounded intake includes40 issu
 | F-X208 | Author PowerPoint footer fields themes and transitions | L | done | - |
 | F-X209 | Edit PowerPoint masters layouts and themes | L | done | - |
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | done | - |
-| F-X211 | Complete Python script compatibility and safe XML access | L | pending | - |
+| F-X211 | Complete Python script compatibility and safe XML access | L | in-progress | codex |
 | F-X212 | Align native accessibility with visible paragraph content | M | done | - |
 | F-X213 | Preserve TOC entry boundary paragraphs during rebuild | M | done | - |
 | F-X214 | Bound recursive PowerPoint parsing and traversal | L | done | - |
@@ -1158,3 +1158,8 @@ Twenty-one of29 stories are completed. The shared one-shot CLI repair integrates
 ## F-X218 isolated native phase, 2026-10-12
 
 F-X218 is claimed after completed dependencies. Initial exclusive leases: crates/rpptx/src/html.rs, crates/rpptx/src/lib.rs, html registration and narrow read metadata only, crates/rpptx/tests/integration.rs, inline semantic controls only. The approved full acceptance remains unchanged. Existing font, chart and Word inventory providers stay under their current owners. Public bindings, CLI and shared HLD changes require explicit phased handover.
+
+
+## F-X211 isolated native phase, 2026-10-12
+
+F-X211 is claimed after completed dependencies. Initial exclusive leases: crates/rdocx-oxml/src/text.rs, qualified paragraph/run XML admission only, crates/rdocx/src/document.rs, checked selected-owner transaction glue only. The approved full acceptance remains unchanged. Existing font, chart and Word inventory providers stay under their current owners. Public bindings, CLI and shared HLD changes require explicit phased handover.
