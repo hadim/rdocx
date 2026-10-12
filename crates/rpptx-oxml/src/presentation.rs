@@ -146,6 +146,136 @@ impl CT_SlideMasterId {
     }
 }
 
+/// The face slot one embedded font part fills, in `p:embeddedFont` order.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum EmbeddedFontKind {
+    Regular,
+    Bold,
+    Italic,
+    BoldItalic,
+}
+
+impl EmbeddedFontKind {
+    /// Every face slot in schema order.
+    pub const ALL: [Self; 4] = [Self::Regular, Self::Bold, Self::Italic, Self::BoldItalic];
+
+    /// The PresentationML local name of the face element.
+    pub fn element_name(self) -> &'static str {
+        match self {
+            Self::Regular => "regular",
+            Self::Bold => "bold",
+            Self::Italic => "italic",
+            Self::BoldItalic => "boldItalic",
+        }
+    }
+
+    fn index(self) -> usize {
+        self as usize
+    }
+
+    fn from_local_name(name: &[u8]) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|kind| kind.element_name().as_bytes() == name)
+    }
+}
+
+/// One face element of an embedded font and its unresolved relationship id.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct EmbeddedFontFace {
+    relationship_id: String,
+    raw_attributes: RawAttributes,
+    raw_children: OrderedRawChildren,
+}
+
+/// One `p:embeddedFont`: the `p:font` description and its face relationship ids.
+#[allow(non_camel_case_types)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CT_EmbeddedFontListEntry {
+    pub typeface: String,
+    pub panose: Option<String>,
+    pub pitch_family: Option<i8>,
+    pub charset: Option<i8>,
+    faces: [Option<EmbeddedFontFace>; 4],
+    font_raw_attributes: RawAttributes,
+    font_raw_children: OrderedRawChildren,
+    raw_attributes: RawAttributes,
+    raw_children: OrderedRawChildren,
+    /// Unmodelled list children that precede this entry in the source list.
+    leading_raw: Vec<Vec<u8>>,
+}
+
+impl CT_EmbeddedFontListEntry {
+    pub fn new(typeface: impl Into<String>) -> Result<Self> {
+        let typeface = typeface.into();
+        validate_typeface(&typeface)?;
+        Ok(Self {
+            typeface,
+            panose: None,
+            pitch_family: None,
+            charset: None,
+            faces: [None, None, None, None],
+            font_raw_attributes: Vec::new(),
+            font_raw_children: OrderedRawChildren::default(),
+            raw_attributes: Vec::new(),
+            raw_children: OrderedRawChildren::default(),
+            leading_raw: Vec::new(),
+        })
+    }
+
+    /// Returns the relationship id of one face, when the entry has it.
+    pub fn face(&self, kind: EmbeddedFontKind) -> Option<&str> {
+        self.faces[kind.index()]
+            .as_ref()
+            .map(|face| face.relationship_id.as_str())
+    }
+
+    /// Returns every present face and its relationship id in schema order.
+    pub fn faces(&self) -> impl Iterator<Item = (EmbeddedFontKind, &str)> {
+        EmbeddedFontKind::ALL.into_iter().filter_map(|kind| {
+            self.face(kind)
+                .map(|relationship_id| (kind, relationship_id))
+        })
+    }
+
+    /// Points one face at a relationship id and returns the id it replaced.
+    ///
+    /// A replaced face keeps its unmodelled attributes and children.
+    pub fn set_face(
+        &mut self,
+        kind: EmbeddedFontKind,
+        relationship_id: impl Into<String>,
+    ) -> Option<String> {
+        let relationship_id = relationship_id.into();
+        match &mut self.faces[kind.index()] {
+            Some(face) => Some(std::mem::replace(
+                &mut face.relationship_id,
+                relationship_id,
+            )),
+            slot => {
+                *slot = Some(EmbeddedFontFace {
+                    relationship_id,
+                    raw_attributes: Vec::new(),
+                    raw_children: OrderedRawChildren::default(),
+                });
+                None
+            }
+        }
+    }
+
+    /// Removes one face and returns its relationship id.
+    pub fn remove_face(&mut self, kind: EmbeddedFontKind) -> Option<String> {
+        self.faces[kind.index()]
+            .take()
+            .map(|face| face.relationship_id)
+    }
+
+    /// Whether the entry carries unmodelled children of its own.
+    pub fn has_raw_children(&self) -> bool {
+        !self.raw_children.is_empty()
+    }
+}
+
 /// The typed shell for `/ppt/presentation.xml`.
 #[allow(non_camel_case_types)]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -155,6 +285,8 @@ pub struct CT_Presentation {
     pub slide_size: Option<CT_SlideSize>,
     pub notes_size: CT_SlideSize,
     pub default_text_style: Option<CT_TextListStyle>,
+    embedded_fonts: Vec<CT_EmbeddedFontListEntry>,
+    embedded_font_list: Option<EmbeddedFontListShell>,
     sections: Vec<Section>,
     extension_list_raw: Option<Vec<u8>>,
     section_list_range: Option<(usize, usize)>,
@@ -171,6 +303,13 @@ pub struct CT_Presentation {
     raw_children: OrderedRawChildren,
 }
 
+/// The attributes and trailing raw children of a present `p:embeddedFontLst`.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct EmbeddedFontListShell {
+    raw_attributes: RawAttributes,
+    trailing_raw: Vec<Vec<u8>>,
+}
+
 #[derive(Default)]
 struct PresentationParseState {
     raw_attributes: RawAttributes,
@@ -183,6 +322,8 @@ struct PresentationParseState {
     slide_size: Option<CT_SlideSize>,
     notes_size: Option<CT_SlideSize>,
     default_text_style: Option<CT_TextListStyle>,
+    embedded_fonts: Vec<CT_EmbeddedFontListEntry>,
+    embedded_font_list: Option<EmbeddedFontListShell>,
     sections: Vec<Section>,
     extension_list_raw: Option<Vec<u8>>,
     section_list_range: Option<(usize, usize)>,
@@ -243,6 +384,16 @@ impl PresentationParseState {
                 self.notes_size = Some(parse_size(&raw, "notesSz")?);
                 self.boundary = self.boundary.max(6);
             }
+            b"embeddedFontLst" => {
+                namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
+                if self.embedded_font_list.is_some() {
+                    return Err(duplicate("embeddedFontLst"));
+                }
+                let (entries, shell) = parse_embedded_font_list(&raw, namespaces)?;
+                self.embedded_fonts = entries;
+                self.embedded_font_list = Some(shell);
+                self.boundary = self.boundary.max(8);
+            }
             b"defaultTextStyle" => {
                 namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
                 if self.default_text_style.is_some() {
@@ -297,6 +448,8 @@ impl PresentationParseState {
             slide_size: self.slide_size,
             notes_size,
             default_text_style: self.default_text_style,
+            embedded_fonts: self.embedded_fonts,
+            embedded_font_list: self.embedded_font_list,
             sections: self.sections,
             extension_list_raw: self.extension_list_raw,
             section_list_range: self.section_list_range,
@@ -323,6 +476,8 @@ impl CT_Presentation {
             slide_size: None,
             notes_size,
             default_text_style: None,
+            embedded_fonts: Vec::new(),
+            embedded_font_list: None,
             sections: Vec::new(),
             extension_list_raw: None,
             section_list_range: None,
@@ -381,6 +536,137 @@ impl CT_Presentation {
             let before = section.slide_ids.len();
             section.slide_ids.retain(|id| *id != slide_id);
             self.sections_dirty |= section.slide_ids.len() != before;
+        }
+    }
+
+    /// Returns the modelled `p:embeddedFont` entries in list order.
+    pub fn embedded_fonts(&self) -> &[CT_EmbeddedFontListEntry] {
+        &self.embedded_fonts
+    }
+
+    /// Returns the entry whose `p:font/@typeface` equals `typeface`.
+    pub fn embedded_font_mut(&mut self, typeface: &str) -> Option<&mut CT_EmbeddedFontListEntry> {
+        self.embedded_fonts
+            .iter_mut()
+            .find(|entry| entry.typeface == typeface)
+    }
+
+    /// Appends one entry, materializing `p:embeddedFontLst` when absent.
+    pub fn push_embedded_font(&mut self, entry: CT_EmbeddedFontListEntry) -> Result<()> {
+        validate_typeface(&entry.typeface)?;
+        if self
+            .embedded_fonts
+            .iter()
+            .any(|existing| existing.typeface == entry.typeface)
+        {
+            return Err(invalid_value(format!(
+                "embedded font {} already exists",
+                entry.typeface
+            )));
+        }
+        self.embedded_font_list.get_or_insert_with(Default::default);
+        self.embedded_fonts.push(entry);
+        Ok(())
+    }
+
+    /// Removes one entry by typeface.
+    ///
+    /// Unmodelled list children that preceded it move to the next entry, so
+    /// they keep their place. A list left with no entry, attribute, or raw
+    /// child is dropped.
+    pub fn remove_embedded_font(&mut self, typeface: &str) -> Option<CT_EmbeddedFontListEntry> {
+        let index = self
+            .embedded_fonts
+            .iter()
+            .position(|entry| entry.typeface == typeface)?;
+        let mut removed = self.embedded_fonts.remove(index);
+        let leading_raw = std::mem::take(&mut removed.leading_raw);
+        let shell = self
+            .embedded_font_list
+            .as_mut()
+            .expect("a modelled entry has a list");
+        match self.embedded_fonts.get_mut(index) {
+            Some(next) => {
+                let mut moved = leading_raw;
+                moved.append(&mut next.leading_raw);
+                next.leading_raw = moved;
+            }
+            None => {
+                let mut moved = leading_raw;
+                moved.append(&mut shell.trailing_raw);
+                shell.trailing_raw = moved;
+            }
+        }
+        if self.embedded_fonts.is_empty()
+            && shell.trailing_raw.is_empty()
+            && shell.raw_attributes.is_empty()
+        {
+            self.embedded_font_list = None;
+        }
+        Some(removed)
+    }
+
+    /// Counts the modelled faces that reference one relationship id.
+    pub fn embedded_font_relationship_reference_count(&self, relationship_id: &str) -> usize {
+        self.embedded_fonts
+            .iter()
+            .flat_map(CT_EmbeddedFontListEntry::faces)
+            .filter(|(_, id)| *id == relationship_id)
+            .count()
+    }
+
+    /// Returns `p:presentation/@embedTrueTypeFonts`, or `None` when absent or
+    /// not an `xsd:boolean`.
+    pub fn embed_true_type_fonts(&self) -> Option<bool> {
+        self.root_boolean("embedTrueTypeFonts")
+    }
+
+    /// Writes `embedTrueTypeFonts` as `1` or `0` in place, or removes it.
+    pub fn set_embed_true_type_fonts(&mut self, value: Option<bool>) {
+        self.set_root_boolean("embedTrueTypeFonts", value);
+    }
+
+    /// Returns `p:presentation/@saveSubsetFonts`, or `None` when absent or
+    /// not an `xsd:boolean`.
+    pub fn save_subset_fonts(&self) -> Option<bool> {
+        self.root_boolean("saveSubsetFonts")
+    }
+
+    /// Writes `saveSubsetFonts` as `1` or `0` in place, or removes it.
+    pub fn set_save_subset_fonts(&mut self, value: Option<bool>) {
+        self.set_root_boolean("saveSubsetFonts", value);
+    }
+
+    fn root_boolean(&self, name: &str) -> Option<bool> {
+        self.raw_attributes
+            .iter()
+            .find(|(attribute, _)| attribute == name)
+            .and_then(|(_, value)| match value.trim() {
+                "1" | "true" => Some(true),
+                "0" | "false" => Some(false),
+                _ => None,
+            })
+    }
+
+    fn set_root_boolean(&mut self, name: &str, value: Option<bool>) {
+        if self.root_boolean(name) == value {
+            return;
+        }
+        let position = self
+            .raw_attributes
+            .iter()
+            .position(|(attribute, _)| attribute == name);
+        match (value, position) {
+            (Some(value), Some(index)) => {
+                self.raw_attributes[index].1 = if value { "1" } else { "0" }.to_owned();
+            }
+            (Some(value), None) => self
+                .raw_attributes
+                .push((name.to_owned(), if value { "1" } else { "0" }.to_owned())),
+            (None, Some(index)) => {
+                self.raw_attributes.remove(index);
+            }
+            (None, None) => {}
         }
     }
 
@@ -499,7 +785,11 @@ impl CT_Presentation {
         emit_raw(&mut writer, self.raw_children.at(5))?;
         write_size(&self.notes_size, "p:notesSz", &mut writer)?;
         emit_raw(&mut writer, self.raw_children.at(6))?;
-        for boundary in 7..=12 {
+        emit_raw(&mut writer, self.raw_children.at(7))?;
+        if let Some(shell) = &self.embedded_font_list {
+            write_embedded_font_list(shell, &self.embedded_fonts, &mut writer)?;
+        }
+        for boundary in 8..=12 {
             emit_raw(&mut writer, self.raw_children.at(boundary))?;
         }
         if let Some(style) = &self.default_text_style {
@@ -1684,6 +1974,324 @@ fn validate_guid(kind: &str, value: &str) -> Result<()> {
     }
 }
 
+fn parse_embedded_font_list(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+) -> Result<(Vec<CT_EmbeddedFontListEntry>, EmbeddedFontListShell)> {
+    let mut reader = Reader::from_reader(xml);
+    let mut list_namespaces = inherited.clone();
+    let mut entries = Vec::new();
+    let mut shell = EmbeddedFontListShell::default();
+    let mut pending_raw = Vec::new();
+    let mut buffer = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) if local_name(element.name().as_ref()) == b"embeddedFontLst" => {
+                shell.raw_attributes = all_attributes(&element)?;
+                list_namespaces = inherited.with_start(&element)?;
+            }
+            Event::Empty(element) if local_name(element.name().as_ref()) == b"embeddedFontLst" => {
+                shell.raw_attributes = all_attributes(&element)?;
+                break;
+            }
+            Event::Start(element) => {
+                let namespaces = list_namespaces.with_start(&element)?;
+                let raw = capture_element(&mut reader, &element)?;
+                push_embedded_font_child(
+                    &element,
+                    raw,
+                    &namespaces,
+                    &mut entries,
+                    &mut pending_raw,
+                )?;
+            }
+            Event::Empty(element) => {
+                let namespaces = list_namespaces.with_start(&element)?;
+                let raw = capture_empty_element(&element)?;
+                push_embedded_font_child(
+                    &element,
+                    raw,
+                    &namespaces,
+                    &mut entries,
+                    &mut pending_raw,
+                )?;
+            }
+            Event::End(element) if local_name(element.name().as_ref()) == b"embeddedFontLst" => {
+                break;
+            }
+            Event::Eof => {
+                return Err(OxmlError::MissingElement(
+                    "closing p:embeddedFontLst".to_owned(),
+                ));
+            }
+            _ => {}
+        }
+        buffer.clear();
+    }
+    shell.trailing_raw = pending_raw;
+    Ok((entries, shell))
+}
+
+/// Models one list child, or keeps it raw in place when it is not an
+/// embedded font entry this model can represent without loss.
+fn push_embedded_font_child(
+    element: &BytesStart<'_>,
+    raw: Vec<u8>,
+    namespaces: &NamespaceBindings,
+    entries: &mut Vec<CT_EmbeddedFontListEntry>,
+    pending_raw: &mut Vec<Vec<u8>>,
+) -> Result<()> {
+    let modelled = if local_name(element.name().as_ref()) == b"embeddedFont"
+        && namespaces.element_uri(element.name().as_ref()) == Some(P_NS)
+    {
+        namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
+        parse_embedded_font_entry(&raw, namespaces)
+            .ok()
+            .filter(|entry| {
+                entries
+                    .iter()
+                    .all(|existing| existing.typeface != entry.typeface)
+            })
+    } else {
+        None
+    };
+    match modelled {
+        Some(mut entry) => {
+            entry.leading_raw = std::mem::take(pending_raw);
+            entries.push(entry);
+        }
+        None => pending_raw.push(raw),
+    }
+    Ok(())
+}
+
+fn parse_embedded_font_entry(
+    xml: &[u8],
+    inherited: &NamespaceBindings,
+) -> Result<CT_EmbeddedFontListEntry> {
+    let mut reader = Reader::from_reader(xml);
+    let mut entry_namespaces = inherited.clone();
+    let mut entry = None::<CT_EmbeddedFontListEntry>;
+    let mut raw_attributes = Vec::new();
+    let mut raw_children = OrderedRawChildren::default();
+    let mut faces: [Option<EmbeddedFontFace>; 4] = [None, None, None, None];
+    // 0 before p:font, 1 after it, and 2 + face index after each face.
+    let mut boundary = 0;
+    let mut buffer = Vec::new();
+    let mut depth = 0_usize;
+    loop {
+        let event = reader.read_event_into(&mut buffer)?;
+        let (element, is_empty) = match event {
+            Event::Start(element) => (element, false),
+            Event::Empty(element) => (element, true),
+            Event::End(_) => break,
+            Event::Eof => break,
+            _ => {
+                buffer.clear();
+                continue;
+            }
+        };
+        if depth == 0 {
+            raw_attributes = all_attributes(&element)?;
+            entry_namespaces = inherited.with_start(&element)?;
+            depth = 1;
+            if is_empty {
+                break;
+            }
+            buffer.clear();
+            continue;
+        }
+        let element = element.into_owned();
+        let namespaces = entry_namespaces.with_start(&element)?;
+        let raw = if is_empty {
+            capture_empty_element(&element)?
+        } else {
+            capture_element(&mut reader, &element)?
+        };
+        let name = local_name(element.name().as_ref()).to_vec();
+        let is_presentationml = namespaces.element_uri(element.name().as_ref()) == Some(P_NS);
+        if is_presentationml && name == b"font" {
+            if entry.is_some() || boundary > 0 {
+                return Err(duplicate("embeddedFont p:font"));
+            }
+            entry = Some(parse_embedded_font_description(&raw)?);
+            boundary = 1;
+        } else if let Some(kind) = EmbeddedFontKind::from_local_name(&name)
+            .filter(|_| is_presentationml && entry.is_some())
+        {
+            if boundary > kind.index() + 1 {
+                return Err(invalid_value(format!(
+                    "embeddedFont p:{} is out of schema order",
+                    kind.element_name()
+                )));
+            }
+            let (id, relationship_id, face_attributes, face_children) =
+                parse_identifier(&raw, kind.element_name(), &namespaces)?;
+            if id.is_some() {
+                return Err(invalid_value(format!(
+                    "embeddedFont p:{} carries an unmodelled id",
+                    kind.element_name()
+                )));
+            }
+            faces[kind.index()] = Some(EmbeddedFontFace {
+                relationship_id,
+                raw_attributes: face_attributes,
+                raw_children: face_children,
+            });
+            boundary = kind.index() + 2;
+        } else {
+            raw_children.push(boundary, raw);
+        }
+        buffer.clear();
+    }
+    let mut entry = entry.ok_or_else(|| OxmlError::MissingElement("embeddedFont p:font".into()))?;
+    entry.faces = faces;
+    entry.raw_attributes = raw_attributes;
+    entry.raw_children = raw_children;
+    Ok(entry)
+}
+
+fn parse_embedded_font_description(xml: &[u8]) -> Result<CT_EmbeddedFontListEntry> {
+    let mut reader = Reader::from_reader(xml);
+    let mut attributes = Vec::new();
+    let mut raw_children = OrderedRawChildren::default();
+    let mut buffer = Vec::new();
+    let mut seen_root = false;
+    loop {
+        match reader.read_event_into(&mut buffer)? {
+            Event::Start(element) if !seen_root => {
+                attributes = all_attributes(&element)?;
+                seen_root = true;
+            }
+            Event::Empty(element) if !seen_root => {
+                attributes = all_attributes(&element)?;
+                break;
+            }
+            Event::Start(element) => raw_children.push(0, capture_element(&mut reader, &element)?),
+            Event::Empty(element) => raw_children.push(0, capture_empty_element(&element)?),
+            Event::End(_) | Event::Eof => break,
+            _ => {}
+        }
+        buffer.clear();
+    }
+    let mut typeface = None;
+    let mut panose = None;
+    let mut pitch_family = None;
+    let mut charset = None;
+    let mut font_raw_attributes = Vec::new();
+    for (name, value) in attributes {
+        match name.as_str() {
+            "typeface" if typeface.is_none() => typeface = Some(value),
+            "panose" if panose.is_none() => panose = Some(value),
+            "pitchFamily" if pitch_family.is_none() => {
+                pitch_family = Some(parse_byte("font", "pitchFamily", &value)?);
+            }
+            "charset" if charset.is_none() => {
+                charset = Some(parse_byte("font", "charset", &value)?);
+            }
+            "typeface" | "panose" | "pitchFamily" | "charset" => {
+                return Err(duplicate(&format!("font @{name}")));
+            }
+            _ => font_raw_attributes.push((name, value)),
+        }
+    }
+    let mut entry = CT_EmbeddedFontListEntry::new(
+        typeface.ok_or_else(|| missing_attribute("font", "typeface"))?,
+    )?;
+    entry.panose = panose;
+    entry.pitch_family = pitch_family;
+    entry.charset = charset;
+    entry.font_raw_attributes = font_raw_attributes;
+    entry.font_raw_children = raw_children;
+    Ok(entry)
+}
+
+fn write_embedded_font_list<W: Write>(
+    shell: &EmbeddedFontListShell,
+    entries: &[CT_EmbeddedFontListEntry],
+    writer: &mut Writer<W>,
+) -> Result<()> {
+    let mut list = BytesStart::new("p:embeddedFontLst");
+    push_attributes(&mut list, &shell.raw_attributes);
+    if entries.is_empty() && shell.trailing_raw.is_empty() {
+        writer.write_event(Event::Empty(list))?;
+        return Ok(());
+    }
+    writer.write_event(Event::Start(list))?;
+    for entry in entries {
+        emit_raw(writer, entry.leading_raw.iter().map(Vec::as_slice))?;
+        write_embedded_font_entry(entry, writer)?;
+    }
+    emit_raw(writer, shell.trailing_raw.iter().map(Vec::as_slice))?;
+    writer.write_event(Event::End(BytesEnd::new("p:embeddedFontLst")))?;
+    Ok(())
+}
+
+fn write_embedded_font_entry<W: Write>(
+    entry: &CT_EmbeddedFontListEntry,
+    writer: &mut Writer<W>,
+) -> Result<()> {
+    validate_typeface(&entry.typeface)?;
+    let mut start = BytesStart::new("p:embeddedFont");
+    push_attributes(&mut start, &entry.raw_attributes);
+    writer.write_event(Event::Start(start))?;
+    emit_raw(writer, entry.raw_children.at(0))?;
+
+    let mut font = BytesStart::new("p:font");
+    font.push_attribute(("typeface", entry.typeface.as_str()));
+    if let Some(panose) = &entry.panose {
+        font.push_attribute(("panose", panose.as_str()));
+    }
+    let pitch_family = entry.pitch_family.map(|value| value.to_string());
+    if let Some(pitch_family) = &pitch_family {
+        font.push_attribute(("pitchFamily", pitch_family.as_str()));
+    }
+    let charset = entry.charset.map(|value| value.to_string());
+    if let Some(charset) = &charset {
+        font.push_attribute(("charset", charset.as_str()));
+    }
+    push_attributes(&mut font, &entry.font_raw_attributes);
+    if entry.font_raw_children.is_empty() {
+        writer.write_event(Event::Empty(font))?;
+    } else {
+        writer.write_event(Event::Start(font))?;
+        emit_raw(writer, entry.font_raw_children.at(0))?;
+        writer.write_event(Event::End(BytesEnd::new("p:font")))?;
+    }
+    emit_raw(writer, entry.raw_children.at(1))?;
+
+    for kind in EmbeddedFontKind::ALL {
+        if let Some(face) = &entry.faces[kind.index()] {
+            write_identifier(
+                &format!("p:{}", kind.element_name()),
+                None,
+                &face.relationship_id,
+                &face.raw_attributes,
+                &face.raw_children,
+                writer,
+            )?;
+        }
+        emit_raw(writer, entry.raw_children.at(kind.index() + 2))?;
+    }
+    writer.write_event(Event::End(BytesEnd::new("p:embeddedFont")))?;
+    Ok(())
+}
+
+fn validate_typeface(typeface: &str) -> Result<()> {
+    if typeface.trim().is_empty() {
+        return Err(invalid_value(
+            "embedded font typeface must not be empty".to_owned(),
+        ));
+    }
+    reject_non_xml_characters("embedded font typeface", typeface)
+}
+
+fn parse_byte(element: &str, attribute: &str, value: &str) -> Result<i8> {
+    value
+        .parse::<i8>()
+        .map_err(|_| invalid_value(format!("{element} has malformed @{attribute}: {value}")))
+}
+
 fn parse_slide_list(xml: &[u8], inherited: &NamespaceBindings) -> Result<ParsedSlideList> {
     let mut reader = Reader::from_reader(xml);
     let mut list_namespaces = inherited.clone();
@@ -2158,7 +2766,6 @@ fn root_schema_boundary(name: &[u8]) -> Option<usize> {
         b"notesMasterIdLst" => Some(2),
         b"handoutMasterIdLst" => Some(3),
         b"smartTags" => Some(7),
-        b"embeddedFontLst" => Some(8),
         b"custShowLst" => Some(9),
         b"photoAlbum" => Some(10),
         b"custDataLst" => Some(11),

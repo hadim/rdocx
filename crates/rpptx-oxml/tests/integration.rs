@@ -5877,3 +5877,103 @@ fn unchanged_text_bodies_keep_inherited_a_raw_bytes_and_unsafe_rewrite_fails() {
     );
     assert!(CommentList::from_xml(xml).unwrap().to_xml().is_ok());
 }
+
+#[test]
+fn embedded_font_list_reads_aliases_and_writes_schema_order_keeping_raw_children() {
+    use rpptx_oxml::presentation::{CT_EmbeddedFontListEntry, CT_Presentation, EmbeddedFontKind};
+
+    let xml = r#"<q:presentation xmlns:q="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:rel="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:x="urn:fonts" saveSubsetFonts="true" x:keep="1"><q:sldSz cx="9144000" cy="6858000"/><q:notesSz cx="6858000" cy="9144000"/><q:embeddedFontLst x:list="1"><x:first/><q:embeddedFont><q:font typeface="Alpha" panose="02040503050406030204" pitchFamily="18" charset="-128" x:font="2"/><q:regular rel:id="rId7"/><x:between/><q:bold rel:id="rId8" x:face="3"/></q:embeddedFont><x:middle/><q:embeddedFont><q:font typeface="Beta"/><q:boldItalic rel:id="rId9"><x:inside/></q:boldItalic><x:tail/></q:embeddedFont><q:embeddedFont><x:no-font/></q:embeddedFont></q:embeddedFontLst><x:after/></q:presentation>"#;
+    let mut presentation = CT_Presentation::from_xml(xml.as_bytes()).unwrap();
+    assert_eq!(presentation.save_subset_fonts(), Some(true));
+    assert_eq!(presentation.embed_true_type_fonts(), None);
+    let fonts = presentation.embedded_fonts();
+    assert_eq!(fonts.len(), 2);
+    assert_eq!(fonts[0].typeface, "Alpha");
+    assert_eq!(fonts[0].panose.as_deref(), Some("02040503050406030204"));
+    assert_eq!(fonts[0].pitch_family, Some(18));
+    assert_eq!(fonts[0].charset, Some(-128));
+    assert_eq!(
+        fonts[0].faces().collect::<Vec<_>>(),
+        [
+            (EmbeddedFontKind::Regular, "rId7"),
+            (EmbeddedFontKind::Bold, "rId8")
+        ]
+    );
+    assert_eq!(fonts[1].face(EmbeddedFontKind::BoldItalic), Some("rId9"));
+    assert_eq!(
+        presentation.embedded_font_relationship_reference_count("rId8"),
+        1
+    );
+
+    let written = String::from_utf8(presentation.to_xml().unwrap()).unwrap();
+    assert!(
+        written.contains(r#"<p:notesSz cx="6858000" cy="9144000"/><p:embeddedFontLst x:list="1"><x:first/><p:embeddedFont><p:font typeface="Alpha" panose="02040503050406030204" pitchFamily="18" charset="-128" x:font="2"/><p:regular r:id="rId7"/><x:between/><p:bold r:id="rId8" x:face="3"/></p:embeddedFont><x:middle/><p:embeddedFont><p:font typeface="Beta"/><p:boldItalic r:id="rId9"><x:inside/></p:boldItalic><x:tail/></p:embeddedFont><q:embeddedFont><x:no-font/></q:embeddedFont></p:embeddedFontLst><x:after/>"#),
+        "{written}"
+    );
+    assert_eq!(
+        CT_Presentation::from_xml(written.as_bytes()).unwrap(),
+        presentation
+    );
+
+    // Removing the first entry keeps the raw sibling that preceded it in place.
+    let removed = presentation.remove_embedded_font("Alpha").unwrap();
+    assert_eq!(removed.face(EmbeddedFontKind::Regular), Some("rId7"));
+    let entry = presentation.embedded_font_mut("Beta").unwrap();
+    assert_eq!(entry.set_face(EmbeddedFontKind::Regular, "rId10"), None);
+    assert_eq!(
+        entry
+            .set_face(EmbeddedFontKind::BoldItalic, "rId11")
+            .as_deref(),
+        Some("rId9")
+    );
+    let mut gamma = CT_EmbeddedFontListEntry::new("Gamma").unwrap();
+    gamma.pitch_family = Some(34);
+    gamma.charset = Some(0);
+    gamma.set_face(EmbeddedFontKind::Italic, "rId12");
+    presentation.push_embedded_font(gamma.clone()).unwrap();
+    assert!(presentation.push_embedded_font(gamma).is_err());
+    presentation.set_embed_true_type_fonts(Some(true));
+    presentation.set_save_subset_fonts(Some(true));
+    let written = String::from_utf8(presentation.to_xml().unwrap()).unwrap();
+    assert!(
+        written.contains(r#"saveSubsetFonts="true" x:keep="1" embedTrueTypeFonts="1">"#),
+        "{written}"
+    );
+    assert!(
+        written.contains(r#"<p:embeddedFontLst x:list="1"><x:first/><x:middle/><p:embeddedFont><p:font typeface="Beta"/><p:regular r:id="rId10"/><p:boldItalic r:id="rId11"><x:inside/></p:boldItalic><x:tail/></p:embeddedFont><p:embeddedFont><p:font typeface="Gamma" pitchFamily="34" charset="0"/><p:italic r:id="rId12"/></p:embeddedFont><q:embeddedFont><x:no-font/></q:embeddedFont></p:embeddedFontLst>"#),
+        "{written}"
+    );
+    presentation.set_save_subset_fonts(None);
+    presentation.set_embed_true_type_fonts(Some(false));
+    let written = String::from_utf8(presentation.to_xml().unwrap()).unwrap();
+    assert!(
+        written.contains(r#"x:keep="1" embedTrueTypeFonts="0">"#),
+        "{written}"
+    );
+    assert!(!written.contains("saveSubsetFonts"));
+}
+
+#[test]
+fn an_emptied_embedded_font_list_is_dropped_and_a_new_one_is_written_after_smart_tags() {
+    use rpptx_oxml::presentation::{CT_EmbeddedFontListEntry, CT_Presentation, EmbeddedFontKind};
+
+    let xml = r#"<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:sldSz cx="9144000" cy="6858000"/><p:notesSz cx="6858000" cy="9144000"/><p:smartTags r:id="rId3"/><p:custShowLst/><p:defaultTextStyle/></p:presentation>"#;
+    let mut presentation = CT_Presentation::from_xml(xml.as_bytes()).unwrap();
+    assert!(presentation.embedded_fonts().is_empty());
+    let mut entry = CT_EmbeddedFontListEntry::new("Delta").unwrap();
+    entry.set_face(EmbeddedFontKind::Regular, "rId4");
+    presentation.push_embedded_font(entry).unwrap();
+    let written = String::from_utf8(presentation.to_xml().unwrap()).unwrap();
+    assert!(
+        written.contains(r#"<p:smartTags r:id="rId3"/><p:embeddedFontLst><p:embeddedFont><p:font typeface="Delta"/><p:regular r:id="rId4"/></p:embeddedFont></p:embeddedFontLst><p:custShowLst/>"#),
+        "{written}"
+    );
+    presentation.remove_embedded_font("Delta").unwrap();
+    let written = String::from_utf8(presentation.to_xml().unwrap()).unwrap();
+    assert!(!written.contains("embeddedFontLst"), "{written}");
+    assert_eq!(
+        presentation,
+        CT_Presentation::from_xml(xml.as_bytes()).unwrap()
+    );
+    assert!(CT_EmbeddedFontListEntry::new(" ").is_err());
+}
