@@ -208,7 +208,7 @@ Citation formatting has separate locale, kind and modifier boundaries.
 Recognized unfinished branches refuse the whole cache refresh atomically.
 Noncatalogue paths retain caches with diagnostics. Non-ASCII collection ordering
 refuses rather than approximates Word. The remaining full catalogue contract
-belongs to F-X192 in S91. Dedicated Python and WASM bibliography APIs are not
+belongs to F-X192 in S92. Dedicated Python and WASM bibliography APIs are not
 part of this native boundary.
 
 
