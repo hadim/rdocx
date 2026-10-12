@@ -36011,6 +36011,39 @@ mod tests {
     }
 
     #[test]
+    fn font_directories_load_in_file_name_order_whatever_the_creation_order() {
+        const CARLITO: &[u8] = include_bytes!("../../oxml-layout/fonts/Carlito-Regular.ttf");
+        const CALADEA: &[u8] = include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf");
+        let root =
+            std::env::temp_dir().join(format!("rdocx-font-dir-order-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let files = [("Embedia.ttf", CARLITO), ("Aileron.TTF", CALADEA)];
+        let loaded = [false, true].map(|reversed| {
+            let dir = root.join(if reversed { "reversed" } else { "listed" });
+            std::fs::create_dir_all(&dir).unwrap();
+            let mut order = files.to_vec();
+            if reversed {
+                order.reverse();
+            }
+            for (name, data) in order {
+                std::fs::write(dir.join(name), data).unwrap();
+            }
+            std::fs::write(dir.join("notes.txt"), b"not a font").unwrap();
+            Document::load_fonts_from_dir(&dir)
+                .into_iter()
+                .map(|font| (font.family, font.data))
+                .collect::<Vec<_>>()
+        });
+        std::fs::remove_dir_all(&root).unwrap();
+        let expected = vec![
+            ("Aileron".to_owned(), CALADEA.to_vec()),
+            ("Embedia".to_owned(), CARLITO.to_vec()),
+        ];
+        assert!(loaded[0] == expected, "files load in file name byte order");
+        assert!(loaded[1] == expected, "the creation order does not matter");
+    }
+
+    #[test]
     fn bundled_fallback_completes_an_incomplete_caller_font_set() {
         let (caller_family, caller_bytes) = caller_only_font();
         let mut document = Document::new();
