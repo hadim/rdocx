@@ -2988,7 +2988,6 @@ impl PyDocument {
             .map_err(|error| rdocx_to_pyerr(py, error))
     }
 
-    #[pyo3(signature = (font_name, kind = "regular"))]
     fn remove_embedded_font(
         &mut self,
         py: Python<'_>,

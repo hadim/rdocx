@@ -1014,7 +1014,7 @@ with the face `kind` (`regular`, `bold`, `italic`, or `bold_italic`), the
 deobfuscated `data`, the `font_key`, `subsetted`, and a `FontEmbeddingLicense`.
 `set_font(name, *, alternate_name, family, pitch)` adds or replaces a record
 and keeps its embedded faces. `remove_font(name)` and
-`remove_embedded_font(font_name, kind="regular")` return the removed snapshot
+`remove_embedded_font(font_name, kind)` return the removed snapshot
 or `None`. `embed_font(font_name, font, kind="regular", *, license, font_key=None,
 subsetted=False)` takes the font bytes or a path, and `license` is a
 `FontEmbeddingLicense(authorized=..., identity=...)` with no default for either

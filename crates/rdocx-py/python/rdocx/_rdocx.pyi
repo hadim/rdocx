@@ -844,7 +844,7 @@ class Document:
         saves the document again. A refused embed changes nothing.
         """
     def remove_embedded_font(
-        self, font_name: str, kind: _EmbeddedFontKind = "regular"
+        self, font_name: str, kind: _EmbeddedFontKind
     ) -> EmbeddedFont | None:
         """Remove one embedded face, keeping its font-table record."""
     @property
