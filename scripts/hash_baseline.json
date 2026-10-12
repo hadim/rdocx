@@ -11,7 +11,7 @@
     "feature_showcase:pdf/bytes": "b4fe360e1dc26d0f3d848b3d9be0bcba8af613cb417e3d310b8ee17b150f993b",
     "feature_showcase:pdf/pages": "f0578124411527a6dcccbcd0701908226ce570dfc94c62bb55961f4df60d9fa2",
     "feature_showcase:pdf/resources": "3573cc6e7183b5e912bfde97f11edea4ec44bb40e1b8f066eeb9b4e5e7726d62",
-    "feature_showcase:word/document.xml": "ada34bba6c97288dce7f60a96b32f2d20c3ea2254f6f82e08c660a39ecfc3b54",
+    "feature_showcase:word/document.xml": "9d3418ef8ef11cbcd64acb40b6f2d54648f985050138181bfb32531c8eecf48f",
     "feature_showcase:word/numbering.xml": "59283ab7d3fbd70ab110b2c9aa4b9f7f41443ef7c24bc6db3c248ee908e44232",
     "feature_showcase:word/styles.xml": "36e2057c493e6695e41dc5b96a369c72a31bc1f271f6bbafdd58899352450033",
     "invoice:page1.png": "b1e2dd50226d2760eef9de6e2e2b46c719b1d56ed56d3feb4e2ccf9832a9fa72",
@@ -46,9 +46,9 @@
     "report:pdf/bytes": "8e0871a665336802b706b22cebdea914c408bb94d7a57e54f41eef3f0fb2a171",
     "report:pdf/pages": "71223ecf20c4dbd0bce4c0d9e0e6fdce63eda5e58533508ac179ec47c0ddf188",
     "report:pdf/resources": "5010450bb7ad7cdb168bb355dc49ba50fc520faade505e391048c44f34d0bb00",
-    "report:word/document.xml": "bc7d4995931e61ff1fc1c0f004349e64b483428b8c0a5b652a47c46ccb50915e",
+    "report:word/document.xml": "8df95515887d2b7c7f5604db9c99f5cf2dcbce6a2ea2e202799adf6885c68ec4",
     "report:word/numbering.xml": "59283ab7d3fbd70ab110b2c9aa4b9f7f41443ef7c24bc6db3c248ee908e44232",
     "report:word/styles.xml": "49687b10d19688bf634d4967a488eca42eec85ee54c4730af334e5fb1107a7f4"
   },
-  "reason": "F-X210 intentional Georgia alias correction selects genuine Gelasio in contract, proposal and report. Exactly 12 reviewed PDF and PNG hashes change, all other 37 entries remain unchanged. Retains previously accepted F-X212 accessibility audit values."
+  "reason": "F-X210 approved Georgia to Gelasio font mapping and F-X200 source-aware namespace closure on eight retained paragraph property owners. Reviewed intentional deltas, deterministic font mode."
 }
