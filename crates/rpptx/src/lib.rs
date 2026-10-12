@@ -3734,11 +3734,13 @@ impl Presentation {
             })?
             .part_name
             .clone();
-        preflight_cross_presentation_transfer(&source.package, &source.slides[index])?;
+        // The source's unsaved edits are part of what is copied.
+        let source_package = source.staged_package(true)?;
+        preflight_cross_presentation_transfer(&source_package, &source.slides[index])?;
         let mut staged = self.clone();
         let inserted = staged.slides.len();
         staged.copy_slide_from_in_place(
-            &source.package,
+            &source_package,
             source.slides[index].clone(),
             inserted,
             "transfer SmartArt slide",
@@ -3828,6 +3830,10 @@ impl Presentation {
     /// are carried unchanged and may name a custom show this presentation
     /// lacks.
     ///
+    /// Both presentations are read as they are in memory, through the bytes
+    /// a save would write, so an unsaved edit of the source is copied
+    /// without saving and reopening it first.
+    ///
     /// Legacy comments, controls and any other internal relationship type,
     /// on the slide, its notes or a copied part, are rejected without
     /// mutation, and the error names the relationship type.
@@ -3881,6 +3887,11 @@ impl Presentation {
                 destination_record.part_name.clone(),
             );
         }
+        // Every part is read from the presentations as they are in memory,
+        // so an unsaved edit of the source is copied and an unsaved edit of
+        // this presentation is compared, rather than the bytes they were
+        // opened from.
+        let source_package = source.staged_package(true)?;
         let mut slide_namer = MediaNamer::scan(
             "/ppt/slides",
             "slide",
@@ -3907,7 +3918,7 @@ impl Presentation {
                     None => self.import_layout_index(source, index)?,
                 })
             };
-            preflight_slide_import(&source.package, record)?;
+            preflight_slide_import(&source_package, record)?;
             let slide_part = slide_namer.next_part_name("xml");
             copied_targets
                 .entry(record.part_name.clone())
@@ -3920,6 +3931,7 @@ impl Presentation {
         jump_targets.extend(copied_targets);
 
         let mut staged = self.clone();
+        staged.package = staged.staged_package(true)?;
         if copies
             .iter()
             .any(|(index, _, _)| source.slides[*index].notes.is_some())
@@ -3935,11 +3947,11 @@ impl Presentation {
                     staged.layouts[*layout_index].part_name.clone()
                 }
                 ImportLayout::Source(layout) => {
-                    staged.adopt_source_layout(&source.package, layout, &mut adopted)?
+                    staged.adopt_source_layout(&source_package, layout, &mut adopted)?
                 }
             };
             staged.copy_slide_from_in_place(
-                &source.package,
+                &source_package,
                 source.slides[*index].clone(),
                 inserted + offset,
                 OPERATION,
