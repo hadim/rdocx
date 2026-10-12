@@ -5347,8 +5347,7 @@ fn markdown_inline_marks_become_run_formatting() {
         .filter(|run| !run.text().trim().is_empty())
         .map(|run| {
             (
-                // The importer carries a collapsed space into the next run.
-                run.text().trim().to_owned(),
+                run.text(),
                 run.italic_value() == Some(true),
                 run.bold_value() == Some(true),
                 run.strike_value() == Some(true),
@@ -5381,6 +5380,95 @@ fn markdown_inline_marks_become_run_formatting() {
     assert_eq!(paragraph.run(1).unwrap().bold_value(), Some(true));
     assert_eq!(paragraph.run(3).unwrap().italic_value(), Some(true));
     assert_eq!(paragraph.run(4).unwrap().strike_value(), Some(true));
+}
+
+/// The text and the underline, strike, bold and italic of each run.
+fn marked_runs(paragraph: &rdocx::paragraph::ParagraphRef<'_>) -> Vec<(String, [bool; 4])> {
+    (0..paragraph.run_count())
+        .map(|index| paragraph.run(index).unwrap())
+        .map(|run| {
+            (
+                run.text(),
+                [
+                    run.is_underline(),
+                    run.is_strike(),
+                    run.is_bold(),
+                    run.is_italic(),
+                ],
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn the_space_around_an_emphasised_span_stays_outside_it() {
+    const PLAIN: [bool; 4] = [false; 4];
+    const U: [bool; 4] = [true, false, false, false];
+    const S: [bool; 4] = [false, true, false, false];
+    const B: [bool; 4] = [false, false, true, false];
+    const I: [bool; 4] = [false, false, false, true];
+    let html = Document::from_html(
+        "<p>see <u>u</u> then <s>s</s> then <b>b</b> then <i>i</i> end</p>\
+         <p><u>u</u> <s>s</s></p><p><u>u </u>tail</p>",
+    )
+    .unwrap()
+    .document;
+    // "see " then each span followed by " then ", the last by " end".
+    let expected = |spans: &[(&str, [bool; 4])]| {
+        let mut runs = vec![("see ".to_owned(), PLAIN)];
+        for (index, (text, mark)) in spans.iter().enumerate() {
+            runs.push(((*text).to_owned(), *mark));
+            let after = if index + 1 == spans.len() {
+                " end"
+            } else {
+                " then "
+            };
+            runs.push((after.to_owned(), PLAIN));
+        }
+        runs
+    };
+    let all = [("u", U), ("s", S), ("b", B), ("i", I)];
+    assert_eq!(marked_runs(&html.paragraph(0).unwrap()), expected(&all));
+    // A space between two spans is in neither of them.
+    assert_eq!(
+        marked_runs(&html.paragraph(1).unwrap()),
+        [
+            ("u".to_owned(), U),
+            (" ".to_owned(), PLAIN),
+            ("s".to_owned(), S)
+        ]
+    );
+    // A space written inside the span stays in it, as a browser draws it.
+    assert_eq!(
+        marked_runs(&html.paragraph(2).unwrap()),
+        [("u ".to_owned(), U), ("tail".to_owned(), PLAIN)]
+    );
+
+    // Markdown has no underline: strike, bold and italic.
+    let md = markdown("see ~~s~~ then **b** then *i* end\n").document;
+    assert_eq!(marked_runs(&md.paragraph(0).unwrap()), expected(&all[1..]));
+
+    // Inserting a fragment builds its paragraphs the same way.
+    let mut inserted = Document::new();
+    let body = inserted
+        .stories()
+        .unwrap()
+        .into_iter()
+        .find(|story| story.kind() == StoryKind::Body)
+        .unwrap();
+    inserted
+        .insert_html_fragment(
+            &rdocx::ContentLocation::end(body),
+            "<p>see <u>u</u> then <s>s</s> then <b>b</b> then <i>i</i> end</p>",
+            &[],
+        )
+        .unwrap();
+    let inserted = Document::from_bytes(&inserted.to_bytes().unwrap()).unwrap();
+    let last = inserted.paragraph_count() - 1;
+    assert_eq!(
+        marked_runs(&inserted.paragraph(last).unwrap()),
+        expected(&all)
+    );
 }
 
 #[test]

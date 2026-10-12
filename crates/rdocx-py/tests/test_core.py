@@ -639,6 +639,38 @@ def test_issue_350_insert_html_after_a_story_item():
         document.insert_html("<p>stale</p>", after=first)
 
 
+def test_issue_351_the_space_around_emphasis_stays_outside_it():
+    import rdocx
+
+    def marks(paragraph):
+        return [
+            (run.text, bool(run.font.underline), bool(run.font.strike), bool(run.font.bold), bool(run.font.italic))
+            for run in paragraph.runs
+        ]
+
+    html, _ = rdocx.Document.from_html("<p>see <u>u</u> then <s>s</s> then <b>b</b> then <i>i</i> end</p>")
+    assert marks(html.paragraphs[0]) == [
+        ("see ", False, False, False, False),
+        ("u", True, False, False, False),
+        (" then ", False, False, False, False),
+        ("s", False, True, False, False),
+        (" then ", False, False, False, False),
+        ("b", False, False, True, False),
+        (" then ", False, False, False, False),
+        ("i", False, False, False, True),
+        (" end", False, False, False, False),
+    ]
+    inserted = rdocx.Document()
+    inserted.insert_html("<p>see <u>u</u> end</p>")
+    assert marks(inserted.paragraphs[-1]) == [
+        ("see ", False, False, False, False),
+        ("u", True, False, False, False),
+        (" end", False, False, False, False),
+    ]
+    md, _ = rdocx.Document.from_markdown("see ~~s~~ then **b** then *i* end\n")
+    assert marks(md.paragraphs[0]) == marks(html.paragraphs[0])[:1] + marks(html.paragraphs[0])[3:]
+
+
 def test_issue_351_markdown_creates_a_styled_document(tmp_path):
     import rdocx
 

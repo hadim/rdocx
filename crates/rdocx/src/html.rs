@@ -4026,10 +4026,10 @@ impl Importer<'_> {
             }
             let mut emitted = false;
             let mut pending_space = false;
-            // The link of the last text run, and the style of the text the
-            // pending collapsed space was written in.
-            let mut previous_link: Option<String> = None;
+            // The style of the text the pending collapsed space was written
+            // in, and whether the last run was written in that same text.
             let mut space_style: Option<Box<ComputedStyle>> = None;
+            let mut space_ends_last_run = false;
             for piece in model.pieces {
                 match piece {
                     InlinePiece::Break => {
@@ -4037,7 +4037,6 @@ impl Importer<'_> {
                         paragraph.add_line_break();
                         emitted = true;
                         pending_space = false;
-                        previous_link = None;
                     }
                     InlinePiece::Image(image) => {
                         self.bump_runs()?;
@@ -4052,7 +4051,6 @@ impl Importer<'_> {
                         }
                         emitted = true;
                         pending_space = false;
-                        previous_link = None;
                     }
                     InlinePiece::Text(text, style, true) => {
                         let mut lines = text.split('\n').peekable();
@@ -4066,7 +4064,6 @@ impl Importer<'_> {
                                 };
                                 apply_run_style(&mut run, &style);
                                 emitted = true;
-                                previous_link.clone_from(&style.hyperlink);
                             }
                             if lines.peek().is_some() {
                                 self.bump_runs()?;
@@ -4077,22 +4074,32 @@ impl Importer<'_> {
                         pending_space = false;
                     }
                     InlinePiece::Text(text, style, false) => {
-                        // A collapsed space before a link stays with the text
-                        // it was written in, as a browser lays it out, rather
-                        // than becoming the first character of the link.
+                        // A collapsed space before differently formatted text
+                        // stays with the text it was written in, as a browser
+                        // lays it out, rather than becoming the first
+                        // character of an underlined, struck or linked run.
                         if pending_space
                             && emitted
-                            && style.hyperlink.is_some()
-                            && style.hyperlink != previous_link
-                            && let Some(space) = space_style.take()
+                            && let Some(space) = space_style.take_if(|space| {
+                                !same_run_format(space, &style)
+                                    && text.chars().any(|character| !character.is_whitespace())
+                            })
                         {
-                            self.bump_runs()?;
-                            let mut run = if let Some(url) = &space.hyperlink {
-                                paragraph.add_hyperlink(" ", &hyperlink_ids[url])
+                            if space_ends_last_run
+                                && let Some(last) = paragraph.inner.runs.last_mut()
+                            {
+                                let mut run = Run { inner: last };
+                                let ended = run.text();
+                                run.set_text(&format!("{ended} "));
                             } else {
-                                paragraph.add_run(" ")
-                            };
-                            apply_run_style(&mut run, &space);
+                                self.bump_runs()?;
+                                let mut run = if let Some(url) = &space.hyperlink {
+                                    paragraph.add_hyperlink(" ", &hyperlink_ids[url])
+                                } else {
+                                    paragraph.add_run(" ")
+                                };
+                                apply_run_style(&mut run, &space);
+                            }
                             pending_space = false;
                         }
                         let was_pending = pending_space;
@@ -4106,9 +4113,9 @@ impl Importer<'_> {
                             };
                             apply_run_style(&mut run, &style);
                             emitted = true;
-                            previous_link.clone_from(&style.hyperlink);
                         }
                         if pending_space && (!was_pending || !normalized.is_empty()) {
+                            space_ends_last_run = !normalized.is_empty();
                             space_style = Some(style);
                         }
                     }
@@ -4275,6 +4282,28 @@ fn apply_run_style(run: &mut Run<'_>, style: &ComputedStyle) {
         Some(VerticalText::Subscript) => run.set_subscript(),
         None => {}
     }
+}
+
+/// Whether two pieces of text would get the same run formatting.
+fn same_run_format(left: &ComputedStyle, right: &ComputedStyle) -> bool {
+    left.font == right.font
+        && left.size == right.size
+        && left.bold == right.bold
+        && left.italic == right.italic
+        && left.underline == right.underline
+        && left.strike == right.strike
+        && left.color == right.color
+        && left.background == right.background
+        && matches!(
+            (left.vertical, right.vertical),
+            (None, None)
+                | (
+                    Some(VerticalText::Superscript),
+                    Some(VerticalText::Superscript)
+                )
+                | (Some(VerticalText::Subscript), Some(VerticalText::Subscript))
+        )
+        && left.hyperlink == right.hyperlink
 }
 
 fn collapse_text(text: &str, pending_space: &mut bool, already_emitted: bool) -> String {
