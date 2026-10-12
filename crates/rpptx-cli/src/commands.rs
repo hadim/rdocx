@@ -5,8 +5,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use oxml_cli_support::{
-    StagedOutputSet, default_output_path, ensure_output_paths_allowed,
-    ensure_output_paths_available, json_envelope, parse_range,
+    ReplacementPair, StagedOutputSet, default_output_path, ensure_output_paths_allowed,
+    ensure_output_paths_available, json_envelope, parse_range, parse_replacement_map,
 };
 use oxml_pdf::{RasterFormat, RasterOptions, RasterOutput};
 use rpptx::{
@@ -555,32 +555,66 @@ fn longest_common_subsequence(a: &[String], b: &[String]) -> Result<Vec<String>>
 
 pub fn replace(
     file: &Path,
-    placeholder: &str,
-    value: &str,
+    pair: Option<(String, String)>,
+    map: Option<&Path>,
     expect: Option<usize>,
     output: &Path,
+    as_json: bool,
 ) -> Result<()> {
     ensure_output_paths_available(&[output.to_path_buf()])?;
+    ensure_output_paths_allowed(&[output.to_path_buf()], file, false)?;
+    let single = pair.is_some();
+    let pairs = match (pair, map) {
+        (Some((placeholder, value)), None) => vec![ReplacementPair {
+            placeholder,
+            value,
+            expect,
+        }],
+        (None, Some(map)) if expect.is_none() => {
+            parse_replacement_map(&std::fs::read_to_string(map)?)?
+        }
+        _ => return Err("give -p and -v, or --map without --expect".into()),
+    };
+    let refs = pairs
+        .iter()
+        .map(|p| (p.placeholder.as_str(), p.value.as_str(), p.expect))
+        .collect::<Vec<_>>();
     let mut presentation = Presentation::open(file)?;
-    let count = presentation.try_replace_text(placeholder, value)?;
-    if let Some(expected) = expect
-        && count != expected
-    {
+    let counts = presentation.try_replace_all_expected(&refs)?.map_err(|m| {
+        format!(
+            "pair {}: expected {} replacement(s) of \"{}\", found {}, nothing written",
+            m.index, m.expected, m.placeholder, m.found
+        )
+    })?;
+    if single && counts[0] == 0 && pairs[0].expect.is_none() {
         return Err(format!(
-            "expected {expected} replacement(s) of \"{placeholder}\", found {count}"
+            "no replacements found for \"{}\", nothing written",
+            pairs[0].placeholder
         )
         .into());
     }
-    if count == 0 && expect != Some(0) {
-        return Err(format!("no replacements found for \"{placeholder}\"").into());
+    let total = counts
+        .iter()
+        .try_fold(0usize, |sum, count| sum.checked_add(*count))
+        .ok_or("replacement total overflows")?;
+    let entries = pairs.iter().zip(&counts).enumerate().map(|(index,(p,count))|json!({"index":index,"placeholder":p.placeholder,"value":p.value,"count":count,"expected":p.expect})).collect::<Vec<_>>();
+    publish_presentation(&presentation, output)?;
+    if as_json {
+        return mutation_record(
+            true,
+            "replace",
+            json!({"mode":"literal","pairs":entries,"total_count":total}),
+            output,
+        );
     }
-    let bytes = presentation.to_bytes_for_path(output)?;
-    stage_and_publish(&[(output.to_path_buf(), bytes)], false)?;
     let mut stdout = io::stdout().lock();
-    writeln!(
-        stdout,
-        "Replaced {count} occurrence(s) of \"{placeholder}\" -> \"{value}\""
-    )?;
+    for (pair, count) in pairs.iter().zip(&counts) {
+        writeln!(
+            stdout,
+            "Replaced {count} occurrence(s) of \"{}\" -> \"{}\"",
+            pair.placeholder, pair.value
+        )?;
+    }
     writeln!(stdout, "Written to {}", output.display())?;
     Ok(())
 }
@@ -1387,4 +1421,362 @@ pub fn footer(
         json!({ "slides": presentation.len(), "slide_number_start": presentation.slide_number_start()? }),
         &output,
     )
+}
+
+/// Returns the zero-based index of one-based slide `slide`, or an error that
+/// names the slide count.
+fn slide_index(presentation: &Presentation, slide: usize) -> Result<usize> {
+    if slide == 0 || slide > presentation.len() {
+        return Err(format!(
+            "slide {slide} is out of range for {} slides",
+            presentation.len()
+        )
+        .into());
+    }
+    Ok(slide - 1)
+}
+
+/// Lists the layouts as `N "name"` for an error message.
+fn layout_list(presentation: &Presentation) -> String {
+    (0..presentation.layout_count())
+        .map(|index| {
+            format!(
+                "{} \"{}\"",
+                index + 1,
+                presentation.layout_name(index).unwrap_or_default()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Resolves a checked one-based decimal index or exact unique layout name.
+fn resolve_layout(presentation: &Presentation, layout: &str) -> Result<usize> {
+    if !layout.is_empty() && layout.bytes().all(|b| b.is_ascii_digit()) {
+        return layout
+            .parse::<usize>()
+            .ok()
+            .filter(|n| (1..=presentation.layout_count()).contains(n))
+            .map(|n| n - 1)
+            .ok_or_else(|| {
+                format!(
+                    "layout index {layout} is out of range (layouts: {})",
+                    layout_list(presentation)
+                )
+                .into()
+            });
+    }
+    let found = (0..presentation.layout_count())
+        .filter(|i| presentation.layout_name(*i) == Some(layout))
+        .collect::<Vec<_>>();
+    match found.as_slice() {
+        [index] => Ok(*index),
+        [] => Err(format!(
+            "unknown layout name \"{layout}\" (layouts: {})",
+            layout_list(presentation)
+        )
+        .into()),
+        _ => Err(format!("ambiguous layout name \"{layout}\", use its one-based index").into()),
+    }
+}
+
+/// Adds one slide from a layout, then moves it to `at` when given.
+pub fn slide_add(
+    file: &Path,
+    layout: &str,
+    at: Option<usize>,
+    output: &Path,
+    as_json: bool,
+) -> Result<()> {
+    ensure_output_paths_allowed(&[output.to_path_buf()], file, false)?;
+    ensure_output_paths_available(&[output.to_path_buf()])?;
+    let mut presentation = Presentation::open(file)?;
+    let layout_index = resolve_layout(&presentation, layout)?;
+    let final_count = presentation
+        .len()
+        .checked_add(1)
+        .ok_or("slide count overflows")?;
+    let position = at.unwrap_or(final_count);
+    if position == 0 || position > final_count {
+        return Err(format!(
+            "--at {position} is out of range, the new slide can go at 1 to {final_count}"
+        )
+        .into());
+    }
+    presentation.add_slide_at(layout_index, position - 1)?;
+    publish_presentation(&presentation, output)?;
+    mutation_record(
+        as_json,
+        "add",
+        json!({
+            "slide": position,
+            "slides": presentation.len(),
+            "layout": layout_index + 1,
+            "layout_name": presentation.layout_name(layout_index),
+        }),
+        output,
+    )
+}
+
+/// One slide edit, with one-based slide numbers.
+pub enum SlideEdit {
+    Duplicate(usize),
+    Remove(usize),
+    Move(usize, usize),
+    Hidden(usize, bool),
+}
+
+/// Applies one slide edit and publishes the complete presentation.
+pub fn slide_edit(file: &Path, edit: SlideEdit, output: &Path, as_json: bool) -> Result<()> {
+    ensure_output_paths_allowed(&[output.to_path_buf()], file, false)?;
+    ensure_output_paths_available(&[output.to_path_buf()])?;
+    let mut presentation = Presentation::open(file)?;
+    // `changed` is false for an edit that leaves the deck as it was, such as
+    // moving a slide to its own position or hiding a hidden slide.
+    let (action, slide, changed) = match edit {
+        SlideEdit::Duplicate(slide) => {
+            let index = slide_index(&presentation, slide)?;
+            presentation.duplicate_slide(index)?;
+            ("duplicate", slide + 1, true)
+        }
+        SlideEdit::Remove(slide) => {
+            let index = slide_index(&presentation, slide)?;
+            presentation.remove_slide(index)?;
+            ("remove", slide, true)
+        }
+        SlideEdit::Move(slide, to) => {
+            let index = slide_index(&presentation, slide)?;
+            let to_index = slide_index(&presentation, to).map_err(|_| {
+                format!(
+                    "--to {to} is out of range for {} slides",
+                    presentation.len()
+                )
+            })?;
+            presentation.move_slide(index, to_index)?;
+            ("move", to, index != to_index)
+        }
+        SlideEdit::Hidden(slide, hidden) => {
+            let index = slide_index(&presentation, slide)?;
+            let was_hidden = presentation
+                .slide(index)
+                .ok_or("slide index was checked")?
+                .hidden();
+            presentation
+                .slide_mut(index)
+                .ok_or("slide index was checked")?
+                .set_hidden(hidden);
+            (
+                if hidden { "hide" } else { "show" },
+                slide,
+                was_hidden != hidden,
+            )
+        }
+    };
+    if !changed && !as_json {
+        eprintln!("Note: {action} left slide {slide} as it was");
+    }
+    publish_presentation(&presentation, output)?;
+    mutation_record(
+        as_json,
+        action,
+        json!({ "slide": slide, "slides": presentation.len(), "changed": changed }),
+        output,
+    )
+}
+
+/// Replaces one slide's speaker notes.
+pub fn notes_set(
+    file: &Path,
+    slide: usize,
+    text: Option<&str>,
+    from_file: Option<&Path>,
+    output: &Path,
+    as_json: bool,
+) -> Result<()> {
+    ensure_output_paths_allowed(&[output.to_path_buf()], file, false)?;
+    ensure_output_paths_available(&[output.to_path_buf()])?;
+    let text = match (text, from_file) {
+        (Some(text), None) => text.to_owned(),
+        (None, Some(path)) => std::fs::read_to_string(path)
+            .map_err(|error| format!("cannot read --from-file {}: {error}", path.display()))?,
+        _ => return Err("give --text or --from-file".into()),
+    };
+    let mut presentation = Presentation::open(file)?;
+    let index = slide_index(&presentation, slide)?;
+    presentation.set_notes_text(index, &text)?;
+    publish_presentation(&presentation, output)?;
+    mutation_record(
+        as_json,
+        "set",
+        json!({ "slide": slide, "character_count": text.chars().count() }),
+        output,
+    )
+}
+
+fn core_json(core: Option<&rpptx::CoreProperties>) -> Value {
+    let field = |value: fn(&rpptx::CoreProperties) -> &Option<String>| {
+        core.and_then(|core| value(core).as_deref())
+    };
+    json!({
+        "title": field(|core| &core.title),
+        "author": field(|core| &core.creator),
+        "subject": field(|core| &core.subject),
+        "keywords": field(|core| &core.keywords),
+        "description": field(|core| &core.description),
+        "category": field(|core| &core.category),
+        "last_modified_by": field(|core| &core.last_modified_by),
+        "created": field(|core| &core.created),
+        "modified": field(|core| &core.modified),
+        "content_status": field(|core| &core.content_status),
+        "identifier": field(|core| &core.identifier),
+        "language": field(|core| &core.language),
+        "last_printed": field(|core| &core.last_printed),
+        "revision": field(|core| &core.revision),
+        "version": field(|core| &core.version),
+    })
+}
+
+/// Prints the core properties.
+pub fn meta_get(file: &Path, as_json: bool) -> Result<()> {
+    let presentation = Presentation::open(file)?;
+    let core = core_json(presentation.core_properties());
+    if as_json {
+        return print_json(json!({ "core": core }));
+    }
+    let mut stdout = io::stdout().lock();
+    if let Value::Object(fields) = &core {
+        for (name, value) in fields {
+            if let Some(value) = value.as_str() {
+                writeln!(stdout, "{name}: {value}")?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Sets the given core properties: title, author, subject, keywords,
+/// description and category, in that order.
+pub fn meta_set(
+    file: &Path,
+    values: [Option<String>; 6],
+    output: &Path,
+    as_json: bool,
+) -> Result<()> {
+    ensure_output_paths_allowed(&[output.to_path_buf()], file, false)?;
+    ensure_output_paths_available(&[output.to_path_buf()])?;
+    if values.iter().all(Option::is_none) {
+        return Err(
+            "meta set needs at least one of --title, --author, --subject, --keywords, \
+                    --description or --category"
+                .into(),
+        );
+    }
+    let mut presentation = Presentation::open(file)?;
+    let mut core = presentation.core_properties().cloned().unwrap_or_default();
+    let slots = [
+        &mut core.title,
+        &mut core.creator,
+        &mut core.subject,
+        &mut core.keywords,
+        &mut core.description,
+        &mut core.category,
+    ];
+    for (value, slot) in values.into_iter().zip(slots) {
+        if value.is_some() {
+            *slot = value.filter(|value| !value.is_empty());
+        }
+    }
+    presentation.set_core_properties(core)?;
+    publish_presentation(&presentation, output)?;
+    mutation_record(
+        as_json,
+        "set",
+        json!({ "core": core_json(presentation.core_properties()) }),
+        output,
+    )
+}
+
+/// Read-only fit report, returning whether any assessed owner overflows.
+pub fn fit(file: &Path, as_json: bool, font_dir: Option<&Path>) -> Result<bool> {
+    let fonts = font_dir
+        .map(oxml_layout::FontFile::from_dir)
+        .transpose()?
+        .unwrap_or_default();
+    let refs = fonts
+        .iter()
+        .map(|f| (f.family.as_str(), f.data.as_slice()))
+        .collect::<Vec<_>>();
+    let presentation = Presentation::open(file)?;
+    let report = presentation.fit_report(&refs)?;
+    let unsupported = report
+        .frames
+        .iter()
+        .filter(|f| f.update.status == "unsupported")
+        .collect::<Vec<_>>();
+    if !unsupported.is_empty() {
+        return Err(format!(
+            "fit cannot assess mandatory owners: {}",
+            unsupported
+                .iter()
+                .map(|f| format!(
+                    "{} {:?}: {}",
+                    f.update.location.owner_part,
+                    f.update.location.child_path,
+                    f.update
+                        .diagnostics
+                        .iter()
+                        .map(|d| d.message.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+                .collect::<Vec<_>>()
+                .join(" | ")
+        )
+        .into());
+    }
+    let overflow = report.frames.iter().any(|f| f.overflow);
+    let frames=report.frames.iter().map(|f| {
+        let u=&f.update;
+        json!({
+            "owner_part":u.location.owner_part,"child_path":u.location.child_path,"cell":u.location.cell,
+            "owner_kind":u.owner_kind,"slide":u.slide_index.map(|i|i+1),"shape_id":u.shape_id,"name":u.name,"context":f.context,
+            "mode":match u.mode {AutofitMode::None=>"none",AutofitMode::Normal=>"normal",AutofitMode::Shape=>"shape"},
+            "status":u.status,"overflow":f.overflow,"needed_scale":f.needed_scale,"needed_reduction":f.needed_reduction,
+            "reason":if f.overflow && f.needed_scale.is_none(){Some("unfit-at-floor")}else{None},
+            "measured_font_scale":f.measured_font_scale,"current_line_spacing_reduction":f.current_line_spacing_reduction,
+            "stored_font_scale":u.font_scale,"stored_line_spacing_reduction":u.line_spacing_reduction,"point_size":u.point_size,
+            "old_bounds_emu":u.old_bounds,"new_bounds_emu":u.new_bounds,"changed":u.changed,
+            "quantized_trial":f.quantized_trial.as_ref().map(|t|json!({"usable_points":{"x":t.usable.x,"y":t.usable.y,"width":t.usable.width,"height":t.usable.height},"physical_height_points":t.physical_height,"line_advance_height_points":t.line_advance_height,"font_scale":t.font_scale,"width_fits":t.width_fits,"fits":t.fits})),
+            "persisted_trial":f.persisted_trial.as_ref().map(|t|json!({"usable_points":{"x":t.usable.x,"y":t.usable.y,"width":t.usable.width,"height":t.usable.height},"physical_height_points":t.physical_height,"line_advance_height_points":t.line_advance_height,"font_scale":t.font_scale,"width_fits":t.width_fits,"fits":t.fits})),
+            "diagnostics":u.diagnostics.iter().map(|d|d.message.as_str()).collect::<Vec<_>>(),
+        })
+    }).collect::<Vec<_>>();
+    let diagnostics = report
+        .diagnostics
+        .iter()
+        .map(|d| d.message.as_str())
+        .collect::<Vec<_>>();
+    if as_json {
+        print_json(
+            json!({"frames":frames,"diagnostics":diagnostics,"overflow":overflow,"scale_units":"hundred-thousandths","measurement_units":"points","bounds_units":"EMU"}),
+        )?;
+    } else {
+        let mut stdout = io::stdout().lock();
+        for frame in &frames {
+            writeln!(
+                stdout,
+                "{} {:?}: status={}, overflow={}, needed_scale={}",
+                frame["owner_part"],
+                frame["child_path"],
+                frame["status"],
+                frame["overflow"],
+                frame["needed_scale"]
+            )?;
+        }
+        for diagnostic in diagnostics {
+            writeln!(stdout, "Diagnostic: {diagnostic}")?;
+        }
+    }
+    io::stdout().flush()?;
+    Ok(overflow)
 }

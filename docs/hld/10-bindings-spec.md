@@ -3251,16 +3251,92 @@ or tag authority.
 ## CLIs
 
 `--font-dir` configures Word layout, conversion and image rendering, and
-PowerPoint conversion, rendering and thumbnails. The shared strict loader
+PowerPoint conversion, rendering, thumbnails and read-only fit reports. The shared strict loader
 retains lexical file order and embedded identity with filename aliases.
 Deterministic CLI fallback remains bundled. PDF, PNG, JPEG and TIFF consume the
 selected layout instances. Unsupported output formats refuse a supplied font
 directory before publication. Missing or invalid inputs preserve staging and
 existing destination limits.
 
-`rpptx-cli` extends the seven-command `rdocx-cli` surface with `inspect`,
-`text`, `convert`, `diff`, `replace`, `validate`, `render`, `thumbnail`,
-`outline`, and `comment`. It uses clap derive and `serde_json` for `--json`.
+Both CLIs use clap derive, native family providers and the shared schema-1
+JSON envelope. Word exposes inspect, text, layout, convert, diff, replace, validate,
+render, comment, revision, compare, toc, fields, images, meta and fill. PowerPoint exposes inspect, text,
+convert, diff, replace, validate, render, thumbnail, outline, comment,
+footer, slide, notes, fit and meta.
+
+Ordered `replace --map PATH` accepts a JSON array of placeholder/value/optional
+expect objects, retaining duplicate pairs and parser last-key-wins behavior.
+Unknown keys, invalid types and command-line pair/expect conflicts refuse.
+Null or absent expectations allow zero, and an empty map succeeds unchanged.
+Pairs cascade on one native candidate, with one final publication and ordered
+counts. Native presentation `try_replace_all_expected` returns the same
+family-local index/placeholder/expected/found mismatch facts as Word. Python
+Presentation.replace_all exposes pairs with optional counts and ordered tuple
+results. New counted wrappers allocate results before publication, preserve
+held handles on failure or actual unchanged bytes, and retain causal owner
+survival on changed results. Single CLI replacement retains family unmatched
+behavior. Reports contain action or operation, mode, ordered index/placeholder/
+value/count/nullable expected records, total_count and output.
+
+Word `--regex` consumes `try_replace_all_regex_expected` and Python
+replace_all_regex_expected, with the existing native dialect and $1 captures.
+Patterns and replacement text are admitted before staging. Required raw-owner,
+header/footer, note rewrite and final reopen errors propagate. Legacy regex
+methods retain their existing behavior. Logical counts and alternate physical
+copies use the established document-wide matcher rather than scoped picture
+correspondence. Chart labels remain outside regex scope.
+
+Word fields update consumes `update_all_fields(context)`, returning the
+FieldsUpdateReport through native/Python. The report retains ordinary_updated,
+layout, ordered evaluations with original instructions and cached results,
+combined diagnostics, total_updated and saved_cache_scope. Python allocates
+the complete owned report before publication. Evaluation outcome dictionaries
+are owned report data and do not mutate the document.
+One outer candidate performs ordinary and deterministic page-cache work.
+`--now YYYY-MM-DDTHH:MM:SS` is a checked Gregorian civil value, without offset,
+fraction or leap second. Omission keeps now=None and unresolved date caches.
+Existing header/footer dynamic caches and unsupported-switch diagnostics stay
+visible. The input path supplies field filename context.
+
+Word images extract uses physical picture occurrences and actual internal
+media identity, extracting each unique source part once in first-occurrence
+order. Flat generated image-000001 names derive extensions from bounded content
+types, with bin for unknown types. External links retain URL metadata and a
+null extracted file, without fetching. Missing required media refuses.
+Complete bytes and destinations are admitted before nonreplacing staged
+publication. Inspect adds pictures and public word/Unicode-scalar character/
+deterministic page counts, with accepted-main-body scope, spaces included and
+provider diagnostics. Existing inspect keys remain compatible.
+
+Word meta get/set uses typed current core/custom providers. Repeated
+`--custom NAME=TYPE:VALUE` admits str, int32, finite float64, true/false bool,
+checked provider filetime and empty without payload. Existing PID/fmtid/string
+subtype/order and opaque values survive updates. Remove-custom is explicit,
+and missing removal is unchanged. Tag fill splits NAME=VALUE once, uses tags
+only and refuses duplicates, missing tags or unsupported bound owners as one
+transaction. Native/Python fill_content_control_tags returns per-tag counts.
+Core set in either family changes only supplied fields, treating empty text
+as removal and preserving imported metadata.
+
+PowerPoint slide commands use one-based CLI positions, checked decimal layout
+indexes or exact unique names. Add-at composes native creation/placement on
+one candidate and exposes SlideCollection.add_slide_at(layout,position) with
+zero-based Python positions. Duplicate inserts after source, move uses final
+positions, and hide/show preserve no-ops. Notes set requires exactly one text
+or complete UTF-8 file source, preserving LF/CRLF/carriage returns, all spaces,
+empty text and existing notes formatting/opaque payload through native/Python.
+New editing commands require a distinct output and refuse existing files and
+input aliases, symlinks or hard links before native editing/publication.
+
+PowerPoint fit consumes the F-X207 native fit_report and exposes frozen Python
+FitReport/FitFrameReport/FitTrial snapshots, without a second solver or mutable
+owner selector. CLI JSON preserves physical owner part/child path/cell,
+identity/name, contexts, empty/status facts, current measured/stored values,
+needed total scale/reduction, quantized/persisted trials and diagnostics.
+Trial dimensions/heights are points, stored bounds EMU and integer scales or
+reductions hundred-thousandths. No fitting permitted trial reports null needed
+scale and unfit-at-floor. Unsupported mandatory owners refuse. Fit does not
+save, exiting0 without overflow,1 for overflow and2 for checked error.
 
 `inspect` reports the file, slide and layout counts, slide size, core metadata,
 and each slide's identity, hidden state, and shape count. Its JSON form uses the

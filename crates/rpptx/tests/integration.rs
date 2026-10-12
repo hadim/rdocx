@@ -10496,7 +10496,6 @@ fn notes_and_handout_export_leave_the_opened_package_byte_identical() {
     assert_eq!(presentation.to_bytes().unwrap(), before);
 }
 
-#[cfg(all(feature = "digital-signatures", feature = "render"))]
 const M21_AUDIO_WAV: &[u8] = b"RIFF\x26\0\0\0WAVEfmt \x10\0\0\0\x01\0\x01\0\x40\x1f\0\0\x40\x1f\0\0\x01\0\x08\0data\x02\0\0\0\x80\x80";
 
 #[cfg(all(feature = "digital-signatures", feature = "render"))]
@@ -30411,4 +30410,61 @@ mod fx214_nesting {
         let reopened = Presentation::from_bytes(&presentation.to_bytes().unwrap()).unwrap();
         assert!(reopened.slide(0).unwrap().text().contains("deepest"));
     }
+}
+
+#[test]
+fn fx204_native_batch_counts_and_placement_publish_once() {
+    let mut deck = rpptx::Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    deck.slide_mut(0)
+        .unwrap()
+        .add_textbox(
+            rpptx::Emu(0),
+            rpptx::Emu(0),
+            rpptx::Emu(2000000),
+            rpptx::Emu(500000),
+        )
+        .unwrap()
+        .set_text("A A")
+        .unwrap();
+    deck.set_notes_text(0, "A").unwrap();
+    let before = deck.to_bytes().unwrap();
+    assert_eq!(
+        deck.try_replace_all_expected(&[]).unwrap().unwrap(),
+        Vec::<usize>::new()
+    );
+    assert_eq!(deck.to_bytes().unwrap(), before);
+    let mismatch = deck
+        .try_replace_all_expected(&[("A", "B", Some(3)), ("B", "C", Some(4))])
+        .unwrap()
+        .unwrap_err();
+    assert_eq!(mismatch.index, 1);
+    assert_eq!(mismatch.placeholder, "B");
+    assert_eq!(mismatch.found, 3);
+    assert_eq!(deck.to_bytes().unwrap(), before);
+    assert!(
+        deck.try_replace_all_expected(&[("A", "B", None), ("", "C", None)])
+            .is_err()
+    );
+    assert_eq!(deck.to_bytes().unwrap(), before);
+    assert_eq!(
+        deck.try_replace_all_expected(&[("A", "B", Some(3)), ("B", "C", Some(3))])
+            .unwrap()
+            .unwrap(),
+        vec![3, 3]
+    );
+    assert_eq!(deck.slide(0).unwrap().text(), "C C");
+    assert_eq!(deck.slide(0).unwrap().notes_text().as_deref(), Some("C"));
+    let before = deck.to_bytes().unwrap();
+    assert!(deck.add_slide_at(6, 2).is_err());
+    assert!(deck.add_slide_at(deck.layout_count(), 0).is_err());
+    assert_eq!(deck.to_bytes().unwrap(), before);
+    assert_eq!(deck.add_slide_at(6, 0).unwrap(), 0);
+    assert_eq!(deck.len(), 2);
+    assert_eq!(deck.slide(1).unwrap().text(), "C C");
+    let reopened = rpptx::Presentation::from_bytes(&deck.to_bytes().unwrap()).unwrap();
+    assert_eq!(
+        reopened.slide(1).unwrap().notes_text().as_deref(),
+        Some("C")
+    );
 }

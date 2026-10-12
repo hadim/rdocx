@@ -24,7 +24,7 @@ its cost is recorded in `00-vision.md`.
 |---|---|
 | `Presentation::new / open / from_bytes / save / to_bytes` | `new()` uses a bundled template |
 | Slide collection, iteration, indexing, lookup by id | |
-| `add_slide(layout)` | Synthesises placeholders, does not deep-copy |
+| `add_slide(layout)`, atomic `add_slide_at(layout, position)` | Synthesises placeholders, does not deep-copy |
 | `remove_slide`, `move_slide`, `duplicate_slide` | Beyond python-pptx |
 | Slide size get and set | |
 | Slide masters and layouts, layout lookup by name | Read |
@@ -524,3 +524,14 @@ are editable. Layout lifecycle checks actual inbound package relationships.
 Theme application accepts a selected PPTX or POTX master or one THMX theme,
 imports supported selected dependencies atomically and preserves direct slide
 content. Google Slides compatibility remains best effort.
+
+## Native one-shot automation surfaces
+
+Word CLI ordered literal/regex replacement, combined field-cache updates,
+physical image inventory/extraction, core/custom metadata, tag-only fill and
+accepted-main-body counts consume the native/Python common operations.
+PowerPoint CLI slide lifecycle, exact speaker-note text/file updates, core
+metadata, ordered replacement and read-only fit consume the presentation
+facade. Fit includes admitted owner contexts and refuses mandatory unsupported
+owners. Atomic editing and input-identity refusal apply to new commands.
+External image inventory is metadata only and performs no network fetch.

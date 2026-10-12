@@ -262,6 +262,14 @@ impl PyPicture {
         &self.inner.relationship_id
     }
     #[getter]
+    fn media_part_name(&self) -> Option<&str> {
+        self.inner.media_part_name.as_deref()
+    }
+    #[getter]
+    fn external_url(&self) -> Option<&str> {
+        self.inner.external_url.as_deref()
+    }
+    #[getter]
     fn content_type(&self) -> &str {
         &self.inner.content_type
     }
@@ -701,6 +709,24 @@ pub struct PyLayoutBackedFieldUpdateReport {
     section_fields: usize,
     section_pages_fields: usize,
     diagnostics: Vec<String>,
+}
+
+#[pyclass(name = "FieldEvaluation", frozen, get_all, skip_from_py_object)]
+pub struct PyFieldEvaluation {
+    field_index: usize,
+    instruction: String,
+    cached_result: String,
+    outcome: Py<PyDict>,
+}
+
+#[pyclass(name = "FieldsUpdateReport", frozen, get_all, skip_from_py_object)]
+pub struct PyFieldsUpdateReport {
+    ordinary_updated: usize,
+    layout: Py<PyLayoutBackedFieldUpdateReport>,
+    evaluations: Py<PyTuple>,
+    diagnostics: Py<PyTuple>,
+    total_updated: usize,
+    saved_cache_scope: String,
 }
 
 #[pyclass(name = "Revision", frozen, get_all, eq, skip_from_py_object)]
@@ -4765,6 +4791,26 @@ impl PyDocument {
     ) -> PyResult<usize> {
         self.set_control_value(py, tag, value, true)
     }
+    fn fill_content_control_tags<'py>(
+        &mut self,
+        py: Python<'py>,
+        pairs: Vec<(String, String)>,
+    ) -> PyResult<Bound<'py, PyTuple>> {
+        let pairs = pairs
+            .iter()
+            .map(|(tag, value)| (tag.as_str(), value.as_str()))
+            .collect::<Vec<_>>();
+        let mut candidate = self.inner.clone_for_staging();
+        let counts = py
+            .detach(|| candidate.fill_content_control_tags(&pairs))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+
+        let result = PyTuple::new(py, counts)?;
+        self.publish_api_candidate(py, candidate, "Document.fill_content_control_tags")?;
+
+        Ok(result)
+    }
+
     fn set_content_control_value_by_alias(
         &mut self,
         py: Python<'_>,
@@ -7263,6 +7309,48 @@ impl PyDocument {
         Ok(result)
     }
 
+    fn replace_all_regex_expected<'py>(
+        &mut self,
+        py: Python<'py>,
+        pairs: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyTuple>> {
+        let mut owned = Vec::new();
+        for (index, pair) in pairs.try_iter()?.enumerate() {
+            let pair = pair?;
+            let parsed = match pair.extract::<(String, String)>() {
+                Ok((placeholder, replacement)) => (placeholder, replacement, None),
+                Err(_) => pair
+                    .extract::<(String, String, Option<usize>)>()
+                    .map_err(|_| {
+                        PyTypeError::new_err(format!(
+                            "pair {index} must be an (old, new) or (old, new, expected) tuple, \
+                         where expected is a nonnegative int or None"
+                        ))
+                    })?,
+            };
+            owned.push(parsed);
+        }
+        let pairs = owned
+            .iter()
+            .map(|(placeholder, replacement, expected)| {
+                (placeholder.as_str(), replacement.as_str(), *expected)
+            })
+            .collect::<Vec<_>>();
+        let (candidate, counts) = {
+            let mut candidate = self.inner.clone_for_staging();
+            let counts = py
+                .detach(|| candidate.try_replace_all_regex_expected(&pairs))
+                .map_err(|error| rdocx_to_pyerr(py, error))?
+                .map_err(|mismatch| crate::replacement_count_to_pyerr(py, &mismatch, true))?;
+            (candidate, counts)
+        };
+
+        let result = PyTuple::new(py, counts)?;
+        self.publish_api_candidate(py, candidate, "Document.replace_all_regex_expected")?;
+
+        Ok(result)
+    }
+
     fn replace_all_regex(
         &mut self,
         py: Python<'_>,
@@ -7321,6 +7409,107 @@ impl PyDocument {
         self.counted_mutation(py, "Document.update_fields", |document| {
             document.update_fields(&context)
         })
+    }
+
+    #[pyo3(signature = (
+        *,
+        now = None,
+        file_name = None,
+        file_path = None,
+        merge_fields = None,
+        included_text = None,
+        merge_record_number = None,
+        merge_sequence_number = None,
+    ))]
+    #[allow(clippy::too_many_arguments)]
+    fn update_all_fields(
+        &mut self,
+        py: Python<'_>,
+        now: Option<&Bound<'_, PyAny>>,
+        file_name: Option<String>,
+        file_path: Option<String>,
+        merge_fields: Option<BTreeMap<String, String>>,
+        included_text: Option<BTreeMap<String, String>>,
+        merge_record_number: Option<u32>,
+        merge_sequence_number: Option<u32>,
+    ) -> PyResult<Py<PyFieldsUpdateReport>> {
+        // Read field by field: the abi3 build has no datetime accessors, and
+        // the wall-clock values are used as given.
+        let now = now
+            .map(|now| {
+                Ok::<_, PyErr>(rdocx::FieldDateTime {
+                    year: now.getattr("year")?.extract()?,
+                    month: now.getattr("month")?.extract()?,
+                    day: now.getattr("day")?.extract()?,
+                    hour: now.getattr("hour")?.extract()?,
+                    minute: now.getattr("minute")?.extract()?,
+                    second: now.getattr("second")?.extract()?,
+                })
+            })
+            .transpose()?;
+        let context = rdocx::FieldEvaluationContext {
+            now,
+            file_name,
+            file_path,
+            merge_fields: merge_fields.unwrap_or_default(),
+            included_text: included_text.unwrap_or_default(),
+            merge_record_number,
+            merge_sequence_number,
+        };
+        let mut candidate = self.inner.clone_for_staging();
+        let report = py
+            .detach(|| candidate.update_all_fields(&context))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+
+        // Every returned object, including nested outcomes and tuples, exists
+        // before publishing. Returning this owned Py object needs no allocation.
+        let json_loads = py.import("json")?.getattr("loads")?;
+        let evaluations = report
+            .evaluations
+            .iter()
+            .map(|evaluation| {
+                let outcome = json_loads
+                    .call1((evaluation.to_json_value()["outcome"].to_string(),))?
+                    .cast_into::<PyDict>()?
+                    .unbind();
+                Py::new(
+                    py,
+                    PyFieldEvaluation {
+                        field_index: evaluation.field_index,
+                        instruction: evaluation.instruction.clone(),
+                        cached_result: evaluation.cached_result.clone(),
+                        outcome,
+                    },
+                )
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        let evaluations = PyTuple::new(py, evaluations)?.unbind();
+        let diagnostics = PyTuple::new(py, &report.diagnostics)?.unbind();
+        let layout = Py::new(
+            py,
+            PyLayoutBackedFieldUpdateReport {
+                page_fields: report.layout.page_fields,
+                num_pages_fields: report.layout.num_pages_fields,
+                page_reference_fields: report.layout.page_reference_fields,
+                section_fields: report.layout.section_fields,
+                section_pages_fields: report.layout.section_pages_fields,
+                diagnostics: report.layout.diagnostics,
+            },
+        )?;
+        let result = Py::new(
+            py,
+            PyFieldsUpdateReport {
+                ordinary_updated: report.ordinary_updated,
+                layout,
+                evaluations,
+                diagnostics,
+                total_updated: report.total_updated,
+                saved_cache_scope: report.saved_cache_scope.to_owned(),
+            },
+        )?;
+        self.publish_api_candidate(py, candidate, "Document.update_all_fields")?;
+
+        Ok(result)
     }
 
     fn update_page_fields(&mut self, py: Python<'_>) -> PyResult<usize> {

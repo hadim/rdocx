@@ -314,6 +314,14 @@ fn inspect_json_uses_the_shared_schema() {
                 "keywords": "cli,test",
             },
             "styles_used": [],
+            "word_count": 4,
+            "character_count": 20,
+            "page_count": 1,
+            "count_scope": "accepted-main-body",
+            "character_include_spaces": true,
+            "page_count_source": "deterministic-layout",
+            "diagnostics": [],
+            "pictures": [],
         })
     );
 }
@@ -5188,4 +5196,757 @@ fn fx195_every_word_cli_entrypoint_uses_caller_only_face() {
     assert_success(&repeated, "repeated layout");
     assert_eq!(repeated.stdout, listed.stdout);
     assert_eq!(fs::read(&input).unwrap(), before);
+}
+
+#[test]
+fn word_replace_map_is_ordered_counted_and_atomic() {
+    let temp = TempWorkspace::new("word-map");
+    let input = temp.path.join("input.docx");
+    let output = temp.path.join("output.docx");
+    let map = temp.path.join("map.json");
+    write_document(&input, &["A A"]);
+    let before = fs::read(&input).unwrap();
+    fs::write(&map, r#"[{"placeholder":"A","value":"B","expect":2},{"placeholder":"B","value":"C","expect":2}]"#).unwrap();
+    let result = cli(&[
+        "replace",
+        path_text(&input),
+        "--map",
+        path_text(&map),
+        "--output",
+        path_text(&output),
+        "--json",
+    ]);
+    assert_success(&result, "ordered map");
+    let report: Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(report["schema"], 1);
+    assert_eq!(report["total_count"], 4);
+    assert_eq!(
+        Document::open(&output)
+            .unwrap()
+            .paragraph(0)
+            .unwrap()
+            .text(),
+        "C C"
+    );
+    fs::remove_file(&output).unwrap();
+    fs::write(&map, r#"[{"placeholder":"A","value":"B","expect":2},{"placeholder":"B","value":"C","expect":1}]"#).unwrap();
+    let refused = cli(&[
+        "replace",
+        path_text(&input),
+        "--map",
+        path_text(&map),
+        "--output",
+        path_text(&output),
+        "--json",
+    ]);
+    assert!(!refused.status.success());
+    assert!(refused.stdout.is_empty());
+    assert!(!output.exists());
+    assert_eq!(fs::read(&input).unwrap(), before);
+}
+
+fn pixel_png() -> Vec<u8> {
+    vec![
+        137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1, 8, 6,
+        0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 8, 29, 99, 96, 96, 96, 248, 15, 0,
+        1, 4, 1, 0, 30, 115, 156, 64, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66, 96, 130,
+    ]
+}
+
+fn json_stdout(output: &Output) -> Value {
+    serde_json::from_slice(&output.stdout).expect("JSON standard output")
+}
+
+fn write_controls_document(path: &Path, controls: &[(&str, &str, &str)]) {
+    write_document(path, &["seed"]);
+    let body = controls
+        .iter()
+        .map(|(tag, properties, text)| {
+            format!(
+                r#"<w:sdt><w:sdtPr><w:tag w:val="{tag}"/>{properties}</w:sdtPr><w:sdtContent><w:p><w:r><w:t>{text}</w:t></w:r></w:p></w:sdtContent></w:sdt>"#
+            )
+        })
+        .collect::<String>();
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(fs::read(path).unwrap())).unwrap();
+    package.set_part(
+        "/word/document.xml",
+        format!(
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"><w:body>{body}<w:sectPr/></w:body></w:document>"#
+        )
+        .into_bytes(),
+    );
+    package.save(path).unwrap();
+}
+
+#[test]
+fn fields_update_reports_general_and_layout_cache_results() {
+    let temp = TempWorkspace::new("fields-update");
+    let input = temp.path.join("fields.docx");
+    let mut document = fixture_document(&[]);
+    {
+        let mut paragraph = document.add_paragraph("Page ");
+        let mut run = paragraph.add_run("");
+        run.add_field("PAGE", "9").unwrap();
+        run.add_field("NUMPAGES", "9").unwrap();
+        run.add_field(r#"DATE \@ "yyyy-MM-dd""#, "1999-01-01")
+            .unwrap();
+    }
+    for _ in 0..2 {
+        document
+            .add_paragraph("Figure ")
+            .add_run("")
+            .add_field("SEQ Figure", "9")
+            .unwrap();
+    }
+    for (instruction, stored) in [
+        ("FILENAME", "old-name"),
+        (r"FILENAME \p", "old-path"),
+        ("UNSUPPORTED", "retained"),
+    ] {
+        document
+            .add_paragraph("")
+            .add_run("")
+            .add_field(instruction, stored)
+            .unwrap();
+    }
+    document.set_header("header seed");
+    document.save(&input).unwrap();
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(fs::read(&input).unwrap())).unwrap();
+    let header_part = package
+        .parts
+        .keys()
+        .find(|name| name.starts_with("/word/header") && name.ends_with(".xml"))
+        .unwrap()
+        .clone();
+    let header_source = br#"<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:v="urn:producer"><w:p><w:fldSimple w:instr="PAGE"><w:r><w:t>77</w:t></w:r></w:fldSimple><w:fldSimple w:instr="NUMPAGES"><w:r><w:t>88</w:t></w:r></w:fldSimple></w:p><v:keep value="opaque"/></w:hdr>"#;
+    package.set_part(&header_part, header_source.to_vec());
+    package.save(&input).unwrap();
+    let input_before = fs::read(&input).unwrap();
+
+    let output = temp.path.join("updated.docx");
+    let result = cli(&[
+        "fields",
+        "update",
+        path_text(&input),
+        "--now",
+        "2026-10-10T08:30:00",
+        "-o",
+        path_text(&output),
+        "--json",
+    ]);
+    assert_success(&result, "fields update");
+    let record = json_stdout(&result);
+    assert_eq!(record["now"], "2026-10-10T08:30:00");
+    assert_eq!(record["page_fields"], 1);
+    assert_eq!(record["num_pages_fields"], 1);
+    assert_eq!(record["ordinary_updated"], record["ordinary_fields"]);
+    assert_eq!(
+        record["total_updated"].as_u64().unwrap(),
+        record["ordinary_updated"].as_u64().unwrap() + 2
+    );
+    assert!(
+        record["saved_cache_scope"]
+            .as_str()
+            .unwrap()
+            .contains("header-footer")
+    );
+    let evaluations = record["evaluations"].as_array().unwrap();
+    assert_eq!(evaluations[0]["instruction"], "PAGE");
+    assert_eq!(evaluations[0]["cached_result"], "9");
+    assert_eq!(evaluations[0]["outcome"]["kind"], "deferred_pagination");
+    assert_eq!(
+        evaluations[2]["outcome"],
+        serde_json::json!({"kind":"resolved","text":"2026-10-10"})
+    );
+    assert_eq!(evaluations[7]["outcome"]["kind"], "keep_stored");
+    assert!(!record["diagnostics"].as_array().unwrap().is_empty());
+    assert_eq!(
+        Document::open(&output)
+            .unwrap()
+            .paragraph(0)
+            .unwrap()
+            .text(),
+        "Page 112026-10-10"
+    );
+
+    let updated = Document::open(&output).unwrap();
+    assert_eq!(updated.paragraph(1).unwrap().text(), "Figure 1");
+    assert_eq!(updated.paragraph(2).unwrap().text(), "Figure 2");
+    assert_eq!(updated.paragraph(3).unwrap().text(), "fields.docx");
+    assert_eq!(
+        updated.paragraph(4).unwrap().text(),
+        fs::canonicalize(&input).unwrap().to_str().unwrap()
+    );
+    assert_eq!(updated.paragraph(5).unwrap().text(), "retained");
+    let saved_package =
+        OpcPackage::from_reader(std::io::Cursor::new(fs::read(&output).unwrap())).unwrap();
+    let saved_header = std::str::from_utf8(saved_package.get_part(&header_part).unwrap()).unwrap();
+    assert!(
+        saved_header.contains(r#"w:instr="PAGE" w:dirty="1"><w:r><w:t>77</w:t>"#),
+        "{saved_header}"
+    );
+    assert!(
+        saved_header.contains(r#"w:instr="NUMPAGES" w:dirty="1"><w:r><w:t>88</w:t>"#),
+        "{saved_header}"
+    );
+    assert!(
+        saved_header.contains(r#"<v:keep value="opaque"/>"#),
+        "{saved_header}"
+    );
+    let twice = temp.path.join("twice.docx");
+    Document::open(&output).unwrap().save(&twice).unwrap();
+    assert_eq!(
+        Document::open(&twice).unwrap().paragraph(4).unwrap().text(),
+        fs::canonicalize(&input).unwrap().to_str().unwrap()
+    );
+    assert_eq!(fs::read(&input).unwrap(), input_before);
+
+    let clock = temp.path.join("clock.docx");
+    let result = cli(&[
+        "fields",
+        "update",
+        path_text(&input),
+        "-o",
+        path_text(&clock),
+        "--json",
+    ]);
+    assert_success(&result, "fields update with the clock");
+    assert!(json_stdout(&result)["now"].is_null());
+    assert!(
+        Document::open(&clock)
+            .unwrap()
+            .paragraph(0)
+            .unwrap()
+            .text()
+            .ends_with("1999-01-01")
+    );
+
+    let invalid = cli(&[
+        "fields",
+        "update",
+        path_text(&input),
+        "--now",
+        "2026-02-30T08:30:00",
+        "-o",
+        path_text(&temp.path.join("invalid.docx")),
+    ]);
+    assert_eq!(invalid.status.code(), Some(2));
+    for (index, invalid_time) in [
+        "2026-10-10",
+        "2026-10-10T08:30",
+        "2026-10-10T08:30:00.5",
+        "2026-10-10T08:30:00Z",
+        "2026-10-10T08:30:00+01:00",
+        "2026-10-10t08:30:00",
+        "2026-10-10T08:30:60",
+        "2026-10-10T24:30:00",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let destination = temp.path.join(format!("refused-{index}.docx"));
+        let result = cli(&[
+            "fields",
+            "update",
+            path_text(&input),
+            "--now",
+            invalid_time,
+            "-o",
+            path_text(&destination),
+        ]);
+        assert_eq!(
+            result.status.code(),
+            Some(2),
+            "{invalid_time}: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(!destination.exists());
+        assert_eq!(fs::read(&input).unwrap(), input_before);
+    }
+}
+
+#[test]
+fn word_regex_map_has_native_scope_and_capture_counts() {
+    let temp = TempWorkspace::new("regex-map");
+    let input = temp.path.join("in.docx");
+    let output = temp.path.join("out.docx");
+    let map = temp.path.join("map.json");
+    write_document(&input, &["one12 two34"]);
+    let before = fs::read(&input).unwrap();
+    fs::write(
+        &map,
+        r#"[{"placeholder":"([a-z]+)([0-9]+)","value":"$2:$1","expect":2}]"#,
+    )
+    .unwrap();
+    let result = cli(&[
+        "replace",
+        path_text(&input),
+        "--map",
+        path_text(&map),
+        "--regex",
+        "-o",
+        path_text(&output),
+        "--json",
+    ]);
+    assert_success(&result, "regex map");
+    assert_eq!(
+        Document::open(&output)
+            .unwrap()
+            .paragraph(0)
+            .unwrap()
+            .text(),
+        "12:one 34:two"
+    );
+    fs::remove_file(&output).unwrap();
+    fs::write(
+        &map,
+        r#"[{"placeholder":"one","value":"changed"},{"placeholder":"[","value":"x"}]"#,
+    )
+    .unwrap();
+    let refused = cli(&[
+        "replace",
+        path_text(&input),
+        "--map",
+        path_text(&map),
+        "--regex",
+        "-o",
+        path_text(&output),
+    ]);
+    assert!(!refused.status.success());
+    assert!(!output.exists());
+    assert_eq!(fs::read(input).unwrap(), before);
+}
+
+#[test]
+fn fill_tag_updates_all_matching_controls_atomically() {
+    let temp = TempWorkspace::new("fill-tag");
+    let input = temp.path.join("in.docx");
+    let output = temp.path.join("out.docx");
+    write_controls_document(
+        &input,
+        &[
+            ("client", "<w:text/>", "before"),
+            ("client", "<w:text/>", "other"),
+        ],
+    );
+    let before = fs::read(&input).unwrap();
+    let result = cli(&[
+        "fill",
+        path_text(&input),
+        "--tag",
+        "client=A=B",
+        "-o",
+        path_text(&output),
+        "--json",
+    ]);
+    assert_success(&result, "fill tag");
+    assert_eq!(json_stdout(&result)["tags"][0]["count"], 2);
+    assert!(
+        Document::open(&output)
+            .unwrap()
+            .content_controls()
+            .iter()
+            .all(|c| c.text() == "A=B")
+    );
+    fs::remove_file(&output).unwrap();
+    for tags in [["client=x", "missing=y"], ["client=x", "client=y"]] {
+        let refused = cli(&[
+            "fill",
+            path_text(&input),
+            "--tag",
+            tags[0],
+            "--tag",
+            tags[1],
+            "-o",
+            path_text(&output),
+        ]);
+        assert!(!refused.status.success());
+        assert!(!output.exists());
+        assert_eq!(fs::read(&input).unwrap(), before);
+    }
+}
+
+#[test]
+fn word_meta_get_set_preserves_core_custom_types() {
+    let temp = TempWorkspace::new("meta-types");
+    let input = temp.path.join("in.docx");
+    let output = temp.path.join("out.docx");
+    write_document(&input, &["keep"]);
+    let result = cli(&[
+        "meta",
+        "set",
+        path_text(&input),
+        "--title",
+        "Changed",
+        "--custom",
+        "count=int:4",
+        "--custom",
+        "text=str:a:b=c",
+        "--custom",
+        "when=filetime:2024-02-29T12:00:00+01:00",
+        "-o",
+        path_text(&output),
+        "--json",
+    ]);
+    assert_success(&result, "meta set");
+    let doc = Document::open(&output).unwrap();
+    assert_eq!(doc.title(), Some("Changed"));
+    assert_eq!(
+        doc.custom_property("count").unwrap().value,
+        rdocx::CustomPropertyValue::I4(4)
+    );
+    assert_eq!(
+        doc.custom_property("text").unwrap().value,
+        rdocx::CustomPropertyValue::Lpwstr("a:b=c".into())
+    );
+    let report = cli(&["meta", "get", path_text(&output), "--json"]);
+    assert_success(&report, "meta get");
+    assert_eq!(json_stdout(&report)["custom"][0]["pid"], 2);
+    fs::remove_file(&output).unwrap();
+    let before = fs::read(&input).unwrap();
+    for value in [
+        "x=bool:1",
+        "x=float:NaN",
+        "x=filetime:2023-02-29T12:00:00Z",
+        "x=empty:bad",
+    ] {
+        let refused = cli(&[
+            "meta",
+            "set",
+            path_text(&input),
+            "--custom",
+            value,
+            "-o",
+            path_text(&output),
+        ]);
+        assert!(!refused.status.success());
+        assert!(!output.exists());
+        assert_eq!(fs::read(&input).unwrap(), before);
+    }
+}
+
+#[test]
+fn inspect_adds_pictures_and_public_counts_compatibly() {
+    let temp = TempWorkspace::new("inspect-counts");
+    let input = temp.path.join("in.docx");
+    write_document(&input, &["one two"]);
+    let result = cli(&["inspect", path_text(&input), "--json"]);
+    assert_success(&result, "inspect counts");
+    let json = json_stdout(&result);
+    assert_eq!(json["schema"], 1);
+    assert_eq!(json["paragraphs"], 1);
+    assert_eq!(json["word_count"], 2);
+    assert_eq!(json["character_count"], 7);
+    assert_eq!(json["page_count"], 1);
+    assert_eq!(json["count_scope"], "accepted-main-body");
+    assert_eq!(json["pictures"], json!([]));
+}
+
+#[test]
+fn images_extract_preserves_bytes_and_reports_story_owners() {
+    let temp = TempWorkspace::new("extract-owners");
+    let input = temp.path.join("in.docx");
+    let dir = temp.path.join("images");
+    let mut doc = fixture_document(&["before"]);
+    let body = doc.stories().unwrap()[0].clone();
+    doc.add_picture_with_options(
+        &body,
+        &pixel_png(),
+        "../../evil.png",
+        rdocx::PictureOptions {
+            width: rdocx::Length::emu(914400),
+            height: rdocx::Length::emu(457200),
+            crop: None,
+            anchor: None,
+            name: None,
+            description: None,
+            title: None,
+            decorative: false,
+        },
+    )
+    .unwrap();
+    doc.save(&input).unwrap();
+    let result = cli(&[
+        "images",
+        "extract",
+        path_text(&input),
+        path_text(&dir),
+        "--json",
+    ]);
+    assert_success(&result, "extract owners");
+    let json = json_stdout(&result);
+    assert_eq!(json["extracted_parts"], 1);
+    assert_eq!(json["pictures"][0]["file"], "image-000001.png");
+    assert_eq!(fs::read(dir.join("image-000001.png")).unwrap(), pixel_png());
+    let again = cli(&["images", "extract", path_text(&input), path_text(&dir)]);
+    assert!(!again.status.success());
+    assert_eq!(fs::read(dir.join("image-000001.png")).unwrap(), pixel_png());
+    let empty = temp.path.join("empty.docx");
+    write_document(&empty, &["no image"]);
+    let absent = temp.path.join("absent");
+    let result = cli(&[
+        "images",
+        "extract",
+        path_text(&empty),
+        path_text(&absent),
+        "--json",
+    ]);
+    assert_success(&result, "empty extraction");
+    assert!(!absent.exists());
+}
+
+#[test]
+fn fx204_shared_media_and_external_images_retain_physical_owner_identity() {
+    let temp = TempWorkspace::new("shared-external");
+    let input = temp.path.join("in.docx");
+    let output = temp.path.join("images");
+    let mut doc = fixture_document(&["body"]);
+    doc.try_set_header("header").unwrap();
+    for kind in [rdocx::StoryKind::Body, rdocx::StoryKind::Header] {
+        let story = doc
+            .stories()
+            .unwrap()
+            .into_iter()
+            .find(|s| s.kind() == kind)
+            .unwrap();
+        doc.add_picture_with_options(
+            &story,
+            &pixel_png(),
+            "picture.png",
+            rdocx::PictureOptions {
+                width: rdocx::Length::emu(914400),
+                height: rdocx::Length::emu(457200),
+                crop: None,
+                anchor: None,
+                name: None,
+                description: None,
+                title: None,
+                decorative: false,
+            },
+        )
+        .unwrap();
+    }
+    doc.save(&input).unwrap();
+    let pictures = doc.pictures().unwrap();
+    assert_eq!(pictures.len(), 2);
+    let body = pictures
+        .iter()
+        .find(|p| p.location.story().kind() == rdocx::StoryKind::Body)
+        .unwrap();
+    let header = pictures
+        .iter()
+        .find(|p| p.location.story().kind() == rdocx::StoryKind::Header)
+        .unwrap();
+    let media = body.media_part_name.clone().unwrap();
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(fs::read(&input).unwrap())).unwrap();
+    package
+        .get_or_create_part_rels(header.location.story().part_name())
+        .items
+        .iter_mut()
+        .find(|r| r.id == header.relationship_id)
+        .unwrap()
+        .target = media.to_ascii_uppercase();
+    package.save(&input).unwrap();
+    let before = fs::read(&input).unwrap();
+    let result = cli(&[
+        "images",
+        "extract",
+        path_text(&input),
+        path_text(&output),
+        "--json",
+    ]);
+    assert_success(&result, "shared image owners");
+    let report = json_stdout(&result);
+    assert_eq!(report["extracted_parts"], 1);
+    assert_eq!(report["pictures"].as_array().unwrap().len(), 2);
+    assert_eq!(report["pictures"][0]["file"], report["pictures"][1]["file"]);
+    assert_ne!(
+        report["pictures"][0]["story"]["part_name"],
+        report["pictures"][1]["story"]["part_name"]
+    );
+    assert_eq!(fs::read(&input).unwrap(), before);
+    let external = temp.path.join("external.docx");
+    let xml = String::from_utf8(
+        package
+            .get_part(body.location.story().part_name())
+            .unwrap()
+            .to_vec(),
+    )
+    .unwrap()
+    .replace(
+        &format!("r:embed=\"{}\"", body.relationship_id),
+        &format!("r:link=\"{}\"", body.relationship_id),
+    );
+    package.set_part(body.location.story().part_name(), xml.into_bytes());
+    let relationship = package
+        .get_or_create_part_rels(body.location.story().part_name())
+        .items
+        .iter_mut()
+        .find(|r| r.id == body.relationship_id)
+        .unwrap();
+    relationship.target = "https://example.invalid/never-fetched.png".into();
+    relationship.target_mode = Some("External".into());
+    package.save(&external).unwrap();
+    let external_dir = temp.path.join("external-images");
+    let result = cli(&[
+        "images",
+        "extract",
+        path_text(&external),
+        path_text(&external_dir),
+        "--json",
+    ]);
+    assert_success(&result, "external image inventory");
+    let report = json_stdout(&result);
+    assert_eq!(report["pictures"][0]["status"], "external");
+    assert!(report["pictures"][0]["file"].is_null());
+    assert_eq!(
+        report["pictures"][0]["url"],
+        "https://example.invalid/never-fetched.png"
+    );
+    assert_eq!(report["extracted_parts"], 1);
+    let mut reopened = Document::open(&external).unwrap();
+    let linked = reopened
+        .pictures()
+        .unwrap()
+        .into_iter()
+        .find(|p| p.external_url.is_some())
+        .unwrap();
+    let before = reopened.to_bytes().unwrap();
+    assert!(
+        reopened
+            .set_picture_size_at(&linked, rdocx::Length::emu(2), rdocx::Length::emu(2))
+            .is_err()
+    );
+    assert_eq!(reopened.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn fx204_empty_maps_and_hostile_maps_preserve_input_and_outputs() {
+    let temp = TempWorkspace::new("map-refusals");
+    let input = temp.path.join("in.docx");
+    let output = temp.path.join("out.docx");
+    let map = temp.path.join("map.json");
+    write_document(&input, &["A"]);
+    let before = fs::read(&input).unwrap();
+    fs::write(&map, "[]").unwrap();
+    let result = cli(&[
+        "replace",
+        path_text(&input),
+        "--map",
+        path_text(&map),
+        "-o",
+        path_text(&output),
+        "--json",
+    ]);
+    assert_success(&result, "empty map");
+    assert_eq!(json_stdout(&result)["pairs"], json!([]));
+    assert_eq!(
+        Document::open(&output)
+            .unwrap()
+            .paragraph(0)
+            .unwrap()
+            .text(),
+        "A"
+    );
+    fs::remove_file(&output).unwrap();
+    for value in [
+        r#"[{"placeholder":"A","value":"B","expect":true}]"#,
+        r#"[{"placeholder":"A","value":"B","unknown":0}]"#,
+        r#"[{"placeholder":"A","value":"B"},{"placeholder":"B","value":"\u0000"}]"#,
+    ] {
+        fs::write(&map, value).unwrap();
+        let result = cli(&[
+            "replace",
+            path_text(&input),
+            "--map",
+            path_text(&map),
+            "-o",
+            path_text(&output),
+            "--json",
+        ]);
+        assert!(!result.status.success());
+        assert!(result.stdout.is_empty());
+        assert!(!output.exists());
+        assert_eq!(fs::read(&input).unwrap(), before);
+    }
+}
+
+#[test]
+fn every_new_command_has_help_and_reference_contract() {
+    for args in [
+        &["replace", "--help"][..],
+        &["fields", "update", "--help"],
+        &["images", "extract", "--help"],
+        &["meta", "set", "--help"],
+        &["fill", "--help"],
+    ] {
+        let result = cli(args);
+        assert_success(&result, "command help");
+        assert!(!result.stdout.is_empty());
+    }
+    let replace = cli(&["replace", "--help"]);
+    let help = String::from_utf8(replace.stdout).unwrap();
+    for flag in ["--map", "--regex", "--expect", "--json"] {
+        assert!(help.contains(flag));
+    }
+    let image_help = cli(&["images", "extract", "--help"]);
+    assert!(
+        !String::from_utf8(image_help.stdout)
+            .unwrap()
+            .contains("--force")
+    );
+}
+
+#[test]
+fn new_mutations_reject_input_aliases_and_output_collisions() {
+    let temp = TempWorkspace::new("new-output-refusal");
+    let input = temp.path.join("in.docx");
+    let output = temp.path.join("out.docx");
+    write_document(&input, &["A"]);
+    let before = fs::read(&input).unwrap();
+    let alias = temp.path.join("hardlink.docx");
+    fs::hard_link(&input, &alias).unwrap();
+    for path in [&input, &alias] {
+        for args in [
+            vec![
+                "replace",
+                path_text(&input),
+                "-p",
+                "A",
+                "-v",
+                "B",
+                "-o",
+                path_text(path),
+            ],
+            vec!["fields", "update", path_text(&input), "-o", path_text(path)],
+            vec![
+                "meta",
+                "set",
+                path_text(&input),
+                "--title",
+                "B",
+                "-o",
+                path_text(path),
+            ],
+        ] {
+            let result = cli(&args);
+            assert!(!result.status.success());
+            assert_eq!(fs::read(&input).unwrap(), before);
+        }
+    }
+    fs::write(&output, b"keep").unwrap();
+    let result = cli(&[
+        "meta",
+        "set",
+        path_text(&input),
+        "--title",
+        "B",
+        "-o",
+        path_text(&output),
+    ]);
+    assert!(!result.status.success());
+    assert_eq!(fs::read(output).unwrap(), b"keep");
 }

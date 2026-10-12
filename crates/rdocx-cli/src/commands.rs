@@ -16,9 +16,10 @@ use quick_xml::events::{BytesStart, Event};
 use quick_xml::name::{Namespace, ResolveResult};
 use quick_xml::reader::NsReader;
 use rdocx::{
-    BodyItemRef, ComparisonGranularity, ComparisonOptions, ComparisonStoryKind, Document,
-    HdrFtrType, HeaderFooterKind, RasterFormat, RasterOptions, RasterOutput, RevisionKind,
-    RevisionView, RunRange, StoryId, StoryItemKind, StoryKind,
+    BodyItemRef, ComparisonGranularity, ComparisonOptions, ComparisonStoryKind, CoreProperties,
+    CustomProperty, CustomPropertyValue, Document, FieldDateTime, FieldEvaluationContext,
+    HdrFtrType, HeaderFooterKind, PictureOccurrence, RasterFormat, RasterOptions, RasterOutput,
+    RevisionKind, RevisionView, RunRange, StoryId, StoryItemKind, StoryKind,
 };
 use rdocx_oxml::content_control::{CT_Sdt, SdtContent};
 use rdocx_oxml::document::{BodyContent, CT_Document};
@@ -91,6 +92,18 @@ pub fn inspect(file: &Path, json: bool) -> Result<()> {
         writeln!(stdout, "Paragraphs: {paragraph_count}")?;
         writeln!(stdout, "Tables: {table_count}")?;
         writeln!(stdout, "Content elements: {content_count}")?;
+        writeln!(stdout, "Words (accepted main body): {}", doc.word_count())?;
+        writeln!(
+            stdout,
+            "Characters (including spaces): {}",
+            doc.character_count(true)
+        )?;
+        writeln!(
+            stdout,
+            "Pages (deterministic layout): {}",
+            doc.layout_deterministic()?.layout.pages.len()
+        )?;
+        writeln!(stdout, "Pictures: {}", doc.pictures()?.len())?;
         writeln!(stdout)?;
         writeln!(stdout, "Metadata:")?;
         if let Some(t) = &title {
@@ -123,6 +136,8 @@ pub fn inspect(file: &Path, json: bool) -> Result<()> {
 }
 
 fn inspect_json(file: &Path, doc: &Document, style_ids: Vec<String>) -> Result<Value> {
+    let layout = doc.layout_deterministic()?;
+    let pictures = doc.pictures()?;
     Ok(json_envelope(json!({
         "file": file.display().to_string(),
         "paragraphs": doc.paragraph_count(),
@@ -135,6 +150,10 @@ fn inspect_json(file: &Path, doc: &Document, style_ids: Vec<String>) -> Result<V
             "keywords": doc.keywords(),
         },
         "styles_used": style_ids,
+        "word_count":doc.word_count(),"character_count":doc.character_count(true),"page_count":layout.layout.pages.len(),
+        "count_scope":"accepted-main-body","character_include_spaces":true,"page_count_source":"deterministic-layout",
+        "diagnostics":layout.layout.diagnostics.iter().map(|d|d.message.clone()).collect::<Vec<_>>(),
+        "pictures":pictures.iter().map(|p|picture_json(p,None)).collect::<Vec<_>>(),
     }))?)
 }
 
@@ -1960,30 +1979,76 @@ fn print_json(payload: Value) -> Result<()> {
     Ok(())
 }
 
-/// Replace a placeholder in a DOCX file and save to output.
+pub struct ReplaceInput<'a> {
+    pub pair: Option<(String, String)>,
+    pub map: Option<&'a Path>,
+    pub expect: Option<usize>,
+    pub regex: bool,
+}
+
+/// Replace one pair or an ordered map through the shared checked transaction.
 pub fn replace(
     file: &Path,
-    placeholder: &str,
-    value: &str,
-    expect: Option<usize>,
+    input: ReplaceInput<'_>,
     output: &Path,
+    json_output: bool,
 ) -> Result<()> {
+    ensure_output_paths_allowed(&[output.to_path_buf()], file, false)?;
+    ensure_output_paths_available(&[output.to_path_buf()])?;
+    let pairs = if let Some(map) = input.map {
+        oxml_cli_support::parse_replacement_map(&std::fs::read_to_string(map)?)?
+    } else {
+        let (placeholder, value) = input.pair.ok_or("replace requires a pair or --map")?;
+        vec![oxml_cli_support::ReplacementPair {
+            placeholder,
+            value,
+            expect: input.expect,
+        }]
+    };
+    let borrowed = pairs
+        .iter()
+        .map(|pair| (pair.placeholder.as_str(), pair.value.as_str(), pair.expect))
+        .collect::<Vec<_>>();
     let mut doc = Document::open(file)?;
-    let count = doc.try_replace_text(placeholder, value)?;
-    if let Some(expected) = expect
-        && count != expected
-    {
-        return Err(format!(
-            "expected {expected} replacement(s) of \"{placeholder}\", found {count}"
-        )
-        .into());
+    let counts = if input.regex {
+        doc.try_replace_all_regex_expected(&borrowed)?
+    } else {
+        doc.try_replace_all_expected(&borrowed)?
     }
+    .map_err(|mismatch| {
+        format!(
+            "pair {}: expected {} replacement(s) of {:?}, found {}",
+            mismatch.index, mismatch.expected, mismatch.placeholder, mismatch.found
+        )
+    })?;
+    let total = counts
+        .iter()
+        .try_fold(0usize, |sum, count| sum.checked_add(*count))
+        .ok_or("replacement total overflow")?;
     publish_document(&mut doc, output)?;
+    if json_output {
+        return print_json(
+            json!({"operation":"replace","mode":if input.regex {"regex"} else {"literal"},
+            "pairs":pairs.iter().zip(&counts).enumerate().map(|(index,(pair,count))|json!({"index":index,"placeholder":pair.placeholder,"value":pair.value,"count":count,"expected":pair.expect})).collect::<Vec<_>>(),
+            "total_count":total,"output":output.display().to_string()}),
+        );
+    }
     let mut stdout = io::stdout().lock();
-    writeln!(
-        stdout,
-        "Replaced {count} occurrence(s) of \"{placeholder}\" -> \"{value}\""
-    )?;
+    for (pair, count) in pairs.iter().zip(counts) {
+        if input.regex {
+            writeln!(
+                stdout,
+                "Replaced {count} occurrence(s) of pattern {:?} -> {:?}",
+                pair.placeholder, pair.value
+            )?;
+        } else {
+            writeln!(
+                stdout,
+                "Replaced {count} occurrence(s) of \"{}\" -> \"{}\"",
+                pair.placeholder, pair.value
+            )?;
+        }
+    }
     writeln!(stdout, "Written to {}", output.display())?;
     Ok(())
 }
@@ -2348,6 +2413,570 @@ fn word_value(
     Ok(None)
 }
 
+/// Parse a `NAME=VALUE` assignment, splitting at the first `=`.
+pub fn parse_assignment(text: &str) -> std::result::Result<(String, String), String> {
+    match text.split_once('=') {
+        Some((name, value)) if !name.is_empty() => Ok((name.to_owned(), value.to_owned())),
+        _ => Err(format!("expected NAME=VALUE, found {text:?}")),
+    }
+}
+
+/// A date and time read from the command line, with the offset from UTC in
+/// minutes that it names, if any.
+struct ParsedDateTime {
+    value: FieldDateTime,
+    offset_minutes: Option<i32>,
+}
+
+/// Parse `YYYY-MM-DD`, optionally followed by `THH:MM`, `THH:MM:SS` or
+/// `THH:MM:SS.fff`, and by `Z` or an offset such as `+02:00` or `-0500`.
+fn parse_date_time(text: &str) -> std::result::Result<ParsedDateTime, String> {
+    let invalid = || {
+        format!(
+            "expected a date such as 2026-10-10, 2026-10-10T08:30:00, \
+             2026-10-10T08:30:00Z or 2026-10-10T08:30:00+02:00, found {text:?}"
+        )
+    };
+    let digits = |part: &str, count: usize| {
+        (part.len() == count && part.bytes().all(|byte| byte.is_ascii_digit()))
+            .then(|| part.parse::<u32>().ok())
+            .flatten()
+    };
+    let (rest, offset_minutes) = if let Some(rest) = text.strip_suffix('Z') {
+        (rest, Some(0))
+    } else {
+        // An offset follows the date, or the time when there is one.
+        let search_from = text.find('T').unwrap_or(text.len().min(10));
+        if !text.is_char_boundary(search_from) {
+            return Err(invalid());
+        }
+        match text[search_from..].rfind(['+', '-']) {
+            Some(position) => {
+                let (rest, offset) = text.split_at(search_from + position);
+                let sign = if offset.starts_with('-') { -1 } else { 1 };
+                let offset = offset[1..].replace(':', "");
+                let (hours, minutes) = (
+                    digits(offset.get(0..2).unwrap_or_default(), 2),
+                    digits(offset.get(2..).unwrap_or_default(), 2),
+                );
+                let (Some(hours), Some(minutes)) = (hours, minutes) else {
+                    return Err(invalid());
+                };
+                if hours > 23 || minutes > 59 {
+                    return Err(invalid());
+                }
+                (rest, Some(sign * (hours * 60 + minutes) as i32))
+            }
+            None => (text, None),
+        }
+    };
+    let (date, time) = rest.split_once('T').unwrap_or((rest, "00:00:00"));
+    let time = time.split_once('.').map_or(time, |(whole, fraction)| {
+        if fraction.bytes().all(|byte| byte.is_ascii_digit()) && !fraction.is_empty() {
+            whole
+        } else {
+            ""
+        }
+    });
+    let date = date.split('-').collect::<Vec<_>>();
+    let time = time.split(':').collect::<Vec<_>>();
+    let [year, month, day] = date.as_slice() else {
+        return Err(invalid());
+    };
+    let (hour, minute, second) = match time.as_slice() {
+        [hour, minute] => (*hour, *minute, "00"),
+        [hour, minute, second] => (*hour, *minute, *second),
+        _ => return Err(invalid()),
+    };
+    let year = digits(year, 4).ok_or_else(invalid)?;
+    let month = digits(month, 2).filter(|month| (1..=12).contains(month));
+    let month = month.ok_or_else(invalid)? as u8;
+    let day = digits(day, 2).ok_or_else(invalid)? as u8;
+    let year = i32::try_from(year).map_err(|_| invalid())?;
+    if year == 0 {
+        return Err(invalid());
+    }
+    if day == 0 || day > days_in_month(year, month) {
+        return Err(invalid());
+    }
+    let hour = digits(hour, 2)
+        .filter(|hour| *hour < 24)
+        .ok_or_else(invalid)?;
+    let minute = digits(minute, 2).filter(|minute| *minute < 60);
+    let second = digits(second, 2).filter(|second| *second < 60);
+    Ok(ParsedDateTime {
+        value: FieldDateTime {
+            year,
+            month,
+            day,
+            hour: hour as u8,
+            minute: minute.ok_or_else(invalid)? as u8,
+            second: second.ok_or_else(invalid)? as u8,
+        },
+        offset_minutes,
+    })
+}
+
+/// Parse the wall-clock `--now` of a DATE or TIME field, which names no
+/// time zone.
+pub fn parse_field_date_time(text: &str) -> std::result::Result<FieldDateTime, String> {
+    let bytes = text.as_bytes();
+    if bytes.len() != 19
+        || !bytes.iter().enumerate().all(|(index, byte)| match index {
+            4 | 7 => *byte == b'-',
+            10 => *byte == b'T',
+            13 | 16 => *byte == b':',
+            _ => byte.is_ascii_digit(),
+        })
+    {
+        return Err(format!(
+            "--now requires YYYY-MM-DDTHH:MM:SS civil time without fractions or offsets, found {text:?}"
+        ));
+    }
+    let parsed = parse_date_time(text)?;
+    if parsed.offset_minutes.is_some() {
+        return Err(format!(
+            "--now is the wall-clock time the fields show, give it without Z or an offset, \
+             found {text:?}"
+        ));
+    }
+    Ok(parsed.value)
+}
+
+fn days_in_month(year: i32, month: u8) -> u8 {
+    match month {
+        4 | 6 | 9 | 11 => 30,
+        2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+        2 => 28,
+        _ => 31,
+    }
+}
+
+/// Update supported caches through one native outer transaction.
+pub fn fields_update(
+    file: &Path,
+    now: Option<FieldDateTime>,
+    output: &Path,
+    json_output: bool,
+) -> Result<()> {
+    ensure_output_paths_allowed(&[output.to_path_buf()], file, false)?;
+    ensure_output_paths_available(&[output.to_path_buf()])?;
+    let source_path = std::fs::canonicalize(file)?;
+    let file_name = source_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("field input filename must be valid Unicode")?
+        .to_owned();
+    let file_path = source_path
+        .to_str()
+        .ok_or("field input path must be valid Unicode")?
+        .to_owned();
+    let mut doc = Document::open(file)?;
+    let report = doc.update_all_fields(&FieldEvaluationContext {
+        now,
+        file_name: Some(file_name),
+        file_path: Some(file_path),
+        ..Default::default()
+    })?;
+    publish_document(&mut doc, output)?;
+    mutation_record(
+        json_output,
+        "all-supported-stories",
+        "update",
+        json!({"ordinary_fields":report.ordinary_updated,"ordinary_updated":report.ordinary_updated,
+        "now":now.map(|n| format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",n.year,n.month,n.day,n.hour,n.minute,n.second)),
+        "page_fields":report.layout.page_fields,"num_pages_fields":report.layout.num_pages_fields,"page_reference_fields":report.layout.page_reference_fields,
+        "section_fields":report.layout.section_fields,"section_pages_fields":report.layout.section_pages_fields,
+        "layout":{"page_fields":report.layout.page_fields,"num_pages_fields":report.layout.num_pages_fields,
+            "page_reference_fields":report.layout.page_reference_fields,"section_fields":report.layout.section_fields,
+            "section_pages_fields":report.layout.section_pages_fields,"diagnostics":report.layout.diagnostics},
+        "evaluations":report.evaluations.iter().map(rdocx::FieldEvaluation::to_json_value).collect::<Vec<_>>(),
+        "diagnostics":report.diagnostics,"total_updated":report.total_updated,"saved_cache_scope":report.saved_cache_scope}),
+        output,
+    )
+}
+
+pub fn fill(
+    file: &Path,
+    pairs: &[(String, String)],
+    output: &Path,
+    json_output: bool,
+) -> Result<()> {
+    ensure_output_paths_allowed(&[output.to_path_buf()], file, false)?;
+    ensure_output_paths_available(&[output.to_path_buf()])?;
+    if pairs.is_empty() {
+        return Err("fill requires at least one --tag".into());
+    }
+    let borrowed = pairs
+        .iter()
+        .map(|(tag, value)| (tag.as_str(), value.as_str()))
+        .collect::<Vec<_>>();
+    let mut doc = Document::open(file)?;
+    let counts = doc.fill_content_control_tags(&borrowed)?;
+    publish_document(&mut doc, output)?;
+    mutation_record(
+        json_output,
+        "accepted-main-body",
+        "fill",
+        json!({"tags":pairs.iter().zip(counts).map(|((tag,value),count)|json!({"tag":tag,"value":value,"count":count})).collect::<Vec<_>>()}),
+        output,
+    )
+}
+
+fn core_properties_json(core: Option<&CoreProperties>) -> Value {
+    let field = |value: fn(&CoreProperties) -> &Option<String>| {
+        core.and_then(|core| value(core).as_deref())
+    };
+    json!({
+        "title": field(|core| &core.title),
+        "author": field(|core| &core.creator),
+        "subject": field(|core| &core.subject),
+        "keywords": field(|core| &core.keywords),
+        "description": field(|core| &core.description),
+        "category": field(|core| &core.category),
+        "last_modified_by": field(|core| &core.last_modified_by),
+        "created": field(|core| &core.created),
+        "modified": field(|core| &core.modified),
+        "content_status": field(|core| &core.content_status),
+        "identifier": field(|core| &core.identifier),
+        "language": field(|core| &core.language),
+        "last_printed": field(|core| &core.last_printed),
+        "revision": field(|core| &core.revision),
+        "version": field(|core| &core.version),
+    })
+}
+
+fn custom_property_json(property: &CustomProperty) -> Value {
+    let (kind, value) = match &property.value {
+        CustomPropertyValue::Lpstr(text) => ("lpstr", json!(text)),
+        CustomPropertyValue::Lpwstr(text) => ("lpwstr", json!(text)),
+        CustomPropertyValue::I4(value) => ("integer", json!(value)),
+        CustomPropertyValue::R8(value) => ("number", json!(value)),
+        CustomPropertyValue::Bool(value) => ("boolean", json!(value)),
+        CustomPropertyValue::FileTime(value) => ("date", json!(value)),
+        CustomPropertyValue::Empty => ("empty", Value::Null),
+        CustomPropertyValue::Raw(_) => ("other", Value::Null),
+    };
+    json!({ "name": property.name, "type": kind, "value": value, "pid": property.pid, "fmtid":property.fmtid, "raw_xml":match &property.value { CustomPropertyValue::Raw(raw)=>Some(raw), _=>None } })
+}
+
+/// Print the core and custom properties.
+pub fn meta_get(file: &Path, json_output: bool) -> Result<()> {
+    let doc = Document::open(file)?;
+    let core = core_properties_json(doc.core_properties());
+    let custom = doc
+        .custom_properties()
+        .iter()
+        .map(custom_property_json)
+        .collect::<Vec<_>>();
+    if json_output {
+        return print_json(json!({ "core": core, "custom": custom }));
+    }
+    let mut stdout = io::stdout().lock();
+    if let Value::Object(fields) = &core {
+        for (name, value) in fields {
+            if let Some(value) = value.as_str() {
+                writeln!(stdout, "{name}: {value}")?;
+            }
+        }
+    }
+    for property in &custom {
+        writeln!(
+            stdout,
+            "custom {} ({}): {}",
+            property["name"].as_str().unwrap_or_default(),
+            property["type"].as_str().unwrap_or_default(),
+            match &property["value"] {
+                Value::String(text) => text.clone(),
+                Value::Null => String::new(),
+                other => other.to_string(),
+            }
+        )?;
+    }
+    Ok(())
+}
+
+/// The property changes of one `meta set` command.
+pub struct MetaChanges {
+    pub title: Option<String>,
+    pub author: Option<String>,
+    pub subject: Option<String>,
+    pub keywords: Option<String>,
+    pub description: Option<String>,
+    pub category: Option<String>,
+    pub custom: Vec<(String, String)>,
+    pub remove_custom: Vec<String>,
+}
+
+pub fn meta_set(
+    file: &Path,
+    changes: &MetaChanges,
+    output: &Path,
+    json_output: bool,
+) -> Result<()> {
+    ensure_output_paths_allowed(&[output.to_path_buf()], file, false)?;
+    ensure_output_paths_available(&[output.to_path_buf()])?;
+    let values = [
+        &changes.title,
+        &changes.author,
+        &changes.subject,
+        &changes.keywords,
+        &changes.description,
+        &changes.category,
+    ];
+    if values.iter().all(|v| v.is_none())
+        && changes.custom.is_empty()
+        && changes.remove_custom.is_empty()
+    {
+        return Err("meta set requires an assignment".into());
+    }
+    let mut named = std::collections::HashSet::new();
+    for name in changes
+        .custom
+        .iter()
+        .map(|(name, _)| name)
+        .chain(&changes.remove_custom)
+    {
+        if !named.insert(name) {
+            return Err(format!("custom property {name:?} is named twice").into());
+        }
+    }
+    let parsed = changes
+        .custom
+        .iter()
+        .map(|(name, text)| Ok((name, parse_custom_value(text)?)))
+        .collect::<Result<Vec<_>>>()?;
+    let mut doc = Document::open(file)?;
+    if values.iter().any(|v| v.is_some()) {
+        let mut core = doc.core_properties().cloned().unwrap_or_default();
+        let slots = [
+            &mut core.title,
+            &mut core.creator,
+            &mut core.subject,
+            &mut core.keywords,
+            &mut core.description,
+            &mut core.category,
+        ];
+        for (value, slot) in values.into_iter().zip(slots) {
+            if let Some(value) = value {
+                *slot = (!value.is_empty()).then(|| value.clone());
+            }
+        }
+        doc.set_core_properties(core)?;
+    }
+    for (name, mut value) in parsed {
+        let existing = doc.custom_property(name);
+        let (pid, fmtid) = if let Some(property) = existing {
+            if matches!(property.value, CustomPropertyValue::Lpstr(_))
+                && let CustomPropertyValue::Lpwstr(text) = value
+            {
+                value = CustomPropertyValue::Lpstr(text);
+            }
+            (property.pid, property.fmtid.clone())
+        } else {
+            let pid = doc
+                .custom_properties()
+                .iter()
+                .map(|p| p.pid)
+                .max()
+                .unwrap_or(1)
+                .max(1)
+                .checked_add(1)
+                .ok_or("custom property PID overflow")?;
+            (pid, "{D5CDD505-2E9C-101B-9397-08002B2CF9AE}".to_owned())
+        };
+        doc.set_custom_property(CustomProperty {
+            pid,
+            fmtid,
+            name: Some(name.clone()),
+            value,
+        })?;
+    }
+    for name in &changes.remove_custom {
+        doc.remove_custom_property(name)?;
+    }
+    publish_document(&mut doc, output)?;
+    mutation_record(
+        json_output,
+        "document",
+        "set",
+        json!({"core":core_properties_json(doc.core_properties()),"custom":doc.custom_properties().iter().map(custom_property_json).collect::<Vec<_>>()}),
+        output,
+    )
+}
+
+fn parse_custom_value(text: &str) -> Result<CustomPropertyValue> {
+    let (kind, value) = text
+        .split_once(':')
+        .ok_or("custom value requires TYPE:VALUE")?;
+    Ok(match kind {
+        "str" => CustomPropertyValue::Lpwstr(value.to_owned()),
+        "int" => CustomPropertyValue::I4(value.parse()?),
+        "float" => {
+            let number = value.parse::<f64>()?;
+            if !number.is_finite() {
+                return Err("custom float must be finite".into());
+            }
+            CustomPropertyValue::R8(number)
+        }
+        "bool" => CustomPropertyValue::Bool(match value {
+            "true" => true,
+            "false" => false,
+            _ => return Err("custom bool requires true or false".into()),
+        }),
+        "filetime" if valid_custom_filetime(value) => {
+            CustomPropertyValue::FileTime(value.to_owned())
+        }
+        "empty" if value.is_empty() => CustomPropertyValue::Empty,
+        _ => return Err(format!("invalid custom property type or value {kind:?}").into()),
+    })
+}
+
+fn valid_custom_filetime(value: &str) -> bool {
+    let b = value.as_bytes();
+    if b.len() < 20
+        || !b.is_ascii()
+        || b[4] != b'-'
+        || b[7] != b'-'
+        || b[10] != b'T'
+        || b[13] != b':'
+        || b[16] != b':'
+    {
+        return false;
+    }
+    let number = |start: usize, end: usize| -> Option<u32> {
+        b[start..end]
+            .iter()
+            .all(u8::is_ascii_digit)
+            .then(|| value[start..end].parse().ok())
+            .flatten()
+    };
+    let (Some(year), Some(month), Some(day), Some(hour), Some(minute), Some(second)) = (
+        number(0, 4),
+        number(5, 7),
+        number(8, 10),
+        number(11, 13),
+        number(14, 16),
+        number(17, 19),
+    ) else {
+        return false;
+    };
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if leap {
+                29
+            } else {
+                28
+            }
+        }
+        _ => return false,
+    };
+    if year == 0 || day == 0 || day > days || hour > 23 || minute > 59 || second > 59 {
+        return false;
+    }
+    let mut at = 19;
+    if b.get(at) == Some(&b'.') {
+        at += 1;
+        let start = at;
+        while b.get(at).is_some_and(u8::is_ascii_digit) {
+            at += 1;
+        }
+        if at == start {
+            return false;
+        }
+    }
+    if b.get(at) == Some(&b'Z') {
+        return at + 1 == b.len();
+    }
+    if !matches!(b.get(at), Some(b'+') | Some(b'-')) || at + 6 != b.len() || b[at + 3] != b':' {
+        return false;
+    }
+    number(at + 1, at + 3).is_some_and(|n| n <= 23)
+        && number(at + 4, at + 6).is_some_and(|n| n <= 59)
+}
+
+fn picture_json(picture: &PictureOccurrence, file: Option<&str>) -> Value {
+    json!({"story":story_json(picture.location.story()),"index_path":picture.location.index_path(),
+        "ordinal":picture.ordinal,"relationship_id":picture.relationship_id,"media_part_name":picture.media_part_name,
+        "content_type":picture.content_type,"width_emu":picture.width,"height_emu":picture.height,"description":picture.description,
+        "title":picture.title,"name":picture.name,"decorative":picture.decorative,"anchored":picture.anchored,
+        "status":if picture.external_url.is_some(){"external"}else{"internal"},"url":picture.external_url,"file":file})
+}
+
+/// Extract each internal media part once using generated safe names and rollback-capable publication.
+pub fn images_extract(file: &Path, dir: &Path, json_output: bool) -> Result<()> {
+    let doc = Document::open(file)?;
+    let pictures = doc.pictures()?;
+    let mut outputs = Vec::new();
+    let mut names = HashMap::new();
+    let mut listing = Vec::new();
+    for picture in &pictures {
+        let name = if let Some(part) = &picture.media_part_name {
+            if !names.contains_key(part) {
+                let ext = match picture.content_type.as_str() {
+                    "image/png" => "png",
+                    "image/jpeg" => "jpg",
+                    "image/gif" => "gif",
+                    "image/tiff" => "tiff",
+                    "image/bmp" => "bmp",
+                    "image/svg+xml" => "svg",
+                    "image/x-emf" => "emf",
+                    "image/x-wmf" => "wmf",
+                    _ => "bin",
+                };
+                let name = format!("image-{:06}.{ext}", names.len() + 1);
+                outputs.push((dir.join(&name), picture.bytes.clone()));
+                names.insert(part.clone(), name);
+            }
+            names.get(part).map(String::as_str)
+        } else {
+            None
+        };
+        listing.push(picture_json(picture, name));
+    }
+    let destinations = outputs
+        .iter()
+        .map(|(path, _)| path.clone())
+        .collect::<Vec<_>>();
+    ensure_output_paths_allowed(&destinations, file, false)?;
+    ensure_output_paths_available(&destinations)?;
+    let existed = match std::fs::symlink_metadata(dir) {
+        Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => {
+            return Err("image destination must be a real directory".into());
+        }
+        Ok(_) => true,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error.into()),
+    };
+    if !outputs.is_empty() {
+        if !existed {
+            std::fs::create_dir(dir)?;
+        }
+        if let Err(error) = stage_and_publish(&outputs, false) {
+            if !existed {
+                let _ = std::fs::remove_dir(dir);
+            }
+            return Err(error);
+        }
+    }
+    if json_output {
+        print_json(
+            json!({"operation":"images-extract","pictures":listing,"extracted_parts":outputs.len(),"directory":dir.display().to_string()}),
+        )
+    } else {
+        writeln!(
+            io::stdout(),
+            "Extracted {} media part(s), {} picture occurrence(s)",
+            outputs.len(),
+            pictures.len()
+        )?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2410,6 +3039,14 @@ mod tests {
                     "keywords": document.keywords(),
                 },
                 "styles_used": styles,
+                "word_count": 0,
+                "character_count": 0,
+                "page_count": 1,
+                "count_scope": "accepted-main-body",
+                "character_include_spaces": true,
+                "page_count_source": "deterministic-layout",
+                "diagnostics": [],
+                "pictures": [],
             })
         );
     }

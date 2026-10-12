@@ -2516,3 +2516,559 @@ fn fx208_footer_cli_safe_publication_and_inspection() {
     assert!(!invalid.status.success());
     assert_eq!(std::fs::read(&input).unwrap(), before);
 }
+
+#[test]
+fn powerpoint_replace_map_is_ordered_and_includes_notes() {
+    let temp = TempWorkspace::new("fx204-base-map");
+    let input = temp.path.join("input.pptx");
+    let output = temp.path.join("output.pptx");
+    let map = temp.path.join("map.json");
+    write_deck(&input, &["A A"]);
+    add_speaker_notes(&input, "A");
+    fs::write(&map, r#"[{"placeholder":"A","value":"B","expect":3},{"placeholder":"B","value":"C","expect":3}]"#).unwrap();
+    let result = cli(&[
+        "replace",
+        input.to_str().unwrap(),
+        "--map",
+        map.to_str().unwrap(),
+        "--json",
+        "--output",
+        output.to_str().unwrap(),
+    ]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(report["pairs"][0]["count"], 3);
+    assert_eq!(report["pairs"][1]["count"], 3);
+    assert_eq!(
+        Presentation::open(&output)
+            .unwrap()
+            .slide(0)
+            .unwrap()
+            .text(),
+        "C C"
+    );
+    let reopened = Presentation::open(&output).unwrap();
+    assert_eq!(
+        reopened.slide(0).unwrap().notes_text().as_deref(),
+        Some("C")
+    );
+    assert!(
+        OpcPackage::open(&output).unwrap().parts["/ppt/notesSlides/notesSlide1.xml"]
+            .windows(b"urn:rdocx:test".len())
+            .any(|w| w == b"urn:rdocx:test")
+    );
+    let before = fs::read(&input).unwrap();
+    let rejected = temp.path.join("rejected.pptx");
+    fs::write(&map, r#"[{"placeholder":"A","value":"B","expect":3},{"placeholder":"B","value":"C","expect":4}]"#).unwrap();
+    let refused = cli(&[
+        "replace",
+        input.to_str().unwrap(),
+        "--map",
+        map.to_str().unwrap(),
+        "--output",
+        rejected.to_str().unwrap(),
+    ]);
+    assert!(!refused.status.success());
+    assert!(!rejected.exists());
+    assert_eq!(fs::read(&input).unwrap(), before);
+}
+
+#[test]
+fn slide_add_resolves_layout_and_insertion_atomically() {
+    let temp = TempWorkspace::new("fx204-add");
+    let input = temp.path.join("input.pptx");
+    write_deck(&input, &["first", "last"]);
+    let before = fs::read(&input).unwrap();
+    let layout_name = Presentation::open(&input)
+        .unwrap()
+        .layout_name(6)
+        .unwrap()
+        .to_owned();
+    for (n, layout) in [(1, "7"), (2, layout_name.as_str()), (3, "7")] {
+        let output = temp.path.join(format!("add-{n}.pptx"));
+        let result = cli(&[
+            "slide",
+            "add",
+            input.to_str().unwrap(),
+            "--layout",
+            layout,
+            "--at",
+            &n.to_string(),
+            "--json",
+            "--output",
+            output.to_str().unwrap(),
+        ]);
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(report["slide"], n);
+        let deck = Presentation::open(&output).unwrap();
+        assert_eq!(deck.len(), 3);
+        assert_eq!(deck.slide(n as usize - 1).unwrap().text(), "");
+    }
+    for layout in [
+        "0",
+        "999",
+        "blank",
+        "unknown",
+        "999999999999999999999999999999999999",
+    ] {
+        let output = temp.path.join("refused.pptx");
+        let result = cli(&[
+            "slide",
+            "add",
+            input.to_str().unwrap(),
+            "--layout",
+            layout,
+            "--output",
+            output.to_str().unwrap(),
+        ]);
+        assert!(!result.status.success());
+        assert!(!output.exists());
+    }
+    assert_eq!(fs::read(&input).unwrap(), before);
+}
+
+#[test]
+fn slide_duplicate_preserves_native_slide_and_notes_ownership() {
+    let temp = TempWorkspace::new("fx204-duplicate");
+    let input = temp.path.join("input.pptx");
+    let output = temp.path.join("output.pptx");
+    write_deck(&input, &["first", "last"]);
+    add_speaker_notes(&input, "speaker");
+    let result = cli(&[
+        "slide",
+        "duplicate",
+        input.to_str().unwrap(),
+        "1",
+        "--output",
+        output.to_str().unwrap(),
+    ]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let deck = Presentation::open(&output).unwrap();
+    assert_eq!(deck.len(), 3);
+    assert_eq!(deck.slide(0).unwrap().text(), "first");
+    assert_eq!(deck.slide(1).unwrap().text(), "first");
+    assert_eq!(deck.slide(2).unwrap().text(), "last");
+    assert_eq!(
+        deck.slide(0).unwrap().notes_text().as_deref(),
+        Some("speaker")
+    );
+    assert_eq!(
+        deck.slide(1).unwrap().notes_text().as_deref(),
+        Some("speaker")
+    );
+    let package = OpcPackage::open(&output).unwrap();
+    let notes = package
+        .parts
+        .iter()
+        .filter(|(name, _)| {
+            name.starts_with("/ppt/notesSlides/notesSlide") && name.ends_with(".xml")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(notes.len(), 2);
+    assert!(notes.iter().all(|(_, bytes)| {
+        bytes
+            .windows(b"urn:rdocx:test".len())
+            .any(|w| w == b"urn:rdocx:test")
+    }));
+}
+
+#[test]
+fn slide_remove_preserves_native_relationship_lifecycle() {
+    let temp = TempWorkspace::new("fx204-remove");
+    let input = temp.path.join("input.pptx");
+    let output = temp.path.join("output.pptx");
+    write_deck(&input, &["first", "last"]);
+    add_speaker_notes(&input, "speaker");
+    let result = cli(&[
+        "slide",
+        "remove",
+        input.to_str().unwrap(),
+        "1",
+        "--output",
+        output.to_str().unwrap(),
+    ]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let deck = Presentation::open(&output).unwrap();
+    assert_eq!(deck.len(), 1);
+    assert_eq!(deck.slide(0).unwrap().text(), "last");
+    assert!(
+        !OpcPackage::open(&output)
+            .unwrap()
+            .parts
+            .contains_key("/ppt/notesSlides/notesSlide1.xml")
+    );
+    let rejected = temp.path.join("rejected.pptx");
+    let result = cli(&[
+        "slide",
+        "remove",
+        input.to_str().unwrap(),
+        "0",
+        "--output",
+        rejected.to_str().unwrap(),
+    ]);
+    assert!(!result.status.success());
+    assert!(!rejected.exists());
+}
+
+#[test]
+fn slide_move_uses_one_based_cli_positions() {
+    let temp = TempWorkspace::new("fx204-move");
+    let input = temp.path.join("input.pptx");
+    write_deck(&input, &["first", "middle", "last"]);
+    for (from, to, texts) in [
+        (1, 3, ["middle", "last", "first"]),
+        (3, 1, ["last", "first", "middle"]),
+        (2, 2, ["first", "middle", "last"]),
+    ] {
+        let output = temp.path.join(format!("move-{from}-{to}.pptx"));
+        let result = cli(&[
+            "slide",
+            "move",
+            input.to_str().unwrap(),
+            &from.to_string(),
+            "--to",
+            &to.to_string(),
+            "--output",
+            output.to_str().unwrap(),
+        ]);
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let deck = Presentation::open(&output).unwrap();
+        for (i, text) in texts.iter().enumerate() {
+            assert_eq!(deck.slide(i).unwrap().text(), *text);
+        }
+    }
+    for (from, to) in [(0, 1), (1, 0), (4, 1), (1, 4)] {
+        let output = temp.path.join("refused.pptx");
+        let result = cli(&[
+            "slide",
+            "move",
+            input.to_str().unwrap(),
+            &from.to_string(),
+            "--to",
+            &to.to_string(),
+            "--output",
+            output.to_str().unwrap(),
+        ]);
+        assert!(!result.status.success());
+        assert!(!output.exists());
+    }
+}
+
+#[test]
+fn slide_hide_and_show_round_trip() {
+    let temp = TempWorkspace::new("fx204-hidden");
+    let mut input = temp.path.join("input.pptx");
+    write_deck(&input, &["text"]);
+    for (i, action, hidden) in [
+        (0, "hide", true),
+        (1, "hide", true),
+        (2, "show", false),
+        (3, "show", false),
+    ] {
+        let output = temp.path.join(format!("hidden-{i}.pptx"));
+        let result = cli(&[
+            "slide",
+            action,
+            input.to_str().unwrap(),
+            "1",
+            "--output",
+            output.to_str().unwrap(),
+        ]);
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let deck = Presentation::open(&output).unwrap();
+        assert_eq!(deck.slide(0).unwrap().hidden(), hidden);
+        assert_eq!(deck.slide(0).unwrap().text(), "text");
+        input = output;
+    }
+}
+
+#[test]
+fn notes_set_text_or_file_preserves_exact_text() {
+    let temp = TempWorkspace::new("fx204-notes");
+    let input = temp.path.join("input.pptx");
+    write_deck(&input, &["text"]);
+    add_speaker_notes(&input, "old");
+    let source = temp.path.join("notes.txt");
+    for (case, text) in [
+        "  leading\r\nnext\n\n",
+        "first\nsecond\n",
+        "first\rsecond",
+        "  π 日本語\n尾  ",
+        "",
+    ]
+    .iter()
+    .enumerate()
+    {
+        fs::write(&source, text).unwrap();
+        for (mode, args) in [
+            (0, vec!["--text", *text]),
+            (1, vec!["--from-file", source.to_str().unwrap()]),
+        ] {
+            let output = temp.path.join(format!("notes-{case}-{mode}.pptx"));
+            let mut args2 = vec!["notes", "set", input.to_str().unwrap(), "1"];
+            args2.extend(args);
+            args2.extend(["--output", output.to_str().unwrap()]);
+            let result = cli(&args2);
+            assert!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            assert_eq!(
+                Presentation::open(&output)
+                    .unwrap()
+                    .slide(0)
+                    .unwrap()
+                    .notes_text()
+                    .as_deref(),
+                Some(*text)
+            );
+            let package = OpcPackage::open(&output).unwrap();
+            let xml = String::from_utf8(package.parts["/ppt/notesSlides/notesSlide1.xml"].clone())
+                .unwrap();
+            assert!(xml.contains("urn:rdocx:test"));
+            assert!(xml.contains("b=\"1\""));
+        }
+    }
+    let rejected = temp.path.join("refused.pptx");
+    let result = cli(&[
+        "notes",
+        "set",
+        input.to_str().unwrap(),
+        "1",
+        "--text",
+        "x",
+        "--from-file",
+        source.to_str().unwrap(),
+        "--output",
+        rejected.to_str().unwrap(),
+    ]);
+    assert!(!result.status.success());
+    assert!(!rejected.exists());
+    fs::write(&source, [0xff]).unwrap();
+    let result = cli(&[
+        "notes",
+        "set",
+        input.to_str().unwrap(),
+        "1",
+        "--from-file",
+        source.to_str().unwrap(),
+        "--output",
+        rejected.to_str().unwrap(),
+    ]);
+    assert!(!result.status.success());
+    assert!(!rejected.exists());
+}
+
+#[test]
+fn powerpoint_meta_get_set_matches_python_core_properties() {
+    let temp = TempWorkspace::new("fx204-meta");
+    let input = temp.path.join("input.pptx");
+    let output = temp.path.join("output.pptx");
+    write_deck(&input, &["text"]);
+    let mut original = Presentation::open(&input).unwrap();
+    let mut core = original.core_properties().cloned().unwrap_or_default();
+    core.language = Some("en-GB".into());
+    core.identifier = Some("preserved".into());
+    original.set_core_properties(core).unwrap();
+    original.save(&input).unwrap();
+    let result = cli(&[
+        "meta",
+        "set",
+        input.to_str().unwrap(),
+        "--title",
+        "title",
+        "--author",
+        "author",
+        "--subject",
+        "subject",
+        "--keywords",
+        "keywords",
+        "--description",
+        "description",
+        "--category",
+        "category",
+        "--json",
+        "--output",
+        output.to_str().unwrap(),
+    ]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let deck = Presentation::open(&output).unwrap();
+    let core = deck.core_properties().unwrap();
+    assert_eq!(core.title.as_deref(), Some("title"));
+    assert_eq!(core.creator.as_deref(), Some("author"));
+    assert_eq!(core.subject.as_deref(), Some("subject"));
+    assert_eq!(core.keywords.as_deref(), Some("keywords"));
+    assert_eq!(core.description.as_deref(), Some("description"));
+    assert_eq!(core.category.as_deref(), Some("category"));
+    assert_eq!(core.language.as_deref(), Some("en-GB"));
+    assert_eq!(core.identifier.as_deref(), Some("preserved"));
+    let result = cli(&["meta", "get", output.to_str().unwrap(), "--json"]);
+    assert!(result.status.success());
+    let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(report["core"]["language"], "en-GB");
+}
+
+#[test]
+fn fit_reports_every_supported_overflow_and_needed_scale() {
+    let temp = TempWorkspace::new("fx204-fit");
+    for (name, text, expected) in [
+        ("fit", "short".to_owned(), 0),
+        ("overflow", "long overflow text ".repeat(100), 1),
+    ] {
+        let input = temp.path.join(format!("{name}.pptx"));
+        write_deck(&input, &[&text]);
+        let before = fs::read(&input).unwrap();
+        let native = Presentation::open(&input).unwrap().fit_report(&[]).unwrap();
+        let result = cli(&["fit", input.to_str().unwrap(), "--json"]);
+        assert_eq!(
+            result.status.code(),
+            Some(expected),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let report: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(report["schema"], 1);
+        assert_eq!(
+            report["frames"].as_array().unwrap().len(),
+            native.frames.len()
+        );
+        assert!(!native.frames.is_empty());
+        for (json, frame) in report["frames"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .zip(&native.frames)
+        {
+            assert_eq!(json["owner_part"], frame.update.location.owner_part);
+            assert_eq!(json["overflow"], frame.overflow);
+            assert_eq!(json["needed_scale"], serde_json::json!(frame.needed_scale));
+            assert_eq!(
+                json["needed_reduction"],
+                serde_json::json!(frame.needed_reduction)
+            );
+            assert_eq!(json["status"], frame.update.status);
+            assert_eq!(
+                json["quantized_trial"].is_null(),
+                frame.quantized_trial.is_none()
+            );
+            assert_eq!(
+                json["persisted_trial"].is_null(),
+                frame.persisted_trial.is_none()
+            );
+        }
+        assert_eq!(fs::read(&input).unwrap(), before);
+    }
+}
+
+#[test]
+fn every_new_command_has_help_and_reference_contract() {
+    for command in [
+        vec!["replace"],
+        vec!["slide", "add"],
+        vec!["slide", "duplicate"],
+        vec!["slide", "remove"],
+        vec!["slide", "move"],
+        vec!["slide", "hide"],
+        vec!["slide", "show"],
+        vec!["notes", "set"],
+        vec!["fit"],
+        vec!["meta", "get"],
+        vec!["meta", "set"],
+    ] {
+        let mut args = command.clone();
+        args.push("--help");
+        let result = cli(&args);
+        assert!(
+            result.status.success(),
+            "{:?}: {}",
+            command,
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(!result.stdout.is_empty());
+    }
+}
+
+#[test]
+fn new_mutations_reject_input_aliases_and_output_collisions() {
+    let temp = TempWorkspace::new("fx204-identity");
+    let input = temp.path.join("input.pptx");
+    write_deck(&input, &["text"]);
+    let original = fs::read(&input).unwrap();
+    let existing = temp.path.join("existing.pptx");
+    fs::write(&existing, b"unrelated").unwrap();
+    let commands = vec![
+        vec![
+            "replace",
+            input.to_str().unwrap(),
+            "-p",
+            "text",
+            "-v",
+            "new",
+        ],
+        vec!["slide", "add", input.to_str().unwrap(), "--layout", "7"],
+        vec!["slide", "duplicate", input.to_str().unwrap(), "1"],
+        vec!["slide", "remove", input.to_str().unwrap(), "1"],
+        vec!["slide", "move", input.to_str().unwrap(), "1", "--to", "1"],
+        vec!["slide", "hide", input.to_str().unwrap(), "1"],
+        vec!["slide", "show", input.to_str().unwrap(), "1"],
+        vec![
+            "notes",
+            "set",
+            input.to_str().unwrap(),
+            "1",
+            "--text",
+            "notes",
+        ],
+        vec!["meta", "set", input.to_str().unwrap(), "--title", "title"],
+    ];
+    let hardlink = temp.path.join("hardlink.pptx");
+    fs::hard_link(&input, &hardlink).unwrap();
+    let mut aliases = vec![input.clone(), hardlink];
+    #[cfg(unix)]
+    {
+        let symlink = temp.path.join("symlink.pptx");
+        std::os::unix::fs::symlink(&input, &symlink).unwrap();
+        aliases.push(symlink);
+    }
+    aliases.push(existing.clone());
+    for command in commands {
+        for alias in &aliases {
+            let mut args = command.clone();
+            args.extend(["--output", alias.to_str().unwrap()]);
+            let result = cli(&args);
+            assert!(!result.status.success(), "{:?}", args);
+            assert_eq!(fs::read(&input).unwrap(), original);
+            assert_eq!(fs::read(&existing).unwrap(), b"unrelated");
+        }
+    }
+}

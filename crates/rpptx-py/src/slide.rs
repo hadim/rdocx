@@ -1128,6 +1128,46 @@ impl PySlideCollection {
         Ok(result)
     }
 
+    /// Inserts a new slide at a final zero-based position, including append.
+    fn add_slide_at(
+        &self,
+        py: Python<'_>,
+        layout: &Bound<'_, PyAny>,
+        position: usize,
+    ) -> PyResult<Py<PySlide>> {
+        let layout = layout.extract::<PyRef<'_, PySlideLayout>>()?;
+        self.len(py)?;
+        if !layout.presentation.is(&self.presentation) {
+            return Err(PyValueError::new_err(
+                "layout belongs to a different presentation",
+            ));
+        }
+        let layout_index = layout.validate(py)?;
+        let mut presentation = self.presentation.borrow_mut(py);
+        let mut candidate = presentation.inner.clone();
+        let index = candidate
+            .add_slide_at(layout_index, position)
+            .map_err(|error| crate::rpptx_to_pyerr(py, error))?;
+        let survivors =
+            presentation.slide_owner_edit(crate::presentation::SlideOwnerEdit::Insert(index))?;
+        let prepared = presentation.prepare_owners(
+            &candidate,
+            "SlideCollection.add_slide_at",
+            &survivors,
+            true,
+            false,
+            false,
+        )?;
+        let path = presentation.capture_prepared_path(
+            &prepared,
+            smallvec![PathSeg::Slide(index)],
+            None,
+        )?;
+        let result = Py::new(py, PySlide::new(self.presentation.clone_ref(py), path))?;
+        presentation.publish_owners(candidate, prepared)?;
+        Ok(result)
+    }
+
     /// Imports a slide of another presentation, using this presentation's theme.
     ///
     /// The copy takes `layout` when given. Otherwise a slide of this

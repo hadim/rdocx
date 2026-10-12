@@ -6993,9 +6993,13 @@ Require scoped verification and independent zero-defect, zero-smell review.
 
 ### F-X204, Complete shared CLI one-shot editing commands (L)
 
-Resolve [Issue307](https://github.com/tensorbee/rdocx/issues/307) in S91,
-part of [Issue314](https://github.com/tensorbee/rdocx/issues/314)'s everyday
-coverage checklist. Add Word multi-pair expected-count replacement, regex and JSON reports, field updates, image extraction/inventory, core/custom metadata, content-control fill and counts. Add PowerPoint slide lifecycle commands, notes text/file updates, overflow fit reports, metadata and multi-pair replacement. Every command uses a Python-visible API, refuses input overwrite and commits counted edits all or nothing. Do not duplicate footer/theme commands owned by F-X208.
+[Issue307](https://github.com/tensorbee/rdocx/issues/307) and its PR330
+contribution share native/Python/CLI ordered counts, atomic refusal and one-shot
+publication. Word exposes maps, regex, combined fields, physical image
+extraction/inventory, typed metadata, tag fill and deterministic/body counts.
+PowerPoint exposes slide lifecycle, exact notes text/file updates, core
+metadata, maps and the common read-only fit provider with typed snapshots.
+Footer/theme commands retain F-X208 ownership.
 
 **Depends on**: F-X202, F-X203, F-X205, F-X207.
 **Test gate**: regression. Reproduce each missing operation or reported defect

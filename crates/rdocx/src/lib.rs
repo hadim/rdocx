@@ -85,12 +85,12 @@ pub use error::{Error, Result};
 pub use field::{
     AuthorityEntry, BarcodeCaseStyle, BarcodeField, BarcodeKind, BarcodePointOfSaleStyle,
     CaptionOptions, CaptionTarget, CrossReferenceNumber, CrossReferenceOptions, FieldDateTime,
-    FieldEvaluation, FieldEvaluationContext, FieldOutcome, GeneratedTablesReport, IndexEntry,
-    IndexOptions, LayoutBackedFieldUpdateReport, LegacyFormFieldInfo, LegacyFormFieldKind,
-    LegacyFormFieldValue, MailMergeControl, MailMergeData, MailMergeFormatContext,
-    MailMergeFormattedText, MailMergeImage, MailMergeRecord, MailMergeValue, SequenceOptions,
-    TableOfAuthoritiesOptions, TableOfFiguresOptions, TcField, TocEntrySelection, TocField,
-    TocRebuildReport,
+    FieldEvaluation, FieldEvaluationContext, FieldOutcome, FieldsUpdateReport,
+    GeneratedTablesReport, IndexEntry, IndexOptions, LayoutBackedFieldUpdateReport,
+    LegacyFormFieldInfo, LegacyFormFieldKind, LegacyFormFieldValue, MailMergeControl,
+    MailMergeData, MailMergeFormatContext, MailMergeFormattedText, MailMergeImage, MailMergeRecord,
+    MailMergeValue, SequenceOptions, TableOfAuthoritiesOptions, TableOfFiguresOptions, TcField,
+    TocEntrySelection, TocField, TocRebuildReport,
 };
 pub use html::{
     HtmlDiagnostic, HtmlFragmentInsertResult, HtmlImageResource, HtmlReadResult, MhtmlDiagnostic,

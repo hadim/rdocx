@@ -100,21 +100,40 @@ enum Command {
         exit_code: bool,
     },
     /// Replace placeholders in a DOCX file
+    ///
+    /// Give one pair with -p and -v, or many with --map. Nothing is written
+    /// unless every pair with an expected count replaced exactly that count.
     Replace {
         /// Path to the DOCX file
         file: PathBuf,
-        /// Placeholder string
-        #[arg(long, short = 'p')]
-        placeholder: String,
-        /// Replacement value
-        #[arg(long, short = 'v')]
-        value: String,
+        /// Placeholder string, a regular expression with --regex
+        #[arg(
+            long,
+            short = 'p',
+            required_unless_present = "map",
+            requires = "value",
+            conflicts_with = "map"
+        )]
+        placeholder: Option<String>,
+        /// Replacement value, where $1 names a capture group with --regex
+        #[arg(long, short = 'v', requires = "placeholder")]
+        value: Option<String>,
+        /// JSON file holding an array of pairs, applied in order, such as
+        /// [{"placeholder": "{{name}}", "value": "Ada", "expect": 2}]
+        #[arg(long, value_name = "PAIRS_JSON")]
+        map: Option<PathBuf>,
+        /// Read each placeholder as a regular expression
+        #[arg(long)]
+        regex: bool,
         /// Output file path
         #[arg(long, short = 'o')]
         output: PathBuf,
         /// Require exactly this many replacements before publishing output
-        #[arg(long)]
+        #[arg(long, conflicts_with = "map")]
         expect: Option<usize>,
+        /// Output the count of each pair as JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Validate OOXML conformance
     Validate {
@@ -218,6 +237,135 @@ enum Command {
         #[command(subcommand)]
         command: TocCommand,
     },
+    /// Update field results
+    Fields {
+        #[command(subcommand)]
+        command: FieldsCommand,
+    },
+    /// Extract physical pictures from supported story owners
+    Images {
+        #[command(subcommand)]
+        command: ImagesCommand,
+    },
+    /// Read and write core and custom document properties
+    Meta {
+        #[command(subcommand)]
+        command: MetaCommand,
+    },
+    /// Set the value of content controls by tag
+    ///
+    /// Every --tag must name at least one control of the body,
+    /// or nothing is written. A control bound to custom XML gets the value in
+    /// its bound part too.
+    Fill {
+        /// Path to the DOCX file
+        file: PathBuf,
+        /// Set every control whose tag is NAME, repeatable
+        #[arg(long = "tag", value_name = "NAME=VALUE", value_parser = commands::parse_assignment)]
+        tags: Vec<(String, String)>,
+        /// Output DOCX file
+        #[arg(long, short = 'o')]
+        output: PathBuf,
+        /// Output the count of each assignment as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum FieldsCommand {
+    /// Update PAGE, NUMPAGES, PAGEREF, SECTIONPAGES, DATE, TIME, SEQ, REF and
+    /// the other supported field results
+    ///
+    /// Field results that need a value the document does not hold, such as a
+    /// mail-merge field, keep their cached result. Page numbers come from
+    /// rdocx's own pagination.
+    Update {
+        /// Path to the DOCX file
+        file: PathBuf,
+        /// Civil date and time for DATE and TIME fields, exactly
+        /// YYYY-MM-DDTHH:MM:SS, unresolved when absent
+        #[arg(long, value_parser = commands::parse_field_date_time)]
+        now: Option<rdocx::FieldDateTime>,
+        /// Output DOCX file
+        #[arg(long, short = 'o')]
+        output: PathBuf,
+        /// Output the operation record as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum ImagesCommand {
+    /// Write each internal media part of supported physical pictures into a directory and list them
+    ///
+    /// Story ownership is reported. External links are listed without fetching.
+    Extract {
+        /// Path to the DOCX file
+        file: PathBuf,
+        /// Output directory, created when absent
+        dir: PathBuf,
+        /// Output the listing as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+// Parsed once per run, so the size of the `set` variant costs nothing.
+#[allow(clippy::large_enum_variant)]
+#[derive(Subcommand)]
+enum MetaCommand {
+    /// Print the core and custom properties
+    Get {
+        /// Path to the DOCX file
+        file: PathBuf,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Set core properties and add, replace or remove custom properties
+    Set {
+        /// Path to the DOCX file
+        file: PathBuf,
+        #[command(flatten)]
+        core: CoreArgs,
+        /// Add or replace a custom property, repeatable. An existing number,
+        /// integer or Boolean property keeps its type
+        #[arg(long = "custom", value_name = "NAME=TYPE:VALUE", value_parser = commands::parse_assignment)]
+        custom: Vec<(String, String)>,
+        /// Remove a custom property, repeatable
+        #[arg(long = "remove-custom", value_name = "NAME")]
+        remove_custom: Vec<String>,
+        /// Output DOCX file
+        #[arg(long, short = 'o')]
+        output: PathBuf,
+        /// Output the properties written as JSON
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Args)]
+struct CoreArgs {
+    /// Title
+    #[arg(long)]
+    title: Option<String>,
+    /// Author (dc:creator)
+    #[arg(long)]
+    author: Option<String>,
+    /// Subject
+    #[arg(long)]
+    subject: Option<String>,
+    /// Keywords
+    #[arg(long)]
+    keywords: Option<String>,
+    /// Description (comments)
+    #[arg(long)]
+    description: Option<String>,
+    /// Category
+    #[arg(long)]
+    category: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -515,9 +663,22 @@ fn run_cli() {
             file,
             placeholder,
             value,
+            map,
+            regex,
             output,
             expect,
-        } => commands::replace(&file, &placeholder, &value, expect, &output),
+            json,
+        } => commands::replace(
+            &file,
+            commands::ReplaceInput {
+                pair: placeholder.zip(value),
+                map: map.as_deref(),
+                expect,
+                regex,
+            },
+            &output,
+            json,
+        ),
         // Handled above so its exit code can reflect the verdict.
         Command::Validate { .. } => unreachable!(),
         Command::Render {
@@ -694,6 +855,50 @@ fn run_cli() {
             &output,
             json,
         ),
+        Command::Fields { command } => match command {
+            FieldsCommand::Update {
+                file,
+                now,
+                output,
+                json,
+            } => commands::fields_update(&file, now, &output, json),
+        },
+        Command::Images { command } => match command {
+            ImagesCommand::Extract { file, dir, json } => {
+                commands::images_extract(&file, &dir, json)
+            }
+        },
+        Command::Meta { command } => match command {
+            MetaCommand::Get { file, json } => commands::meta_get(&file, json),
+            MetaCommand::Set {
+                file,
+                core,
+                custom,
+                remove_custom,
+                output,
+                json,
+            } => commands::meta_set(
+                &file,
+                &commands::MetaChanges {
+                    title: core.title,
+                    author: core.author,
+                    subject: core.subject,
+                    keywords: core.keywords,
+                    description: core.description,
+                    category: core.category,
+                    custom,
+                    remove_custom,
+                },
+                &output,
+                json,
+            ),
+        },
+        Command::Fill {
+            file,
+            tags,
+            output,
+            json,
+        } => commands::fill(&file, &tags, &output, json),
         Command::Toc { command } => match command {
             TocCommand::Rebuild { file, output, json } => {
                 commands::toc_rebuild(&file, &output, json)

@@ -1426,6 +1426,90 @@ pub struct FieldEvaluation {
     pub outcome: FieldOutcome,
 }
 
+impl FieldEvaluation {
+    /// Complete ordered evaluation facts shared by CLI and Python reports.
+    #[must_use]
+    pub fn to_json_value(&self) -> serde_json::Value {
+        use serde_json::json;
+        let outcome = match &self.outcome {
+            FieldOutcome::Resolved(text) => json!({"kind":"resolved","text":text}),
+            FieldOutcome::DeferredPagination => json!({"kind":"deferred_pagination"}),
+            FieldOutcome::KeepStored { diagnostic } => {
+                json!({"kind":"keep_stored","diagnostic":diagnostic})
+            }
+            FieldOutcome::TableOfContents(request) => {
+                let entries = match &request.entries {
+                    TocEntrySelection::None => json!({"kind":"none"}),
+                    TocEntrySelection::All => json!({"kind":"all"}),
+                    TocEntrySelection::Identifier(value) => {
+                        json!({"kind":"identifier","value":value})
+                    }
+                };
+                json!({"kind":"table_of_contents","request":{
+                    "heading_levels":request.heading_levels,"custom_styles":request.custom_styles,
+                    "entries":entries,"sequence_identifier":request.sequence_identifier,
+                    "bookmark":request.bookmark,"hyperlink":request.hyperlink,
+                    "use_outline_levels":request.use_outline_levels,
+                    "omit_page_number_levels":request.omit_page_number_levels,
+                    "page_number_separator":request.page_number_separator,"entry_page_separator":request.entry_page_separator}})
+            }
+            FieldOutcome::TableOfContentsEntry(request) => {
+                json!({"kind":"table_of_contents_entry","request":{
+                "entry":request.entry,"level":request.level,"table_identifier":request.table_identifier,
+                "omit_page_number":request.omit_page_number}})
+            }
+            FieldOutcome::MailMergeControl(control) => {
+                let control = match control {
+                    MailMergeControl::NextRecord { record_number } => {
+                        json!({"kind":"next_record","record_number":record_number})
+                    }
+                    MailMergeControl::NextRecordIf {
+                        condition,
+                        record_number,
+                    } => {
+                        json!({"kind":"next_record_if","condition":condition,"record_number":record_number})
+                    }
+                    MailMergeControl::SkipRecordIf {
+                        condition,
+                        record_number,
+                    } => {
+                        json!({"kind":"skip_record_if","condition":condition,"record_number":record_number})
+                    }
+                    MailMergeControl::RecordNumber(value) => {
+                        json!({"kind":"record_number","value":value})
+                    }
+                    MailMergeControl::SequenceNumber(value) => {
+                        json!({"kind":"sequence_number","value":value})
+                    }
+                };
+                json!({"kind":"mail_merge_control","control":control})
+            }
+            FieldOutcome::Barcode(request) => json!({"kind":"barcode","request":{
+                "value":request.value,"kind":format!("{:?}",request.kind),"height":request.height,
+                "scale":request.scale,"error_correction":request.error_correction,
+                "point_of_sale_style":request.point_of_sale_style.map(|value| format!("{value:?}")),
+                "case_style":request.case_style.map(|value| format!("{value:?}")),
+                "fix_check_digit":request.fix_check_digit,"rotation":request.rotation,
+                "foreground_color":request.foreground_color,"background_color":request.background_color,
+                "display_text":request.display_text,"add_start_stop":request.add_start_stop}}),
+        };
+        json!({"field_index":self.field_index,"instruction":self.instruction,
+            "cached_result":self.cached_result,"outcome":outcome})
+    }
+}
+
+/// Result of one atomic ordinary and layout-backed stored-cache update.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldsUpdateReport {
+    pub ordinary_updated: usize,
+    pub layout: LayoutBackedFieldUpdateReport,
+    pub evaluations: Vec<FieldEvaluation>,
+    pub diagnostics: Vec<String>,
+    pub total_updated: usize,
+    /// Supported typed and placed caches only. Header/footer PAGE and NUMPAGES stay stored.
+    pub saved_cache_scope: &'static str,
+}
+
 /// A pure field-evaluation decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FieldOutcome {
@@ -1821,6 +1905,40 @@ impl Document {
             self.commit_staged_mutation(candidate.prepare_and_reopen_staged()?);
         }
         Ok(updated)
+    }
+
+    /// Refresh ordinary and deterministic layout caches in one outer transaction.
+    /// Omitted time remains unresolved. Ordinary retention diagnostics precede layout diagnostics.
+    pub fn update_all_fields(
+        &mut self,
+        context: &FieldEvaluationContext,
+    ) -> Result<FieldsUpdateReport> {
+        let mut candidate = self.clone_for_staging();
+        let evaluations = candidate.evaluate_fields(context)?;
+        let ordinary = candidate.update_fields(context)?;
+        let layout = candidate.update_layout_backed_fields()?;
+        let mut diagnostics = evaluations
+            .iter()
+            .filter_map(|field| match &field.outcome {
+                FieldOutcome::KeepStored { diagnostic } => Some(diagnostic.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        diagnostics.extend(layout.diagnostics.iter().cloned());
+        let total_updated = ordinary
+            .checked_add(layout.updated_count())
+            .ok_or_else(|| Error::Other("field update count overflow".to_owned()))?;
+        if total_updated != 0 {
+            self.commit_staged_mutation(candidate.prepare_and_reopen_staged()?);
+        }
+        Ok(FieldsUpdateReport {
+            ordinary_updated: ordinary,
+            layout,
+            evaluations,
+            diagnostics,
+            total_updated,
+            saved_cache_scope: "supported-typed-and-placed-caches-with-dynamic-header-footer-page-caches-retained",
+        })
     }
 
     /// Write layout-backed field caches and return the number changed.

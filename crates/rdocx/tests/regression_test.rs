@@ -488,7 +488,7 @@ fn rich_content_reopens_in_every_header_and_footer_variant() {
                 .add_hyperlink_to_story(&current, &marker, &url)
                 .unwrap();
             let current = f252_section_story(&document, 0, kind, variant);
-            let image = marker.as_bytes().to_vec();
+            let image = f_x204_picture_fixture(marker.as_bytes());
             document
                 .add_picture_to_story(
                     &current,
@@ -1179,7 +1179,7 @@ fn rich_section_stories_survive_reopen_replace_and_unlink() {
     document
         .add_picture_to_story(
             &header,
-            b"f252 image payload",
+            &f_x204_picture_fixture(b"f252 image payload")[..],
             "f252.png",
             Length::pt(12.0),
             Length::pt(8.0),
@@ -1295,7 +1295,7 @@ fn rich_section_stories_survive_reopen_replace_and_unlink() {
         let image_id = f255_xml_attribute(&xml, "r:embed").unwrap();
         assert_eq!(
             reopened.image_data_for_story(story, &image_id).unwrap(),
-            b"f252 image payload"
+            &f_x204_picture_fixture(b"f252 image payload")[..]
         );
         let drawing_id = xml
             .split("<wp:docPr")
@@ -1355,7 +1355,7 @@ fn removing_one_variant_retains_shared_and_inherited_stories() {
     document
         .add_picture_to_story(
             &footer,
-            b"shared footer image",
+            &f_x204_picture_fixture(b"shared footer image")[..],
             "shared.png",
             Length::pt(5.0),
             Length::pt(5.0),
@@ -1542,8 +1542,8 @@ fn f255_story_document() -> Document {
 
 #[test]
 fn replace_image_preserves_drawings_and_story_relationship_ownership() {
-    let png: &[u8] = b"\x89PNG\r\n\x1a\noriginal";
-    let replacement_png: &[u8] = b"\x89PNG\r\n\x1a\nreplacement";
+    let png: &[u8] = &f_x204_picture_fixture(b"original")[..];
+    let replacement_png: &[u8] = &f_x204_picture_fixture(b"replacement")[..];
     let jpeg: &[u8] = b"\xff\xd8\xff\xd9";
     let mut authored = f255_story_document();
     authored.add_picture(png, "body.png", Length::pt(20.0), Length::pt(10.0));
@@ -3319,14 +3319,45 @@ mod remove_run {
     }
 }
 
+/// A decoded one-pixel PNG with a private ancillary marker for exact payload identity.
+fn f_x204_picture_fixture(marker: &[u8]) -> Vec<u8> {
+    const PNG: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
+        0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8,
+        0xcf, 0xc0, 0xf0, 0x1f, 0x00, 0x05, 0x00, 0x01, 0xff, 0x89, 0x99, 0x3d, 0x1d, 0x00, 0x00,
+        0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+    let mut bytes = PNG[..PNG.len() - 12].to_vec();
+    bytes.extend_from_slice(&(marker.len() as u32).to_be_bytes());
+    let start = bytes.len();
+    bytes.extend_from_slice(b"rdCx");
+    bytes.extend_from_slice(marker);
+    let mut crc = u32::MAX;
+    for byte in &bytes[start..] {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = (crc >> 1) ^ (0xedb88320 & 0u32.wrapping_sub(crc & 1));
+        }
+    }
+    bytes.extend_from_slice(&(!crc).to_be_bytes());
+    bytes.extend_from_slice(&PNG[PNG.len() - 12..]);
+    bytes
+}
+
 fn f_x090_cross_part_drawing_package() -> Vec<u8> {
     let mut document = f255_story_document();
-    document.add_picture(b"body image", "body.png", Length::pt(1.0), Length::pt(1.0));
+    document.add_picture(
+        &f_x204_picture_fixture(b"body image")[..],
+        "body.png",
+        Length::pt(1.0),
+        Length::pt(1.0),
+    );
     let header = f254_story(&document, StoryKind::Header);
     document
         .add_picture_to_story(
             &header,
-            b"header image",
+            &f_x204_picture_fixture(b"header image")[..],
             "header.png",
             Length::pt(1.0),
             Length::pt(1.0),
@@ -3387,7 +3418,10 @@ fn f255_producer_header_drawing_document() -> Document {
             oxml_opc::relationship::rel_types::IMAGE,
             "../media/producer.png",
         );
-    package.set_part("/word/media/producer.png", b"producer image".to_vec());
+    package.set_part(
+        "/word/media/producer.png",
+        f_x204_picture_fixture(b"producer image"),
+    );
     package
         .content_types
         .add_override("/word/media/producer.png", "image/png");
@@ -3436,7 +3470,10 @@ fn f255_install_producer_story_drawing(
         oxml_opc::relationship::rel_types::IMAGE,
         producer_target,
     );
-    package.set_part("/word/media/producer.png", b"producer image".to_vec());
+    package.set_part(
+        "/word/media/producer.png",
+        f_x204_picture_fixture(b"producer image"),
+    );
     package
         .content_types
         .add_override("/word/media/producer.png", "image/png");
@@ -3679,7 +3716,7 @@ fn f255_assert_story_assets(document: &Document, kind: StoryKind, label: &str) {
     let hyperlink_id = f255_story_relationship_attribute(document, &story, "r:id");
     assert_eq!(
         document.image_data_for_story(&story, &image_id).unwrap(),
-        format!("{label} image").as_bytes()
+        &f_x204_picture_fixture(format!("{label} image").as_bytes())[..]
     );
     assert_eq!(
         document
@@ -3735,7 +3772,7 @@ fn equal_related_content_resolves_only_through_its_story_owner() {
         document
             .add_picture_to_story(
                 &story,
-                b"same image",
+                &f_x204_picture_fixture(b"same image")[..],
                 "same.png",
                 Length::pt(1.0),
                 Length::pt(1.0),
@@ -3783,7 +3820,7 @@ fn equal_related_content_resolves_only_through_its_story_owner() {
                 reopened
                     .image_data_for_story(&story, &relationship_id)
                     .unwrap(),
-                b"same image"
+                &f_x204_picture_fixture(b"same image")[..]
             );
         }
         for relationship_id in hyperlink_ids {
@@ -3855,7 +3892,7 @@ fn wrong_scope_relationships_are_rejected_atomically() {
     document
         .add_picture_to_story(
             &body,
-            b"image",
+            &f_x204_picture_fixture(b"image")[..],
             "image.png",
             Length::pt(1.0),
             Length::pt(1.0),
@@ -3999,8 +4036,18 @@ fn wrong_scope_relationships_are_rejected_atomically() {
 #[test]
 fn legacy_body_and_header_helpers_use_the_shared_owner_path() {
     let mut document = Document::new();
-    document.add_picture(b"image", "body.png", Length::pt(1.0), Length::pt(1.0));
-    document.set_header_image(b"image", "header.png", Length::pt(1.0), Length::pt(1.0));
+    document.add_picture(
+        &f_x204_picture_fixture(b"image")[..],
+        "body.png",
+        Length::pt(1.0),
+        Length::pt(1.0),
+    );
+    document.set_header_image(
+        &f_x204_picture_fixture(b"image")[..],
+        "header.png",
+        Length::pt(1.0),
+        Length::pt(1.0),
+    );
 
     let bytes = document.to_bytes().unwrap();
     let reopened = Document::from_bytes(&bytes).unwrap();
@@ -4025,7 +4072,7 @@ fn legacy_body_and_header_helpers_use_the_shared_owner_path() {
             reopened
                 .image_data_for_story(story, &relationships[0])
                 .unwrap(),
-            b"image"
+            &f_x204_picture_fixture(b"image")[..]
         );
     }
 }
@@ -4055,7 +4102,7 @@ fn cross_part_producer_drawing_ids_do_not_block_document_open() {
         .unwrap();
     let mut document = Document::from_bytes(&bytes).unwrap();
     document.add_picture(
-        b"authored image",
+        &f_x204_picture_fixture(b"authored image")[..],
         "authored.png",
         Length::pt(1.0),
         Length::pt(1.0),
@@ -4127,7 +4174,7 @@ fn repeated_drawing_id_package(id: &str, one_paragraph: bool) -> Vec<u8> {
             document.add_paragraph(&format!("Picture {name}"));
         }
         document.add_picture(
-            format!("image {name}").as_bytes(),
+            &f_x204_picture_fixture(format!("image {name}").as_bytes())[..],
             &format!("{name}.png"),
             Length::pt(1.0),
             Length::pt(1.0),
@@ -4187,7 +4234,7 @@ fn repeated_drawing_ids_in_one_part_do_not_block_document_open() {
         assert_eq!(document.to_bytes().unwrap(), bytes);
 
         document.add_picture(
-            b"authored image",
+            &f_x204_picture_fixture(b"authored image")[..],
             "authored.png",
             Length::pt(1.0),
             Length::pt(1.0),
@@ -4274,7 +4321,7 @@ fn related_footnote_insertion_survives_later_typed_mutation() {
     document
         .add_picture_to_story(
             &footnote,
-            b"retained image",
+            &f_x204_picture_fixture(b"retained image")[..],
             "retained.png",
             Length::pt(1.0),
             Length::pt(1.0),
@@ -4316,7 +4363,7 @@ fn related_footnote_insertion_survives_later_typed_mutation() {
     let footnote = f254_story(&reopened, StoryKind::Footnote);
     assert_eq!(
         reopened.image_data_for_story(&footnote, &image_id).unwrap(),
-        b"retained image"
+        &f_x204_picture_fixture(b"retained image")[..]
     );
     assert_eq!(
         reopened
@@ -4338,14 +4385,14 @@ fn header_drawing_ids_do_not_depend_on_replacement_history() {
         let mut document = Document::new();
         if with_history {
             document.set_header_image(
-                b"retired image",
+                &f_x204_picture_fixture(b"retired image")[..],
                 "retired.png",
                 Length::pt(2.0),
                 Length::pt(2.0),
             );
         }
         document.set_header_image(
-            b"final image",
+            &f_x204_picture_fixture(b"final image")[..],
             "final.png",
             Length::pt(1.0),
             Length::pt(1.0),
@@ -4369,9 +4416,15 @@ fn producer_header_picture_ids_follow_final_recursive_order() {
     fn build(reorder: bool) -> Vec<u8> {
         let mut document = f255_producer_header_drawing_document();
         let images: [(&[u8], &str); 2] = if reorder {
-            [(b"image A", "a.png"), (b"image B", "b.png")]
+            [
+                (&f_x204_picture_fixture(b"image A")[..], "a.png"),
+                (&f_x204_picture_fixture(b"image B")[..], "b.png"),
+            ]
         } else {
-            [(b"image B", "b.png"), (b"image A", "a.png")]
+            [
+                (&f_x204_picture_fixture(b"image B")[..], "b.png"),
+                (&f_x204_picture_fixture(b"image A")[..], "a.png"),
+            ]
         };
         for (image, name) in images {
             let header = f254_story(&document, StoryKind::Header);
@@ -4394,7 +4447,7 @@ fn producer_header_picture_ids_follow_final_recursive_order() {
                     };
                     document
                         .image_data_for_story(&header, &relationship_id)
-                        .is_ok_and(|image| image == b"image A")
+                        .is_ok_and(|image| image == f_x204_picture_fixture(b"image A")[..])
                 })
                 .expect("image A story item")
                 .location()
@@ -4462,9 +4515,15 @@ fn typed_footnote_flush_preserves_canonical_story_history() {
     fn build(reorder: bool) -> Vec<u8> {
         let mut document = f255_producer_footnote_drawing_document();
         let images: [(&[u8], &str); 2] = if reorder {
-            [(b"image A", "a.png"), (b"image B", "b.png")]
+            [
+                (&f_x204_picture_fixture(b"image A")[..], "a.png"),
+                (&f_x204_picture_fixture(b"image B")[..], "b.png"),
+            ]
         } else {
-            [(b"image B", "b.png"), (b"image A", "a.png")]
+            [
+                (&f_x204_picture_fixture(b"image B")[..], "b.png"),
+                (&f_x204_picture_fixture(b"image A")[..], "a.png"),
+            ]
         };
         for (image, name) in images {
             let footnote = f254_story(&document, StoryKind::Footnote);
@@ -4473,7 +4532,11 @@ fn typed_footnote_flush_preserves_canonical_story_history() {
                 .unwrap();
         }
         if reorder {
-            f255_move_story_image_to_end(&mut document, StoryKind::Footnote, b"image A");
+            f255_move_story_image_to_end(
+                &mut document,
+                StoryKind::Footnote,
+                &f_x204_picture_fixture(b"image A")[..],
+            );
         }
         document.add_footnote("later typed footnote");
 
@@ -4494,9 +4557,9 @@ fn typed_footnote_flush_preserves_canonical_story_history() {
         assert_eq!(
             f255_package_story_image_data_in_order(&bytes, "/word/stories/footnotes.xml"),
             [
-                b"producer image".to_vec(),
-                b"image B".to_vec(),
-                b"image A".to_vec(),
+                f_x204_picture_fixture(b"producer image"),
+                f_x204_picture_fixture(b"image B"),
+                f_x204_picture_fixture(b"image A"),
             ]
         );
         let mut reopened = Document::from_bytes(&bytes).unwrap();
@@ -4505,7 +4568,7 @@ fn typed_footnote_flush_preserves_canonical_story_history() {
             reopened
                 .image_data_for_story(&footnote, "producerImage")
                 .unwrap(),
-            b"producer image"
+            &f_x204_picture_fixture(b"producer image")[..]
         );
         assert!(
             reopened
@@ -4525,9 +4588,15 @@ fn typed_comment_flush_preserves_canonical_story_history() {
     fn build(reorder: bool) -> Vec<u8> {
         let mut document = f255_producer_comment_drawing_document();
         let images: [(&[u8], &str); 2] = if reorder {
-            [(b"image A", "a.png"), (b"image B", "b.png")]
+            [
+                (&f_x204_picture_fixture(b"image A")[..], "a.png"),
+                (&f_x204_picture_fixture(b"image B")[..], "b.png"),
+            ]
         } else {
-            [(b"image B", "b.png"), (b"image A", "a.png")]
+            [
+                (&f_x204_picture_fixture(b"image B")[..], "b.png"),
+                (&f_x204_picture_fixture(b"image A")[..], "a.png"),
+            ]
         };
         for (image, name) in images {
             let comment = f254_story(&document, StoryKind::Comment);
@@ -4536,7 +4605,11 @@ fn typed_comment_flush_preserves_canonical_story_history() {
                 .unwrap();
         }
         if reorder {
-            f255_move_story_image_to_end(&mut document, StoryKind::Comment, b"image A");
+            f255_move_story_image_to_end(
+                &mut document,
+                StoryKind::Comment,
+                &f_x204_picture_fixture(b"image A")[..],
+            );
         }
         let parent = document.comments()[0].id();
         document
@@ -4549,9 +4622,9 @@ fn typed_comment_flush_preserves_canonical_story_history() {
         assert_eq!(
             f255_package_story_image_data_in_order(&bytes, "/word/comments.xml"),
             [
-                b"producer image".to_vec(),
-                b"image B".to_vec(),
-                b"image A".to_vec(),
+                f_x204_picture_fixture(b"producer image"),
+                f_x204_picture_fixture(b"image B"),
+                f_x204_picture_fixture(b"image A"),
             ]
         );
         let mut reopened = Document::from_bytes(&bytes).unwrap();
@@ -4560,7 +4633,7 @@ fn typed_comment_flush_preserves_canonical_story_history() {
             reopened
                 .image_data_for_story(&comment, "producerImage")
                 .unwrap(),
-            b"producer image"
+            &f_x204_picture_fixture(b"producer image")[..]
         );
         assert!(
             reopened
@@ -4754,7 +4827,7 @@ fn comment_story_mutation_preserves_shadowed_r_and_wp_raw_meaning() {
     document
         .add_picture_to_story(
             &comment,
-            b"comment image",
+            &f_x204_picture_fixture(b"comment image")[..],
             "comment.png",
             Length::pt(1.0),
             Length::pt(1.0),
@@ -4819,7 +4892,7 @@ fn footnote_typed_mutation_preserves_inherited_shadowed_wp_raw_meaning() {
     document
         .add_picture_to_story(
             &footnote,
-            b"footnote image",
+            &f_x204_picture_fixture(b"footnote image")[..],
             "footnote.png",
             Length::pt(1.0),
             Length::pt(1.0),
@@ -4868,7 +4941,7 @@ fn body_and_text_box_assets_do_not_depend_on_operation_order() {
         document
             .add_picture_to_story(
                 &story,
-                format!("{label} image").as_bytes(),
+                &f_x204_picture_fixture(format!("{label} image").as_bytes())[..],
                 &format!("{label}.png"),
                 Length::pt(1.0),
                 Length::pt(1.0),
@@ -4946,7 +5019,7 @@ fn nested_story_assets_survive_enclosing_owner_insert_remove_clone_and_move() {
             document
                 .add_picture_to_story(
                     &story,
-                    format!("{label} image").as_bytes(),
+                    &f_x204_picture_fixture(format!("{label} image").as_bytes())[..],
                     &format!("{label}.png"),
                     Length::pt(1.0),
                     Length::pt(1.0),
@@ -5000,7 +5073,7 @@ fn f255_story_asset_paragraph_removal_reconciles_live_provenance() {
         picture
             .add_picture_to_story(
                 &story,
-                b"removed picture",
+                &f_x204_picture_fixture(b"removed picture")[..],
                 "removed.png",
                 Length::pt(1.0),
                 Length::pt(1.0),
@@ -5033,7 +5106,7 @@ fn f255_story_asset_paragraph_removal_reconciles_live_provenance() {
         );
         assert_eq!(
             reopened.image_data_for_story(&story, &picture_id).unwrap(),
-            b"removed picture",
+            &f_x204_picture_fixture(b"removed picture")[..],
             "{kind:?} picture definition"
         );
 
@@ -5080,7 +5153,7 @@ fn f255_story_asset_paragraph_clone_shares_relationships_and_freshens_drawings()
         picture
             .add_picture_to_story(
                 &story,
-                b"cloned picture",
+                &f_x204_picture_fixture(b"cloned picture")[..],
                 "cloned.png",
                 Length::pt(1.0),
                 Length::pt(1.0),
@@ -5138,7 +5211,7 @@ fn f255_story_asset_paragraph_clone_shares_relationships_and_freshens_drawings()
             reopened
                 .image_data_for_story(&story, &picture_items[0].0)
                 .unwrap(),
-            b"cloned picture",
+            &f_x204_picture_fixture(b"cloned picture")[..],
             "{kind:?} cloned picture semantics"
         );
 
@@ -5194,7 +5267,7 @@ fn reordered_body_and_text_box_assets_resolve_to_their_original_semantics() {
     document
         .add_picture_to_story(
             &body,
-            b"body semantic image",
+            &f_x204_picture_fixture(b"body semantic image")[..],
             "body-semantic.png",
             Length::pt(1.0),
             Length::pt(1.0),
@@ -5212,7 +5285,7 @@ fn reordered_body_and_text_box_assets_resolve_to_their_original_semantics() {
     document
         .add_picture_to_story(
             &text_box,
-            b"box semantic image",
+            &f_x204_picture_fixture(b"box semantic image")[..],
             "box-semantic.png",
             Length::pt(1.0),
             Length::pt(1.0),
@@ -5242,7 +5315,7 @@ fn reordered_body_and_text_box_assets_resolve_to_their_original_semantics() {
         reopened
             .image_data_for_story(&text_box, &box_image)
             .unwrap(),
-        b"box semantic image"
+        &f_x204_picture_fixture(b"box semantic image")[..]
     );
     assert_eq!(
         reopened
@@ -5275,7 +5348,7 @@ fn reordered_body_and_text_box_assets_resolve_to_their_original_semantics() {
         .expect("body hyperlink paragraph r:id");
     assert_eq!(
         reopened.image_data_for_story(&body, &body_image).unwrap(),
-        b"body semantic image"
+        &f_x204_picture_fixture(b"body semantic image")[..]
     );
     assert_eq!(
         reopened
@@ -17853,7 +17926,7 @@ fn issue_157_insert_picture(
     document.insert_picture_to_story(
         story,
         after,
-        b"issue 157 image payload",
+        &f_x204_picture_fixture(b"issue 157 image payload")[..],
         "issue_157.png",
         Some(Length::pt(12.0)),
         Some(Length::pt(8.0)),
@@ -45764,8 +45837,20 @@ fn word_final_paragraph_property_redlines_resolve_both_ways() {
         }
     }
 }
-const ISSUE_254_RED: &[u8] = b"\x89PNG\r\n\x1a\nred figure";
-const ISSUE_254_BLUE: &[u8] = b"\x89PNG\r\n\x1a\nblue figure";
+const ISSUE_254_RED: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0xf0,
+    0x1f, 0x00, 0x05, 0x00, 0x01, 0xff, 0x89, 0x99, 0x3d, 0x1d, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
+const ISSUE_254_BLUE: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x60, 0x60, 0xf8, 0xff,
+    0x1f, 0x00, 0x03, 0x02, 0x01, 0xff, 0xe6, 0x77, 0x0b, 0xae, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
 
 /// A figure between two paragraphs, with an optional header picture.
 fn issue_254_document(
@@ -46135,7 +46220,7 @@ fn rich_footnotes_keep_part_scoped_relationships() {
     document
         .add_picture_to_story(
             &story,
-            b"footnote image",
+            &f_x204_picture_fixture(b"footnote image")[..],
             "footnote.png",
             Length::pt(1.0),
             Length::pt(1.0),
@@ -46155,7 +46240,7 @@ fn rich_footnotes_keep_part_scoped_relationships() {
     let hyperlink_id = f255_xml_attribute(xml, "r:id").unwrap();
     assert_eq!(
         reopened.image_data_for_story(&story, &image_id).unwrap(),
-        b"footnote image"
+        &f_x204_picture_fixture(b"footnote image")[..]
     );
     assert_eq!(
         reopened
@@ -46312,7 +46397,7 @@ fn rich_endnotes_reopen_with_part_scoped_relationships() {
     document
         .add_picture_to_story(
             &story,
-            b"endnote image",
+            &f_x204_picture_fixture(b"endnote image")[..],
             "endnote.png",
             Length::pt(1.0),
             Length::pt(1.0),
@@ -46351,7 +46436,7 @@ fn rich_endnotes_reopen_with_part_scoped_relationships() {
     let hyperlink_id = f255_xml_attribute(xml, "r:id").unwrap();
     assert_eq!(
         reopened.image_data_for_story(&story, &image_id).unwrap(),
-        b"endnote image"
+        &f_x204_picture_fixture(b"endnote image")[..]
     );
     assert_eq!(
         reopened
@@ -46909,7 +46994,7 @@ fn fragment_import_remaps_note_companions_atomically() {
     source
         .add_picture_to_story(
             &first_note_story,
-            b"f276-note-image",
+            &f_x204_picture_fixture(b"f276-note-image")[..],
             "note.png",
             Length::pt(10.0),
             Length::pt(10.0),
@@ -46957,7 +47042,7 @@ fn fragment_import_remaps_note_companions_atomically() {
         package
             .parts
             .values()
-            .any(|bytes| bytes == b"f276-note-image")
+            .any(|bytes| bytes == &f_x204_picture_fixture(b"f276-note-image")[..])
     );
     let reopened = Document::from_bytes(&saved).unwrap();
     assert_eq!(reopened.footnotes().len(), 3);
@@ -47073,7 +47158,7 @@ fn full_story_fragment_import_covers_every_supported_owner_pair() {
         source
             .add_picture_to_story(
                 &source_story,
-                image.as_bytes(),
+                &f_x204_picture_fixture(image.as_bytes())[..],
                 "scope.png",
                 Length::pt(10.0),
                 Length::pt(10.0),
@@ -47111,7 +47196,9 @@ fn full_story_fragment_import_covers_every_supported_owner_pair() {
             let copied = package
                 .parts
                 .iter()
-                .find_map(|(name, bytes)| (bytes == image.as_bytes()).then_some(name))
+                .find_map(|(name, bytes)| {
+                    (bytes == &f_x204_picture_fixture(image.as_bytes())).then_some(name)
+                })
                 .unwrap();
             assert!(
                 package

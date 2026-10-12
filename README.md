@@ -39,7 +39,7 @@ rows are the enforced release-mode bounds plus one dated observation.
 
 | Measurement | Value | Version | Platform | Build mode | Input | Command | Statistic | Measured on |
 |---|---|---|---|---|---|---|---|---|
-| Crates.io archive: rdocx | 3,645,871 compressed bytes, 51,436,597 member bytes, 37 members | 0.16.0 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `rdocx` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-10-12 |
+| Crates.io archive: rdocx | 3,650,032 compressed bytes, 51,457,573 member bytes, 37 members | 0.16.0 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `rdocx` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-10-12 |
 | Large-document layout throughput | minimum 250 pages/s, observed 31,019.1 pages/s | rdocx 0.14.0 | macOS 26.6.2, Apple M5 Max, arm64 | release, one test thread | 1,000 one-page paragraphs with deterministic fonts | `cargo test -p rdocx --test regression_test --release a_thousand_page_document_paginates_and_renders_within_the_declared_limits -- --ignored --exact --nocapture --test-threads=1` | pages per wall-clock second | 2026-09-19 |
 | Large-document layout peak allocation | maximum 64 MiB, observed 29.03 MiB | rdocx 0.14.0 | macOS 26.6.2, Apple M5 Max, arm64 | release, one test thread | 1,000 one-page paragraphs with deterministic fonts | `cargo test -p rdocx --test regression_test --release a_thousand_page_document_paginates_and_renders_within_the_declared_limits -- --ignored --exact --nocapture --test-threads=1` | peak live allocation | 2026-09-19 |
 | Large-document PDF throughput | minimum 1,000 pages/s, observed 60,058.0 pages/s | rdocx 0.14.0 | macOS 26.6.2, Apple M5 Max, arm64 | release, one test thread | 1,000 deterministic layout pages | `cargo test -p rdocx --test regression_test --release a_thousand_page_document_paginates_and_renders_within_the_declared_limits -- --ignored --exact --nocapture --test-threads=1` | pages per wall-clock second | 2026-09-19 |
@@ -198,6 +198,21 @@ rdocx diff before.docx after.docx
 The [binding specification](https://github.com/tensorbee/rdocx/blob/main/docs/hld/10-bindings-spec.md#native-word-facade-stability)
 defines where Python, WebAssembly, and CLI intentionally expose less than
 native Rust.
+
+### One-shot CLI editing
+
+```sh
+rdocx replace template.docx --map pairs.json --json -o filled.docx
+rdocx fields update filled.docx --now 2026-10-10T08:30:00 -o cached.docx
+rdocx images extract cached.docx extracted-images --json
+rpptx slide add deck.pptx --layout 7 --at 1 -o updated.pptx
+rpptx notes set updated.pptx 1 --from-file notes.txt -o noted.pptx
+rpptx fit noted.pptx --json
+```
+
+Ordered replacement maps and one-shot mutations use checked native candidates
+and refuse input overwrite. The family CLI references define exact scopes,
+JSON records, field cache limits and fit exit codes.
 
 ### Community Claude plugin
 

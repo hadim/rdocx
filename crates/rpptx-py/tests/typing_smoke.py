@@ -6,6 +6,9 @@ from rpptx import (
     BoundingBox,
     AutofitRefreshResult,
     AutofitUpdate,
+    FitReport,
+    FitFrameReport,
+    FitTrial,
     Comment,
     CommentAuthor,
     CommentReply,
@@ -695,3 +698,16 @@ def _fx209_part_owned_typed_surface(prs: Presentation) -> None:
     master.theme.fonts.major.latin = "Carlito"
     assert_type(prs.apply_theme(prs.to_bytes(), source_master=0,
                                import_masters=False, layout_map=[]), None)
+
+
+def fx204_shared_operation_types(prs: Presentation) -> None:
+    assert_type(prs.replace_all([("x", "y", 1)]), tuple[int, ...])
+    assert_type(prs.slides.add_slide_at(prs.slide_layouts[6], 0), Slide)
+    report = prs.fit_report()
+    assert_type(report, FitReport)
+    assert_type(report.frames, tuple[FitFrameReport, ...])
+    frame = report.frames[0]
+    assert_type(frame.quantized_trial, FitTrial | None)
+    assert_type(frame.persisted_trial, FitTrial | None)
+    assert_type(frame.update.child_path, list[int])
+    assert_type(frame.update.name, str | None)

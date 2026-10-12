@@ -30,6 +30,8 @@ class ReplacementCountError(RpptxError):
         super().__init__(message, expected, found)
         self.expected = expected
         self.found = found
+        self.index: int | None = None
+        self.placeholder: str | None = None
 
     def __str__(self) -> str:
         return str(self.args[0])
@@ -37,12 +39,15 @@ class ReplacementCountError(RpptxError):
 
 from ._rpptx import Comment, CommentAuthor, CommentReply, Presentation, CoreProperties, AppProperties, CustomProperties, CustomProperty, CustomFileTime, Section, MediaInfo, GradientStops, GradientStop
 from ._rpptx import SlideTransition, HeaderFooter, PlaceholderFormat, SlideMaster, SlideMasterCollection, Theme, ThemeFonts, ThemeFontSet, ThemeColors, MasterTextStyles, TextStyleList
-from ._rpptx import AutofitRefreshResult, AutofitUpdate, BoundingBox, TextFrameLayout, TextLineLayout, ValidationIssue
+from ._rpptx import FitReport, FitFrameReport, FitTrial, AutofitRefreshResult, AutofitUpdate, BoundingBox, TextFrameLayout, TextLineLayout, ValidationIssue
 
 __all__ = [
     "MSO_PATTERN_TYPE", "MSO_PATTERN", "CoreProperties", "AppProperties", "CustomProperties", "CustomProperty", "CustomFileTime", "Section", "MediaInfo", "GradientStops", "GradientStop",
     "MSO_THEME_COLOR",
     "BoundingBox",
+    "FitReport",
+    "FitFrameReport",
+    "FitTrial",
     "AutofitRefreshResult",
     "AutofitUpdate",
     "Inches",

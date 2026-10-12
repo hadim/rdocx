@@ -1240,6 +1240,10 @@ pub struct PictureOccurrence {
     pub location: ContentLocation,
     pub ordinal: usize,
     pub relationship_id: String,
+    /// Internal media identity, independent of relationship spelling and bytes.
+    pub media_part_name: Option<String>,
+    /// External image source is metadata only and is never fetched.
+    pub external_url: Option<String>,
     pub width: i64,
     pub height: i64,
     pub name: Option<String>,
@@ -20053,13 +20057,8 @@ impl Document {
                         } else {
                             continue;
                         };
-                        if chart.is_some() || embed.is_empty() {
+                        if chart.is_some() || (embed.is_empty() && link.is_none()) {
                             continue;
-                        }
-                        if link.is_some() {
-                            return Err(Error::Other(
-                                "linked picture occurrence is unsupported".into(),
-                            ));
                         }
                         let raw = raw.as_ref().ok_or_else(|| {
                             Error::Other("picture has no physical source identity".into())
@@ -20112,31 +20111,73 @@ impl Document {
                         if width <= 0 || height <= 0 {
                             return Err(Error::Other("picture extent must be positive".into()));
                         }
-                        let target = self.validate_internal_relationship_for_story(
-                            &story,
-                            embed,
-                            rel_types::IMAGE,
-                        )?;
-                        let bytes = self
-                            .package
-                            .get_part(&target)
-                            .ok_or_else(|| Error::Other("picture media is missing".into()))?
-                            .to_vec();
-                        let content_type = self
-                            .package
-                            .content_types
-                            .content_type_for(&target)
-                            .filter(|kind| kind.starts_with("image/"))
-                            .ok_or_else(|| {
-                                Error::Other("picture media content type is unsupported".into())
-                            })?
-                            .to_owned();
+                        let relationship_id = link.as_deref().unwrap_or(embed);
+                        let (media_part_name, external_url, bytes, content_type) = if link.is_some()
+                        {
+                            let relationship = self
+                                .package
+                                .get_part_rels(&story.part_name)
+                                .and_then(|rels| rels.get_by_id(relationship_id))
+                                .ok_or_else(|| {
+                                    Error::Other("linked picture relationship is missing".into())
+                                })?;
+                            if relationship.rel_type != rel_types::IMAGE
+                                || relationship_is_internal(relationship)
+                            {
+                                return Err(Error::Other(
+                                    "linked picture must have an external image relationship"
+                                        .into(),
+                                ));
+                            }
+                            (
+                                None,
+                                Some(relationship.target.clone()),
+                                Vec::new(),
+                                String::new(),
+                            )
+                        } else {
+                            let target = self.validate_internal_relationship_for_story(
+                                &story,
+                                embed,
+                                rel_types::IMAGE,
+                            )?;
+                            let target = self
+                                .package
+                                .parts
+                                .keys()
+                                .filter(|name| {
+                                    OpcPackage::resolve_rel_target("/", name)
+                                        .eq_ignore_ascii_case(&target)
+                                })
+                                .min()
+                                .cloned()
+                                .ok_or_else(|| {
+                                    Error::Other("picture media identity is missing".into())
+                                })?;
+                            let bytes = self
+                                .package
+                                .get_part(&target)
+                                .ok_or_else(|| Error::Other("picture media is missing".into()))?
+                                .to_vec();
+                            let content_type = self
+                                .package
+                                .content_types
+                                .content_type_for(&target)
+                                .filter(|kind| kind.starts_with("image/"))
+                                .ok_or_else(|| {
+                                    Error::Other("picture media content type is unsupported".into())
+                                })?
+                                .to_owned();
+                            (Some(target), None, bytes, content_type)
+                        };
                         occurrences.push((
                             start,
                             PictureOccurrence {
                                 location: location.clone(),
                                 ordinal: 0,
-                                relationship_id: embed.clone(),
+                                relationship_id: relationship_id.to_owned(),
+                                media_part_name,
+                                external_url,
                                 width,
                                 height,
                                 name: name.clone(),
@@ -20171,6 +20212,11 @@ impl Document {
         width: Length,
         height: Length,
     ) -> Result<()> {
+        if picture.external_url.is_some() {
+            return Err(Error::Other(
+                "linked picture resizing is unsupported".into(),
+            ));
+        }
         let (width, height) = (width.to_emu(), height.to_emu());
         if width <= 0 || height <= 0 {
             return Err(Error::Other("picture dimensions must be positive".into()));
@@ -30826,6 +30872,9 @@ impl Document {
         &mut self,
         pairs: &[(&str, &str, Option<usize>)],
     ) -> Result<std::result::Result<Vec<usize>, ReplacementCountMismatch>> {
+        if pairs.is_empty() {
+            return Ok(Ok(Vec::new()));
+        }
         let mut candidate = self.clone_for_staging();
         let mut counts = Vec::with_capacity(pairs.len());
         for (index, &(placeholder, replacement, expected)) in pairs.iter().enumerate() {
@@ -31065,6 +31114,99 @@ impl Document {
             count += candidate.replace_regex_compiled(regex, replacement)?;
         }
         self.commit_staged_mutation(candidate);
+        Ok(count)
+    }
+
+    /// Apply ordered regex pairs with checked owner errors and atomic expected counts.
+    /// Patterns use Rust regex syntax. Empty batches preserve the original state.
+    pub fn try_replace_all_regex_expected(
+        &mut self,
+        pairs: &[(&str, &str, Option<usize>)],
+    ) -> Result<std::result::Result<Vec<usize>, ReplacementCountMismatch>> {
+        let compiled = pairs
+            .iter()
+            .map(|(pattern, replacement, expected)| {
+                oxml_core::xml::reject_non_xml_characters("replacement text", replacement)?;
+                let regex = regex::Regex::new(pattern)
+                    .map_err(|error| Error::Other(format!("invalid regex: {error}")))?;
+                Ok((regex, *replacement, *expected))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if pairs.is_empty() {
+            return Ok(Ok(Vec::new()));
+        }
+        let mut candidate = self.clone_for_staging();
+        let mut counts = Vec::with_capacity(pairs.len());
+        for (index, (regex, replacement, expected)) in compiled.iter().enumerate() {
+            let found = candidate.replace_regex_compiled_checked(regex, replacement)?;
+            if let Some(expected) = expected
+                && *expected != found
+            {
+                return Ok(Err(ReplacementCountMismatch {
+                    index,
+                    placeholder: pairs[index].0.to_owned(),
+                    expected: *expected,
+                    found,
+                }));
+            }
+            counts.push(found);
+        }
+        self.commit_staged_mutation(candidate.prepare_and_reopen_staged()?);
+        Ok(Ok(counts))
+    }
+
+    fn replace_regex_compiled_checked(
+        &mut self,
+        re: &regex::Regex,
+        replacement: &str,
+    ) -> Result<usize> {
+        use rdocx_oxml::placeholder;
+        self.flush_to_package()?;
+        let mut count = 0;
+        visit_body_paragraphs_mut(&mut self.document.body.content, &mut |paragraph| {
+            count += placeholder::replace_regex_in_paragraph(paragraph, re, replacement);
+        });
+        for (rel_id, is_header) in self.header_footer_rel_ids() {
+            let mut hf = self.load_header_footer(&rel_id, is_header).ok_or_else(|| {
+                Error::Other(format!("required header/footer {rel_id} cannot be read"))
+            })?;
+            let n = placeholder::replace_regex_in_header_footer(&mut hf, re, replacement);
+            if n > 0 {
+                self.save_header_footer(&rel_id, &hf, is_header)?;
+                count += n;
+            }
+        }
+        self.flush_to_package()?;
+        for (part_name, _) in self.text_bearing_part_names() {
+            let xml = self
+                .package
+                .get_part(&part_name)
+                .ok_or_else(|| Error::Other(format!("required text owner {part_name} is missing")))?
+                .to_vec();
+            let (changed, n) = placeholder::replace_regex_in_xml_part(&xml, re, replacement)?;
+            if changed != xml {
+                if part_name == self.doc_part_name {
+                    self.document = CT_Document::from_xml(&changed)?;
+                }
+                self.package.set_part(&part_name, changed);
+            }
+            count += n;
+        }
+        for part_name in self.note_part_names() {
+            let xml = self
+                .package
+                .get_part(&part_name)
+                .ok_or_else(|| Error::Other(format!("required note owner {part_name} is missing")))?
+                .to_vec();
+            let (changed, n) = placeholder::replace_regex_in_notes_part(&xml, re, replacement)?;
+            if changed != xml {
+                if self.footnotes_part_name.as_deref() == Some(part_name.as_str()) {
+                    self.footnotes = rdocx_oxml::footnotes::CT_Footnotes::from_xml(&changed)?;
+                }
+                self.package.set_part(&part_name, changed);
+            }
+            count += n;
+        }
         Ok(count)
     }
 
@@ -48138,4 +48280,70 @@ fn validate_document_package(package: OpcPackage) -> Result<ValidationReport> {
         }
     }
     Ok(document_validation_report(errors, warnings))
+}
+
+#[cfg(test)]
+#[test]
+fn fx204_checked_regex_late_note_failure_preserves_native_source() {
+    let mut document = Document::new();
+    document.add_paragraph("before");
+    document
+        .package
+        .set_part("/word/endnotes.xml", b"<w:endnotes".to_vec());
+    document.package.content_types.add_override(
+        "/word/endnotes.xml",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml",
+    );
+    document
+        .package
+        .get_or_create_part_rels(&document.doc_part_name.clone())
+        .add(rel_types::ENDNOTES, "endnotes.xml");
+    let before = document.document.to_xml().unwrap();
+    let package = document.package.parts.clone();
+    assert!(
+        document
+            .try_replace_all_regex_expected(&[("before", "after", Some(1))])
+            .is_err()
+    );
+    assert_eq!(document.document.to_xml().unwrap(), before);
+    assert_eq!(document.package.parts, package);
+}
+
+#[cfg(test)]
+#[test]
+fn fx204_checked_regex_counts_and_mismatch_are_atomic() {
+    let mut document = Document::new();
+    document.add_paragraph("a12 a34");
+    let original = document.document.to_xml().unwrap();
+    assert_eq!(
+        document
+            .try_replace_all_regex_expected(&[("a([0-9]+)", "b$1", Some(2)), ("b", "c", Some(1))])
+            .unwrap()
+            .unwrap_err()
+            .index,
+        1
+    );
+    assert_eq!(document.document.to_xml().unwrap(), original);
+    assert_eq!(
+        document
+            .try_replace_all_regex_expected(&[("a([0-9]+)", "b$1", Some(2)), ("b", "c", Some(2))])
+            .unwrap()
+            .unwrap(),
+        vec![2, 2]
+    );
+    assert_eq!(document.paragraph(0).unwrap().text(), "c12 c34");
+    let original = document.document.to_xml().unwrap();
+    assert!(
+        document
+            .try_replace_all_regex_expected(&[("c", "a", None), ("[", "x", None)])
+            .is_err()
+    );
+    assert_eq!(document.document.to_xml().unwrap(), original);
+    assert_eq!(
+        document
+            .try_replace_all_regex_expected(&[("", "x", Some(0))])
+            .unwrap()
+            .unwrap(),
+        vec![0]
+    );
 }

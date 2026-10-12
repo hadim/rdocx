@@ -19,6 +19,8 @@ from rdocx import (
     Inches,
     Length,
     LayoutFragment,
+    FieldEvaluation,
+    FieldsUpdateReport,
     LayoutBackedFieldUpdateReport,
     LayoutPage,
     ListLevel,
@@ -459,3 +461,16 @@ def fx203_owned_document_operations(document: Document, paragraph: Paragraph, pa
     inserted = paragraph.add_equation("x+1", format="latex")
     assert_type(inserted, EquationInsertResult)
     assert_type(inserted.equation.to_latex(), EquationConversionResult)
+
+
+def fx204_shared_operation_types(document: Document) -> None:
+    assert_type(document.replace_all_regex_expected([("x", "y", 1)]), tuple[int, ...])
+    assert_type(document.fill_content_control_tags([("tag", "value")]), tuple[int, ...])
+    fields_report = document.update_all_fields()
+    assert_type(fields_report, FieldsUpdateReport)
+    assert_type(fields_report.ordinary_updated, int)
+    assert_type(fields_report.layout, LayoutBackedFieldUpdateReport)
+    assert_type(fields_report.evaluations, tuple[FieldEvaluation, ...])
+    assert_type(fields_report.total_updated, int)
+    assert_type(fields_report.diagnostics, tuple[str, ...])
+    assert_type(fields_report.saved_cache_scope, str)

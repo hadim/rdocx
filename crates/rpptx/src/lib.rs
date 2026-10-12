@@ -429,6 +429,15 @@ pub struct PictureImage<'a> {
     pub bytes: &'a [u8],
 }
 
+/// A refused pair in an ordered transactional replacement batch.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReplacementCountMismatch {
+    pub index: usize,
+    pub placeholder: String,
+    pub expected: usize,
+    pub found: usize,
+}
+
 /// An error opening, resolving, or serialising a presentation package.
 #[derive(Debug, Error)]
 pub enum Error {
@@ -2894,6 +2903,39 @@ impl Presentation {
         candidate.staged_package(false)?;
         *self = candidate;
         Ok(count)
+    }
+
+    /// Applies ordered literal pairs on one candidate and publishes once.
+    ///
+    /// Counts refer to each pair's current candidate, so pairs may cascade.
+    /// A mismatch or serialization failure leaves the original unchanged.
+    pub fn try_replace_all_expected(
+        &mut self,
+        pairs: &[(&str, &str, Option<usize>)],
+    ) -> Result<std::result::Result<Vec<usize>, ReplacementCountMismatch>> {
+        for (placeholder, _, _) in pairs {
+            require_replacement_placeholder(placeholder)?;
+        }
+        if pairs.is_empty() {
+            return Ok(Ok(Vec::new()));
+        }
+        let mut candidate = self.clone();
+        let mut counts = Vec::with_capacity(pairs.len());
+        for (index, &(placeholder, value, expected)) in pairs.iter().enumerate() {
+            let found = candidate.replace_text(placeholder, value);
+            if let Some(expected) = expected.filter(|expected| *expected != found) {
+                return Ok(Err(ReplacementCountMismatch {
+                    index,
+                    placeholder: placeholder.to_owned(),
+                    expected,
+                    found,
+                }));
+            }
+            counts.push(found);
+        }
+        candidate.staged_package(false)?;
+        *self = candidate;
+        Ok(Ok(counts))
     }
 
     /// Replaces literal text on one slide, and in its speaker notes when
@@ -6261,6 +6303,31 @@ impl Presentation {
             },
         );
         Ok(inserted)
+    }
+
+    /// Inserts a new slide at a final zero-based position, including append.
+    ///
+    /// Layout selection, creation and placement share one staged publication.
+    pub fn add_slide_at(&mut self, layout_index: usize, position: usize) -> Result<usize> {
+        if layout_index >= self.layouts.len() {
+            return Err(Error::UnknownLayoutIndex {
+                index: layout_index,
+                layout_count: self.layouts.len(),
+            });
+        }
+        let old_count = self.slides.len();
+        let new_count = old_count.checked_add(1).ok_or(Error::SlideIdExhausted)?;
+        if position >= new_count {
+            return Err(Error::UnknownSlideIndex {
+                index: position,
+                slide_count: new_count,
+            });
+        }
+        let mut candidate = self.clone();
+        candidate.add_slide(layout_index)?;
+        candidate.move_slide(old_count, position)?;
+        self.commit_candidate(candidate)?;
+        Ok(position)
     }
 
     /// Synthesizes a new slide from one layout selected by zero-based index.
@@ -12286,6 +12353,16 @@ impl<'a> SlideMut<'a> {
                 message: "notes slide has no body placeholder".to_owned(),
             })?;
         body.set_text(text);
+        // The general DrawingML setter treats CRLF as a paragraph separator.
+        // Notes authoring retains the caller's exact line endings instead.
+        for (index, line) in text.split('\n').enumerate() {
+            body.paragraph_mut(index)
+                .ok_or_else(|| Error::InvalidSlideMutation {
+                    operation: "set notes text",
+                    message: "notes paragraph count changed during staging".to_owned(),
+                })?
+                .set_text(line);
+        }
         candidate
             .to_xml()
             .map_err(|error| Error::InvalidSlideMutation {

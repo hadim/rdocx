@@ -9170,3 +9170,79 @@ def test_fx209_master_layout_placeholders_share_physical_owner_and_persist():
         shape = next(shape for shape in owner.shapes if shape.is_placeholder)
         assert owner.placeholders[shape.placeholder_format.idx].text == f"Physical placeholder {index}"
     assert reopened.to_bytes() == saved
+
+
+def test_fx204_batches_keep_counts_notes_rollback_and_noop_handles():
+    import rpptx
+    prs = rpptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    shape = slide.shapes.add_textbox(0, 0, 3000000, 800000)
+    shape.text = "A A"
+    prs.slides[0].notes_text = "A"
+    held = prs.slides[0].shapes[-1].text_frame.paragraphs[0].runs[0]
+    before = prs.to_bytes()
+    assert prs.replace_all([]) == ()
+    assert prs.replace_all([("missing", "x", 0)]) == (0,)
+    assert prs.replace_all([("A", "A", 3)]) == (3,)
+    assert held.text == "A A" and prs.to_bytes() == before
+    with pytest.raises(rpptx.ReplacementCountError) as raised:
+        prs.replace_all([("A", "B", 3), ("B", "C", 4)])
+    assert raised.value.index == 1 and raised.value.placeholder == "B"
+    assert raised.value.expected == 4 and raised.value.found == 3
+    assert prs.to_bytes() == before and held.text == "A A"
+    with pytest.raises(rpptx.RpptxError):
+        prs.replace_all([("A", "B"), ("", "C")])
+    assert prs.to_bytes() == before and held.text == "A A"
+    assert prs.replace_all([("A", "B", 3), ("B", "C", 3)]) == (3, 3)
+    reopened = rpptx.Presentation.from_bytes(prs.to_bytes())
+    assert reopened.slides[0].shapes[-1].text == "C C"
+    assert reopened.slides[0].notes_text == "C"
+    with pytest.raises(rpptx.StaleElementError):
+        _ = held.text
+
+
+def test_fx204_add_at_preserves_physical_survivors_and_refusals():
+    import rpptx
+    prs = rpptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    slide.shapes.add_textbox(0, 0, 3000000, 800000).text = "survivor"
+    held = prs.slides[0].shapes[-1]
+    before = prs.to_bytes()
+    with pytest.raises(rpptx.RpptxError):
+        prs.slides.add_slide_at(prs.slide_layouts[6], 2)
+    assert prs.to_bytes() == before and held.text == "survivor"
+    other = rpptx.Presentation()
+    with pytest.raises(ValueError):
+        prs.slides.add_slide_at(other.slide_layouts[6], 0)
+    assert prs.to_bytes() == before
+    new_slide = prs.slides.add_slide_at(prs.slide_layouts[6], 0)
+    assert len(prs.slides) == 2 and len(new_slide.shapes) == 0
+    assert held.text == "survivor" and prs.slides[1].shapes[-1].text == "survivor"
+    new_slide.shapes.add_textbox(0, 0, 3000000, 800000).text = "new"
+    reopened = rpptx.Presentation.from_bytes(prs.to_bytes())
+    assert reopened.slides[0].shapes[-1].text == "new"
+    assert reopened.slides[1].shapes[-1].text == "survivor"
+
+
+def test_fx204_fit_snapshots_and_notes_are_readonly_and_exact():
+    import rpptx
+    prs = rpptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    slide.shapes.add_textbox(0, 0, 3000000, 800000).text = "short"
+    before = prs.to_bytes()
+    report = prs.fit_report()
+    assert isinstance(report, rpptx.FitReport)
+    assert isinstance(report.frames, tuple) and report.frames
+    assert isinstance(report.diagnostics, tuple)
+    frame = report.frames[0]
+    assert isinstance(frame, rpptx.FitFrameReport)
+    assert frame.update.owner_part and isinstance(frame.update.child_path, list)
+    assert not frame.overflow
+    assert frame.quantized_trial is None or isinstance(frame.quantized_trial, rpptx.FitTrial)
+    with pytest.raises(AttributeError):
+        frame.overflow = True
+    assert prs.to_bytes() == before
+    for text in ["first\r\nnext\n\n", "first\nnext", "first\rnext", "  π 日本語  ", ""]:
+        prs.slides[0].notes_text = text
+        reopened = rpptx.Presentation.from_bytes(prs.to_bytes())
+        assert reopened.slides[0].notes_text == text

@@ -5465,3 +5465,127 @@ def test_fx202_malformed_explicit_size_picture_preserves_held_owner(host):
         assert owner.text == "retained"
     elif host == "cell":
         assert owner.text == ""
+
+
+def test_fx204_counted_regex_preserves_failed_noop_and_empty_handles():
+    import rdocx
+    document = rdocx.Document()
+    document.add_paragraph("a12 a34")
+    held = document.paragraphs[0]
+    before = document.to_bytes()
+    assert document.replace_all_regex_expected([]) == ()
+    assert document.to_bytes() == before
+    assert held.text == "a12 a34"
+    assert document.replace_all_regex_expected([(r"missing", "x", 0)]) == (0,)
+    assert held.text == "a12 a34"
+    assert document.replace_all_regex_expected([(r"a([0-9]+)", "a$1", 2)]) == (2,)
+    assert held.text == "a12 a34"
+    with pytest.raises(rdocx.ReplacementCountError):
+        document.replace_all_regex_expected([(r"a([0-9]+)", "b$1", 2), ("b", "c", 1)])
+    assert document.to_bytes() == before
+    assert held.text == "a12 a34"
+    with pytest.raises(rdocx.RdocxError):
+        document.replace_all_regex_expected([("a", "b"), ("[", "c")])
+    assert document.to_bytes() == before
+    assert held.text == "a12 a34"
+    assert document.replace_all_regex_expected([(r"a([0-9]+)", "b$1", 2), ("b", "c", 2)]) == (2, 2)
+    assert rdocx.Document.from_bytes(document.to_bytes()).paragraphs[0].text == "c12 c34"
+    with pytest.raises(rdocx.StaleElementError):
+        _ = held.text
+
+
+def test_fx204_tag_fill_keeps_alias_and_late_refusal_atomic():
+    import rdocx
+    document = _replace_document_body(rdocx.Document(), '<w:sdt><w:sdtPr><w:tag w:val="client"/><w:alias w:val="alias"/><w:text/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>before</w:t></w:r></w:p></w:sdtContent></w:sdt>')
+    before = document.to_bytes()
+    for pairs in [[("client", "x"), ("missing", "y")], [("client", "x"), ("client", "y")], [("alias", "x")]]:
+        with pytest.raises(rdocx.RdocxError):
+            document.fill_content_control_tags(pairs)
+        assert document.to_bytes() == before
+    assert document.fill_content_control_tags([]) == ()
+    assert document.to_bytes() == before
+    assert document.fill_content_control_tags([("client", "Ada")]) == (1,)
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    assert reopened.content_controls()[0].text == "Ada"
+
+
+def test_fx204_combined_fields_keeps_explicit_and_omitted_time_policy():
+    import datetime
+    import rdocx
+    document = rdocx.Document()
+    paragraph = document.add_paragraph("Page ")
+    paragraph.add_run("").add_field("PAGE", "9")
+    document.paragraphs[0].add_run("").add_field("NUMPAGES", "9")
+    document.paragraphs[0].add_run("").add_field('DATE \\@ "yyyy-MM-dd"', "1999-01-01")
+    raw = document.to_bytes()
+    omitted = rdocx.Document.from_bytes(raw)
+    report = omitted.update_all_fields()
+    ordinary, pages = report.ordinary_updated, report.layout
+    assert isinstance(report, rdocx.FieldsUpdateReport)
+    assert isinstance(ordinary, int)
+    assert isinstance(pages, rdocx.LayoutBackedFieldUpdateReport)
+    assert report.total_updated == ordinary + pages.updated_count
+    assert [evaluation.field_index for evaluation in report.evaluations] == [0, 1, 2]
+    assert [evaluation.cached_result for evaluation in report.evaluations] == ["9", "9", "1999-01-01"]
+    assert [evaluation.outcome["kind"] for evaluation in report.evaluations] == ["deferred_pagination", "deferred_pagination", "keep_stored"]
+    assert report.diagnostics and "header-footer" in report.saved_cache_scope
+    assert pages.page_fields == 1 and pages.num_pages_fields == 1
+    assert omitted.paragraphs[0].text.endswith("1999-01-01")
+    explicit = rdocx.Document.from_bytes(raw)
+    report = explicit.update_all_fields(now=datetime.datetime(2026, 10, 10, 8, 30))
+    ordinary, pages = report.ordinary_updated, report.layout
+    assert ordinary >= 1 and pages.page_fields == 1
+    assert report.total_updated == ordinary + pages.updated_count
+    assert report.evaluations[2].outcome == {"kind": "resolved", "text": "2026-10-10"}
+    assert isinstance(report.evaluations[2], rdocx.FieldEvaluation)
+    assert explicit.paragraphs[0].text == "Page 112026-10-10"
+    assert rdocx.Document.from_bytes(explicit.to_bytes()).paragraphs[0].text == "Page 112026-10-10"
+
+
+def test_fx204_picture_media_facts_match_saved_owner():
+    from rdocx import Document
+    document = Document()
+    image = _one_pixel_png()
+    document.add_picture(image, "pixel.png", width=127000, height=127000)
+    picture = document.pictures()[0]
+    assert picture.media_part_name and picture.external_url is None
+    assert picture.bytes == image
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as archive:
+        assert archive.read(picture.media_part_name.lstrip("/")) == image
+    reopened = Document.from_bytes(document.to_bytes()).pictures()[0]
+    assert reopened.media_part_name == picture.media_part_name
+    assert reopened.external_url is None and reopened.bytes == image
+
+
+def test_fx204_field_report_allocation_failure_discards_candidate(monkeypatch):
+    import datetime
+    import json
+    import rdocx
+
+    document = rdocx.Document()
+    document.add_paragraph("retained ").add_run("").add_field('DATE \\@ "yyyy-MM-dd"', "1999-01-01")
+    held = document.paragraphs[0]
+    before, text = document.to_bytes(), held.text
+
+    def refuse_report_allocation(*args, **kwargs):
+        raise MemoryError("injected prepublication evaluation result allocation")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(json, "loads", refuse_report_allocation)
+        with pytest.raises(MemoryError, match="prepublication"):
+            document.update_all_fields(now=datetime.datetime(2026, 10, 10))
+        assert document.to_bytes() == before and held.text == text
+
+    report = document.update_all_fields(now=datetime.datetime(2026, 10, 10))
+    assert isinstance(report, rdocx.FieldsUpdateReport)
+    assert report.evaluations[0].cached_result == "1999-01-01"
+    assert report.evaluations[0].outcome == {"kind": "resolved", "text": "2026-10-10"}
+    assert rdocx.Document.from_bytes(document.to_bytes()).paragraphs[0].text == "retained 2026-10-10"
+
+    empty = rdocx.Document()
+    empty.add_paragraph("still live")
+    held = empty.paragraphs[0]
+    before = empty.to_bytes()
+    report = empty.update_all_fields()
+    assert report.total_updated == 0 and report.evaluations == ()
+    assert held.text == "still live" and empty.to_bytes() == before

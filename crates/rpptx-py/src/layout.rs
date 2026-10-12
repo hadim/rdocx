@@ -9,6 +9,9 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyTextFrameLayout>()?;
     module.add_class::<PyAutofitUpdate>()?;
     module.add_class::<PyAutofitRefreshResult>()?;
+    module.add_class::<PyFitTrial>()?;
+    module.add_class::<PyFitFrameReport>()?;
+    module.add_class::<PyFitReport>()?;
     Ok(())
 }
 
@@ -192,6 +195,10 @@ pub struct PyAutofitUpdate {
     #[pyo3(get)]
     owner_part: String,
     #[pyo3(get)]
+    child_path: Vec<usize>,
+    #[pyo3(get)]
+    name: Option<String>,
+    #[pyo3(get)]
     owner_kind: String,
     #[pyo3(get)]
     slide_index: Option<usize>,
@@ -223,6 +230,8 @@ impl From<&rpptx::AutofitUpdate> for PyAutofitUpdate {
     fn from(update: &rpptx::AutofitUpdate) -> Self {
         Self {
             owner_part: update.location.owner_part.clone(),
+            child_path: update.location.child_path.clone(),
+            name: update.name.clone(),
             owner_kind: update.owner_kind.clone(),
             slide_index: update.slide_index,
             shape_id: update.shape_id,
@@ -291,5 +300,102 @@ impl PyAutofitRefreshResult {
     #[getter]
     fn changed(&self) -> bool {
         self.changed
+    }
+}
+
+/// One shared solver trial. Dimensions and heights are in points.
+#[pyclass(name = "FitTrial", frozen, get_all, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq)]
+pub struct PyFitTrial {
+    usable: PyBoundingBox,
+    physical_height: f64,
+    line_advance_height: f64,
+    font_scale: f64,
+    width_fits: bool,
+    fits: bool,
+}
+
+/// Read-only physical owner facts from the common native fit provider.
+#[pyclass(name = "FitFrameReport", frozen, get_all, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq)]
+pub struct PyFitFrameReport {
+    update: PyAutofitUpdate,
+    context: String,
+    overflow: bool,
+    needed_scale: Option<u32>,
+    needed_reduction: Option<u32>,
+    measured_font_scale: Option<f64>,
+    current_line_spacing_reduction: Option<f64>,
+    quantized_trial: Option<PyFitTrial>,
+    persisted_trial: Option<PyFitTrial>,
+}
+
+#[pyclass(name = "FitReport", frozen, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq)]
+pub struct PyFitReport {
+    frames: Vec<PyFitFrameReport>,
+    diagnostics: Vec<String>,
+}
+
+impl From<&rpptx::FitReport> for PyFitReport {
+    fn from(report: &rpptx::FitReport) -> Self {
+        Self {
+            frames: report
+                .frames
+                .iter()
+                .map(|frame| PyFitFrameReport {
+                    update: PyAutofitUpdate::from(&frame.update),
+                    context: frame.context.clone(),
+                    overflow: frame.overflow,
+                    needed_scale: frame.needed_scale,
+                    needed_reduction: frame.needed_reduction,
+                    measured_font_scale: frame.measured_font_scale,
+                    current_line_spacing_reduction: frame.current_line_spacing_reduction,
+                    quantized_trial: frame.quantized_trial.as_ref().map(|trial| PyFitTrial {
+                        usable: PyBoundingBox {
+                            x: trial.usable.x,
+                            y: trial.usable.y,
+                            width: trial.usable.width,
+                            height: trial.usable.height,
+                        },
+                        physical_height: trial.physical_height,
+                        line_advance_height: trial.line_advance_height,
+                        font_scale: trial.font_scale,
+                        width_fits: trial.width_fits,
+                        fits: trial.fits,
+                    }),
+                    persisted_trial: frame.persisted_trial.as_ref().map(|trial| PyFitTrial {
+                        usable: PyBoundingBox {
+                            x: trial.usable.x,
+                            y: trial.usable.y,
+                            width: trial.usable.width,
+                            height: trial.usable.height,
+                        },
+                        physical_height: trial.physical_height,
+                        line_advance_height: trial.line_advance_height,
+                        font_scale: trial.font_scale,
+                        width_fits: trial.width_fits,
+                        fits: trial.fits,
+                    }),
+                })
+                .collect(),
+            diagnostics: report
+                .diagnostics
+                .iter()
+                .map(|d| d.message.clone())
+                .collect(),
+        }
+    }
+}
+
+#[pymethods]
+impl PyFitReport {
+    #[getter]
+    fn frames<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, self.frames.iter().cloned())
+    }
+    #[getter]
+    fn diagnostics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, &self.diagnostics)
     }
 }

@@ -1826,3 +1826,25 @@ DrawingML text watermark compatibility preserves one WPS choice and a real VML t
 Document import closes the native fragment dependency graph before publication. Physical locations retain story identity, item kind and index path. Invalid destination indices refuse even when the imported document is empty. Reading properties or exporting text does not allocate package parts. Custom-property snapshots retain PID, fmtid, type and raw unsupported values. App-property mutations act on the latest owner and preserve unrelated producer fields.
 
 Checkbox admission and state selection use expanded Word2010 names, including qualified aliases and the default namespace. Only the selected qualified checked value changes. Foreign same-name elements, attributes, namespace declarations and opaque child order remain source-owned. The selected Unicode scalar and state font are admitted together before any matching control changes. Forbidden XML text and late invalid state values refuse the entire operation.
+
+## Picture extraction and one-shot publication
+
+Word picture occurrences retain physical story ownership separately from
+shared media identity. Case aliases resolve to the actual owning package key.
+External IMAGE relationships retain URL metadata and have no embedded bytes,
+media part or extracted file. Linked resizing remains unsupported.
+Extraction preloads complete source bytes, then publishes generated flat names
+for each unique internal part in deterministic first-occurrence order.
+Distinct parts remain distinct even when their bytes match. Missing internal
+media/relationships refuse before output creation. Symlink directories,
+existing destinations and input aliases refuse. Empty extraction creates no
+unnecessary directory. Recoverable nonreplacing publication failure removes
+this invocation's files and an empty newly created directory, preserving
+preexisting unrelated files. Cleanup is best effort and does not promise
+crash-atomic multi-file renames.
+
+Ordered replacement, tag fill, combined fields and slide creation/placement
+use one candidate and checked final publication. Late count, owner or
+serialization failure cannot publish a partial native edit. New CLI mutation
+outputs use the existing extension-based package class and VBA/signature
+contracts, and success JSON follows file publication.

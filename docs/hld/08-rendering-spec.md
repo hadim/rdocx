@@ -2588,3 +2588,21 @@ Qualified picture drawing properties with hidden=true or hidden=1 do not paint. 
 Checked empty-row creation copies admitted last-row formatting and logical occupancy without copying content, related media or document-wide identities. New rows clear vertical-merge continuation. Column operations use logical grid coordinates and the selected reference column for widths and cell properties. Insertions expand crossing spans, preserve omitted cells and reject unsupported opaque-property cloning. Deletion retains consistent grid and cell widths and refuses the final column. Splitting restores the complete merge region and keeps each original member's content and producer identity at its leftmost resulting cell. Only admitted cell formatting is copied into newly materialized empty cells. An ordinary cell stays unchanged. Every structural operation stages the document and reopens before publication.
 
 Picture inventory identifies one physical DrawingML owner by its checked story, paragraph occurrence and unchanged source. Two drawings sharing media remain distinct. Inventory returns owned image bytes, content type, extent and metadata, while refusing ambiguous alternate representations. Resizing transports only qualified owner extent edits onto the original source and retains crop, metadata, relationships and unmodelled XML. The native relationship-wide compatibility method remains distinct. Supported configured imports allocate media on the actual body, cell or related-story part before one atomic publication.
+
+## Read-only fit and count consumers
+
+PowerPoint CLI fit and Python fit_report consume the common authoring solver's
+read-only FitReport. They retain owner contexts, admitted table cells, empty
+frames, measured/stored scale, hypothetical needed total scale/reduction,
+quantized and persisted trial containment and provider diagnostics. Trials
+report points, stored bounds EMU and integer solver scale/reduction values in
+hundred-thousandths. Unsupported mandatory owners refuse rather than vanish,
+and no permitted fitting trial retains a null needed scale. Caller fonts use
+the same strict preparation and deterministic bundled fallback as rendering.
+The report does not mutate autofit or save the presentation.
+
+Word inspect page counts and combined layout-backed field updates use the
+native deterministic layout provider. Accepted-main-body word and Unicode
+scalar counts remain distinct from layout page counts. Unsupported field
+switches and intentionally retained dynamic header/footer caches keep their
+provider diagnostics, and omitted explicit date context never reads a clock.

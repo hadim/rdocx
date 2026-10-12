@@ -1,10 +1,10 @@
 # F-X204, Shared CLI one-shot editing commands
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X202, F-X203, F-X205, F-X207
-**Implementation**: not claimed, no source or Cargo changes
+**Implementation**: claimed by codex at 9ef5ec193c7ebb5daa49acf1144dd2fa088d441f. Completed provider prefix 4bb17d5fe0dc6187553fa5f8c63aba224f5d621c retains that ancestry. Native, Python and CLI implementation is complete, independently reviewed and scoped verified.
 
 ## Problem
 
@@ -399,16 +399,16 @@ unexplained hash delta to CLI work or move the exclusive baseline.
 
 ## Implementation checklist
 
-- [ ] Review and reduce actual capability dependencies and assign native/Python provider ownership.
-- [ ] Capture installed/native Base failures and existing supported controls.
-- [ ] Finalize map grammar, exact ordered rollback semantics and JSON schema.
-- [ ] Add common counted batch/regex/field orchestration operations with Python exposure.
-- [ ] Add thin commands consuming provider image/count/control/meta/fit surfaces.
-- [ ] Add every command's existing-entrypoint integration test and filesystem rollback controls.
-- [ ] Update help, existing reference text, stubs and HLD contracts.
-- [ ] Run focused evidence, applicable riders, unchanged hash and scoped gate.
-- [ ] Obtain independent microscope over final diff including measured records.
-- [ ] Prepare only after the full contract is satisfied, with no worker ledger edits.
+- [x] Review and reduce actual capability dependencies and assign native/Python provider ownership.
+- [x] Capture installed/native Base failures and existing supported controls.
+- [x] Finalize map grammar, exact ordered rollback semantics and JSON schema.
+- [x] Add common counted batch/regex/field orchestration operations with Python exposure.
+- [x] Add thin commands consuming provider image/count/control/meta/fit surfaces.
+- [x] Add every command's existing-entrypoint integration test and filesystem rollback controls.
+- [x] Update help, existing reference text, stubs and HLD contracts.
+- [x] Run focused evidence, applicable riders, unchanged hash and scoped gate.
+- [x] Obtain independent microscope over final diff including measured records.
+- [x] Prepare only after the full contract is satisfied, with no worker ledger edits.
 
 ## Open questions
 

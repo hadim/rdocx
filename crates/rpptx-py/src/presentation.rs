@@ -1213,6 +1213,26 @@ impl PyPresentation {
         }
     }
 
+    /// Read-only fit facts from the shared native solver, with caller fonts.
+    #[pyo3(signature=(*,fonts=None,font_dir=None,font_dirs=None))]
+    fn fit_report<'py>(
+        &self,
+        py: Python<'py>,
+        fonts: Option<Vec<(String, Bound<'py, PyBytes>)>>,
+        font_dir: Option<PathBuf>,
+        font_dirs: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<crate::layout::PyFitReport> {
+        let files = collect_caller_fonts(py, fonts, font_dir, font_dirs)?.unwrap_or_default();
+        let refs = files
+            .iter()
+            .map(|f| (f.family.as_str(), f.data.as_slice()))
+            .collect::<Vec<_>>();
+        let result = py
+            .detach(|| self.inner.fit_report(&refs))
+            .map_err(|e| rpptx_to_pyerr(py, e))?;
+        Ok(crate::layout::PyFitReport::from(&result))
+    }
+
     /// Explicit authoring transaction. Existing content handles keep their paths.
     #[pyo3(signature=(*,fonts=None,font_dir=None,font_dirs=None))]
     fn refresh_autofit<'py>(
@@ -1470,6 +1490,68 @@ impl PyPresentation {
             expect,
             "Presentation.try_replace_text",
         )
+    }
+
+    /// Applies an ordered counted batch and publishes one owner revision.
+    fn replace_all<'py>(
+        &mut self,
+        py: Python<'py>,
+        pairs: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyTuple>> {
+        let mut owned = Vec::new();
+        for (index, pair) in pairs.try_iter()?.enumerate() {
+            let pair = pair?;
+            let parsed = match pair.extract::<(String, String)>() {
+                Ok((old, new)) => (old, new, None),
+                Err(_) => pair.extract::<(String, String, Option<usize>)>().map_err(|_| {
+                    PyTypeError::new_err(format!("pair {index} must be an (old, new) or (old, new, expected) tuple, where expected is a nonnegative int or None"))
+                })?,
+            };
+            owned.push(parsed);
+        }
+        let pairs = owned
+            .iter()
+            .map(|(old, new, expected)| (old.as_str(), new.as_str(), *expected))
+            .collect::<Vec<_>>();
+        let mut candidate = self.inner.clone();
+        let counts = py
+            .detach(|| candidate.try_replace_all_expected(&pairs))
+            .map_err(|error| rpptx_to_pyerr(py, error))?
+            .map_err(|mismatch| {
+                let error = replacement_count_to_pyerr(
+                    py,
+                    &mismatch.placeholder,
+                    mismatch.expected,
+                    mismatch.found,
+                );
+                if let Err(attribute_error) = error
+                    .value(py)
+                    .setattr("index", mismatch.index)
+                    .and_then(|()| error.value(py).setattr("placeholder", mismatch.placeholder))
+                {
+                    return attribute_error;
+                }
+                error
+            })?;
+        let result = PyTuple::new(py, counts)?;
+        let changed = py
+            .detach(|| -> rpptx::Result<bool> {
+                Ok(self.inner.to_bytes()? != candidate.to_bytes()?)
+            })
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        if changed {
+            let survivors = self.replaced_text_owners(&candidate)?;
+            let prepared = self.prepare_owners(
+                &candidate,
+                "Presentation.replace_all",
+                &survivors,
+                false,
+                false,
+                false,
+            )?;
+            self.publish_owners(candidate, prepared)?;
+        }
+        Ok(result)
     }
 
     /// Alias for the checked literal replacement operation.

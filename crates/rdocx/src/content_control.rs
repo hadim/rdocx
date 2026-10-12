@@ -143,6 +143,34 @@ impl Document {
         })
     }
 
+    /// Fill distinct tags atomically, refusing missing tags and invalid late owners.
+    /// Aliases do not participate. Counts retain the caller's order.
+    pub fn fill_content_control_tags(&mut self, pairs: &[(&str, &str)]) -> Result<Vec<usize>> {
+        let mut seen = std::collections::HashSet::new();
+        for &(tag, value) in pairs {
+            if !seen.insert(tag) {
+                return Err(Error::Other(format!(
+                    "duplicate content-control tag {tag:?}"
+                )));
+            }
+            oxml_core::xml::reject_non_xml_characters("content-control value", value)?;
+        }
+        if pairs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut candidate = self.clone_for_staging();
+        let mut counts = Vec::with_capacity(pairs.len());
+        for &(tag, value) in pairs {
+            let count = candidate.set_content_control_value_by_tag(tag, value)?;
+            if count == 0 {
+                return Err(Error::Other(format!("no content control has tag {tag:?}")));
+            }
+            counts.push(count);
+        }
+        self.commit_staged_mutation(candidate.prepare_and_reopen_staged()?);
+        Ok(counts)
+    }
+
     /// Replace the display and bound custom XML value of controls with `alias`.
     pub fn set_content_control_value_by_alias(
         &mut self,

@@ -14,11 +14,11 @@ use oxml_py_support::StaleElementError;
 
 use document::{
     PyBookmark, PyBoundingBox, PyComment, PyComparisonDiagnostic, PyContentFragment,
-    PyCoreProperties, PyDocument, PyHeaderFooter, PyHeaderFooterVariant, PyHyperlink,
-    PyLayoutBackedFieldUpdateReport, PyLayoutFragment, PyLayoutPage, PyListLevel, PyNote,
-    PyRevision, PyRunPosition, PyRunRange, PySection, PySectionHandle, PySettings, PyStory,
-    PyStoryItem, PyStoryRunPosition, PyStoryRunRange, PyStyle, PySvgDiagnostic, PySvgRenderResult,
-    PyTocRebuildReport,
+    PyCoreProperties, PyDocument, PyFieldEvaluation, PyFieldsUpdateReport, PyHeaderFooter,
+    PyHeaderFooterVariant, PyHyperlink, PyLayoutBackedFieldUpdateReport, PyLayoutFragment,
+    PyLayoutPage, PyListLevel, PyNote, PyRevision, PyRunPosition, PyRunRange, PySection,
+    PySectionHandle, PySettings, PyStory, PyStoryItem, PyStoryRunPosition, PyStoryRunRange,
+    PyStyle, PySvgDiagnostic, PySvgRenderResult, PyTocRebuildReport,
 };
 use formatting::{PyColorFormat, PyFont, PyParagraphFormat};
 use paragraph::{PyParagraph, PyParagraphCollection};
@@ -176,6 +176,8 @@ fn _rdocx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyLayoutFragment>()?;
     module.add_class::<PyLayoutPage>()?;
     module.add_class::<PyLayoutBackedFieldUpdateReport>()?;
+    module.add_class::<PyFieldEvaluation>()?;
+    module.add_class::<PyFieldsUpdateReport>()?;
     module.add_class::<PyTocRebuildReport>()?;
     module.add_class::<PyRevision>()?;
     module.add_class::<PyStory>()?;
