@@ -5,11 +5,11 @@
 **Size**: L
 **Depends on**: F-X194, F-X198, F-X206
 
-The design is approved. Implementation waits for completed dependencies and exclusive source claims.
-Both prerequisites remain unfinished. Do not claim or start this story until
-their reviewed integration and the decisions below are complete. Sources and
-citations were checked against canonical head
-`360b5b1cf77d19e7fe5c4cc26152dd55a00d12c1` and the frozen X198 worker.
+The design is approved. F-X194, F-X198 and F-X206 are completed. The
+F-X203 scoped integration has released the shared Word source boundary.
+Implementation claims the current canonical delivery checkpoint. Historical
+line citations below identify the original analysis and must be reconciled
+against the actual claim Base. The accepted operation contracts are unchanged.
 
 ## Problem
 
