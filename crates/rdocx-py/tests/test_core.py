@@ -691,6 +691,8 @@ def test_issue_351_spaces_on_both_sides_of_a_span_edge_collapse_into_one():
         ("a ", *plain), ("b ", False, False, True, False), ("c", False, False, True, True), (" d", *plain)]
     linked, _ = rdocx.Document.from_html('<p>a <a href="https://example.test/">b </a> c</p>')
     assert [run.text for run in linked.paragraphs[0].runs] == ["a ", "b ", "c"]
+    kept, _ = rdocx.Document.from_html("<p>a&nbsp;&nbsp;<s>b</s></p>")
+    assert kept.paragraphs[0].text == "a\u00a0\u00a0b"
     md, _ = rdocx.Document.from_markdown("a [b ](https://example.test/) c\n\na [ b](https://example.test/)\n")
     assert [run.text for run in md.paragraphs[0].runs] == ["a ", "b ", "c"]
     assert [run.text for run in md.paragraphs[1].runs] == ["a ", "b"]

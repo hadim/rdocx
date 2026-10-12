@@ -229,6 +229,8 @@ fn html_import_collapses_spaces_on_both_sides_of_a_span_edge_into_one() {
             "a <s>b </s><i> </i> c",
             "a <a href='https://example.test/'>b </a> c",
             "a <a href='https://example.test/'> b</a>",
+            // A non-breaking space is not collapsible and stays as written.
+            "a&nbsp;&nbsp;<s>b</s>",
         ]),
         [
             runs(&[("a ", PLAIN), ("b ", B), ("c", BI), (" d", PLAIN)]),
@@ -236,6 +238,7 @@ fn html_import_collapses_spaces_on_both_sides_of_a_span_edge_into_one() {
             runs(&[("a ", PLAIN), ("b ", S), ("c", PLAIN)]),
             runs(&[("a ", PLAIN), ("b ", PLAIN), ("c", PLAIN)]),
             runs(&[("a ", PLAIN), ("b", PLAIN)]),
+            runs(&[("a\u{a0}\u{a0}", PLAIN), ("b", S)]),
         ]
     );
 }

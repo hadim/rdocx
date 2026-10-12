@@ -5518,6 +5518,11 @@ fn spaces_on_both_sides_of_a_span_edge_collapse_into_one() {
         marked_runs(&nested.paragraph(2).unwrap()),
         runs(&[("a ", PLAIN), ("b ", S), ("c", PLAIN)])
     );
+    // A non-breaking space is not collapsible and stays as written.
+    let kept = html("<p>a&nbsp;&nbsp;<s>b</s></p><p>a <s>b </s>&nbsp;c</p>");
+    assert_eq!(kept.paragraph(0).unwrap().text(), "a\u{a0}\u{a0}b");
+    assert_eq!(kept.paragraph(1).unwrap().text(), "a b \u{a0}c");
+
     // A link keeps the space it ends with, and the text after it none.
     let link_texts = |document: &Document| {
         document

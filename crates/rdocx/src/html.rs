@@ -4085,7 +4085,9 @@ impl Importer<'_> {
                             && emitted
                             && let Some(space) = space_style.take_if(|space| {
                                 !same_run_format(space, &style)
-                                    && text.chars().any(|character| !character.is_whitespace())
+                                    && text
+                                        .chars()
+                                        .any(|character| !character.is_ascii_whitespace())
                             })
                         {
                             if space_ends_last_run
@@ -4104,7 +4106,9 @@ impl Importer<'_> {
                                 apply_run_style(&mut run, &space);
                             }
                             pending_space = false;
-                            text = text.trim_start_matches(char::is_whitespace);
+                            text = text.trim_start_matches(|character: char| {
+                                character.is_ascii_whitespace()
+                            });
                         }
                         let was_pending = pending_space;
                         let normalized = collapse_text(text, &mut pending_space, emitted);
@@ -4310,11 +4314,13 @@ fn same_run_format(left: &ComputedStyle, right: &ComputedStyle) -> bool {
         && left.hyperlink == right.hyperlink
 }
 
+/// Collapses each run of HTML whitespace (space, tab and line breaks) into
+/// one pending space. A non-breaking space is not collapsible: it is text.
 fn collapse_text(text: &str, pending_space: &mut bool, already_emitted: bool) -> String {
     let mut output = String::new();
     let mut emitted = already_emitted;
     for character in text.chars() {
-        if character.is_whitespace() {
+        if character.is_ascii_whitespace() {
             *pending_space = true;
         } else {
             if *pending_space && emitted {
