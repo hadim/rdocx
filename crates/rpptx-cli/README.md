@@ -20,7 +20,7 @@ replaces text, and produces deterministic fixed output.
 
 | Measurement | Value | Version | Platform | Build mode | Input | Command | Statistic | Measured on |
 |---|---|---|---|---|---|---|---|---|
-| Crates.io archive: rpptx-cli | 55,081 compressed bytes, 248,811 member bytes, 8 members | 0.14.0 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `rpptx-cli` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-10-12 |
+| Crates.io archive: rpptx-cli | 59,021 compressed bytes, 270,586 member bytes, 8 members | 0.14.0 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `rpptx-cli` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-10-13 |
 
 ## Use it when
 
@@ -173,3 +173,24 @@ The same common operations are exposed in Python as
 index/placeholder/expected/found, and failed or actual no-op batches preserve
 held content handles. FitReport, FitFrameReport and FitTrial are frozen
 snapshots rather than mutable owner selectors.
+
+## Licensed font embedding
+
+Use caller-owned font files only after confirming their embedding license.
+Embedding requires explicit authorization and exact license identity. Commands
+write a new output and refuse input/font aliases or existing destinations.
+
+```bash
+rpptx font embed input.pptx --name "My Face" --font ./MyFace-Regular.ttf \
+  --license-authorized --license-identity "SIL Open Font License 1.1" \
+  --output embedded.pptx
+rpptx font list embedded.pptx --json
+rpptx font settings embedded.pptx --embed-true-type-fonts false --output disabled.pptx
+rpptx font remove embedded.pptx --name "My Face" --kind regular --output removed.pptx
+```
+
+The four CLI kinds are regular, bold, italic and bold-italic. Settings accept
+true, false or none, with none removing the owned value. Listing reports actual
+native part, format and byte-length facts in the schema1 JSON envelope.
+PowerPoint preserves compressed/unknown imported font data and reports absent
+decoded bytes. save-subset-fonts is the other presence-sensitive setting.

@@ -4037,3 +4037,55 @@ missing historical timeline and SmartArt oracle fixtures as unqualified.
 Focused applicable feature gates do not infer oracle credit from early returns
 or substitute package inspection for native application acceptance.
 
+## Embedded font acceptance
+
+Font regressions exercise actual supported caller bytes, all four face kinds,
+explicit license refusals, native graph transactions and installed Python/CLI
+listing, replacement, removal and tri-state settings. Short binary reads must
+reach real EOF, and valid first chunks followed by invalid data or later
+exceptions must refuse atomically. Real allocation-failure controls intercept
+the actual result allocator and prove unchanged bytes and held owners before
+a successful unarmed successor.
+
+Round-trip controls distinguish source-built graphs from authentic Word and
+PowerPoint font-bearing producers. Preserve exact source font lists, parts,
+relationships, flags and content types, including opaque compressed formats.
+Hostile declared lengths, duplicate/foreign ownership and repeated aliases
+require bounded explicit errors, copy-on-write and physical byte sharing.
+
+Own-render controls identify actual regular/bold/italic font bodies and compare
+positive outputs with disabled/missing/caller-override negatives through the
+real entrypoints in deterministic mode. Native application acceptance remains
+a separate recorded gate with actual app/build, source/output/font hashes,
+uninstalled test identities and distinguishing fallback controls. Cached or
+unperformed native controls receive no interoperability credit. Fresh paired
+wheels require complete member/RECORD/native-source identity, exact installed
+nodes, strict typing and complete stub agreement.
+
+Native Office qualification retains five original controls per family:
+positive, missing-font, disabled embedding flag, raw stored format and changed
+face. Each has distinct input/output hashes, actual app/build, native open and
+normal saved-copy reopen observations, complete relationship graphs and local
+printing PDFs. Font use is checked through actual embedded PDF streams, text
+painting operations, character maps, glyph outlines and advances. Arbitrary
+PDF resource names and merely heavier pixels do not prove a genuine bold face.
+
+PowerPoint's positive uses both prepared faces and retains its EOT parts.
+Native unavailable-font warnings remain warnings, not repair-free font-use
+credit. Raw-format fresh reopen evidence comes from the explicit opening
+after a known close, not an earlier action that might reactivate a window.
+
+Word's positive records actual regular use, synthetic bold and empty native
+saved bold parts under the approved one-font-per-name boundary. Fresh family
+and fresh UUID controls isolate the pre-save result, and a single bold-body
+control proves font loading without substituting for multi-face acceptance.
+That additional interoperability belongs to F-X223. Word's disabled control
+retains its first loaded-face PDF and the different reopened fallback PDF
+after native font-part removal. It does not falsely assert raster continuity.
+Changed-face controls built from one regular body can synthesize a bold
+variant and do not replace the genuine PowerPoint paired-face positive.
+
+Native application normalization remains separate from the library's exact
+unrelated-edit preservation controls. Known absent historical movie and PNG
+oracles remain unqualified under their S92 disposition. Original failed
+commands and distinct successful successors retain their actual membership.

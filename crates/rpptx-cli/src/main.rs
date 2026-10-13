@@ -16,7 +16,67 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+enum FontCommand {
+    /// List native font records and faces
+    List {
+        file: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Embed one caller-owned font face with explicit license authorization
+    Embed {
+        file: PathBuf,
+        /// Exact font record/typeface name
+        #[arg(long)]
+        name: String,
+        /// Local TrueType or OpenType font file
+        #[arg(long)]
+        font: PathBuf,
+        #[arg(long, default_value = "regular", value_parser = ["regular", "bold", "italic", "bold-italic"])]
+        kind: String,
+        /// Explicitly authorize embedding under the identified license
+        #[arg(long, required = true)]
+        license_authorized: bool,
+        #[arg(long)]
+        license_identity: String,
+        #[arg(long, short = 'o')]
+        output: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove a named font record, or only the selected embedded face
+    Remove {
+        file: PathBuf,
+        #[arg(long)]
+        name: String,
+        #[arg(long, value_parser = ["regular", "bold", "italic", "bold-italic"])]
+        kind: Option<String>,
+        #[arg(long, short = 'o')]
+        output: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Read flags, or set explicitly named tri-state flags into a new output
+    Settings {
+        file: PathBuf,
+        #[arg(long, value_parser = ["true", "false", "none"])]
+        embed_true_type_fonts: Option<String>,
+        #[arg(long, value_parser = ["true", "false", "none"])]
+        save_subset_fonts: Option<String>,
+        #[arg(long, short = 'o')]
+        output: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum Command {
+    /// List, embed, remove and configure explicitly licensed fonts
+    Font {
+        #[command(subcommand)]
+        command: FontCommand,
+    },
     /// Print presentation structure and metadata
     Inspect {
         file: PathBuf,
@@ -447,6 +507,51 @@ fn run_cli() {
         }
     }
     let result = match cli.command {
+        Command::Font { command } => match command {
+            FontCommand::List { file, json } => commands::font_list(&file, json),
+            FontCommand::Embed {
+                file,
+                name,
+                font,
+                kind,
+                license_authorized,
+                license_identity,
+                output,
+                json,
+            } => commands::font_embed(
+                &file,
+                &commands::FontEmbedOptions {
+                    name: &name,
+                    font: &font,
+                    kind: &kind,
+                    license_authorized,
+                    license_identity: &license_identity,
+                    output: &output,
+                    json,
+                },
+            ),
+            FontCommand::Remove {
+                file,
+                name,
+                kind,
+                output,
+                json,
+            } => commands::font_remove(&file, &name, kind.as_deref(), &output, json),
+            FontCommand::Settings {
+                file,
+                embed_true_type_fonts,
+                save_subset_fonts,
+                output,
+                json,
+            } => commands::font_settings(
+                &file,
+                embed_true_type_fonts.as_deref(),
+                save_subset_fonts.as_deref(),
+                output.as_deref(),
+                json,
+            ),
+        },
+
         Command::Inspect { file, json } => commands::inspect(&file, json),
         Command::Text { file, json, notes } => commands::text(&file, json, notes),
         Command::Convert {

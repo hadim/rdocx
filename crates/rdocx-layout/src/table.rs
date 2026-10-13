@@ -2397,6 +2397,7 @@ mod tests {
             core_properties: None,
             theme: None,
             fonts: Vec::new(),
+            embedded_fonts: Vec::new(),
         };
         let media = MediaRegistry::new(&input.images);
         let mut font_manager = FontManager::new();
@@ -2666,6 +2667,7 @@ mod tests {
             core_properties: None,
             theme: None,
             fonts: Vec::new(),
+            embedded_fonts: Vec::new(),
         };
 
         let mut fm = FontManager::new();

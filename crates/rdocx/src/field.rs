@@ -1695,7 +1695,7 @@ impl Document {
         } else {
             Evaluator::new(source, context)
         };
-        let input = source.build_layout_input();
+        let input = source.build_layout_input()?;
         let snapshot = rdocx_layout::engine::evaluate_sequence_fields(&input)
             .map_err(|error| Error::Other(format!("sequence source evaluation failed: {error}")))?;
         let mut nodes_by_story =
@@ -2029,7 +2029,7 @@ impl Document {
             &mut report,
         );
 
-        let input = self.build_layout_input();
+        let input = self.build_layout_input()?;
         for (part_name, kind, xml) in field_story_parts(self, false) {
             let story = legacy_story_paragraphs(&xml, kind)?;
             let paragraphs = story
@@ -8220,7 +8220,7 @@ fn discover_toc_sources(
     collect_body_paragraphs(&document.document.body, &mut paragraphs);
     let context = FieldEvaluationContext::default();
     let sequence_snapshot = Arc::new(
-        rdocx_layout::engine::evaluate_sequence_fields(&document.build_layout_input()).map_err(
+        rdocx_layout::engine::evaluate_sequence_fields(&document.build_layout_input()?).map_err(
             |error| Error::Other(format!("TOC sequence source evaluation failed: {error}")),
         )?,
     );
@@ -19320,10 +19320,8 @@ fn generated_table_opcode(name: &str, policy: DynamicOwnerPolicy) -> bool {
 }
 
 fn generated_authority_categories(document: &Document) -> Result<Vec<u8>> {
-    let snapshot = rdocx_layout::engine::evaluate_sequence_fields(&document.build_layout_input())
-        .map_err(|error| {
-        Error::Other(format!("authority source evaluation failed: {error}"))
-    })?;
+    let snapshot = rdocx_layout::engine::evaluate_sequence_fields(&document.build_layout_input()?)
+        .map_err(|error| Error::Other(format!("authority source evaluation failed: {error}")))?;
     let mut categories = BTreeSet::new();
     for index in 1u32.. {
         let Some(node) = rdocx_layout::SourceNodeId::new(index) else {
@@ -20001,12 +19999,12 @@ fn generated_table_sources(
     stories: &[GeneratedStorySource],
 ) -> Result<Vec<GeneratedTableSource>> {
     let paragraphs = document.generated_table_paragraph_positions()?;
-    let snapshot = rdocx_layout::engine::evaluate_sequence_fields(&document.build_layout_input())
+    let snapshot = rdocx_layout::engine::evaluate_sequence_fields(&document.build_layout_input()?)
         .map_err(|error| {
-        Error::Other(format!(
-            "generated sequence source evaluation failed: {error}"
-        ))
-    })?;
+            Error::Other(format!(
+                "generated sequence source evaluation failed: {error}"
+            ))
+        })?;
     let mut result = Vec::new();
     let mut sequence_values = BTreeMap::new();
     for story in stories {
@@ -20257,7 +20255,7 @@ fn generated_sequence_value(
     field_index: u32,
     field: &Field,
 ) -> Result<String> {
-    let input = document.build_layout_input();
+    let input = document.build_layout_input()?;
     let mut nodes = Vec::new();
     for index in 1u32.. {
         let Some(node) = rdocx_layout::SourceNodeId::new(index) else {

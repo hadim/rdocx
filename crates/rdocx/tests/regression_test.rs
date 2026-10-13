@@ -29360,6 +29360,7 @@ fn empty_story_layout_input() -> rdocx_layout::LayoutInput {
         }),
         theme: None,
         fonts: Vec::new(),
+        embedded_fonts: Vec::new(),
         revision_view: rdocx_layout::RevisionView::Accepted,
     }
 }
@@ -41080,6 +41081,7 @@ mod advanced_table_geometry_regressions {
             endnotes: None,
             theme: None,
             fonts: Vec::new(),
+            embedded_fonts: Vec::new(),
             revision_view: rdocx_layout::RevisionView::Accepted,
         }
     }

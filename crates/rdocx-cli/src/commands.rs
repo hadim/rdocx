@@ -3051,6 +3051,225 @@ pub fn images_extract(file: &Path, dir: &Path, json_output: bool) -> Result<()> 
     }
 }
 
+/// Inputs for one explicitly licensed embedded font face.
+pub struct FontEmbedOptions<'a> {
+    pub name: &'a str,
+    pub font: &'a Path,
+    pub kind: &'a str,
+    pub license_authorized: bool,
+    pub license_identity: &'a str,
+    pub font_key: Option<&'a str>,
+    pub subsetted: bool,
+    pub output: &'a Path,
+    pub json: bool,
+}
+
+fn font_kind(value: &str) -> Result<rdocx::EmbeddedFontKind> {
+    match value {
+        "regular" => Ok(rdocx::EmbeddedFontKind::Regular),
+        "bold" => Ok(rdocx::EmbeddedFontKind::Bold),
+        "italic" => Ok(rdocx::EmbeddedFontKind::Italic),
+        "bold-italic" => Ok(rdocx::EmbeddedFontKind::BoldItalic),
+        _ => Err("font kind must be regular, bold, italic or bold-italic".into()),
+    }
+}
+fn font_kind_name(kind: rdocx::EmbeddedFontKind) -> &'static str {
+    match kind {
+        rdocx::EmbeddedFontKind::Regular => "regular",
+        rdocx::EmbeddedFontKind::Bold => "bold",
+        rdocx::EmbeddedFontKind::Italic => "italic",
+        rdocx::EmbeddedFontKind::BoldItalic => "bold-italic",
+    }
+}
+fn font_setting(value: Option<&str>) -> Result<Option<Option<bool>>> {
+    value
+        .map(|value| match value {
+            "true" => Ok(Some(true)),
+            "false" => Ok(Some(false)),
+            "none" => Ok(None),
+            _ => Err("font setting must be true, false or none".into()),
+        })
+        .transpose()
+}
+fn read_font_file(path: &Path) -> Result<Vec<u8>> {
+    use std::io::Read;
+    const LIMIT: usize = 64 * 1024 * 1024;
+    if !std::fs::metadata(path)?.is_file() {
+        return Err("font input must be a local regular file".into());
+    }
+    let mut file = std::fs::File::open(path)?;
+    if !file.metadata()?.is_file() {
+        return Err("font input must be a local regular file".into());
+    }
+    let mut bytes = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let request = chunk.len().min(LIMIT - bytes.len() + 1);
+        let count = file.read(&mut chunk[..request])?;
+        if count == 0 {
+            return Ok(bytes);
+        }
+        if count > LIMIT - bytes.len() {
+            return Err("font input exceeds 64 MiB".into());
+        }
+        bytes.try_reserve(count)?;
+        bytes.extend_from_slice(&chunk[..count]);
+    }
+}
+pub fn font_embed(file: &Path, options: &FontEmbedOptions<'_>) -> Result<()> {
+    ensure_output_paths_allowed(&[options.output.to_path_buf()], file, false)?;
+    ensure_output_paths_allowed(&[options.output.to_path_buf()], options.font, false)?;
+    ensure_output_paths_available(&[options.output.to_path_buf()])?;
+    if !options.license_authorized || options.license_identity.trim().is_empty() {
+        return Err(
+            "font embedding needs explicit authorization and a nonempty license identity".into(),
+        );
+    }
+    let data = read_font_file(options.font)?;
+    let kind = font_kind(options.kind)?;
+    let mut document = Document::open(file)?;
+    let key = match options.font_key {
+        Some(key) => key.to_owned(),
+        None => rdocx::derive_font_key(&data)?,
+    };
+    document.embed_font(
+        options.name,
+        rdocx::EmbeddedFont {
+            kind,
+            data,
+            font_key: key,
+            subsetted: options.subsetted,
+            license: rdocx::FontEmbeddingLicense::new(
+                options.license_authorized,
+                options.license_identity,
+            ),
+        },
+    )?;
+    let bytes = document.to_bytes_for_path(options.output)?;
+    stage_and_publish(&[(options.output.to_path_buf(), bytes)], false)?;
+    font_mutation_record("embed", options.name, options.output, options.json)
+}
+pub fn font_remove(
+    file: &Path,
+    name: &str,
+    kind: Option<&str>,
+    output: &Path,
+    as_json: bool,
+) -> Result<()> {
+    ensure_output_paths_allowed(&[output.to_path_buf()], file, false)?;
+    ensure_output_paths_available(&[output.to_path_buf()])?;
+    let mut document = Document::open(file)?;
+    let removed = if let Some(kind) = kind {
+        document
+            .remove_embedded_font(name, font_kind(kind)?)?
+            .is_some()
+    } else {
+        document.remove_font(name)?.is_some()
+    };
+    let bytes = document.to_bytes_for_path(output)?;
+    stage_and_publish(&[(output.to_path_buf(), bytes)], false)?;
+    if as_json {
+        print_json(json!({"scope": "font", "action": "remove", "name": name,
+        "kind": kind, "removed": removed, "output": output.display().to_string()}))
+    } else {
+        writeln!(io::stdout(), "Removed: {removed}")?;
+        Ok(())
+    }
+}
+fn font_mutation_record(action: &str, name: &str, output: &Path, as_json: bool) -> Result<()> {
+    if as_json {
+        print_json(json!({"scope": "font", "action": action, "name": name,
+        "output": output.display().to_string()}))
+    } else {
+        writeln!(
+            io::stdout(),
+            "{action}: {name}\nWritten to {}",
+            output.display()
+        )?;
+        Ok(())
+    }
+}
+pub fn font_settings(
+    file: &Path,
+    embed: Option<&str>,
+    system: Option<&str>,
+    subset: Option<&str>,
+    output: Option<&Path>,
+    as_json: bool,
+) -> Result<()> {
+    let embed = font_setting(embed)?;
+    let system = font_setting(system)?;
+    let subset = font_setting(subset)?;
+    let changed = embed.is_some() || system.is_some() || subset.is_some();
+    if changed != output.is_some() {
+        return Err(
+            "font settings mutations require --output and at least one explicit setting".into(),
+        );
+    }
+    if let Some(output) = output {
+        ensure_output_paths_allowed(&[output.to_path_buf()], file, false)?;
+        ensure_output_paths_available(&[output.to_path_buf()])?;
+    }
+    let mut document = Document::open(file)?;
+    if let Some(value) = embed {
+        document.set_embed_true_type_fonts(value)?;
+    }
+    if let Some(value) = system {
+        document.set_embed_system_fonts(value)?;
+    }
+    if let Some(value) = subset {
+        document.set_save_subset_fonts(value)?;
+    }
+    let flags = json!({"embed_true_type_fonts": document.embed_true_type_fonts()?,
+        "embed_system_fonts": document.embed_system_fonts()?,
+        "save_subset_fonts": document.save_subset_fonts()?});
+    if let Some(output) = output {
+        let bytes = document.to_bytes_for_path(output)?;
+        stage_and_publish(&[(output.to_path_buf(), bytes)], false)?;
+    }
+    if as_json {
+        print_json(json!({"scope": "font", "settings": flags,
+        "output": output.map(|path| path.display().to_string())}))
+    } else {
+        writeln!(io::stdout(), "{}", serde_json::to_string_pretty(&flags)?)?;
+        Ok(())
+    }
+}
+
+pub fn font_list(file: &Path, as_json: bool) -> Result<()> {
+    let document = Document::open(file)?;
+    let fonts = document
+        .try_fonts()?
+        .iter()
+        .enumerate()
+        .map(|(record_index, font)| {
+            let faces = font.embedded_fonts.iter().enumerate().map(|(face_index, face)| {
+            let (part_name, stored_len) = document.font_part_metadata(record_index, face_index)?;
+            Ok(json!({"kind": font_kind_name(face.kind), "format": "odttf", "part_name": part_name,
+                "stored_len": stored_len, "decoded_len": face.data.len(), "font_key": face.font_key,
+                "subsetted": face.subsetted}))
+        }).collect::<Result<Vec<_>>>()?;
+            Ok(
+                json!({"name": font.name, "alternate_name": font.alternate_name,
+            "family": font.family, "pitch": font.pitch, "faces": faces}),
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    if as_json {
+        print_json(json!({"fonts": fonts}))
+    } else {
+        for font in fonts {
+            writeln!(
+                io::stdout(),
+                "{}: {} face(s)",
+                font["name"].as_str().unwrap_or(""),
+                font["faces"].as_array().map_or(0, Vec::len)
+            )?;
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

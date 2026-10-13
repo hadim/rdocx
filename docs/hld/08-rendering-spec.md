@@ -1433,7 +1433,7 @@ admission. Rich Word paths which cannot satisfy cache safety remain uncached.
 Caller font labels that differ from their embedded family names create
 label-derived aliases to the exact loaded faces. Native callers can also set
 explicit byte-free aliases from document-facing family names to loaded caller
-families. Resolution checks an exact embedded family first, then an explicit
+families. Within the caller tier, resolution checks an exact sfnt family first, then an explicit
 alias, then a label-derived alias, followed by the existing mapped alternatives
 and generic fallbacks. Candidate stretch, style, and directional weight choice
 uses the same CSS-like `fontdb` query as ordinary family resolution. Explicit
@@ -1501,7 +1501,7 @@ writer reports a selected shared-definition continuation loss when concrete
 list output cannot express it, without claiming unrestricted Word numbering
 parity in that format.
 
-Relationship-resolved embedded font faces enter `LayoutInput.fonts` under the
+Relationship-resolved embedded font faces enter `LayoutInput.embedded_fonts` under the
 font-table record name. Their OOXML font key deobfuscates the package bytes
 before shaping. This explicit document input has priority over bundled fallback
 and needs no system-font discovery. Authored major and minor theme typefaces
@@ -2606,3 +2606,45 @@ native deterministic layout provider. Accepted-main-body word and Unicode
 scalar counts remain distinct from layout page counts. Unsupported field
 switches and intentionally retained dynamic header/footer caches keep their
 provider diagnostics, and omitted explicit date context never reads a clock.
+
+## Embedded face selection across exports
+
+Caller faces form the highest selection tier, followed by document-embedded
+faces, then the existing bundled/system fallback policy of the entrypoint.
+Within each tier, exact family, explicit alias and label-derived alias lookup
+retain CSS stretch/style/directional weight selection. Embedded aliases retain
+regular, bold, italic and boldItalic face identity. Aliases share one physical
+immutable font body rather than copying bytes per reference.
+
+Word admits embedded faces when embedTrueTypeFonts is absent or true and
+skips them when explicitly false. PowerPoint requires embedTrueTypeFonts=true
+for its embedded rendering tier. Supported sfnt/EOT data enters the same font
+manager used for slides, notes, handouts, fitting and timelines. Compressed EOT
+or unsupported Word payload does not become a decoded font. Explicit caller
+faces still override a closer-style embedded match. Deterministic entrypoints
+resolve fallback from the bundled inventory without discovering system fonts.
+
+PDF, raster and supported SVG exports consume the selected layout font body
+and face instance. Read-only layout/render consumers keep source and retained
+physical owners unchanged. Word caches and reusable engines include exact
+embedded source identity, settings and aliases in their retained context.
+Equal/no-op updates preserve cached identity, and changed font input invalidates
+only through the existing native provider.
+
+### Native Office font consumption
+
+Own-renderer face selection remains distinct from native Office behavior.
+PowerPoint's positive regular and bold output uses separate actual font glyph
+streams whose outlines and advances agree with the prepared faces. Its
+pre-save, post-save and normal-reopened PDFs retain the same text geometry and
+raster output. Missing, disabled and raw-format controls use measured fallback
+faces. A changed-font control must differ in real glyphs and metrics, not just
+in a resource name.
+
+Native Word is bounded by the [documented one-font-per-name implementation](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/22da0d03-7202-4731-9518-b96bfbe4de61).
+A paired uninstalled family can paint the actual regular font with synthetic
+bold before any native save, and native saving can leave its bold part empty.
+A separate bold-body control proves that body can load, without proving
+multi-face family selection. Word multi-face interoperability belongs to
+F-X223. Neither that boundary nor native fallback weakens genuine regular,
+bold, italic and bold-italic selection in our renderer or caller overrides.

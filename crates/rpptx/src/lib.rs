@@ -110,8 +110,10 @@ pub use rpptx_oxml::picture::MediaKind;
 use rpptx_oxml::picture::{CT_Picture, MediaSource as PictureMediaSource, PictureMedia};
 use rpptx_oxml::placeholder::PlaceholderKey;
 use rpptx_oxml::placeholder::{CT_Placeholder, PhType};
-pub use rpptx_oxml::presentation::Section;
-use rpptx_oxml::presentation::{CT_Presentation, CT_SlideId, custom_show_relationship_ids};
+use rpptx_oxml::presentation::{
+    CT_EmbeddedFontListEntry, CT_Presentation, CT_SlideId, custom_show_relationship_ids,
+};
+pub use rpptx_oxml::presentation::{EmbeddedFontKind, Section};
 use rpptx_oxml::relmap::{
     relationship_ids, release_hyperlinks, rewrite_exact_rel_ids, rewrite_rel_ids,
 };
@@ -918,6 +920,10 @@ pub enum Error {
         operation: &'static str,
         message: String,
     },
+
+    /// A font embedding input or byte budget was refused before mutation.
+    #[error("{0}")]
+    InvalidFontEmbedding(String),
 
     #[error("adjustment {name} requires a finite value")]
     NonFiniteAdjustmentValue { name: String },
@@ -2782,6 +2788,13 @@ impl Presentation {
     ) -> Result<(DeterministicTimelineFrame, Vec<EvaluatedMediaState>)> {
         let package = self.staged_package(false)?;
         let mut assembly = prepare_render_context(&package, fallback_policy.is_some(), font_files)?;
+        // A detached sample starts with fresh glyph identities, unlike an animation sequence.
+        assembly.font_manager = configured_font_manager(
+            &package,
+            &self.presentation_part,
+            &self.presentation,
+            font_files,
+        )?;
         render_prepared_timeline_request(
             &mut assembly,
             TimelineRequest {
@@ -2791,7 +2804,6 @@ impl Presentation {
                 fallback_policy,
             },
             self.slides.len(),
-            false,
         )
     }
 
@@ -2818,7 +2830,7 @@ impl Presentation {
             }
         }
         let mut owners = autofit_inventory(self, &package)?;
-        let mut fonts = authoring_fonts(font_files)?;
+        let mut fonts = authoring_fonts(self, font_files)?;
         let mut plans = Vec::new();
         for owner in &mut owners {
             if owner.update.mode == AutofitMode::None {
@@ -2969,7 +2981,7 @@ impl Presentation {
     pub fn fit_report(&self, font_files: &[(&str, &[u8])]) -> Result<FitReport> {
         let package = self.staged_package(false)?;
         let owners = autofit_inventory(self, &package)?;
-        let mut fonts = authoring_fonts(font_files)?;
+        let mut fonts = authoring_fonts(self, font_files)?;
         let mut frames = Vec::new();
         let mut diagnostics = Vec::new();
         for mut owner in owners {
@@ -3141,7 +3153,7 @@ impl Presentation {
                 "physical owner has no measured context",
             ));
         }
-        let mut fonts = authoring_fonts(font_files)?;
+        let mut fonts = authoring_fonts(self, font_files)?;
         let mut chosen = None;
         for size in (1..=max_size).rev() {
             let mut fits = true;
@@ -10091,7 +10103,6 @@ fn render_prepared_timeline_request(
     assembly: &mut PreparedRenderAssembly,
     request: TimelineRequest,
     slide_count: usize,
-    reuse_prepared_fonts: bool,
 ) -> Result<(DeterministicTimelineFrame, Vec<EvaluatedMediaState>)> {
     #[cfg(test)]
     let _retention = ActiveResolvedSample::enter();
@@ -10103,15 +10114,7 @@ fn render_prepared_timeline_request(
                 index: request.slide_index,
                 slide_count,
             })?;
-    let mut legacy_font_manager;
-    let font_manager = if reuse_prepared_fonts {
-        &mut assembly.font_manager
-    } else {
-        legacy_font_manager = FontManager::new_deterministic()
-            .map_err(|error| render_failure(format!("deterministic fonts: {error}")))?;
-        legacy_font_manager.load_additional_fonts(&assembly.input.fonts);
-        &mut legacy_font_manager
-    };
+    let font_manager = &mut assembly.font_manager;
     font_manager.begin_layout();
     let mut incoming_context = ResolveCtx::new(
         &incoming_source.theme,
@@ -13792,6 +13795,780 @@ fn is_latent_placeholder(placeholder: &CT_Placeholder) -> bool {
         placeholder.ph_type.as_ref(),
         Some(PhType::DateTime | PhType::Footer | PhType::SlideNumber)
     )
+}
+
+const EMBEDDED_FONT_CONTENT_TYPE: &str = "application/x-fontdata";
+const EOT_VERSION: u32 = 0x0002_0001;
+const EOT_MAGIC: u16 = 0x504C;
+const EOT_FLAG_COMPRESSED: u32 = 0x0000_0004;
+const EOT_FIXED_HEADER_LEN: usize = 80;
+
+/// The caller's explicit authorization and exact license identity.
+///
+/// PresentationML has no place for the license, so it is checked when a face
+/// is embedded and is not written to the package.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FontEmbeddingLicense {
+    pub authorized: bool,
+    pub identity: String,
+}
+
+impl FontEmbeddingLicense {
+    pub fn new(authorized: bool, identity: impl Into<String>) -> Self {
+        Self {
+            authorized,
+            identity: identity.into(),
+        }
+    }
+}
+
+/// Caller-owned TrueType or OpenType bytes for one embedded face.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EmbeddedFont {
+    pub kind: EmbeddedFontKind,
+    pub data: Vec<u8>,
+    pub license: FontEmbeddingLicense,
+}
+
+impl EmbeddedFont {
+    pub fn new(kind: EmbeddedFontKind, data: Vec<u8>, license: FontEmbeddingLicense) -> Self {
+        Self {
+            kind,
+            data,
+            license,
+        }
+    }
+}
+
+/// How a stored embedded font part is encoded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum EmbeddedFontFormat {
+    /// Embedded OpenType without MicroType Express compression, the form this
+    /// crate writes.
+    Eot,
+    /// Embedded OpenType with MicroType Express compression, as PowerPoint
+    /// writes it. The part is preserved but not decoded.
+    CompressedEot,
+    /// A bare TrueType or OpenType font.
+    Sfnt,
+    /// A missing part or bytes in no recognized form.
+    Unknown,
+}
+
+/// One embedded face as the package stores it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EmbeddedFontFace {
+    pub kind: EmbeddedFontKind,
+    pub relationship_id: String,
+    /// The resolved font part, or `None` when the relationship is missing,
+    /// external, or of another type.
+    pub part_name: Option<String>,
+    pub format: EmbeddedFontFormat,
+    pub stored_len: usize,
+    /// The sfnt bytes, when the stored form can be decoded. Faces that
+    /// reference one part share its decoded bytes.
+    pub data: Option<std::sync::Arc<[u8]>>,
+}
+
+/// One `p:embeddedFont` entry and its faces in schema order.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EmbeddedTypeface {
+    pub typeface: String,
+    pub panose: Option<String>,
+    pub pitch_family: Option<i8>,
+    pub charset: Option<i8>,
+    pub faces: Vec<EmbeddedFontFace>,
+}
+
+const MAX_EMBEDDED_FACE_BYTES: usize = 64 * 1024 * 1024;
+const MAX_EMBEDDED_DECODED_BYTES: usize = 256 * 1024 * 1024;
+type DecodedEmbeddedFont = (EmbeddedFontFormat, Option<std::sync::Arc<[u8]>>);
+
+impl Presentation {
+    /// Embeds a single sfnt face after explicit license authorization.
+    pub fn embed_font(&mut self, typeface: &str, font: EmbeddedFont) -> Result<()> {
+        validate_font_embedding_license(&font.license).map_err(Error::InvalidFontEmbedding)?;
+        let mut entry = CT_EmbeddedFontListEntry::new(typeface).map_err(font_model_error)?;
+        let sfnt = SfntTables::parse(&font.data).map_err(Error::InvalidFontEmbedding)?;
+        let eot = sfnt
+            .embedded_open_type()
+            .map_err(Error::InvalidFontEmbedding)?;
+        let mut staged = self.clone();
+        let existing = staged
+            .presentation
+            .embedded_font_mut(typeface)
+            .map_err(font_model_error)?
+            .and_then(|entry| entry.face(font.kind))
+            .map(str::to_owned);
+        let previous = existing
+            .as_deref()
+            .map(|id| staged.checked_font_target(id))
+            .transpose()?;
+        if let Some(part) = &previous
+            && staged.package.get_part(part) == Some(eot.as_slice())
+            && staged.embed_true_type_fonts()? == Some(true)
+        {
+            return Ok(());
+        }
+        let reusable = match (&existing, &previous) {
+            (Some(id), Some(part)) => {
+                staged
+                    .presentation
+                    .embedded_font_reference_count(id)
+                    .map_err(font_model_error)?
+                    == 1
+                    && font_incoming_relationship_count(&staged.package, part) == 1
+            }
+            _ => false,
+        };
+        let (id, part) = if reusable {
+            (existing.clone().unwrap(), previous.clone().unwrap())
+        } else {
+            let part = MediaNamer::scan(
+                "/ppt/fonts",
+                "font",
+                staged.package.parts.keys().map(String::as_str),
+            )
+            .next_part_name("fntdata");
+            let id = staged
+                .package
+                .get_or_create_part_rels(&staged.presentation_part)
+                .add(
+                    rel_types::FONT,
+                    &relative_part_target(&staged.presentation_part, &part),
+                );
+            (id, part)
+        };
+        staged.package.set_part(&part, eot);
+        register_content_type(
+            &mut staged.package,
+            &part,
+            "fntdata",
+            EMBEDDED_FONT_CONTENT_TYPE,
+        );
+        match staged
+            .presentation
+            .embedded_font_mut(typeface)
+            .map_err(font_model_error)?
+        {
+            Some(current) => {
+                current
+                    .set_face(font.kind, id.clone())
+                    .map_err(font_model_error)?;
+            }
+            None => {
+                entry
+                    .set_face(font.kind, id.clone())
+                    .map_err(font_model_error)?;
+                staged
+                    .presentation
+                    .push_embedded_font(entry)
+                    .map_err(font_model_error)?;
+            }
+        }
+        if let Some(old) = existing.filter(|old| old != &id) {
+            staged.release_font_relationship(&old)?;
+        }
+        staged.presentation.set_embed_true_type_fonts(Some(true));
+        self.commit_candidate(staged)
+    }
+
+    /// Removes one face while retaining preserved font descriptions and payloads.
+    pub fn remove_embedded_font(
+        &mut self,
+        typeface: &str,
+        kind: EmbeddedFontKind,
+    ) -> Result<Option<EmbeddedFontFace>> {
+        let mut staged = self.clone();
+        let Some(id) = staged
+            .presentation
+            .embedded_font_mut(typeface)
+            .map_err(font_model_error)?
+            .and_then(|entry| entry.face(kind))
+            .map(str::to_owned)
+        else {
+            return Ok(None);
+        };
+        self.checked_font_target(&id)?;
+        let removed = self
+            .embedded_fonts()?
+            .into_iter()
+            .find(|entry| entry.typeface == typeface)
+            .and_then(|entry| entry.faces.into_iter().find(|face| face.kind == kind))
+            .expect("checked modeled face");
+        staged
+            .presentation
+            .embedded_font_mut(typeface)
+            .map_err(font_model_error)?
+            .unwrap()
+            .remove_face(kind)
+            .map_err(font_model_error)?;
+        staged.release_font_relationship(&id)?;
+        self.commit_candidate(staged)?;
+        Ok(Some(removed))
+    }
+
+    /// Removes an entry only when it contains no opaque source payload.
+    pub fn remove_font(&mut self, typeface: &str) -> Result<Option<EmbeddedTypeface>> {
+        let mut staged = self.clone();
+        let Some(entry) = staged
+            .presentation
+            .remove_embedded_font(typeface)
+            .map_err(font_model_error)?
+        else {
+            return Ok(None);
+        };
+        for (_, id) in entry.faces() {
+            self.checked_font_target(id)?;
+        }
+        let removed = self
+            .embedded_fonts()?
+            .into_iter()
+            .find(|font| font.typeface == typeface)
+            .expect("checked modeled entry");
+        for (_, id) in entry.faces() {
+            staged.release_font_relationship(id)?;
+        }
+        self.commit_candidate(staged)?;
+        Ok(Some(removed))
+    }
+
+    /// Returns the presence-sensitive PowerPoint font-use setting.
+    pub fn embed_true_type_fonts(&self) -> Result<Option<bool>> {
+        self.presentation
+            .embed_true_type_fonts()
+            .map_err(font_model_error)
+    }
+    pub fn save_subset_fonts(&self) -> Result<Option<bool>> {
+        self.presentation
+            .save_subset_fonts()
+            .map_err(font_model_error)
+    }
+    pub fn set_embed_true_type_fonts(&mut self, value: Option<bool>) -> Result<()> {
+        if self.embed_true_type_fonts().ok() == Some(value) {
+            return Ok(());
+        }
+        let mut staged = self.clone();
+        staged.presentation.set_embed_true_type_fonts(value);
+        self.commit_candidate(staged)
+    }
+    pub fn set_save_subset_fonts(&mut self, value: Option<bool>) -> Result<()> {
+        if self.save_subset_fonts().ok() == Some(value) {
+            return Ok(());
+        }
+        let mut staged = self.clone();
+        staged.presentation.set_save_subset_fonts(value);
+        self.commit_candidate(staged)
+    }
+
+    fn checked_font_target(&self, id: &str) -> Result<String> {
+        let relationship = self
+            .package
+            .get_part_rels(&self.presentation_part)
+            .and_then(|rels| rels.get_by_id(id))
+            .filter(|rel| rel.rel_type == rel_types::FONT && !relationship_is_external(rel))
+            .ok_or_else(|| {
+                Error::InvalidFontEmbedding(
+                    "font relationship is missing, foreign or external".to_owned(),
+                )
+            })?;
+        let part = OpcPackage::resolve_rel_target(&self.presentation_part, &relationship.target);
+        if self.package.get_part(&part).is_none()
+            || self.package.content_types.content_type_for(&part)
+                != Some(EMBEDDED_FONT_CONTENT_TYPE)
+        {
+            return Err(Error::InvalidFontEmbedding(
+                "font relationship does not target a font-data part".to_owned(),
+            ));
+        }
+        Ok(part)
+    }
+
+    fn release_font_relationship(&mut self, id: &str) -> Result<()> {
+        let part = self.checked_font_target(id)?;
+        if self
+            .presentation
+            .embedded_font_reference_count(id)
+            .map_err(font_model_error)?
+            != 0
+        {
+            return Ok(());
+        }
+        self.package
+            .get_part_rels_mut(&self.presentation_part)
+            .unwrap()
+            .items
+            .retain(|rel| rel.id != id);
+        prune_unreachable_parts(&mut self.package, &HashSet::from([part]));
+        Ok(())
+    }
+
+    /// Lists supported font entries, sharing decoded bytes for each physical part.
+    pub fn embedded_fonts(&self) -> Result<Vec<EmbeddedTypeface>> {
+        presentation_embedded_fonts(&self.package, &self.presentation_part, &self.presentation)
+    }
+}
+
+fn presentation_embedded_fonts(
+    package: &OpcPackage,
+    presentation_part: &str,
+    presentation: &CT_Presentation,
+) -> Result<Vec<EmbeddedTypeface>> {
+    let relationships = package.get_part_rels(presentation_part);
+    let mut decoded: HashMap<String, DecodedEmbeddedFont> = HashMap::new();
+    let mut decoded_bytes = 0usize;
+    let mut entries = Vec::new();
+    for entry in presentation.embedded_fonts() {
+        let mut faces = Vec::new();
+        for (kind, id) in entry.faces() {
+            let part_name = relationships
+                .and_then(|rels| rels.get_by_id(id))
+                .filter(|rel| rel.rel_type == rel_types::FONT && !relationship_is_external(rel))
+                .map(|rel| OpcPackage::resolve_rel_target(presentation_part, &rel.target));
+            let stored = part_name.as_deref().and_then(|name| package.get_part(name));
+            let mut format = EmbeddedFontFormat::Unknown;
+            let mut data = None;
+            if let (Some(name), Some(bytes)) = (&part_name, stored)
+                && package.content_types.content_type_for(name) == Some(EMBEDDED_FONT_CONTENT_TYPE)
+            {
+                let cache_key = name.to_ascii_lowercase();
+                if !decoded.contains_key(&cache_key) {
+                    let (kind, body) = checked_embedded_font(bytes);
+                    let shared = if let Some(body) = body {
+                        decoded_bytes = decoded_bytes.checked_add(body.len()).ok_or_else(|| {
+                            Error::InvalidFontEmbedding(
+                                "decoded font byte budget overflow".to_owned(),
+                            )
+                        })?;
+                        if decoded_bytes > MAX_EMBEDDED_DECODED_BYTES {
+                            return Err(Error::InvalidFontEmbedding(
+                                "decoded fonts exceed 256 MiB".to_owned(),
+                            ));
+                        }
+                        Some(std::sync::Arc::<[u8]>::from(body))
+                    } else {
+                        None
+                    };
+                    decoded.insert(cache_key.clone(), (kind, shared));
+                }
+                (format, data) = decoded[&cache_key].clone();
+            }
+            faces.push(EmbeddedFontFace {
+                kind,
+                relationship_id: id.to_owned(),
+                part_name,
+                format,
+                stored_len: stored.map_or(0, <[u8]>::len),
+                data,
+            });
+        }
+        entries.push(EmbeddedTypeface {
+            typeface: entry.typeface().to_owned(),
+            panose: entry.panose().map(str::to_owned),
+            pitch_family: entry.pitch_family(),
+            charset: entry.charset(),
+            faces,
+        });
+    }
+    Ok(entries)
+}
+
+#[cfg(feature = "render")]
+fn configured_font_manager(
+    package: &OpcPackage,
+    presentation_part: &str,
+    presentation: &CT_Presentation,
+    callers: &[oxml_layout::FontFile],
+) -> Result<FontManager> {
+    let mut sources: Vec<(Vec<String>, std::sync::Arc<[u8]>)> = Vec::new();
+    if presentation
+        .embed_true_type_fonts()
+        .map_err(font_model_error)?
+        == Some(true)
+    {
+        let mut parts = HashMap::new();
+        for entry in presentation_embedded_fonts(package, presentation_part, presentation)? {
+            for face in entry.faces {
+                if let (Some(part), Some(data)) = (face.part_name, face.data) {
+                    let index = *parts.entry(part.to_ascii_lowercase()).or_insert_with(|| {
+                        sources.push((Vec::new(), data));
+                        sources.len() - 1
+                    });
+                    if !sources[index].0.contains(&entry.typeface) {
+                        sources[index].0.push(entry.typeface.clone());
+                    }
+                }
+            }
+        }
+    }
+    let mut fonts = FontManager::new_deterministic()
+        .map_err(|error| render_failure(format!("deterministic fonts: {error}")))?;
+    fonts
+        .load_embedded_fonts(&sources)
+        .map_err(|error| render_failure(format!("embedded fonts: {error}")))?;
+    fonts.load_additional_fonts(callers);
+    Ok(fonts)
+}
+
+fn font_model_error(error: OxmlError) -> Error {
+    Error::InvalidFontEmbedding(error.to_string())
+}
+
+fn font_incoming_relationship_count(package: &OpcPackage, target: &str) -> usize {
+    std::iter::once(("/", &package.package_rels))
+        .chain(
+            package
+                .part_rels
+                .iter()
+                .map(|(source, rels)| (source.as_str(), rels)),
+        )
+        .flat_map(|(source, rels)| rels.items.iter().map(move |rel| (source, rel)))
+        .filter(|(source, rel)| {
+            !relationship_is_external(rel)
+                && OpcPackage::resolve_rel_target(source, &rel.target).eq_ignore_ascii_case(target)
+        })
+        .count()
+}
+
+fn validate_font_embedding_license(
+    license: &FontEmbeddingLicense,
+) -> std::result::Result<(), String> {
+    if !license.authorized {
+        return Err("font embedding requires explicit caller authorization".to_owned());
+    }
+    if license.identity.trim().is_empty()
+        || license.identity.len() > 4096
+        || license
+            .identity
+            .bytes()
+            .any(|byte| matches!(byte, b'\t' | b'\n' | b'\r'))
+    {
+        return Err(
+            "font embedding requires an exact nonempty license identity of at most 4096 bytes"
+                .to_owned(),
+        );
+    }
+    Ok(())
+}
+
+/// Inspects the complete stored envelope before exposing a borrowed sfnt body.
+fn checked_embedded_font(bytes: &[u8]) -> (EmbeddedFontFormat, Option<&[u8]>) {
+    if bytes.len() <= MAX_EMBEDDED_FACE_BYTES && SfntTables::parse(bytes).is_ok() {
+        return (EmbeddedFontFormat::Sfnt, Some(bytes));
+    }
+    let unknown = (EmbeddedFontFormat::Unknown, None);
+    if bytes.len() < EOT_FIXED_HEADER_LEN
+        || read_u16_le(bytes, 34) != Some(EOT_MAGIC)
+        || read_u32_le(bytes, 0).map(|size| size as usize) != Some(bytes.len())
+    {
+        return unknown;
+    }
+    let version = read_u32_le(bytes, 8).unwrap();
+    if !matches!(version, 0x0001_0000 | 0x0002_0001 | 0x0002_0002) {
+        return unknown;
+    }
+    let flags = read_u32_le(bytes, 12).unwrap();
+    let mut cursor = EOT_FIXED_HEADER_LEN;
+    for _ in 0..if version == 0x0001_0000 { 4 } else { 5 } {
+        if read_u16_le(bytes, cursor) != Some(0) {
+            return unknown;
+        }
+        let Some(length) = read_u16_le(bytes, cursor + 2).map(usize::from) else {
+            return unknown;
+        };
+        cursor += 4;
+        if !length.is_multiple_of(2) || bytes.get(cursor..cursor + length).is_none() {
+            return unknown;
+        }
+        cursor += length;
+    }
+    if version == 0x0002_0002 {
+        // Root checksum, EUDC codepage, padding, signature and EUDC payload.
+        if bytes.get(cursor..cursor + 10).is_none() || read_u16_le(bytes, cursor + 8) != Some(0) {
+            return unknown;
+        }
+        let Some(length) = read_u16_le(bytes, cursor + 10).map(usize::from) else {
+            return unknown;
+        };
+        cursor += 12;
+        if bytes.get(cursor..cursor + length).is_none() {
+            return unknown;
+        }
+        cursor += length;
+        if bytes.get(cursor..cursor + 8).is_none() {
+            return unknown;
+        }
+        let length = read_u32_le(bytes, cursor + 4).unwrap() as usize;
+        cursor += 8;
+        let Some(end) = cursor.checked_add(length) else {
+            return unknown;
+        };
+        if bytes.get(cursor..end).is_none() {
+            return unknown;
+        }
+        cursor = end;
+    }
+    let size = read_u32_le(bytes, 4).unwrap() as usize;
+    if cursor.checked_add(size) != Some(bytes.len()) {
+        return unknown;
+    }
+    if flags & EOT_FLAG_COMPRESSED != 0 {
+        return (EmbeddedFontFormat::CompressedEot, None);
+    }
+    if flags != 0 || size > MAX_EMBEDDED_FACE_BYTES {
+        return (EmbeddedFontFormat::Eot, None);
+    }
+    let body = &bytes[cursor..];
+    (
+        EmbeddedFontFormat::Eot,
+        SfntTables::parse(body).is_ok().then_some(body),
+    )
+}
+
+fn read_u16_le(bytes: &[u8], offset: usize) -> Option<u16> {
+    bytes
+        .get(offset..offset.checked_add(2)?)
+        .map(|slice| u16::from_le_bytes([slice[0], slice[1]]))
+}
+
+fn read_u32_le(bytes: &[u8], offset: usize) -> Option<u32> {
+    bytes
+        .get(offset..offset.checked_add(4)?)
+        .map(|slice| u32::from_le_bytes([slice[0], slice[1], slice[2], slice[3]]))
+}
+
+fn read_u16_be(bytes: &[u8], offset: usize) -> Option<u16> {
+    bytes
+        .get(offset..offset.checked_add(2)?)
+        .map(|slice| u16::from_be_bytes([slice[0], slice[1]]))
+}
+
+fn read_u32_be(bytes: &[u8], offset: usize) -> Option<u32> {
+    bytes
+        .get(offset..offset.checked_add(4)?)
+        .map(|slice| u32::from_be_bytes([slice[0], slice[1], slice[2], slice[3]]))
+}
+
+/// The `OS/2`, `head`, `name` and `post` tables of one TrueType or OpenType
+/// font, bounds-checked against the font bytes.
+struct SfntTables<'a> {
+    data: &'a [u8],
+    os2: &'a [u8],
+    head: &'a [u8],
+    name: &'a [u8],
+}
+
+impl<'a> SfntTables<'a> {
+    fn parse(data: &'a [u8]) -> std::result::Result<Self, String> {
+        match data.first_chunk::<4>() {
+            Some(b"\x00\x01\x00\x00" | b"OTTO" | b"true") => {}
+            Some(b"ttcf") => {
+                return Err(
+                    "a font collection cannot be embedded, pass one TrueType or OpenType face"
+                        .to_owned(),
+                );
+            }
+            _ => return Err("embedded font bytes are not a supported sfnt font".to_owned()),
+        }
+        let malformed = || "embedded font bytes have a malformed sfnt table directory".to_owned();
+        let table_count = read_u16_be(data, 4).ok_or_else(malformed)?;
+        if table_count == 0 || table_count > 512 {
+            return Err(malformed());
+        }
+        if data.len() > MAX_EMBEDDED_FACE_BYTES || data.len() < 12 + usize::from(table_count) * 16 {
+            return Err(malformed());
+        }
+        let mut directory = HashMap::new();
+        for index in 0..usize::from(table_count) {
+            let record = 12 + index * 16;
+            let tag: [u8; 4] = data[record..record + 4].try_into().unwrap();
+            let offset = read_u32_be(data, record + 8).ok_or_else(malformed)? as usize;
+            let length = read_u32_be(data, record + 12).ok_or_else(malformed)? as usize;
+            let end = offset.checked_add(length).ok_or_else(malformed)?;
+            let bytes = data.get(offset..end).ok_or_else(malformed)?;
+            if directory.insert(tag, bytes).is_some()
+                || (length != 0 && offset < 12 + usize::from(table_count) * 16)
+            {
+                return Err(malformed());
+            }
+        }
+        let table = |tag: &[u8; 4]| -> std::result::Result<Option<&'a [u8]>, String> {
+            Ok(directory.get(tag).copied())
+        };
+        let required = |tag: &[u8; 4]| {
+            table(tag)?.ok_or_else(|| {
+                format!(
+                    "embedded font has no {} table",
+                    String::from_utf8_lossy(tag).trim_end()
+                )
+            })
+        };
+        let tables = Self {
+            data,
+            os2: required(b"OS/2")?,
+            head: required(b"head")?,
+            name: required(b"name")?,
+        };
+        if tables.os2.len() < 78 || tables.head.len() < 54 {
+            return Err("embedded font has a truncated OS/2 or head table".to_owned());
+        }
+        let minimum_os2 = match tables.os2_version() {
+            0 => 78,
+            1 => 86,
+            2..=4 => 96,
+            _ => 100,
+        };
+        if tables.os2.len() < minimum_os2 {
+            return Err("embedded font has a truncated OS/2 table".to_owned());
+        }
+        let count = read_u16_be(tables.name, 2).ok_or_else(malformed)? as usize;
+        let strings = read_u16_be(tables.name, 4).ok_or_else(malformed)? as usize;
+        let format = read_u16_be(tables.name, 0).ok_or_else(malformed)?;
+        if format > 1 || strings < 6 + count * 12 || strings > tables.name.len() {
+            return Err(malformed());
+        }
+        for index in 0..count {
+            let record = 6 + index * 12;
+            let platform = read_u16_be(tables.name, record).ok_or_else(malformed)?;
+            let length = read_u16_be(tables.name, record + 8).ok_or_else(malformed)? as usize;
+            let offset = read_u16_be(tables.name, record + 10).ok_or_else(malformed)? as usize;
+            if tables
+                .name
+                .get(strings + offset..strings + offset + length)
+                .is_none()
+                || (matches!(platform, 0 | 3) && !length.is_multiple_of(2))
+            {
+                return Err(malformed());
+            }
+        }
+        Ok(tables)
+    }
+
+    fn os2_version(&self) -> u16 {
+        read_u16_be(self.os2, 0).unwrap_or(0)
+    }
+
+    fn panose(&self) -> &'a [u8] {
+        &self.os2[32..42]
+    }
+
+    fn code_page_ranges(&self) -> (u32, u32) {
+        if self.os2_version() >= 1 && self.os2.len() >= 86 {
+            (
+                read_u32_be(self.os2, 78).unwrap_or(0),
+                read_u32_be(self.os2, 82).unwrap_or(0),
+            )
+        } else {
+            (0, 0)
+        }
+    }
+
+    /// One `name` table string as UTF-16LE, preferring Windows English.
+    fn name_utf16le(&self, name_id: u16) -> Vec<u8> {
+        let count = read_u16_be(self.name, 2).unwrap_or(0);
+        let strings = usize::from(read_u16_be(self.name, 4).unwrap_or(0));
+        let mut best: Option<(u8, &[u8], bool)> = None;
+        for index in 0..usize::from(count) {
+            let record = 6 + index * 12;
+            let (
+                Some(platform),
+                Some(encoding),
+                Some(language),
+                Some(id),
+                Some(length),
+                Some(offset),
+            ) = (
+                read_u16_be(self.name, record),
+                read_u16_be(self.name, record + 2),
+                read_u16_be(self.name, record + 4),
+                read_u16_be(self.name, record + 6),
+                read_u16_be(self.name, record + 8),
+                read_u16_be(self.name, record + 10),
+            )
+            else {
+                break;
+            };
+            if id != name_id {
+                continue;
+            }
+            let rank = match (platform, encoding, language) {
+                (3, 1, 0x0409) => 0,
+                (3, 0 | 1 | 10, _) => 1,
+                (0, _, _) => 2,
+                (1, 0, 0) => 3,
+                _ => continue,
+            };
+            let start = strings + usize::from(offset);
+            let Some(bytes) = self.name.get(start..start + usize::from(length)) else {
+                continue;
+            };
+            if platform == 1 && !bytes.is_ascii() {
+                continue;
+            }
+            if best.is_none_or(|(best_rank, _, _)| rank < best_rank) {
+                best = Some((rank, bytes, platform != 1));
+            }
+        }
+        match best {
+            Some((_, bytes, true)) => bytes
+                .chunks_exact(2)
+                .flat_map(|unit| [unit[1], unit[0]])
+                .collect(),
+            Some((_, bytes, false)) => bytes
+                .iter()
+                .flat_map(|byte| {
+                    let unit = if byte.is_ascii() {
+                        u16::from(*byte)
+                    } else {
+                        0xFFFD
+                    };
+                    unit.to_le_bytes()
+                })
+                .collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// Wraps the font in an uncompressed Embedded OpenType 2.1 header.
+    fn embedded_open_type(&self) -> std::result::Result<Vec<u8>, String> {
+        let too_large = || "embedded font is too large for Embedded OpenType".to_owned();
+        let font_data_size = u32::try_from(self.data.len()).map_err(|_| too_large())?;
+        let os2 = self.os2;
+        let (code_page_1, code_page_2) = self.code_page_ranges();
+        let mut header = Vec::with_capacity(EOT_FIXED_HEADER_LEN + 256);
+        header.extend_from_slice(&[0; 4]);
+        header.extend_from_slice(&font_data_size.to_le_bytes());
+        header.extend_from_slice(&EOT_VERSION.to_le_bytes());
+        header.extend_from_slice(&0_u32.to_le_bytes());
+        header.extend_from_slice(self.panose());
+        header.push(1);
+        header.push(u8::from(read_u16_be(os2, 62).unwrap_or(0) & 1 != 0));
+        header.extend_from_slice(&u32::from(read_u16_be(os2, 4).unwrap_or(400)).to_le_bytes());
+        header.extend_from_slice(&read_u16_be(os2, 8).unwrap_or(0).to_le_bytes());
+        header.extend_from_slice(&EOT_MAGIC.to_le_bytes());
+        for offset in [42, 46, 50, 54] {
+            header.extend_from_slice(&read_u32_be(os2, offset).unwrap_or(0).to_le_bytes());
+        }
+        header.extend_from_slice(&code_page_1.to_le_bytes());
+        header.extend_from_slice(&code_page_2.to_le_bytes());
+        header.extend_from_slice(&read_u32_be(self.head, 8).unwrap_or(0).to_le_bytes());
+        header.extend_from_slice(&[0; 16]);
+        debug_assert_eq!(header.len(), EOT_FIXED_HEADER_LEN);
+        // Family, style, version and full names, each after a zero padding word.
+        for name_id in [1, 2, 5, 4] {
+            let name = self.name_utf16le(name_id);
+            let size = u16::try_from(name.len()).map_err(|_| too_large())?;
+            header.extend_from_slice(&0_u16.to_le_bytes());
+            header.extend_from_slice(&size.to_le_bytes());
+            header.extend_from_slice(&name);
+        }
+        // The padding word and an empty root string.
+        header.extend_from_slice(&[0; 4]);
+        let eot_size = u32::try_from(header.len() + self.data.len()).map_err(|_| too_large())?;
+        header[0..4].copy_from_slice(&eot_size.to_le_bytes());
+        header.extend_from_slice(self.data);
+        Ok(header)
+    }
 }
 
 fn relative_part_target(source_part: &str, target_part: &str) -> String {
@@ -18732,9 +19509,13 @@ enum AuthoringChange {
 }
 
 #[cfg(feature = "render")]
-fn authoring_fonts(files: &[(&str, &[u8])]) -> Result<FontManager> {
-    let mut fonts = FontManager::new_deterministic().map_err(|e| render_failure(e.to_string()))?;
-    fonts.load_additional_fonts(&caller_font_files(files));
+fn authoring_fonts(presentation: &Presentation, files: &[(&str, &[u8])]) -> Result<FontManager> {
+    let mut fonts = configured_font_manager(
+        &presentation.package,
+        &presentation.presentation_part,
+        &presentation.presentation,
+        &caller_font_files(files),
+    )?;
     fonts.begin_layout();
     Ok(fonts)
 }
@@ -20091,9 +20872,8 @@ fn prepare_render_context(
     PREPARED_MEDIA_ASSEMBLY_COUNT.with(|count| count.set(count.get() + 1));
     #[cfg(test)]
     PREPARED_FONT_MANAGER_COUNT.with(|count| count.set(count.get() + 1));
-    let mut font_manager = FontManager::new_deterministic()
-        .map_err(|error| render_failure(format!("deterministic fonts: {error}")))?;
-    font_manager.load_additional_fonts(font_files);
+    let mut font_manager =
+        configured_font_manager(package, &presentation_part, &presentation, font_files)?;
     let mut resolved_slides = Vec::with_capacity(presentation.slide_ids.len());
     let mut text_directions = Vec::with_capacity(presentation.slide_ids.len());
     let mut prepared_slides = Vec::with_capacity(presentation.slide_ids.len());
@@ -24162,6 +24942,592 @@ mod write_tests {
 
     #[cfg(feature = "default-template")]
     #[test]
+    fn fx220_native_original_mtx_base_retains_font_graph() {
+        let source = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/pptx/placeholder-layout-color.pptx");
+        let mut presentation = Presentation::open(&source).unwrap();
+        let font_parts = (1..=6)
+            .map(|index| {
+                let name = format!("/ppt/fonts/font{index}.fntdata");
+                (
+                    name.clone(),
+                    presentation.package.get_part(&name).unwrap().to_vec(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let original = presentation.presentation.to_xml().unwrap();
+        let start = original
+            .windows(b"<p:embeddedFontLst".len())
+            .position(|raw| raw == b"<p:embeddedFontLst")
+            .unwrap();
+        let close = b"</p:embeddedFontLst>";
+        let end = original
+            .windows(close.len())
+            .position(|raw| raw == close)
+            .unwrap()
+            + close.len();
+        let list = original[start..end].to_vec();
+        let relationships = presentation
+            .package
+            .get_part_rels(&presentation.presentation_part)
+            .unwrap()
+            .clone();
+        for bytes in [presentation.to_bytes().unwrap(), {
+            presentation.set_slide_number_start(Some(8)).unwrap();
+            presentation.to_bytes().unwrap()
+        }] {
+            let reopened = Presentation::from_bytes(&bytes).unwrap();
+            for (name, expected) in &font_parts {
+                assert_eq!(reopened.package.get_part(name).unwrap(), expected);
+            }
+            let written = reopened.presentation.to_xml().unwrap();
+            assert!(written.windows(list.len()).any(|raw| raw == list));
+            assert_eq!(
+                reopened
+                    .package
+                    .get_part_rels(&reopened.presentation_part)
+                    .unwrap()
+                    .to_xml()
+                    .unwrap(),
+                relationships.to_xml().unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn fx220_checked_eot_writer_and_hostile_envelopes() {
+        let data = include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf");
+        let tables = SfntTables::parse(data).unwrap();
+        let eot = tables.embedded_open_type().unwrap();
+        assert_eq!(
+            checked_embedded_font(&eot),
+            (EmbeddedFontFormat::Eot, Some(data.as_slice()))
+        );
+        assert_eq!(read_u16_le(&eot, 32), read_u16_be(tables.os2, 8));
+        for offset in [0, 4, 8, 80, 82] {
+            let mut hostile = eot.clone();
+            hostile[offset..offset + 2].fill(0xff);
+            assert!(
+                checked_embedded_font(&hostile).1.is_none(),
+                "offset {offset}"
+            );
+        }
+        for length in [0, 4, 79, 80, eot.len() - 1] {
+            assert!(checked_embedded_font(&eot[..length]).1.is_none());
+        }
+        let mut hostile = data.to_vec();
+        hostile[20..24].copy_from_slice(&u32::MAX.to_be_bytes());
+        assert!(SfntTables::parse(&hostile).is_err());
+        let mut duplicate = data.to_vec();
+        let tag: [u8; 4] = duplicate[12..16].try_into().unwrap();
+        duplicate[28..32].copy_from_slice(&tag);
+        assert!(SfntTables::parse(&duplicate).is_err());
+        let mut unknown_flags = eot.clone();
+        unknown_flags[12..16].copy_from_slice(&0x1000_0000_u32.to_le_bytes());
+        assert_eq!(
+            checked_embedded_font(&unknown_flags),
+            (EmbeddedFontFormat::Eot, None)
+        );
+    }
+
+    #[test]
+    fn fx220_native_actual_compressed_snapshot_is_opaque() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../corpus/pptx/placeholder-layout-color.pptx");
+        let presentation = Presentation::open(path).unwrap();
+        let entries = presentation.embedded_fonts().unwrap();
+        assert_eq!(entries.len(), 3);
+        let faces = entries
+            .iter()
+            .flat_map(|entry| &entry.faces)
+            .collect::<Vec<_>>();
+        assert_eq!(faces.len(), 6);
+        for face in faces {
+            assert_eq!(face.format, EmbeddedFontFormat::CompressedEot);
+            assert!(face.data.is_none());
+            assert!(face.part_name.is_some());
+            assert!(face.stored_len > 0);
+        }
+    }
+
+    #[test]
+    fn fx220_native_transactions_faces_flags_and_atomic_refusals() {
+        let regular = include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf");
+        let bold = include_bytes!("../../oxml-layout/fonts/Caladea-Bold.ttf");
+        let license = FontEmbeddingLicense::new(true, "SIL Open Font License 1.1");
+        let mut deck = Presentation::new().unwrap();
+        assert_eq!(deck.embed_true_type_fonts().unwrap(), None);
+        for kind in EmbeddedFontKind::ALL {
+            deck.embed_font(
+                "Caladea",
+                EmbeddedFont::new(kind, regular.to_vec(), license.clone()),
+            )
+            .unwrap();
+        }
+        assert_eq!(deck.embedded_fonts().unwrap()[0].faces.len(), 4);
+        assert_eq!(deck.embed_true_type_fonts().unwrap(), Some(true));
+        deck.set_save_subset_fonts(Some(false)).unwrap();
+        assert_eq!(deck.save_subset_fonts().unwrap(), Some(false));
+        let before = deck.to_bytes().unwrap();
+        deck.set_save_subset_fonts(Some(false)).unwrap();
+        deck.embed_font(
+            "Caladea",
+            EmbeddedFont::new(EmbeddedFontKind::Regular, regular.to_vec(), license.clone()),
+        )
+        .unwrap();
+        assert_eq!(deck.to_bytes().unwrap(), before);
+        for (data, license) in [
+            (regular.to_vec(), FontEmbeddingLicense::new(false, "OFL")),
+            (vec![0; 16], license.clone()),
+            (regular.to_vec(), FontEmbeddingLicense::new(true, "")),
+        ] {
+            assert!(
+                deck.embed_font(
+                    "Caladea",
+                    EmbeddedFont::new(EmbeddedFontKind::Regular, data, license)
+                )
+                .is_err()
+            );
+            assert_eq!(deck.to_bytes().unwrap(), before);
+        }
+        deck.embed_font(
+            "Caladea",
+            EmbeddedFont::new(EmbeddedFontKind::Bold, bold.to_vec(), license),
+        )
+        .unwrap();
+        let written = deck.to_bytes().unwrap();
+        let mut reopened = Presentation::from_bytes(&written).unwrap();
+        let faces = reopened.embedded_fonts().unwrap().remove(0).faces;
+        assert_eq!(
+            faces
+                .iter()
+                .find(|face| face.kind == EmbeddedFontKind::Bold)
+                .unwrap()
+                .data
+                .as_deref(),
+            Some(bold.as_slice())
+        );
+        let part = faces[0].part_name.clone().unwrap();
+        reopened
+            .remove_embedded_font("Caladea", EmbeddedFontKind::Regular)
+            .unwrap()
+            .unwrap();
+        assert!(reopened.package.get_part(&part).is_none());
+        assert_eq!(reopened.embedded_fonts().unwrap()[0].faces.len(), 3);
+        reopened.remove_font("Caladea").unwrap().unwrap();
+        assert!(reopened.embedded_fonts().unwrap().is_empty());
+        assert_eq!(reopened.embed_true_type_fonts().unwrap(), Some(true));
+        let before = reopened.to_bytes().unwrap();
+        assert!(reopened.remove_font("absent").unwrap().is_none());
+        assert_eq!(reopened.to_bytes().unwrap(), before);
+        reopened.set_embed_true_type_fonts(Some(false)).unwrap();
+        assert_eq!(reopened.embed_true_type_fonts().unwrap(), Some(false));
+        reopened.set_embed_true_type_fonts(None).unwrap();
+        assert_eq!(reopened.embed_true_type_fonts().unwrap(), None);
+    }
+
+    #[test]
+    fn fx220_native_two_thousand_references_share_and_replace_by_copy() {
+        let regular = include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf");
+        let bold = include_bytes!("../../oxml-layout/fonts/Caladea-Bold.ttf");
+        let license = FontEmbeddingLicense::new(true, "OFL 1.1");
+        let mut deck = Presentation::new().unwrap();
+        deck.embed_font(
+            "Caladea",
+            EmbeddedFont::new(EmbeddedFontKind::Regular, regular.to_vec(), license.clone()),
+        )
+        .unwrap();
+        let first = deck.embedded_fonts().unwrap().remove(0).faces.remove(0);
+        let mut xml = String::from_utf8(deck.presentation.to_xml().unwrap()).unwrap();
+        let aliases = (1..2000).map(|index| format!("<p:embeddedFont><p:font typeface=\"Alias{index}\"/><p:regular r:id=\"{}\"/></p:embeddedFont>", first.relationship_id)).collect::<String>();
+        xml = xml.replace("</p:embeddedFontLst>", &(aliases + "</p:embeddedFontLst>"));
+        deck.presentation = CT_Presentation::from_xml(xml.as_bytes()).unwrap();
+        let snapshot = deck.embedded_fonts().unwrap();
+        let data = snapshot[0].faces[0].data.as_ref().unwrap();
+        assert_eq!(snapshot.len(), 2000);
+        for entry in &snapshot {
+            assert!(std::sync::Arc::ptr_eq(
+                data,
+                entry.faces[0].data.as_ref().unwrap()
+            ));
+        }
+        let original_part = first.part_name.unwrap();
+        let original_bytes = deck.package.get_part(&original_part).unwrap().to_vec();
+        deck.embed_font(
+            "Caladea",
+            EmbeddedFont::new(EmbeddedFontKind::Regular, bold.to_vec(), license),
+        )
+        .unwrap();
+        let snapshot = deck.embedded_fonts().unwrap();
+        assert_ne!(
+            snapshot[0].faces[0].part_name,
+            snapshot[1].faces[0].part_name
+        );
+        assert_eq!(snapshot[0].faces[0].data.as_deref(), Some(bold.as_slice()));
+        assert_eq!(
+            snapshot[1].faces[0].data.as_deref(),
+            Some(regular.as_slice())
+        );
+        assert_eq!(
+            deck.package.get_part(&original_part).unwrap(),
+            original_bytes
+        );
+        deck.remove_font("Caladea").unwrap();
+        assert!(deck.package.get_part(&original_part).is_some());
+        assert_eq!(deck.embedded_fonts().unwrap().len(), 1999);
+    }
+
+    #[test]
+    fn fx220_native_foreign_graph_and_opaque_references_preserve_owned_parts() {
+        let data = include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf");
+        let license = FontEmbeddingLicense::new(true, "OFL 1.1");
+        let mut deck = Presentation::new().unwrap();
+        deck.embed_font(
+            "Caladea",
+            EmbeddedFont::new(EmbeddedFontKind::Regular, data.to_vec(), license.clone()),
+        )
+        .unwrap();
+        let face = deck.embedded_fonts().unwrap().remove(0).faces.remove(0);
+        let part = face.part_name.clone().unwrap();
+        let mut xml = String::from_utf8(deck.presentation.to_xml().unwrap()).unwrap();
+        xml = xml.replace("</p:presentation>", &format!("<p:extLst><p:ext uri=\"font-retention\"><x:payload xmlns:x=\"urn:font-test\" r:embed=\"{}\"/></p:ext></p:extLst></p:presentation>", face.relationship_id));
+        deck.presentation = CT_Presentation::from_xml(xml.as_bytes()).unwrap();
+        let retained = deck.package.get_part(&part).unwrap().to_vec();
+        deck.remove_font("Caladea").unwrap().unwrap();
+        assert_eq!(deck.package.get_part(&part).unwrap(), retained);
+        assert!(
+            deck.package
+                .get_part_rels(&deck.presentation_part)
+                .unwrap()
+                .get_by_id(&face.relationship_id)
+                .is_some()
+        );
+        assert!(
+            deck.presentation
+                .to_xml()
+                .unwrap()
+                .windows(b"urn:font-test".len())
+                .any(|raw| raw == b"urn:font-test")
+        );
+
+        let mut deck = Presentation::new().unwrap();
+        deck.embed_font(
+            "Caladea",
+            EmbeddedFont::new(EmbeddedFontKind::Regular, data.to_vec(), license.clone()),
+        )
+        .unwrap();
+        let id = deck.embedded_fonts().unwrap()[0].faces[0]
+            .relationship_id
+            .clone();
+        deck.package
+            .get_part_rels_mut(&deck.presentation_part)
+            .unwrap()
+            .items
+            .iter_mut()
+            .find(|rel| rel.id == id)
+            .unwrap()
+            .rel_type = rel_types::IMAGE.to_owned();
+        let before = deck.to_bytes().unwrap();
+        assert!(
+            deck.embed_font(
+                "Caladea",
+                EmbeddedFont::new(EmbeddedFontKind::Regular, data.to_vec(), license)
+            )
+            .is_err()
+        );
+        assert_eq!(deck.to_bytes().unwrap(), before);
+        let snapshot = deck.embedded_fonts().unwrap();
+        assert!(snapshot[0].faces[0].part_name.is_none());
+        assert_eq!(snapshot[0].faces[0].format, EmbeddedFontFormat::Unknown);
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn fx220_native_shared_render_and_authoring_font_assembly() {
+        let body = include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf");
+        let mut deck = Presentation::new().unwrap();
+        deck.embed_font(
+            "Caladea",
+            EmbeddedFont::new(
+                EmbeddedFontKind::Regular,
+                body.to_vec(),
+                FontEmbeddingLicense::new(true, "OFL 1.1"),
+            ),
+        )
+        .unwrap();
+        let first = deck.embedded_fonts().unwrap().remove(0).faces.remove(0);
+        let aliases = (0..2000).map(|index| format!("<p:embeddedFont><p:font typeface=\"FX220 Alias {index}\"/><p:regular r:id=\"{}\"/></p:embeddedFont>", first.relationship_id)).collect::<String>();
+        let xml = String::from_utf8(deck.presentation.to_xml().unwrap())
+            .unwrap()
+            .replace("</p:embeddedFontLst>", &(aliases + "</p:embeddedFontLst>"));
+        deck.presentation = CT_Presentation::from_xml(xml.as_bytes()).unwrap();
+        let package = deck.staged_package(false).unwrap();
+        let mut render = prepare_render_context(&package, false, &[]).unwrap();
+        let mut authoring = authoring_fonts(&deck, &[]).unwrap();
+        for index in [0, 999, 1999] {
+            let name = format!("FX220 Alias {index}");
+            for fonts in [&mut render.font_manager, &mut authoring] {
+                let id = fonts.resolve_font(Some(&name), false, false).unwrap();
+                assert_eq!(fonts.font_data(id).unwrap().data.as_ref(), body.as_slice());
+            }
+        }
+        let caller = include_bytes!("../../oxml-layout/fonts/Carlito-Regular.ttf");
+        let mut render = prepare_render_context(
+            &package,
+            false,
+            &[oxml_layout::FontFile {
+                family: "FX220 Alias 1999".to_owned(),
+                data: caller.to_vec(),
+            }],
+        )
+        .unwrap();
+        let id = render
+            .font_manager
+            .resolve_font(Some("FX220 Alias 1999"), false, false)
+            .unwrap();
+        assert_eq!(
+            render.font_manager.font_data(id).unwrap().data.as_ref(),
+            caller.as_slice()
+        );
+        deck.set_embed_true_type_fonts(None).unwrap();
+        let mut authoring = authoring_fonts(&deck, &[]).unwrap();
+        let id = authoring
+            .resolve_font(Some("FX220 Alias 1999"), false, false)
+            .unwrap();
+        assert_ne!(
+            authoring.font_data(id).unwrap().data.as_ref(),
+            body.as_slice()
+        );
+    }
+
+    fn fx220_broken_font_removal_fixture(case: usize, preserved_reference: bool) -> Presentation {
+        let body = include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf");
+        let mut deck = Presentation::new().unwrap();
+        deck.embed_font(
+            "Caladea",
+            EmbeddedFont::new(
+                EmbeddedFontKind::Regular,
+                body.to_vec(),
+                FontEmbeddingLicense::new(true, "OFL 1.1"),
+            ),
+        )
+        .unwrap();
+        let face = deck.embedded_fonts().unwrap().remove(0).faces.remove(0);
+        if preserved_reference {
+            let xml = String::from_utf8(deck.presentation.to_xml().unwrap()).unwrap().replace("</p:presentation>", &format!("<p:extLst><p:ext uri=\"retention\"><x:payload xmlns:x=\"urn:fx220-removal\" r:embed=\"{}\"/></p:ext></p:extLst></p:presentation>", face.relationship_id));
+            deck.presentation = CT_Presentation::from_xml(xml.as_bytes()).unwrap();
+        }
+        let rels = deck
+            .package
+            .get_part_rels_mut(&deck.presentation_part)
+            .unwrap();
+        let relation = rels
+            .items
+            .iter_mut()
+            .find(|rel| rel.id == face.relationship_id)
+            .unwrap();
+        match case {
+            0 => relation.rel_type = rel_types::IMAGE.to_owned(),
+            1 => rels.items.retain(|rel| rel.id != face.relationship_id),
+            2 => relation.target_mode = Some("External".to_owned()),
+            3 => {
+                deck.package.remove_part(face.part_name.as_deref().unwrap());
+            }
+            4 => deck
+                .package
+                .content_types
+                .add_override(face.part_name.as_deref().unwrap(), "image/png"),
+            _ => unreachable!(),
+        }
+        deck
+    }
+
+    fn fx220_removal_source_snapshot(deck: &Presentation) -> (Vec<u8>, Vec<u8>) {
+        let mut package = std::io::Cursor::new(Vec::new());
+        deck.package.write_to(&mut package).unwrap();
+        (package.into_inner(), deck.presentation.to_xml().unwrap())
+    }
+
+    #[test]
+    fn fx220_remove_face_invalid_graph_refuses_atomically() {
+        for case in 0..5 {
+            for preserved in [false, true] {
+                let mut deck = fx220_broken_font_removal_fixture(case, preserved);
+                let before = fx220_removal_source_snapshot(&deck);
+                assert!(
+                    deck.remove_embedded_font("Caladea", EmbeddedFontKind::Regular)
+                        .is_err(),
+                    "case {case}, preserved {preserved}"
+                );
+                assert_eq!(fx220_removal_source_snapshot(&deck), before);
+            }
+        }
+    }
+
+    #[test]
+    fn fx220_remove_entry_invalid_graph_refuses_atomically() {
+        for case in 0..5 {
+            for preserved in [false, true] {
+                let mut deck = fx220_broken_font_removal_fixture(case, preserved);
+                let before = fx220_removal_source_snapshot(&deck);
+                assert!(
+                    deck.remove_font("Caladea").is_err(),
+                    "case {case}, preserved {preserved}"
+                );
+                assert_eq!(fx220_removal_source_snapshot(&deck), before);
+            }
+        }
+    }
+
+    #[cfg(feature = "render")]
+    fn fx220_timeline_glyph_signature(page: &PageFrame) -> Vec<(Vec<u16>, Vec<f64>)> {
+        let mut result = Vec::new();
+        let mut text = String::new();
+        oxml_layout::walk(&page.elements, &mut |element, _| match element {
+            PositionedElement::Text(run) => {
+                text.push_str(&run.text);
+                result.push((run.glyph_ids.clone(), run.advances.clone()));
+            }
+            PositionedElement::MultilingualText(run) => {
+                text.push_str(&run.logical_text);
+                result.push((run.glyph_ids.clone(), run.x_advances.clone()));
+            }
+            _ => {}
+        });
+        assert!(text.contains("iiiiWWWW"), "actual text: {text:?}");
+        result
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn fx220_public_timeline_uses_embedded_glyphs_and_caller_override() {
+        let body = include_bytes!("../../oxml-layout/fonts/LiberationMono-Regular.ttf");
+        let caller = include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf");
+        let name = "FX220 uninstalled timeline";
+        let mut deck = Presentation::new().unwrap();
+        deck.add_slide(6).unwrap();
+        let mut slide = deck.slide_mut(0).unwrap();
+        let mut shape = slide
+            .add_textbox(Emu(100_000), Emu(100_000), Emu(4_000_000), Emu(800_000))
+            .unwrap();
+        shape.set_text("iiiiWWWW").unwrap();
+        shape
+            .text_frame()
+            .unwrap()
+            .paragraph_mut(0)
+            .unwrap()
+            .run_mut(0)
+            .unwrap()
+            .set_font(Some(TextFont::new(name).unwrap()));
+        deck.embed_font(
+            name,
+            EmbeddedFont::new(
+                EmbeddedFontKind::Regular,
+                body.to_vec(),
+                FontEmbeddingLicense::new(true, "OFL 1.1"),
+            ),
+        )
+        .unwrap();
+        let before = deck.to_bytes().unwrap();
+        let positive = deck.render_deterministic().unwrap().1;
+        assert!(
+            positive
+                .fonts
+                .iter()
+                .any(|font| font.data.as_ref() == body.as_slice())
+        );
+        let embedded_signature = fx220_timeline_glyph_signature(&positive.pages[0]);
+        let frame = deck
+            .render_timeline_deterministic(0, TimelinePosition::default(), None)
+            .unwrap();
+        assert_eq!(
+            fx220_timeline_glyph_signature(&frame.page),
+            fx220_timeline_glyph_signature(&positive.pages[0])
+        );
+        let frame_layout = oxml_layout::LayoutResult::new(
+            vec![std::sync::Arc::new(frame.page)],
+            positive.fonts.clone(),
+            None,
+            Vec::new(),
+        );
+        assert_eq!(
+            oxml_pdf::render_page_to_png(&frame_layout, 0, 72.0).unwrap(),
+            oxml_pdf::render_page_to_png(&positive, 0, 72.0).unwrap(),
+            "the public frame must paint with the ordinary export font identities"
+        );
+        let files = [(name, caller.as_slice())];
+        let positive = deck.render_deterministic_with_fonts(&files).unwrap().1;
+        assert!(
+            positive
+                .fonts
+                .iter()
+                .any(|font| font.data.as_ref() == caller.as_slice())
+        );
+        let frame = deck
+            .render_timeline_deterministic_with_fonts(0, TimelinePosition::default(), None, &files)
+            .unwrap();
+        assert_eq!(
+            fx220_timeline_glyph_signature(&frame.page),
+            fx220_timeline_glyph_signature(&positive.pages[0])
+        );
+        let frame_layout = oxml_layout::LayoutResult::new(
+            vec![std::sync::Arc::new(frame.page)],
+            positive.fonts.clone(),
+            None,
+            Vec::new(),
+        );
+        assert_eq!(
+            oxml_pdf::render_page_to_png(&frame_layout, 0, 72.0).unwrap(),
+            oxml_pdf::render_page_to_png(&positive, 0, 72.0).unwrap(),
+            "the public frame must paint with the ordinary export font identities"
+        );
+        assert_eq!(deck.to_bytes().unwrap(), before);
+        deck.set_embed_true_type_fonts(None).unwrap();
+        let missing = deck
+            .render_timeline_deterministic(0, TimelinePosition::default(), None)
+            .unwrap();
+        assert_ne!(
+            fx220_timeline_glyph_signature(&missing.page),
+            embedded_signature
+        );
+    }
+
+    #[cfg(feature = "render")]
+    #[test]
+    fn fx220_caller_alias_overrides_exact_embedded_family() {
+        let embedded = include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf");
+        let caller = include_bytes!("../../oxml-layout/fonts/Carlito-Regular.ttf");
+        let mut deck = Presentation::new().unwrap();
+        deck.embed_font(
+            "Caladea",
+            EmbeddedFont::new(
+                EmbeddedFontKind::Regular,
+                embedded.to_vec(),
+                FontEmbeddingLicense::new(true, "OFL 1.1"),
+            ),
+        )
+        .unwrap();
+        let snapshot = deck.embedded_fonts().unwrap();
+        let mut manager = FontManager::new_deterministic().unwrap();
+        manager.load_additional_fonts(&[
+            oxml_layout::FontFile {
+                family: "Caladea".to_owned(),
+                data: snapshot[0].faces[0].data.as_deref().unwrap().to_vec(),
+            },
+            oxml_layout::FontFile {
+                family: "Caladea".to_owned(),
+                data: caller.to_vec(),
+            },
+        ]);
+        let id = manager.resolve_font(Some("Caladea"), false, false).unwrap();
+        assert_eq!(
+            manager.font_data(id).unwrap().family,
+            "Carlito",
+            "explicit caller alias must outrank the exact embedded family"
+        );
+    }
+
+    #[test]
     fn fx205_fresh_metadata_is_deterministic_and_does_not_leak_template_authors() {
         let presentation = Presentation::new().unwrap();
         assert_eq!(presentation.len(), 0);
@@ -24560,7 +25926,7 @@ mod write_tests {
             .unwrap();
         assert_eq!(owner.contexts.len(), 1);
         let c = &owner.contexts[0];
-        let mut fonts = authoring_fonts(&files).unwrap();
+        let mut fonts = authoring_fonts(&deck, &files).unwrap();
         let (q, s) = rpptx_render::measure_autofit_candidate(
             &c.shape,
             &c.text,
@@ -24660,7 +26026,7 @@ mod write_tests {
             .iter()
             .find(|o| o.update.location.owner_part == master_part && o.update.shape_id == Some(100))
             .unwrap();
-        let mut measuring_fonts = authoring_fonts(&fonts).unwrap();
+        let mut measuring_fonts = authoring_fonts(&deck, &fonts).unwrap();
         for (slide_index, expected_fit) in [(0, true), (9, false)] {
             let context = physical
                 .contexts
@@ -25642,6 +27008,93 @@ mod write_tests {
         );
         assert_ne!(configured_animation.bytes, ordinary_animation.bytes);
         assert_eq!(presentation.to_bytes().unwrap(), before);
+
+        // F-X220 reuses these real owners to prove embedded consumption and
+        // caller precedence through every existing output assembly.
+        let embedded = include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf");
+        presentation
+            .embed_font(
+                inputs[0].0,
+                EmbeddedFont::new(
+                    EmbeddedFontKind::Regular,
+                    embedded.to_vec(),
+                    FontEmbeddingLicense::new(true, "OFL 1.1"),
+                ),
+            )
+            .unwrap();
+        let embedded_before = presentation.to_bytes().unwrap();
+        let (_, embedded_layout) = presentation.render_deterministic().unwrap();
+        let embedded_package = presentation.staged_package(false).unwrap();
+        let embedded_notes = render_notes_pages(&embedded_package, &[]).unwrap();
+        let embedded_handout =
+            render_handout_pages(&embedded_package, HandoutLayout::Six, &[]).unwrap();
+        for consumer in [&embedded_layout, &embedded_notes, &embedded_handout] {
+            assert!(
+                consumer
+                    .fonts
+                    .iter()
+                    .any(|font| font.data.as_ref() == embedded.as_slice())
+            );
+        }
+        assert_eq!(
+            presentation.to_pdf_deterministic().unwrap(),
+            oxml_pdf::render_to_pdf_checked(&embedded_layout).unwrap()
+        );
+        assert_eq!(
+            presentation.slide_png_deterministic(0, 72.0).unwrap(),
+            render_export_png(&embedded_layout, 0, 72.0).unwrap()
+        );
+        assert_eq!(
+            presentation.to_notes_pdf_deterministic().unwrap(),
+            oxml_pdf::render_to_pdf_checked(&embedded_notes).unwrap()
+        );
+        assert_eq!(
+            presentation.notes_page_pngs_deterministic(72.0).unwrap(),
+            render_export_pngs(&embedded_notes, 72.0).unwrap()
+        );
+        assert_eq!(
+            presentation
+                .to_handout_pdf_deterministic(HandoutLayout::Six)
+                .unwrap(),
+            oxml_pdf::render_to_pdf_checked(&embedded_handout).unwrap()
+        );
+        assert_eq!(
+            presentation
+                .handout_page_pngs_deterministic(HandoutLayout::Six, 72.0)
+                .unwrap(),
+            render_export_pngs(&embedded_handout, 72.0).unwrap()
+        );
+        let with_callers = presentation
+            .render_deterministic_with_fonts(&inputs)
+            .unwrap()
+            .1;
+        assert!(
+            with_callers
+                .fonts
+                .iter()
+                .any(|font| font.data.as_ref() == bytes.as_slice())
+        );
+        assert!(
+            !with_callers
+                .fonts
+                .iter()
+                .any(|font| font.data.as_ref() == embedded.as_slice())
+        );
+        let embedded_animation = presentation
+            .export_animation_deterministic(&segments, export_options)
+            .unwrap();
+        assert_ne!(embedded_animation.bytes, ordinary_animation.bytes);
+        let embedded_text = presentation.text_layout_deterministic(1.0).unwrap();
+        assert_ne!(
+            format!("{embedded_text:?}"),
+            format!(
+                "{:?}",
+                presentation
+                    .text_layout_deterministic_with_fonts(1.0, &inputs)
+                    .unwrap()
+            )
+        );
+        assert_eq!(presentation.to_bytes().unwrap(), embedded_before);
     }
 
     #[cfg(feature = "render")]

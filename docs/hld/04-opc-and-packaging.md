@@ -1879,3 +1879,42 @@ when typed equality ignores source-root markup. Existing relationship,
 metadata and signature invalidation rules apply before candidate publication.
 Exact source no-ops do not rewrite package bytes.
 
+## Embedded font package transactions
+
+Word writes checked single-face sfnt input as ODTTF with its explicit or
+deterministically derived uppercase OOXML GUID. Embedding can stage a missing
+font record and the owned embedTrueTypeFonts setting together with the font
+part and relationship. Descriptive font records retain their source attributes
+and child slots. Font/settings readers resolve actual namespace URIs, accept
+source aliases and distinguish absence from false. Removing a last face retains
+the explicit embed setting until its setter changes it.
+
+PowerPoint embeds an uncompressed EOT version0x00020001, flags0 envelope in a
+font part referenced by the presentation's qualified font list. Four face
+relationship slots retain schema order. Root embedTrueTypeFonts and
+saveSubsetFonts attributes are tri-state. Imported compressed EOT and unknown
+formats remain opaque and exact through no-op saves and unrelated edits.
+Unsupported decoding is reported with absent decoded bytes. License identity
+is checked caller input and has no fabricated PresentationML metadata field.
+
+Before publication, both providers validate actual source ownership, internal
+font relationship kind, unique relationship identity, resolved target and part
+content type. Invalid or ambiguous graphs refuse atomically. Replacing shared
+targets retains all reachable source references, including preserved opaque
+references. EOT headers, string ranges, sfnt directory/table ranges and declared
+lengths are bounded before allocation. No-op operations retain byte identity
+and existing live owners.
+
+Library preservation and native application resave are distinct contracts.
+PowerPoint's qualified positive retains both complete authored EOT parts
+through native save and normal reopen, while remapping relationship IDs and
+normalizing presentation font metadata. Invalid raw sfnt data can remain
+stored without being used by the native application. Missing-font warnings
+are recorded separately from XML repair.
+
+Word may replace embedded font names and GUIDs, add other font parts and save
+an empty bold part under its documented one-font-per-name behavior. Disabling
+embedding can remove font parts on native save even while the already loaded
+document still paints an embedded face. A normal reopened copy can then use
+fallback. These observed native changes do not authorize the library to discard
+opaque source or reinterpret missing decoded bytes as a successfully used font.

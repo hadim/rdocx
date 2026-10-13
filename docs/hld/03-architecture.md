@@ -382,8 +382,8 @@ The facade owns a separate deterministic-base engine for layouts where caller
 fonts override the bundled inventory. Missing families resolve from bundled
 faces without consulting system fonts. A caller font label that differs from
 its embedded family is a label-derived alias for that exact caller face. Native
-callers can also install byte-free family aliases. Resolution prefers an exact
-embedded family, then an explicit caller alias, then a label-derived alias,
+callers can also install byte-free family aliases. Within the caller tier, resolution prefers an exact
+sfnt family, then an explicit caller alias, then a label-derived alias,
 before existing mapped and generic fallbacks. Alias state retains a
 deterministic prefix of at most 256 mappings and 64 KiB of complete mapping and
 lookup identity. Checked transfer includes that exact bounded alias identity
@@ -2072,3 +2072,29 @@ address current owners, never prove that removed children survived. Actual
 owner, text-body and XML-property child generations establish alias identity.
 Shared revision primitives remain owned by oxml-py-support.
 
+## Embedded font ownership
+
+Word owns its relationship-resolved font table and ODTTF parts. PowerPoint
+owns its source-preserving presentation font list and EOT parts. Both native
+facades stage font model, package bytes, relationships, content types and flags
+as one transaction. Shared source targets use copy-on-write and pruning removes
+only genuinely unreachable owned parts. Descriptive records and opaque producer
+source remain authoritative, and unsafe ambiguous edits refuse before publication.
+
+Both families require explicit caller authorization and exact nonempty license
+identity. Font bytes come from bounded caller inputs. Word checked listing
+bounds projected owned copies while retaining the legacy snapshot layout. Its
+indexed metadata reader resolves the actual part through the same checked
+relationship provider. PowerPoint decodes each distinct supported part once
+and shares its immutable body among aliases. Python preallocates immutable
+result snapshots before publishing the native candidate, and CLIs use those
+same native providers before staging outputs. No second ZIP/font/revision engine
+or low-level dependency on a facade is introduced.
+
+Native Office is an independent consumer of those package graphs, not a second
+font provider. PowerPoint qualifies actual regular and bold font use through
+source open, native save and normal reopen. Word's documented one-font-per-name
+behavior can synthesize styles and change saved embeddings. That native
+interoperability boundary does not change the four-face APIs, deterministic
+renderer selection or caller precedence. Native Word multi-face work belongs
+to F-X223.

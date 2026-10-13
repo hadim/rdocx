@@ -1784,6 +1784,118 @@ impl PyPresentation {
         let path = slf.borrow(py).capture_path(smallvec![], None)?;
         Py::new(py, PySlideCollection::new(slf, path))
     }
+
+    #[getter]
+    fn embedded_fonts(&self, py: Python<'_>) -> PyResult<Py<PyTuple>> {
+        let fonts = self
+            .inner
+            .embedded_fonts()
+            .map_err(|e| rpptx_to_pyerr(py, e))?;
+        let mut snapshots = Vec::new();
+        snapshots.try_reserve_exact(fonts.len()).map_err(|_| {
+            pyo3::exceptions::PyMemoryError::new_err("font listing allocation failed")
+        })?;
+        let mut bodies = std::collections::BTreeMap::new();
+        for font in fonts {
+            snapshots.push(PyEmbeddedTypeface::snapshot(py, font, &mut bodies)?);
+        }
+        Ok(PyTuple::new(py, snapshots)?.unbind())
+    }
+    #[pyo3(signature = (name, font, kind="regular", *, license))]
+    fn embed_font(
+        &mut self,
+        py: Python<'_>,
+        name: &str,
+        font: &Bound<'_, PyAny>,
+        kind: &str,
+        license: PyRef<'_, PyFontEmbeddingLicense>,
+    ) -> PyResult<()> {
+        let kind = checked_font_kind(kind)?;
+        let license = checked_font_license(&license)?;
+        let data = if let Ok(value) = font.extract::<PyRef<'_, PyEmbeddedFont>>() {
+            let original = value.license.borrow(py);
+            if original.authorized != license.authorized
+                || original.identity != license.identity
+                || checked_font_kind(value.kind)? != kind
+            {
+                return Err(PyValueError::new_err(
+                    "authored font kind and license must match the embedding request",
+                ));
+            }
+            checked_font_input(value.data.bind(py).as_any())?
+        } else {
+            checked_font_input(font)?
+        };
+        let mut candidate = self.inner.clone();
+        candidate
+            .embed_font(name, rpptx::EmbeddedFont::new(kind, data, license))
+            .map_err(|e| rpptx_to_pyerr(py, e))?;
+        self.publish_font_candidate(py, candidate, "Presentation.embed_font")
+    }
+    #[pyo3(signature = (name, kind="regular"))]
+    fn remove_embedded_font(
+        &mut self,
+        py: Python<'_>,
+        name: &str,
+        kind: &str,
+    ) -> PyResult<Option<Py<PyEmbeddedFontFace>>> {
+        let kind = checked_font_kind(kind)?;
+        let mut candidate = self.inner.clone();
+        let removed = candidate
+            .remove_embedded_font(name, kind)
+            .map_err(|e| rpptx_to_pyerr(py, e))?
+            .map(|font| {
+                PyEmbeddedFontFace::snapshot(py, font, &mut std::collections::BTreeMap::new())
+            })
+            .transpose()?;
+        self.publish_font_candidate(py, candidate, "Presentation.remove_embedded_font")?;
+        Ok(removed)
+    }
+    fn remove_font(
+        &mut self,
+        py: Python<'_>,
+        name: &str,
+    ) -> PyResult<Option<Py<PyEmbeddedTypeface>>> {
+        let mut candidate = self.inner.clone();
+        let removed = candidate
+            .remove_font(name)
+            .map_err(|e| rpptx_to_pyerr(py, e))?
+            .map(|font| {
+                PyEmbeddedTypeface::snapshot(py, font, &mut std::collections::BTreeMap::new())
+            })
+            .transpose()?;
+        self.publish_font_candidate(py, candidate, "Presentation.remove_font")?;
+        Ok(removed)
+    }
+
+    #[getter]
+    fn embed_true_type_fonts(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+        self.inner
+            .embed_true_type_fonts()
+            .map_err(|e| rpptx_to_pyerr(py, e))
+    }
+    #[setter]
+    fn set_embed_true_type_fonts(&mut self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        let mut candidate = self.inner.clone();
+        candidate
+            .set_embed_true_type_fonts(value)
+            .map_err(|e| rpptx_to_pyerr(py, e))?;
+        self.publish_font_candidate(py, candidate, "Presentation.set_embed_true_type_fonts")
+    }
+    #[getter]
+    fn save_subset_fonts(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+        self.inner
+            .save_subset_fonts()
+            .map_err(|e| rpptx_to_pyerr(py, e))
+    }
+    #[setter]
+    fn set_save_subset_fonts(&mut self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        let mut candidate = self.inner.clone();
+        candidate
+            .set_save_subset_fonts(value)
+            .map_err(|e| rpptx_to_pyerr(py, e))?;
+        self.publish_font_candidate(py, candidate, "Presentation.set_save_subset_fonts")
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -3806,4 +3918,278 @@ pub(crate) fn collect_caller_fonts<'py>(
         })
         .map_err(|error| rpptx_value_to_pyerr(py, error.to_string()))?;
     Ok((!selected.is_empty()).then_some(selected))
+}
+
+/// Caller authorization is required independently of the font's own fsType bits.
+#[pyclass(
+    name = "FontEmbeddingLicense",
+    frozen,
+    get_all,
+    eq,
+    skip_from_py_object
+)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyFontEmbeddingLicense {
+    pub authorized: bool,
+    pub identity: String,
+}
+#[pymethods]
+impl PyFontEmbeddingLicense {
+    #[new]
+    #[pyo3(signature = (*, authorized, identity))]
+    fn new(authorized: bool, identity: String) -> Self {
+        Self {
+            authorized,
+            identity,
+        }
+    }
+}
+
+fn checked_font_input(font: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
+    use std::io::Read;
+    const LIMIT: usize = 64 * 1024 * 1024;
+    let copy = |source: &[u8]| -> PyResult<Vec<u8>> {
+        if source.len() > LIMIT {
+            return Err(PyValueError::new_err("font exceeds 64 MiB input bound"));
+        }
+        let mut data = Vec::new();
+        data.try_reserve_exact(source.len()).map_err(|_| {
+            pyo3::exceptions::PyMemoryError::new_err("font input allocation failed")
+        })?;
+        data.extend_from_slice(source);
+        Ok(data)
+    };
+    if let Ok(bytes) = font.cast::<PyBytes>() {
+        return copy(bytes.as_bytes());
+    }
+    if let Ok(path) = font.extract::<PathBuf>() {
+        let file = std::fs::File::open(path)
+            .map_err(|e| pyo3::exceptions::PyOSError::new_err(e.to_string()))?;
+        if file
+            .metadata()
+            .map_err(|e| pyo3::exceptions::PyOSError::new_err(e.to_string()))?
+            .len()
+            > LIMIT as u64
+        {
+            return Err(PyValueError::new_err("font exceeds 64 MiB input bound"));
+        }
+        let mut data = Vec::new();
+        let mut input = file.take((LIMIT + 1) as u64);
+        let mut chunk = [0u8; 8192];
+        loop {
+            let count = input
+                .read(&mut chunk)
+                .map_err(|e| pyo3::exceptions::PyOSError::new_err(e.to_string()))?;
+            if count == 0 {
+                break;
+            }
+            if count > LIMIT - data.len() {
+                return Err(PyValueError::new_err("font exceeds 64 MiB input bound"));
+            }
+            data.try_reserve_exact(count).map_err(|_| {
+                pyo3::exceptions::PyMemoryError::new_err("font input allocation failed")
+            })?;
+            data.extend_from_slice(&chunk[..count]);
+        }
+        return Ok(data);
+    }
+    let read = font.getattr("read").map_err(|_| {
+        PyTypeError::new_err("font must be bytes, a filesystem path or a binary reader")
+    })?;
+    let mut data = Vec::new();
+    loop {
+        let remaining = LIMIT - data.len();
+        let value = read.call1(((remaining + 1).min(8192),))?;
+        let bytes = value
+            .cast::<PyBytes>()
+            .map_err(|_| PyTypeError::new_err("font reader must return bytes"))?;
+        let chunk = bytes.as_bytes();
+        if chunk.is_empty() {
+            return Ok(data);
+        }
+        if chunk.len() > remaining {
+            return Err(PyValueError::new_err("font exceeds 64 MiB input bound"));
+        }
+        let needed = data.len() + chunk.len();
+        if needed > data.capacity() {
+            let capacity = data
+                .capacity()
+                .saturating_mul(2)
+                .clamp(8192, LIMIT)
+                .max(needed);
+            data.try_reserve_exact(capacity - data.len()).map_err(|_| {
+                pyo3::exceptions::PyMemoryError::new_err("font input allocation failed")
+            })?;
+        }
+        data.extend_from_slice(chunk);
+    }
+}
+
+fn font_kind_name(kind: rpptx::EmbeddedFontKind) -> &'static str {
+    match kind {
+        rpptx::EmbeddedFontKind::Regular => "regular",
+        rpptx::EmbeddedFontKind::Bold => "bold",
+        rpptx::EmbeddedFontKind::Italic => "italic",
+        rpptx::EmbeddedFontKind::BoldItalic => "bold_italic",
+    }
+}
+fn checked_font_kind(kind: &str) -> PyResult<rpptx::EmbeddedFontKind> {
+    match kind {
+        "regular" => Ok(rpptx::EmbeddedFontKind::Regular),
+        "bold" => Ok(rpptx::EmbeddedFontKind::Bold),
+        "italic" => Ok(rpptx::EmbeddedFontKind::Italic),
+        "bold_italic" => Ok(rpptx::EmbeddedFontKind::BoldItalic),
+        _ => Err(PyValueError::new_err(
+            "font kind must be regular, bold, italic or bold_italic",
+        )),
+    }
+}
+fn checked_font_license(license: &PyFontEmbeddingLicense) -> PyResult<rpptx::FontEmbeddingLicense> {
+    if !license.authorized || license.identity.trim().is_empty() {
+        return Err(PyValueError::new_err(
+            "font embedding requires explicit authorization and nonempty license identity",
+        ));
+    }
+    Ok(rpptx::FontEmbeddingLicense::new(
+        license.authorized,
+        license.identity.clone(),
+    ))
+}
+
+#[pyclass(name = "EmbeddedFont", frozen, get_all, skip_from_py_object)]
+pub struct PyEmbeddedFont {
+    pub kind: &'static str,
+    pub data: Py<PyBytes>,
+    pub license: Py<PyFontEmbeddingLicense>,
+}
+#[pymethods]
+impl PyEmbeddedFont {
+    #[new]
+    #[pyo3(signature = (font, kind="regular", *, license))]
+    fn new(
+        py: Python<'_>,
+        font: &Bound<'_, PyAny>,
+        kind: &str,
+        license: PyRef<'_, PyFontEmbeddingLicense>,
+    ) -> PyResult<Self> {
+        let kind = checked_font_kind(kind)?;
+        checked_font_license(&license)?;
+        let bytes = checked_font_input(font)?;
+        let data = PyBytes::new_with(py, bytes.len(), |out| {
+            out.copy_from_slice(&bytes);
+            Ok(())
+        })?
+        .unbind();
+        let license = Py::new(py, license.clone())?;
+        Ok(Self {
+            kind: font_kind_name(kind),
+            data,
+            license,
+        })
+    }
+}
+#[pyclass(name = "EmbeddedFontFace", frozen, get_all, skip_from_py_object)]
+pub struct PyEmbeddedFontFace {
+    pub kind: &'static str,
+    pub relationship_id: String,
+    pub part_name: Option<String>,
+    pub format: &'static str,
+    pub stored_len: usize,
+    pub data: Option<Py<PyBytes>>,
+}
+impl PyEmbeddedFontFace {
+    fn snapshot(
+        py: Python<'_>,
+        font: rpptx::EmbeddedFontFace,
+        bodies: &mut std::collections::BTreeMap<String, Py<PyBytes>>,
+    ) -> PyResult<Py<Self>> {
+        let data = if let Some(bytes) = &font.data {
+            let part = font
+                .part_name
+                .as_ref()
+                .ok_or_else(|| PyValueError::new_err("decoded font has no source part"))?;
+            if let Some(bytes) = bodies.get(part) {
+                Some(bytes.clone_ref(py))
+            } else {
+                let body = PyBytes::new_with(py, bytes.len(), |out| {
+                    out.copy_from_slice(bytes);
+                    Ok(())
+                })?
+                .unbind();
+                bodies.insert(part.clone(), body.clone_ref(py));
+                Some(body)
+            }
+        } else {
+            None
+        };
+        let format = match font.format {
+            rpptx::EmbeddedFontFormat::Eot => "eot",
+            rpptx::EmbeddedFontFormat::CompressedEot => "compressed_eot",
+            rpptx::EmbeddedFontFormat::Sfnt => "sfnt",
+            rpptx::EmbeddedFontFormat::Unknown => "unknown",
+        };
+        Py::new(
+            py,
+            Self {
+                kind: font_kind_name(font.kind),
+                relationship_id: font.relationship_id,
+                part_name: font.part_name,
+                format,
+                stored_len: font.stored_len,
+                data,
+            },
+        )
+    }
+}
+#[pyclass(name = "EmbeddedTypeface", frozen, get_all, skip_from_py_object)]
+pub struct PyEmbeddedTypeface {
+    pub typeface: String,
+    pub panose: Option<String>,
+    pub pitch_family: Option<i8>,
+    pub charset: Option<i8>,
+    pub faces: Py<PyTuple>,
+}
+impl PyEmbeddedTypeface {
+    fn snapshot(
+        py: Python<'_>,
+        font: rpptx::EmbeddedTypeface,
+        bodies: &mut std::collections::BTreeMap<String, Py<PyBytes>>,
+    ) -> PyResult<Py<Self>> {
+        let mut faces = Vec::new();
+        faces.try_reserve_exact(font.faces.len()).map_err(|_| {
+            pyo3::exceptions::PyMemoryError::new_err("font snapshot allocation failed")
+        })?;
+        for face in font.faces {
+            faces.push(PyEmbeddedFontFace::snapshot(py, face, bodies)?);
+        }
+        let faces = PyTuple::new(py, faces)?.unbind();
+        Py::new(
+            py,
+            Self {
+                typeface: font.typeface,
+                panose: font.panose,
+                pitch_family: font.pitch_family,
+                charset: font.charset,
+                faces,
+            },
+        )
+    }
+}
+impl PyPresentation {
+    fn publish_font_candidate(
+        &mut self,
+        py: Python<'_>,
+        candidate: rpptx::Presentation,
+        operation: &'static str,
+    ) -> PyResult<()> {
+        let before = self.inner.to_bytes().map_err(|e| rpptx_to_pyerr(py, e))?;
+        let after = candidate.to_bytes().map_err(|e| rpptx_to_pyerr(py, e))?;
+        if before == after {
+            return Ok(());
+        }
+        let survivors = self.unchanged_owners()?;
+        let prepared =
+            self.prepare_owners(&candidate, operation, &survivors, false, false, false)?;
+        self.publish_owners(candidate, prepared)
+    }
 }

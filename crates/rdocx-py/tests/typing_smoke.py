@@ -485,3 +485,32 @@ def html_markdown_imports(source: Path, template: Document, paragraph: Paragraph
     assert_type(Document.from_markdown("# Title", template=template), tuple[Document, tuple[HtmlDiagnostic, ...]])
     assert_type(Document.open_markdown(source, template=source), tuple[Document, tuple[HtmlDiagnostic, ...]])
     assert_type(template.insert_html("<p>New</p>", after=paragraph), tuple[HtmlDiagnostic, ...])
+
+
+def check_fx220_font_embedding_types() -> None:
+    from rdocx import Document, FontEmbeddingLicense, FontDefinition, EmbeddedFont
+    from typing import assert_type
+    value = Document()
+    license = FontEmbeddingLicense(authorized=True, identity="OFL 1.1")
+    assert_type(license.authorized, bool)
+    assert_type(license.identity, str)
+    value.embed_font("typed face", b"font", license=license)
+    assert_type(value.fonts, tuple[FontDefinition, ...])
+    assert_type(value.remove_embedded_font("typed face"), EmbeddedFont | None)
+    assert_type(value.remove_font("typed face"), FontDefinition | None)
+    value.set_font(FontDefinition("typed face", family="swiss"))
+    value.embed_system_fonts = None
+    assert_type(value.embed_true_type_fonts, bool | None)
+    value.embed_true_type_fonts = True
+    value.save_subset_fonts = False
+
+
+def fx220_licensed_embedding_recipe(font_path: Path, output_path: Path) -> None:
+    from rdocx import FontEmbeddingLicense, FontDefinition
+    value = Document()
+    license = FontEmbeddingLicense(authorized=True, identity="SIL Open Font License 1.1")
+    value.embed_font("My Face", font_path, "regular", license=license)
+    value.save(output_path)
+    assert_type(value.fonts, tuple[FontDefinition, ...])
+    value.embed_true_type_fonts = False
+    value.remove_embedded_font("My Face", "regular")

@@ -1502,3 +1502,29 @@ Shared text-body parsing admits only concrete qualified consumer tuples,
 including DiagramML t, chart txPr and modern-comment txBody containers. That
 parser compatibility does not authorize wrong-owner checked XML replacement.
 
+## Presentation embedded font list
+
+CT_Presentation models qualified embeddedFontLst entries and regular, bold,
+italic and boldItalic face relationship slots. It retains the source list shell,
+entry attributes, panose, pitchFamily, charset, unknown events and children.
+Actual namespace URIs own elements and relationship attributes, including
+aliased/default namespaces and local rebinding. Foreign lookalikes remain
+preserved source. Duplicate lists or ambiguous typefaces refuse unsafe edits.
+
+The facade exposes EmbeddedFontKind, explicit FontEmbeddingLicense, authored
+EmbeddedFont and immutable EmbeddedTypeface/EmbeddedFontFace snapshots. Face
+facts include the actual relationship id, optional resolved part name, stored
+length, format and optional decoded bytes. Supported EOT and checked raw sfnt
+inputs decode through one bounded provider, while compressed EOT and unknown
+producer forms retain stored bytes without successful decoding claims.
+embed_font, remove_embedded_font and remove_font stage all owned graph changes.
+embed_true_type_fonts and save_subset_fonts preserve None, false and true.
+
+Native PowerPoint consumption is qualified independently from decoding. The
+positive uncompressed EOT graph supplies actual regular and bold glyphs before
+Save As, after save and after normal reopen. Stored parts and decoded full
+font bodies remain exact even when native relationship IDs or font metadata
+change. Missing and raw-format controls fall back with recorded unavailable
+font warnings. The tested disabled-flag graph falls back and loses font parts
+on native save. That observation is bounded to the captured application build,
+not a general rule that a save setting always prevents loading.

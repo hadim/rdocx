@@ -8087,6 +8087,138 @@ impl PyDocument {
         document.inner = candidate;
         Ok(())
     }
+
+    #[getter]
+    fn fonts(&self, py: Python<'_>) -> PyResult<Py<PyTuple>> {
+        let fonts = self.inner.try_fonts().map_err(|e| rdocx_to_pyerr(py, e))?;
+        let mut snapshots = Vec::new();
+        snapshots.try_reserve_exact(fonts.len()).map_err(|_| {
+            pyo3::exceptions::PyMemoryError::new_err("font listing allocation failed")
+        })?;
+        for font in fonts {
+            snapshots.push(PyFontDefinition::snapshot(py, font)?);
+        }
+        Ok(PyTuple::new(py, snapshots)?.unbind())
+    }
+    fn set_font(&mut self, py: Python<'_>, font: PyRef<'_, PyFontDefinition>) -> PyResult<()> {
+        if !font.embedded_fonts.bind(py).is_empty() {
+            return Err(PyValueError::new_err(
+                "set_font accepts descriptive records only, use embed_font",
+            ));
+        }
+        let native = rdocx::FontDefinition {
+            name: font.name.clone(),
+            alternate_name: font.alternate_name.clone(),
+            family: font.family.clone(),
+            pitch: font.pitch.clone(),
+            embedded_fonts: Vec::new(),
+        };
+        let mut candidate = self.inner.clone_for_staging();
+        candidate
+            .set_font(native)
+            .map_err(|e| rdocx_to_pyerr(py, e))?;
+        self.publish_api_candidate(py, candidate, "Document.set_font")
+    }
+    fn remove_font(
+        &mut self,
+        py: Python<'_>,
+        name: &str,
+    ) -> PyResult<Option<Py<PyFontDefinition>>> {
+        let mut candidate = self.inner.clone_for_staging();
+        let removed = candidate
+            .remove_font(name)
+            .map_err(|e| rdocx_to_pyerr(py, e))?
+            .map(|font| PyFontDefinition::snapshot(py, font))
+            .transpose()?;
+        self.publish_api_candidate(py, candidate, "Document.remove_font")?;
+        Ok(removed)
+    }
+    #[pyo3(signature = (name, kind="regular"))]
+    fn remove_embedded_font(
+        &mut self,
+        py: Python<'_>,
+        name: &str,
+        kind: &str,
+    ) -> PyResult<Option<Py<PyEmbeddedFont>>> {
+        let kind = checked_font_kind(kind)?;
+        let mut candidate = self.inner.clone_for_staging();
+        let removed = candidate
+            .remove_embedded_font(name, kind)
+            .map_err(|e| rdocx_to_pyerr(py, e))?
+            .map(|font| PyEmbeddedFont::snapshot(py, font))
+            .transpose()?;
+        self.publish_api_candidate(py, candidate, "Document.remove_embedded_font")?;
+        Ok(removed)
+    }
+    #[pyo3(signature = (name, font, kind="regular", *, license, font_key=None, subsetted=false))]
+    #[allow(clippy::too_many_arguments)] // Explicit operands match the native font authoring contract.
+    fn embed_font(
+        &mut self,
+        py: Python<'_>,
+        name: &str,
+        font: &Bound<'_, PyAny>,
+        kind: &str,
+        license: PyRef<'_, PyFontEmbeddingLicense>,
+        font_key: Option<String>,
+        subsetted: bool,
+    ) -> PyResult<()> {
+        let kind = checked_font_kind(kind)?;
+        let license = checked_font_license(&license)?;
+        let data = checked_font_input(font)?;
+        let key = match font_key {
+            Some(key) => key,
+            None => rdocx::derive_font_key(&data).map_err(|e| rdocx_to_pyerr(py, e))?,
+        };
+        let font = rdocx::EmbeddedFont::new(kind, data, key, license).with_subsetted(subsetted);
+        let mut candidate = self.inner.clone_for_staging();
+        candidate
+            .embed_font(name, font)
+            .map_err(|e| rdocx_to_pyerr(py, e))?;
+        self.publish_api_candidate(py, candidate, "Document.embed_font")
+    }
+
+    #[getter]
+    fn embed_true_type_fonts(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+        self.inner
+            .embed_true_type_fonts()
+            .map_err(|e| rdocx_to_pyerr(py, e))
+    }
+    #[setter]
+    fn set_embed_true_type_fonts(&mut self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        let mut candidate = self.inner.clone_for_staging();
+        candidate
+            .set_embed_true_type_fonts(value)
+            .map_err(|e| rdocx_to_pyerr(py, e))?;
+        self.publish_api_candidate(py, candidate, "Document.set_embed_true_type_fonts")
+    }
+    #[getter]
+    fn embed_system_fonts(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+        self.inner
+            .embed_system_fonts()
+            .map_err(|e| rdocx_to_pyerr(py, e))
+    }
+    #[setter]
+    fn set_embed_system_fonts(&mut self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        let mut candidate = self.inner.clone_for_staging();
+        candidate
+            .set_embed_system_fonts(value)
+            .map_err(|e| rdocx_to_pyerr(py, e))?;
+        self.publish_api_candidate(py, candidate, "Document.set_embed_system_fonts")
+    }
+    #[getter]
+    fn save_subset_fonts(&self, py: Python<'_>) -> PyResult<Option<bool>> {
+        self.inner
+            .save_subset_fonts()
+            .map_err(|e| rdocx_to_pyerr(py, e))
+    }
+    #[setter]
+    fn set_save_subset_fonts(&mut self, py: Python<'_>, value: Option<bool>) -> PyResult<()> {
+        let mut candidate = self.inner.clone_for_staging();
+        candidate
+            .set_save_subset_fonts(value)
+            .map_err(|e| rdocx_to_pyerr(py, e))?;
+        self.publish_api_candidate(py, candidate, "Document.set_save_subset_fonts")
+    }
 }
 
 fn parse_render_options(revision_view: &str) -> PyResult<rdocx::RenderOptions> {
@@ -8577,4 +8709,227 @@ fn template_container(
         array.push(template_value(item, &format!("{path}[{index}]"), open)?);
     }
     Ok(Value::Array(array))
+}
+
+/// Caller authorization is required independently of the font's own fsType bits.
+#[pyclass(
+    name = "FontEmbeddingLicense",
+    frozen,
+    get_all,
+    eq,
+    skip_from_py_object
+)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyFontEmbeddingLicense {
+    pub authorized: bool,
+    pub identity: String,
+}
+#[pymethods]
+impl PyFontEmbeddingLicense {
+    #[new]
+    #[pyo3(signature = (*, authorized, identity))]
+    fn new(authorized: bool, identity: String) -> Self {
+        Self {
+            authorized,
+            identity,
+        }
+    }
+}
+
+fn checked_font_input(font: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
+    use std::io::Read;
+    const LIMIT: usize = 64 * 1024 * 1024;
+    let copy = |source: &[u8]| -> PyResult<Vec<u8>> {
+        if source.len() > LIMIT {
+            return Err(PyValueError::new_err("font exceeds 64 MiB input bound"));
+        }
+        let mut data = Vec::new();
+        data.try_reserve_exact(source.len()).map_err(|_| {
+            pyo3::exceptions::PyMemoryError::new_err("font input allocation failed")
+        })?;
+        data.extend_from_slice(source);
+        Ok(data)
+    };
+    if let Ok(bytes) = font.cast::<PyBytes>() {
+        return copy(bytes.as_bytes());
+    }
+    if let Ok(path) = font.extract::<PathBuf>() {
+        let file = std::fs::File::open(path)
+            .map_err(|e| pyo3::exceptions::PyOSError::new_err(e.to_string()))?;
+        if file
+            .metadata()
+            .map_err(|e| pyo3::exceptions::PyOSError::new_err(e.to_string()))?
+            .len()
+            > LIMIT as u64
+        {
+            return Err(PyValueError::new_err("font exceeds 64 MiB input bound"));
+        }
+        let mut data = Vec::new();
+        let mut input = file.take((LIMIT + 1) as u64);
+        let mut chunk = [0u8; 8192];
+        loop {
+            let count = input
+                .read(&mut chunk)
+                .map_err(|e| pyo3::exceptions::PyOSError::new_err(e.to_string()))?;
+            if count == 0 {
+                break;
+            }
+            if count > LIMIT - data.len() {
+                return Err(PyValueError::new_err("font exceeds 64 MiB input bound"));
+            }
+            data.try_reserve_exact(count).map_err(|_| {
+                pyo3::exceptions::PyMemoryError::new_err("font input allocation failed")
+            })?;
+            data.extend_from_slice(&chunk[..count]);
+        }
+        return Ok(data);
+    }
+    let read = font.getattr("read").map_err(|_| {
+        PyTypeError::new_err("font must be bytes, a filesystem path or a binary reader")
+    })?;
+    let mut data = Vec::new();
+    loop {
+        let remaining = LIMIT - data.len();
+        let value = read.call1(((remaining + 1).min(8192),))?;
+        let bytes = value
+            .cast::<PyBytes>()
+            .map_err(|_| PyTypeError::new_err("font reader must return bytes"))?;
+        let chunk = bytes.as_bytes();
+        if chunk.is_empty() {
+            return Ok(data);
+        }
+        if chunk.len() > remaining {
+            return Err(PyValueError::new_err("font exceeds 64 MiB input bound"));
+        }
+        let needed = data.len() + chunk.len();
+        if needed > data.capacity() {
+            let capacity = data
+                .capacity()
+                .saturating_mul(2)
+                .clamp(8192, LIMIT)
+                .max(needed);
+            data.try_reserve_exact(capacity - data.len()).map_err(|_| {
+                pyo3::exceptions::PyMemoryError::new_err("font input allocation failed")
+            })?;
+        }
+        data.extend_from_slice(chunk);
+    }
+}
+
+fn font_kind_name(kind: rdocx::EmbeddedFontKind) -> &'static str {
+    match kind {
+        rdocx::EmbeddedFontKind::Regular => "regular",
+        rdocx::EmbeddedFontKind::Bold => "bold",
+        rdocx::EmbeddedFontKind::Italic => "italic",
+        rdocx::EmbeddedFontKind::BoldItalic => "bold_italic",
+    }
+}
+fn checked_font_kind(kind: &str) -> PyResult<rdocx::EmbeddedFontKind> {
+    match kind {
+        "regular" => Ok(rdocx::EmbeddedFontKind::Regular),
+        "bold" => Ok(rdocx::EmbeddedFontKind::Bold),
+        "italic" => Ok(rdocx::EmbeddedFontKind::Italic),
+        "bold_italic" => Ok(rdocx::EmbeddedFontKind::BoldItalic),
+        _ => Err(PyValueError::new_err(
+            "font kind must be regular, bold, italic or bold_italic",
+        )),
+    }
+}
+fn checked_font_license(license: &PyFontEmbeddingLicense) -> PyResult<rdocx::FontEmbeddingLicense> {
+    if !license.authorized || license.identity.trim().is_empty() {
+        return Err(PyValueError::new_err(
+            "font embedding requires explicit authorization and nonempty license identity",
+        ));
+    }
+    Ok(rdocx::FontEmbeddingLicense::new(
+        license.authorized,
+        license.identity.clone(),
+    ))
+}
+
+#[pyclass(name = "EmbeddedFont", frozen, get_all, skip_from_py_object)]
+pub struct PyEmbeddedFont {
+    pub kind: &'static str,
+    pub data: Py<PyBytes>,
+    pub font_key: String,
+    pub subsetted: bool,
+    pub license: Py<PyFontEmbeddingLicense>,
+}
+impl PyEmbeddedFont {
+    fn snapshot(py: Python<'_>, font: rdocx::EmbeddedFont) -> PyResult<Py<Self>> {
+        let data = PyBytes::new_with(py, font.data.len(), |out| {
+            out.copy_from_slice(&font.data);
+            Ok(())
+        })?
+        .unbind();
+        let license = Py::new(
+            py,
+            PyFontEmbeddingLicense {
+                authorized: font.license.authorized,
+                identity: font.license.identity,
+            },
+        )?;
+        Py::new(
+            py,
+            Self {
+                kind: font_kind_name(font.kind),
+                data,
+                font_key: font.font_key,
+                subsetted: font.subsetted,
+                license,
+            },
+        )
+    }
+}
+#[pyclass(name = "FontDefinition", frozen, get_all, skip_from_py_object)]
+pub struct PyFontDefinition {
+    pub name: String,
+    pub alternate_name: Option<String>,
+    pub family: Option<String>,
+    pub pitch: Option<String>,
+    pub embedded_fonts: Py<PyTuple>,
+}
+#[pymethods]
+impl PyFontDefinition {
+    #[new]
+    #[pyo3(signature = (name, *, alternate_name=None, family=None, pitch=None))]
+    fn new(
+        py: Python<'_>,
+        name: String,
+        alternate_name: Option<String>,
+        family: Option<String>,
+        pitch: Option<String>,
+    ) -> PyResult<Self> {
+        Ok(Self {
+            name,
+            alternate_name,
+            family,
+            pitch,
+            embedded_fonts: PyTuple::new(py, Vec::<Py<PyEmbeddedFont>>::new())?.unbind(),
+        })
+    }
+}
+impl PyFontDefinition {
+    fn snapshot(py: Python<'_>, font: rdocx::FontDefinition) -> PyResult<Py<Self>> {
+        let mut faces = Vec::new();
+        faces
+            .try_reserve_exact(font.embedded_fonts.len())
+            .map_err(|_| {
+                pyo3::exceptions::PyMemoryError::new_err("font snapshot allocation failed")
+            })?;
+        for font in font.embedded_fonts {
+            faces.push(PyEmbeddedFont::snapshot(py, font)?);
+        }
+        let embedded_fonts = PyTuple::new(py, faces)?.unbind();
+        Py::new(
+            py,
+            Self {
+                name: font.name,
+                alternate_name: font.alternate_name,
+                family: font.family,
+                pitch: font.pitch,
+                embedded_fonts,
+            },
+        )
+    }
 }

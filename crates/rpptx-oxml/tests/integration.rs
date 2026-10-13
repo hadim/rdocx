@@ -6015,3 +6015,508 @@ fn an_empty_parallel_time_node_is_an_error_not_a_panic() {
     let error = CT_Timing::from_xml(xml).unwrap_err();
     assert!(error.to_string().contains("p:cTn"), "{error}");
 }
+
+#[test]
+fn fx220_original_mtx_producer_list_survives_existing_model_base() {
+    let corpus = require_or_skip_corpus().expect("F-X220 requires original producer corpus");
+    verify_fetched_corpus();
+    let package = OpcPackage::open(corpus.join("placeholder-layout-color.pptx")).unwrap();
+    let original = package.get_part(PRESENTATION_PART).unwrap();
+    let start = original
+        .windows(b"<p:embeddedFontLst".len())
+        .position(|part| part == b"<p:embeddedFontLst")
+        .unwrap();
+    let end_tag = b"</p:embeddedFontLst>";
+    let end = original
+        .windows(end_tag.len())
+        .position(|part| part == end_tag)
+        .unwrap()
+        + end_tag.len();
+    let list = &original[start..end];
+    let mut parsed = CT_Presentation::from_xml(original).unwrap();
+    for written in [parsed.to_xml().unwrap(), {
+        parsed.set_first_slide_number(Some(8));
+        parsed.to_xml().unwrap()
+    }] {
+        assert!(
+            written.windows(list.len()).any(|part| part == list),
+            "actual producer list remains exact"
+        );
+        CT_Presentation::from_xml(&written).unwrap();
+    }
+    for index in 1..=6 {
+        let data = package
+            .get_part(&format!("/ppt/fonts/font{index}.fntdata"))
+            .unwrap();
+        assert_eq!(
+            u32::from_le_bytes(data[0..4].try_into().unwrap()) as usize,
+            data.len()
+        );
+        assert_eq!(u32::from_le_bytes(data[8..12].try_into().unwrap()), 0x20002);
+        assert_eq!(u32::from_le_bytes(data[12..16].try_into().unwrap()), 5);
+        assert_eq!(u16::from_le_bytes(data[34..36].try_into().unwrap()), 0x504c);
+    }
+}
+
+#[test]
+fn fx220_four_faces_aliases_and_opaque_source_are_edited_in_place() {
+    use rpptx_oxml::presentation::{CT_EmbeddedFontListEntry, EmbeddedFontKind};
+    let list = r#"<q:embeddedFontLst x:list = '&#65;'> <!--list--> <q:embeddedFont x:entry='retained'><q:font typeface='Alpha' panose='02000000000000000000' pitchFamily='34' charset='-128' x:font='retained'/><q:regular rel:id='old' x:face='retained'><x:payload rel:embed='shared'/></q:regular><x:between/><!--entry--></q:embeddedFont><x:unsupported rel:id='shared'/></q:embeddedFontLst>"#;
+    let xml = format!(
+        r#"<q:presentation xmlns:q="{P_NS}" xmlns:rel="{R_NS}" xmlns:x="urn:producer"><q:notesSz cx="6858000" cy="9144000"/>{list}<q:defaultTextStyle/></q:presentation>"#
+    );
+    let mut presentation = CT_Presentation::from_xml(xml.as_bytes()).unwrap();
+    let entry = presentation.embedded_fonts().next().unwrap();
+    assert_eq!(entry.typeface(), "Alpha");
+    assert_eq!(entry.panose(), Some("02000000000000000000"));
+    assert_eq!(entry.pitch_family(), Some(34));
+    assert_eq!(entry.charset(), Some(-128));
+    assert_eq!(entry.face(EmbeddedFontKind::Regular), Some("old"));
+    assert!(
+        presentation
+            .to_xml()
+            .unwrap()
+            .windows(list.len())
+            .any(|raw| raw == list.as_bytes())
+    );
+    assert_eq!(
+        presentation
+            .embedded_font_reference_count("shared")
+            .unwrap(),
+        2
+    );
+    presentation
+        .embedded_font_mut("Alpha")
+        .unwrap()
+        .unwrap()
+        .set_face(EmbeddedFontKind::Regular, "new&id")
+        .unwrap();
+    let replaced = list.replace(" rel:id='old'", " rel:id=\"new&amp;id\"");
+    let written = presentation.to_xml().unwrap();
+    assert!(
+        written
+            .windows(replaced.len())
+            .any(|raw| raw == replaced.as_bytes())
+    );
+    let before = written.clone();
+    presentation
+        .embedded_font_mut("Alpha")
+        .unwrap()
+        .unwrap()
+        .set_face(EmbeddedFontKind::Regular, "new&id")
+        .unwrap();
+    assert_eq!(presentation.to_xml().unwrap(), before);
+    assert!(
+        presentation
+            .embedded_font_mut("Alpha")
+            .unwrap()
+            .unwrap()
+            .remove_face(EmbeddedFontKind::Regular)
+            .is_err()
+    );
+    assert!(presentation.remove_embedded_font("Alpha").is_err());
+    assert_eq!(presentation.to_xml().unwrap(), before);
+    let mut beta = CT_EmbeddedFontListEntry::new("Beta").unwrap();
+    for kind in EmbeddedFontKind::ALL.into_iter().rev() {
+        beta.set_face(kind, format!("rId{}", kind.element_name()))
+            .unwrap();
+    }
+    presentation.push_embedded_font(beta).unwrap();
+    let reopened = CT_Presentation::from_xml(&presentation.to_xml().unwrap()).unwrap();
+    let beta = reopened
+        .embedded_fonts()
+        .find(|entry| entry.typeface() == "Beta")
+        .unwrap();
+    assert_eq!(
+        beta.faces().map(|(kind, _)| kind).collect::<Vec<_>>(),
+        EmbeddedFontKind::ALL
+    );
+    assert_eq!(
+        presentation
+            .remove_embedded_font("Beta")
+            .unwrap()
+            .unwrap()
+            .typeface(),
+        "Beta"
+    );
+    assert_eq!(
+        presentation.to_xml().unwrap(),
+        before,
+        "new entry removal leaves exact source shell"
+    );
+}
+
+#[test]
+fn fx220_default_namespaces_rebindings_and_foreign_lookalikes_keep_ownership() {
+    use rpptx_oxml::presentation::EmbeddedFontKind;
+    let list = format!(
+        r#"<embeddedFontLst xmlns="{P_NS}"><embeddedFont><font typeface="Default"/><regular xmlns:rel="{R_NS}" rel:id="shared"/><regular xmlns="urn:foreign" xmlns:rel="urn:foreign-r" rel:id="shared"/><bold xmlns:r="urn:foreign-r" xmlns:owner="{R_NS}" r:id="foreign" owner:id="shared"/></embeddedFont><embeddedFont xmlns="urn:foreign"><font typeface="Foreign"/><regular xmlns:rel="{R_NS}" rel:id="shared"/></embeddedFont><x:raw xmlns:x="urn:raw" xmlns:rel="{R_NS}" rel:embed="shared"/></embeddedFontLst>"#
+    );
+    let xml = format!(
+        r#"<p:presentation xmlns:p="{P_NS}"><p:notesSz cx="6858000" cy="9144000"/>{list}</p:presentation>"#
+    );
+    let mut presentation = CT_Presentation::from_xml(xml.as_bytes()).unwrap();
+    assert_eq!(presentation.embedded_fonts().count(), 1);
+    assert_eq!(
+        presentation
+            .embedded_font_reference_count("shared")
+            .unwrap(),
+        4
+    );
+    assert_eq!(
+        presentation
+            .embedded_font_reference_count("foreign")
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        presentation
+            .embedded_fonts()
+            .next()
+            .unwrap()
+            .face(EmbeddedFontKind::Bold),
+        Some("shared")
+    );
+    presentation
+        .embedded_font_mut("Default")
+        .unwrap()
+        .unwrap()
+        .set_face(EmbeddedFontKind::Bold, "replacement")
+        .unwrap();
+    let expected = list.replace("owner:id=\"shared\"", "owner:id=\"replacement\"");
+    let written = presentation.to_xml().unwrap();
+    assert!(
+        written
+            .windows(expected.len())
+            .any(|raw| raw == expected.as_bytes())
+    );
+    assert_eq!(
+        presentation
+            .embedded_font_reference_count("shared")
+            .unwrap(),
+        3
+    );
+    assert!(CT_Presentation::from_xml(&written).is_ok());
+}
+
+#[test]
+fn fx220_ambiguous_and_unsupported_entries_survive_and_mutations_refuse_atomically() {
+    use rpptx_oxml::presentation::{CT_EmbeddedFontListEntry, EmbeddedFontKind};
+    for entries in [
+        r#"<p:embeddedFont><p:font typeface="Same"/><p:regular r:id="one"/></p:embeddedFont><p:embeddedFont><p:font typeface="Same"/><p:regular r:id="two"/></p:embeddedFont>"#,
+        r#"<p:embeddedFont><p:font typeface="Same"/><p:regular r:id="one"/><p:regular r:id="two"/></p:embeddedFont>"#,
+        r#"<p:embeddedFont><p:font typeface="Same"/><p:regular x:id="one"/></p:embeddedFont>"#,
+    ] {
+        let xml = format!(
+            r#"<p:presentation xmlns:p="{P_NS}" xmlns:r="{R_NS}" xmlns:x="urn:foreign"><p:notesSz cx="6858000" cy="9144000"/><p:embeddedFontLst producer='&#65;'>{entries}<!--tail--></p:embeddedFontLst></p:presentation>"#
+        );
+        let mut presentation = CT_Presentation::from_xml(xml.as_bytes()).unwrap();
+        let before = presentation.to_xml().unwrap();
+        assert!(presentation.embedded_font_mut("Same").is_err());
+        assert!(presentation.remove_embedded_font("Same").is_err());
+        assert!(
+            presentation
+                .push_embedded_font(CT_EmbeddedFontListEntry::new("Same").unwrap())
+                .is_err()
+        );
+        assert_eq!(presentation.to_xml().unwrap(), before);
+        assert!(
+            before
+                .windows(entries.len())
+                .any(|raw| raw == entries.as_bytes())
+        );
+    }
+    let mut presentation = CT_Presentation::new(
+        rpptx_oxml::presentation::CT_SlideSize::new(
+            oxml_core::units::Emu(6858000),
+            oxml_core::units::Emu(9144000),
+        )
+        .unwrap(),
+    );
+    let mut entry = CT_EmbeddedFontListEntry::new("Owned").unwrap();
+    entry.set_face(EmbeddedFontKind::Regular, "shared").unwrap();
+    entry.set_face(EmbeddedFontKind::Bold, "shared").unwrap();
+    presentation.push_embedded_font(entry).unwrap();
+    assert_eq!(
+        presentation
+            .embedded_font_reference_count("shared")
+            .unwrap(),
+        2
+    );
+    presentation
+        .embedded_font_mut("Owned")
+        .unwrap()
+        .unwrap()
+        .remove_face(EmbeddedFontKind::Regular)
+        .unwrap();
+    assert_eq!(
+        presentation
+            .embedded_font_reference_count("shared")
+            .unwrap(),
+        1
+    );
+    let before = presentation.to_xml().unwrap();
+    assert!(
+        presentation
+            .embedded_font_mut("Owned")
+            .unwrap()
+            .unwrap()
+            .set_face(EmbeddedFontKind::Italic, "invalid\0")
+            .is_err()
+    );
+    assert_eq!(presentation.to_xml().unwrap(), before);
+}
+
+#[test]
+fn fx220_root_font_flags_are_presence_sensitive_and_preserve_unrelated_attributes() {
+    let xml = format!(
+        r#"<p:presentation xmlns:p="{P_NS}" xmlns:x="urn:producer" x:embedTrueTypeFonts="foreign" embedTrueTypeFonts="true" saveSubsetFonts="false" producer="exact"><p:notesSz cx="6858000" cy="9144000"/></p:presentation>"#
+    );
+    let mut presentation = CT_Presentation::from_xml(xml.as_bytes()).unwrap();
+    assert_eq!(presentation.embed_true_type_fonts().unwrap(), Some(true));
+    assert_eq!(presentation.save_subset_fonts().unwrap(), Some(false));
+    let before = presentation.to_xml().unwrap();
+    presentation.set_embed_true_type_fonts(Some(true));
+    presentation.set_save_subset_fonts(Some(false));
+    assert_eq!(presentation.to_xml().unwrap(), before);
+    presentation.set_embed_true_type_fonts(None);
+    presentation.set_save_subset_fonts(Some(true));
+    let written = presentation.to_xml().unwrap();
+    let reopened = CT_Presentation::from_xml(&written).unwrap();
+    assert_eq!(reopened.embed_true_type_fonts().unwrap(), None);
+    assert_eq!(reopened.save_subset_fonts().unwrap(), Some(true));
+    assert!(
+        String::from_utf8(written)
+            .unwrap()
+            .contains(r#"x:embedTrueTypeFonts="foreign""#)
+    );
+    let malformed = xml.replace("saveSubsetFonts=\"false\"", "saveSubsetFonts=\"invalid\"");
+    let mut malformed = CT_Presentation::from_xml(malformed.as_bytes()).unwrap();
+    assert!(malformed.save_subset_fonts().is_err());
+    malformed.set_save_subset_fonts(None);
+    assert_eq!(malformed.save_subset_fonts().unwrap(), None);
+}
+
+#[test]
+fn fx220_actual_mtx_producer_font_description_and_relationships_are_projected() {
+    use rpptx_oxml::presentation::EmbeddedFontKind;
+    let corpus = require_or_skip_corpus().expect("F-X220 requires original producer corpus");
+    verify_fetched_corpus();
+    let package = OpcPackage::open(corpus.join("placeholder-layout-color.pptx")).unwrap();
+    let original = package.get_part(PRESENTATION_PART).unwrap();
+    let parsed = CT_Presentation::from_xml(original).unwrap();
+    assert_eq!(parsed.embed_true_type_fonts().unwrap(), Some(true));
+    assert_eq!(parsed.save_subset_fonts().unwrap(), Some(true));
+    let entries = parsed.embedded_fonts().collect::<Vec<_>>();
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| entry.typeface())
+            .collect::<Vec<_>>(),
+        ["Arial Black", "Krona One", "Roboto"]
+    );
+    assert_eq!(entries.iter().flat_map(|entry| entry.faces()).count(), 6);
+    assert_eq!(entries[0].face(EmbeddedFontKind::Bold), Some("rId4"));
+    assert_eq!(entries[1].face(EmbeddedFontKind::Regular), Some("rId5"));
+    assert_eq!(
+        entries[2].faces().map(|(_, id)| id).collect::<Vec<_>>(),
+        ["rId6", "rId7", "rId8", "rId9"]
+    );
+    for index in 4..=9 {
+        assert_eq!(
+            parsed
+                .embedded_font_reference_count(&format!("rId{index}"))
+                .unwrap(),
+            1
+        );
+    }
+    assert_eq!(
+        parsed,
+        CT_Presentation::from_xml(&parsed.to_xml().unwrap()).unwrap()
+    );
+}
+
+#[test]
+fn fx220_duplicate_lists_and_opaque_attribute_spellings_are_preserved() {
+    use rpptx_oxml::presentation::{CT_EmbeddedFontListEntry, EmbeddedFontKind};
+    let list = r#"<p:embeddedFontLst><p:embeddedFont><p:font typeface="One"/><p:regular r:id="same"/></p:embeddedFont></p:embeddedFontLst>"#;
+    let xml = format!(
+        r#"<p:presentation xmlns:p="{P_NS}" xmlns:r="{R_NS}"><p:notesSz cx="6858000" cy="9144000"/>{list}{list}</p:presentation>"#
+    );
+    let mut presentation = CT_Presentation::from_xml(xml.as_bytes()).unwrap();
+    let before = presentation.to_xml().unwrap();
+    assert_eq!(
+        before
+            .windows(list.len())
+            .filter(|raw| *raw == list.as_bytes())
+            .count(),
+        2
+    );
+    assert_eq!(
+        presentation.embedded_font_reference_count("same").unwrap(),
+        2
+    );
+    assert!(presentation.embedded_font_mut("One").is_err());
+    assert!(presentation.remove_embedded_font("One").is_err());
+    assert!(
+        presentation
+            .push_embedded_font(CT_EmbeddedFontListEntry::new("New").unwrap())
+            .is_err()
+    );
+    assert_eq!(presentation.to_xml().unwrap(), before);
+    for attributes in [
+        "xmlnsFake='opaque'",
+        "xmlns:rel='urn:opaque' rel:id='opaque'",
+    ] {
+        let xml = format!(
+            r#"<p:presentation xmlns:p="{P_NS}" xmlns:r="{R_NS}"><p:notesSz cx="6858000" cy="9144000"/><p:embeddedFontLst><p:embeddedFont><p:font typeface="One"/><p:regular r:id="same" {attributes}/></p:embeddedFont></p:embeddedFontLst></p:presentation>"#
+        );
+        let mut presentation = CT_Presentation::from_xml(xml.as_bytes()).unwrap();
+        let before = presentation.to_xml().unwrap();
+        assert!(
+            presentation
+                .embedded_font_mut("One")
+                .unwrap()
+                .unwrap()
+                .remove_face(EmbeddedFontKind::Regular)
+                .is_err()
+        );
+        assert!(presentation.remove_embedded_font("One").is_err());
+        assert_eq!(presentation.to_xml().unwrap(), before);
+    }
+    let entry = CT_EmbeddedFontListEntry::new("A\nB\tC\rD").unwrap();
+    assert_eq!(entry.typeface(), "A\nB\tC\rD");
+}
+
+#[test]
+fn fx220_transferred_source_entries_retain_inherited_namespace_ownership() {
+    use rpptx_oxml::presentation::{CT_SlideSize, EmbeddedFontKind};
+    for (root_namespaces, list_start, entry) in [
+        (format!(r#"xmlns:q="{P_NS}" xmlns:rel="{R_NS}" xmlns:x="urn:source""#), "<q:embeddedFontLst>".to_owned(), r#"<q:embeddedFont><q:font typeface="Transferred"/><q:regular rel:id="shared"/><x:opaque rel:embed="shared" q:unknown='&#65;'/><!--keep--></q:embeddedFont>"#.to_owned()),
+        (format!(r#"xmlns:q="{P_NS}" xmlns:rel="{R_NS}" xmlns="{P_NS}""#), "<embeddedFontLst>".to_owned(), r#"<embeddedFont><font typeface="Transferred"/><regular rel:id="shared"/><!--keep--></embeddedFont>"#.to_owned()),
+        (format!(r#"xmlns:q="{P_NS}" xmlns:rel="{R_NS}""#), r#"<q:embeddedFontLst xmlns:x="urn:source" xmlns:r="urn:foreign">"#.to_owned(), r#"<q:embeddedFont><q:font typeface="Transferred"/><q:regular rel:id="shared"/><x:opaque r:id="foreign" rel:embed="shared"/><unqualified marker='&#65;'/></q:embeddedFont>"#.to_owned()),
+    ] {
+        let list_end = if list_start.starts_with("<q:") { "</q:embeddedFontLst>" } else { "</embeddedFontLst>" };
+        let source = format!(r#"<q:presentation {root_namespaces}><q:notesSz cx="6858000" cy="9144000"/>{list_start}{entry}{list_end}</q:presentation>"#);
+        let source = CT_Presentation::from_xml(source.as_bytes()).unwrap();
+        let original = source.to_xml().unwrap();
+        let cloned = source.embedded_fonts().next().unwrap().clone();
+        for destination in [None, Some(format!(r#"<p:presentation xmlns:p="{P_NS}" xmlns:q="urn:destination-q" xmlns:rel="urn:destination-rel" xmlns:x="urn:destination-x" xmlns="urn:destination-default"><p:notesSz cx="6858000" cy="9144000"/><p:embeddedFontLst/></p:presentation>"#))] {
+            let mut destination = match destination { Some(xml) => CT_Presentation::from_xml(xml.as_bytes()).unwrap(), None => CT_Presentation::new(CT_SlideSize::new(oxml_core::units::Emu(6858000), oxml_core::units::Emu(9144000)).unwrap()) };
+            destination.push_embedded_font(cloned.clone()).unwrap();
+            let written = destination.to_xml().unwrap();
+            let reopened = CT_Presentation::from_xml(&written).unwrap();
+            assert_eq!(reopened.embedded_fonts().next().unwrap().typeface(), "Transferred");
+            assert_eq!(reopened.embedded_fonts().next().unwrap().face(EmbeddedFontKind::Regular), Some("shared"));
+            assert_eq!(destination.embedded_font_reference_count("shared").unwrap(), source.embedded_font_reference_count("shared").unwrap());
+            assert_eq!(reopened.embedded_font_reference_count("shared").unwrap(), source.embedded_font_reference_count("shared").unwrap());
+            assert_eq!(reopened.embedded_font_reference_count("foreign").unwrap(), 0);
+            for opaque in ["<!--keep-->", "q:unknown='&#65;'", "marker='&#65;'"] { if source.to_xml().unwrap().windows(opaque.len()).any(|raw| raw == opaque.as_bytes()) { assert!(written.windows(opaque.len()).any(|raw| raw == opaque.as_bytes())); } }
+            assert_eq!(source.to_xml().unwrap(), original);
+        }
+    }
+    let source = format!(
+        r#"<q:presentation xmlns:q="{P_NS}" xmlns:rel="{R_NS}"><q:notesSz cx="6858000" cy="9144000"/><q:embeddedFontLst><q:embeddedFont><q:font typeface="Removed"/><q:regular rel:id="shared"/></q:embeddedFont></q:embeddedFontLst></q:presentation>"#
+    );
+    let mut source = CT_Presentation::from_xml(source.as_bytes()).unwrap();
+    let before = source.to_xml().unwrap();
+    let same_context = source.remove_embedded_font("Removed").unwrap().unwrap();
+    source.push_embedded_font(same_context).unwrap();
+    assert_eq!(
+        source.to_xml().unwrap(),
+        before,
+        "same-context transfer preserves exact original entry/list bytes"
+    );
+    let removed = source.remove_embedded_font("Removed").unwrap().unwrap();
+    let mut destination = CT_Presentation::new(
+        CT_SlideSize::new(
+            oxml_core::units::Emu(6858000),
+            oxml_core::units::Emu(9144000),
+        )
+        .unwrap(),
+    );
+    destination.push_embedded_font(removed).unwrap();
+    assert_eq!(
+        CT_Presentation::from_xml(&destination.to_xml().unwrap())
+            .unwrap()
+            .embedded_fonts()
+            .count(),
+        1
+    );
+    assert_eq!(
+        destination.embedded_font_reference_count("shared").unwrap(),
+        1
+    );
+    assert_eq!(source.embedded_font_reference_count("shared").unwrap(), 0);
+}
+
+#[test]
+fn fx220_relationship_id_whitespace_refuses_and_encoded_source_counts_exactly() {
+    use rpptx_oxml::presentation::{CT_EmbeddedFontListEntry, EmbeddedFontKind};
+    let mut presentation = CT_Presentation::new(
+        rpptx_oxml::presentation::CT_SlideSize::new(
+            oxml_core::units::Emu(6858000),
+            oxml_core::units::Emu(9144000),
+        )
+        .unwrap(),
+    );
+    let mut entry = CT_EmbeddedFontListEntry::new("Owned").unwrap();
+    entry
+        .set_face(EmbeddedFontKind::Regular, "valid-id")
+        .unwrap();
+    presentation.push_embedded_font(entry).unwrap();
+    for invalid in ["a\nb", "a\rb", "a\tb", "a b", " valid", "valid "] {
+        for kind in [EmbeddedFontKind::Regular, EmbeddedFontKind::Bold] {
+            let before = presentation.to_xml().unwrap();
+            assert!(
+                presentation
+                    .embedded_font_mut("Owned")
+                    .unwrap()
+                    .unwrap()
+                    .set_face(kind, invalid)
+                    .is_err()
+            );
+            assert_eq!(presentation.to_xml().unwrap(), before);
+        }
+    }
+}
+
+#[test]
+fn fx220_encoded_relationship_source_reachability_is_exact() {
+    let xml = format!(
+        r#"<p:presentation xmlns:p="{P_NS}" xmlns:r="{R_NS}" xmlns:x="urn:source"><p:notesSz cx="6858000" cy="9144000"/><p:embeddedFontLst><p:embeddedFont><p:font typeface="Encoded"/><p:regular r:id="a&#10;b"/></p:embeddedFont><x:opaque r:embed="a&#10;b" r:id="a&#9;b"/><x:space r:id="a b"/></p:embeddedFontLst></p:presentation>"#
+    );
+    let mut source = CT_Presentation::from_xml(xml.as_bytes()).unwrap();
+    let before = source.to_xml().unwrap();
+    assert_eq!(source.embedded_font_reference_count("a\nb").unwrap(), 2);
+    assert_eq!(source.embedded_font_reference_count("a\tb").unwrap(), 1);
+    assert_eq!(source.embedded_font_reference_count("a b").unwrap(), 1);
+    assert_eq!(
+        source.embedded_fonts().count(),
+        0,
+        "invalid relationship identity remains unsupported source"
+    );
+    assert!(source.embedded_font_mut("Encoded").is_err());
+    assert_eq!(source.to_xml().unwrap(), before);
+}
+
+#[test]
+fn fx220_unsafe_unbound_prefix_transfer_refuses_before_destination_mutation() {
+    let xml = format!(
+        r#"<p:presentation xmlns:p="{P_NS}" xmlns:r="{R_NS}"><p:notesSz cx="6858000" cy="9144000"/><p:embeddedFontLst><p:embeddedFont><p:font typeface="Source"/><p:regular r:id="shared"/><unbound:opaque/></p:embeddedFont></p:embeddedFontLst></p:presentation>"#
+    );
+    // Existing reader retains this namespace-invalid producer payload as opaque.
+    let source = CT_Presentation::from_xml(xml.as_bytes()).unwrap();
+    let entry = source.embedded_fonts().next().unwrap().clone();
+    let xml = format!(
+        r#"<p:presentation xmlns:p="{P_NS}" xmlns:unbound="urn:destination"><p:notesSz cx="6858000" cy="9144000"/></p:presentation>"#
+    );
+    let mut destination = CT_Presentation::from_xml(xml.as_bytes()).unwrap();
+    let before = destination.to_xml().unwrap();
+    assert!(destination.push_embedded_font(entry).is_err());
+    assert_eq!(
+        destination.to_xml().unwrap(),
+        before,
+        "failed transfer must not materialize a list"
+    );
+}

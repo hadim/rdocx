@@ -2169,7 +2169,9 @@ mod theme_and_embedded_font_tests {
         assert!(output.find("altName").unwrap() < output.find("embedRegular").unwrap());
 
         let mut reopened = Document::from_bytes(&package_bytes(&saved)).unwrap();
-        assert!(reopened.remove_font("Corpus Sans").unwrap().is_some());
+        let before_removal = reopened.to_bytes().unwrap();
+        assert!(reopened.remove_font("Corpus Sans").is_err());
+        assert_eq!(reopened.to_bytes().unwrap(), before_removal);
         let removed =
             OpcPackage::from_reader(std::io::Cursor::new(reopened.to_bytes().unwrap())).unwrap();
         let output = std::str::from_utf8(removed.get_part("/word/fontTable.xml").unwrap()).unwrap();
@@ -2443,9 +2445,13 @@ mod theme_and_embedded_font_tests {
         let wrong_type_id = wrong_type_relationship.id.clone();
         wrong_type_relationship.rel_type = rel_types::IMAGE.to_owned();
         let mut wrong_type = Document::from_bytes(&package_bytes(&wrong_type_package)).unwrap();
-        wrong_type
-            .remove_embedded_font("Corpus Sans", EmbeddedFontKind::Regular)
-            .unwrap();
+        let before_removal = wrong_type.to_bytes().unwrap();
+        assert!(
+            wrong_type
+                .remove_embedded_font("Corpus Sans", EmbeddedFontKind::Regular)
+                .is_err()
+        );
+        assert_eq!(wrong_type.to_bytes().unwrap(), before_removal);
         let wrong_type_saved =
             OpcPackage::from_reader(std::io::Cursor::new(wrong_type.to_bytes().unwrap())).unwrap();
         assert_eq!(
@@ -19616,6 +19622,7 @@ mod advanced_table_authoring_and_geometry {
             endnotes: None,
             theme: None,
             fonts: Vec::new(),
+            embedded_fonts: Vec::new(),
             revision_view: rdocx_layout::RevisionView::Accepted,
         }
     }

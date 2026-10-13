@@ -9595,3 +9595,201 @@ def test_fx211b_virtual_cell_and_inherited_style_elements_refuse_without_materia
     with pytest.raises(ValueError, match="shape has no text frame"):
         _ = frame.text
     assert style.font.name == prior_name
+
+
+def test_fx220_ppt_python_font_graph_snapshots_inputs_and_removal(tmp_path):
+    from pathlib import Path
+    from rpptx import Presentation, EmbeddedFont, FontEmbeddingLicense
+
+    source = Path(__file__).resolve().parents[2] / "oxml-layout/fonts/Selawik-Regular.ttf"
+    body = source.read_bytes()
+    license = FontEmbeddingLicense(authorized=True, identity="SIL Open Font License 1.1")
+    deck = Presentation()
+    slide = deck.slides.add_slide(deck.slide_layouts[6])
+    slide.shapes.add_textbox(0, 0, 1000000, 1000000).text = "font control"
+    held = deck.slides[0]
+    for kind, value in zip(("regular", "bold", "italic", "bold_italic"), (body, source, io.BytesIO(body), EmbeddedFont(body, "bold_italic", license=license))):
+        deck.embed_font("FX220 Python PPT", value, kind, license=license)
+    assert held.shapes[0].text == "font control"
+    fonts = deck.embedded_fonts
+    assert isinstance(fonts, tuple) and len(fonts) == 1 and fonts[0].typeface == "FX220 Python PPT"
+    assert tuple(face.kind for face in fonts[0].faces) == ("regular", "bold", "italic", "bold_italic")
+    for face in fonts[0].faces:
+        assert face.format == "eot" and face.data == body and face.stored_len > len(body)
+        assert face.part_name.startswith("/ppt/fonts/") and face.relationship_id
+        with pytest.raises(AttributeError):
+            face.format = "unknown"
+    saved = deck.to_bytes()
+    package = zipfile.ZipFile(io.BytesIO(saved))
+    assert len([name for name in package.namelist() if name.startswith("ppt/fonts/")]) == 4
+    reopened = Presentation.from_bytes(saved)
+    assert tuple(face.data for face in reopened.embedded_fonts[0].faces) == (body,) * 4
+    deck.embed_font("FX220 Python PPT", body, license=license)
+    assert deck.to_bytes() == saved and held.shapes[0].text == "font control"
+    assert deck.remove_embedded_font("FX220 Python PPT", "italic").data == body
+    assert deck.remove_embedded_font("FX220 Python PPT", "italic") is None
+    assert len(deck.remove_font("FX220 Python PPT").faces) == 3
+    assert deck.remove_font("FX220 Python PPT") is None
+    output = tmp_path / "removed.pptx"
+    deck.save(output)
+    assert Presentation(output).embedded_fonts == ()
+
+
+def test_fx220_ppt_python_license_flags_and_refusal_are_atomic():
+    from pathlib import Path
+    from rpptx import Presentation, FontEmbeddingLicense
+
+    body = (Path(__file__).resolve().parents[2] / "oxml-layout/fonts/Selawik-Regular.ttf").read_bytes()
+    deck = Presentation()
+    deck.slides.add_slide(deck.slide_layouts[6])
+    # The bundled PowerPoint template explicitly enables subset saving.
+    for name, initial in (("embed_true_type_fonts", None), ("save_subset_fonts", True)):
+        assert getattr(deck, name) is initial
+        for value in (False, True, None):
+            setattr(deck, name, value)
+            assert getattr(deck, name) is value
+    baseline = deck.to_bytes()
+    held = deck.slides[0]
+    good = FontEmbeddingLicense(authorized=True, identity="OFL 1.1")
+    for value, kind, license in ((body, "regular", FontEmbeddingLicense(authorized=False, identity="OFL")), (body, "regular", FontEmbeddingLicense(authorized=True, identity=" ")), (b"not a font", "regular", good), (body, "unknown", good), (io.StringIO("not bytes"), "regular", good)):
+        with pytest.raises(Exception):
+            deck.embed_font("FX220 refusal", value, kind, license=license)
+        assert deck.to_bytes() == baseline and held.shapes is not None
+    class OversizedReader:
+        def read(self, size):
+            assert 0 < size <= 8192
+            return b"x" * (64 * 1024 * 1024 + 1)
+    with pytest.raises(ValueError):
+        deck.embed_font("FX220 refusal", OversizedReader(), license=good)
+    assert deck.to_bytes() == baseline and held.shapes is not None
+
+
+@pytest.mark.parametrize("mode", ["short_chunks", "later_type", "later_error", "cumulative_bound"])
+def test_fx220_rpptx_binary_readers_reach_real_eof_before_publication(mode):
+    from pathlib import Path
+    import rpptx
+
+    body = (Path(__file__).resolve().parents[2] / "oxml-layout/fonts/Selawik-Regular.ttf").read_bytes()
+    value = rpptx.Presentation()
+    value.slides.add_slide(value.slide_layouts[6]).shapes.add_textbox(0, 0, 1000000, 1000000).text = "binary owner"
+    held = value.slides[0].shapes[0]
+    baseline = value.to_bytes()
+    license = rpptx.FontEmbeddingLicense(authorized=True, identity="OFL 1.1")
+    class Reader:
+        def __init__(self):
+            self.calls = 0
+            self.offset = 0
+        def read(self, size):
+            self.calls += 1
+            if mode == "short_chunks":
+                part = body[self.offset:self.offset + min(size, 8192)]
+                self.offset += len(part)
+                return part
+            if self.calls == 1:
+                return body
+            if mode == "later_type":
+                return "invalid later text"
+            if mode == "later_error":
+                raise OSError("later font read failed")
+            return b"x" * (1024 * 1024)
+    reader = Reader()
+    if mode == "short_chunks":
+        value.embed_font("FX220 binary stream", reader, license=license)
+        assert reader.calls > 2 and reader.offset == len(body)
+        assert value.embedded_fonts[0].faces[0].data == body
+        authored_reader = Reader()
+        authored = rpptx.EmbeddedFont(authored_reader, license=license)
+        assert authored.data == body and authored_reader.calls > 2
+        value.embed_font("FX220 authored stream", authored, license=license)
+        assert value.embedded_fonts[1].faces[0].data == body
+    else:
+        if mode == "later_error":
+            expected, match = OSError, "later font read failed"
+        elif mode == "later_type":
+            expected, match = TypeError, "reader must return bytes"
+        else:
+            expected, match = ValueError, "64 MiB"
+        with pytest.raises(expected, match=match):
+            value.embed_font("FX220 binary stream", reader, license=license)
+        assert reader.calls > 1
+        assert value.to_bytes() == baseline and held.text == "binary owner"
+
+        with pytest.raises(expected, match=match):
+            rpptx.EmbeddedFont(Reader(), license=license)
+        assert value.to_bytes() == baseline and held.text == "binary owner"
+
+@pytest.mark.parametrize("method", ["pdf", "png", "all_slides", "notes_pdf", "notes_png", "handout_pdf", "handout_png", "layout"])
+def test_fx220_ppt_embedded_faces_and_caller_override_reach_exports(method):
+    from pathlib import Path
+    from rpptx import Presentation, FontEmbeddingLicense
+    import xml.etree.ElementTree as ET
+
+    directory = Path(__file__).resolve().parents[2] / "oxml-layout/fonts"
+    kinds = ("regular", "bold", "italic", "bold_italic")
+    styles = ("Regular", "Bold", "Italic", "BoldItalic")
+    embedded = [(directory / f"Caladea-{style}.ttf").read_bytes() for style in styles]
+    caller = [(directory / f"LiberationMono-{style}.ttf").read_bytes() for style in styles]
+    name = "FX220 deterministic export face"
+    deck = _fx195_presentation(name)
+    for index in range(4):
+        if index == 0:
+            run = deck.slides[0].shapes[0].text_frame.paragraphs[0].runs[0]
+        else:
+            run = deck.slides[0].shapes[0].text_frame.paragraphs[0].add_run()
+        run.text = "iiiiWWWW route "
+        run.font.name = name
+        run.font.bold = bool(index & 1)
+        run.font.italic = bool(index & 2)
+    # Notes are independently source-authored with four actual styled runs.
+    parts = _package_parts(deck.to_bytes())
+    notes_part = next(part for part in parts if re.fullmatch(r"ppt/notesSlides/notesSlide\d+\.xml", part))
+    namespace = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    tree = ET.fromstring(parts[notes_part])
+    paragraph = next(parent for parent in tree.iter(namespace + "p") if any("FX195 NOTES" in (child.text or "") for child in parent.iter(namespace + "t")))
+    for child in list(paragraph):
+        if child.tag == namespace + "r": paragraph.remove(child)
+    for index in range(4):
+        run = ET.SubElement(paragraph, namespace + "r")
+        properties = ET.SubElement(run, namespace + "rPr", {"sz": "2000", "b": str(index & 1), "i": str((index >> 1) & 1)})
+        ET.SubElement(properties, namespace + "latin", {"typeface": name})
+        ET.SubElement(run, namespace + "t").text = "iiiiWWWW notes route "
+    parts[notes_part] = ET.tostring(tree, encoding="utf-8", xml_declaration=True)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as output:
+        for part, data in parts.items(): output.writestr(part, data)
+    deck = Presentation.from_bytes(buffer.getvalue())
+    license = FontEmbeddingLicense(authorized=True, identity="Apache License 2.0")
+    for kind, body in zip(kinds, embedded): deck.embed_font(name, body, kind, license=license)
+    source = deck.to_bytes()
+    held = deck.slides[0]
+    disabled = Presentation.from_bytes(source)
+    disabled.embed_true_type_fonts = False
+    missing = Presentation.from_bytes(source)
+    missing.remove_font(name)
+    reference = Presentation.from_bytes(missing.to_bytes())
+
+    def invoke(value, fonts):
+        if method == "pdf": return value.to_pdf(fonts=fonts)
+        if method == "png": return value.render_slide_to_png(0, dpi=72.0, fonts=fonts)
+        if method == "all_slides": return value.render_all_slides(dpi=72.0, fonts=fonts)
+        if method == "notes_pdf": return value.to_notes_pdf(fonts=fonts)
+        if method == "notes_png": return value.render_all_notes(dpi=72.0, fonts=fonts)
+        if method == "handout_pdf": return value.to_handout_pdf(slides_per_page=2, fonts=fonts)
+        if method == "handout_png": return value.render_all_handouts(slides_per_page=2, dpi=72.0, fonts=fonts)
+        return tuple(tuple((line.bounds.width, line.bounds.height) for line in frame.lines) for frame in value.text_layout(fonts=fonts))
+
+    positive = invoke(deck, [])
+    off = invoke(disabled, [])
+    absent = invoke(missing, [])
+    override = invoke(deck, list(zip([name] * 4, caller)))
+    expected = invoke(reference, list(zip([name] * 4, embedded)))
+    expected_override = invoke(reference, list(zip([name] * 4, caller)))
+    assert positive != off and positive != override
+    assert off == absent
+    if method.endswith("pdf") or method == "pdf":
+        assert positive.startswith(b"%PDF") and b"Caladea" in positive
+        assert b"LiberationMono" in override and b"Caladea" not in override
+        assert b"Caladea" not in off
+    else:
+        assert positive == expected and override == expected_override
+    assert deck.to_bytes() == source and held.shapes[0].text == "iiiiWWWW route " * 4

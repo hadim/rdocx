@@ -47,6 +47,10 @@ class ReplacementCountError(RdocxError):
 
 from ._rdocx import (
     HtmlDiagnostic,
+    FontEmbeddingLicense,
+    EmbeddedFont,
+    FontDefinition,
+
     OdtDiagnostic,
     RtfDiagnostic,
     EpubDiagnostic,
@@ -123,6 +127,10 @@ from ._rdocx import (
 
 __all__ = [
     "HtmlDiagnostic",
+    "FontEmbeddingLicense",
+    "EmbeddedFont",
+    "FontDefinition",
+
     "OdtDiagnostic",
     "RtfDiagnostic",
     "EpubDiagnostic",

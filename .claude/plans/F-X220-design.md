@@ -1,6 +1,6 @@
 # F-X220, Embed fonts through both native and public package families
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X195, F-X200, F-X205, F-X210
@@ -105,13 +105,13 @@ Existing49 outputs are expected unchanged for ordinary documents. Authored font 
 
 ## Implementation checklist
 
-- [ ] Complete finite donor extraction and actual producer-format qualification before writer bytes.
-- [ ] Capture valid native/installed Base and font/relationship inventories.
-- [ ] Implement namespace-safe model, native transactions/settings and bounded font decoding.
-- [ ] Adapt existing bindings/CLI and all render paths with checked publication.
-- [ ] Qualify all named native, installed, corpus, Office and hostile controls.
-- [ ] Measure affected archives, exact metadata and required policy gates.
-- [ ] Obtain clean microscope, update listed HLD files and prepare handoff.
+- [x] Complete finite donor extraction and actual producer-format qualification.
+- [x] Capture valid native/installed Base and font/relationship inventories.
+- [x] Implement namespace-safe model, native transactions/settings and bounded font decoding.
+- [x] Adapt existing bindings/CLI and all render paths with checked publication.
+- [x] Qualify all named native, installed, corpus, Office and hostile controls.
+- [x] Measure affected archives, exact metadata and required policy gates.
+- [x] Obtain clean microscope, update listed HLD files and prepare handoff.
 
 ## Open questions
 

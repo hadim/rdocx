@@ -3072,3 +3072,291 @@ fn new_mutations_reject_input_aliases_and_output_collisions() {
         }
     }
 }
+
+#[test]
+fn fx220_cli_fonts_embed_all_faces_list_actual_parts_and_remove() {
+    let workspace = TempWorkspace::new("fx220-faces");
+    let source = workspace.path.join("source.pptx");
+    fs::write(&source, include_bytes!("../../rpptx/assets/default.pptx")).unwrap();
+    let original = fs::read(&source).unwrap();
+    let font = workspace.path.join("font.ttf");
+    let data = include_bytes!("../../oxml-layout/fonts/Gelasio-Regular.ttf");
+    fs::write(&font, data).unwrap();
+    let mut current = source.clone();
+    for (index, kind) in ["regular", "bold", "italic", "bold-italic"]
+        .iter()
+        .enumerate()
+    {
+        let output = workspace.path.join(format!("face{index}.pptx"));
+        let result = cli(&[
+            "font",
+            "embed",
+            current.to_str().unwrap(),
+            "--name",
+            "FX220 CLI",
+            "--font",
+            font.to_str().unwrap(),
+            "--kind",
+            kind,
+            "--license-authorized",
+            "--license-identity",
+            "OFL-1.1",
+            "--output",
+            output.to_str().unwrap(),
+            "--json",
+        ]);
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let record: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(record["schema"], 1);
+        current = output;
+    }
+    let result = cli(&["font", "list", current.to_str().unwrap(), "--json"]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let record: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(record["schema"], 1);
+    let entry = record["fonts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|font| font["name"] == "FX220 CLI")
+        .unwrap();
+    let faces = entry["faces"].as_array().unwrap();
+    assert_eq!(faces.len(), 4);
+    let package = oxml_opc::OpcPackage::open(&current).unwrap();
+    for (face, kind) in faces
+        .iter()
+        .zip(["regular", "bold", "italic", "bold-italic"])
+    {
+        assert_eq!(face["kind"], kind);
+        assert_eq!(face["format"], "eot");
+        let body = package
+            .get_part(face["part_name"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(face["stored_len"].as_u64().unwrap() as usize, body.len());
+        assert_eq!(face["decoded_len"].as_u64().unwrap() as usize, data.len());
+    }
+    let removed = workspace.path.join("removed.pptx");
+    let result = cli(&[
+        "font",
+        "remove",
+        current.to_str().unwrap(),
+        "--name",
+        "FX220 CLI",
+        "--kind",
+        "bold",
+        "--output",
+        removed.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let record: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert_eq!(record["removed"], true);
+    let result = cli(&["font", "list", removed.to_str().unwrap(), "--json"]);
+    let record: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    let entry = record["fonts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|font| font["name"] == "FX220 CLI")
+        .unwrap();
+    assert_eq!(entry["faces"].as_array().unwrap().len(), 3);
+    let all_removed = workspace.path.join("all-removed.pptx");
+    let result = cli(&[
+        "font",
+        "remove",
+        removed.to_str().unwrap(),
+        "--name",
+        "FX220 CLI",
+        "--output",
+        all_removed.to_str().unwrap(),
+        "--json",
+    ]);
+    assert!(result.status.success());
+    let result = cli(&["font", "list", all_removed.to_str().unwrap(), "--json"]);
+    let record: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+    assert!(
+        record["fonts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|font| font["name"] != "FX220 CLI")
+    );
+    assert_eq!(fs::read(&source).unwrap(), original);
+    assert_eq!(fs::read(&font).unwrap(), data);
+}
+
+#[test]
+fn fx220_cli_font_settings_keep_absence_and_false_distinct() {
+    let workspace = TempWorkspace::new("fx220-settings");
+    let source = workspace.path.join("source.pptx");
+    fs::write(&source, include_bytes!("../../rpptx/assets/default.pptx")).unwrap();
+    let original = fs::read(&source).unwrap();
+    let mut current = source.clone();
+    for (index, setting) in ["true", "false", "none"].iter().enumerate() {
+        let output = workspace.path.join(format!("settings{index}.pptx"));
+        let result = cli(&[
+            "font",
+            "settings",
+            current.to_str().unwrap(),
+            "--embed-true-type-fonts",
+            setting,
+            "--save-subset-fonts",
+            setting,
+            "--output",
+            output.to_str().unwrap(),
+            "--json",
+        ]);
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let record: serde_json::Value = serde_json::from_slice(&result.stdout).unwrap();
+        let expected = match *setting {
+            "true" => json!(true),
+            "false" => json!(false),
+            _ => serde_json::Value::Null,
+        };
+        assert_eq!(record["settings"]["embed_true_type_fonts"], expected);
+        assert_eq!(record["settings"]["save_subset_fonts"], expected);
+        let reread = cli(&["font", "settings", output.to_str().unwrap(), "--json"]);
+        assert!(reread.status.success());
+        let reread: serde_json::Value = serde_json::from_slice(&reread.stdout).unwrap();
+        assert_eq!(reread["settings"], record["settings"]);
+        current = output;
+    }
+    for args in [
+        vec!["--embed-true-type-fonts", "false"],
+        vec!["--output", current.to_str().unwrap()],
+    ] {
+        let result = cli(&[&["font", "settings", source.to_str().unwrap()][..], &args].concat());
+        assert!(!result.status.success());
+    }
+    assert_eq!(fs::read(&source).unwrap(), original);
+}
+
+#[test]
+fn fx220_cli_font_refusals_preserve_inputs_and_existing_outputs() {
+    let workspace = TempWorkspace::new("fx220-refusals");
+    let source = workspace.path.join("source.pptx");
+    fs::write(&source, include_bytes!("../../rpptx/assets/default.pptx")).unwrap();
+    let original = fs::read(&source).unwrap();
+    let font = workspace.path.join("font.ttf");
+    let data = include_bytes!("../../oxml-layout/fonts/Gelasio-Regular.ttf");
+    fs::write(&font, data).unwrap();
+    let output = workspace.path.join("output.pptx");
+    let common = [
+        "font",
+        "embed",
+        source.to_str().unwrap(),
+        "--name",
+        "FX220 CLI",
+        "--font",
+        font.to_str().unwrap(),
+    ];
+    for extra in [
+        vec!["--license-identity", "OFL-1.1"],
+        vec!["--license-authorized", "--license-identity", " "],
+        vec![
+            "--license-authorized",
+            "--license-identity",
+            "OFL-1.1",
+            "--kind",
+            "invalid",
+        ],
+    ] {
+        let result = cli(&[&common[..], &extra, &["--output", output.to_str().unwrap()]].concat());
+        assert!(!result.status.success());
+        assert!(!output.exists());
+    }
+    let license = ["--license-authorized", "--license-identity", "OFL-1.1"];
+    for collision in [&source, &font, &output] {
+        if collision == &output {
+            fs::write(collision, b"keep existing output").unwrap();
+        }
+        let before = fs::read(collision).unwrap();
+        let result = cli(&[
+            &common[..],
+            &license,
+            &["--output", collision.to_str().unwrap()],
+        ]
+        .concat());
+        assert!(!result.status.success());
+        assert_eq!(fs::read(collision).unwrap(), before);
+    }
+    let invalid = workspace.path.join("invalid.ttf");
+    fs::write(&invalid, b"not a font").unwrap();
+    let oversized = workspace.path.join("oversized.ttf");
+    fs::File::create(&oversized)
+        .unwrap()
+        .set_len(64 * 1024 * 1024 + 1)
+        .unwrap();
+    let absent_output = workspace.path.join("absent.pptx");
+    for bad_font in [&invalid, &oversized, &workspace.path] {
+        let result = cli(&[
+            "font",
+            "embed",
+            source.to_str().unwrap(),
+            "--name",
+            "FX220 CLI",
+            "--font",
+            bad_font.to_str().unwrap(),
+            "--license-authorized",
+            "--license-identity",
+            "OFL-1.1",
+            "--output",
+            absent_output.to_str().unwrap(),
+        ]);
+        assert!(!result.status.success());
+        assert!(!absent_output.exists());
+    }
+    #[cfg(unix)]
+    {
+        let alias = workspace.path.join("source-alias.pptx");
+        std::os::unix::fs::symlink(&source, &alias).unwrap();
+        let hard_alias = workspace.path.join("font-hard-alias.pptx");
+        fs::hard_link(&font, &hard_alias).unwrap();
+        for collision in [&alias, &hard_alias] {
+            let result = cli(&[
+                &common[..],
+                &license,
+                &["--output", collision.to_str().unwrap()],
+            ]
+            .concat());
+            assert!(!result.status.success());
+        }
+    }
+    assert_eq!(fs::read(&source).unwrap(), original);
+    assert_eq!(fs::read(&font).unwrap(), data);
+    assert!(fs::read_dir(&workspace.path).unwrap().all(|entry| {
+        !entry
+            .unwrap()
+            .file_name()
+            .to_string_lossy()
+            .ends_with(".tmp")
+    }));
+    let help = cli(&["font", "embed", "--help"]);
+    assert!(help.status.success());
+    let help = String::from_utf8(help.stdout).unwrap();
+    for flag in [
+        "--license-authorized",
+        "--license-identity",
+        "--font",
+        "--kind",
+        "--output",
+    ] {
+        assert!(help.contains(flag));
+    }
+}

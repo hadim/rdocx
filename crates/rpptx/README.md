@@ -28,7 +28,7 @@ presentation, notes, handout, PDF, and animation outputs.
 
 | Measurement | Value | Version | Platform | Build mode | Input | Command | Statistic | Measured on |
 |---|---|---|---|---|---|---|---|---|
-| Crates.io archive: rpptx | 619,292 compressed bytes, 3,282,556 member bytes, 16 members | 0.14.0 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `rpptx` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-10-12 |
+| Crates.io archive: rpptx | 630,620 compressed bytes, 3,340,300 member bytes, 16 members | 0.14.0 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `rpptx` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-10-13 |
 
 ## Use it when
 
@@ -61,3 +61,25 @@ Enable native encryption and signing explicitly:
 [dependencies]
 rpptx = { version = "0.14.0", features = ["agile-encryption", "digital-signatures"] }
 ```
+
+## Licensed font embedding
+
+```rust,no_run
+use rpptx::{Presentation, EmbeddedFont, EmbeddedFontKind, FontEmbeddingLicense};
+
+let mut deck = Presentation::new()?;
+let bytes = std::fs::read("MyFace-Regular.ttf")?;
+deck.embed_font("My Face", EmbeddedFont::new(
+    EmbeddedFontKind::Regular, bytes,
+    FontEmbeddingLicense::new(true, "SIL Open Font License 1.1"),
+))?;
+let faces = deck.embedded_fonts()?;
+assert_eq!(faces[0].typeface, "My Face");
+deck.save("embedded.pptx")?;
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Confirm the caller font's embedding license before authorizing it. Native
+embedding writes checked uncompressed EOT and stages the face relationship
+with the presentation model and flags. Imported compressed/unknown data remains
+preserved with absent decoded bytes. Caller render faces retain precedence.

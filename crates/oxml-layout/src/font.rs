@@ -692,6 +692,10 @@ pub struct FontManager {
     coverage_misses: HashSet<char>,
     /// Exact additional font set currently loaded into `db`.
     additional_fonts: Vec<FontFile>,
+    /// One decoded body per physical embedded part and every owned alias.
+    embedded_fonts: Vec<(Vec<String>, Arc<[u8]>)>,
+    /// Owned embedded typeface aliases, separate from caller provenance.
+    embedded_aliases: HashMap<String, Vec<fontdb::ID>>,
     /// Lowercased caller labels mapped to the exact faces loaded from their
     /// bytes. Rebuilt together with `additional_fonts`.
     caller_aliases: HashMap<String, Vec<fontdb::ID>>,
@@ -818,6 +822,8 @@ impl FontManager {
             coverage_fallbacks: HashMap::new(),
             coverage_misses: HashSet::new(),
             additional_fonts: Vec::new(),
+            embedded_fonts: Vec::new(),
+            embedded_aliases: HashMap::new(),
             caller_aliases: HashMap::new(),
             caller_families: HashMap::new(),
             explicit_aliases: Vec::new(),
@@ -868,15 +874,134 @@ impl FontManager {
         if self.additional_fonts == font_files {
             return false;
         }
+        let embedded = self.embedded_fonts.clone();
+        // Previously admitted immutable embedded sources remain valid. Refuse
+        // atomically if rebuilding ever fails instead of clearing active state.
+        self.rebuild_font_sources(&embedded, font_files).is_ok()
+    }
 
-        self.db = self.base_db.clone();
-        self.caller_aliases.clone_from(&self.base_caller_aliases);
-        self.caller_families.clone_from(&self.base_caller_families);
+    /// Load bounded physical embedded font sources and all their owned aliases.
+    /// Caller faces retain priority. An unchanged set preserves loaded IDs and caches.
+    #[doc(hidden)]
+    pub fn load_embedded_fonts(&mut self, sources: &[(Vec<String>, Arc<[u8]>)]) -> Result<bool> {
+        if self.embedded_fonts == sources {
+            return Ok(false);
+        }
+        let callers = self.additional_fonts.clone();
+        self.rebuild_font_sources(sources, &callers)?;
+        Ok(true)
+    }
+
+    fn rebuild_font_sources(
+        &mut self,
+        embedded_fonts: &[(Vec<String>, Arc<[u8]>)],
+        font_files: &[FontFile],
+    ) -> Result<()> {
+        const FACE_LIMIT: usize = 64 * 1024 * 1024;
+        const TOTAL_LIMIT: usize = 256 * 1024 * 1024;
+        const ALIAS_LIMIT: usize = 16_384;
+        const ALIAS_BYTES_LIMIT: usize = 4 * 1024 * 1024;
+        let refused = || {
+            LayoutError::FontParse(
+                "embedded font sources exceed the data or alias limits".to_owned(),
+            )
+        };
+        if embedded_fonts.len() > 4096 {
+            return Err(refused());
+        }
+        let mut total = 0usize;
+        let mut aliases = 0usize;
+        let mut alias_bytes = 0usize;
+        for (names, data) in embedded_fonts {
+            total = total.checked_add(data.len()).ok_or_else(refused)?;
+            aliases = aliases.checked_add(names.len()).ok_or_else(refused)?;
+            if data.len() > FACE_LIMIT
+                || total > TOTAL_LIMIT
+                || aliases > ALIAS_LIMIT
+                || names.is_empty()
+            {
+                return Err(refused());
+            }
+            for name in names {
+                alias_bytes = alias_bytes
+                    .checked_add(name.len().saturating_mul(4))
+                    .ok_or_else(refused)?;
+                if name.is_empty() || name.len() > 4096 || alias_bytes > ALIAS_BYTES_LIMIT {
+                    return Err(refused());
+                }
+            }
+        }
+        let mut face_count = 0usize;
+        let mut alias_references = 0usize;
+        let mut font_name_bytes = 0usize;
+        for (names, data) in embedded_fonts {
+            let count = ttf_parser::fonts_in_collection(data).unwrap_or(1);
+            if count == 0 || count > 256 {
+                return Err(refused());
+            }
+            face_count = face_count.checked_add(count as usize).ok_or_else(refused)?;
+            alias_references = alias_references
+                .checked_add(
+                    names
+                        .len()
+                        .checked_mul(count as usize)
+                        .ok_or_else(refused)?,
+                )
+                .ok_or_else(refused)?;
+            if face_count > 4096 || alias_references > 262_144 {
+                return Err(refused());
+            }
+            for index in 0..count {
+                let face = ttf_parser::Face::parse(data, index).map_err(|error| {
+                    LayoutError::FontParse(format!("embedded font face: {error:?}"))
+                })?;
+                if face.names().len() > 1024 {
+                    return Err(refused());
+                }
+                for name in face.names() {
+                    font_name_bytes = font_name_bytes
+                        .checked_add(name.name.len())
+                        .ok_or_else(refused)?;
+                    if font_name_bytes > ALIAS_BYTES_LIMIT {
+                        return Err(refused());
+                    }
+                }
+            }
+        }
+        let mut db = self.base_db.clone();
+        let mut embedded_aliases: HashMap<String, Vec<fontdb::ID>> = HashMap::new();
+        for (names, data) in embedded_fonts {
+            let before = db.len();
+            let mut body = Vec::new();
+            body.try_reserve_exact(data.len()).map_err(|error| {
+                LayoutError::FontParse(format!("embedded font allocation: {error}"))
+            })?;
+            body.extend_from_slice(data);
+            db.load_font_data(body);
+            let ids = db
+                .faces()
+                .skip(before)
+                .map(|face| face.id)
+                .collect::<Vec<_>>();
+            if ids.is_empty() {
+                return Err(LayoutError::FontParse(
+                    "embedded font contains no supported faces".to_owned(),
+                ));
+            }
+            for name in names {
+                embedded_aliases
+                    .entry(name.to_lowercase())
+                    .or_default()
+                    .extend(ids.iter().copied());
+            }
+        }
+        let mut caller_aliases = self.base_caller_aliases.clone();
+        let mut caller_families = self.base_caller_families.clone();
         for font_file in font_files {
             Self::load_caller_font(
-                &mut self.db,
-                &mut self.caller_aliases,
-                &mut self.caller_families,
+                &mut db,
+                &mut caller_aliases,
+                &mut caller_families,
                 &font_file.family,
                 font_file.data.clone(),
             );
@@ -886,8 +1011,8 @@ impl FontManager {
         // constructor block so its established first-loaded tie stays first
         // when best_caller_face visits the additional tier last-loaded first.
         for (active, base) in [
-            (&mut self.caller_aliases, &self.base_caller_aliases),
-            (&mut self.caller_families, &self.base_caller_families),
+            (&mut caller_aliases, &self.base_caller_aliases),
+            (&mut caller_families, &self.base_caller_families),
         ] {
             for (family, base_ids) in base {
                 if let Some(ids) = active.get_mut(family) {
@@ -896,6 +1021,11 @@ impl FontManager {
                 }
             }
         }
+
+        self.db = db;
+        self.caller_aliases = caller_aliases;
+        self.caller_families = caller_families;
+        self.embedded_aliases = embedded_aliases;
         self.cache.clear();
         self.memory_face_data.clear();
         self.fonts.clear();
@@ -903,6 +1033,7 @@ impl FontManager {
         self.coverage_fallbacks.clear();
         self.coverage_misses.clear();
         self.additional_fonts = font_files.to_vec();
+        self.embedded_fonts = embedded_fonts.to_vec();
         if self.shaping_memo.is_poisoned() {
             self.shaping_memo.clear_poison();
         }
@@ -910,7 +1041,7 @@ impl FontManager {
             .get_mut()
             .expect("shaping cache poison was cleared")
             .clear();
-        true
+        Ok(())
     }
 
     /// Create a FontManager with user-provided fonts (no system font loading).
@@ -1800,8 +1931,36 @@ impl FontManager {
             fontdb::Weight::NORMAL
         };
 
+        let caller_candidate = || {
+            let exact = self.caller_families.get(family_name);
+            let aliases = self.caller_aliases.get(&requested_key);
+            match (exact, aliases) {
+                (Some(exact), Some(aliases)) => {
+                    // CSS compares both buckets together. Equal ranks retain
+                    // constructor-first ties, then the latest additional face.
+                    let (mut constructor, mut additional): (Vec<_>, Vec<_>) = self
+                        .db
+                        .faces()
+                        .filter(|face| exact.contains(&face.id) || aliases.contains(&face.id))
+                        .map(|face| face.id)
+                        .partition(|id| self.base_db.face(*id).is_some());
+                    constructor.reverse();
+                    additional.extend(constructor);
+                    best_caller_face(&self.db, &additional, weight, style)
+                }
+                (Some(ids), None) | (None, Some(ids)) => {
+                    best_caller_face(&self.db, ids, weight, style)
+                }
+                (None, None) => None,
+            }
+        };
         let query_family = |family: &str| {
             if let Some(ids) = self.caller_families.get(family)
+                && let Some(id) = best_caller_face(&self.db, ids, weight, style)
+            {
+                return Some(id);
+            }
+            if let Some(ids) = self.embedded_aliases.get(&family.to_lowercase())
                 && let Some(id) = best_caller_face(&self.db, ids, weight, style)
             {
                 return Some(id);
@@ -1815,7 +1974,11 @@ impl FontManager {
             self.db.query(&query)
         };
 
-        let mut found_id = query_family(family_name);
+        let mut found_id = if self.explicit_alias_map.contains_key(&requested_key) {
+            query_family(family_name)
+        } else {
+            caller_candidate().or_else(|| query_family(family_name))
+        };
         if found_id.is_none()
             && let Some(alias) = self.explicit_alias_map.get(&requested_key)
         {
@@ -3466,7 +3629,7 @@ for feature in ['smcp=0','smcp=1']:
     }
 
     #[test]
-    fn caller_font_labels_resolve_after_exact_embedded_families() {
+    fn caller_font_labels_override_bundled_families_and_keep_explicit_aliases() {
         let caladea = bundled_font_data()
             .into_iter()
             .find(|(family, _)| *family == "Caladea")
@@ -3494,10 +3657,10 @@ for feature in ['smcp=0','smcp=1']:
 
         let exact = manager
             .resolve_font(Some("Carlito"), false, false)
-            .expect("embedded family resolves exactly");
+            .expect("caller label overrides the bundled family");
         assert_eq!(
             manager.fonts[manager.index_of(exact).unwrap()].family,
-            "Carlito"
+            "Caladea"
         );
 
         manager.set_caller_aliases(&[("Document Serif".to_owned(), "Carlito".to_owned())]);
@@ -3782,6 +3945,211 @@ for feature in ['smcp=0','smcp=1']:
                 fontdb::Style::Oblique,
             ),
             Some(italic)
+        );
+    }
+
+    #[test]
+    fn fx220_embedded_physical_body_serves_two_thousand_aliases_atomically() {
+        let body: Arc<[u8]> = Arc::from(include_bytes!("../fonts/Caladea-Regular.ttf").as_slice());
+        let names = (0..2000)
+            .map(|index| format!("FX220 Alias {index}"))
+            .collect::<Vec<_>>();
+        let sources = vec![(names, body.clone())];
+        let mut manager = FontManager::new_deterministic().unwrap();
+        let base = manager.db.len();
+        assert!(manager.load_embedded_fonts(&sources).unwrap());
+        assert_eq!(manager.db.len(), base + 1);
+        let mut ids = Vec::new();
+        let mut data = Vec::new();
+        for index in [0, 999, 1999] {
+            let id = manager
+                .resolve_font(Some(&format!("FX220 Alias {index}")), false, false)
+                .unwrap();
+            data.push(manager.font_data(id).unwrap().data);
+            ids.push(id);
+        }
+        assert!(Arc::ptr_eq(&data[0], &data[1]) && Arc::ptr_eq(&data[1], &data[2]));
+        assert_eq!(data[0].as_ref(), body.as_ref());
+        let cache = manager.cache.len();
+        assert!(!manager.load_embedded_fonts(&sources).unwrap());
+        assert_eq!(manager.cache.len(), cache);
+        assert_eq!(
+            manager
+                .resolve_font(Some("FX220 Alias 0"), false, false)
+                .unwrap(),
+            ids[0]
+        );
+        let refused = vec![(vec!["too many".to_owned(); 16_385], body.clone())];
+        assert!(manager.load_embedded_fonts(&refused).is_err());
+        assert!(
+            manager
+                .load_embedded_fonts(&[(
+                    vec!["malformed".to_owned()],
+                    Arc::from([0_u8; 16].as_slice())
+                )])
+                .is_err()
+        );
+        let mut hostile_collection = b"ttcf\x00\x01\x00\x00".to_vec();
+        hostile_collection.extend_from_slice(&u32::MAX.to_be_bytes());
+        assert!(
+            manager
+                .load_embedded_fonts(&[(
+                    vec!["hostile collection".to_owned()],
+                    Arc::from(hostile_collection)
+                )])
+                .is_err()
+        );
+        assert_eq!(manager.cache.len(), cache);
+        assert_eq!(manager.db.len(), base + 1);
+        assert_eq!(
+            manager
+                .resolve_font(Some("FX220 Alias 0"), false, false)
+                .unwrap(),
+            ids[0]
+        );
+        let caller = include_bytes!("../fonts/Carlito-Regular.ttf").to_vec();
+        manager.load_additional_fonts(&[FontFile {
+            family: "FX220 Alias 1999".to_owned(),
+            data: caller.clone(),
+        }]);
+        let id = manager
+            .resolve_font(Some("FX220 Alias 1999"), false, false)
+            .unwrap();
+        assert_eq!(manager.font_data(id).unwrap().data.as_ref(), caller);
+        let id = manager
+            .resolve_font(Some("FX220 Alias 999"), false, false)
+            .unwrap();
+        assert_eq!(manager.font_data(id).unwrap().data.as_ref(), body.as_ref());
+        assert!(manager.load_embedded_fonts(&[]).unwrap());
+        assert!(manager.embedded_aliases.is_empty());
+    }
+
+    #[test]
+    fn fx220_embedded_four_faces_preserve_css_and_caller_priority() {
+        let face_data: [&[u8]; 4] = [
+            include_bytes!("../fonts/Caladea-Regular.ttf"),
+            include_bytes!("../fonts/Caladea-Bold.ttf"),
+            include_bytes!("../fonts/Caladea-Italic.ttf"),
+            include_bytes!("../fonts/Caladea-BoldItalic.ttf"),
+        ];
+        let sources = face_data
+            .iter()
+            .map(|data| (vec!["Embedded FX220".to_owned()], Arc::<[u8]>::from(*data)))
+            .collect::<Vec<_>>();
+        let mut manager = FontManager::new_deterministic().unwrap();
+        manager.load_embedded_fonts(&sources).unwrap();
+        for (index, (bold, italic)) in [(false, false), (true, false), (false, true), (true, true)]
+            .into_iter()
+            .enumerate()
+        {
+            let id = manager
+                .resolve_font(Some("Embedded FX220"), bold, italic)
+                .unwrap();
+            assert_eq!(
+                manager.font_data(id).unwrap().data.as_ref(),
+                face_data[index]
+            );
+        }
+        let caller = include_bytes!("../fonts/Carlito-Regular.ttf").to_vec();
+        let mut constructor =
+            FontManager::new_with_fonts(vec![("Embedded FX220".to_owned(), caller.clone())]);
+        constructor.load_embedded_fonts(&sources).unwrap();
+        let id = constructor
+            .resolve_font(Some("Embedded FX220"), false, false)
+            .unwrap();
+        assert_eq!(constructor.font_data(id).unwrap().data.as_ref(), caller);
+        manager.load_additional_fonts(&[FontFile {
+            family: "Embedded FX220".to_owned(),
+            data: caller.clone(),
+        }]);
+        let id = manager
+            .resolve_font(Some("Embedded FX220"), false, false)
+            .unwrap();
+        assert_eq!(manager.font_data(id).unwrap().data.as_ref(), caller);
+    }
+
+    #[test]
+    fn fx220_cross_bucket_ranking_retains_constructor_and_css_precedence() {
+        let family = "FX220CX";
+        let exact = font_with_family(include_bytes!("../fonts/Caladea-Regular.ttf"), family);
+        let alias = include_bytes!("../fonts/Carlito-Regular.ttf").to_vec();
+        let bold = include_bytes!("../fonts/Carlito-Bold.ttf").to_vec();
+        let italic = include_bytes!("../fonts/Carlito-Italic.ttf").to_vec();
+        let bold_italic = include_bytes!("../fonts/Carlito-BoldItalic.ttf").to_vec();
+        for (constructor, additional) in [
+            (exact.clone(), alias.clone()),
+            (alias.clone(), exact.clone()),
+        ] {
+            let mut manager =
+                FontManager::new_with_fonts(vec![(family.to_owned(), constructor.clone())]);
+            let files = vec![FontFile {
+                family: family.to_owned(),
+                data: additional,
+            }];
+            assert!(manager.load_additional_fonts(&files));
+            let id = manager.resolve_font(Some(family), false, false).unwrap();
+            assert_eq!(manager.font_data(id).unwrap().data.as_ref(), constructor);
+            assert!(!manager.load_additional_fonts(&files));
+            assert_eq!(
+                manager.resolve_font(Some(family), false, false).unwrap(),
+                id
+            );
+            assert!(manager.load_additional_fonts(&[
+                FontFile {
+                    family: family.to_owned(),
+                    data: bold.clone()
+                },
+                FontFile {
+                    family: family.to_owned(),
+                    data: italic.clone()
+                },
+                FontFile {
+                    family: family.to_owned(),
+                    data: bold_italic.clone()
+                },
+            ]));
+            for (is_bold, is_italic, expected) in [
+                (true, false, &bold),
+                (false, true, &italic),
+                (true, true, &bold_italic),
+            ] {
+                let id = manager
+                    .resolve_font(Some(family), is_bold, is_italic)
+                    .unwrap();
+                assert_eq!(manager.font_data(id).unwrap().data.as_ref(), expected);
+            }
+        }
+        let mut manager = FontManager::new_deterministic().unwrap();
+        for files in [
+            vec![exact.clone(), alias.clone()],
+            vec![alias.clone(), exact.clone()],
+        ] {
+            let expected = files.last().unwrap().clone();
+            manager.load_additional_fonts(
+                &files
+                    .into_iter()
+                    .map(|data| FontFile {
+                        family: family.to_owned(),
+                        data,
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            let id = manager.resolve_font(Some(family), false, false).unwrap();
+            assert_eq!(manager.font_data(id).unwrap().data.as_ref(), expected);
+        }
+        manager.set_caller_aliases(&[("Explicit FX220".to_owned(), family.to_owned())]);
+        let direct = manager.resolve_font(Some(family), false, false).unwrap();
+        let indirect = manager
+            .resolve_font(Some("Explicit FX220"), false, false)
+            .unwrap();
+        assert_eq!(
+            manager.font_data(direct).unwrap().data,
+            manager.font_data(indirect).unwrap().data
+        );
+        assert!(
+            manager
+                .resolve_font(Some("Missing FX220"), false, false)
+                .is_ok()
         );
     }
 

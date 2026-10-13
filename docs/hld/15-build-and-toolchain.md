@@ -1130,3 +1130,37 @@ Template geometry and metadata are separately labelled behaviour changes with
 measured hash attribution before any exclusive baseline update. The asset
 remains packaged under rpptx/assets and every archive measurement uses actual
 current source members.
+
+## Embedded font inputs and consumer recipes
+
+Embedding reads caller-owned licensed font bytes, with no network discovery,
+automatic host font lookup or installed-font prerequisite. Single-face sfnt
+authoring and bounded EOT/ODTTF decoding reuse existing dependencies and
+existing native providers. Python and CLI inputs are bounded at64MiB before
+copying. Word checked listing also bounds aggregate projected copies, while
+PowerPoint repeated references share one decoded physical body.
+
+Consumer recipes use explicit license authorization and exact identity, and
+exercise source-built current APIs and actual CLI help. Deterministic rendering
+retains caller-first embedded-second selection and entrypoint-specific fallback.
+Fresh paired wheel qualification authenticates every archive member, RECORD
+digest/length, local Python/stub source and native binary before isolated install.
+Affected crate inventories and measured archive tuples come from actual verified
+packages, with the existing10MiB ceiling. Separate downstream skill guidance
+requires its own reviewed patch and submission boundary. Local README changes
+do not imply that an external skill repository was updated.
+
+Native font-use fixtures derive fresh names from licensed existing fonts while
+pinning all unchanged outline, metric, style and license tables. Their inputs
+are not installed on the host. Independent font parsing, bounded stored-part
+inspection and pinned PDF extraction/raster tools qualify actual glyph use
+without changing the product or the managed Python environment. Native Word
+16.113.2 build16.113.26092012 and PowerPoint16.113.4 build16.113.26100421
+qualifications retain input, output, app executable and tool identities.
+
+Office PDF comparisons are application evidence, not deterministic product
+baselines. Native font-unavailable warnings, font-part removal and synthetic
+styles remain recorded. Own-renderer baselines continue to use deterministic
+font mode and true face selection. External downstream guidance remains a
+reviewed proposal until separately submitted, and integrated sprint gates
+remain independent of isolated feature qualifications.

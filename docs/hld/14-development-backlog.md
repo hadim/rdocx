@@ -7726,6 +7726,15 @@ and remove the temporary named restriction only after these controls pass.
 
 Resolve Issue360 with admitted PR361. Expose existing native Word font embedding, font records and face removal in Python/CLI, plus checked Word embedding settings. Add equivalent native/Python/CLI PowerPoint face embedding, listing/removal and flags, with actual embedded font parts/relationships and schema-ordered source-preserving font lists. Explicit caller authorization, exact license identity and valid bounded font input are required. Qualify PowerPoint-produced font format before writer bytes and real uninstalled regular/bold native PowerPoint font use. Native Word acceptance uses its documented one-font-per-name limit, retaining actual synthetic bold and native save changes as evidence. All four API face kinds and genuine own-renderer face selection remain required. F-X223 carries native Word multi-face interoperability to S92 under the approved scope decision. Imported font graph preservation remains required independently. Unsupported compressed formats remain exact. Decode shared parts once, reject hostile lengths without huge allocation and preserve F195 caller override across render paths. Update existing consumer recipes and prepare concrete downstream skill guidance without falsely claiming an external submission. No new tracked font assets, product modules or dependencies are needed.
 
+Current native and public contracts use checked source-owned transactions,
+immutable snapshots and distinct caller/embedded tiers. Word checked listing
+retains its compatible owned snapshot representation and reports actual stored
+part facts through its indexed metadata reader. PowerPoint lists supported and
+opaque stored formats explicitly and shares repeated decoded bodies. Python
+binary inputs require real EOF. Both CLIs use licensed font commands and staged
+outputs. The regression gate retains separate authentic producer/native-use,
+installed, deterministic render, hostile-input and verified archive evidence.
+
 ### F-X221, Prepare Word 0.17.0 and PowerPoint 0.15.0 minor releases
 
 **Size**: L

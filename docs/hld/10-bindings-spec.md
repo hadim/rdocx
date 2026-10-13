@@ -1224,7 +1224,8 @@ Native Rust re-exports `CT_OfficeStyleSheet` and adds the concrete
 `remove_embedded_font` form the additive pre-1.0 authoring surface. Embedding
 requires caller bytes, an explicit authorization value, a nonempty exact
 license identity without XML-normalized whitespace, and a valid OOXML font
-key. Python, WASM, and CLI gain no new binding in this story.
+key. Python and CLI expose checked licensed font operations through these
+native providers. WASM gains no new font-authoring entrypoint.
 
 Native Rust re-exports `CoreProperties`, `AppProperties`, `CustomProperty`,
 `CustomPropertyValue`, `Twips`, and the bounded settings value types. `Document`
@@ -3681,3 +3682,41 @@ allocation failure preserve document bytes and live tokens. Ordinary supported
 setters retain their established lifetime behavior, while notes edits preserve
 unrelated shape and text owners.
 
+## Licensed embedded fonts in Python and CLI
+
+Both Python packages expose FontEmbeddingLicense with required keyword-only
+authorized and identity inputs. Embedding requires true authorization and a
+nonempty exact identity. Font inputs accept bounded bytes, paths and binary
+readers. Binary readers are read in bounded chunks through actual empty-bytes
+EOF, with cumulative bounds checked before copying. Invalid chunk types, later
+read exceptions and excess input refuse before native publication.
+
+Word exposes immutable FontDefinition/EmbeddedFont snapshots through fonts,
+set_font, remove_font, remove_embedded_font and embed_font. The four kind names
+are regular, bold, italic and bold_italic. Omitted font_key derives a valid
+uppercase OOXML GUID, while explicit keys retain checked native semantics.
+subsetted is explicit face metadata. embed_true_type_fonts, embed_system_fonts
+and save_subset_fonts are bool-or-None properties, where None removes only the
+owned setting. PowerPoint exposes immutable EmbeddedTypeface/EmbeddedFontFace
+snapshots through embedded_fonts, equivalent embedding/removal and tri-state
+embed_true_type_fonts/save_subset_fonts. Authored PowerPoint EmbeddedFont values
+retain explicit kind and license. Snapshot bytes and Python result allocations
+precede native publication, and exact no-ops preserve existing owner handles.
+
+Both CLIs use font list, font embed, font remove and font settings. Embedding
+requires --license-authorized and --license-identity, accepts --name, --font
+and --kind regular/bold/italic/bold-italic, and writes a new --output. Word also
+accepts --font-key and --subsetted. Removal without --kind removes a record,
+while an explicit kind removes only that face. Settings read without mutation
+options, and explicit true/false/none values require a new output. JSON uses
+the existing schema1 envelope and stable native record/face order, with actual
+part/format/length facts. Input/font aliases and existing output collisions
+refuse. Complete native serialization precedes staged output publication.
+
+The four face kinds describe authored package entries and the native-backed
+API. They are not a promise that every external application selects every
+embedded face. PowerPoint has independently qualified actual regular and bold
+use. Native Word's documented one-font-per-name behavior remains explicit,
+including synthetic bold and changed or empty saved parts, with multi-face
+interoperability owned by F-X223. API inputs, exact license authorization,
+immutable snapshots and own-renderer face selection retain their contracts.

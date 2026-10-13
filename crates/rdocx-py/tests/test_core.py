@@ -5739,3 +5739,184 @@ def test_fx217_public_markdown_template_preserves_graph_and_inputs(tmp_path):
     with pytest.raises(ValueError, match="UTF-8"):
         rdocx.Document.open_markdown(invalid, template=template)
     assert template.to_bytes() == before
+
+
+def test_fx220_word_python_font_graph_snapshots_inputs_and_removal(tmp_path):
+    from pathlib import Path
+    from rdocx import Document, FontDefinition, FontEmbeddingLicense
+
+    source = Path(__file__).resolve().parents[2] / "oxml-layout/fonts/Selawik-Regular.ttf"
+    body = source.read_bytes()
+    license = FontEmbeddingLicense(authorized=True, identity="SIL Open Font License 1.1")
+    document = Document()
+    document.add_paragraph("font control")
+    document.set_font(FontDefinition("FX220 Python Word", alternate_name="control alias", family="swiss", pitch="variable"))
+    for kind, value in zip(("regular", "bold", "italic", "bold_italic"), (body, source, io.BytesIO(body), body)):
+        document.embed_font("FX220 Python Word", value, kind, license=license, subsetted=kind == "italic")
+    font = next(font for font in document.fonts if font.name == "FX220 Python Word")
+    assert isinstance(document.fonts, tuple) and isinstance(font.embedded_fonts, tuple)
+    assert font.alternate_name == "control alias" and font.family == "swiss" and font.pitch == "variable"
+    assert tuple(face.kind for face in font.embedded_fonts) == ("regular", "bold", "italic", "bold_italic")
+    for face in font.embedded_fonts:
+        assert face.data == body and face.license.authorized and face.license.identity == license.identity
+        assert face.font_key.startswith("{") and face.font_key.endswith("}")
+        with pytest.raises(AttributeError):
+            face.subsetted = False
+    assert font.embedded_fonts[2].subsetted
+    saved = document.to_bytes()
+    package = zipfile.ZipFile(io.BytesIO(saved))
+    font_parts = [name for name in package.namelist() if name.startswith("word/fonts/")]
+    assert len(font_parts) == 4 and all(package.read(name) != body for name in font_parts)
+    reopened = Document.from_bytes(saved)
+    assert next(font for font in reopened.fonts if font.name == "FX220 Python Word").embedded_fonts[0].data == body
+    held = document.paragraphs[0]
+    document.embed_font("FX220 Python Word", body, license=license)
+    assert document.to_bytes() == saved and held.text == "font control"
+    assert document.remove_embedded_font("FX220 Python Word", "italic").data == body
+    assert document.remove_embedded_font("FX220 Python Word", "italic") is None
+    removed = document.remove_font("FX220 Python Word")
+    assert len(removed.embedded_fonts) == 3
+    assert document.remove_font("FX220 Python Word") is None
+    output = tmp_path / "removed.docx"
+    document.save(output)
+    assert all(font.name != "FX220 Python Word" for font in Document(output).fonts)
+
+
+def test_fx220_word_python_license_flags_and_refusal_are_atomic():
+    from pathlib import Path
+    from rdocx import Document, FontDefinition, FontEmbeddingLicense
+
+    body = (Path(__file__).resolve().parents[2] / "oxml-layout/fonts/Selawik-Regular.ttf").read_bytes()
+    document = Document()
+    document.add_paragraph("held")
+    for name in ("embed_true_type_fonts", "embed_system_fonts", "save_subset_fonts"):
+        assert getattr(document, name) is None
+        for value in (False, True, None):
+            setattr(document, name, value)
+            assert getattr(document, name) is value
+    baseline = document.to_bytes()
+    held = document.paragraphs[0]
+    good = FontEmbeddingLicense(authorized=True, identity="OFL 1.1")
+    for value, kind, license, key in ((body, "regular", FontEmbeddingLicense(authorized=False, identity="OFL"), None), (body, "regular", FontEmbeddingLicense(authorized=True, identity=" "), None), (b"not a font", "regular", good, None), (body, "unknown", good, None), (body, "regular", good, "bad-key"), (io.StringIO("not bytes"), "regular", good, None)):
+        with pytest.raises(Exception):
+            document.embed_font("FX220 refusal", value, kind, license=license, font_key=key)
+        assert document.to_bytes() == baseline and held.text == "held"
+    class OversizedReader:
+        def read(self, size):
+            assert 0 < size <= 8192
+            return b"x" * (64 * 1024 * 1024 + 1)
+    with pytest.raises(ValueError):
+        document.embed_font("FX220 refusal", OversizedReader(), license=good)
+    assert document.to_bytes() == baseline and held.text == "held"
+    document.set_font(FontDefinition("FX220 explicit"))
+    document.embed_font("FX220 explicit", body, license=good, font_key="{00112233-4455-6677-8899-AABBCCDDEEFF}")
+    assert next(font for font in document.fonts if font.name == "FX220 explicit").embedded_fonts[0].font_key == "{00112233-4455-6677-8899-AABBCCDDEEFF}"
+
+
+@pytest.mark.parametrize("mode", ["short_chunks", "later_type", "later_error", "cumulative_bound"])
+def test_fx220_rdocx_binary_readers_reach_real_eof_before_publication(mode):
+    from pathlib import Path
+    import rdocx
+
+    body = (Path(__file__).resolve().parents[2] / "oxml-layout/fonts/Selawik-Regular.ttf").read_bytes()
+    value = rdocx.Document()
+    value.add_paragraph("binary owner")
+    held = value.paragraphs[0]
+    baseline = value.to_bytes()
+    license = rdocx.FontEmbeddingLicense(authorized=True, identity="OFL 1.1")
+    class Reader:
+        def __init__(self):
+            self.calls = 0
+            self.offset = 0
+        def read(self, size):
+            self.calls += 1
+            if mode == "short_chunks":
+                part = body[self.offset:self.offset + min(size, 8192)]
+                self.offset += len(part)
+                return part
+            if self.calls == 1:
+                return body
+            if mode == "later_type":
+                return "invalid later text"
+            if mode == "later_error":
+                raise OSError("later font read failed")
+            return b"x" * (1024 * 1024)
+    reader = Reader()
+    if mode == "short_chunks":
+        value.embed_font("FX220 binary stream", reader, license=license)
+        assert reader.calls > 2 and reader.offset == len(body)
+        assert next(font for font in value.fonts if font.name == "FX220 binary stream").embedded_fonts[0].data == body
+    else:
+        if mode == "later_error":
+            expected, match = OSError, "later font read failed"
+        elif mode == "later_type":
+            expected, match = TypeError, "reader must return bytes"
+        else:
+            expected, match = ValueError, "64 MiB"
+        with pytest.raises(expected, match=match):
+            value.embed_font("FX220 binary stream", reader, license=license)
+        assert reader.calls > 1
+        assert value.to_bytes() == baseline and held.text == "binary owner"
+
+@pytest.mark.parametrize("method", ["pdf", "png", "svg", "all_pages", "selected_pages"])
+def test_fx220_word_embedded_faces_and_caller_override_reach_exports(method):
+    import base64
+    import re
+    from pathlib import Path
+    from rdocx import Document, FontEmbeddingLicense
+
+    directory = Path(__file__).resolve().parents[2] / "oxml-layout/fonts"
+    kinds = ("regular", "bold", "italic", "bold_italic")
+    styles = ("Regular", "Bold", "Italic", "BoldItalic")
+    embedded = [(directory / f"Caladea-{style}.ttf").read_bytes() for style in styles]
+    caller = [(directory / f"LiberationMono-{style}.ttf").read_bytes() for style in styles]
+    name = "FX220 deterministic export face"
+    document = Document()
+    for index in range(4):
+        run = document.add_paragraph("").add_run("iiiiWWWW font route")
+        run.font.name = name
+        run.font.bold = bool(index & 1)
+        run.font.italic = bool(index & 2)
+    license = FontEmbeddingLicense(authorized=True, identity="Apache License 2.0")
+    for kind, body in zip(kinds, embedded):
+        document.embed_font(name, body, kind, license=license)
+    source = document.to_bytes()
+    before = document.to_bytes()
+    held = document.paragraphs[0]
+    disabled = Document.from_bytes(source)
+    disabled.embed_true_type_fonts = False
+    missing = Document.from_bytes(source)
+    missing.remove_font(name)
+    reference = Document.from_bytes(missing.to_bytes())
+    for value in (document, disabled, missing, reference):
+        assert value.paragraphs[0].text == "iiiiWWWW font route"
+
+    def invoke(value, fonts):
+        if method == "pdf": return value.to_pdf(fonts=fonts)
+        if method == "png": return value.render_page_to_png(0, dpi=72.0, fonts=fonts)
+        if method == "svg": return value.render_page_to_svg(0, fonts=fonts).svg
+        if method == "all_pages": return value.render_all_pages(dpi=72.0, fonts=fonts)
+        return value.render_pages(pages=[0], dpi=72.0, fonts=fonts)
+
+    positive = invoke(document, [])
+    off = invoke(disabled, [])
+    absent = invoke(missing, [])
+    override = invoke(document, list(zip([name] * 4, caller)))
+    expected = invoke(reference, list(zip([name] * 4, embedded)))
+    expected_override = invoke(reference, list(zip([name] * 4, caller)))
+    assert positive != off and positive != override
+    assert off == absent
+    if method in ("png", "all_pages", "selected_pages"):
+        assert positive == expected
+        assert override == expected_override
+    elif method == "pdf":
+        assert positive.startswith(b"%PDF") and b"Caladea" in positive
+        assert b"LiberationMono" in override and b"Caladea" not in override
+        assert b"Caladea" not in off
+    else:
+        def bodies(svg):
+            return {base64.b64decode(value) for value in re.findall(r"base64,([A-Za-z0-9+/=]+)", svg)}
+        assert set(embedded) <= bodies(positive)
+        assert set(caller) <= bodies(override)
+        assert not set(embedded) & bodies(off)
+    assert document.to_bytes() == before and held.text == "iiiiWWWW font route"

@@ -180,7 +180,6 @@ impl PreparedAnimationAssembly {
                 fallback_policy: Some(self.fallback),
             },
             self.slide_count,
-            true,
         )
         .map(|(frame, _)| (frame.page, frame.diagnostics))
     }

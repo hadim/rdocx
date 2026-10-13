@@ -32,7 +32,7 @@ use rdocx_oxml::drawing::{
     AnchorAlignH, AnchorAlignV, CT_Anchor, CT_Drawing, CT_Inline, ST_RelativeFromH,
     ST_RelativeFromV, SourceRect, WrapType, drawing_ns,
 };
-use rdocx_oxml::font_table::{EmbeddedFontReference, FontFaceKind, FontTable};
+use rdocx_oxml::font_table::{EmbeddedFontReference, FontFaceKind, FontRecord, FontTable};
 use rdocx_oxml::header_footer::{
     CT_HdrFtr, HdrFtrRef, HdrFtrType, VmlWatermark, replace_authored_watermark,
 };
@@ -300,6 +300,29 @@ pub struct EmbeddedFont {
     pub font_key: String,
     pub subsetted: bool,
     pub license: FontEmbeddingLicense,
+}
+
+/// Derive a deterministic uppercase OOXML key from checked single-face font bytes.
+pub fn derive_font_key(data: &[u8]) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    if !valid_authored_sfnt(data) {
+        return Err(Error::Other(
+            "font-key derivation requires a bounded supported sfnt font".to_owned(),
+        ));
+    }
+    let digest = Sha256::digest(data);
+    let hex = digest[..16]
+        .iter()
+        .map(|byte| format!("{byte:02X}"))
+        .collect::<String>();
+    Ok(format!(
+        "{{{}-{}-{}-{}-{}}}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    ))
 }
 
 impl EmbeddedFont {
@@ -16394,7 +16417,7 @@ impl Document {
             return Ok(Arc::clone(layout));
         }
 
-        let input = self.build_layout_input();
+        let input = self.build_layout_input()?;
         #[cfg(test)]
         record_layout_invocation();
         let mut engine = self
@@ -16419,7 +16442,7 @@ impl Document {
             return Ok(Arc::clone(layout));
         }
 
-        let input = self.build_layout_input();
+        let input = self.build_layout_input()?;
         #[cfg(test)]
         record_layout_invocation();
         let layout = Arc::new(rdocx_layout::layout_document_deterministic_with_provenance(
@@ -16442,7 +16465,7 @@ impl Document {
             };
         }
 
-        let mut input = self.build_layout_input();
+        let mut input = self.build_layout_input()?;
         input.revision_view = options.revision_view;
         #[cfg(test)]
         record_layout_invocation();
@@ -29145,64 +29168,288 @@ impl Document {
 
     /// Return font-table records with related embedded bytes deobfuscated.
     pub fn fonts(&self) -> Vec<FontDefinition> {
+        self.try_fonts().unwrap_or_default()
+    }
+
+    /// Return checked font snapshots after bounding every projected byte copy.
+    pub fn try_fonts(&self) -> Result<Vec<FontDefinition>> {
         let Some(table) = &self.font_table else {
-            return Vec::new();
+            if self.font_table_part_name.is_some() {
+                return Err(Error::Other("font table is unmodeled".to_owned()));
+            }
+            return Ok(Vec::new());
         };
-        let relationships = self
-            .font_table_part_name
-            .as_deref()
-            .and_then(|part_name| self.package.get_part_rels(part_name));
-        table
-            .fonts()
+        if table.fonts().len() > 4096 {
+            return Err(Error::Other(
+                "font snapshot exceeds 4096 records".to_owned(),
+            ));
+        }
+        self.project_font_records(&table.fonts().iter().collect::<Vec<_>>())
+    }
+
+    fn project_font_records(&self, records: &[&FontRecord]) -> Result<Vec<FontDefinition>> {
+        if records.len() > 4096 {
+            return Err(Error::Other(
+                "font snapshot exceeds 4096 records".to_owned(),
+            ));
+        }
+        let mut bytes = 0usize;
+        let mut faces = 0usize;
+        let mut metadata = 0usize;
+        for font in records {
+            for value in [
+                Some(&font.name),
+                font.alternate_name.as_ref(),
+                font.family.as_ref(),
+                font.pitch.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                metadata = metadata
+                    .checked_add(value.len())
+                    .ok_or_else(|| Error::Other("font metadata size overflow".to_owned()))?;
+                if value.len() > 4096 || metadata > 4 * 1024 * 1024 {
+                    return Err(Error::Other(
+                        "font snapshot metadata exceeds its bound".to_owned(),
+                    ));
+                }
+            }
+            for reference in &font.embedded_fonts {
+                faces += 1;
+                let (_, body) = self.checked_embedded_font_source(reference)?;
+                bytes = bytes
+                    .checked_add(body.len())
+                    .ok_or_else(|| Error::Other("font snapshot size overflow".to_owned()))?;
+                if body.len() > 64 * 1024 * 1024 || bytes > 256 * 1024 * 1024 || faces > 16384 {
+                    return Err(Error::Other(
+                        "font snapshot exceeds its byte or face bound".to_owned(),
+                    ));
+                }
+                metadata = metadata
+                    .checked_add(reference.font_key.len())
+                    .and_then(|size| {
+                        size.checked_add(reference.license_identity.as_ref().map_or(0, String::len))
+                    })
+                    .ok_or_else(|| Error::Other("font metadata size overflow".to_owned()))?;
+                if reference.font_key.len() > 4096
+                    || reference
+                        .license_identity
+                        .as_ref()
+                        .is_some_and(|value| value.len() > 4096)
+                    || metadata > 4 * 1024 * 1024
+                {
+                    return Err(Error::Other(
+                        "font snapshot metadata exceeds its bound".to_owned(),
+                    ));
+                }
+            }
+        }
+        records
             .iter()
             .map(|font| {
                 let embedded_fonts = font
                     .embedded_fonts
                     .iter()
-                    .map(|embedded| {
-                        let data = relationships
-                            .and_then(|relationships| {
-                                relationships.items.iter().find(|relationship| {
-                                    relationship.id == embedded.relationship_id
-                                        && relationship.rel_type == rel_types::FONT
-                                        && relationship_is_internal(relationship)
-                                })
-                            })
-                            .and_then(|relationship| {
-                                let owner = self.font_table_part_name.as_deref()?;
-                                let target =
-                                    OpcPackage::resolve_rel_target(owner, &relationship.target);
-                                self.package.get_part(&target)
-                            })
-                            .and_then(|bytes| deobfuscate_odttf_with_key(bytes, &embedded.font_key))
-                            .unwrap_or_default();
-                        EmbeddedFont {
-                            kind: embedded.kind.into(),
-                            data,
-                            font_key: embedded.font_key.clone(),
-                            subsetted: embedded.subsetted.unwrap_or(false),
+                    .map(|reference| {
+                        let (_, bytes) = self.checked_embedded_font_source(reference)?;
+                        Ok(EmbeddedFont {
+                            kind: reference.kind.into(),
+                            data: deobfuscate_odttf_with_key(bytes, &reference.font_key)
+                                .unwrap_or_default(),
+                            font_key: reference.font_key.clone(),
+                            subsetted: reference.subsetted.unwrap_or(false),
                             license: FontEmbeddingLicense {
-                                authorized: embedded.authorized.unwrap_or(false),
-                                identity: embedded.license_identity.clone().unwrap_or_default(),
+                                authorized: reference.authorized.unwrap_or(false),
+                                identity: reference.license_identity.clone().unwrap_or_default(),
                             },
-                        }
+                        })
                     })
-                    .collect();
-                FontDefinition {
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(FontDefinition {
                     name: font.name.clone(),
                     alternate_name: font.alternate_name.clone(),
                     family: font.family.clone(),
                     pitch: font.pitch.clone(),
                     embedded_fonts,
-                }
+                })
             })
             .collect()
     }
 
+    /// Resolve the actual stored part and byte length for an indexed font face.
+    /// Indices follow `try_fonts()` record and face order.
+    pub fn font_part_metadata(
+        &self,
+        record_index: usize,
+        face_index: usize,
+    ) -> Result<(String, usize)> {
+        let reference = self
+            .font_table
+            .as_ref()
+            .and_then(|table| table.fonts().get(record_index))
+            .and_then(|record| record.embedded_fonts.get(face_index))
+            .ok_or_else(|| Error::Other("font record or face index is out of range".to_owned()))?;
+        let (part, bytes) = self.checked_embedded_font_source(reference)?;
+        if bytes.len() > 64 * 1024 * 1024 {
+            return Err(Error::Other(
+                "embedded font part exceeds its byte bound".to_owned(),
+            ));
+        }
+        Ok((part, bytes.len()))
+    }
+
+    fn checked_embedded_font_source(
+        &self,
+        reference: &EmbeddedFontReference,
+    ) -> Result<(String, &[u8])> {
+        if reference.relationship_id.len() > 4096 || reference.font_key.len() > 4096 {
+            return Err(Error::Other(
+                "embedded font metadata exceeds its bound".to_owned(),
+            ));
+        }
+        let owner = self
+            .font_table_part_name
+            .as_deref()
+            .ok_or_else(|| Error::Other("font-table part name is missing".to_owned()))?;
+        let relationships = self
+            .package
+            .get_part_rels(owner)
+            .ok_or_else(|| Error::Other("font relationships are missing".to_owned()))?;
+        let mut matches = relationships
+            .items
+            .iter()
+            .filter(|rel| rel.id == reference.relationship_id);
+        let relationship = matches
+            .next()
+            .filter(|rel| rel.rel_type == rel_types::FONT && relationship_is_internal(rel))
+            .ok_or_else(|| {
+                Error::Other("embedded font relationship is missing or unsupported".to_owned())
+            })?;
+        if matches.next().is_some() {
+            return Err(Error::Other(
+                "embedded font relationship is ambiguous".to_owned(),
+            ));
+        }
+        if relationship.target.len() > 4096 {
+            return Err(Error::Other(
+                "embedded font target exceeds its bound".to_owned(),
+            ));
+        }
+        let target = OpcPackage::resolve_rel_target(owner, &relationship.target);
+        let part = self
+            .package
+            .parts
+            .keys()
+            .find(|part| part.eq_ignore_ascii_case(&target))
+            .ok_or_else(|| Error::Other("embedded font part is missing".to_owned()))?;
+        if self.package.content_types.content_type_for(part) != Some(EMBEDDED_FONT_CONTENT_TYPE) {
+            return Err(Error::Other(
+                "embedded font part has an unsupported content type".to_owned(),
+            ));
+        }
+        Ok((
+            part.clone(),
+            self.package.get_part(part).expect("checked font part"),
+        ))
+    }
+
+    /// Return the presence-sensitive embedded TrueType setting.
+    pub fn embed_true_type_fonts(&self) -> Result<Option<bool>> {
+        if self.settings.is_none() && self.settings_part_name.is_some() {
+            return Err(Error::Other("cannot inspect unmodeled settings".to_owned()));
+        }
+        Ok(self
+            .settings
+            .as_ref()
+            .map(CT_Settings::embed_true_type_fonts)
+            .transpose()?
+            .flatten())
+    }
+
+    /// Set or remove the embedded TrueType setting atomically.
+    pub fn set_embed_true_type_fonts(&mut self, value: Option<bool>) -> Result<()> {
+        if self.embed_true_type_fonts()? == value {
+            return Ok(());
+        }
+        let mut candidate = self.settings_mutation_candidate()?;
+        candidate
+            .settings
+            .get_or_insert_with(CT_Settings::new)
+            .set_embed_true_type_fonts(value)?;
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// Return the presence-sensitive embedded system font setting.
+    pub fn embed_system_fonts(&self) -> Result<Option<bool>> {
+        if self.settings.is_none() && self.settings_part_name.is_some() {
+            return Err(Error::Other("cannot inspect unmodeled settings".to_owned()));
+        }
+        Ok(self
+            .settings
+            .as_ref()
+            .map(CT_Settings::embed_system_fonts)
+            .transpose()?
+            .flatten())
+    }
+
+    /// Set or remove the embedded system font setting atomically.
+    pub fn set_embed_system_fonts(&mut self, value: Option<bool>) -> Result<()> {
+        if self.embed_system_fonts()? == value {
+            return Ok(());
+        }
+        let mut candidate = self.settings_mutation_candidate()?;
+        candidate
+            .settings
+            .get_or_insert_with(CT_Settings::new)
+            .set_embed_system_fonts(value)?;
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
+    /// Return the presence-sensitive font subsetting setting.
+    pub fn save_subset_fonts(&self) -> Result<Option<bool>> {
+        if self.settings.is_none() && self.settings_part_name.is_some() {
+            return Err(Error::Other("cannot inspect unmodeled settings".to_owned()));
+        }
+        Ok(self
+            .settings
+            .as_ref()
+            .map(CT_Settings::save_subset_fonts)
+            .transpose()?
+            .flatten())
+    }
+
+    /// Set or remove the font subsetting setting atomically.
+    pub fn set_save_subset_fonts(&mut self, value: Option<bool>) -> Result<()> {
+        if self.save_subset_fonts()? == value {
+            return Ok(());
+        }
+        let mut candidate = self.settings_mutation_candidate()?;
+        candidate
+            .settings
+            .get_or_insert_with(CT_Settings::new)
+            .set_save_subset_fonts(value)?;
+        self.commit_staged_mutation(candidate);
+        Ok(())
+    }
+
     /// Add or replace one descriptive font-table record.
     pub fn set_font(&mut self, font: FontDefinition) -> Result<()> {
-        if font.name.trim().is_empty() {
-            return Err(Error::Other("font name must not be empty".to_owned()));
+        if font.name.trim().is_empty()
+            || std::iter::once(font.name.as_str())
+                .chain(font.alternate_name.as_deref())
+                .any(|value| {
+                    value.len() > 4096
+                        || value
+                            .chars()
+                            .any(|ch| ch < ' ' || ch == '\u{fffe}' || ch == '\u{ffff}')
+                })
+        {
+            return Err(Error::Other(
+                "font metadata is empty or unsupported".to_owned(),
+            ));
         }
         if font.family.as_deref().is_some_and(|family| {
             !matches!(
@@ -29228,6 +29475,29 @@ impl Document {
                 "set_font does not accept embedded bytes, use embed_font".to_owned(),
             ));
         }
+        if let Some(table) = &self.font_table {
+            let mut matches = table
+                .fonts()
+                .iter()
+                .filter(|record| record.name == font.name);
+            if let Some(record) = matches.next() {
+                if matches.next().is_some() {
+                    return Err(Error::Other("ambiguous font record".to_owned()));
+                }
+                if record.alternate_name == font.alternate_name
+                    && record.family == font.family
+                    && record.pitch == font.pitch
+                {
+                    return Ok(());
+                }
+                if (record.alternate_name.is_some() && font.alternate_name.is_none())
+                    || (record.family.is_some() && font.family.is_none())
+                    || (record.pitch.is_some() && font.pitch.is_none())
+                {
+                    table.can_remove_font(&font.name)?;
+                }
+            }
+        }
         let mut candidate = self.font_table_mutation_candidate()?;
         candidate
             .font_table
@@ -29247,9 +29517,17 @@ impl Document {
 
     /// Remove one font-table record and every embedded face it owns.
     pub fn remove_font(&mut self, name: &str) -> Result<Option<FontDefinition>> {
-        let Some(removed) = self.fonts().into_iter().find(|font| font.name == name) else {
+        if let Some(table) = &self.font_table {
+            table.can_remove_font(name)?;
+        }
+        let Some(record) = self
+            .font_table
+            .as_ref()
+            .and_then(|table| table.fonts().iter().find(|font| font.name == name))
+        else {
             return Ok(None);
         };
+        let removed = self.project_font_records(&[record])?.remove(0);
         let mut candidate = self.font_table_mutation_candidate()?;
         let references = candidate
             .font_table
@@ -29269,6 +29547,14 @@ impl Document {
 
     /// Embed caller-provided font bytes after explicit license authorization.
     pub fn embed_font(&mut self, font_name: &str, embedded: EmbeddedFont) -> Result<()> {
+        if font_name.trim().is_empty()
+            || font_name.len() > 4096
+            || font_name
+                .chars()
+                .any(|ch| ch < ' ' || ch == '\u{fffe}' || ch == '\u{ffff}')
+        {
+            return Err(Error::Other("font name is empty or unsupported".to_owned()));
+        }
         if !embedded.license.authorized {
             return Err(Error::Other(
                 "font embedding requires explicit caller authorization".to_owned(),
@@ -29287,14 +29573,14 @@ impl Document {
         if embedded
             .license
             .identity
-            .bytes()
-            .any(|byte| matches!(byte, b'\t' | b'\n' | b'\r'))
+            .chars()
+            .any(|ch| ch < ' ' || ch == '\u{fffe}' || ch == '\u{ffff}')
         {
             return Err(Error::Other(
-                "font embedding license identity contains XML-normalized whitespace".to_owned(),
+                "font embedding license identity contains unsupported XML characters".to_owned(),
             ));
         }
-        if !looks_like_sfnt(&embedded.data) {
+        if !valid_authored_sfnt(&embedded.data) {
             return Err(Error::Other(
                 "embedded font bytes are not a supported sfnt font".to_owned(),
             ));
@@ -29306,13 +29592,26 @@ impl Document {
         let mut candidate = self.font_table_mutation_candidate()?;
         let table = candidate
             .font_table
-            .as_ref()
+            .as_mut()
             .expect("font-table mutation candidate has a model");
+        if table
+            .fonts()
+            .iter()
+            .filter(|font| font.name == font_name)
+            .count()
+            > 1
+        {
+            return Err(Error::Other("font-table record is ambiguous".to_owned()));
+        }
+        if !table.fonts().iter().any(|font| font.name == font_name) {
+            table.set_font(font_name.to_owned(), None, None, None);
+        }
+        let table = candidate.font_table.as_ref().unwrap();
         let font = table
             .fonts()
             .iter()
             .find(|font| font.name == font_name)
-            .ok_or_else(|| Error::Other(format!("font-table record {font_name} does not exist")))?;
+            .unwrap();
         let kind = FontFaceKind::from(embedded.kind);
         let existing = font
             .embedded_fonts
@@ -29324,28 +29623,34 @@ impl Document {
             .clone()
             .expect("font-table mutation candidate has a part name");
 
-        let existing_target = if let Some(existing) = &existing {
-            let relationship = candidate
-                .package
-                .get_part_rels(&font_table_part)
-                .and_then(|relationships| relationships.get_by_id(&existing.relationship_id))
-                .filter(|relationship| {
-                    relationship.rel_type == rel_types::FONT
-                        && relationship_is_internal(relationship)
-                })
-                .ok_or_else(|| {
-                    Error::Other(format!(
-                        "embedded font relationship {} is missing",
-                        existing.relationship_id
-                    ))
-                })?;
-            Some(OpcPackage::resolve_rel_target(
-                &font_table_part,
-                &relationship.target,
-            ))
-        } else {
-            None
-        };
+        if font
+            .embedded_fonts
+            .iter()
+            .filter(|face| face.kind == kind)
+            .count()
+            > 1
+        {
+            return Err(Error::Other("embedded font face is ambiguous".to_owned()));
+        }
+        let existing_target = existing
+            .as_ref()
+            .map(|reference| {
+                candidate
+                    .checked_embedded_font_source(reference)
+                    .map(|(target, _)| target)
+            })
+            .transpose()?;
+        let obfuscated = obfuscate_odttf_with_key(&embedded.data, &guid);
+        if let (Some(reference), Some(target)) = (&existing, &existing_target)
+            && reference.font_key == embedded.font_key
+            && reference.subsetted == Some(embedded.subsetted)
+            && reference.authorized == Some(true)
+            && reference.license_identity.as_ref() == Some(&embedded.license.identity)
+            && candidate.package.get_part(target) == Some(obfuscated.as_slice())
+            && candidate.embed_true_type_fonts()? == Some(true)
+        {
+            return Ok(());
+        }
         let can_reuse_existing = existing.as_ref().is_some_and(|existing| {
             let relationship_reference_count =
                 table.embedded_relationship_reference_count(&existing.relationship_id);
@@ -29368,7 +29673,8 @@ impl Document {
                 })
                 .filter(|(source, relationship)| {
                     relationship_is_internal(relationship)
-                        && OpcPackage::resolve_rel_target(source, &relationship.target) == *target
+                        && OpcPackage::resolve_rel_target(source, &relationship.target)
+                            .eq_ignore_ascii_case(target)
                 })
                 .count();
             relationship_reference_count == 1
@@ -29400,9 +29706,7 @@ impl Document {
             (relationship_id, part_name)
         };
 
-        candidate
-            .package
-            .set_part(&part_name, obfuscate_odttf_with_key(&embedded.data, &guid));
+        candidate.package.set_part(&part_name, obfuscated);
         candidate
             .package
             .content_types
@@ -29432,6 +29736,27 @@ impl Document {
             .as_ref()
             .expect("font-table mutation candidate has a model")
             .to_xml()?;
+        if candidate.settings_part_name.is_some() && candidate.settings.is_none() {
+            return Err(Error::Other("cannot mutate unmodeled settings".to_owned()));
+        }
+        let created = candidate.settings_part_name.is_none();
+        let settings_part = match &candidate.settings_part_name {
+            Some(part) => part.clone(),
+            None => candidate
+                .identifiers
+                .reserve_preferred_part_name(DEFAULT_SETTINGS_PART)?,
+        };
+        candidate.ensure_part_relationship_checked(
+            &settings_part,
+            rel_types::SETTINGS,
+            SETTINGS_CONTENT_TYPE,
+        )?;
+        candidate.settings_part_name = Some(settings_part);
+        candidate.settings_owned |= created;
+        candidate
+            .settings
+            .get_or_insert_with(CT_Settings::new)
+            .set_embed_true_type_fonts(Some(true))?;
         candidate.font_table_dirty = true;
         candidate.invalidate_layout();
         self.commit_staged_mutation(candidate);
@@ -29444,17 +29769,42 @@ impl Document {
         font_name: &str,
         kind: EmbeddedFontKind,
     ) -> Result<Option<EmbeddedFont>> {
-        let Some(removed) = self
-            .fonts()
-            .into_iter()
-            .find(|font| font.name == font_name)
+        if let Some(table) = &self.font_table {
+            table.can_remove_embedded_font(font_name, kind.into())?;
+        }
+        let Some(reference) = self
+            .font_table
+            .as_ref()
+            .and_then(|table| table.fonts().iter().find(|font| font.name == font_name))
             .and_then(|font| {
                 font.embedded_fonts
-                    .into_iter()
-                    .find(|embedded| embedded.kind == kind)
+                    .iter()
+                    .find(|face| face.kind == kind.into())
             })
         else {
             return Ok(None);
+        };
+        let (_, data) = self.checked_embedded_font_source(reference)?;
+        if data.len() > 64 * 1024 * 1024
+            || reference.font_key.len() > 4096
+            || reference
+                .license_identity
+                .as_ref()
+                .is_some_and(|value| value.len() > 4096)
+        {
+            return Err(Error::Other(
+                "embedded font snapshot exceeds its bound".to_owned(),
+            ));
+        }
+        let removed = EmbeddedFont {
+            kind,
+            data: deobfuscate_odttf_with_key(data, &reference.font_key).unwrap_or_default(),
+            font_key: reference.font_key.clone(),
+            subsetted: reference.subsetted.unwrap_or(false),
+            license: FontEmbeddingLicense {
+                authorized: reference.authorized.unwrap_or(false),
+                identity: reference.license_identity.clone().unwrap_or_default(),
+            },
         };
         let mut candidate = self.font_table_mutation_candidate()?;
         let reference = candidate
@@ -29509,23 +29859,13 @@ impl Document {
             .font_table_part_name
             .clone()
             .ok_or_else(|| Error::Other("font-table part name is missing".to_owned()))?;
+        let (target, _) = self.checked_embedded_font_source(reference)?;
         if self.font_table.as_ref().is_some_and(|table| {
             table.embedded_relationship_reference_count(&reference.relationship_id) > 0
                 || table.retained_raw_mentions_relationship(&reference.relationship_id)
         }) {
             return Ok(());
         }
-        let target = self
-            .package
-            .get_part_rels(&owner)
-            .and_then(|relationships| relationships.get_by_id(&reference.relationship_id))
-            .filter(|relationship| {
-                relationship.rel_type == rel_types::FONT && relationship_is_internal(relationship)
-            })
-            .map(|relationship| OpcPackage::resolve_rel_target(&owner, &relationship.target));
-        let Some(target) = target else {
-            return Ok(());
-        };
         if let Some(relationships) = self.package.get_part_rels_mut(&owner) {
             relationships.items.retain(|relationship| {
                 relationship.id != reference.relationship_id
@@ -29545,7 +29885,8 @@ impl Document {
             .any(|(source, relationships)| {
                 relationships.items.iter().any(|relationship| {
                     relationship_is_internal(relationship)
-                        && OpcPackage::resolve_rel_target(source, &relationship.target) == target
+                        && OpcPackage::resolve_rel_target(source, &relationship.target)
+                            .eq_ignore_ascii_case(&target)
                 })
             });
         if !still_referenced {
@@ -31608,7 +31949,9 @@ impl Document {
     /// body content matches exactly. A rejected transfer leaves both engines
     /// unchanged. Completed layout results remain owned by their documents.
     pub fn transfer_reusable_layout_from(&mut self, source: &mut Document) -> bool {
-        let input = self.build_layout_input();
+        let Ok(input) = self.build_layout_input() else {
+            return false;
+        };
         let transferred = {
             let mut source_engine = source
                 .normal_layout_engine
@@ -31637,7 +31980,10 @@ impl Document {
         source: &mut Document,
         font_files: &[(&str, &[u8])],
     ) -> bool {
-        let input = self.build_layout_input_with_fonts(font_files, RenderOptions::default());
+        let Ok(input) = self.build_layout_input_with_fonts(font_files, RenderOptions::default())
+        else {
+            return false;
+        };
         let transferred = {
             let mut source_engine = source
                 .bundled_fallback_layout_engine
@@ -31666,7 +32012,10 @@ impl Document {
         font_files: &[(&str, &[u8])],
         font_aliases: &[(&str, &str)],
     ) -> bool {
-        let input = self.build_layout_input_with_fonts(font_files, RenderOptions::default());
+        let Ok(input) = self.build_layout_input_with_fonts(font_files, RenderOptions::default())
+        else {
+            return false;
+        };
         let font_aliases = owned_font_aliases(font_aliases);
         let transferred = {
             let mut source_engine = source
@@ -31792,7 +32141,7 @@ impl Document {
                 })
             })
             .map(|relationship| relationship.id.as_str());
-        let input = self.build_layout_input_with_fonts(&[], options);
+        let input = self.build_layout_input_with_fonts(&[], options)?;
         let (height_points, diagnostics) = rdocx_layout::measure_content_deterministic(
             &input,
             &content,
@@ -31823,7 +32172,7 @@ impl Document {
         font_files: &[(&str, &[u8])],
         options: RenderOptions,
     ) -> Result<rdocx_layout::WordLayoutResult> {
-        let input = self.build_layout_input_with_fonts(font_files, options);
+        let input = self.build_layout_input_with_fonts(font_files, options)?;
         #[cfg(test)]
         record_layout_invocation();
         Ok(rdocx_layout::layout_document_with_caller_fonts_and_provenance(&input)?)
@@ -31851,7 +32200,7 @@ impl Document {
         font_files: &[(&str, &[u8])],
         options: RenderOptions,
     ) -> Result<rdocx_layout::WordLayoutResult> {
-        let input = self.build_layout_input_with_fonts(font_files, options);
+        let input = self.build_layout_input_with_fonts(font_files, options)?;
         #[cfg(test)]
         record_layout_invocation();
         let mut engine = self
@@ -31891,7 +32240,7 @@ impl Document {
         font_aliases: &[(&str, &str)],
         options: RenderOptions,
     ) -> Result<rdocx_layout::WordLayoutResult> {
-        let input = self.build_layout_input_with_fonts(font_files, options);
+        let input = self.build_layout_input_with_fonts(font_files, options)?;
         let font_aliases = owned_font_aliases(font_aliases);
         #[cfg(test)]
         record_layout_invocation();
@@ -31913,8 +32262,8 @@ impl Document {
         &self,
         font_files: &[(&str, &[u8])],
         options: RenderOptions,
-    ) -> rdocx_layout::LayoutInput {
-        let mut input = self.build_layout_input();
+    ) -> Result<rdocx_layout::LayoutInput> {
+        let mut input = self.build_layout_input()?;
         input.revision_view = options.revision_view;
         input.fonts.extend(
             font_files
@@ -31924,7 +32273,7 @@ impl Document {
                     data: data.to_vec(),
                 }),
         );
-        input
+        Ok(input)
     }
 
     /// Render the document to PDF bytes.
@@ -31993,7 +32342,7 @@ impl Document {
         font_files: &[(&str, &[u8])],
         options: RenderOptions,
     ) -> Result<rdocx_layout::WordLayoutResult> {
-        let input = self.build_layout_input_with_fonts(font_files, options);
+        let input = self.build_layout_input_with_fonts(font_files, options)?;
         #[cfg(test)]
         record_layout_invocation();
         Ok(rdocx_layout::layout_document_with_provenance(&input)?)
@@ -32441,7 +32790,8 @@ impl Document {
         Ok(rdocx_oxml::document::CT_Document::from_xml(&projected)?.body)
     }
 
-    pub(crate) fn build_layout_input(&self) -> rdocx_layout::LayoutInput {
+    pub(crate) fn build_layout_input(&self) -> Result<rdocx_layout::LayoutInput> {
+        let embedded_fonts = self.extract_embedded_fonts()?;
         let modern_compatibility = self.settings.as_ref().is_some_and(|settings| {
             settings.compatibility_settings().iter().any(|setting| {
                 setting.name == "compatibilityMode"
@@ -32472,7 +32822,7 @@ impl Document {
         let even_headers_enabled = self.even_headers_enabled();
 
         // Extract embedded fonts from the DOCX package
-        let fonts = self.extract_embedded_fonts();
+        let fonts = Vec::new();
 
         let insert_part_images =
             |images: &mut HashMap<String, ImageData>, part_rel_id: &str, part_name: &str| {
@@ -32816,7 +33166,7 @@ impl Document {
             }
         }
 
-        LayoutInput {
+        Ok(LayoutInput {
             sequence_snapshot: None,
             revision_view: rdocx_layout::RevisionView::Accepted,
             document,
@@ -32889,70 +33239,83 @@ impl Document {
             endnotes,
             theme,
             fonts,
-        }
+            embedded_fonts,
+        })
     }
 
-    /// Extract embedded fonts from the DOCX package.
-    ///
-    /// Word can embed fonts as `.odttf` (obfuscated TrueType) or regular `.ttf`/`.otf`
-    /// files in the `word/fonts/` directory. ODTTF files have the first 32 bytes
-    /// XOR'd with a 16-byte GUID derived from the font's relationship ID.
-    fn extract_embedded_fonts(&self) -> Vec<rdocx_layout::FontFile> {
-        if let (Some(table), Some(owner)) = (&self.font_table, &self.font_table_part_name) {
-            let relationships = self.package.get_part_rels(owner);
-            return table
-                .fonts()
-                .iter()
-                .flat_map(|font| {
-                    font.embedded_fonts.iter().filter_map(|embedded| {
-                        let relationship = relationships?.items.iter().find(|relationship| {
-                            relationship.id == embedded.relationship_id
-                                && relationship.rel_type == rel_types::FONT
-                                && relationship_is_internal(relationship)
-                        })?;
-                        let part_name = OpcPackage::resolve_rel_target(owner, &relationship.target);
-                        let data = self.package.get_part(&part_name)?;
-                        let data = deobfuscate_odttf_with_key(data, &embedded.font_key)?;
-                        Some(rdocx_layout::FontFile {
-                            family: font.name.clone(),
-                            data,
-                        })
-                    })
-                })
-                .collect();
+    /// Prepare distinct owned font bodies and all aliases before layout allocation.
+    fn extract_embedded_fonts(&self) -> Result<Vec<rdocx_layout::input::EmbeddedFontSource>> {
+        if self.embed_true_type_fonts()? == Some(false) {
+            return Ok(Vec::new());
         }
-
-        let mut fonts = Vec::new();
-
-        // Look for font parts in word/fonts/ directory
-        for (part_name, data) in &self.package.parts {
-            let lower = part_name.to_lowercase();
-            if !lower.contains("/word/fonts/") && !lower.contains("/word/font") {
-                continue;
+        let Some(table) = &self.font_table else {
+            if self.font_table_part_name.is_some() {
+                return Err(Error::Other("font table is unmodeled".to_owned()));
             }
-
-            // Determine font family name from the file name
-            let file_name = part_name.rsplit('/').next().unwrap_or(part_name);
-            let family = file_name.split('.').next().unwrap_or(file_name).to_string();
-
-            if lower.ends_with(".odttf") {
-                // Deobfuscate ODTTF: XOR first 32 bytes with GUID from the file name
-                if let Some(deobfuscated) = deobfuscate_odttf(data, file_name) {
-                    fonts.push(rdocx_layout::FontFile {
-                        family,
-                        data: deobfuscated,
-                    });
+            return Ok(Vec::new());
+        };
+        let mut groups: Vec<(String, String, Vec<String>)> = Vec::new();
+        let mut by_part = HashMap::new();
+        let mut total = 0usize;
+        let mut alias_count = 0usize;
+        let mut alias_bytes = 0usize;
+        for font in table.fonts() {
+            for reference in &font.embedded_fonts {
+                let (part, body) = self.checked_embedded_font_source(reference)?;
+                if body.len() > 64 * 1024 * 1024
+                    || font.name.len() > 4096
+                    || reference.font_key.len() > 4096
+                {
+                    return Err(Error::Other(
+                        "embedded font input exceeds its bound".to_owned(),
+                    ));
                 }
-            } else if lower.ends_with(".ttf") || lower.ends_with(".otf") || lower.ends_with(".ttc")
-            {
-                fonts.push(rdocx_layout::FontFile {
-                    family,
-                    data: data.clone(),
-                });
+                let identity = part.to_ascii_lowercase();
+                let index = if let Some(&index) = by_part.get(&identity) {
+                    index
+                } else {
+                    total = total
+                        .checked_add(body.len())
+                        .ok_or_else(|| Error::Other("embedded font size overflow".to_owned()))?;
+                    if total > 256 * 1024 * 1024 || groups.len() >= 4096 {
+                        return Err(Error::Other(
+                            "embedded font input exceeds its aggregate bound".to_owned(),
+                        ));
+                    }
+                    let index = groups.len();
+                    groups.push((part, reference.font_key.clone(), Vec::new()));
+                    by_part.insert(identity, index);
+                    index
+                };
+                let group = &mut groups[index];
+                if group.1 != reference.font_key {
+                    return Err(Error::Other(
+                        "shared font part has conflicting obfuscation keys".to_owned(),
+                    ));
+                }
+                if !group.2.contains(&font.name) {
+                    alias_count += 1;
+                    alias_bytes = alias_bytes.checked_add(font.name.len()).ok_or_else(|| {
+                        Error::Other("embedded font alias size overflow".to_owned())
+                    })?;
+                    if alias_count > 16384 || alias_bytes > 4 * 1024 * 1024 {
+                        return Err(Error::Other(
+                            "embedded font aliases exceed their bound".to_owned(),
+                        ));
+                    }
+                    group.2.push(font.name.clone());
+                }
             }
         }
-
-        fonts
+        let mut sources = Vec::new();
+        for (part, key, aliases) in groups {
+            let body = self.package.get_part(&part).expect("preflighted font part");
+            // Unsupported producer bytes remain in the original package and use fallback.
+            if let Some(data) = deobfuscate_odttf_with_key(body, &key) {
+                sources.push((aliases, Arc::from(data)));
+            }
+        }
+        Ok(sources)
     }
 
     /// Load font files from a directory and return them as FontFile entries.
@@ -34900,6 +35263,7 @@ fn truncate_str(s: &str, max_len: usize) -> String {
 /// accepted if it starts with a recognised sfnt version. A wrong key yields
 /// bytes that no font parser can use, so validating here means a bad guess
 /// degrades to "font not embedded" instead of feeding garbage downstream.
+#[cfg(test)]
 fn deobfuscate_odttf(data: &[u8], file_name: &str) -> Option<Vec<u8>> {
     if data.len() < 32 {
         return None;
@@ -34967,33 +35331,53 @@ fn obfuscate_odttf_with_key(data: &[u8], guid: &[u8; 16]) -> Vec<u8> {
 }
 
 fn deobfuscate_odttf_with_key(data: &[u8], font_key: &str) -> Option<Vec<u8>> {
-    if data.len() < 32 {
+    if data.len() < 32 || data.len() > 64 * 1024 * 1024 {
         return None;
     }
     let guid = font_key_bytes(font_key)?;
-
     let candidates = odttf_key_candidates(&guid);
-    let decoded: Vec<Vec<u8>> = candidates
+    let prefixes = candidates.map(|key| {
+        let mut prefix = *data.first_chunk::<32>().unwrap();
+        for (index, byte) in prefix.iter_mut().enumerate() {
+            *byte ^= key[index % 16];
+        }
+        prefix
+    });
+    // Producer subset headers may omit the derived binary-search hints.
+    let index = prefixes
         .iter()
-        .map(|key| {
-            let mut result = data.to_vec();
-            // XOR the first 32 bytes with the 16-byte key, applied twice.
-            for (i, byte) in result.iter_mut().take(32).enumerate() {
-                *byte ^= key[i % 16];
-            }
-            result
-        })
-        .collect();
+        .position(|prefix| has_consistent_sfnt_header(prefix))
+        .or_else(|| prefixes.iter().position(|prefix| looks_like_sfnt(prefix)))?;
+    let mut result = Vec::new();
+    result.try_reserve_exact(data.len()).ok()?;
+    result.extend_from_slice(data);
+    result[..32].copy_from_slice(&prefixes[index]);
+    Some(result)
+}
 
-    // A well-formed table directory pins down which key was used. Fall back to
-    // the weaker signature check for fonts whose header arithmetic is wrong —
-    // subsetting tools do emit those — so they still load rather than being
-    // dropped entirely.
-    decoded
-        .iter()
-        .find(|d| has_consistent_sfnt_header(d))
-        .or_else(|| decoded.iter().find(|d| looks_like_sfnt(d)))
-        .cloned()
+/// Bound and check every authored single-face sfnt table before obfuscation.
+fn valid_authored_sfnt(data: &[u8]) -> bool {
+    if data.len() > 64 * 1024 * 1024 || !looks_like_sfnt(data) || data.starts_with(b"ttcf") {
+        return false;
+    }
+    let count = u16::from_be_bytes([data[4], data[5]]) as usize;
+    let Some(directory) = data.get(12..12 + count * 16) else {
+        return false;
+    };
+    let mut tags = std::collections::HashSet::new();
+    for record in directory.chunks_exact(16) {
+        let offset = u32::from_be_bytes(record[8..12].try_into().unwrap()) as usize;
+        let length = u32::from_be_bytes(record[12..16].try_into().unwrap()) as usize;
+        if !tags.insert(&record[..4])
+            || offset
+                .checked_add(length)
+                .is_none_or(|end| end > data.len())
+            || (length > 0 && offset < 12 + count * 16)
+        {
+            return false;
+        }
+    }
+    true
 }
 
 /// The two candidate XOR keys for ODTTF deobfuscation, most likely first.
@@ -38699,7 +39083,7 @@ mod tests {
         document.settings =
             Some(CT_Settings::from_xml(settings_xml.as_bytes()).expect("math settings parse"));
 
-        let input = document.build_layout_input();
+        let input = document.build_layout_input().unwrap();
         assert_eq!(
             input
                 .math_properties
@@ -40364,7 +40748,7 @@ mod tests {
     }
 
     fn deterministic_chart_layout(document: &Document) -> oxml_layout::LayoutResult {
-        rdocx_layout::layout_document_deterministic(&document.build_layout_input())
+        rdocx_layout::layout_document_deterministic(&document.build_layout_input().unwrap())
             .expect("deterministic Word chart layout")
     }
 
@@ -40511,7 +40895,7 @@ mod tests {
             .get_or_create_part_rels("/word/document.xml")
             .add(rel_types::THEME, "theme/custom-chart-theme.xml");
 
-        let input = document.build_layout_input();
+        let input = document.build_layout_input().unwrap();
         assert_eq!(
             input.chart_color_map,
             oxml_drawing::color::ColorMap::default()
@@ -41255,7 +41639,7 @@ mod tests {
             .add(rel_types::IMAGE, "media/misleading.png");
 
         let html_input = document.build_html_input();
-        let layout_input = document.build_layout_input();
+        let layout_input = document.build_layout_input().unwrap();
 
         assert_eq!(
             html_input.images[&relationship_id].content_type,
@@ -41272,7 +41656,7 @@ mod tests {
         let mut doc = Document::new();
         doc.add_paragraph("Deterministic rendering");
 
-        let input = doc.build_layout_input();
+        let input = doc.build_layout_input().unwrap();
         let layout = rdocx_layout::layout_document_deterministic(&input)
             .expect("deterministic layout should succeed");
         let bundled_fonts = oxml_layout::bundled_fonts::bundled_font_data();
@@ -44276,7 +44660,7 @@ mod tests {
 
         let bytes = document.to_bytes().unwrap();
         let reopened = Document::from_bytes(&bytes).unwrap();
-        assert!(reopened.build_layout_input().automatic_hyphenation);
+        assert!(reopened.build_layout_input().unwrap().automatic_hyphenation);
         assert_eq!(
             reopened.paragraphs()[0].run(0).unwrap().language(),
             Some("en-US")
@@ -46544,7 +46928,7 @@ mod watermark_tests {
         text.set_text_watermark("DRAFT").unwrap();
         text.set_text_watermark("FINAL").unwrap();
         let reopened = Document::from_bytes(&text.to_bytes().unwrap()).unwrap();
-        let input = reopened.build_layout_input();
+        let input = reopened.build_layout_input().unwrap();
         assert_eq!(input.headers.len(), 3);
         assert!(input.headers.values().all(|header| {
             matches!(
@@ -46559,7 +46943,7 @@ mod watermark_tests {
             .set_image_watermark(PNG, "watermark.png", Length::pt(72.0), Length::pt(36.0))
             .unwrap();
         let reopened = Document::from_bytes(&image.to_bytes().unwrap()).unwrap();
-        assert!(!reopened.build_layout_input().headers.is_empty());
+        assert!(!reopened.build_layout_input().unwrap().headers.is_empty());
 
         let mut invalid = Document::new();
         invalid.set_header("unchanged");
@@ -46832,7 +47216,7 @@ mod watermark_tests {
             &[("rId1", &alternate, "first.png")],
             HdrFtrType::First,
         );
-        let input = document.build_layout_input();
+        let input = document.build_layout_input().unwrap();
         let scoped = input
             .images
             .iter()
@@ -47856,6 +48240,618 @@ mod reader_fact_tests {
 #[cfg(test)]
 mod odttf_tests {
     use super::*;
+
+    #[test]
+    fn fx220_missing_record_embedding_is_one_native_transaction() {
+        let body = include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf");
+        let mut document = Document::new();
+        document.add_paragraph("unchanged body");
+        let font = EmbeddedFont::new(
+            EmbeddedFontKind::Regular,
+            body.to_vec(),
+            "{00112233-4455-6677-8899-AABBCCDDEEFF}",
+            FontEmbeddingLicense::new(true, "OFL 1.1"),
+        );
+        document
+            .embed_font("FX220 native uninstalled", font.clone())
+            .unwrap();
+        let snapshot = document
+            .fonts()
+            .into_iter()
+            .find(|f| f.name == "FX220 native uninstalled")
+            .unwrap();
+        assert_eq!(
+            snapshot.embedded_fonts.as_slice(),
+            std::slice::from_ref(&font)
+        );
+        let before = document.to_bytes().unwrap();
+        document
+            .embed_font("FX220 native uninstalled", font)
+            .unwrap();
+        assert_eq!(document.to_bytes().unwrap(), before);
+        let reopened = Document::from_bytes(&before).unwrap();
+        assert_eq!(reopened.fonts(), document.fonts());
+    }
+
+    #[test]
+    fn fx220_word_faces_flags_and_atomic_invalid_inputs() {
+        let body = include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf");
+        let mut document = Document::new();
+        assert_eq!(document.embed_true_type_fonts().unwrap(), None);
+        assert_eq!(document.embed_system_fonts().unwrap(), None);
+        assert_eq!(document.save_subset_fonts().unwrap(), None);
+        for kind in [
+            EmbeddedFontKind::Regular,
+            EmbeddedFontKind::Bold,
+            EmbeddedFontKind::Italic,
+            EmbeddedFontKind::BoldItalic,
+        ] {
+            let font = EmbeddedFont::new(
+                kind,
+                body.to_vec(),
+                "{00112233-4455-6677-8899-AABBCCDDEEFF}",
+                FontEmbeddingLicense::new(true, "OFL 1.1"),
+            )
+            .with_subsetted(kind == EmbeddedFontKind::Italic);
+            document.embed_font("FX220 face controls", font).unwrap();
+        }
+        assert_eq!(document.embed_true_type_fonts().unwrap(), Some(true));
+        document.set_embed_system_fonts(Some(false)).unwrap();
+        document.set_save_subset_fonts(Some(true)).unwrap();
+        let before = document.to_bytes().unwrap();
+        let fonts = document.try_fonts().unwrap();
+        let faces = &fonts
+            .iter()
+            .find(|font| font.name == "FX220 face controls")
+            .unwrap()
+            .embedded_fonts;
+        assert_eq!(faces.len(), 4);
+        assert!(
+            faces
+                .iter()
+                .all(|face| face.data.as_slice() == body.as_slice()
+                    && face.license.identity == "OFL 1.1")
+        );
+        let mut reopened = Document::from_bytes(&before).unwrap();
+        assert_eq!(reopened.try_fonts().unwrap(), fonts);
+        assert_eq!(reopened.embed_system_fonts().unwrap(), Some(false));
+        assert_eq!(reopened.save_subset_fonts().unwrap(), Some(true));
+        for case in 0..8 {
+            let mut font = faces[0].clone();
+            match case {
+                0 => font.license.authorized = false,
+                1 => font.font_key = "invalid".to_owned(),
+                2 => font.license.identity = "bad\nidentity".to_owned(),
+                3 => font.data = b"ttcf\0\x01\0\0".to_vec(),
+                4 => font.data[20..24].copy_from_slice(&u32::MAX.to_be_bytes()),
+                5 => font.license.identity = "bad\0identity".to_owned(),
+                6 => font.license.identity = "bad\u{fffe}identity".to_owned(),
+                7 => font.license.identity = "bad\u{ffff}identity".to_owned(),
+                _ => unreachable!(),
+            }
+            assert!(reopened.embed_font("FX220 face controls", font).is_err());
+            assert_eq!(reopened.to_bytes().unwrap(), before);
+        }
+        for kind in [
+            EmbeddedFontKind::Regular,
+            EmbeddedFontKind::Bold,
+            EmbeddedFontKind::Italic,
+            EmbeddedFontKind::BoldItalic,
+        ] {
+            assert!(
+                reopened
+                    .remove_embedded_font("FX220 face controls", kind)
+                    .unwrap()
+                    .is_some()
+            );
+        }
+        assert_eq!(reopened.embed_true_type_fonts().unwrap(), Some(true));
+        assert!(
+            reopened
+                .try_fonts()
+                .unwrap()
+                .iter()
+                .find(|font| font.name == "FX220 face controls")
+                .unwrap()
+                .embedded_fonts
+                .is_empty()
+        );
+        reopened.set_embed_true_type_fonts(None).unwrap();
+        reopened.set_embed_system_fonts(None).unwrap();
+        reopened.set_save_subset_fonts(None).unwrap();
+        assert_eq!(reopened.embed_true_type_fonts().unwrap(), None);
+        assert_eq!(reopened.embed_system_fonts().unwrap(), None);
+        assert_eq!(reopened.save_subset_fonts().unwrap(), None);
+    }
+
+    #[test]
+    fn fx220_word_snapshot_counts_repeated_projected_body_copies() {
+        let body = include_bytes!("../../oxml-layout/fonts/Carlito-Regular.ttf");
+        let mut document = Document::new();
+        document
+            .embed_font(
+                "FX220 shared source",
+                EmbeddedFont::new(
+                    EmbeddedFontKind::Regular,
+                    body.to_vec(),
+                    "{00112233-4455-6677-8899-AABBCCDDEEFF}",
+                    FontEmbeddingLicense::new(true, "OFL 1.1"),
+                ),
+            )
+            .unwrap();
+        let table = document.font_table.as_mut().unwrap();
+        let reference = table
+            .fonts()
+            .iter()
+            .find(|font| font.name == "FX220 shared source")
+            .unwrap()
+            .embedded_fonts[0]
+            .clone();
+        for index in 0..2000 {
+            let name = format!("FX220 shared alias {index}");
+            table.set_font(name.clone(), None, None, None);
+            table.set_embedded_font(&name, reference.clone());
+        }
+        let before = table.to_xml().unwrap();
+        assert!(
+            matches!(document.try_fonts(), Err(error) if error.to_string().contains("byte or face bound"))
+        );
+        assert_eq!(
+            document.font_table.as_ref().unwrap().to_xml().unwrap(),
+            before
+        );
+        assert!(document.fonts().is_empty());
+        assert!(
+            document
+                .remove_embedded_font("FX220 shared alias 1000", EmbeddedFontKind::Regular)
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            document
+                .package
+                .parts
+                .values()
+                .any(|bytes| bytes.len() == body.len())
+        );
+    }
+
+    fn fx220_word_source_snapshot(document: &Document) -> (Vec<u8>, Vec<u8>) {
+        let mut writer = std::io::Cursor::new(Vec::new());
+        document.package.write_to(&mut writer).unwrap();
+        (
+            writer.into_inner(),
+            document.font_table.as_ref().unwrap().to_xml().unwrap(),
+        )
+    }
+
+    #[test]
+    fn fx220_word_invalid_removed_face_graph_refuses_before_publication() {
+        let body = include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf");
+        for case in 0..5 {
+            for preserve in [false, true] {
+                for whole in [false, true] {
+                    let mut document = Document::new();
+                    document
+                        .embed_font(
+                            "FX220 graph owner",
+                            EmbeddedFont::new(
+                                EmbeddedFontKind::Regular,
+                                body.to_vec(),
+                                "{00112233-4455-6677-8899-AABBCCDDEEFF}",
+                                FontEmbeddingLicense::new(true, "OFL 1.1"),
+                            ),
+                        )
+                        .unwrap();
+                    let reference = document
+                        .font_table
+                        .as_ref()
+                        .unwrap()
+                        .fonts()
+                        .iter()
+                        .find(|font| font.name == "FX220 graph owner")
+                        .unwrap()
+                        .embedded_fonts[0]
+                        .clone();
+                    let (part, _) = document.checked_embedded_font_source(&reference).unwrap();
+                    if preserve {
+                        let xml = String::from_utf8(
+                            document.font_table.as_ref().unwrap().to_xml().unwrap(),
+                        )
+                        .unwrap()
+                        .replace(
+                            "</w:fonts>",
+                            &format!(
+                                "<x:payload xmlns:x='urn:fx220-retention' r:id='{}'/></w:fonts>",
+                                reference.relationship_id
+                            ),
+                        );
+                        document.font_table = Some(FontTable::from_xml(xml.as_bytes()).unwrap());
+                    }
+                    let owner = document.font_table_part_name.clone().unwrap();
+                    let relations = document.package.get_part_rels_mut(&owner).unwrap();
+                    let relation = relations
+                        .items
+                        .iter_mut()
+                        .find(|rel| rel.id == reference.relationship_id)
+                        .unwrap();
+                    match case {
+                        0 => relation.rel_type = rel_types::IMAGE.to_owned(),
+                        1 => relations
+                            .items
+                            .retain(|rel| rel.id != reference.relationship_id),
+                        2 => relation.target_mode = Some("External".to_owned()),
+                        3 => {
+                            document.package.remove_part(&part);
+                        }
+                        4 => document
+                            .package
+                            .content_types
+                            .add_override(&part, "image/png"),
+                        _ => unreachable!(),
+                    }
+                    let before = fx220_word_source_snapshot(&document);
+                    if whole {
+                        assert!(document.remove_font("FX220 graph owner").is_err());
+                    } else {
+                        assert!(
+                            document
+                                .remove_embedded_font(
+                                    "FX220 graph owner",
+                                    EmbeddedFontKind::Regular
+                                )
+                                .is_err()
+                        );
+                    }
+                    assert_eq!(fx220_word_source_snapshot(&document), before);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn fx220_word_shared_target_replacement_and_removal_use_copy_on_write() {
+        let body = include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf");
+        let replacement = include_bytes!("../../oxml-layout/fonts/Carlito-Regular.ttf");
+        let mut document = Document::new();
+        let font = EmbeddedFont::new(
+            EmbeddedFontKind::Regular,
+            body.to_vec(),
+            "{00112233-4455-6677-8899-AABBCCDDEEFF}",
+            FontEmbeddingLicense::new(true, "OFL 1.1"),
+        );
+        document
+            .embed_font("FX220 original owner", font.clone())
+            .unwrap();
+        let table = document.font_table.as_mut().unwrap();
+        let reference = table
+            .fonts()
+            .iter()
+            .find(|font| font.name == "FX220 original owner")
+            .unwrap()
+            .embedded_fonts[0]
+            .clone();
+        table.set_font("FX220 shared owner".to_owned(), None, None, None);
+        table.set_embedded_font("FX220 shared owner", reference.clone());
+        let (original_part, original_bytes) =
+            document.checked_embedded_font_source(&reference).unwrap();
+        let original_bytes = original_bytes.to_vec();
+        let mut changed = font;
+        changed.data = replacement.to_vec();
+        document
+            .embed_font("FX220 original owner", changed)
+            .unwrap();
+        assert_eq!(
+            document.package.get_part(&original_part),
+            Some(original_bytes.as_slice())
+        );
+        assert_eq!(
+            document
+                .try_fonts()
+                .unwrap()
+                .iter()
+                .find(|font| font.name == "FX220 shared owner")
+                .unwrap()
+                .embedded_fonts[0]
+                .data
+                .as_slice(),
+            body.as_slice()
+        );
+        document.remove_font("FX220 original owner").unwrap();
+        assert_eq!(
+            document.package.get_part(&original_part),
+            Some(original_bytes.as_slice())
+        );
+        document
+            .remove_embedded_font("FX220 shared owner", EmbeddedFontKind::Regular)
+            .unwrap();
+        assert!(document.package.get_part(&original_part).is_none());
+        assert_eq!(document.embed_true_type_fonts().unwrap(), Some(true));
+    }
+
+    #[test]
+    fn fx220_word_render_caller_tier_wins_embedded_css_face_rank() {
+        let body = include_bytes!("../../oxml-layout/fonts/Caladea-Bold.ttf");
+        let caller = include_bytes!("../../oxml-layout/fonts/Carlito-Regular.ttf");
+        let name = "FX220 Word uninstalled tier";
+        let mut document = Document::new();
+        document
+            .add_paragraph("")
+            .add_run("iiiiWWWW")
+            .font(name)
+            .bold(true);
+        document
+            .embed_font(
+                name,
+                EmbeddedFont::new(
+                    EmbeddedFontKind::Bold,
+                    body.to_vec(),
+                    "{00112233-4455-6677-8899-AABBCCDDEEFF}",
+                    FontEmbeddingLicense::new(true, "OFL 1.1"),
+                ),
+            )
+            .unwrap();
+        let embedded = document.layout_deterministic().unwrap();
+        assert!(
+            embedded
+                .layout
+                .fonts
+                .iter()
+                .any(|font| font.data.as_ref() == body.as_slice())
+        );
+        let layout = document
+            .layout_with_fonts_and_bundled_fallback(&[(name, caller.as_slice())])
+            .unwrap();
+        let mut painted = 0;
+        oxml_layout::walk(&layout.layout.pages[0].elements, &mut |element, _| {
+            let (text, id) = match element {
+                oxml_layout::PositionedElement::Text(run) => (run.text.as_str(), run.font_id),
+                oxml_layout::PositionedElement::MultilingualText(run) => {
+                    (run.logical_text.as_str(), run.font_id)
+                }
+                _ => return,
+            };
+            if text.contains("iiiiWWWW") {
+                painted += 1;
+                let selected = layout
+                    .layout
+                    .fonts
+                    .iter()
+                    .find(|font| font.id == id)
+                    .unwrap();
+                assert!(
+                    selected.data.as_ref() == caller.as_slice(),
+                    "actual selected family {}",
+                    selected.family
+                );
+            }
+        });
+        assert!(painted > 0);
+    }
+
+    #[test]
+    fn fx220_word_derived_key_has_checked_reversible_byte_order() {
+        let body = include_bytes!("../../oxml-layout/fonts/Caladea-Regular.ttf");
+        let key = derive_font_key(body).unwrap();
+        assert_eq!(key, derive_font_key(body).unwrap());
+        assert_eq!(key.len(), 38);
+        assert_eq!(key, key.to_uppercase());
+        let guid = font_key_bytes(&key).unwrap();
+        let stored = obfuscate_odttf_with_key(body, &guid);
+        assert_ne!(&stored[..32], &body[..32]);
+        assert_eq!(&stored[32..], &body[32..]);
+        assert_eq!(
+            deobfuscate_odttf_with_key(&stored, &key).as_deref(),
+            Some(body.as_slice())
+        );
+        assert!(derive_font_key(b"ttcf").is_err());
+        assert!(derive_font_key(&[0; 32]).is_err());
+    }
+
+    #[test]
+    fn fx220_word_distinct_source_renders_all_shared_aliases_and_preserves_noop_cache() {
+        let body = include_bytes!("../../oxml-layout/fonts/LiberationMono-Regular.ttf");
+        let caller = include_bytes!("../../oxml-layout/fonts/Carlito-Regular.ttf");
+        let mut document = Document::new();
+        let font = EmbeddedFont::new(
+            EmbeddedFontKind::Regular,
+            body.to_vec(),
+            derive_font_key(body).unwrap(),
+            FontEmbeddingLicense::new(true, "OFL 1.1"),
+        );
+        document
+            .embed_font("FX220 alias source", font.clone())
+            .unwrap();
+        let table = document.font_table.as_mut().unwrap();
+        let reference = table
+            .fonts()
+            .iter()
+            .find(|font| font.name == "FX220 alias source")
+            .unwrap()
+            .embedded_fonts[0]
+            .clone();
+        for index in 0..2000 {
+            let name = format!("FX220 render alias {index}");
+            table.set_font(name.clone(), None, None, None);
+            table.set_embedded_font(&name, reference.clone());
+        }
+        document.font_table_dirty = true;
+        for index in [0, 1000, 1999] {
+            document
+                .add_paragraph("")
+                .add_run("iiiiWWWW")
+                .font(&format!("FX220 render alias {index}"));
+        }
+        let input = document.build_layout_input().unwrap();
+        assert!(input.fonts.is_empty());
+        assert_eq!(input.embedded_fonts.len(), 1);
+        assert_eq!(input.embedded_fonts[0].0.len(), 2001);
+        assert_eq!(input.embedded_fonts[0].1.as_ref(), body.as_slice());
+        let before = document.to_bytes().unwrap();
+        let first = document.layout_deterministic().unwrap();
+        let mut painted = 0;
+        for page in &first.layout.pages {
+            oxml_layout::walk(&page.elements, &mut |element, _| {
+                let (text, id) = match element {
+                    oxml_layout::PositionedElement::Text(run) => (run.text.as_str(), run.font_id),
+                    oxml_layout::PositionedElement::MultilingualText(run) => {
+                        (run.logical_text.as_str(), run.font_id)
+                    }
+                    _ => return,
+                };
+                if text.contains("iiiiWWWW") {
+                    painted += 1;
+                    assert!(
+                        first
+                            .layout
+                            .fonts
+                            .iter()
+                            .find(|font| font.id == id)
+                            .unwrap()
+                            .data
+                            .as_ref()
+                            == body.as_slice()
+                    );
+                }
+            });
+        }
+        assert_eq!(painted, 3);
+        document.embed_font("FX220 alias source", font).unwrap();
+        assert_eq!(document.to_bytes().unwrap(), before);
+        assert!(Arc::ptr_eq(
+            &first,
+            &document.layout_deterministic().unwrap()
+        ));
+        document.set_embed_true_type_fonts(None).unwrap();
+        assert!(
+            document
+                .layout_deterministic()
+                .unwrap()
+                .layout
+                .fonts
+                .iter()
+                .any(|font| font.data.as_ref() == body.as_slice())
+        );
+        document.set_embed_true_type_fonts(Some(false)).unwrap();
+        assert!(
+            document
+                .build_layout_input()
+                .unwrap()
+                .embedded_fonts
+                .is_empty()
+        );
+        assert!(
+            document
+                .layout_deterministic()
+                .unwrap()
+                .layout
+                .fonts
+                .iter()
+                .all(|font| font.data.as_ref() != body.as_slice())
+        );
+        let layout = document
+            .layout_with_fonts_and_bundled_fallback(&[(
+                "FX220 render alias 1999",
+                caller.as_slice(),
+            )])
+            .unwrap();
+        assert!(
+            layout
+                .layout
+                .fonts
+                .iter()
+                .any(|font| font.data.as_ref() == caller.as_slice())
+        );
+    }
+
+    #[test]
+    fn fx220_word_descriptive_font_noop_retains_cached_layout() {
+        let mut document = Document::new();
+        let font = FontDefinition::new("FX220 metadata font")
+            .with_alternate_name("FX220 alternate")
+            .with_family("roman")
+            .with_pitch("variable");
+        document.set_font(font.clone()).unwrap();
+        document.add_paragraph("metadata no-op");
+        let first = document.layout_deterministic().unwrap();
+        let before = document.to_bytes().unwrap();
+        document.set_font(font).unwrap();
+        assert_eq!(document.to_bytes().unwrap(), before);
+        assert!(Arc::ptr_eq(
+            &first,
+            &document.layout_deterministic().unwrap()
+        ));
+    }
+
+    #[test]
+    fn fx220_word_descriptive_font_opaque_clear_refuses_atomically() {
+        let xml = format!(
+            r#"<w:fonts xmlns:w="{}" xmlns:x="urn:producer"><w:font w:name="FX220 opaque"><w:altName w:val="alternate" x:fact="kept"/></w:font></w:fonts>"#,
+            rdocx_oxml::namespace::W_NS
+        );
+        let mut document = Document::new();
+        document
+            .set_font(FontDefinition::new("FX220 opaque"))
+            .unwrap();
+        document.font_table = Some(FontTable::from_xml(xml.as_bytes()).unwrap());
+        document.font_table_dirty = true;
+        let before = document.to_bytes().unwrap();
+        assert!(
+            document
+                .set_font(FontDefinition::new("FX220 opaque"))
+                .is_err()
+        );
+        assert_eq!(document.to_bytes().unwrap(), before);
+    }
+
+    #[test]
+    fn fx220_word_multiple_font_flags_serialize_and_reopen() {
+        let mut document = Document::new();
+        for (kind, body) in [
+            (
+                EmbeddedFontKind::Regular,
+                include_bytes!("../../oxml-layout/fonts/Selawik-Regular.ttf").as_slice(),
+            ),
+            (
+                EmbeddedFontKind::Bold,
+                include_bytes!("../../oxml-layout/fonts/Selawik-Bold.ttf").as_slice(),
+            ),
+        ] {
+            document
+                .embed_font(
+                    "Selawik",
+                    EmbeddedFont::new(
+                        kind,
+                        body.to_vec(),
+                        derive_font_key(body).unwrap(),
+                        FontEmbeddingLicense::new(true, "SIL Open Font License 1.1"),
+                    ),
+                )
+                .unwrap();
+        }
+        document.set_save_subset_fonts(Some(false)).unwrap();
+        document.set_embed_true_type_fonts(Some(false)).unwrap();
+        let raw = document.settings.as_ref().unwrap().to_xml().unwrap();
+        assert!(
+            oxml_core::xml::validate_strict_xml_1_0(&raw).is_ok(),
+            "settings: {raw:?}"
+        );
+        let bytes = document.to_bytes().unwrap();
+        let reopened = Document::from_bytes(&bytes).unwrap();
+        assert_eq!(reopened.embed_true_type_fonts().unwrap(), Some(false));
+        assert_eq!(reopened.save_subset_fonts().unwrap(), Some(false));
+        assert_eq!(
+            reopened
+                .try_fonts()
+                .unwrap()
+                .iter()
+                .find(|font| font.name == "Selawik")
+                .unwrap()
+                .embedded_fonts
+                .len(),
+            2
+        );
+    }
 
     /// Build a TrueType header with a two-entry table directory.
     fn fake_font() -> Vec<u8> {

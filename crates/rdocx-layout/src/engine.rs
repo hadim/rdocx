@@ -34,7 +34,7 @@ use crate::block::{
     SharedLayoutBlock, TableSemantics,
 };
 use crate::convert;
-use crate::input::{LayoutInput, MediaRegistry, RevisionView};
+use crate::input::{EmbeddedFontSource, LayoutInput, MediaRegistry, RevisionView};
 use crate::notes::NoteRegistry;
 use crate::paginator::{
     self, ColumnTrack, HeaderFooterContent, HeaderFooterSemantics, LineNumbering, PageBorderFrame,
@@ -2646,6 +2646,7 @@ struct ReusableEngineContext {
     endnotes: Option<rdocx_oxml::footnotes::CT_Footnotes>,
     theme: Option<rdocx_oxml::theme::Theme>,
     fonts: Vec<oxml_layout::FontFile>,
+    embedded_fonts: Vec<EmbeddedFontSource>,
     caller_font_aliases: Vec<(String, String)>,
     background_xml: Option<Vec<u8>>,
 }
@@ -2740,6 +2741,7 @@ impl ReusableEngineContext {
             endnotes: input.endnotes.clone(),
             theme: input.theme.clone(),
             fonts: input.fonts.clone(),
+            embedded_fonts: input.embedded_fonts.clone(),
             caller_font_aliases: bounded_caller_aliases(caller_font_aliases),
             background_xml: input.document.background_xml.clone(),
         }
@@ -2753,6 +2755,7 @@ impl ReusableEngineContext {
     ) -> bool {
         self.matches_input_after_unchanged_fonts(input, caller_font_aliases, has_wrapping_drawing)
             && retained_context_fonts_match(&self.fonts, &input.fonts)
+            && self.embedded_fonts == input.embedded_fonts
     }
 
     fn matches_input_after_unchanged_fonts(
@@ -3498,6 +3501,8 @@ impl Engine {
         available_width: f64,
         related_story_scope: Option<&str>,
     ) -> Result<(f64, Vec<Diagnostic>)> {
+        self.font_manager
+            .load_embedded_fonts(&input.embedded_fonts)?;
         self.font_manager.load_additional_fonts(&input.fonts);
         self.font_manager.begin_layout();
         let media = MediaRegistry::new(&input.images);
@@ -3645,7 +3650,10 @@ impl Engine {
         let input = derived_input.as_ref().unwrap_or(input);
         // Load user-provided / DOCX-embedded fonts (highest priority). An exact
         // unchanged set is a no-op in a reusable engine.
-        let font_context_changed = self.font_manager.load_additional_fonts(&input.fonts)
+        let font_context_changed = self
+            .font_manager
+            .load_embedded_fonts(&input.embedded_fonts)?
+            | self.font_manager.load_additional_fonts(&input.fonts)
             | self
                 .font_manager
                 .set_caller_aliases(&self.caller_font_aliases);
@@ -15070,6 +15078,7 @@ mod tests {
             endnotes: None,
             theme: None,
             fonts: Vec::new(),
+            embedded_fonts: Vec::new(),
         }
     }
 
@@ -22272,6 +22281,7 @@ mod tests {
             endnotes: None,
             theme: None,
             fonts: Vec::new(),
+            embedded_fonts: Vec::new(),
         };
 
         let result = Engine::new().layout(&input);
@@ -22812,6 +22822,7 @@ mod tests {
             endnotes: None,
             theme: None,
             fonts: Vec::new(),
+            embedded_fonts: Vec::new(),
         };
 
         let result = Engine::new().layout(&input);
@@ -22887,6 +22898,7 @@ mod tests {
             endnotes: None,
             theme: None,
             fonts: Vec::new(),
+            embedded_fonts: Vec::new(),
         };
 
         let result = Engine::new().layout(&input);
@@ -22989,6 +23001,7 @@ mod tests {
             endnotes: None,
             theme: None,
             fonts: Vec::new(),
+            embedded_fonts: Vec::new(),
         }
     }
 
@@ -23181,6 +23194,7 @@ mod tests {
                 endnotes: None,
                 theme: None,
                 fonts: Vec::new(),
+                embedded_fonts: Vec::new(),
             }
         };
 
@@ -23319,6 +23333,7 @@ mod tests {
             endnotes: None,
             theme: None,
             fonts: Vec::new(),
+            embedded_fonts: Vec::new(),
         }
     }
 
@@ -23634,6 +23649,7 @@ mod tests {
             }),
             theme: None,
             fonts: Vec::new(),
+            embedded_fonts: Vec::new(),
         }
     }
 
@@ -23896,6 +23912,7 @@ mod tests {
                 }),
                 theme: None,
                 fonts: Vec::new(),
+                embedded_fonts: Vec::new(),
             }
         };
 
@@ -24040,6 +24057,7 @@ mod tests {
             endnotes: None,
             theme: None,
             fonts: Vec::new(),
+            embedded_fonts: Vec::new(),
         }
     }
 
@@ -24386,6 +24404,7 @@ mod tests {
             endnotes: None,
             theme: None,
             fonts: Vec::new(),
+            embedded_fonts: Vec::new(),
         };
 
         let mut engine = Engine::new();
@@ -24482,6 +24501,7 @@ mod tests {
             endnotes: None,
             theme: None,
             fonts: Vec::new(),
+            embedded_fonts: Vec::new(),
         };
 
         let mut engine = Engine::new();
@@ -24604,6 +24624,7 @@ mod tests {
             endnotes: endnotes_instead.then_some(stream),
             theme: None,
             fonts: Vec::new(),
+            embedded_fonts: Vec::new(),
         }
     }
 
@@ -24825,6 +24846,7 @@ mod tests {
             endnotes: None,
             theme: None,
             fonts: Vec::new(),
+            embedded_fonts: Vec::new(),
         }
     }
 
