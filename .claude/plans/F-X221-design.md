@@ -24,9 +24,9 @@ Read-only registry/tag receipt /private/tmp/S91-intake-admission-360-361/registr
 
 ## Admission and dependency barrier
 
-Design uses the run-sprint batch route. The user explicitly requests both minor families and matching Python packages. No material version question remains after current registry/tag verification. All27 included repair prerequisites must be completed through their full approved scoped lifecycles before claim. New font embedding F220 remains included. Bibliography F192, navigation F283, standalone authoring carryovers and full-range watermark F219 remain in S92 and are not release blockers or completion claims.
+Design uses the run-sprint batch route. The user explicitly requests both minor families and matching Python packages. No material version question remains after current registry/tag verification. All28 included repair prerequisites must be completed through their full approved scoped lifecycles before claim. Font embedding F220 and the Issue362/PR363 inventory repair F222 remain included. Bibliography F192, navigation F283, standalone authoring carryovers and full-range watermark F219 remain in S92 and are not release blockers or completion claims.
 
-Contribution intake is bounded to the user's latest explicit fold:39 included issues and29 PRs, excluding discussion264/281. Updated PR357 and359 are reconciled incrementally with their existing F216/F217 owners, without repeating accepted provider implementation. Do not discover or silently add later records. Native/binding source must be final before version changes and fresh final wheel builds. Keep one canonical tracker, backlog, design and review set.
+Contribution intake is bounded to the user's latest explicit fold through Issue362/PR363:40 included issues and30 PRs, excluding discussion264/281. Updated PR357 and359 are reconciled incrementally with their existing F216/F217 owners, without repeating accepted provider implementation. Do not discover or silently add later records. Native/binding source must be final before version changes and fresh final wheel builds. Keep one canonical tracker, backlog, design and review set.
 
 ## Approach
 
@@ -87,7 +87,7 @@ All49 deterministic outputs must remain unchanged by version preparation. Preser
 
 ## Implementation checklist
 
-- [ ] Complete all27 repair prerequisites and obtain exclusive preparation claim.
+- [ ] Complete all28 repair prerequisites and obtain exclusive preparation claim.
 - [ ] Recheck version/tag facts and genuine old-version Base failure.
 - [ ] Update exact family carriers and authenticated notes/inventories.
 - [ ] Pass actual package, policy, wheel/metadata/runtime/typing/WASM controls.
