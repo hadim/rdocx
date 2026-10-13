@@ -21,6 +21,7 @@ from rpptx import (
     MSO_UNDERLINE,
     PP_ALIGN,
     Presentation,
+    PresentationTextExport,
     Pt,
     ReplacementCountError,
     RGBColor,
@@ -764,3 +765,16 @@ def fx215_chart_typing() -> None:
     assert_type(chart, Chart)
     assert_type(chart.categories, tuple[str, ...])
     chart.replace_data(data)
+
+
+def semantic_text_exports(prs: Presentation, path: Path) -> None:
+    assert_type(prs.to_html(include_notes=True), str)
+    assert_type(prs.to_markdown(skip_hidden=True), str)
+    result = prs.export_html(inline_images=False)
+    assert_type(result, PresentationTextExport)
+    assert_type(result.text, str)
+    assert_type(result.assets, tuple[tuple[str, bytes], ...])
+    assert_type(result.diagnostics, tuple[str, ...])
+    assert_type(prs.export_markdown(), PresentationTextExport)
+    assert_type(prs.save_html(path), tuple[str, ...])
+    assert_type(prs.save_markdown(path, inline_images=True), tuple[str, ...])

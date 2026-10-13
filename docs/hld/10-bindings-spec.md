@@ -1716,8 +1716,8 @@ through `Presentation::from_html` and `Presentation::open_html`. The additive
 pre-1.0 surface exposes concrete `HtmlReadResult`, `HtmlDiagnostic`, and
 `HtmlImageResource` values plus `Error::Html`. Conversion returns a fresh
 editable presentation only after save, reopen, and validation. Python, WASM,
-and CLI surfaces gain no presentation HTML entry point and retain their
-existing methods and errors.
+and CLI surfaces gain no presentation HTML import entry point and retain their
+existing import methods and errors.
 
 Native Rust callers can import PDF pages through
 `Presentation::from_pdf_bytes`, `from_pdf_bytes_with_limits`, and `open_pdf`.
@@ -3734,3 +3734,29 @@ use. Native Word's documented one-font-per-name behavior remains explicit,
 including synthetic bold and changed or empty saved parts, with multi-face
 interoperability owned by F-X223. API inputs, exact license authorization,
 immutable snapshots and own-renderer face selection retain their contracts.
+
+## Presentation semantic text export
+
+Python `Presentation.to_html` and `to_markdown` return strings with keyword
+options `include_notes=False`, `skip_hidden=False` and `inline_images=True`.
+Detached image mode refuses with directions to an export result or save method.
+`export_html` and `export_markdown` return a frozen `PresentationTextExport`
+with `text: str`, `assets: tuple[tuple[str, bytes], ...]` and
+`diagnostics: tuple[str, ...]`. Detached results own their data and remain
+independent of subsequent presentation edits.
+
+`save_html` and `save_markdown` accept a path and the same keyword options,
+with `inline_images=False`, and return a tuple of diagnostics after staged
+publication. Invalid option types refuse before output. All exports preserve
+current owner handles and presentation revisions, including on complete-body
+image validation failure. Package exports and stubs
+include the result type and every method.
+
+`rpptx convert --to html` and `--to md` use semantic source order. `--notes`
+includes notes, `--skip-hidden` omits hidden slides and
+`--embed-images=false` writes adjacent resources. Images embed by default.
+These formats reject all rendering options before any font discovery or
+rendering. Semantic flags refuse on PDF and image formats. The existing
+`--force` policy applies to the whole document/asset set and never permits
+replacing the input. Diagnostics are separate from exported text. WASM gains
+no semantic export entry point.

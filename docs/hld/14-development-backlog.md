@@ -7706,9 +7706,11 @@ Resolve Issues350 and351 captured at2026-10-11 18:56UTC. Expose existing HTML cr
 
 **Size**: L
 **Depends on**: F-X205, F-X206
-**Test gate**: regression
+**Test gate**: regression, `fx218_installed_and_cli_semantic_exports` with native semantic/corpus controls, independent HTML/CommonMark validators, native PowerPoint source authority, fresh installed typing/stub checks and atomic publication
 
 Resolve Issues352 and353 captured at2026-10-11 18:56UTC. Rust, Python and CLI export one title-headed section per slide in existing outline reading order. Preserve paragraph levels and emphasis, links, semantic tables, picture alt text and embedded or adjacent image assets. Include notes and skip hidden slides when requested. Markdown uses nested lists and pipe tables. HTML uses semantic sections and tables and validates as HTML. Corpus expected-output comparisons cover every construct and option. This is semantic text export, with no pixel-exact promise.
+
+Detached results carry text, owned assets and ordered diagnostics. Python string methods reject detached image mode, while export companions and save methods preserve assets. CLI semantic flags reject rendering options. Complete-body image validation uses the crate-private native validator and bounded existing workspace decoder dependencies even without render/default-template features. Native PowerPoint source semantics and save/reopen establish source authority, while HTML and Markdown retain their own independent conformance gates.
 
 ### F-X219, Qualify full-range text watermark interoperability
 

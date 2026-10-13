@@ -38,7 +38,7 @@ class ReplacementCountError(RpptxError):
 
 
 from ._rpptx import FontEmbeddingLicense, EmbeddedFont, EmbeddedFontFace, EmbeddedTypeface
-from ._rpptx import Element, Comment, CommentAuthor, CommentReply, Presentation, CoreProperties, AppProperties, CustomProperties, CustomProperty, CustomFileTime, Section, MediaInfo, GradientStops, GradientStop
+from ._rpptx import Element, Comment, CommentAuthor, CommentReply, Presentation, PresentationTextExport, CoreProperties, AppProperties, CustomProperties, CustomProperty, CustomFileTime, Section, MediaInfo, GradientStops, GradientStop
 from ._rpptx import SlideTransition, HeaderFooter, PlaceholderFormat, SlideMaster, SlideMasterCollection, Theme, ThemeFonts, ThemeFontSet, ThemeColors, MasterTextStyles, TextStyleList
 from ._rpptx import FitReport, FitFrameReport, FitTrial, AutofitRefreshResult, AutofitUpdate, BoundingBox, TextFrameLayout, TextLineLayout, ValidationIssue
 
@@ -79,6 +79,7 @@ __all__ = [
     "CommentAuthor",
     "CommentReply",
     "Presentation",
+    "PresentationTextExport",
     "Pt",
     "RGBColor",
     "ReplacementCountError",

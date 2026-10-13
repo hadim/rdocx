@@ -2098,3 +2098,19 @@ behavior can synthesize styles and change saved embeddings. That native
 interoperability boundary does not change the four-face APIs, deterministic
 renderer selection or caller precedence. Native Word multi-face work belongs
 to F-X223.
+
+## Presentation semantic text projection
+
+The `rpptx` facade owns semantic HTML and Markdown projection in its existing
+HTML carrier. Python and CLI consumers call that projection without invoking
+font discovery, layout or rendering. Export options and detached results are
+concrete facade values. The source package and live owners remain unchanged.
+
+The facade directly uses the existing workspace `tiny-skia`, `gif`,
+`zune-jpeg` and `tiff` dependencies for bounded image validation, including
+when rendering and the default template are disabled. PNG and JPEG bodies are
+fully decoded, all GIF frames and TIFF pages are checked, and uncompressed BMP
+pixel extents are validated. The existing crate root owns the crate-private bounded picture-body validator.
+Semantic export attaches its source-path error context at the call site. The
+validator remains a concrete facade helper, with no dependency from a shared
+OXML crate into a facade.

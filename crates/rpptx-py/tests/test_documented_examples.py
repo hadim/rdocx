@@ -9924,3 +9924,57 @@ def test_fx215_chart_xml_retires_old_view_and_data_edits_preserve_owned_graph(re
     reopened = Presentation.from_bytes(saved)
     assert reopened.slides[0].shapes[0].chart.categories == ("Updated",)
     assert reopened.slides[0].shapes[1].chart.categories == ("Other",)
+
+
+@pytest.mark.parametrize("format", ["html", "markdown"])
+def test_fx218_detached_semantic_export_and_atomic_publication(format, tmp_path):
+    import rpptx
+    prs = rpptx.Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    held = slide.shapes.add_textbox(0, 0, 3000000, 800000)
+    held.text = "Visible & literal <text>"
+    slide.notes_text = "Private speaker note"
+    png = _tiny_png()
+    slide.shapes.add_picture(io.BytesIO(png), 0, 0)
+    slide.shapes.add_picture(io.BytesIO(png), 10000, 0)
+    before = prs.to_bytes()
+    to_text = getattr(prs, "to_" + format)
+    export = getattr(prs, "export_" + format)
+    save = getattr(prs, "save_" + format)
+    assert isinstance(to_text(), str)
+    result = export(include_notes=True, inline_images=False)
+    assert isinstance(result, rpptx.PresentationTextExport)
+    expected_text = "Visible &amp; literal &lt;text&gt;" if format == "html" else r"Visible \& literal \<text\>"
+    assert expected_text in result.text.replace("&#32;", " ")
+    assert "Private speaker note" in result.text.replace("&#32;", " ")
+    assert isinstance(result.assets, tuple) and len(result.assets) == 1
+    name, body = result.assets[0]
+    assert isinstance(name, str) and body == png and isinstance(body, bytes)
+    assert result.text.count(name) == 2
+    assert isinstance(result.diagnostics, tuple)
+    with pytest.raises(AttributeError):
+        result.text = "changed"
+    with pytest.raises(ValueError, match="retain image assets"):
+        to_text(inline_images=False)
+    output = tmp_path / ("result.html" if format == "html" else "result.md")
+    for bad in [1, "yes", object()]:
+        with pytest.raises(TypeError):
+            save(output, include_notes=bad)
+        assert not output.exists()
+    asset = tmp_path / name
+    asset.write_bytes(b"keep existing asset")
+    with pytest.raises(Exception):
+        save(output)
+    assert asset.read_bytes() == b"keep existing asset"
+    assert not output.exists()
+    asset.unlink()
+    assert isinstance(save(output, include_notes=True), tuple)
+    assert asset.read_bytes() == png
+    assert output.read_text() == result.text
+    published = output.read_bytes()
+    with pytest.raises(Exception):
+        save(output)
+    assert output.read_bytes() == published
+    assert prs.to_bytes() == before
+    assert held.text == "Visible & literal <text>"
+    assert rpptx.Presentation.from_bytes(before).slides[0].notes_text == "Private speaker note"

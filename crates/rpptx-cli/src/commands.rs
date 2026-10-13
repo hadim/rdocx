@@ -370,6 +370,45 @@ fn write_render_diagnostics(diagnostics: &[oxml_layout::Diagnostic]) -> Result<(
     Ok(())
 }
 
+pub fn convert_semantic(
+    file: &Path,
+    format: &str,
+    output: Option<&Path>,
+    force: bool,
+    options: rpptx::PresentationTextExportOptions,
+) -> Result<()> {
+    let presentation = Presentation::open(file)?;
+    let result = match format {
+        "html" => presentation.to_html_with_options(&options)?,
+        "md" => presentation.to_markdown_with_options(&options)?,
+        _ => return Err("semantic export requires html or md".into()),
+    };
+    let output = output
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| default_output_path(file, format));
+    let directory = output
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut outputs = result
+        .assets
+        .into_iter()
+        .map(|(name, bytes)| (directory.join(name), bytes))
+        .collect::<Vec<_>>();
+    outputs.push((output.clone(), result.text.into_bytes()));
+    let paths = outputs
+        .iter()
+        .map(|(path, _)| path.clone())
+        .collect::<Vec<_>>();
+    ensure_output_paths_allowed(&paths, file, force)?;
+    stage_and_publish(&outputs, force)?;
+    for diagnostic in result.diagnostics {
+        eprintln!("Semantic export: {diagnostic}");
+    }
+    println!("Written to {}", output.display());
+    Ok(())
+}
+
 pub fn convert(
     file: &Path,
     format: &str,
@@ -394,7 +433,10 @@ pub fn convert(
         ("pdf", _) => "pdf",
         (_, Ok((_, extension))) => extension,
         (other, Err(_)) => {
-            return Err(format!("Unknown format: {other}. Supported: pdf, png, jpeg, tiff").into());
+            return Err(format!(
+                "Unknown format: {other}. Supported: pdf, png, jpeg, tiff, html, md"
+            )
+            .into());
         }
     };
     let output = output

@@ -3360,3 +3360,103 @@ fn fx220_cli_font_refusals_preserve_inputs_and_existing_outputs() {
         assert!(help.contains(flag));
     }
 }
+
+fn fx218_cli_png() -> Vec<u8> {
+    vec![
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0xf8,
+        0xcf, 0xc0, 0x00, 0x00, 0x03, 0x01, 0x01, 0x00, 0xf7, 0x03, 0x41, 0x43, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ]
+}
+
+#[test]
+fn fx218_installed_and_cli_semantic_exports() {
+    let workspace = TempWorkspace::new("fx218-semantic");
+    let input = workspace.path.join("source.pptx");
+    write_deck(&input, &["Visible & literal <text>", "Hidden content"]);
+    let mut deck = Presentation::open(&input).unwrap();
+    deck.set_notes_text(0, "Private speaker note").unwrap();
+    deck.slide_mut(1).unwrap().set_hidden(true);
+    let png = fx218_cli_png();
+    deck.add_picture(0, &png, "pixel.png", Emu(1), Emu(1), None, None)
+        .unwrap();
+    deck.save(&input).unwrap();
+    let source = fs::read(&input).unwrap();
+    let input_arg = input.to_str().unwrap();
+    for format in ["html", "md"] {
+        let output = workspace.path.join(format!("result.{format}"));
+        let output_arg = output.to_str().unwrap();
+        let args = ["convert", input_arg, "--to", format, "--output", output_arg];
+        for rendering in [
+            vec!["--dpi", "150"],
+            vec!["--quality", "90"],
+            vec!["--slides", "1"],
+            vec!["--font-dir", "missing"],
+            vec!["--transparent"],
+        ] {
+            let refusal = cli(&[args.as_slice(), rendering.as_slice()].concat());
+            assert!(!refusal.status.success());
+            assert!(
+                String::from_utf8_lossy(&refusal.stderr)
+                    .contains("do not accept rendering options")
+            );
+            assert!(!output.exists());
+        }
+        let success = cli(&[args.as_slice(), &["--notes", "--skip-hidden"]].concat());
+        assert!(
+            success.status.success(),
+            "{}",
+            String::from_utf8_lossy(&success.stderr)
+        );
+        let text = fs::read_to_string(&output).unwrap().replace("&#32;", " ");
+        assert!(
+            text.contains(if format == "html" {
+                "Visible &amp; literal &lt;text&gt;"
+            } else {
+                r"Visible \& literal \<text\>"
+            }),
+            "{format}: {text}"
+        );
+        assert!(text.contains("Private speaker note"));
+        assert!(!text.contains("Hidden content"));
+        assert!(text.contains("data:image/png;base64,"));
+        fs::remove_file(&output).unwrap();
+        let options = rpptx::PresentationTextExportOptions {
+            inline_images: false,
+            ..Default::default()
+        };
+        let detached = deck.to_html_with_options(&options).unwrap();
+        let asset = workspace.path.join(&detached.assets[0].0);
+        fs::write(&asset, b"keep asset").unwrap();
+        let failure = cli(&[args.as_slice(), &["--embed-images=false"]].concat());
+        assert!(!failure.status.success());
+        assert!(!output.exists());
+        assert_eq!(fs::read(&asset).unwrap(), b"keep asset");
+        fs::remove_file(&asset).unwrap();
+        let success = cli(&[args.as_slice(), &["--embed-images=false"]].concat());
+        assert!(
+            success.status.success(),
+            "{}",
+            String::from_utf8_lossy(&success.stderr)
+        );
+        assert_eq!(fs::read(&asset).unwrap(), png);
+        assert!(
+            fs::read_to_string(&output)
+                .unwrap()
+                .contains(&detached.assets[0].0)
+        );
+        fs::remove_file(&asset).unwrap();
+        fs::remove_file(&output).unwrap();
+        let refusal = cli(&[
+            "convert", input_arg, "--to", format, "--output", input_arg, "--force",
+        ]);
+        assert!(!refusal.status.success());
+        assert_eq!(fs::read(&input).unwrap(), source);
+    }
+    let refusal = cli(&["convert", input_arg, "--to", "pdf", "--notes"]);
+    assert!(!refusal.status.success());
+    assert!(String::from_utf8_lossy(&refusal.stderr).contains("require --to html or --to md"));
+    assert_eq!(fs::read(&input).unwrap(), source);
+}

@@ -4109,3 +4109,30 @@ creation API. Fresh paired source-matched wheels require explicit node
 membership, strict mypy and complete stubtest. Native Word/PowerPoint opens,
 PowerPoint Edit Data, normal save/reopen and deterministic value-specific
 renders remain separate required acceptance, including stale-value negatives.
+
+## Presentation semantic export qualification
+
+HTML and Markdown qualification starts from genuine valid source decks and
+independent expected semantic structures. Source slide order, titles, nested
+levels, inherited formatting, links, tables, picture descriptions, notes and
+hidden flags are checked individually and in mixed inputs. Source packages,
+image bytes, live owners and repeated exports remain unchanged. Bad option,
+resource, filename-collision and publication controls verify atomic refusal.
+
+HTML parser errors and strict nesting checks must both be empty. Malformed
+list and paragraph controls prove the validator detects recovery. The pinned
+official cmark-gfm parser, with tables and strikethrough, checks Markdown
+structure independently and includes literal-list, emphasis and pipe-cell
+negative controls. Corpus hashes and producer identity are authenticated.
+
+Native PowerPoint reads actual source title/body/levels/table/alternative
+text/notes/hidden properties and saves and reopens without repair. This
+qualifies source semantics, not HTML as an Office document. Native package
+normalization and PDF word-bound differences are recorded separately from
+semantic equality. Exact raster continuity does not establish HTML pixel
+parity, and a tiny picture with exact media metadata need not be visually
+discernible. Fresh installed
+Python checks verify complete wheel provenance, detached result types, stubs,
+strict typing and current public behavior. Both CLI formats, resource modes,
+existing rendering paths and both WASM graphs are qualified. Verified affected
+archives, scoped checks and unchanged deterministic hashes complete the gate.

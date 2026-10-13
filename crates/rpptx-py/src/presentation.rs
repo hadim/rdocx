@@ -818,6 +818,36 @@ impl PyCoreProperties {
     }
 }
 
+/// Detached semantic text, owned image bytes, and loss diagnostics.
+#[pyclass(name = "PresentationTextExport", frozen)]
+pub struct PyPresentationTextExport {
+    result: rpptx::PresentationTextExport,
+}
+
+#[pymethods]
+impl PyPresentationTextExport {
+    #[getter]
+    fn text(&self) -> &str {
+        &self.result.text
+    }
+
+    #[getter]
+    fn assets<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(
+            py,
+            self.result
+                .assets
+                .iter()
+                .map(|(name, bytes)| (name.as_str(), PyBytes::new(py, bytes))),
+        )
+    }
+
+    #[getter]
+    fn diagnostics<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
+        PyTuple::new(py, &self.result.diagnostics)
+    }
+}
+
 #[pyclass(name = "Presentation")]
 pub struct PyPresentation {
     pub(crate) inner: rpptx::Presentation,
@@ -1349,6 +1379,134 @@ impl PyPresentation {
             })
             .map_err(|error| rpptx_to_pyerr(py, error))?;
         PyList::new(py, pages.iter().map(|bytes| PyBytes::new(py, bytes)))
+    }
+
+    /// Returns semantic html text. Use export_html for diagnostics and assets.
+    #[pyo3(signature = (*, include_notes = false, skip_hidden = false, inline_images = true))]
+    fn to_html(
+        &self,
+        py: Python<'_>,
+        include_notes: bool,
+        skip_hidden: bool,
+        inline_images: bool,
+    ) -> PyResult<String> {
+        if !inline_images {
+            return Err(PyValueError::new_err(
+                "inline_images=False requires export_html or save_html to retain image assets",
+            ));
+        }
+        let options = rpptx::PresentationTextExportOptions {
+            include_notes,
+            skip_hidden,
+            inline_images,
+        };
+        py.detach(|| self.inner.to_html_with_options(&options))
+            .map(|result| result.text)
+            .map_err(|error| rpptx_to_pyerr(py, error))
+    }
+
+    /// Returns detached semantic text, image assets, and diagnostics.
+    #[pyo3(signature = (*, include_notes = false, skip_hidden = false, inline_images = true))]
+    fn export_html(
+        &self,
+        py: Python<'_>,
+        include_notes: bool,
+        skip_hidden: bool,
+        inline_images: bool,
+    ) -> PyResult<PyPresentationTextExport> {
+        let options = rpptx::PresentationTextExportOptions {
+            include_notes,
+            skip_hidden,
+            inline_images,
+        };
+        py.detach(|| self.inner.to_html_with_options(&options))
+            .map(|result| PyPresentationTextExport { result })
+            .map_err(|error| rpptx_to_pyerr(py, error))
+    }
+
+    /// Atomically saves semantic text and adjacent assets, returning diagnostics.
+    #[pyo3(signature = (path, *, include_notes = false, skip_hidden = false, inline_images = false))]
+    fn save_html<'py>(
+        &self,
+        py: Python<'py>,
+        path: PathBuf,
+        include_notes: bool,
+        skip_hidden: bool,
+        inline_images: bool,
+    ) -> PyResult<Bound<'py, PyTuple>> {
+        let options = rpptx::PresentationTextExportOptions {
+            include_notes,
+            skip_hidden,
+            inline_images,
+        };
+        let diagnostics = py
+            .detach(|| self.inner.save_html(&path, &options))
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        PyTuple::new(py, diagnostics)
+    }
+
+    /// Returns semantic markdown text. Use export_markdown for diagnostics and assets.
+    #[pyo3(signature = (*, include_notes = false, skip_hidden = false, inline_images = true))]
+    fn to_markdown(
+        &self,
+        py: Python<'_>,
+        include_notes: bool,
+        skip_hidden: bool,
+        inline_images: bool,
+    ) -> PyResult<String> {
+        if !inline_images {
+            return Err(PyValueError::new_err(
+                "inline_images=False requires export_markdown or save_markdown to retain image assets",
+            ));
+        }
+        let options = rpptx::PresentationTextExportOptions {
+            include_notes,
+            skip_hidden,
+            inline_images,
+        };
+        py.detach(|| self.inner.to_markdown_with_options(&options))
+            .map(|result| result.text)
+            .map_err(|error| rpptx_to_pyerr(py, error))
+    }
+
+    /// Returns detached semantic text, image assets, and diagnostics.
+    #[pyo3(signature = (*, include_notes = false, skip_hidden = false, inline_images = true))]
+    fn export_markdown(
+        &self,
+        py: Python<'_>,
+        include_notes: bool,
+        skip_hidden: bool,
+        inline_images: bool,
+    ) -> PyResult<PyPresentationTextExport> {
+        let options = rpptx::PresentationTextExportOptions {
+            include_notes,
+            skip_hidden,
+            inline_images,
+        };
+        py.detach(|| self.inner.to_markdown_with_options(&options))
+            .map(|result| PyPresentationTextExport { result })
+            .map_err(|error| rpptx_to_pyerr(py, error))
+    }
+
+    /// Atomically saves semantic text and adjacent assets, returning diagnostics.
+    #[pyo3(signature = (path, *, include_notes = false, skip_hidden = false, inline_images = false))]
+    fn save_markdown<'py>(
+        &self,
+        py: Python<'py>,
+        path: PathBuf,
+        include_notes: bool,
+        skip_hidden: bool,
+        inline_images: bool,
+    ) -> PyResult<Bound<'py, PyTuple>> {
+        let options = rpptx::PresentationTextExportOptions {
+            include_notes,
+            skip_hidden,
+            inline_images,
+        };
+        let diagnostics = py
+            .detach(|| self.inner.save_markdown(&path, &options))
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        PyTuple::new(py, diagnostics)
     }
 
     /// Converts an OpenDocument presentation, from a path or bytes, and

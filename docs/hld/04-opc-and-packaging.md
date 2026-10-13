@@ -1927,3 +1927,24 @@ embedding can remove font parts on native save even while the already loaded
 document still paints an embedded face. A normal reopened copy can then use
 fallback. These observed native changes do not authorize the library to discard
 opaque source or reinterpret missing decoded bytes as a successfully used font.
+
+## Presentation semantic export resources
+
+Semantic export resolves hyperlinks and images from their actual owning slide
+part. Internal slide links use normalized, case-insensitive OPC part identity.
+Links to omitted hidden slides produce diagnostics. No external resource is
+fetched. Safe HTTP, HTTPS, mail and telephone links retain their target.
+
+Owned image content type, signature and complete body must agree before any
+output is written. Compressed image input is limited to128MiB, decoded images
+and cumulative animation/page data to64MiB, each dimension to16,384 and
+frame/page/scan counts to1,024. Unsupported image encoding returns a precise
+error. The native picture-body validator completes before export destinations
+or assets are allocated. Original image bytes are exported unchanged. Byte-identical pictures
+share one SHA-256 asset name while each picture occurrence remains present.
+
+Native save methods stage and sync the text and every adjacent asset before
+publication. An existing destination, repeated destination or publication
+failure leaves the source and existing outputs unchanged and removes newly
+published outputs. CLI staging applies its explicit overwrite policy to the
+whole output set while protecting the input, including aliases and hard links.

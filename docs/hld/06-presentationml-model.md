@@ -1528,3 +1528,30 @@ change. Missing and raw-format controls fall back with recorded unavailable
 font warnings. The tested disabled-flag graph falls back and loses font parts
 on native save. That observation is bounded to the captured application build,
 not a general rule that a save setting always prevents loading.
+
+## Semantic HTML and Markdown projection
+
+`Presentation::to_html` and `to_markdown` return
+`PresentationTextExport { text, assets, diagnostics }`. The corresponding
+`_with_options` methods accept `PresentationTextExportOptions` with
+`include_notes`, `skip_hidden` and `inline_images`. Defaults exclude notes,
+retain hidden slides and embed images. Native save methods default only through
+the explicit options supplied by their caller. Export also works without the
+default template or rendering features.
+
+Each included source slide has one section and title heading, with a numbered
+fallback for an untitled slide. Original slide identity and source order remain
+stable when hidden slides are omitted. Groups and selected compatibility
+branches retain source order. Paragraph levels and effective list/style
+inheritance determine nested lists. Direct false formatting overrides inherited
+formatting. Run emphasis, explicit breaks, stored fields and safe hyperlinks
+retain their supported semantic content.
+
+Tables emit origin cells in row order, with HTML spans and eligible headers.
+Markdown uses pipe tables and diagnoses merge geometry it cannot express.
+Complex cell paragraphs and lists use isolated inline HTML blocks. Pictures
+retain alternative text, title and owned bytes. Included notes follow the
+slide body. Unsupported payloads and omitted semantics produce ordered
+diagnostics. Text escaping preserves literal markup, whitespace and link
+targets. The projection reads source semantics independently of native slide
+rendering and changes no source XML, revisions or owner handles.

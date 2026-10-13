@@ -13,7 +13,10 @@ use pyo3::prelude::*;
 use pyo3::types::PyType;
 
 use oxml_py_support::{ContentPath, PathSeg, StaleElementError};
-use presentation::{PyComment, PyCommentAuthor, PyCommentReply, PyPresentation, PyValidationIssue};
+use presentation::{
+    PyComment, PyCommentAuthor, PyCommentReply, PyPresentation, PyPresentationTextExport,
+    PyValidationIssue,
+};
 
 pub(crate) fn normalize_index(index: isize, len: usize, kind: &str) -> PyResult<usize> {
     let normalized = if index < 0 {
@@ -140,6 +143,7 @@ fn _rpptx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<presentation::PyEmbeddedFontFace>()?;
     module.add_class::<presentation::PyEmbeddedTypeface>()?;
 
+    module.add_class::<PyPresentationTextExport>()?;
     module.add_class::<presentation::PyCoreProperties>()?;
     module.add_class::<presentation::PyAppProperties>()?;
     module.add_class::<presentation::PyCustomFileTime>()?;

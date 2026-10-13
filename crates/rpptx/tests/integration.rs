@@ -9,6 +9,977 @@ use std::sync::atomic::AtomicU64;
 const F224_BROWSER_SSIM_FLOOR: f64 = 0.95;
 const F225_PDF_SSIM_FLOOR: f64 = 0.995;
 
+#[test]
+fn fx218_genuine_base_source_deck_is_valid() {
+    use rpptx::Presentation;
+    let deck = fx218_semantic_source();
+    let bytes = deck.to_bytes().unwrap();
+    let reopened = Presentation::from_bytes(&bytes).unwrap();
+    assert_eq!(reopened.len(), 2);
+    assert!(reopened.validate().is_empty());
+    let first = reopened.slide(0).unwrap();
+    assert!(first.text().contains("Semantic body <literal> & exact"));
+    assert!(first.text().contains("1|2"));
+    assert_eq!(first.notes_text().as_deref(), Some("Speaker note"));
+    assert!(
+        first
+            .shapes()
+            .any(|shape| shape.kind() == rpptx::ShapeKind::Picture)
+    );
+    assert!(reopened.slide(1).unwrap().hidden());
+    if let Ok(path) = std::env::var("FX218_BASE_DECK") {
+        fs::write(path, bytes).unwrap();
+    }
+}
+
+fn fx218_semantic_source() -> rpptx::Presentation {
+    use rpptx::{Emu, Presentation};
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    deck.slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(3_000_000), Emu(500_000))
+        .unwrap()
+        .set_text("Semantic body <literal> & exact")
+        .unwrap();
+    let mut slide = deck.slide_mut(0).unwrap();
+    let mut shape = slide
+        .add_table(2, 2, Emu(0), Emu(1_000_000), Emu(3_000_000), Emu(900_000))
+        .unwrap();
+    let mut table = shape.table_mut().unwrap();
+    for (row, column, text) in [
+        (0, 0, "Head"),
+        (0, 1, "Value"),
+        (1, 0, "Cell"),
+        (1, 1, "1|2"),
+    ] {
+        table.cell_mut(row, column).unwrap().set_text(text);
+    }
+    deck.add_picture(
+        0,
+        &valid_one_pixel_png(),
+        "semantic.png",
+        Emu(0),
+        Emu(0),
+        None,
+        None,
+    )
+    .unwrap();
+    deck.set_notes_text(0, "Speaker note").unwrap();
+    deck.add_slide(6).unwrap();
+    deck.slide_mut(1).unwrap().set_hidden(true);
+    deck
+}
+
+#[test]
+fn fx218_export_source_and_resources_are_unchanged() {
+    let deck = fx218_semantic_source();
+    let before = deck.to_bytes().unwrap();
+    let options = rpptx::PresentationTextExportOptions {
+        include_notes: true,
+        skip_hidden: false,
+        inline_images: false,
+    };
+    let html = deck.to_html_with_options(&options).unwrap();
+    let markdown = deck.to_markdown_with_options(&options).unwrap();
+    assert!(
+        html.text
+            .contains("<p>Semantic body &lt;literal&gt; &amp; exact</p>"),
+        "{}",
+        html.text
+    );
+    assert!(
+        html.text
+            .contains("<td rowspan=\"1\" colspan=\"1\">1|2</td>")
+    );
+    assert!(
+        markdown
+            .text
+            .contains("Semantic&#32;body&#32;\\<literal\\>&#32;\\&&#32;exact"),
+        "{}",
+        markdown.text
+    );
+    assert!(markdown.text.contains("1\\|2"));
+    assert_eq!(html.assets.len(), 1);
+    assert_eq!(html.assets, markdown.assets);
+    assert_eq!(html.assets[0].1, valid_one_pixel_png());
+    assert_eq!(before, deck.to_bytes().unwrap());
+    assert_eq!(html, deck.to_html_with_options(&options).unwrap());
+}
+
+#[test]
+fn fx218_notes_hidden_assets_and_internal_links() {
+    let mut deck = fx218_semantic_source();
+    let shape_id = deck
+        .slide(0)
+        .unwrap()
+        .shapes()
+        .find(|shape| shape.text_frame().is_some())
+        .unwrap()
+        .non_visual_id()
+        .unwrap();
+    deck.set_run_target_slide(0, shape_id, 0, 0, Some(1))
+        .unwrap();
+    let default = deck.to_html().unwrap();
+    assert!(!default.text.contains("Speaker note"));
+    assert!(default.assets.is_empty());
+    assert!(default.text.contains("data:image/png;base64,"));
+    assert!(default.text.contains("id=\"slide-2\""));
+    assert!(default.text.contains("href=\"#slide-2\""));
+    let options = rpptx::PresentationTextExportOptions {
+        include_notes: true,
+        skip_hidden: true,
+        inline_images: true,
+    };
+    let filtered = deck.to_html_with_options(&options).unwrap();
+    assert!(filtered.text.contains("Speaker note"));
+    assert!(!filtered.text.contains("id=\"slide-2\""));
+    assert!(filtered.text.contains("data-slide-number=\"1\""));
+    assert!(!filtered.text.contains("href=\"#slide-2\""));
+    assert!(
+        filtered
+            .diagnostics
+            .iter()
+            .any(|message| message.contains("target omitted"))
+    );
+}
+
+#[test]
+fn fx218_inline_escaping_and_qualified_image_links() {
+    use oxml_drawing::text::CT_TextCharacterProperties;
+    use rpptx::{Emu, Presentation};
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    let mut slide = deck.slide_mut(0).unwrap();
+    let mut shape = slide
+        .add_textbox(Emu(0), Emu(0), Emu(1_000_000), Emu(1_000_000))
+        .unwrap();
+    let mut frame = shape.text_frame().unwrap();
+    let mut paragraph = frame.paragraph_mut(0).unwrap();
+    paragraph.default_run_properties_mut().bold = Some(true);
+    paragraph.add_run(" inherited ");
+    let mut run = paragraph.add_run("1. literal * < & ");
+    let mut properties = CT_TextCharacterProperties::default();
+    properties.bold = Some(false);
+    properties.italic = Some(true);
+    run.set_properties(properties);
+    let html = deck.to_html().unwrap();
+    assert!(
+        html.text
+            .contains("<strong> inherited </strong><em>1. literal * &lt; &amp; </em>"),
+        "{}",
+        html.text
+    );
+    let markdown = deck.to_markdown().unwrap();
+    assert!(markdown.text.contains("<strong>&#32;inherited&#32;</strong><em>1\\.&#32;literal&#32;\\*&#32;\\<&#32;\\&&#32;</em>"),"{}",markdown.text);
+    assert_eq!(
+        deck.to_bytes().unwrap(),
+        Presentation::from_bytes(&deck.to_bytes().unwrap())
+            .unwrap()
+            .to_bytes()
+            .unwrap()
+    );
+    if let Some(directory) = std::env::var_os("FX218_ORACLE_INPUT") {
+        fs::write(PathBuf::from(directory).join("rich.md"), markdown.text).unwrap();
+    }
+}
+
+#[cfg(feature = "default-template")]
+fn fx218_assert_valid_html(html: &str) {
+    let parsed = scraper::Html::parse_document(html);
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let mut reader = quick_xml::Reader::from_str(html);
+    let mut open = Vec::new();
+    loop {
+        match reader.read_event().unwrap() {
+            quick_xml::events::Event::Start(element) => open.push(element.name().as_ref().to_vec()),
+            quick_xml::events::Event::End(element) => {
+                assert_eq!(open.pop().as_deref(), Some(element.name().as_ref()))
+            }
+            quick_xml::events::Event::Empty(element) => {
+                assert!([b"meta".as_slice(), b"br", b"img"].contains(&element.name().as_ref()))
+            }
+            quick_xml::events::Event::Eof => break,
+            _ => {}
+        }
+    }
+    assert!(open.is_empty());
+    let section = scraper::Selector::parse("body > section").unwrap();
+    let heading = scraper::Selector::parse("h1").unwrap();
+    for section in parsed.select(&section) {
+        assert_eq!(section.select(&heading).count(), 1);
+        assert!(section.value().attr("data-slide-id").is_some());
+    }
+}
+
+#[test]
+#[cfg(feature = "default-template")]
+fn fx218_source_html_is_valid_and_semantic() {
+    let deck = fx218_semantic_source();
+    let result = deck.to_html().unwrap();
+    fx218_assert_valid_html(&result.text);
+    let parsed = scraper::Html::parse_document(&result.text);
+    let paragraphs = scraper::Selector::parse("section > p").unwrap();
+    assert_eq!(
+        parsed
+            .select(&paragraphs)
+            .map(|p| p.text().collect::<String>())
+            .collect::<Vec<_>>(),
+        vec!["Semantic body <literal> & exact"]
+    );
+    assert_eq!(
+        parsed
+            .select(&scraper::Selector::parse("td, th").unwrap())
+            .map(|cell| cell.text().collect::<String>())
+            .collect::<Vec<_>>(),
+        vec!["Head", "Value", "Cell", "1|2"]
+    );
+    assert!(std::panic::catch_unwind(||fx218_assert_valid_html("<!DOCTYPE html><html><head><title>x</title></head><body><ul><li>x</ul></li></body></html>")).is_err());
+    assert!(std::panic::catch_unwind(||fx218_assert_valid_html("<!DOCTYPE html><html><head><title>x</title></head><body><p>one<p>two</p></p></body></html>")).is_err());
+}
+
+#[test]
+fn fx218_detached_save_preflights_every_collision() {
+    let deck = fx218_semantic_source();
+    let options = rpptx::PresentationTextExportOptions {
+        include_notes: false,
+        skip_hidden: false,
+        inline_images: false,
+    };
+    let result = deck.to_html_with_options(&options).unwrap();
+    let directory = f222_temp_directory("fx218-semantic-save");
+    fs::create_dir(&directory).unwrap();
+    let output = directory.join("semantic.html");
+    let asset = directory.join(&result.assets[0].0);
+    fs::write(&asset, b"occupied").unwrap();
+    assert!(deck.save_html(&output, &options).is_err());
+    assert!(!output.exists());
+    assert_eq!(fs::read(&asset).unwrap(), b"occupied");
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 1);
+    fs::remove_file(&asset).unwrap();
+    assert_eq!(
+        deck.save_html(&output, &options).unwrap(),
+        result.diagnostics
+    );
+    assert_eq!(fs::read_to_string(&output).unwrap(), result.text);
+    assert_eq!(fs::read(&asset).unwrap(), result.assets[0].1);
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 2);
+    assert!(deck.save_html(&output, &options).is_err());
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+#[cfg(feature = "default-template")]
+fn fx218_corpus_html_is_valid_and_semantic() {
+    use sha2::{Digest, Sha256};
+    let path = corpus_dir().join("layouts.pptx");
+    if !path.exists() {
+        assert!(
+            std::env::var_os("RDOCX_PPTX_CORPUS_REQUIRED").is_none(),
+            "required pinned corpus absent"
+        );
+        return;
+    }
+    let bytes = fs::read(path).unwrap();
+    let hash = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    assert_eq!(
+        hash,
+        "9c3d53afa3115de2ba72ec77637a616aeed505a6ff3b30a46db871c4edd32be5"
+    );
+    let deck = rpptx::Presentation::from_bytes(&bytes).unwrap();
+    let result = deck.to_html().unwrap();
+    fx218_assert_valid_html(&result.text);
+    let parsed = scraper::Html::parse_document(&result.text);
+    let section = parsed
+        .select(&scraper::Selector::parse("#slide-2").unwrap())
+        .next()
+        .unwrap();
+    assert_eq!(
+        section
+            .select(&scraper::Selector::parse("h1").unwrap())
+            .next()
+            .unwrap()
+            .text()
+            .collect::<String>(),
+        "Title"
+    );
+    let items = section
+        .select(&scraper::Selector::parse("li").unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(items.len(), 9);
+    for (level, item) in items.iter().enumerate() {
+        assert_eq!(
+            item.value().attr("data-source-level"),
+            Some(level.to_string().as_str())
+        );
+    }
+    assert_eq!(
+        section
+            .select(&scraper::Selector::parse("ul").unwrap())
+            .count(),
+        9
+    );
+    assert_eq!(
+        section
+            .select(&scraper::Selector::parse("h1").unwrap())
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn fx218_corpus_markdown_preserves_every_semantic_construct() {
+    let deck = fx218_semantic_source();
+    let options = rpptx::PresentationTextExportOptions {
+        include_notes: true,
+        skip_hidden: true,
+        inline_images: false,
+    };
+    let result = deck.to_markdown_with_options(&options).unwrap();
+    let expected = format!(
+        "<a id=\"slide-1\"></a>\n\n# Slide 1\n\nSemantic&#32;body&#32;\\<literal\\>&#32;\\&&#32;exact\n\n| <strong>Head</strong> | <strong>Value</strong> |\n| --- | --- |\n| Cell | 1\\|2 |\n\n![](<{}> \"\")\n\n## Notes\n\n> Speaker&#32;note\n\n",
+        result.assets[0].0
+    );
+    assert_eq!(result.text, expected);
+    if let Some(directory) = std::env::var_os("FX218_ORACLE_INPUT") {
+        let directory = PathBuf::from(directory);
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(directory.join("mixed.md"), result.text).unwrap();
+    }
+    let path = corpus_dir().join("layouts.pptx");
+    if !path.exists() {
+        assert!(
+            std::env::var_os("RDOCX_PPTX_CORPUS_REQUIRED").is_none(),
+            "required pinned corpus absent"
+        );
+        return;
+    }
+    use sha2::{Digest, Sha256};
+    let bytes = fs::read(path).unwrap();
+    assert_eq!(
+        Sha256::digest(&bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>(),
+        "9c3d53afa3115de2ba72ec77637a616aeed505a6ff3b30a46db871c4edd32be5"
+    );
+    let corpus = rpptx::Presentation::from_bytes(&bytes).unwrap();
+    let result = corpus.to_markdown().unwrap();
+    let slide = result
+        .text
+        .split("<a id=\"slide-2\"></a>\n\n")
+        .nth(1)
+        .unwrap()
+        .split("<a id=\"slide-3\"></a>")
+        .next()
+        .unwrap();
+    let mut expected = "# Title\n\n- Content\n".to_owned();
+    for level in 1..9 {
+        expected.push_str(&format!(
+            "{}- Level&#32;{}\n",
+            "  ".repeat(level),
+            level + 1
+        ));
+    }
+    expected.push('\n');
+    assert_eq!(slide, expected);
+    if let Some(directory) = std::env::var_os("FX218_ORACLE_INPUT") {
+        fs::write(PathBuf::from(directory).join("nested.md"), slide).unwrap();
+    }
+}
+
+#[test]
+fn fx218_nested_order_title_and_table_origins() {
+    use rpptx::{Emu, Presentation};
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(0).unwrap();
+    deck.slide_mut(0)
+        .unwrap()
+        .shape_mut(0)
+        .unwrap()
+        .set_text("Only title")
+        .unwrap();
+    deck.slide_mut(0)
+        .unwrap()
+        .shape_mut(1)
+        .unwrap()
+        .set_text("Between")
+        .unwrap();
+    deck.slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(1_000_000), Emu(1_000_000))
+        .unwrap()
+        .set_text("Nested body")
+        .unwrap();
+    deck.slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(1_000_000), Emu(1_000_000))
+        .unwrap()
+        .set_text("Nested tail")
+        .unwrap();
+    deck.shapes_mut(0, &[]).unwrap().group(&[2, 3]).unwrap();
+    deck.shapes_mut(0, &[2]).unwrap().group(&[0, 1]).unwrap();
+    let mut slide = deck.slide_mut(0).unwrap();
+    let mut shape = slide
+        .add_table(2, 2, Emu(0), Emu(0), Emu(1_000_000), Emu(1_000_000))
+        .unwrap();
+    let mut table = shape.table_mut().unwrap();
+    table.cell_mut(0, 0).unwrap().set_text("Origin");
+    table.cell_mut(0, 0).unwrap().merge_to(1, 1).unwrap();
+    let before = deck.to_bytes().unwrap();
+    let html = deck.to_html().unwrap();
+    assert_eq!(html.text.matches("Only title").count(), 1);
+    assert!(html.text.find("Between").unwrap() < html.text.find("Nested body").unwrap());
+    assert!(html.text.find("Nested body").unwrap() < html.text.find("Origin").unwrap());
+    assert!(html.text.contains("rowspan=\"2\" colspan=\"2\""));
+    assert_eq!(html.text.matches("Origin").count(), 1);
+    let markdown = deck.to_markdown().unwrap();
+    assert_eq!(markdown.text.matches("Origin").count(), 1);
+    assert!(
+        markdown
+            .diagnostics
+            .iter()
+            .any(|d| d.contains("merged-cell spans"))
+    );
+    assert_eq!(before, deck.to_bytes().unwrap());
+}
+
+#[test]
+fn fx218_ordered_labels_and_explicit_no_bullet() {
+    use rpptx::{
+        Emu, Presentation, TextAutoNumber, TextAutoNumberScheme, TextBullet, TextBulletChoice,
+        TextNoBullet,
+    };
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    let mut slide = deck.slide_mut(0).unwrap();
+    let mut shape = slide
+        .add_textbox(Emu(0), Emu(0), Emu(1_000_000), Emu(1_000_000))
+        .unwrap();
+    let mut frame = shape.text_frame().unwrap();
+    for index in 0..3 {
+        let mut p = if index == 0 {
+            frame.paragraph_mut(0).unwrap()
+        } else {
+            frame.add_paragraph()
+        };
+        p.set_text(&format!("item {index}"));
+        let choice = if index == 2 {
+            TextBulletChoice::None(TextNoBullet::default())
+        } else {
+            let mut n = TextAutoNumber::new(TextAutoNumberScheme::RomanUpperParenRight);
+            n.start_at = Some(4);
+            TextBulletChoice::AutoNumber(n)
+        };
+        p.set_bullet(Some(TextBullet {
+            choice: Some(choice),
+            ..Default::default()
+        }));
+    }
+    let html = deck.to_html().unwrap();
+    assert!(html.text.contains("source-marker\">IV) </span>item 0"));
+    assert!(html.text.contains("source-marker\">V) </span>item 1"));
+    assert!(html.text.contains("<p>item 2</p>"));
+    let markdown = deck.to_markdown().unwrap();
+    assert!(
+        markdown
+            .text
+            .contains("4. IV\\) item&#32;0\n5. V\\) item&#32;1"),
+        "{}",
+        markdown.text
+    );
+    assert!(markdown.text.contains("\n\nitem&#32;2\n\n"));
+}
+
+#[test]
+fn fx218_review_case_varied_internal_slide_target_preserves_identity() {
+    let mut seed = fx218_semantic_source();
+    let id = seed
+        .slide(0)
+        .unwrap()
+        .shape(0)
+        .unwrap()
+        .non_visual_id()
+        .unwrap();
+    seed.set_run_target_slide(0, id, 0, 0, Some(1)).unwrap();
+    let mut package = open_opc(&seed.to_bytes().unwrap(), "F218 case-varied link");
+    let rels = package.get_part_rels_mut("/ppt/slides/slide1.xml").unwrap();
+    let target = rels
+        .items
+        .iter_mut()
+        .find(|rel| rel.rel_type.ends_with("/slide"))
+        .unwrap();
+    target.target = "SLIDE2.XML".into();
+    let deck = rpptx::Presentation::from_bytes(&package_bytes(package)).unwrap();
+    assert!(deck.validate().is_empty());
+    let before = deck.to_bytes().unwrap();
+    let html = deck.to_html().unwrap();
+    let markdown = deck.to_markdown().unwrap();
+    let options = rpptx::PresentationTextExportOptions {
+        skip_hidden: true,
+        ..Default::default()
+    };
+    let filtered_html = deck.to_html_with_options(&options).unwrap();
+    let filtered_markdown = deck.to_markdown_with_options(&options).unwrap();
+    assert_eq!(before, deck.to_bytes().unwrap());
+    assert!(html.text.contains("href=\"#slide-2\""), "{}", html.text);
+    assert!(markdown.text.contains("](<#slide-2>)"), "{}", markdown.text);
+    for value in [filtered_html, filtered_markdown] {
+        assert!(!value.text.contains("href=\"#slide-2\"") && !value.text.contains("](<#slide-2>)"));
+        assert!(
+            value
+                .diagnostics
+                .iter()
+                .any(|d| d.contains("hidden-slide filtering")),
+            "{:?}",
+            value.diagnostics
+        );
+    }
+}
+
+fn fx218_assert_invalid_body_refused(bytes: &[u8], content_type: &str) {
+    let seed = fx218_semantic_source();
+    let mut package = open_opc(&seed.to_bytes().unwrap(), "F218 invalid media body");
+    let part = package
+        .parts
+        .keys()
+        .find(|p| p.starts_with("/ppt/media/"))
+        .unwrap()
+        .clone();
+    package.set_part(&part, bytes.to_vec());
+    package.content_types.add_override(&part, content_type);
+    let deck = rpptx::Presentation::from_bytes(&package_bytes(package)).unwrap();
+    assert!(deck.validate().is_empty());
+    let before = deck.to_bytes().unwrap();
+    let mut admitted = Vec::new();
+    for inline_images in [false, true] {
+        let options = rpptx::PresentationTextExportOptions {
+            inline_images,
+            ..Default::default()
+        };
+        admitted.push(deck.to_html_with_options(&options).is_ok());
+        admitted.push(deck.to_markdown_with_options(&options).is_ok());
+        let directory = f222_temp_directory("fx218-invalid-body");
+        fs::create_dir(&directory).unwrap();
+        for (name, html) in [("output.html", true), ("output.md", false)] {
+            let path = directory.join(name);
+            let accepted = if html {
+                deck.save_html(&path, &options).is_ok()
+            } else {
+                deck.save_markdown(&path, &options).is_ok()
+            };
+            admitted.push(accepted);
+            if !accepted {
+                assert_eq!(fs::read_dir(&directory).unwrap().count(), 0);
+            }
+            for entry in fs::read_dir(&directory).unwrap() {
+                fs::remove_file(entry.unwrap().path()).unwrap();
+            }
+        }
+        fs::remove_dir(directory).unwrap();
+    }
+    assert_eq!(before, deck.to_bytes().unwrap());
+    assert!(
+        admitted.iter().all(|accepted| !accepted),
+        "invalid {content_type} body admitted by export/save: {admitted:?}"
+    );
+}
+
+#[test]
+fn fx218_review_truncated_png_body_never_publishes() {
+    fx218_assert_invalid_body_refused(b"\x89PNG\r\n\x1a\n", "image/png");
+}
+
+#[test]
+fn fx218_review_truncated_jpeg_body_never_publishes() {
+    fx218_assert_invalid_body_refused(&[0xff, 0xd8, 0xff], "image/jpeg");
+}
+
+fn fx218_encoded_media_bodies() -> Vec<(&'static str, Vec<u8>)> {
+    let mut jpeg = Vec::new();
+    jpeg_encoder::Encoder::new(&mut jpeg, 90)
+        .encode(&[255, 0, 0], 1, 1, jpeg_encoder::ColorType::Rgb)
+        .unwrap();
+    let mut gif = Vec::new();
+    {
+        let mut encoder = gif::Encoder::new(&mut gif, 1, 1, &[0, 0, 0, 255, 255, 255]).unwrap();
+        let frame = gif::Frame {
+            width: 1,
+            height: 1,
+            buffer: std::borrow::Cow::Borrowed(&[1]),
+            ..Default::default()
+        };
+        encoder.write_frame(&frame).unwrap();
+        encoder.write_frame(&frame).unwrap();
+    }
+    let mut tiff = std::io::Cursor::new(Vec::new());
+    {
+        let mut encoder = tiff::encoder::TiffEncoder::new(&mut tiff).unwrap();
+        encoder
+            .write_image::<tiff::encoder::colortype::RGB8>(1, 1, &[255, 0, 0])
+            .unwrap();
+        encoder
+            .write_image::<tiff::encoder::colortype::RGB8>(1, 1, &[0, 255, 0])
+            .unwrap();
+    }
+    let mut bmp = vec![0; 58];
+    bmp[..2].copy_from_slice(b"BM");
+    for (offset, value) in [(2, 58u32), (10, 54), (14, 40), (18, 1), (22, 1), (34, 4)] {
+        bmp[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    bmp[26..28].copy_from_slice(&1u16.to_le_bytes());
+    bmp[28..30].copy_from_slice(&24u16.to_le_bytes());
+    bmp[56] = 255;
+    vec![
+        ("image/png", valid_one_pixel_png()),
+        ("image/jpeg", jpeg),
+        ("image/gif", gif),
+        ("image/tiff", tiff.into_inner()),
+        ("image/bmp", bmp),
+    ]
+}
+
+#[test]
+fn fx218_review_complete_real_media_bodies_export_unchanged() {
+    for (content_type, bytes) in fx218_encoded_media_bodies() {
+        let seed = fx218_semantic_source();
+        let mut package = open_opc(&seed.to_bytes().unwrap(), "F218 complete media body");
+        let part = package
+            .parts
+            .keys()
+            .find(|p| p.starts_with("/ppt/media/"))
+            .unwrap()
+            .clone();
+        package.set_part(&part, bytes.clone());
+        package.content_types.add_override(&part, content_type);
+        let deck = rpptx::Presentation::from_bytes(&package_bytes(package)).unwrap();
+        let before = deck.to_bytes().unwrap();
+        let options = rpptx::PresentationTextExportOptions {
+            inline_images: false,
+            ..Default::default()
+        };
+        let html = deck.to_html_with_options(&options).unwrap();
+        let markdown = deck.to_markdown_with_options(&options).unwrap();
+        assert_eq!(html.assets.len(), 1);
+        assert_eq!(html.assets[0].1, bytes, "{content_type}");
+        assert_eq!(html.assets, markdown.assets);
+        let inline = deck.to_html().unwrap();
+        assert!(
+            inline
+                .text
+                .contains(&format!("data:{content_type};base64,"))
+        );
+        assert_eq!(before, deck.to_bytes().unwrap());
+    }
+}
+
+#[test]
+fn fx218_review_complete_decode_rejects_corrupt_tail_and_pixel_extents() {
+    for (content_type, mut bytes) in fx218_encoded_media_bodies() {
+        match content_type {
+            "image/png" => {
+                bytes[45] ^= 0xff;
+            }
+            "image/jpeg" => {
+                bytes.truncate(bytes.len() - 2);
+            }
+            "image/gif" => {
+                bytes.truncate(bytes.len() - 4);
+            }
+            "image/tiff" => {
+                bytes.truncate(bytes.len() - 1);
+            }
+            "image/bmp" => {
+                bytes.truncate(57);
+            }
+            _ => unreachable!(),
+        }
+        fx218_assert_invalid_body_refused(&bytes, content_type);
+    }
+}
+
+#[test]
+fn fx218_review_image_dimensions_refuse_before_decode_allocation() {
+    let (_, mut bmp) = fx218_encoded_media_bodies().pop().unwrap();
+    bmp[18..22].copy_from_slice(&65_535u32.to_le_bytes());
+    bmp[22..26].copy_from_slice(&65_535u32.to_le_bytes());
+    let seed = fx218_semantic_source();
+    let mut package = open_opc(&seed.to_bytes().unwrap(), "F218 bounded dimensions");
+    let part = package
+        .parts
+        .keys()
+        .find(|p| p.starts_with("/ppt/media/"))
+        .unwrap()
+        .clone();
+    package.set_part(&part, bmp.clone());
+    package.content_types.add_override(&part, "image/bmp");
+    let deck = rpptx::Presentation::from_bytes(&package_bytes(package)).unwrap();
+    assert!(
+        deck.to_html()
+            .unwrap_err()
+            .to_string()
+            .contains("dimensions exceed the bounded decode limit")
+    );
+    fx218_assert_invalid_body_refused(&bmp, "image/bmp");
+}
+
+#[test]
+fn fx218_hyperlink_destination_entities_and_backslashes_are_literal() {
+    let mut deck = fx218_semantic_source();
+    let id = deck
+        .slide(0)
+        .unwrap()
+        .shape(0)
+        .unwrap()
+        .non_visual_id()
+        .unwrap();
+    deck.set_run_hyperlink(
+        0,
+        id,
+        0,
+        0,
+        Some("https://example.test/a\\b?x=&copy;&q=%20"),
+    )
+    .unwrap();
+    let before = deck.to_bytes().unwrap();
+    let html = deck.to_html().unwrap();
+    assert!(
+        html.text
+            .contains("href=\"https://example.test/a\\b?x=&amp;copy;&amp;q=%20\"")
+    );
+    let markdown = deck.to_markdown().unwrap();
+    assert!(
+        markdown
+            .text
+            .contains("https://example.test/a%5Cb?x=&amp;copy;&amp;q=%20")
+    );
+    assert_eq!(before, deck.to_bytes().unwrap());
+    if let Some(directory) = std::env::var_os("FX218_ORACLE_INPUT") {
+        fs::write(PathBuf::from(directory).join("links.md"), markdown.text).unwrap();
+    }
+}
+
+#[test]
+fn fx218_table_cell_blocks_and_nonpicture_metadata_are_preserved() {
+    use rpptx::{Emu, Presentation, TextBullet, TextBulletCharacter, TextBulletChoice};
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    let mut slide = deck.slide_mut(0).unwrap();
+    let mut shape = slide
+        .add_textbox(Emu(0), Emu(0), Emu(1_000_000), Emu(1_000_000))
+        .unwrap();
+    shape.set_text("Accessible body").unwrap();
+    shape.set_alt_text(Some("Author alt payload")).unwrap();
+    let mut shape = slide
+        .add_table(1, 1, Emu(0), Emu(0), Emu(1_000_000), Emu(1_000_000))
+        .unwrap();
+    let mut table = shape.table_mut().unwrap();
+    let mut cell = table.cell_mut(0, 0).unwrap();
+    let mut frame = cell.text_frame();
+    frame
+        .paragraph_mut(0)
+        .unwrap()
+        .set_text("First | paragraph");
+    let mut paragraph = frame.add_paragraph();
+    paragraph.set_text("Cell bullet");
+    paragraph.set_bullet(Some(TextBullet {
+        choice: Some(TextBulletChoice::Character(
+            TextBulletCharacter::new("•").unwrap(),
+        )),
+        ..Default::default()
+    }));
+    let before = deck.to_bytes().unwrap();
+    let html = deck.to_html().unwrap();
+    assert!(
+        html.text
+            .contains("<p><strong>First | paragraph</strong></p>"),
+        "{}",
+        html.text
+    );
+    assert!(
+        html.text
+            .contains("data-source-bullet=\"•\"></span><strong>Cell bullet"),
+        "{}",
+        html.text
+    );
+    assert!(
+        html.diagnostics
+            .iter()
+            .any(|d| d.contains("Author alt payload"))
+    );
+    fx218_assert_valid_html(&html.text);
+    let markdown = deck.to_markdown().unwrap();
+    assert!(
+        markdown.text.contains("First &#124; paragraph"),
+        "{}",
+        markdown.text
+    );
+    assert!(
+        markdown
+            .text
+            .contains("data-source-bullet=\"•\"></span><strong>Cell bullet")
+    );
+    assert!(
+        markdown
+            .diagnostics
+            .iter()
+            .any(|d| d.contains("Author alt payload"))
+    );
+    assert_eq!(before, deck.to_bytes().unwrap());
+    if let Some(directory) = std::env::var_os("FX218_ORACLE_INPUT") {
+        fs::write(
+            PathBuf::from(directory).join("table-blocks.md"),
+            markdown.text,
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn fx218_qualified_picture_aliases_alt_and_byte_deduplication() {
+    use rpptx::Emu;
+    let mut deck = fx218_semantic_source();
+    deck.slide_mut(0)
+        .unwrap()
+        .shape_mut(2)
+        .unwrap()
+        .set_alt_text(Some("alt [x] < &\nnext"))
+        .unwrap();
+    deck.slide_mut(0)
+        .unwrap()
+        .shape_mut(2)
+        .unwrap()
+        .set_title(Some("title \" &\nnext"))
+        .unwrap();
+    deck.add_picture(
+        0,
+        &valid_one_pixel_png(),
+        "duplicate.png",
+        Emu(0),
+        Emu(0),
+        None,
+        None,
+    )
+    .unwrap();
+    let mut package = open_opc(&deck.to_bytes().unwrap(), "F218 qualified pictures");
+    let xml =
+        String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec()).unwrap();
+    let uri = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let xml = xml
+        .replace(
+            &format!("xmlns:r=\"{uri}\""),
+            &format!("xmlns:r=\"{uri}\" xmlns:owned=\"{uri}\""),
+        )
+        .replace("r:embed=", "owned:embed=");
+    package.set_part("/ppt/slides/slide1.xml", xml.into_bytes());
+    let deck = rpptx::Presentation::from_bytes(&package_bytes(package)).unwrap();
+    let before = deck.to_bytes().unwrap();
+    let options = rpptx::PresentationTextExportOptions {
+        include_notes: false,
+        skip_hidden: true,
+        inline_images: false,
+    };
+    let html = deck.to_html_with_options(&options).unwrap();
+    let markdown = deck.to_markdown_with_options(&options).unwrap();
+    assert_eq!(html.assets.len(), 1);
+    assert_eq!(html.assets, markdown.assets);
+    assert_eq!(html.text.matches("<img ").count(), 2);
+    assert!(html.text.contains("alt=\"alt [x] &lt; &amp;\nnext\""));
+    assert!(
+        markdown
+            .text
+            .contains("alt&#32;\\[x\\]&#32;\\<&#32;\\&&#10;next"),
+        "{}",
+        markdown.text
+    );
+    assert_eq!(before, deck.to_bytes().unwrap());
+    if let Some(directory) = std::env::var_os("FX218_ORACLE_INPUT") {
+        fs::write(PathBuf::from(directory).join("pictures.md"), markdown.text).unwrap();
+    }
+}
+
+#[test]
+fn fx218_unsafe_link_and_mime_mismatch_never_publish() {
+    let mut deck = fx218_semantic_source();
+    let id = deck
+        .slide(0)
+        .unwrap()
+        .shapes()
+        .next()
+        .unwrap()
+        .non_visual_id()
+        .unwrap();
+    deck.set_run_hyperlink(0, id, 0, 0, Some("javascript:alert(1)"))
+        .unwrap();
+    let before = deck.to_bytes().unwrap();
+    assert!(
+        deck.to_html()
+            .unwrap_err()
+            .to_string()
+            .contains("unsafe hyperlink")
+    );
+    let directory = f222_temp_directory("fx218-unsafe-save");
+    fs::create_dir(&directory).unwrap();
+    let output = directory.join("semantic.md");
+    assert!(deck.save_markdown(&output, &Default::default()).is_err());
+    assert_eq!(fs::read_dir(&directory).unwrap().count(), 0);
+    assert_eq!(before, deck.to_bytes().unwrap());
+    fs::remove_dir(directory).unwrap();
+    let deck = fx218_semantic_source();
+    let bytes = deck.to_bytes().unwrap();
+    let mut package = open_opc(&bytes, "F218 MIME mismatch");
+    let part = package
+        .parts
+        .keys()
+        .find(|part| part.starts_with("/ppt/media/"))
+        .unwrap()
+        .to_owned();
+    package.content_types.add_override(&part, "image/jpeg");
+    let deck = rpptx::Presentation::from_bytes(&package_bytes(package)).unwrap();
+    assert!(
+        deck.to_html()
+            .unwrap_err()
+            .to_string()
+            .contains("does not match")
+    );
+}
+
+#[test]
+fn fx218_empty_deck_slide_and_whitespace_notes_are_explicit() {
+    use rpptx::Presentation;
+    let mut deck = Presentation::new().unwrap();
+    assert_eq!(deck.to_markdown().unwrap().text, "");
+    assert!(deck.to_html().unwrap().text.contains("<body>\n</body>"));
+    deck.add_slide(6).unwrap();
+    deck.set_notes_text(0, " \t \n \u{a0} ").unwrap();
+    let before = deck.to_bytes().unwrap();
+    let options = rpptx::PresentationTextExportOptions {
+        include_notes: true,
+        ..Default::default()
+    };
+    let result = deck.to_markdown_with_options(&options).unwrap();
+    assert!(
+        result.text.contains("> &#32;&#9;&#32;\n> &#32;\u{a0}&#32;"),
+        "{}",
+        result.text
+    );
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.contains("used source slide number"))
+    );
+    let html = deck.to_html_with_options(&options).unwrap();
+    assert!(html.text.contains("<p> \t <br /> \u{a0} </p>"));
+    assert_eq!(before, deck.to_bytes().unwrap());
+    if let Some(directory) = std::env::var_os("FX218_ORACLE_INPUT") {
+        fs::write(PathBuf::from(directory).join("notes.md"), result.text).unwrap();
+    }
+}
+
 fn f224_browser_gate_accepts(
     structure_matches: bool,
     text_matches: bool,

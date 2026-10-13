@@ -1,12 +1,12 @@
 # F-X218, Export presentations as semantic HTML and Markdown
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X205, F-X206
 **Issues**: 352, 353
 **Test gate**: regression
-**Implementation**: not claimed, no code or execution
+**Implementation**: Native semantic projection, Python and CLI controls, independent validators and both native PowerPoint source/save/reopen cycles are qualified. Scoped successors resolve the original required corpus and policy setup failures. The behavior-preserving shared image-validator relocation, completion intent and corrected current artifact composition have independent zero-finding reviews. Fresh current PPT wheel/install provenance, typing and stubs, the measured current archive, both current WASM graphs, changed-crate lint and MSRV supplement complete scoped acceptance. Worker preparation keeps integration and final sprint verification separate.
 
 ## Problem
 
@@ -15,6 +15,8 @@ Current `rpptx-cli/src/commands.rs:703` emits an outline by iterating slides in 
 Native SlideRef hidden/title/notes accessors at rpptx/lib.rs7828/7864/7903, TableRef at8323 and ShapeRef table/children at9853/9874 supply much of the projection. There are no current to_html/to_markdown export methods in the inspected native facade. Issue353 explicitly requests semantic HTML, not pixel layout parity. Issue352 requires alt text, notes options and hidden-slide filtering.
 
 ## Spec reference
+
+- docs/hld/03-architecture.md, dependency rule and native media/export dependency edges.
 
 - docs/hld/02-scope-and-non-goals.md, presentation text/outline and HTML capability boundaries.
 - docs/hld/06-presentationml-model.md, The shape tree, z-order and actual nonvisual picture/source metadata.
@@ -69,6 +71,8 @@ Native PowerPoint qualification reads the actual source deck title/body/nesting/
 
 ## HLD impact
 
+- docs/hld/03-architecture.md
+
 - docs/hld/02-scope-and-non-goals.md
 - docs/hld/04-opc-and-packaging.md
 - docs/hld/06-presentationml-model.md
@@ -78,7 +82,7 @@ Native PowerPoint qualification reads the actual source deck title/body/nesting/
 
 ## Risk routing
 
-Parser/serializer04/06: correct source/namespace relationship lookup and HTML/Markdown escaping, table order and opaque source preservation. Public API10: additive semantic export surface, existing text/outline unchanged, verified affected archives/10MiB. Bindings10: fresh PPT wheel/type/stub controls and both WASM graphs. External oracle: pinned HTML/CommonMark validation and actual PowerPoint semantic source evidence. Dependency03 only if implementation finds an actual new cross-family helper need, which requires explicit renewed approval. No layout/shaping algorithm, unit rounding, font asset, feature flag or new product module is proposed. Normal scoped changed-crate tests/lint/format/hash/policy remain required.
+Parser/serializer04/06: correct source/namespace relationship lookup and HTML/Markdown escaping, table order and opaque source preservation. Public API10: additive semantic export surface, existing text/outline unchanged, verified affected archives/10MiB. Bindings10: fresh PPT wheel/type/stub controls and both WASM graphs. External oracle: pinned HTML/CommonMark validation and actual PowerPoint semantic source evidence. Dependency03: bounded semantic media validation reuses existing pinned workspace tiny-skia, gif, zune-jpeg and tiff as unconditional native facade edges. PNG/JPEG full decode and all GIF frames/TIFF pages are bounded before allocation, and BMP physical extents are checked. Root explicitly admits these existing dependency edges and current manifest/lock carriers. No new third-party crate/version or cross-family helper is added. Nodefault library, MSRV, both WASM graphs and verified affected archive checks cover the broader native dependency graph. No layout/shaping algorithm, unit rounding, font asset, feature flag or new product module is proposed. Normal scoped changed-crate tests/lint/format/hash/policy remain required.
 
 ## Hash harness
 
@@ -86,23 +90,23 @@ Existing deterministic49 outputs expected unchanged. New semantic export inputs 
 
 ## Implementation checklist
 
-- [ ] Approve exact read/export/options contract and wait for F205/F206 done.
-- [ ] Preserve genuine Base valid source setup before missing semantic behavior controls.
-- [ ] Implement actual native semantic projection and safe resource publication.
-- [ ] Expose Python/CLI with complete options, stubs and read-only source guarantees.
-- [ ] Complete corpus expected outputs, validation, native semantic authority and installed/CLI controls.
-- [ ] Run scoped/WASM/package/hash/policy gates, update only listed HLD and obtain clean working review.
+- [x] Approve exact read/export/options contract and wait for F205/F206 done.
+- [x] Preserve genuine Base valid source setup before missing semantic behavior controls.
+- [x] Implement actual native semantic projection and safe resource publication.
+- [x] Expose Python/CLI with complete options, stubs and read-only source guarantees.
+- [x] Complete corpus expected outputs, validation, native semantic authority and installed/CLI controls.
+- [x] Run scoped/WASM/package/hash/policy gates, update only listed HLD and obtain clean working review.
 
 ## Open questions
 
-No blocking product ambiguity. Semantic source-order export, included notes opt-in, skip_hidden opt-in, embedded images default and adjacent resources through save methods are stated batch-approval defaults. Supported table text remains exact even when Markdown cannot encode merge geometry, with an explicit span diagnostic. F205/F206 are unfinished, so implementation waits for their actual completion.
+No blocking product ambiguity. Semantic source-order export, included notes opt-in, skip_hidden opt-in, embedded images default and adjacent resources through save methods are stated batch-approval defaults. Supported table text remains exact even when Markdown cannot encode merge geometry, with an explicit span diagnostic. F205/F206 completed before this feature was claimed. No blocking product question remains. Native source qualification is complete. Current source composition and final independent review are qualified. Worker preparation and integrated sprint verification remain separate workflow steps.
 
 ## Batch approval, 2026-10-11
 
 The rolling intake instruction authorizes the full linked issue acceptance.
 ROOT reviewed the source, dependencies, test gate, risk riders and HLD list.
 The stated defaults are adopted. No blocking product question remains.
-Implementation waits for completed dependencies and an exclusive resource wave.
+Completed dependencies and exclusive source leases admit implementation. Native Office qualification remains subject to its exclusive resource wave.
 
 ## Contributor PR358 intake, 2026-10-11
 

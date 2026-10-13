@@ -93,7 +93,7 @@ enum Command {
         #[arg(long)]
         notes: bool,
     },
-    /// Convert a presentation to deterministic PDF or image output
+    /// Convert a presentation to PDF, images, semantic HTML, or Markdown
     Convert {
         file: PathBuf,
         /// Directory containing caller font files (.ttf/.otf/.ttc)
@@ -106,17 +106,27 @@ enum Command {
         /// Replace existing output files, but never the input file
         #[arg(long)]
         force: bool,
-        #[arg(long, default_value = "150")]
-        dpi: f64,
+        /// Raster resolution, default 150
+        #[arg(long)]
+        dpi: Option<f64>,
         /// One-based slide range for image output, such as 1,3-5
         #[arg(long)]
         slides: Option<String>,
         /// JPEG quality from 1 through 100
-        #[arg(long, default_value = "90")]
-        quality: u8,
+        #[arg(long)]
+        quality: Option<u8>,
         /// Preserve unpainted PNG pixels as transparent
         #[arg(long)]
         transparent: bool,
+        /// Include speaker notes in semantic HTML or Markdown
+        #[arg(long)]
+        notes: bool,
+        /// Omit hidden slides from semantic HTML or Markdown
+        #[arg(long)]
+        skip_hidden: bool,
+        /// Embed semantic images (default true), or use --embed-images=false for adjacent assets
+        #[arg(long, num_args = 0..=1, default_missing_value = "true", require_equals = true)]
+        embed_images: Option<bool>,
     },
     /// Compare slide text using a longest-common-subsequence diff
     Diff { file_a: PathBuf, file_b: PathBuf },
@@ -564,19 +574,52 @@ fn run_cli() {
             slides,
             quality,
             transparent,
-        } => commands::convert(
-            &file,
-            &to,
-            output.as_deref(),
-            force,
-            dpi,
-            commands::ImageOptions {
-                font_dir: font_dir.as_deref(),
-                slides: slides.as_deref(),
-                quality,
-                transparent,
-            },
-        ),
+            notes,
+            skip_hidden,
+            embed_images,
+        } => {
+            if matches!(to.as_str(), "html" | "md") {
+                if font_dir.is_some()
+                    || dpi.is_some()
+                    || slides.is_some()
+                    || quality.is_some()
+                    || transparent
+                {
+                    Err("semantic HTML and Markdown do not accept rendering options".into())
+                } else {
+                    commands::convert_semantic(
+                        &file,
+                        &to,
+                        output.as_deref(),
+                        force,
+                        rpptx::PresentationTextExportOptions {
+                            include_notes: notes,
+                            skip_hidden,
+                            inline_images: embed_images.unwrap_or(true),
+                        },
+                    )
+                }
+            } else if notes || skip_hidden || embed_images.is_some() {
+                Err(
+                    "--notes, --skip-hidden, and --embed-images require --to html or --to md"
+                        .into(),
+                )
+            } else {
+                commands::convert(
+                    &file,
+                    &to,
+                    output.as_deref(),
+                    force,
+                    dpi.unwrap_or(150.0),
+                    commands::ImageOptions {
+                        font_dir: font_dir.as_deref(),
+                        slides: slides.as_deref(),
+                        quality: quality.unwrap_or(90),
+                        transparent,
+                    },
+                )
+            }
+        }
         Command::Diff { file_a, file_b } => commands::diff(&file_a, &file_b),
         Command::Replace {
             file,
