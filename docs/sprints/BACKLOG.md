@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 236 | 224 | 3 | 5 |
-| **Total** | **561** | **498** | **3** | **56** |
+| X, Cross-cutting | 236 | 224 | 4 | 4 |
+| **Total** | **561** | **498** | **4** | **55** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -772,7 +772,7 @@ HLD14 contract before adopting contributor changes.
 | F-X211 | Complete Python script compatibility and safe XML access | S91 | L | in-progress |
 | F-X211a | Word checked XML owners and resource admission | S91 | L | done |
 | F-X211b | PowerPoint checked XML owners | S91 | L | done |
-| F-X211c | Integrated Python compatibility and causal errors | S91 | L | pending |
+| F-X211c | Integrated Python compatibility and causal errors | S91 | L | in-progress |
 | F-X212 | Align native accessibility with visible paragraph content | S91 | M | done |
 | F-X213 | Preserve TOC entry boundary paragraphs during rebuild | S91 | M | done |
 | F-X214 | Bound recursive PowerPoint parsing and traversal | S91 | L | done |
