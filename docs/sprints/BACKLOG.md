@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 235 | 220 | 6 | 5 |
-| **Total** | **560** | **494** | **6** | **56** |
+| X, Cross-cutting | 236 | 220 | 6 | 6 |
+| **Total** | **561** | **494** | **6** | **57** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -785,3 +785,4 @@ HLD14 contract before adopting contributor changes.
 | F-X221 | Prepare Word 0.17.0 and PowerPoint 0.15.0 minor releases | S91 | L | pending |
 | F-X222 | Restore linear Word story range inventory and empty owners | S91 | M | done |
 <!-- AUTOGEN:backlog-MX END -->
+| F-X223 | Qualify native Word embedded multi-face interoperability | S92 | M | pending |

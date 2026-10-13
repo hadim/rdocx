@@ -2479,6 +2479,7 @@ and changes no acceptance contract.
 |------|-------|------|
 | F-X192 | Complete the remaining Word bibliography catalogue | L |
 | F-X219 | Qualify full-range text watermark interoperability | M |
+| F-X223 | Qualify native Word embedded multi-face interoperability | M |
 | F-283 | Complete numbering-aware navigation fields | L |
 | F-X178 | Clearable direct run formatting setters | S |
 | F-284 | Stable container-wide template grammar | L |
@@ -3144,3 +3145,5 @@ and causal errors, follows both and its completed provider dependencies. The
 parent closes only after all three children close. This delivery partition
 keeps the frozen40 issues and30 PRs, all existing acceptance and the immutable
 100-script metric. Bibliography, navigation and standalone authoring stay S92.
+
+**Approved native Word font boundary, 2026-10-13**: F-X220 retains four API face kinds and genuine own-renderer and PowerPoint face selection. Native Word acceptance follows its documented one-font-per-name behavior, recording actual synthetic bold and empty native saved bold parts. The user moved native Word multi-face interoperability to F-X223 in S92. This does not move Issue360 or PR361 out of S91. Their remaining native, public, CLI, preservation and authorization acceptance remains due.

@@ -55,6 +55,8 @@ Presentation PDF, PNG, SVG where supported, slides, notes, handouts, layout and 
 
 Update existing crate READMEs and root skill-consumer guidance with licensed embedding recipes. The README links the separate hadim/rdocx-skills repository, which is not a tracked carrier here. Prepare a concrete downstream skill documentation patch against its existing DOCX/PPTX sources after the API stabilizes, and record the separate review/submission boundary. Do not claim those external skills updated from an rdocx README change, or send an upstream message/PR without authorization. No new tracked font asset or source file is required.
 
+On 2026-10-13 the user approved the documented native Word one-font-per-name limit. [MS-OE376 section2.1.263](https://learn.microsoft.com/en-us/openspecs/office_standards/ms-oe376/22da0d03-7202-4731-9518-b96bfbe4de61) describes one embedded font used for all variations of a font name. Fresh-family and fresh-key pre-save PDFs show genuine regular glyphs with synthetic bold. A separate bold-body control proves the embedded bold font loads. Record native saved empty bold parts truthfully. All four face kinds remain in the API and genuine face selection remains required in our renderer and PowerPoint. Native Word multi-face interoperability is F-X223 in S92, outside S91 close acceptance. This changes only native Word paired-face acceptance.
+
 ## Rejected alternatives
 
 - Raw TTF bytes with a .fntdata suffix are not native interoperability evidence.
@@ -74,7 +76,7 @@ Update existing crate READMEs and root skill-consumer guidance with licensed emb
 | regression | fx220_authorization_input_and_settings_are_atomic | Explicit license guards, bounded path/bytes/streams, all Word settings/PPT flags, invalid inputs, allocation failure, exact no-op and held owners |
 | round-trip | fx220_corpus_embedded_fonts_survive_unrelated_edits | Required actual Word and PowerPoint font-bearing corpus, exact list XML/font parts/relationships/content types, MTX/unknown retained |
 | regression | fx220_aliases_shared_parts_and_hostile_lengths | URI aliases/rebindings/foreign lookalikes, shared target COW/removal reachability, repeated2000 references, truncated/max-size EOT and sfnt, no panic/abort/unbounded copies |
-| differential | fx220_native_uninstalled_regular_bold_faces_are_used | Real Word/PowerPoint app/build, absent host family, positive actual face use, raw-format/missing-flag/changed-font negatives, normal save/reopen and original/output provenance |
+| differential | fx220_native_uninstalled_regular_bold_faces_are_used | Real app/build and absent host family. PowerPoint must use genuine regular and bold faces. Word qualifies actual embedded face use within its documented one-font-per-name limit, with synthetic bold and native save changes recorded. Retain raw-format/missing-flag/changed-font negatives, normal save/reopen and original/output provenance |
 | golden | fx220_embedded_and_caller_fonts_share_all_render_paths | Own rendering and installed/CLI slide/notes/handout routes use real faces, caller override remains F195, bold/italic distinctions, deterministic fallback |
 | docs | fx220_existing_skill_consumer_recipes_match_help | Existing READMEs, typed examples and separately recorded downstream skill patch match current APIs and actual CLI help |
 
