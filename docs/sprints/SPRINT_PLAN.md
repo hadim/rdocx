@@ -3126,3 +3126,13 @@ F-X221 depends on every included repair F-X193 through F-X218 and F-X220. It fol
 F-X222, Restore linear Word story range inventory and empty owners, M, is approved pending in S91. It resolves [Issue362](https://github.com/tensorbee/rdocx/issues/362) through assessed [PR363](https://github.com/tensorbee/rdocx/pull/363), immutable head0b9a3cccc1b31bac7ec4108c923faa176b072c47. The full five-carrier patch and two commits are authenticated against actual base733ce6f7 and all five resulting Git blobs. Comments/reviews contain no additional requests. Reuse the three native runtime carriers, adapt current physical source/namespace contracts, prove measured scaling and empty-owner behavior, and measure local archive metadata independently. Do not copy the donor's README/policy measurements.
 
 Included scope is40 issues and30 PRs. Issues264/281 remain excluded and open, and no automatic rolling intake loop is reopened. There are29 stories:20 completed,4 running and5 approved pending. F222's completed dependencies are F203 and F213, with Word source handover after F204. It does not reopen completed F203 or deferred bibliography/navigation. F221 now depends on F222 and follows all28 included repairs before preparing the two minor release families. Final full verification, sprint review and close preflight remain due.
+
+## S91 parallel delivery children
+
+F-X211 remains the existing acceptance owner, with F-X211a, Word checked XML
+owners and resource admission, and F-X211b, PowerPoint checked XML owners,
+implementing in isolated worktrees. F-X211c, Integrated Python compatibility
+and causal errors, follows both and its completed provider dependencies. The
+parent closes only after all three children close. This delivery partition
+keeps the frozen40 issues and30 PRs, all existing acceptance and the immutable
+100-script metric. Bibliography, navigation and standalone authoring stay S92.

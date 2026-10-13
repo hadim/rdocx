@@ -7479,6 +7479,13 @@ opaque content and refuse wrong types atomically. Handles survive supported
 edits, unsupported invalidations name the triggering operation, and each
 silent failure has a failing-before/fixed-after public control.
 
+#### Delivery children
+
+F-X211 retains the complete issue acceptance and closes only after F-X211a,
+F-X211b and F-X211c are completed. Splitting does not add issue scope or waive
+any existing source, preservation, parser, lifetime or corpus requirement.
+The original approved parent plan remains the shared acceptance contract.
+
 #### S91 PR317 reconciliation
 
 PR317 at head3d056f46e97e9cc1caf2969b5096eeb6775a5fa0 closes Issues295,
@@ -7489,6 +7496,51 @@ Review its42-file diff and uncovered criteria before source reuse. Additional
 native accessibility behavior is not authorized merely by its contributor
 hash-baseline record. Keep independent labelled behavior review and derive
 all archive/baseline evidence from actual accepted source.
+
+### F-X211a, Word checked XML owners and resource admission (L)
+
+Complete the five Word element cases, paragraph, run, table, cell and section
+properties, through checked native physical-owner operations and installed
+public bindings. Own Issues331 and337 resource admission, qualified namespaces,
+normal-stack accepted lifecycle and recoverable atomic refusal. Transfer the
+existing parent Word implementation and its immutable failures and reviews
+without reimplementation or promotion of historical evidence. Preserve opaque
+source and relationship identity, equivalent no-ops and family-local causal
+retirement. Root reconciles shared HLD and archive records once.
+
+**Depends on**: F-X200, F-X201, F-X202, F-X206, F-X210, F-X222.
+**Test gate**: regression. Five installed Word XML cases, bounded native and
+consumer-stack parser lifecycle, saved/reopened ownership and atomic failure
+controls, plus all applicable original parent scoped risk riders.
+
+### F-X211b, PowerPoint checked XML owners (L)
+
+Complete the nine PowerPoint element cases through actual slide, layout and
+master owners, checked native operations and installed public bindings. Keep
+all five captured shape variants, actual qualified text-body roots and selected
+relationship scopes. Own qualified DrawingML hyperlink aliases and family-local
+replacement retirement. Preserve opaque source, safe ancestors and equivalent
+no-ops. Shared parser and token prerequisites are serialized by root.
+
+**Depends on**: F-X194, F-X200, F-X206, F-X209, F-X210, F-X214.
+**Test gate**: regression. Nine installed PowerPoint XML cases, shape variants,
+qualified ownership, saved/reopened bytes and atomic relationship/type/order
+refusal, plus all applicable original parent scoped risk riders.
+
+### F-X211c, Integrated Python compatibility and causal errors (L)
+
+Compose both checked XML families with completed providers. Resolve shared
+lifetime, invalid units, ignored options and actionable error residuals once
+under their actual owner. Preserve the complete frozen100 bodies and their
+Word49/PowerPoint51 allocation, Base17/100 evidence and honest per-area rates.
+Qualify source-built paired bindings, saved files, the complete lifetime
+contract and CI reporting. No corpus rewriting or provider duplication.
+
+**Depends on**: F-X211a, F-X211b, F-X200 through F-X210, F-X215, F-X217,
+F-X218, F-X220 for final integrated capability acceptance.
+**Test gate**: regression. Installed isolated bindings execute the immutable100
+and saved-file assertions, actual per-area rates and named causal invalidation
+errors, with all remaining parent native, render, publication and risk gates.
 
 ### F-X212, Align native accessibility with visible paragraph content (M)
 

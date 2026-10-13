@@ -3,7 +3,7 @@
 **Status**: approved
 **Sprint**: S91
 **Size**: L
-**Depends on**: F-X200 through F-X210 for final corpus acceptance, refined source barriers below
+**Depends on**: F-X211a, F-X211b and F-X211c, retaining F-X200 through F-X210 for final corpus acceptance and refined source barriers below
 
 ## Problem
 
@@ -1092,3 +1092,51 @@ An in-process2000-depth test and contributor release timing do not replace
 bounded native, installed CLI and Python subprocess refusal controls, ordinary
 consumer stacks and accepted-boundary release measurements. Archive tuples
 and CI are foreign evidence, not local verification.
+
+
+## Reviewed native recursion resource boundary
+
+Independent native measurements and resource-boundary pass1 select an inclusive
+weighted path budget of256. Each namespace-qualified modeled content control
+costs1. Each actual typed Word text-box body costs16. Costs accumulate only
+along the current owner path and reset when that owner closes. Checked
+arithmetic refuses overflow. Pure256 controls remains accepted. The measured
+normal2MiB lifecycle corners are16 typed boxes,240 controls plus1 box,
+128 controls plus8 boxes, and12 boxes each containing a control. These are
+independent local measurements, not adoption of the contributor's quotas.
+
+The deciding measurements are retained in the worker receipt
+`.claude/scratch/F-X211-start/actual-native-resource-measurements-13/receipt.json`,
+SHA256 `74ebf84393deba32d4e9187b6671efb737299db17c14310186ed853737506d97`.
+Independent review is `.claude/reviews/F-X211-resource-boundary-pass-1.md`.
+Its inline-owner defect is remediated separately before policy implementation.
+Inline shape text remains opaque, including qualified-looking descendants.
+The current anchor parser constructs qualified Word txbxContent even when
+its graphicData URI is unknown. Admission follows that actual typed behavior
+without expanding or narrowing parser ownership. Foreign and rebound opaque
+content retains its exact source bytes and consumes no typed-owner cost.
+
+One linear source preflight must refuse unsupported paths before recursive
+construction or repeated subtree capture. An iterative borrowed-model guard
+must refuse before recursive serialization and facade staging clones, with
+no thread-local admission authority or larger consumer stack. Refusal returns
+an actionable ordinary resource error and leaves source, relationships and
+owner generations unchanged. Related-story, VML, mixed-table/control,
+normal-stack installed CLI/Python and frozen100 acceptance remain required.
+The corner measurements do not waive those remaining gates.
+
+## Delivery children and retained parent acceptance
+
+The oversized implementation is partitioned into F-X211a for Word checked XML
+and Issues331/337, F-X211b for PowerPoint checked XML and DrawingML aliases,
+and F-X211c for final shared errors, lifetime and immutable100 compatibility.
+Each child has its own design, scoped gate, independent review and handoff.
+The parent closes only after all children close, with the entire acceptance
+above unchanged. The frozen100 and historical Base17/100 remain authoritative.
+
+F-X211a inherits the exact frozen parent Word source and evidence through a
+root-authenticated transfer. The original parent worktree stays inactive and
+retained. F-X211b uses an isolated claimed worktree. F-X211c starts only after
+both children and its declared provider completion barriers. Family-local
+owner retirement belongs to the corresponding child. Shared token, parser,
+HLD, archive and baseline changes have one explicitly assigned writer.

@@ -6,8 +6,9 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 now contains twenty-nine active stories, twenty-two completed, five running,
-two approved pending implementation. The latest bounded intake includes40 issues and30 PRs, plus final minor-release preparation.
+S91 retains twenty-nine top-level stories, twenty-two completed, five running,
+two approved pending implementation. F-X211 also has three delivery children
+for parallel Word and PowerPoint work followed by integrated compatibility. The latest bounded intake includes40 issues and30 PRs, plus final minor-release preparation.
 
 ## Spec references
 
@@ -41,7 +42,10 @@ two approved pending implementation. The latest bounded intake includes40 issues
 | F-X208 | Author PowerPoint footer fields themes and transitions | L | done | - |
 | F-X209 | Edit PowerPoint masters layouts and themes | L | done | - |
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | done | - |
-| F-X211 | Complete Python script compatibility and safe XML access | L | in-progress | codex |
+| F-X211 | Complete Python script compatibility and safe XML access | L | in-progress | - |
+| F-X211a | Word checked XML owners and resource admission | L | pending | - |
+| F-X211b | PowerPoint checked XML owners | L | pending | - |
+| F-X211c | Integrated Python compatibility and causal errors | L | pending | - |
 | F-X212 | Align native accessibility with visible paragraph content | M | done | - |
 | F-X213 | Preserve TOC entry boundary paragraphs during rebuild | M | done | - |
 | F-X214 | Bound recursive PowerPoint parsing and traversal | L | done | - |
@@ -1168,3 +1172,19 @@ F-X211 is claimed after completed dependencies. Initial exclusive leases: crates
 ## F-X222 scoped completion, 2026-10-12
 
 Issue362 and PR363 are resolved locally by the reviewed story inventory and empty-owner repair, integrated at53d7ea33. Six focused integrated checks pass with unchanged49 deterministic hashes. Twenty-two of29 stories are now complete, with five running and two approved pending implementation. Scope remains40 admitted issues and30 PRs, excluding discussion264/281. Final full verification, sprint review and release preparation remain due. Bibliography remains S92.
+
+## F-X211 delivery partition
+
+F-X211a owns Word checked XML and bounded native admission, including the
+retained parent worker source and evidence. F-X211b owns PowerPoint checked
+XML and qualified DrawingML aliases. These children implement in isolated
+worktrees with disjoint source reservations. F-X211c follows both completed
+children and the actual provider barriers for final shared lifetime, silent
+error and immutable100 compatibility acceptance. F-X211 remains the parent
+acceptance owner and closes only after all three children complete.
+
+The original parent worktree remains inactive retained evidence during the
+exact Word transfer. No original failure, contribution, corpus body, resource
+limit or application acceptance is waived by splitting. Shared token changes,
+HLD reconciliation, archive measurements and the hash baseline stay exclusive.
+Issue and PR counts remain40 and30. Issues264 and281 remain open.
