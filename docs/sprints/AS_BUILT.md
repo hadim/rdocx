@@ -19327,3 +19327,23 @@ push, main merge, tag or publication is claimed.
 **Spec sections touched.** Exactly HLD02,03,04,10,12,14 and15, preserving existing F-X211 delivery children.
 
 **Notes for future sessions.** Keep work/f-x217-codex through final verification and close. F-X211a must reconcile new import constructors and the existing publisher once. Bibliography, navigation, standalone authoring and historical oracle fixture regeneration remain later work. No remote closure, push, main merge, tag or publication is claimed.
+
+
+### F-X211b, Complete checked PowerPoint XML owners
+
+**Completed.** 2026-10-13, S91 scoped dependency-prefix checkpoint
+**Size.** L, actual not recorded
+
+**What was built.** Nine PowerPoint element owners expose qualified XML reads and checked atomic replacements. Existing paragraph, regular run, table, cell, shape variants, text body, slide, layout and master operations preserve actual namespace, package relationship scope, child sequence, opaque content and compatible legacy reads. Exact no-op retains owners, while selected replacement retires unsafe descendants and preserves approved ancestors.
+
+**Non-obvious choices.** Concrete physical owners and the existing publication provider stage native candidates and Python returns before publication. The reviewed bounded image decoder prerequisite moves mechanically into its existing owner. Completed Word CommonMark dependencies and PowerPoint image dependencies compose without a reverse facade dependency. Only Word normalized archive bytes increase23 from the correct completed F217 predecessor.
+
+**Tests.** Genuine native and installed failing-before controls remain retained. Qualified worker gates include24 native owner controls,31 installed public controls, strict typing/stubtest, allocation refusal, affected native suites, strict Clippy, MSRV, WASM, no-default and dependency-policy checks. Five actual composed publication dry runs abort upload and retain current source-matching archives below10MiB. Current README inventory/examples, prose and adapters pass. Original unfiltered341-pass/5-failure/28-ignore result remains unchanged, with exact publication-contract successor and four missing historical oracle sets deferred to S92 without qualification.
+
+**Integrated evidence.** Reviewed featureba175cf8 and handoff tip6e5891f1 integrate into1651119a. Exact handoff27e63797 is validated and consumed. Three independent reviews report zero defects and smells. All23 non-lock production carriers match the worker and the intended dependency union is authenticated. Both HLD contracts and root parent/c/release records remain preserved. Actual integrated combined native/binding compilation passes. The first root debug test aborts before XML editing on an ordinary2MiB stack. Its separately qualified release/all-feature native nine-owner successor uses the same stack bound, passes one real test and retains the failed predecessor. Receipts remain under /private/tmp/S91-F-X211b-integrated-prefix-1 and integrated-prefix-successor-2. Current five-archive composition checkpoint1423d8ce and source3231 inventory remain in canonical scratch.
+
+**Hash harness.** Actual integrated49 deterministic entries match unchanged baselines. No baseline edits. Final full integrated sprint verification and review remain due.
+
+**Spec sections touched.** Exactly HLD02,03,04,06,10,12 and14, preserving completed F217 Word import intent and the parent frozen100 boundary.
+
+**Notes for future sessions.** Keep work/f-x211b-codex through final verification and close. Preserve required worker evidence before clean worktree retirement. Word XML child a and integrated compatibility child c remain unfinished, so parent F211 is not complete. No new blanket GUI gate or native application acceptance is inferred. Intake stays closed40issues/30PRs with264/281 open. No remote closure, push, main merge, tag or publication is claimed.

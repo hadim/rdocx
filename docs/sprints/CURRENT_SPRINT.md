@@ -44,7 +44,7 @@ for parallel Word and PowerPoint work followed by integrated compatibility. The 
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | done | - |
 | F-X211 | Complete Python script compatibility and safe XML access | L | in-progress | - |
 | F-X211a | Word checked XML owners and resource admission | L | in-progress | codex |
-| F-X211b | PowerPoint checked XML owners | L | in-progress | codex |
+| F-X211b | PowerPoint checked XML owners | L | done | - |
 | F-X211c | Integrated Python compatibility and causal errors | L | pending | - |
 | F-X212 | Align native accessibility with visible paragraph content | M | done | - |
 | F-X213 | Preserve TOC entry boundary paragraphs during rebuild | M | done | - |
@@ -1195,3 +1195,8 @@ Issue and PR counts remain40 and30. Issues264 and281 remain open.
 Issues350 and351 and PR359 have completed scoped implementation and acceptance. Native Word opened both source-built combined and template documents without repair, with distinct local save/render, normal close/reopen and second save/render. Root authenticated3211 source files against the prepared checkpoint. All product, dependency, toolchain and gate carriers equal the reviewed worker. Six differences are existing root-owned plan/sprint records and non-overlapping HLD14 composition. Product integration is be4af3ce. Original failed receipts remain retained. The final full sprint gate, review, remote issue/PR closure and release approval remain due.
 
 Twenty-three of29 top-level stories are complete. Six remain, F-X211, F-X215, F-X216, F-X218, F-X220 and F-X221. The parent F-X211 also retains its two running children and pending integrated compatibility child. Intake is closed at40 issues and30 PRs. Discussions264 and281 remain open. Bibliography, navigation and standalone authoring stay in S92. Historical movie/PNG oracle fixture regeneration is recorded at S92 and adds no S91 repair story.
+
+
+## F-X211b scoped completion, 2026-10-13
+
+The PowerPoint XML child completes at the scoped dependency-prefix checkpoint. Product integration1651119a preserves completed Word import and both dependency graphs. Whole-feature, completion-composition and independent integration reviews have zero defects and smells. Five actual composed archives verify and the complete README inventory/examples pass. Actual combined native/binding all-target/all-feature compilation, release-profile native nine-owner control,49 unchanged hashes and prose pass. The first root debug-profile test abort before XML editing remains failed and distinct from the qualified release successor at the same2MiB stack. The parent and children a/c remain unfinished. Top-level progress remains23 of29 complete. Final full sprint verification, review, close and publication remain due.
