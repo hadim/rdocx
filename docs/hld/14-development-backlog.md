@@ -7515,12 +7515,15 @@ controls, plus all applicable original parent scoped risk riders.
 
 ### F-X211b, PowerPoint checked XML owners (L)
 
-Complete the nine PowerPoint element cases through actual slide, layout and
-master owners, checked native operations and installed public bindings. Keep
-all five captured shape variants, actual qualified text-body roots and selected
-relationship scopes. Own qualified DrawingML hyperlink aliases and family-local
-replacement retirement. Preserve opaque source, safe ancestors and equivalent
-no-ops. Shared parser and token prerequisites are serialized by root.
+Nine PowerPoint element cases use actual slide, layout and master owners,
+checked native operations and installed public bindings. The five captured
+shape variants retain their kind. Qualified roots, schema order and actual
+relationship target/type checks precede candidate publication. Standalone XML
+retains inherited opaque namespaces. Selected logical owners survive checked
+replacement while unsafe property, body, paragraph and run descendants retire.
+No-op, refusal and allocation failure preserve package bytes and live tokens.
+Shared parser and token prerequisites are serialized by root. Final cross-family
+script and causal-error reconciliation remains owned by F-X211c.
 
 **Depends on**: F-X194, F-X200, F-X206, F-X209, F-X210, F-X214.
 **Test gate**: regression. Nine installed PowerPoint XML cases, shape variants,

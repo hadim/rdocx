@@ -1786,6 +1786,345 @@ impl PyPresentation {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PptElementKind {
+    Shape,
+    Table,
+    Cell,
+    TextBody,
+    Paragraph,
+    Run,
+    Slide,
+    Layout,
+    Master,
+}
+
+/// A checked physical XML owner. Snapshots are detached strings, while writes
+/// stage the native package and all owner tokens before one publication.
+#[pyclass(name = "Element", frozen)]
+pub struct PyPptElement {
+    presentation: Py<PyPresentation>,
+    path: oxml_py_support::ContentPath,
+    kind: PptElementKind,
+}
+
+impl PyPptElement {
+    pub(crate) fn new_checked(
+        py: Python<'_>,
+        presentation: Py<PyPresentation>,
+        path: oxml_py_support::ContentPath,
+        kind: PptElementKind,
+    ) -> PyResult<Py<Self>> {
+        let element = Self {
+            presentation,
+            path,
+            kind,
+        };
+        let owner = element.presentation.borrow(py);
+        let path = element.checked_path(py, &owner)?;
+        element.read_xml(py, &owner.inner, &path)?;
+        drop(owner);
+        Py::new(py, element)
+    }
+
+    fn checked_path(
+        &self,
+        py: Python<'_>,
+        owner: &PyPresentation,
+    ) -> PyResult<oxml_py_support::ContentPath> {
+        crate::validate_path(py, owner, &self.path, "Element", ".element")?;
+        let generation = self.path.owner_generation().ok_or_else(|| {
+            pyo3::exceptions::PyNotImplementedError::new_err(
+                "Element requires a physical XML owner",
+            )
+        })?;
+        let actual = owner
+            .owners
+            .iter()
+            .find(|item| item.owner.generation() == generation)
+            .ok_or_else(|| PyValueError::new_err("Element owner is absent"))?;
+        let valid = matches!(
+            (self.kind, &actual.address.physical),
+            (
+                PptElementKind::Shape | PptElementKind::Table,
+                PhysicalOwner::Shape { .. }
+            ) | (PptElementKind::Cell, PhysicalOwner::Cell { .. })
+                | (PptElementKind::TextBody, PhysicalOwner::TextBody { .. })
+                | (PptElementKind::Paragraph, PhysicalOwner::Paragraph { .. })
+                | (PptElementKind::Run, PhysicalOwner::Run { .. })
+                | (PptElementKind::Slide, PhysicalOwner::Slide(_))
+                | (PptElementKind::Layout, PhysicalOwner::Layout(_))
+                | (PptElementKind::Master, PhysicalOwner::Master(_))
+        );
+        if !valid {
+            return Err(pyo3::exceptions::PyNotImplementedError::new_err(
+                "Element is not backed by the requested physical XML owner",
+            ));
+        }
+        owner
+            .current_path(&self.path)
+            .ok_or_else(|| PyValueError::new_err("Element owner is absent"))
+    }
+
+    fn read_xml(
+        &self,
+        py: Python<'_>,
+        inner: &rpptx::Presentation,
+        path: &oxml_py_support::ContentPath,
+    ) -> PyResult<Vec<u8>> {
+        use oxml_py_support::PathSeg;
+        let part = crate::shape::shape_owner(path)?;
+        let shapes = path
+            .segs
+            .iter()
+            .filter_map(|seg| {
+                if let PathSeg::Shape(i) = seg {
+                    Some(*i)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        let row = path.segs.iter().find_map(|seg| {
+            if let PathSeg::Row(i) = seg {
+                Some(*i)
+            } else {
+                None
+            }
+        });
+        let col = path.segs.iter().find_map(|seg| {
+            if let PathSeg::Cell(i) = seg {
+                Some(*i)
+            } else {
+                None
+            }
+        });
+        let cell = row.zip(col);
+        let paragraph = path
+            .segs
+            .iter()
+            .find_map(|seg| {
+                if let PathSeg::Para(i) = seg {
+                    Some(*i)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0);
+        let run = path
+            .segs
+            .iter()
+            .find_map(|seg| {
+                if let PathSeg::Run(i) = seg {
+                    Some(*i)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0);
+        let result = match self.kind {
+            PptElementKind::Shape => inner.shape_xml_at(part, &shapes),
+            PptElementKind::Table => inner.table_xml_at(part, &shapes),
+            PptElementKind::Cell => {
+                let (r, c) = cell.ok_or_else(|| PyValueError::new_err("cell address is absent"))?;
+                inner.cell_xml_at(part, &shapes, r, c)
+            }
+            PptElementKind::TextBody => inner.text_body_xml_at(part, &shapes, cell),
+            PptElementKind::Paragraph => inner.paragraph_xml_at(part, &shapes, cell, paragraph),
+            PptElementKind::Run => inner.run_xml_at(part, &shapes, cell, paragraph, run),
+            PptElementKind::Slide => {
+                let rpptx::ShapeOwner::Slide(i) = part else {
+                    return Err(PyValueError::new_err("slide address is absent"));
+                };
+                inner.slide_xml(i)
+            }
+            PptElementKind::Layout => {
+                let rpptx::ShapeOwner::Layout(i) = part else {
+                    return Err(PyValueError::new_err("layout address is absent"));
+                };
+                inner.layout_xml(i)
+            }
+            PptElementKind::Master => {
+                let rpptx::ShapeOwner::Master(i) = part else {
+                    return Err(PyValueError::new_err("master address is absent"));
+                };
+                inner.master_xml(i)
+            }
+        };
+        result.map_err(|error| rpptx_to_pyerr(py, error))
+    }
+}
+
+#[pymethods]
+impl PyPptElement {
+    #[getter]
+    fn xml(&self, py: Python<'_>) -> PyResult<String> {
+        let owner = self.presentation.borrow(py);
+        let path = self.checked_path(py, &owner)?;
+        String::from_utf8(self.read_xml(py, &owner.inner, &path)?)
+            .map_err(|_| PyValueError::new_err("physical XML snapshot is not UTF-8"))
+    }
+
+    fn replace_xml(&self, py: Python<'_>, xml: &str) -> PyResult<()> {
+        use oxml_py_support::PathSeg;
+        let mut owner = self.presentation.borrow_mut(py);
+        let path = self.checked_path(py, &owner)?;
+        let part = crate::shape::shape_owner(&path)?;
+        let shapes = path
+            .segs
+            .iter()
+            .filter_map(|seg| {
+                if let PathSeg::Shape(i) = seg {
+                    Some(*i)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+        let row = path.segs.iter().find_map(|seg| {
+            if let PathSeg::Row(i) = seg {
+                Some(*i)
+            } else {
+                None
+            }
+        });
+        let col = path.segs.iter().find_map(|seg| {
+            if let PathSeg::Cell(i) = seg {
+                Some(*i)
+            } else {
+                None
+            }
+        });
+        let cell = row.zip(col);
+        let paragraph = path
+            .segs
+            .iter()
+            .find_map(|seg| {
+                if let PathSeg::Para(i) = seg {
+                    Some(*i)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0);
+        let run = path
+            .segs
+            .iter()
+            .find_map(|seg| {
+                if let PathSeg::Run(i) = seg {
+                    Some(*i)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(0);
+        let mut candidate = owner.inner.clone();
+        let result = match self.kind {
+            PptElementKind::Shape => candidate.replace_shape_xml_at(part, &shapes, xml),
+            PptElementKind::Table => candidate.replace_table_xml_at(part, &shapes, xml),
+            PptElementKind::Cell => {
+                let (r, c) = cell.ok_or_else(|| PyValueError::new_err("cell address is absent"))?;
+                candidate.replace_cell_xml_at(part, &shapes, r, c, xml)
+            }
+            PptElementKind::TextBody => {
+                candidate.replace_text_body_xml_at(part, &shapes, cell, xml)
+            }
+            PptElementKind::Paragraph => {
+                candidate.replace_paragraph_xml_at(part, &shapes, cell, paragraph, xml)
+            }
+            PptElementKind::Run => {
+                candidate.replace_run_xml_at(part, &shapes, cell, paragraph, run, xml)
+            }
+            PptElementKind::Slide => {
+                let rpptx::ShapeOwner::Slide(i) = part else {
+                    return Err(PyValueError::new_err("slide address is absent"));
+                };
+                candidate.replace_slide_xml(i, xml)
+            }
+            PptElementKind::Layout => {
+                let rpptx::ShapeOwner::Layout(i) = part else {
+                    return Err(PyValueError::new_err("layout address is absent"));
+                };
+                candidate.replace_layout_xml(i, xml)
+            }
+            PptElementKind::Master => {
+                let rpptx::ShapeOwner::Master(i) = part else {
+                    return Err(PyValueError::new_err("master address is absent"));
+                };
+                candidate.replace_master_xml(i, xml)
+            }
+        };
+        result.map_err(|error| rpptx_to_pyerr(py, error))?;
+        if self.kind == PptElementKind::Shape {
+            let before = crate::shape::native_shape_ref_at(&owner.inner, &path)
+                .is_some_and(|shape| shape.table().is_some());
+            let after = crate::shape::native_shape_ref_at(&candidate, &path)
+                .is_some_and(|shape| shape.table().is_some());
+            if before != after {
+                return Err(pyo3::exceptions::PyNotImplementedError::new_err(
+                    "Shape.element.replace_xml does not support changing table payload presence",
+                ));
+            }
+        }
+        let before = owner
+            .inner
+            .to_bytes()
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        let after = candidate
+            .to_bytes()
+            .map_err(|error| rpptx_to_pyerr(py, error))?;
+        if before == after {
+            return Ok(());
+        }
+        let generation = self
+            .path
+            .owner_generation()
+            .ok_or_else(|| PyValueError::new_err("Element owner is absent"))?;
+        let mut survivors = owner.unchanged_owners()?;
+        survivors.retain_mut(|proof| {
+            let old = owner
+                .owners
+                .iter()
+                .find(|item| item.owner.generation() == proof.generation)
+                .expect("unchanged owner proof");
+            let old_path = if let Some(index) = old.address.layout_index {
+                smallvec![PathSeg::Layout(index)]
+            } else {
+                old.address.path.clone()
+            };
+            if proof.generation == generation {
+                proof.xml_children_changed = self.kind != PptElementKind::Table;
+                proof.text_changed = self.kind != PptElementKind::Run;
+                proof.grid_changed = old.address.table;
+                return true;
+            }
+            if !old_path.starts_with(&path.segs) {
+                return true;
+            }
+            match self.kind {
+                PptElementKind::Run => true,
+                PptElementKind::Paragraph => {
+                    !matches!(old.address.physical, PhysicalOwner::Run { .. })
+                }
+                PptElementKind::TextBody => !matches!(
+                    old.address.physical,
+                    PhysicalOwner::Paragraph { .. } | PhysicalOwner::Run { .. }
+                ),
+                _ => false,
+            }
+        });
+        let prepared = owner.prepare_owners(
+            &candidate,
+            "Element.replace_xml",
+            &survivors,
+            false,
+            false,
+            false,
+        )?;
+        owner.publish_owners(candidate, prepared)
+    }
+}
+
 // Physical addresses are current lookup locations, not lifetime identities.
 #[derive(Clone, Copy)]
 pub(crate) enum SlideOwnerEdit {
@@ -1817,6 +2156,24 @@ enum PhysicalOwner {
         column: usize,
     },
     Layout(String),
+    TextBody {
+        slide: PartIdentity,
+        shape: Option<u32>,
+        cell: Option<(usize, usize)>,
+    },
+    Paragraph {
+        slide: PartIdentity,
+        shape: Option<u32>,
+        cell: Option<(usize, usize)>,
+        index: usize,
+    },
+    Run {
+        slide: PartIdentity,
+        shape: Option<u32>,
+        cell: Option<(usize, usize)>,
+        paragraph: usize,
+        index: usize,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -1832,6 +2189,7 @@ struct LiveOwner {
     address: OwnerAddress,
     owner: oxml_py_support::RevisionState,
     text: oxml_py_support::RevisionState,
+    xml_children: oxml_py_support::RevisionState,
     grid: Option<oxml_py_support::RevisionState>,
 }
 
@@ -1842,6 +2200,7 @@ pub(crate) struct OwnerSurvival {
     pub(crate) destination: smallvec::SmallVec<[oxml_py_support::PathSeg; 5]>,
     pub(crate) layout_index: Option<usize>,
     pub(crate) text_changed: bool,
+    pub(crate) xml_children_changed: bool,
     pub(crate) grid_changed: bool,
 }
 
@@ -1855,6 +2214,75 @@ pub(crate) struct PreparedOwners {
 
 fn owner_addresses(inner: &rpptx::Presentation) -> PyResult<Vec<OwnerAddress>> {
     use oxml_py_support::PathSeg;
+    fn text_nodes(
+        frame: rpptx::TextFrameRef<'_>,
+        slide: PartIdentity,
+        shape: Option<u32>,
+        cell: Option<(usize, usize)>,
+        path: smallvec::SmallVec<[PathSeg; 5]>,
+        out: &mut Vec<OwnerAddress>,
+    ) -> PyResult<()> {
+        out.try_reserve(1).map_err(|_| {
+            pyo3::exceptions::PyMemoryError::new_err("text body owner allocation failed")
+        })?;
+        out.push(OwnerAddress {
+            physical: PhysicalOwner::TextBody {
+                slide: slide.clone(),
+                shape,
+                cell,
+            },
+            path: path.clone(),
+            layout_index: None,
+            table: false,
+        });
+        for index in 0..frame.paragraph_count() {
+            let paragraph = frame
+                .paragraph(index)
+                .ok_or_else(|| PyValueError::new_err("physical paragraph is absent"))?;
+            let mut paragraph_path = path.clone();
+            paragraph_path.try_reserve(1).map_err(|_| {
+                pyo3::exceptions::PyMemoryError::new_err("paragraph owner path allocation failed")
+            })?;
+            paragraph_path.push(PathSeg::Para(index));
+            out.try_reserve(1).map_err(|_| {
+                pyo3::exceptions::PyMemoryError::new_err("paragraph owner allocation failed")
+            })?;
+            out.push(OwnerAddress {
+                physical: PhysicalOwner::Paragraph {
+                    slide: slide.clone(),
+                    shape,
+                    cell,
+                    index,
+                },
+                path: paragraph_path.clone(),
+                layout_index: None,
+                table: false,
+            });
+            for run in 0..paragraph.run_count() {
+                let mut run_path = paragraph_path.clone();
+                run_path.try_reserve(1).map_err(|_| {
+                    pyo3::exceptions::PyMemoryError::new_err("run owner path allocation failed")
+                })?;
+                run_path.push(PathSeg::Run(run));
+                out.try_reserve(1).map_err(|_| {
+                    pyo3::exceptions::PyMemoryError::new_err("run owner allocation failed")
+                })?;
+                out.push(OwnerAddress {
+                    physical: PhysicalOwner::Run {
+                        slide: slide.clone(),
+                        shape,
+                        cell,
+                        paragraph: index,
+                        index: run,
+                    },
+                    path: run_path,
+                    layout_index: None,
+                    table: false,
+                });
+            }
+        }
+        Ok(())
+    }
     fn children(
         shape: rpptx::ShapeRef<'_>,
         slide: PartIdentity,
@@ -1876,12 +2304,22 @@ fn owner_addresses(inner: &rpptx::Presentation) -> PyResult<Vec<OwnerAddress>> {
             layout_index: None,
             table: shape.table().is_some(),
         });
+        if let Some(frame) = shape.text_frame() {
+            text_nodes(
+                frame,
+                slide.clone(),
+                shape.non_visual_id(),
+                None,
+                path.clone(),
+                out,
+            )?;
+        }
         if let Some(table) = shape.table() {
             for row in 0..table.row_count() {
                 for column in 0..table.column_count() {
-                    if table.cell(row, column).is_none() {
+                    let Some(cell) = table.cell(row, column) else {
                         continue;
-                    }
+                    };
                     let mut cell_path = path.clone();
                     cell_path.try_reserve(2).map_err(|_| {
                         pyo3::exceptions::PyMemoryError::new_err(
@@ -1899,10 +2337,20 @@ fn owner_addresses(inner: &rpptx::Presentation) -> PyResult<Vec<OwnerAddress>> {
                             row,
                             column,
                         },
-                        path: cell_path,
+                        path: cell_path.clone(),
                         layout_index: None,
                         table: false,
                     });
+                    if let Some(frame) = cell.text_frame() {
+                        text_nodes(
+                            frame,
+                            slide.clone(),
+                            shape.non_visual_id(),
+                            Some((row, column)),
+                            cell_path,
+                            out,
+                        )?;
+                    }
                 }
             }
         }
@@ -2014,10 +2462,10 @@ impl PyPresentation {
         let addresses = owner_addresses(&inner)?;
         let mut kinds = vec![S::SlideInventory, S::LayoutInventory, S::MasterInventory];
         for address in &addresses {
-            kinds.try_reserve(3).map_err(|_| {
+            kinds.try_reserve(4).map_err(|_| {
                 pyo3::exceptions::PyMemoryError::new_err("owner scopes allocation failed")
             })?;
-            kinds.extend([S::Owner, S::Text]);
+            kinds.extend([S::Owner, S::Text, S::Text]);
             if address.table {
                 kinds.push(S::Grid);
             }
@@ -2043,6 +2491,7 @@ impl PyPresentation {
         for address in addresses {
             let owner = states.next().expect("owner scope was initialized");
             let text = states.next().expect("text scope was initialized");
+            let xml_children = states.next().expect("XML child scope was initialized");
             let grid = address
                 .table
                 .then(|| states.next().expect("table grid scope was initialized"));
@@ -2050,6 +2499,7 @@ impl PyPresentation {
                 address,
                 owner,
                 text,
+                xml_children,
                 grid,
             });
         }
@@ -2071,7 +2521,16 @@ impl PyPresentation {
         layout_index: Option<usize>,
     ) -> Option<&LiveOwner> {
         self.owners.iter().find(|owner| {
-            owner.address.path.as_slice() == path && owner.address.layout_index == layout_index
+            owner.address.path.as_slice() == path
+                && owner.address.layout_index == layout_index
+                && !matches!(owner.address.physical, PhysicalOwner::TextBody { .. })
+        })
+    }
+
+    fn body_owner_at(&self, path: &[oxml_py_support::PathSeg]) -> Option<&LiveOwner> {
+        self.owners.iter().find(|owner| {
+            owner.address.path.as_slice() == path
+                && matches!(owner.address.physical, PhysicalOwner::TextBody { .. })
         })
     }
 
@@ -2092,6 +2551,34 @@ impl PyPresentation {
             .find(|owner| owner.owner.generation() == generation)?;
         let mut path = captured.clone();
         let end = match &owner.address.physical {
+            PhysicalOwner::TextBody { cell, .. } => {
+                let native_path = oxml_py_support::ContentPath::new(
+                    owner.address.path.clone(),
+                    self.revisions.current(),
+                );
+                let shape = crate::shape::native_shape_ref_at(&self.inner, &native_path)?;
+                let exists = match cell {
+                    Some((row, column)) => {
+                        shape.table()?.cell(*row, *column)?.text_frame().is_some()
+                    }
+                    None => shape.text_frame().is_some(),
+                };
+                if !exists {
+                    return None;
+                }
+                captured
+                    .segs
+                    .iter()
+                    .rposition(|seg| matches!(seg, PathSeg::Shape(_) | PathSeg::Cell(_)))?
+            }
+            PhysicalOwner::Paragraph { .. } => captured
+                .segs
+                .iter()
+                .rposition(|seg| matches!(seg, PathSeg::Para(_)))?,
+            PhysicalOwner::Run { .. } => captured
+                .segs
+                .iter()
+                .rposition(|seg| matches!(seg, PathSeg::Run(_)))?,
             PhysicalOwner::Cell { .. } => captured
                 .segs
                 .iter()
@@ -2104,7 +2591,16 @@ impl PyPresentation {
                 .segs
                 .iter()
                 .position(|seg| matches!(seg, PathSeg::Slide(_)))?,
-            PhysicalOwner::Layout(_) => return Some(captured.clone()),
+            PhysicalOwner::Layout(_) => {
+                if let Some(index) = owner.address.layout_index {
+                    for segment in &mut path.segs {
+                        if let PathSeg::Layout(at) = segment {
+                            *at = index;
+                        }
+                    }
+                }
+                return Some(path);
+            }
             PhysicalOwner::Master(_) => captured
                 .segs
                 .iter()
@@ -2153,7 +2649,7 @@ impl PyPresentation {
             &self.slides,
             self.revisions.current(),
             segs,
-            descendants,
+            (descendants, false, false),
         )
     }
 
@@ -2168,7 +2664,34 @@ impl PyPresentation {
             &prepared.slides,
             prepared.revision.committed_serial(),
             segs,
-            descendants,
+            (descendants, false, false),
+        )
+    }
+
+    pub(crate) fn capture_text_body_path(
+        &self,
+        segs: smallvec::SmallVec<[oxml_py_support::PathSeg; 5]>,
+        descendants: Option<oxml_py_support::RevisionScope>,
+    ) -> PyResult<oxml_py_support::ContentPath> {
+        self.capture_owner_path(
+            &self.owners,
+            &self.slides,
+            self.revisions.current(),
+            segs,
+            (descendants, true, false),
+        )
+    }
+
+    pub(crate) fn capture_xml_children_path(
+        &self,
+        segs: smallvec::SmallVec<[oxml_py_support::PathSeg; 5]>,
+    ) -> PyResult<oxml_py_support::ContentPath> {
+        self.capture_owner_path(
+            &self.owners,
+            &self.slides,
+            self.revisions.current(),
+            segs,
+            (None, false, true),
         )
     }
 
@@ -2178,12 +2701,15 @@ impl PyPresentation {
         slides: &oxml_py_support::RevisionState,
         serial: u64,
         segs: smallvec::SmallVec<[oxml_py_support::PathSeg; 5]>,
-        descendants: Option<oxml_py_support::RevisionScope>,
+        selection: (Option<oxml_py_support::RevisionScope>, bool, bool),
     ) -> PyResult<oxml_py_support::ContentPath> {
         use oxml_py_support::PathSeg;
-        let owner_at = |path: &[PathSeg], layout_index: Option<usize>| {
+        let (descendants, select_body, xml_children) = selection;
+        let owner_at = |path: &[PathSeg], layout_index: Option<usize>, body: bool| {
             owners.iter().find(|owner| {
-                owner.address.path.as_slice() == path && owner.address.layout_index == layout_index
+                owner.address.path.as_slice() == path
+                    && owner.address.layout_index == layout_index
+                    && matches!(owner.address.physical, PhysicalOwner::TextBody { .. }) == body
             })
         };
         if segs.is_empty() {
@@ -2206,7 +2732,12 @@ impl PyPresentation {
             .collect::<smallvec::SmallVec<[PathSeg; 5]>>();
         let cell = segs.iter().any(|seg| matches!(seg, PathSeg::Row(_)))
             && segs.iter().any(|seg| matches!(seg, PathSeg::Cell(_)));
-        let owner_path = if cell {
+        let styled = segs.iter().any(|seg| matches!(seg, PathSeg::TextStyle(_)));
+        let node = !styled
+            && segs
+                .iter()
+                .any(|seg| matches!(seg, PathSeg::Para(_) | PathSeg::Run(_)));
+        let base = if cell {
             segs.iter()
                 .filter(|seg| !matches!(seg, PathSeg::Para(_) | PathSeg::Run(_)))
                 .copied()
@@ -2214,72 +2745,110 @@ impl PyPresentation {
         } else {
             physical.clone()
         };
-        let direct_owner = match owner_path.as_slice() {
-            [PathSeg::Layout(index)] => owner_at(&[], Some(*index)),
-            _ => owner_at(&owner_path, None),
+        let owner_path = if node { segs.clone() } else { base.clone() };
+        // An absent cell body has one established virtual paragraph view. It
+        // remains bound to the cell, never inventing a physical paragraph.
+        let virtual_cell = cell
+            && node
+            && !select_body
+            && segs.last() == Some(&PathSeg::Para(0))
+            && owner_at(&base, None, true).is_none();
+        let direct = if virtual_cell {
+            owner_at(&base, None, false)
+        } else {
+            match owner_path.as_slice() {
+                [PathSeg::Layout(index)] if !select_body => owner_at(&[], Some(*index), false),
+                _ => owner_at(&owner_path, None, select_body),
+            }
         };
-        let owner = match direct_owner {
+        let owner = match direct {
             Some(owner) => owner,
             None => {
-                // Opaque AlternateContent fallback inspection keeps the existing
-                // conservative document scope. It never mints mutable owners or
-                // silently rebinds a fallback after an invalidating publication.
-                let opaque_parent = owners.iter().any(|owner| {
-                    matches!(
-                        &owner.address.physical,
-                        PhysicalOwner::Shape {
-                            kind: rpptx::ShapeKind::AlternateContent,
-                            ..
-                        }
-                    ) && owner_path.starts_with(&owner.address.path)
-                        && owner_path.len() > owner.address.path.len()
-                });
+                let opaque_parent = !select_body
+                    && owners.iter().any(|owner| {
+                        matches!(
+                            &owner.address.physical,
+                            PhysicalOwner::Shape {
+                                kind: rpptx::ShapeKind::AlternateContent,
+                                ..
+                            }
+                        ) && owner_path.starts_with(&owner.address.path)
+                            && owner_path.len() > owner.address.path.len()
+                    });
                 if opaque_parent && serial == self.revisions.current() {
                     return Ok(self.revisions.capture(segs));
                 }
+                if select_body {
+                    return Err(pyo3::exceptions::PyNotImplementedError::new_err(
+                        "TextFrame.element requires an existing physical text body, not a virtual cell or inherited text-style view",
+                    ));
+                }
                 return Err(pyo3::exceptions::PyIndexError::new_err(
-                    "physical owner is absent",
+                    "physical XML owner is absent",
                 ));
             }
         };
-        let slide_path = physical
+        let part_path = physical
             .first()
             .copied()
             .into_iter()
             .collect::<smallvec::SmallVec<[PathSeg; 5]>>();
-        let slide = match slide_path.as_slice() {
-            [PathSeg::Layout(index)] => owner_at(&[], Some(*index)),
-            _ => owner_at(&slide_path, None),
+        let part = match part_path.as_slice() {
+            [PathSeg::Layout(index)] => owner_at(&[], Some(*index), false),
+            _ => owner_at(&part_path, None, false),
         }
         .ok_or_else(|| pyo3::exceptions::PyIndexError::new_err("part owner is absent"))?;
         let mut scopes = smallvec::SmallVec::<[oxml_py_support::RevisionState; 4]>::new();
-        scopes.push(slide.owner.clone());
-        if !owner.owner.same_state(&slide.owner) {
+        scopes.try_reserve(segs.len() + 4).map_err(|_| {
+            pyo3::exceptions::PyMemoryError::new_err("captured owner scopes allocation failed")
+        })?;
+        scopes.push(part.owner.clone());
+        let mut prefix = smallvec::SmallVec::<[PathSeg; 5]>::new();
+        prefix.try_reserve(segs.len()).map_err(|_| {
+            pyo3::exceptions::PyMemoryError::new_err("captured owner path allocation failed")
+        })?;
+        for segment in &segs {
+            prefix.push(*segment);
+            if matches!(segment, PathSeg::Para(_)) && !styled && !virtual_cell {
+                let body = owner_at(&base, None, true).ok_or_else(|| {
+                    pyo3::exceptions::PyIndexError::new_err("text body owner is absent")
+                })?;
+                if !scopes.iter().any(|state| state.same_state(&body.owner)) {
+                    scopes.push(body.owner.clone());
+                }
+            }
+            if matches!(
+                segment,
+                PathSeg::Shape(_) | PathSeg::Cell(_) | PathSeg::Para(_) | PathSeg::Run(_)
+            ) && !styled
+                && let Some(ancestor) = owner_at(&prefix, None, false)
+                && !scopes.iter().any(|state| state.same_state(&ancestor.owner))
+            {
+                scopes.push(ancestor.owner.clone());
+            }
+        }
+        if !scopes.iter().any(|state| state.same_state(&owner.owner)) {
             scopes.push(owner.owner.clone());
         }
         if descendants == Some(oxml_py_support::RevisionScope::Grid)
-            || segs
-                .iter()
-                .any(|seg| matches!(seg, PathSeg::Row(_) | PathSeg::Cell(_)))
+            || cell
+            || segs.iter().any(|seg| matches!(seg, PathSeg::Row(_)))
         {
-            let table_owner = owner_at(&physical, None)
+            let table = owner_at(&physical, None, false)
                 .ok_or_else(|| pyo3::exceptions::PyIndexError::new_err("table owner is absent"))?;
             scopes.push(
-                table_owner
+                table
                     .grid
                     .as_ref()
-                    .ok_or_else(|| {
-                        pyo3::exceptions::PyValueError::new_err("owner has no table grid")
-                    })?
+                    .ok_or_else(|| PyValueError::new_err("owner has no table grid"))?
                     .clone(),
             );
         }
-        if descendants == Some(oxml_py_support::RevisionScope::Text)
-            || segs
-                .iter()
-                .any(|seg| matches!(seg, PathSeg::Para(_) | PathSeg::Run(_)))
-        {
+        if descendants == Some(oxml_py_support::RevisionScope::Text) || virtual_cell || styled {
             scopes.push(owner.text.clone());
+        }
+        if xml_children || virtual_cell || styled {
+            scopes.push(owner.xml_children.clone());
         }
         let mut path = self
             .revisions
@@ -2348,7 +2917,10 @@ impl PyPresentation {
             let index = next
                 .iter()
                 .position(|address| {
-                    address.path == proof.destination && address.layout_index == proof.layout_index
+                    address.path == proof.destination
+                        && address.layout_index == proof.layout_index
+                        && std::mem::discriminant(&address.physical)
+                            == std::mem::discriminant(&old.address.physical)
                 })
                 .ok_or_else(|| fail("survival destination is absent"))?;
             if !destinations.insert(index) {
@@ -2389,10 +2961,16 @@ impl PyPresentation {
         }
         let mut affected = Vec::new();
         let mut replacements = Vec::new();
+        let mut xml_replacements = Vec::new();
+        xml_replacements
+            .try_reserve_exact(preserved.len())
+            .map_err(|_| {
+                pyo3::exceptions::PyMemoryError::new_err("XML child replacements allocation failed")
+            })?;
         let affected_capacity = self
             .owners
             .len()
-            .checked_mul(3)
+            .checked_mul(4)
             .and_then(|count| count.checked_add(3))
             .ok_or_else(|| {
                 pyo3::exceptions::PyOverflowError::new_err("owner retirement count overflow")
@@ -2411,12 +2989,17 @@ impl PyPresentation {
             if !seen.contains(&old.owner.generation()) {
                 affected.push(old.owner.clone());
                 affected.push(old.text.clone());
+                affected.push(old.xml_children.clone());
                 if let Some(grid) = &old.grid {
                     affected.push(grid.clone());
                 }
             }
         }
         for (index, old, proof) in &retained {
+            if proof.xml_children_changed {
+                xml_replacements.push((*index, affected.len()));
+                affected.push(old.xml_children.clone());
+            }
             if proof.text_changed {
                 replacements.push((*index, S::Text, affected.len()));
                 affected.push(old.text.clone());
@@ -2449,7 +3032,7 @@ impl PyPresentation {
         let mut births = Vec::new();
         let mut birth_offsets = Vec::new();
         births
-            .try_reserve_exact(next.len().checked_mul(3).ok_or_else(|| {
+            .try_reserve_exact(next.len().checked_mul(4).ok_or_else(|| {
                 pyo3::exceptions::PyOverflowError::new_err("owner birth count overflow")
             })?)
             .map_err(|_| {
@@ -2461,7 +3044,7 @@ impl PyPresentation {
         for (index, address) in next.iter().enumerate() {
             if !destinations.contains(&index) {
                 birth_offsets.push((index, births.len()));
-                births.extend([S::Owner, S::Text]);
+                births.extend([S::Owner, S::Text, S::Text]);
                 if address.table {
                     births.push(S::Grid);
                 }
@@ -2489,6 +3072,10 @@ impl PyPresentation {
                         _ => unreachable!(),
                     }
                 }
+                if let Some((_, at)) = xml_replacements.iter().find(|(at, _)| *at == index) {
+                    owner.xml_children =
+                        revision.successor(*at).expect("XML child successor exists");
+                }
                 owners.push(owner);
             } else {
                 let start = birth_offsets
@@ -2498,11 +3085,12 @@ impl PyPresentation {
                     .1;
                 let grid = address
                     .table
-                    .then(|| revision.born(start + 2).expect("table birth exists"));
+                    .then(|| revision.born(start + 3).expect("table birth exists"));
                 owners.push(LiveOwner {
                     address,
                     owner: revision.born(start).expect("owner birth exists"),
                     text: revision.born(start + 1).expect("text birth exists"),
+                    xml_children: revision.born(start + 2).expect("XML child birth exists"),
                     grid,
                 });
             }
@@ -2585,7 +3173,22 @@ impl PyPresentation {
         proofs.try_reserve_exact(self.owners.len()).map_err(|_| {
             pyo3::exceptions::PyMemoryError::new_err("footer owner allocation failed")
         })?;
+        let mut changed_bodies: Vec<&[oxml_py_support::PathSeg]> = Vec::new();
+        changed_bodies.try_reserve(self.owners.len()).map_err(|_| {
+            pyo3::exceptions::PyMemoryError::new_err("footer text inventory allocation failed")
+        })?;
         for old in &self.owners {
+            // The native footer provider retains the body but replaces its
+            // text children. Earlier nodes do not survive by ordinal.
+            if matches!(
+                old.address.physical,
+                PhysicalOwner::Paragraph { .. } | PhysicalOwner::Run { .. }
+            ) && changed_bodies
+                .iter()
+                .any(|base| old.address.path.starts_with(base))
+            {
+                continue;
+            }
             let matching = next
                 .iter()
                 .filter(|address| address.physical == old.address.physical)
@@ -2605,17 +3208,33 @@ impl PyPresentation {
                         != crate::shape::native_shape_ref_at(candidate, &after_path)
                             .and_then(|shape| shape.text_frame())
                 }
+                PhysicalOwner::TextBody { cell, .. } => {
+                    let frame = |inner, path| {
+                        let shape = crate::shape::native_shape_ref_at(inner, path)?;
+                        match cell {
+                            Some((row, col)) => shape.table()?.cell(*row, *col)?.text_frame(),
+                            None => shape.text_frame(),
+                        }
+                    };
+                    frame(&self.inner, &before_path) != frame(candidate, &after_path)
+                }
                 // Footer publication does not change notes or any table cell.
                 PhysicalOwner::Slide(_)
                 | PhysicalOwner::Cell { .. }
                 | PhysicalOwner::Layout(_)
-                | PhysicalOwner::Master(_) => false,
+                | PhysicalOwner::Master(_)
+                | PhysicalOwner::Paragraph { .. }
+                | PhysicalOwner::Run { .. } => false,
             };
+            if text_changed && matches!(old.address.physical, PhysicalOwner::TextBody { .. }) {
+                changed_bodies.push(old.address.path.as_slice());
+            }
             proofs.push(OwnerSurvival {
                 generation: old.owner.generation(),
                 destination: after.path.clone(),
                 layout_index: after.layout_index,
                 text_changed,
+                xml_children_changed: false,
                 grid_changed: false,
             });
         }
@@ -2632,6 +3251,7 @@ impl PyPresentation {
             destination: owner.address.path.clone(),
             layout_index: owner.address.layout_index,
             text_changed: false,
+            xml_children_changed: false,
             grid_changed: false,
         }));
         Ok(proofs)
@@ -2753,14 +3373,17 @@ impl PyPresentation {
         Ok(proofs)
     }
 
-    /// Literal replacement preserves physical owners but can redistribute text
-    /// between runs without changing flattened text. Compare accepted bodies,
-    /// including opaque facts, before retaining descendant-text generations.
+    /// Literal edits preserve bodies but retire the actual old text nodes in
+    /// each changed body. Matching ordinals are not survival evidence.
     pub(crate) fn replaced_text_owners(
         &self,
         candidate: &rpptx::Presentation,
     ) -> PyResult<Vec<OwnerSurvival>> {
         use oxml_py_support::ContentPath;
+        let mut changed = Vec::new();
+        changed.try_reserve(self.owners.len()).map_err(|_| {
+            pyo3::exceptions::PyMemoryError::new_err("changed text inventory allocation failed")
+        })?;
         let mut proofs = self.unchanged_owners()?;
         for (owner, proof) in self.owners.iter().zip(&mut proofs) {
             let path = ContentPath::new(owner.address.path.clone(), self.revisions.current());
@@ -2773,27 +3396,37 @@ impl PyPresentation {
                         _ => true,
                     }
                 }
-                PhysicalOwner::Shape { .. } => {
-                    let before = crate::shape::native_shape_ref_at(&self.inner, &path)
-                        .and_then(|shape| shape.text_frame());
-                    let after = crate::shape::native_shape_ref_at(candidate, &path)
-                        .and_then(|shape| shape.text_frame());
-                    before != after
+                PhysicalOwner::TextBody { cell, .. } => {
+                    let frame = |inner| {
+                        let shape = crate::shape::native_shape_ref_at(inner, &path)?;
+                        match cell {
+                            Some((row, col)) => shape.table()?.cell(*row, *col)?.text_frame(),
+                            None => shape.text_frame(),
+                        }
+                    };
+                    frame(&self.inner) != frame(candidate)
                 }
-                PhysicalOwner::Cell { row, column, .. } => {
-                    let before = crate::shape::native_shape_ref_at(&self.inner, &path)
-                        .and_then(|shape| shape.table())
-                        .and_then(|table| table.cell(*row, *column))
-                        .and_then(|cell| cell.text_frame());
-                    let after = crate::shape::native_shape_ref_at(candidate, &path)
-                        .and_then(|shape| shape.table())
-                        .and_then(|table| table.cell(*row, *column))
-                        .and_then(|cell| cell.text_frame());
-                    before != after
-                }
-                PhysicalOwner::Layout(_) | PhysicalOwner::Master(_) => false,
+                _ => false,
             };
+            if proof.text_changed
+                && matches!(owner.address.physical, PhysicalOwner::TextBody { .. })
+            {
+                changed.push(owner.address.path.as_slice());
+            }
         }
+        proofs.retain(|proof| {
+            let owner = self
+                .owners
+                .iter()
+                .find(|owner| owner.owner.generation() == proof.generation)
+                .expect("unchanged owner proof");
+            !matches!(
+                owner.address.physical,
+                PhysicalOwner::Paragraph { .. } | PhysicalOwner::Run { .. }
+            ) || !changed
+                .iter()
+                .any(|base| owner.address.path.starts_with(base))
+        });
         Ok(proofs)
     }
 
@@ -2818,32 +3451,146 @@ impl PyPresentation {
             .copied()
             .collect::<smallvec::SmallVec<[PathSeg; 5]>>();
         let mut proofs = self.unchanged_owners()?;
-        for (owner, proof) in self.owners.iter().zip(&mut proofs) {
+        proofs.retain_mut(|proof| {
+            let owner = self
+                .owners
+                .iter()
+                .find(|owner| owner.owner.generation() == proof.generation)
+                .expect("unchanged owner proof");
             if owner.address.layout_index.is_some() || !owner.address.path.starts_with(&table_path)
             {
-                continue;
+                return true;
             }
-            if let PhysicalOwner::Cell { row, column, .. } = &owner.address.physical {
-                proof.text_changed = (*row >= first_row && *row <= last_row)
-                    && (*column >= first_column && *column <= last_column);
+            let cell = match owner.address.physical {
+                PhysicalOwner::Cell { row, column, .. } => Some((row, column)),
+                PhysicalOwner::TextBody { cell, .. }
+                | PhysicalOwner::Paragraph { cell, .. }
+                | PhysicalOwner::Run { cell, .. } => cell,
+                _ => None,
+            };
+            let affected = cell.is_some_and(|(row, column)| {
+                row >= first_row
+                    && row <= last_row
+                    && column >= first_column
+                    && column <= last_column
+            });
+            if affected
+                && matches!(
+                    owner.address.physical,
+                    PhysicalOwner::Paragraph { .. } | PhysicalOwner::Run { .. }
+                )
+            {
+                return false;
             }
-        }
+            proof.text_changed = affected;
+            true
+        });
         Ok(proofs)
     }
 
+    /// Preserve the existing append contract: the body survives, while
+    /// prior paragraph/run views retire on collection topology changes.
+    pub(crate) fn appended_text_owners(
+        &self,
+        path: &oxml_py_support::ContentPath,
+    ) -> PyResult<Vec<OwnerSurvival>> {
+        let generation = path
+            .owner_generation()
+            .ok_or_else(|| PyValueError::new_err("text append needs a bound owner"))?;
+        let selected = self
+            .owners
+            .iter()
+            .find(|owner| owner.owner.generation() == generation)
+            .ok_or_else(|| PyValueError::new_err("text append owner is absent"))?;
+        let base = &selected.address.path;
+        let mut proofs = self.unchanged_owners()?;
+        proofs.retain_mut(|proof| {
+            let old = self
+                .owners
+                .iter()
+                .find(|owner| owner.owner.generation() == proof.generation)
+                .expect("unchanged owner proof");
+            if matches!(
+                old.address.physical,
+                PhysicalOwner::Paragraph { .. } | PhysicalOwner::Run { .. }
+            ) && old.address.path.starts_with(base)
+            {
+                return false;
+            }
+            if proof.generation == generation {
+                proof.text_changed = true;
+            }
+            true
+        });
+        Ok(proofs)
+    }
+
+    /// Ordinary text setters retain the existing lifetime contract. The
+    /// body survives, while a paragraph setter retires its earlier views.
     pub(crate) fn text_changed_owners(
         &self,
         path: &oxml_py_support::ContentPath,
     ) -> PyResult<Vec<OwnerSurvival>> {
+        use oxml_py_support::PathSeg;
+        let current = self
+            .current_path(path)
+            .ok_or_else(|| PyValueError::new_err("text mutation owner is absent"))?;
+        let generation = path
+            .owner_generation()
+            .ok_or_else(|| PyValueError::new_err("text mutation needs a bound owner"))?;
+        let paragraph = current
+            .segs
+            .iter()
+            .any(|seg| matches!(seg, PathSeg::Para(_)));
+        let base = current
+            .segs
+            .iter()
+            .filter(|seg| !matches!(seg, PathSeg::Para(_) | PathSeg::Run(_)))
+            .copied()
+            .collect::<smallvec::SmallVec<[PathSeg; 5]>>();
+        let body = self
+            .body_owner_at(&base)
+            .map(|owner| owner.owner.generation());
         let mut proofs = self.unchanged_owners()?;
-        let generation = path.owner_generation().ok_or_else(|| {
-            pyo3::exceptions::PyValueError::new_err("text mutation needs a bound owner")
-        })?;
-        let proof = proofs
-            .iter_mut()
-            .find(|proof| proof.generation == generation)
-            .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("text owner is absent"))?;
-        proof.text_changed = true;
+        // The slide scalar setter edits only the notes part. Slide body
+        // owners are unrelated and cannot be retired by that operation.
+        if self.owners.iter().any(|owner| {
+            owner.owner.generation() == generation
+                && matches!(owner.address.physical, PhysicalOwner::Slide(_))
+        }) {
+            proofs
+                .iter_mut()
+                .find(|proof| proof.generation == generation)
+                .expect("unchanged slide proof")
+                .text_changed = true;
+            return Ok(proofs);
+        }
+
+        proofs.retain_mut(|proof| {
+            let old = self
+                .owners
+                .iter()
+                .find(|owner| owner.owner.generation() == proof.generation)
+                .expect("unchanged owner proof");
+            let removed = if paragraph {
+                matches!(
+                    old.address.physical,
+                    PhysicalOwner::Paragraph { .. } | PhysicalOwner::Run { .. }
+                ) && old.address.path.starts_with(&current.segs)
+            } else {
+                matches!(
+                    old.address.physical,
+                    PhysicalOwner::Paragraph { .. } | PhysicalOwner::Run { .. }
+                ) && old.address.path.starts_with(&base)
+            };
+            if removed {
+                return false;
+            }
+            if proof.generation == generation || !paragraph && Some(proof.generation) == body {
+                proof.text_changed = true;
+            }
+            true
+        });
         Ok(proofs)
     }
 

@@ -9246,3 +9246,352 @@ def test_fx204_fit_snapshots_and_notes_are_readonly_and_exact():
         prs.slides[0].notes_text = text
         reopened = rpptx.Presentation.from_bytes(prs.to_bytes())
         assert reopened.slides[0].notes_text == text
+
+
+@pytest.mark.parametrize("kind", ["shape", "table", "cell", "body", "paragraph", "run", "slide", "layout", "master"])
+def test_fx211b_element_nine_physical_owners_are_checked_atomic_and_reopened(kind):
+    from rpptx import Element, Presentation, RpptxError
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    shape = slide.shapes.add_textbox(0, 0, 1000, 1000)
+    shape.text = "original"
+    table = slide.shapes.add_table(1, 1, 0, 0, 1000, 1000).table
+    cell = table.cell(0, 0)
+    cell.text = "cell original"
+    owner = {"shape": shape, "table": table, "cell": cell,
+             "body": shape.text_frame, "paragraph": shape.text_frame.paragraphs[0],
+             "run": shape.text_frame.paragraphs[0].runs[0], "slide": slide,
+             "layout": prs.slide_layouts[6], "master": prs.slide_masters[0]}[kind]
+    element = owner.element
+    assert isinstance(element, Element)
+    xml = element.xml
+    assert isinstance(xml, str)
+    before = prs.to_bytes()
+    element.replace_xml(xml)
+    assert prs.to_bytes() == before
+    assert element.xml == xml
+    for bad in ("<foreign/>", xml + "<extra/>", "<!DOCTYPE p [<!ENTITY x 'bad'>]>" + xml):
+        with pytest.raises(Exception):
+            element.replace_xml(bad)
+        assert prs.to_bytes() == before
+        assert element.xml == xml
+    if kind == "body":
+        held_run = shape.text_frame.paragraphs[0].runs[0]
+        held_cell_run = cell.text_frame.paragraphs[0].runs[0]
+        wrong_owner = '<q:txBody xmlns:q="http://schemas.microsoft.com/office/powerpoint/2018/8/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:bodyPr/><a:p/></q:txBody>'
+        for selected in (element, cell.text_frame.element):
+            with pytest.raises(RpptxError, match="expected one complete qualified owner root"):
+                selected.replace_xml(wrong_owner)
+            assert prs.to_bytes() == before
+            assert element.xml == xml
+            assert held_run.text == "original"
+            assert held_cell_run.text == "cell original"
+    if kind in ("layout", "master"):
+        def renamed(match):
+            opening = match.group(0)
+            if 'name="' in opening:
+                return re.sub(r'name="[^"]*"', 'name="xml edited"', opening, count=1)
+            return opening[:-1] + ' name="xml edited">'
+        changed = re.sub(r"<p:cSld\b[^>]*>", renamed, xml, count=1)
+    elif kind == "table":
+        changed = xml.replace("cell original", "cell edited")
+    elif kind == "cell":
+        changed = xml.replace("cell original", "cell edited")
+    else:
+        changed = xml.replace("original", "edited")
+    assert changed != xml
+    element.replace_xml(changed)
+    current = element.xml
+    assert "edited" in current
+    assert "original" not in current or kind == "slide"  # unrelated cell remains
+    reopened = Presentation.from_bytes(prs.to_bytes())
+    reopened = Presentation.from_bytes(reopened.to_bytes())
+    if kind == "layout":
+        assert reopened.slide_layouts[6].name == "xml edited"
+    elif kind == "master":
+        assert 'name="xml edited"' in reopened.slide_masters[0].element.xml
+    elif kind in ("table", "cell"):
+        assert reopened.slides[0].shapes[1].table.cell(0, 0).text == "cell edited"
+    else:
+        assert reopened.slides[0].shapes[0].text == "edited"
+
+
+def test_fx211b_element_precisely_retires_replaced_children_and_preserves_unrelated_owners():
+    from rpptx import Presentation, StaleElementError
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    shape = slide.shapes.add_textbox(0, 0, 1000, 1000)
+    shape.text = "first"
+    other = slide.shapes.add_textbox(0, 0, 1000, 1000)
+    other.text = "unrelated"
+    frame = shape.text_frame
+    paragraph = frame.paragraphs[0]
+    run = paragraph.runs[0]
+    font = run.font
+    other_run = other.text_frame.paragraphs[0].runs[0]
+    selected = paragraph.element
+    before = prs.to_bytes()
+    selected.replace_xml(selected.xml)
+    assert prs.to_bytes() == before and font.bold is None
+    selected.replace_xml(selected.xml.replace("first", "second"))
+    assert paragraph.text == frame.text == shape.text == "second"
+    assert "second" in selected.xml
+    assert other_run.text == "unrelated"
+    for read in (lambda: run.text, lambda: font.bold):
+        with pytest.raises(StaleElementError, match="Element.replace_xml"):
+            read()
+    new_run = paragraph.runs[0]
+    new_font = new_run.font
+    new_run.element.replace_xml(new_run.element.xml.replace("second", "third"))
+    assert new_run.text == "third"
+    with pytest.raises(StaleElementError, match="Element.replace_xml"):
+        _ = new_font.bold
+    assert paragraph.text == "third"
+
+
+def test_fx211b_shape_xml_retires_same_value_properties_and_body_remove_recreate():
+    from rpptx import Presentation, StaleElementError
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    shape = slide.shapes.add_textbox(0, 0, 1000, 1000)
+    shape.text = "kept"
+    fill = shape.fill
+    line = shape.line
+    body = shape.text_frame
+    old_paragraph = body.paragraphs[0]
+    original = shape.element.xml
+    changed = original.replace('name="TextBox 1"', 'name="renamed"')
+    if changed == original:
+        changed = re.sub(r'(name=")[^"]*', r'\1renamed', original, count=1)
+    shape.element.replace_xml(changed)
+    assert shape.text == "kept"
+    for read in (lambda: fill.type, lambda: line.width, lambda: body.text, lambda: old_paragraph.text):
+        with pytest.raises(StaleElementError, match="Element.replace_xml"):
+            read()
+    current_body = shape.text_frame
+    source = shape.element.xml
+    removed, count = re.subn(r"<p:txBody\b[^>]*>.*?</p:txBody>", "", source, count=1, flags=re.S)
+    assert count == 1
+    shape.element.replace_xml(removed)
+    assert not shape.has_text_frame
+    shape.element.replace_xml(source)
+    assert shape.text == "kept"
+    with pytest.raises(StaleElementError, match="Element.replace_xml"):
+        _ = current_body.text
+    assert shape.text_frame.text == "kept"
+
+
+def test_fx211b_table_xml_preserves_table_but_retires_cells_and_whole_shape_retires_table():
+    from rpptx import Presentation, StaleElementError
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    shape = slide.shapes.add_table(1, 1, 0, 0, 1000, 1000)
+    table = shape.table
+    cell = table.cell(0, 0)
+    cell.text = "before"
+    frame = cell.text_frame
+    table.element.replace_xml(table.element.xml.replace("before", "after"))
+    assert table.cell(0, 0).text == "after"
+    for read in (lambda: cell.text, lambda: frame.text):
+        with pytest.raises(StaleElementError, match="Element.replace_xml"):
+            read()
+    xml = shape.element.xml
+    changed = re.sub(r'(name=")[^"]*', r'\1renamed table', xml, count=1)
+    shape.element.replace_xml(changed)
+    with pytest.raises(StaleElementError, match="Element.replace_xml"):
+        _ = table.cell(0, 0)
+    assert shape.table.cell(0, 0).text == "after"
+
+
+def test_fx211b_notes_edit_keeps_unrelated_physical_text_owners():
+    from rpptx import Presentation
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    shape = slide.shapes.add_textbox(0, 0, 1000, 1000)
+    shape.text = "outside notes"
+    body = shape.text_frame
+    paragraph = body.paragraphs[0]
+    run = paragraph.runs[0]
+    font = run.font
+    element = paragraph.element
+    slide.notes_text = "new notes"
+    assert slide.notes_text == "new notes"
+    assert paragraph.text == run.text == body.text == shape.text == "outside notes"
+    assert font.bold is None
+    assert "outside notes" in element.xml
+
+
+@pytest.mark.parametrize("kind", ["shape", "table", "cell", "body", "paragraph", "run", "slide", "layout", "master"])
+def test_fx211b_element_qualified_alias_and_default_roots_preserve_actual_source(kind):
+    from rpptx import Presentation
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    shape = slide.shapes.add_textbox(0, 0, 1000, 1000)
+    shape.text = "alias text"
+    table = slide.shapes.add_table(1, 1, 0, 0, 1000, 1000).table
+    cell = table.cell(0, 0)
+    cell.text = "cell text"
+    owner = {"shape": shape, "table": table, "cell": cell,
+             "body": shape.text_frame, "paragraph": shape.text_frame.paragraphs[0],
+             "run": shape.text_frame.paragraphs[0].runs[0], "slide": slide,
+             "layout": prs.slide_layouts[6], "master": prs.slide_masters[0]}[kind]
+    element = owner.element
+    fully_modeled = kind in ("body", "paragraph", "run", "cell")
+    xml = element.xml
+    opaque = '<corpus:keep xmlns:corpus="urn:fx211b:opaque" value="corpus:QName">&#65;</corpus:keep>'
+    if not fully_modeled:
+        head, closing = xml.rsplit("</", 1)
+        element.replace_xml(head + opaque + "</" + closing)
+        xml = element.xml
+        assert opaque in xml
+    root = re.search(r"<([ap]):(\w+)\b", xml)
+    assert root
+    prefix, local = root.groups()
+    uri = "http://schemas.openxmlformats.org/" + ("presentationml/2006/main" if prefix == "p" else "drawingml/2006/main")
+    # Change only the modeled root name. Its children retain their actual
+    # existing qualified namespace bindings and opaque lexical payloads.
+    alias = xml.replace(f"<{prefix}:{local}", f'<q:{local} xmlns:q="{uri}"', 1)
+    alias = alias.replace(f"</{prefix}:{local}>", f"</q:{local}>")
+    default = xml.replace(f"<{prefix}:{local}", f'<{local} xmlns="{uri}"', 1)
+    default = default.replace(f"</{prefix}:{local}>", f"</{local}>")
+    before = prs.to_bytes()
+    for incoming in (alias, default):
+        element.replace_xml(incoming)
+        if fully_modeled:
+            assert prs.to_bytes() == before
+            assert element.xml == xml
+        else:
+            # Unknown vocabulary conservatively declines equivalence. A
+            # qualified edit still preserves the actual source payloads.
+            assert "alias text" in prs.slides[0].shapes[0].text
+            assert prs.slides[0].shapes[1].table.cell(0, 0).text == "cell text"
+            assert opaque in element.xml
+            saved_parts = _package_parts(prs.to_bytes())
+            assert any(opaque.encode() in data for name, data in saved_parts.items() if name.endswith(".xml"))
+            reopened = Presentation.from_bytes(prs.to_bytes())
+            assert reopened.slides[0].shapes[0].text == "alias text"
+            assert reopened.slides[0].shapes[1].table.cell(0, 0).text == "cell text"
+    before = prs.to_bytes()
+    current = element.xml
+    element.replace_xml(current)
+    assert prs.to_bytes() == before
+    wrong = alias.replace(f'xmlns:q="{uri}"', 'xmlns:q="urn:foreign"', 1)
+    with pytest.raises(Exception):
+        element.replace_xml(wrong)
+    assert prs.to_bytes() == before and element.xml == current
+
+
+def test_fx211b_footer_replacement_retires_actual_changed_nodes_only():
+    from rpptx import Presentation, StaleElementError
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[1])
+    other = slide.shapes.add_textbox(0, 0, 1000, 1000)
+    other.text = "unrelated footer owner"
+    prs.set_header_footer(slide_number=False, footer="footer first", hide_on_title=False)
+    actual = [shape for shape in slide.shapes if shape.has_text_frame and shape.text == "footer first"]
+    assert len(actual) == 1
+    old_body = actual[0].text_frame
+    old_paragraph = old_body.paragraphs[0]
+    old_runs = list(old_paragraph.runs)
+    other_run = other.text_frame.paragraphs[0].runs[0]
+    prs.set_header_footer(slide_number=False, footer="footer second", hide_on_title=False)
+    assert slide.header_footer.footer == "footer second"
+    assert other_run.text == "unrelated footer owner"
+    for read in [lambda: old_paragraph.text] + [lambda run=run: run.text for run in old_runs]:
+        with pytest.raises(StaleElementError, match="Presentation.set_header_footer"):
+            read()
+
+
+def test_fx211b_held_layout_element_tracks_actual_part_after_earlier_removal():
+    from rpptx import Presentation
+    prs = Presentation()
+    held = prs.slide_layouts[6]
+    slide = prs.slides.add_slide(held)
+    element = held.element
+    xml = element.xml
+    name = held.name
+    prs.slide_layouts.remove(prs.slide_layouts[0])
+    assert held.name == name
+    assert element.xml == xml == held.element.xml
+    element.replace_xml(xml)
+    assert slide.slide_layout.name == name
+
+
+def test_fx211b_element_shape_matrix_preserves_five_kinds_and_retires_group_children():
+    from rpptx import Presentation, StaleElementError
+    from rpptx.enum.shapes import MSO_CONNECTOR
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    text = slide.shapes.add_textbox(0, 0, 1000, 1000)
+    text.text = "unrelated survivor"
+    picture = slide.shapes.add_picture(io.BytesIO(_tiny_png()), 0, 0, 1000, 1000)
+    connector = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, 0, 0, 1000, 1000)
+    table = slide.shapes.add_table(1, 1, 0, 0, 1000, 1000)
+    group = slide.shapes.add_group_shape()
+    child = group.shapes.add_textbox(0, 0, 1000, 1000)
+    child.text = "same group child"
+    for owner, root in ((text, "sp"), (picture, "pic"), (connector, "cxnSp"), (table, "graphicFrame"), (group, "grpSp")):
+        element = owner.element
+        xml = element.xml
+        assert re.search(rf"<p:{root}\b", xml)
+        before = prs.to_bytes()
+        element.replace_xml(xml)
+        assert prs.to_bytes() == before
+        wrong = re.sub(rf"<p:{root}\b", "<p:wrong", xml, count=1).replace(f"</p:{root}>", "</p:wrong>")
+        with pytest.raises(Exception):
+            element.replace_xml(wrong)
+        assert prs.to_bytes() == before
+        changed = re.sub(r'(name=")[^"]*', r'\1xml ' + root, xml, count=1)
+        assert changed != xml
+        element.replace_xml(changed)
+        assert owner.name == "xml " + root
+        assert re.search(rf"<p:{root}\b", element.xml)
+    with pytest.raises(StaleElementError, match="Element.replace_xml"):
+        _ = child.text
+    assert group.shapes[0].text == "same group child"
+    reopened = Presentation.from_bytes(prs.to_bytes())
+    assert [shape.name for shape in reopened.slides[0].shapes] == ["xml sp", "xml pic", "xml cxnSp", "xml graphicFrame", "xml grpSp"]
+
+
+def test_fx211b_graphic_frame_payload_transition_is_named_and_atomic():
+    from rpptx import Presentation
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    shape = slide.shapes.add_table(1, 1, 0, 0, 1000, 1000)
+    table = shape.table
+    cell = table.cell(0, 0)
+    cell.text = "retained"
+    xml = shape.element.xml
+    changed, count = re.subn(r"<a:graphicData\b[^>]*>.*?</a:graphicData>", '<a:graphicData uri="urn:fx211b:opaque"><payload xmlns="urn:fx211b:opaque"/></a:graphicData>', xml, count=1, flags=re.S)
+    assert count == 1
+    before = prs.to_bytes()
+    with pytest.raises(NotImplementedError, match="table payload presence"):
+        shape.element.replace_xml(changed)
+    assert prs.to_bytes() == before and cell.text == table.cell(0, 0).text == "retained"
+
+
+def test_fx211b_virtual_cell_and_inherited_style_elements_refuse_without_materializing():
+    from rpptx import Presentation
+    prs, _ = _f_x194_table()
+    out = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(prs.to_bytes())) as source, zipfile.ZipFile(out, "w") as target:
+        for member in source.infolist():
+            data = source.read(member.filename)
+            if member.filename == "ppt/slides/slide1.xml":
+                data, count = re.subn(rb"<a:txBody\b[^>]*>.*?</a:txBody>", b"", data, count=1, flags=re.S)
+                assert count == 1
+            target.writestr(member, data)
+    prs = Presentation.from_bytes(out.getvalue())
+    cell = prs.slides[0].shapes[0].table.cell(0, 0)
+    frame = cell.text_frame
+    style = prs.slide_masters[0].text_styles.title.level(1)
+    prior_name = style.font.name
+    before = prs.to_bytes()
+    with pytest.raises(NotImplementedError, match="physical text body"):
+        _ = frame.element
+    with pytest.raises(NotImplementedError, match="physical XML owner"):
+        _ = style.element
+    assert prs.to_bytes() == before
+    with pytest.raises(ValueError, match="shape has no text frame"):
+        _ = frame.text
+    assert style.font.name == prior_name

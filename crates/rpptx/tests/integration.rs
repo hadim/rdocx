@@ -20254,13 +20254,19 @@ fn rpptx_is_an_explicit_publication_candidate() {
     assert!(manifest.contains("default-template = [\"dep:scraper\"]"));
     assert!(manifest.contains("scraper = { workspace = true, optional = true }"));
     for dependency in [
-        "dep:gif",
         "dep:jpeg-encoder",
         "dep:miniz_oxide",
         "dep:oxml-pdf",
         "dep:rpptx-layout",
         "dep:rpptx-render",
-        "dep:tiny-skia",
+    ] {
+        assert!(manifest.contains(dependency));
+    }
+    for dependency in [
+        "gif.workspace = true",
+        "tiny-skia.workspace = true",
+        "zune-jpeg.workspace = true",
+        "tiff.workspace = true",
     ] {
         assert!(manifest.contains(dependency));
     }
@@ -30467,4 +30473,1372 @@ fn fx204_native_batch_counts_and_placement_publish_once() {
         reopened.slide(1).unwrap().notes_text().as_deref(),
         Some("C")
     );
+}
+
+#[test]
+fn fx211b_regular_run_parser_refuses_trailing_root() {
+    let valid = br#"<a:r xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:t>owned</a:t></a:r>"#;
+    assert!(oxml_drawing::text::CT_RegularTextRun::from_xml(valid).is_ok());
+    let mut trailing = valid.to_vec();
+    trailing.extend_from_slice(b"<foreign/>");
+    assert!(oxml_drawing::text::CT_RegularTextRun::from_xml(&trailing).is_err());
+}
+
+#[test]
+fn fx211b_text_body_parser_refuses_foreign_root() {
+    let valid = br#"<a:txBody xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:bodyPr/><a:lstStyle/><a:p/></a:txBody>"#;
+    assert!(oxml_drawing::text::CT_TextBody::from_xml(valid).is_ok());
+    let foreign = br#"<x:txBody xmlns:x="urn:foreign" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:bodyPr/><a:lstStyle/><a:p/></x:txBody>"#;
+    assert!(oxml_drawing::text::CT_TextBody::from_xml(foreign).is_err());
+}
+
+#[test]
+fn fx211b_table_parser_refuses_trailing_root() {
+    let table =
+        oxml_drawing::table::CT_Table::new(1, 1, rpptx::Emu(914400), rpptx::Emu(914400)).unwrap();
+    let valid = table.to_xml().unwrap();
+    assert!(oxml_drawing::table::CT_Table::from_xml(&valid).is_ok());
+    let mut trailing = valid;
+    trailing.extend_from_slice(b"<foreign/>");
+    assert!(oxml_drawing::table::CT_Table::from_xml(&trailing).is_err());
+}
+
+#[test]
+fn fx211b_slide_parser_refuses_trailing_root() {
+    let valid = br#"<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr/></p:spTree></p:cSld></p:sld>"#;
+    assert!(rpptx_oxml::slide_parts::CT_Slide::from_xml(valid).is_ok());
+    let mut trailing = valid.to_vec();
+    trailing.extend_from_slice(b"<foreign/>");
+    assert!(rpptx_oxml::slide_parts::CT_Slide::from_xml(&trailing).is_err());
+}
+
+#[test]
+fn fx211b_native_nine_owner_noops_and_selected_run_publish() {
+    use rpptx::{Emu, Presentation, ShapeOwner};
+    eprintln!("stage let mut deck");
+    let mut deck = Presentation::new().unwrap();
+    eprintln!("stage deck.add_slide(6).unwrap();");
+    deck.add_slide(6).unwrap();
+    deck.slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(2000000), Emu(500000))
+        .unwrap()
+        .set_text("source")
+        .unwrap();
+    deck.slide_mut(0)
+        .unwrap()
+        .add_table(2, 2, Emu(0), Emu(600000), Emu(2000000), Emu(1000000))
+        .unwrap();
+    eprintln!("stage let mut deck");
+    let mut deck = Presentation::from_bytes(&deck.to_bytes().unwrap()).unwrap();
+    let owner = ShapeOwner::Slide(0);
+    let before = deck.to_bytes().unwrap();
+    eprintln!("stage let shape");
+    let shape = String::from_utf8(deck.shape_xml_at(owner, &[0]).unwrap()).unwrap();
+    deck.replace_shape_xml_at(owner, &[0], &shape).unwrap();
+    eprintln!("stage let table");
+    let table = String::from_utf8(deck.table_xml_at(owner, &[1]).unwrap()).unwrap();
+    deck.replace_table_xml_at(owner, &[1], &table).unwrap();
+    eprintln!("stage let cell");
+    let cell = String::from_utf8(deck.cell_xml_at(owner, &[1], 0, 0).unwrap()).unwrap();
+    deck.replace_cell_xml_at(owner, &[1], 0, 0, &cell).unwrap();
+    eprintln!("stage let body");
+    let body = String::from_utf8(deck.text_body_xml_at(owner, &[0], None).unwrap()).unwrap();
+    deck.replace_text_body_xml_at(owner, &[0], None, &body)
+        .unwrap();
+    eprintln!("stage let paragraph");
+    let paragraph =
+        String::from_utf8(deck.paragraph_xml_at(owner, &[0], None, 0).unwrap()).unwrap();
+    deck.replace_paragraph_xml_at(owner, &[0], None, 0, &paragraph)
+        .unwrap();
+    eprintln!("stage let run");
+    let run = String::from_utf8(deck.run_xml_at(owner, &[0], None, 0, 0).unwrap()).unwrap();
+    deck.replace_run_xml_at(owner, &[0], None, 0, 0, &run)
+        .unwrap();
+    eprintln!("stage let slide");
+    let slide = String::from_utf8(deck.slide_xml(0).unwrap()).unwrap();
+    deck.replace_slide_xml(0, &slide).unwrap();
+    eprintln!("stage let layout");
+    let layout = String::from_utf8(deck.layout_xml(6).unwrap()).unwrap();
+    deck.replace_layout_xml(6, &layout).unwrap();
+    eprintln!("stage let master");
+    let master = String::from_utf8(deck.master_xml(0).unwrap()).unwrap();
+    deck.replace_master_xml(0, &master).unwrap();
+    assert_eq!(deck.to_bytes().unwrap(), before);
+    deck.replace_run_xml_at(
+        owner,
+        &[0],
+        None,
+        0,
+        0,
+        &run.replace(">source<", ">changed<"),
+    )
+    .unwrap();
+    assert_eq!(
+        deck.part_shape_at(owner, &[0]).unwrap().text().as_deref(),
+        Some("changed")
+    );
+    assert_eq!(
+        String::from_utf8(deck.table_xml_at(owner, &[1]).unwrap()).unwrap(),
+        table
+    );
+    let reopened = Presentation::from_bytes(&deck.to_bytes().unwrap()).unwrap();
+    assert_eq!(
+        reopened
+            .part_shape_at(owner, &[0])
+            .unwrap()
+            .text()
+            .as_deref(),
+        Some("changed")
+    );
+}
+
+#[test]
+fn fx211b_native_invalid_owner_input_is_atomic() {
+    use rpptx::{Emu, Presentation, ShapeOwner};
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    deck.slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(2000000), Emu(500000))
+        .unwrap()
+        .set_text("source")
+        .unwrap();
+    let owner = ShapeOwner::Slide(0);
+    let before = deck.to_bytes().unwrap();
+    let valid = String::from_utf8(deck.run_xml_at(owner, &[0], None, 0, 0).unwrap()).unwrap();
+    for invalid in [
+        valid.clone() + "<extra/>",
+        valid.replace("drawingml/2006/main", "drawingml/2006/foreign"),
+        valid
+            .replace("<a:r ", "<a:fld ")
+            .replace("</a:r>", "</a:fld>"),
+        "<!DOCTYPE a:r [<!ENTITY x 'source'>]>".to_owned() + &valid,
+        valid.replace(">source<", ">&missing;<"),
+    ] {
+        assert!(
+            deck.replace_run_xml_at(owner, &[0], None, 0, 0, &invalid)
+                .is_err(),
+            "{invalid}"
+        );
+        assert_eq!(deck.to_bytes().unwrap(), before);
+    }
+    let wrong_order = r#"<a:r xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:t>source</a:t><a:rPr/></a:r>"#;
+    assert!(
+        deck.replace_run_xml_at(owner, &[0], None, 0, 0, wrong_order)
+            .is_err()
+    );
+    assert_eq!(deck.to_bytes().unwrap(), before);
+    let comment_body = r#"<q:txBody xmlns:q="http://schemas.microsoft.com/office/powerpoint/2018/8/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:bodyPr/><a:p/></q:txBody>"#;
+    assert!(
+        deck.replace_text_body_xml_at(owner, &[0], None, comment_body)
+            .is_err()
+    );
+    assert_eq!(deck.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn fx211b_native_relationship_actual_target_and_mode_refusal() {
+    use oxml_opc::{
+        OpcPackage,
+        relationship::{Relationship, rel_types},
+    };
+    use rpptx::{Emu, Presentation, ShapeOwner};
+    let mut producer = Presentation::new().unwrap();
+    producer.add_slide(6).unwrap();
+    producer.add_slide(6).unwrap();
+    producer
+        .slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(2000000), Emu(500000))
+        .unwrap()
+        .set_text("source")
+        .unwrap();
+    let original = producer.to_bytes().unwrap();
+    for (kind, target, external, child) in [
+        (
+            rel_types::SLIDE,
+            "slide2.xml",
+            false,
+            r#"<a:hlinkClick r:id="rIdXml" action="ppaction://hlinksldjump"/>"#,
+        ),
+        (
+            rel_types::SLIDE,
+            "../theme/theme1.xml",
+            false,
+            r#"<a:hlinkClick r:id="rIdXml" action="ppaction://hlinksldjump"/>"#,
+        ),
+        (
+            rel_types::SLIDE,
+            "https://example.invalid/slide",
+            true,
+            r#"<a:hlinkClick r:id="rIdXml" action="ppaction://hlinksldjump"/>"#,
+        ),
+        (
+            rel_types::HYPERLINK,
+            "https://example.invalid/",
+            true,
+            r#"<a:hlinkClick r:id="rIdXml"/>"#,
+        ),
+        (
+            rel_types::HYPERLINK,
+            "slide2.xml",
+            false,
+            r#"<a:hlinkClick r:id="rIdXml"/>"#,
+        ),
+        (
+            rel_types::IMAGE,
+            "../theme/theme1.xml",
+            false,
+            r#"<a:blip r:embed="rIdXml"/>"#,
+        ),
+        (
+            rel_types::IMAGE,
+            "https://example.invalid/image.png",
+            true,
+            r#"<a:blip r:embed="rIdXml"/>"#,
+        ),
+    ] {
+        let mut package = OpcPackage::from_reader(std::io::Cursor::new(&original)).unwrap();
+        package
+            .part_rels
+            .get_mut("/ppt/slides/slide1.xml")
+            .unwrap()
+            .items
+            .push(Relationship {
+                id: "rIdXml".into(),
+                rel_type: kind.into(),
+                target: target.into(),
+                target_mode: external.then(|| "External".into()),
+            });
+        let mut bytes = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut bytes).unwrap();
+        let mut deck = Presentation::from_bytes(&bytes.into_inner()).unwrap();
+        let before = deck.to_bytes().unwrap();
+        let xml = format!(
+            r#"<a:r xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><a:rPr>{child}</a:rPr><a:t>source</a:t></a:r>"#
+        );
+        let valid = kind == rel_types::SLIDE && target == "slide2.xml"
+            || kind == rel_types::HYPERLINK && external;
+        let result = deck.replace_run_xml_at(ShapeOwner::Slide(0), &[0], None, 0, 0, &xml);
+        assert_eq!(
+            result.is_ok(),
+            valid,
+            "kind={kind} target={target} external={external} result={result:?}"
+        );
+        if !valid {
+            assert_eq!(deck.to_bytes().unwrap(), before);
+        } else {
+            Presentation::from_bytes(&deck.to_bytes().unwrap()).unwrap();
+        }
+    }
+}
+
+#[test]
+fn fx211b_native_alias_noop_and_opaque_namespace_meaning() {
+    use rpptx::{Emu, Presentation, ShapeOwner};
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    deck.slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(2000000), Emu(500000))
+        .unwrap()
+        .set_text("source")
+        .unwrap();
+    let owner = ShapeOwner::Slide(0);
+    let before = deck.to_bytes().unwrap();
+    let run = String::from_utf8(deck.run_xml_at(owner, &[0], None, 0, 0).unwrap()).unwrap();
+    let alias = run.replace("a:", "q:").replace("xmlns:a=", "xmlns:q=");
+    deck.replace_run_xml_at(owner, &[0], None, 0, 0, &alias)
+        .unwrap();
+    assert_eq!(deck.to_bytes().unwrap(), before);
+    let default = run.replace("a:", "").replace("xmlns:a=", "xmlns=");
+    deck.replace_run_xml_at(owner, &[0], None, 0, 0, &default)
+        .unwrap();
+    assert_eq!(deck.to_bytes().unwrap(), before);
+    let opaque = r#"<a:r xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:q="urn:one" xmlns:x="urn:opaque" x:kind="q:item"><a:t>source</a:t><x:payload keep="&#65;"><a:r><a:t>opaque</a:t><a:rPr/></a:r></x:payload></a:r>"#;
+    deck.replace_run_xml_at(owner, &[0], None, 0, 0, opaque)
+        .unwrap();
+    let snapshot = String::from_utf8(deck.run_xml_at(owner, &[0], None, 0, 0).unwrap()).unwrap();
+    assert!(snapshot.contains(r#"keep="&#65;""#));
+    assert!(snapshot.contains("<a:t>opaque</a:t><a:rPr/>"));
+    let held = deck.to_bytes().unwrap();
+    deck.replace_run_xml_at(owner, &[0], None, 0, 0, &snapshot)
+        .unwrap();
+    assert_eq!(deck.to_bytes().unwrap(), held);
+    let rebound = snapshot.replacen(r#"xmlns:q="urn:one""#, r#"xmlns:q="urn:two""#, 1);
+    deck.replace_run_xml_at(owner, &[0], None, 0, 0, &rebound)
+        .unwrap();
+    assert_ne!(deck.to_bytes().unwrap(), held);
+    assert!(
+        String::from_utf8(deck.run_xml_at(owner, &[0], None, 0, 0).unwrap())
+            .unwrap()
+            .contains(r#"xmlns:q="urn:two""#)
+    );
+    let reopened = Presentation::from_bytes(&deck.to_bytes().unwrap()).unwrap();
+    assert_eq!(
+        reopened
+            .part_shape_at(owner, &[0])
+            .unwrap()
+            .text()
+            .as_deref(),
+        Some("source")
+    );
+}
+
+#[test]
+fn fx211b_native_shape_variants_preserve_kind_identity_and_parts() {
+    use rpptx::{ConnectorType, Emu, Presentation, ShapeOwner};
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    deck.slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(2000000), Emu(500000))
+        .unwrap()
+        .set_text("source")
+        .unwrap();
+    deck.add_picture(
+        0,
+        &f226_blue_pixel_png(),
+        "owner.png",
+        Emu(0),
+        Emu(0),
+        None,
+        None,
+    )
+    .unwrap();
+    deck.shapes_mut(0, &[]).unwrap().add_group_shape().unwrap();
+    deck.shapes_mut(0, &[])
+        .unwrap()
+        .add_connector(
+            ConnectorType::Straight,
+            Emu(0),
+            Emu(0),
+            Emu(100000),
+            Emu(100000),
+        )
+        .unwrap();
+    deck.slide_mut(0)
+        .unwrap()
+        .add_table(2, 2, Emu(0), Emu(600000), Emu(2000000), Emu(1000000))
+        .unwrap();
+    let owner = ShapeOwner::Slide(0);
+    for index in 0..5 {
+        let kind = deck.part_shape_at(owner, &[index]).unwrap().kind();
+        let id = deck.part_shape_at(owner, &[index]).unwrap().non_visual_id();
+        let xml = String::from_utf8(deck.shape_xml_at(owner, &[index]).unwrap()).unwrap();
+        let before = deck.to_bytes().unwrap();
+        deck.replace_shape_xml_at(owner, &[index], &xml).unwrap();
+        assert_eq!(deck.to_bytes().unwrap(), before);
+        let start = xml.find(r#"name=""#).unwrap() + 6;
+        let end = start + xml[start..].find('"').unwrap();
+        let mut replacement = xml.clone();
+        replacement.replace_range(start..end, &format!("owner{index}"));
+        deck.replace_shape_xml_at(owner, &[index], &replacement)
+            .unwrap();
+        let shape = deck.part_shape_at(owner, &[index]).unwrap();
+        assert_eq!(shape.kind(), kind);
+        assert_eq!(shape.non_visual_id(), id);
+        assert_eq!(
+            shape.non_visual_name().as_deref(),
+            Some(format!("owner{index}").as_str())
+        );
+        let stable = deck.to_bytes().unwrap();
+        let wrong_id = replacement.replacen(&format!(r#"id="{}""#, id.unwrap()), r#"id="999""#, 1);
+        assert!(
+            deck.replace_shape_xml_at(owner, &[index], &wrong_id)
+                .is_err()
+        );
+        assert_eq!(deck.to_bytes().unwrap(), stable);
+    }
+    Presentation::from_bytes(&deck.to_bytes().unwrap()).unwrap();
+}
+
+#[test]
+fn fx211b_native_table_cell_paragraph_body_and_part_edits() {
+    use rpptx::{Emu, Presentation, ShapeOwner};
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    deck.slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(2000000), Emu(500000))
+        .unwrap()
+        .set_text("source")
+        .unwrap();
+    deck.slide_mut(0)
+        .unwrap()
+        .add_table(2, 2, Emu(0), Emu(600000), Emu(2000000), Emu(1000000))
+        .unwrap();
+    let owner = ShapeOwner::Slide(0);
+    let paragraph =
+        String::from_utf8(deck.paragraph_xml_at(owner, &[0], None, 0).unwrap()).unwrap();
+    deck.replace_paragraph_xml_at(
+        owner,
+        &[0],
+        None,
+        0,
+        &paragraph.replace(">source<", ">paragraph<"),
+    )
+    .unwrap();
+    let body = String::from_utf8(deck.text_body_xml_at(owner, &[0], None).unwrap()).unwrap();
+    deck.replace_text_body_xml_at(owner, &[0], None, &body.replace(">paragraph<", ">body<"))
+        .unwrap();
+    let cell = String::from_utf8(deck.cell_xml_at(owner, &[1], 0, 0).unwrap()).unwrap();
+    let changed_cell = cell.replace("<a:p/>", "<a:p><a:r><a:t>cell</a:t></a:r></a:p>");
+    assert_ne!(cell, changed_cell);
+    deck.replace_cell_xml_at(owner, &[1], 0, 0, &changed_cell)
+        .unwrap();
+    let table = String::from_utf8(deck.table_xml_at(owner, &[1]).unwrap()).unwrap();
+    deck.replace_table_xml_at(owner, &[1], &table.replace(">cell<", ">table<"))
+        .unwrap();
+    assert_eq!(
+        deck.part_shape_at(owner, &[1])
+            .unwrap()
+            .table()
+            .unwrap()
+            .cell(0, 0)
+            .unwrap()
+            .text(),
+        "table"
+    );
+    deck.shape_mut_at(owner, &[1])
+        .unwrap()
+        .table_mut()
+        .unwrap()
+        .cell_mut(0, 0)
+        .unwrap()
+        .merge_to(1, 1)
+        .unwrap();
+    let merged = String::from_utf8(deck.table_xml_at(owner, &[1]).unwrap()).unwrap();
+    deck.replace_table_xml_at(owner, &[1], &merged).unwrap();
+    let invalid = merged.replacen(r#"hMerge="1""#, r#"hMerge="0""#, 1);
+    assert_ne!(invalid, merged);
+    let before = deck.to_bytes().unwrap();
+    assert!(deck.replace_table_xml_at(owner, &[1], &invalid).is_err());
+    assert_eq!(deck.to_bytes().unwrap(), before);
+    for part in [
+        ShapeOwner::Slide(0),
+        ShapeOwner::Layout(6),
+        ShapeOwner::Master(0),
+    ] {
+        let xml = String::from_utf8(
+            match part {
+                ShapeOwner::Slide(i) => deck.slide_xml(i),
+                ShapeOwner::Layout(i) => deck.layout_xml(i),
+                ShapeOwner::Master(i) => deck.master_xml(i),
+            }
+            .unwrap(),
+        )
+        .unwrap();
+        let c_sld = xml.find("<p:cSld").unwrap();
+        let c_sld_end = c_sld + xml[c_sld..].find('>').unwrap();
+        let mut changed = xml.clone();
+        if let Some(name) = xml[c_sld..c_sld_end].find(r#"name=""#) {
+            let start = c_sld + name + 6;
+            let end = start + xml[start..].find('"').unwrap();
+            changed.replace_range(start..end, "selected");
+        } else {
+            changed.insert_str(c_sld + 7, r#" name="selected""#);
+        }
+        assert_ne!(changed, xml);
+        match part {
+            ShapeOwner::Slide(i) => deck.replace_slide_xml(i, &changed),
+            ShapeOwner::Layout(i) => deck.replace_layout_xml(i, &changed),
+            ShapeOwner::Master(i) => deck.replace_master_xml(i, &changed),
+        }
+        .unwrap();
+        let output = String::from_utf8(
+            match part {
+                ShapeOwner::Slide(i) => deck.slide_xml(i),
+                ShapeOwner::Layout(i) => deck.layout_xml(i),
+                ShapeOwner::Master(i) => deck.master_xml(i),
+            }
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(output.contains(r#"<p:cSld name="selected""#), "{output}");
+    }
+    let reopened = Presentation::from_bytes(&deck.to_bytes().unwrap()).unwrap();
+    assert_eq!(
+        reopened
+            .part_shape_at(owner, &[0])
+            .unwrap()
+            .text()
+            .as_deref(),
+        Some("body")
+    );
+    assert_eq!(
+        reopened
+            .part_shape_at(owner, &[1])
+            .unwrap()
+            .table()
+            .unwrap()
+            .cell(0, 0)
+            .unwrap()
+            .text(),
+        "table"
+    );
+}
+
+#[test]
+fn fx211b_native_known_attributes_and_empty_body_are_atomic() {
+    use rpptx::{Emu, Presentation, ShapeOwner};
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    deck.slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(2000000), Emu(500000))
+        .unwrap()
+        .set_text("source")
+        .unwrap();
+    let owner = ShapeOwner::Slide(0);
+    let before = deck.to_bytes().unwrap();
+    for attributes in [
+        r#"b="not-bool""#,
+        r#"sz="99""#,
+        r#"sz="400001""#,
+        r#"cap="unknown""#,
+    ] {
+        let xml = format!(
+            r#"<a:r xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:rPr {attributes}/><a:t>source</a:t></a:r>"#
+        );
+        assert!(
+            deck.replace_run_xml_at(owner, &[0], None, 0, 0, &xml)
+                .is_err(),
+            "{xml}"
+        );
+        assert_eq!(deck.to_bytes().unwrap(), before);
+    }
+    let empty =
+        r#"<p:txBody xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"/>"#;
+    assert!(
+        deck.replace_text_body_xml_at(owner, &[0], None, empty)
+            .is_err()
+    );
+    assert_eq!(deck.to_bytes().unwrap(), before);
+}
+
+#[test]
+fn fx211b_native_container_text_and_property_choices_refused() {
+    use rpptx::{Emu, Presentation, ShapeOwner};
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    deck.slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(2000000), Emu(500000))
+        .unwrap()
+        .set_text("source")
+        .unwrap();
+    let before = deck.to_bytes().unwrap();
+    for content in [
+        "structural text<a:t>source</a:t>",
+        "<a:rPr><a:noFill/><a:solidFill><a:srgbClr val=\"000000\"/></a:solidFill></a:rPr><a:t>source</a:t>",
+        "<a:rPr><a:latin typeface=\"Arial\"/><a:ln/></a:rPr><a:t>source</a:t>",
+    ] {
+        let xml = format!(
+            r#"<a:r xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">{content}</a:r>"#
+        );
+        assert!(
+            deck.replace_run_xml_at(ShapeOwner::Slide(0), &[0], None, 0, 0, &xml)
+                .is_err()
+        );
+        assert_eq!(deck.to_bytes().unwrap(), before);
+    }
+}
+
+#[cfg(feature = "digital-signatures")]
+#[test]
+fn fx211b_native_opaque_root_edit_retains_invalidated_signature() {
+    use rpptx::{Emu, Presentation, ShapeOwner};
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    deck.slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(2000000), Emu(500000))
+        .unwrap()
+        .set_text("source")
+        .unwrap();
+    let opaque = r#"<a:r xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:x="urn:opaque" xmlns:q="urn:one" x:kind="q:item"><a:t>source</a:t></a:r>"#;
+    deck.replace_run_xml_at(ShapeOwner::Slide(0), &[0], None, 0, 0, opaque)
+        .unwrap();
+    let (key, certificate) = f221_signing_material();
+    let report = deck.sign(&key, &certificate).unwrap();
+    assert!(report.cryptographically_valid && report.coverage_complete);
+    let original = deck.to_bytes().unwrap();
+    let source_package = open_opc(&original, "F-X211b actual signed predecessor");
+    let mut deck = Presentation::from_bytes(&original).unwrap();
+    let xml = String::from_utf8(
+        deck.run_xml_at(ShapeOwner::Slide(0), &[0], None, 0, 0)
+            .unwrap(),
+    )
+    .unwrap();
+    deck.replace_run_xml_at(
+        ShapeOwner::Slide(0),
+        &[0],
+        None,
+        0,
+        0,
+        &xml.replacen("urn:one", "urn:two", 1),
+    )
+    .unwrap();
+    let output = deck.to_bytes().unwrap();
+    let output_package = open_opc(&output, "F-X211b actual signed successor");
+    for (part, bytes) in source_package
+        .parts
+        .iter()
+        .filter(|(part, _)| part.starts_with("/_xmlsignatures/"))
+    {
+        assert_eq!(output_package.parts.get(part), Some(bytes));
+    }
+    let reopened = Presentation::from_bytes(&output).unwrap();
+    let reports = reopened.verify_signatures().unwrap();
+    assert_eq!(reports.len(), 1);
+    assert!(!reports[0].cryptographically_valid);
+    assert!(
+        String::from_utf8(
+            reopened
+                .run_xml_at(ShapeOwner::Slide(0), &[0], None, 0, 0)
+                .unwrap()
+        )
+        .unwrap()
+        .contains("urn:two")
+    );
+}
+
+#[test]
+fn fx211b_native_actual_part_inherited_opaque_closure_and_siblings() {
+    use rpptx::{Emu, Presentation, ShapeOwner};
+    let mut authored = Presentation::new().unwrap();
+    authored.add_slide(6).unwrap();
+    authored
+        .slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(2000000), Emu(500000))
+        .unwrap()
+        .set_text("source")
+        .unwrap();
+    let shape =
+        String::from_utf8(authored.shape_xml_at(ShapeOwner::Slide(0), &[0]).unwrap()).unwrap();
+    let outer = r#"<corpus:keep lexical="&#65;"/>"#;
+    let inner = r#"<corpus:keep xmlns:corpus="urn:inner" lexical="&#66;"/>"#;
+    let shape = shape
+        .replace("</p:txBody>", &format!("{outer}{inner}</p:txBody>"))
+        .replace("</p:sp>", &format!("{outer}</p:sp>"));
+    let layout_path = authored.layout_part_name(6).unwrap().to_owned();
+    let master_path = authored.slide_master_part_name(0).unwrap().unwrap();
+    let layout_index = authored
+        .layout(6)
+        .unwrap()
+        .common_slide_data
+        .shape_tree
+        .children
+        .len();
+    let master_index = authored
+        .master(0)
+        .unwrap()
+        .common_slide_data
+        .shape_tree
+        .children
+        .len();
+    let mut package = open_opc(
+        &authored.to_bytes().unwrap(),
+        "F-X211b inherited actual producer",
+    );
+    let contexts = [
+        (ShapeOwner::Slide(0), "/ppt/slides/slide1.xml".to_owned(), 0),
+        (ShapeOwner::Layout(6), layout_path, layout_index),
+        (ShapeOwner::Master(0), master_path, master_index),
+    ];
+    for (owner, name, _) in &contexts {
+        let mut xml = String::from_utf8(package.get_part(name).unwrap().to_vec()).unwrap();
+        let root_tag = match owner {
+            ShapeOwner::Slide(_) => "<p:sld ",
+            ShapeOwner::Layout(_) => "<p:sldLayout ",
+            ShapeOwner::Master(_) => "<p:sldMaster ",
+        };
+        let root_start = xml.find(root_tag).unwrap();
+        let root_end = root_start + xml[root_start..].find('>').unwrap();
+        xml.insert_str(root_end, r#" xmlns:corpus="urn:ancestor""#);
+        if *owner == ShapeOwner::Slide(0) {
+            // The standalone read adds conventional declarations, unlike source shape bytes.
+            let start = xml.find("<p:sp>").unwrap();
+            let end = start + xml[start..].find("</p:sp>").unwrap() + "</p:sp>".len();
+            xml.replace_range(start..end, &shape);
+        } else {
+            let original_id = authored
+                .part_shape_at(ShapeOwner::Slide(0), &[0])
+                .unwrap()
+                .non_visual_id()
+                .unwrap();
+            let relocated = shape.replacen(&format!(" id=\"{original_id}\""), " id=\"7001\"", 1);
+            xml = xml.replacen("</p:spTree>", &format!("{relocated}</p:spTree>"), 1);
+        }
+        package.set_part(name, xml.into_bytes());
+    }
+    let original = package_bytes(package);
+    let mut deck = Presentation::from_bytes(&original).unwrap();
+    for (owner, name, index) in contexts {
+        let before = deck.to_bytes().unwrap();
+        for xml in [
+            deck.shape_xml_at(owner, &[index]).unwrap(),
+            deck.text_body_xml_at(owner, &[index], None).unwrap(),
+        ] {
+            let text = String::from_utf8(xml).unwrap();
+            assert!(text.contains(r#"xmlns:corpus="urn:ancestor""#), "{text}");
+            assert!(text.contains(outer), "{text}");
+            assert!(text.contains(inner), "{text}");
+            let mut reader = quick_xml::NsReader::from_reader(text.as_bytes());
+            let mut observed = Vec::new();
+            loop {
+                let (resolved, event) = reader.read_resolved_event().unwrap();
+                if let quick_xml::events::Event::Empty(start) = &event
+                    && start.local_name().as_ref() == b"keep"
+                {
+                    match resolved {
+                        quick_xml::name::ResolveResult::Bound(uri) => {
+                            observed.push(uri.as_ref().to_vec())
+                        }
+                        other => panic!("unqualified opaque alias: {other:?}"),
+                    }
+                }
+                if matches!(event, quick_xml::events::Event::Eof) {
+                    break;
+                }
+            }
+            assert!(observed.contains(&b"urn:ancestor".to_vec()));
+            assert!(observed.contains(&b"urn:inner".to_vec()));
+        }
+        let xml = String::from_utf8(deck.shape_xml_at(owner, &[index]).unwrap()).unwrap();
+        deck.replace_shape_xml_at(owner, &[index], &xml).unwrap();
+        assert_eq!(deck.to_bytes().unwrap(), before);
+        let changed = xml.replacen("source", "selected", 1);
+        let before_package = open_opc(&before, "F-X211b before selected inherited edit");
+        deck.replace_shape_xml_at(owner, &[index], &changed)
+            .unwrap();
+        let after = deck.to_bytes().unwrap();
+        let after_package = open_opc(&after, "F-X211b after selected inherited edit");
+        for (part, bytes) in &before_package.parts {
+            if part != &name {
+                assert_eq!(
+                    after_package.parts.get(part),
+                    Some(bytes),
+                    "unrelated {part}"
+                );
+            }
+        }
+        let selected = String::from_utf8(after_package.get_part(&name).unwrap().to_vec()).unwrap();
+        assert!(selected.contains(outer) && selected.contains(inner));
+        let reopened = Presentation::from_bytes(&after).unwrap();
+        assert_eq!(
+            reopened
+                .part_shape_at(owner, &[index])
+                .unwrap()
+                .text()
+                .as_deref(),
+            Some("selected")
+        );
+    }
+}
+
+#[test]
+fn fx211b_native_retained_cleared_slide_action_is_source_owned() {
+    use rpptx::{Emu, Presentation, ShapeOwner};
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    deck.add_slide(6).unwrap();
+    deck.slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(2000000), Emu(500000))
+        .unwrap();
+    let id = deck
+        .part_shape_at(ShapeOwner::Slide(0), &[0])
+        .unwrap()
+        .non_visual_id()
+        .unwrap();
+    deck.set_shape_target_slide(0, id, Some(1)).unwrap();
+    assert_eq!(deck.shape_target_slide(0, id).unwrap(), Some(1));
+    deck.remove_slide(1).unwrap();
+    assert_eq!(deck.shape_target_slide(0, id).unwrap(), None);
+    let xml = String::from_utf8(deck.shape_xml_at(ShapeOwner::Slide(0), &[0]).unwrap()).unwrap();
+    assert!(xml.contains(r#"r:id="""#) && xml.contains("ppaction://noaction"));
+    let before = deck.to_bytes().unwrap();
+    deck.replace_shape_xml_at(ShapeOwner::Slide(0), &[0], &xml)
+        .unwrap();
+    assert_eq!(deck.to_bytes().unwrap(), before);
+    let unsupported = xml.replacen("ppaction://noaction", "ppaction://hlinksldjump", 1);
+    assert!(
+        deck.replace_shape_xml_at(ShapeOwner::Slide(0), &[0], &unsupported)
+            .is_err()
+    );
+    assert_eq!(deck.to_bytes().unwrap(), before);
+    let name_start = xml.find(r#"name=""#).unwrap() + 6;
+    let name_end = name_start + xml[name_start..].find('"').unwrap();
+    let mut changed = xml.clone();
+    changed.replace_range(name_start..name_end, "retained clear action");
+    deck.replace_shape_xml_at(ShapeOwner::Slide(0), &[0], &changed)
+        .unwrap();
+    let reopened = Presentation::from_bytes(&deck.to_bytes().unwrap()).unwrap();
+    assert_eq!(reopened.shape_target_slide(0, id).unwrap(), None);
+    assert!(
+        String::from_utf8(reopened.shape_xml_at(ShapeOwner::Slide(0), &[0]).unwrap())
+            .unwrap()
+            .contains("retained clear action")
+    );
+}
+
+#[test]
+fn fx211b_native_existing_group_bound_is_modeled_not_opaque() {
+    use rpptx::{Presentation, ShapeOwner};
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    deck.shapes_mut(0, &[]).unwrap().add_group_shape().unwrap();
+    let owner = ShapeOwner::Slide(0);
+    let root = String::from_utf8(deck.shape_xml_at(owner, &[0]).unwrap()).unwrap();
+    let id = deck
+        .part_shape_at(owner, &[0])
+        .unwrap()
+        .non_visual_id()
+        .unwrap();
+    let inner = |count: usize| {
+        let mut nested = String::new();
+        for index in 0..count {
+            let child = root.replacen(
+                &format!(" id=\"{id}\""),
+                &format!(" id=\"{}\"", 1000 + index),
+                1,
+            );
+            nested = child.replacen("</p:grpSp>", &format!("{nested}</p:grpSp>"), 1);
+        }
+        root.replacen("</p:grpSp>", &format!("{nested}</p:grpSp>"), 1)
+    };
+    deck.replace_shape_xml_at(owner, &[0], &inner(31)).unwrap();
+    let before = deck.to_bytes().unwrap();
+    assert!(deck.replace_shape_xml_at(owner, &[0], &inner(32)).is_err());
+    assert_eq!(deck.to_bytes().unwrap(), before);
+    let opaque = format!(
+        r#"<corpus:keep xmlns:corpus="urn:opaque">{}</corpus:keep>"#,
+        inner(40)
+    );
+    let input = root.replacen("</p:grpSp>", &format!("{opaque}</p:grpSp>"), 1);
+    deck.replace_shape_xml_at(owner, &[0], &input).unwrap();
+    let output = String::from_utf8(deck.shape_xml_at(owner, &[0]).unwrap()).unwrap();
+    assert!(output.contains(&opaque));
+    assert_eq!(
+        deck.part_shape_at(owner, &[0]).unwrap().children().count(),
+        0
+    );
+    Presentation::from_bytes(&deck.to_bytes().unwrap()).unwrap();
+}
+
+#[test]
+fn fx211b_native_review_shape_properties_refuse_conflicts_atomically() {
+    use rpptx::{Emu, Presentation, ShapeOwner};
+    let mut producer = Presentation::new().unwrap();
+    producer.add_slide(6).unwrap();
+    producer
+        .slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(1000000), Emu(500000))
+        .unwrap();
+    producer
+        .shapes_mut(0, &[])
+        .unwrap()
+        .add_group_shape()
+        .unwrap();
+    let original = producer.to_bytes().unwrap();
+    let mut accepted = Vec::new();
+    for (index, tag, children) in [
+        (
+            0,
+            "spPr",
+            "<a:noFill/><a:solidFill><a:srgbClr val=\"123456\"/></a:solidFill>",
+        ),
+        (0, "spPr", "<a:ln/><a:noFill/>"),
+        (
+            0,
+            "spPr",
+            "<a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom><a:custGeom/>",
+        ),
+        (
+            0,
+            "spPr",
+            "<a:ln><a:noFill/><a:solidFill><a:srgbClr val=\"123456\"/></a:solidFill></a:ln>",
+        ),
+        (
+            0,
+            "spPr",
+            "<a:ln><a:prstDash val=\"solid\"/><a:custDash/></a:ln>",
+        ),
+        (0, "spPr", "<a:ln><a:round/><a:bevel/></a:ln>"),
+        (0, "spPr", "<a:ln><a:tailEnd/><a:headEnd/></a:ln>"),
+        (0, "spPr", "<a:effectLst/><a:effectDag/>"),
+        (1, "grpSpPr", "<a:effectLst/><a:effectDag/>"),
+    ] {
+        let mut deck = Presentation::from_bytes(&original).unwrap();
+        let owner = ShapeOwner::Slide(0);
+        let xml = String::from_utf8(deck.shape_xml_at(owner, &[index]).unwrap()).unwrap();
+        let marker = format!("<p:{tag}");
+        let start = xml.find(&marker).unwrap();
+        let opening_end = start + xml[start..].find('>').unwrap() + 1;
+        let end = if xml[..opening_end].ends_with("/>") {
+            opening_end
+        } else {
+            opening_end + xml[opening_end..].find(&format!("</p:{tag}>")).unwrap() + tag.len() + 5
+        };
+        let replacement = format!("<p:{tag}>{children}</p:{tag}>");
+        let mut incoming = xml.clone();
+        incoming.replace_range(start..end, &replacement);
+        let before = deck.to_bytes().unwrap();
+        if deck
+            .replace_shape_xml_at(owner, &[index], &incoming)
+            .is_ok()
+        {
+            accepted.push(format!("{tag}: {children}"));
+        } else {
+            assert_eq!(deck.to_bytes().unwrap(), before);
+        }
+    }
+    assert!(
+        accepted.is_empty(),
+        "unsafe shape properties admitted: {accepted:?}"
+    );
+}
+
+#[test]
+fn fx211b_native_review_image_targets_refuse_truncation_and_mime_mismatch() {
+    use oxml_opc::{
+        OpcPackage,
+        relationship::{Relationship, rel_types},
+    };
+    use rpptx::{Emu, Presentation, ShapeOwner};
+    let mut producer = Presentation::new().unwrap();
+    producer.add_slide(6).unwrap();
+    producer
+        .slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(1000000), Emu(500000))
+        .unwrap()
+        .set_text("source")
+        .unwrap();
+    let original = producer.to_bytes().unwrap();
+    let png = f226_blue_pixel_png();
+    let jpeg = valid_template_jpeg();
+    let mut corrupt_crc = png.clone();
+    *corrupt_crc.last_mut().unwrap() ^= 1;
+    let mut trailing_png = png.clone();
+    trailing_png.push(0);
+    let mut accepted = Vec::new();
+    for (label, bytes, mime, valid) in [
+        ("complete PNG", png.clone(), "image/png", true),
+        ("complete JPEG", jpeg.clone(), "image/jpeg", true),
+        (
+            "JPEG missing EOI",
+            jpeg[..jpeg.len() - 2].to_vec(),
+            "image/jpeg",
+            false,
+        ),
+        ("PNG corrupt terminal CRC", corrupt_crc, "image/png", false),
+        ("PNG trailing payload", trailing_png, "image/png", false),
+        (
+            "new unsupported SVG",
+            br#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"/>"#.to_vec(),
+            "image/svg+xml",
+            false,
+        ),
+        ("signature only", png[..8].to_vec(), "image/png", false),
+        ("IHDR only", png[..33].to_vec(), "image/png", false),
+        ("MIME mismatch", png.clone(), "image/jpeg", false),
+    ] {
+        let mut package = OpcPackage::from_reader(std::io::Cursor::new(&original)).unwrap();
+        package.set_part("/ppt/media/checked.png", bytes);
+        package
+            .content_types
+            .add_override("/ppt/media/checked.png", mime);
+        package
+            .get_or_create_part_rels("/ppt/slides/slide1.xml")
+            .items
+            .push(Relationship {
+                id: "rIdCheckedImage".into(),
+                rel_type: rel_types::IMAGE.into(),
+                target: "../media/checked.png".into(),
+                target_mode: None,
+            });
+        let mut output = std::io::Cursor::new(Vec::new());
+        package.write_to(&mut output).unwrap();
+        let mut deck = Presentation::from_bytes(&output.into_inner()).unwrap();
+        let before = deck.to_bytes().unwrap();
+        let xml = r#"<a:r xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><a:rPr><a:blip r:embed="rIdCheckedImage"/></a:rPr><a:t>source</a:t></a:r>"#;
+        let result = deck.replace_run_xml_at(ShapeOwner::Slide(0), &[0], None, 0, 0, xml);
+        if valid {
+            result.unwrap();
+            Presentation::from_bytes(&deck.to_bytes().unwrap()).unwrap();
+        } else if result.is_ok() {
+            accepted.push(label);
+        } else {
+            assert_eq!(deck.to_bytes().unwrap(), before);
+        }
+    }
+    assert!(
+        accepted.is_empty(),
+        "unsafe image targets admitted: {accepted:?}"
+    );
+}
+
+#[test]
+fn fx211b_native_review_foreign_property_names_survive_real_edits() {
+    use rpptx::{ConnectorType, Emu, Presentation, ShapeOwner};
+    let mut deck = Presentation::new().unwrap();
+    deck.add_slide(6).unwrap();
+    deck.slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(1000000), Emu(500000))
+        .unwrap();
+    deck.add_picture(
+        0,
+        &f226_blue_pixel_png(),
+        "owner.png",
+        Emu(0),
+        Emu(0),
+        None,
+        None,
+    )
+    .unwrap();
+    deck.shapes_mut(0, &[])
+        .unwrap()
+        .add_connector(
+            ConnectorType::Straight,
+            Emu(0),
+            Emu(0),
+            Emu(100000),
+            Emu(100000),
+        )
+        .unwrap();
+    let mut lost = Vec::new();
+    for index in 0..3 {
+        let owner = ShapeOwner::Slide(0);
+        let mut incoming = String::from_utf8(deck.shape_xml_at(owner, &[index]).unwrap()).unwrap();
+        let start = incoming.find("<p:spPr").unwrap();
+        let open_end = start + incoming[start..].find('>').unwrap() + 1;
+        let end = if incoming[..open_end].ends_with("/>") {
+            open_end
+        } else {
+            open_end + incoming[open_end..].find("</p:spPr>").unwrap() + 9
+        };
+        incoming.replace_range(start..end, r#"<p:spPr><f:noFill lexical="&#65;"/><a:ln><f:round lexical="&#66;"/></a:ln></p:spPr>"#);
+        let root_end = incoming.find('>').unwrap();
+        incoming.insert_str(root_end, r#" xmlns:f="urn:foreign-properties""#);
+        deck.replace_shape_xml_at(owner, &[index], &incoming)
+            .unwrap();
+        let reopened = Presentation::from_bytes(&deck.to_bytes().unwrap()).unwrap();
+        let actual = String::from_utf8(reopened.shape_xml_at(owner, &[index]).unwrap()).unwrap();
+        if !actual.contains(r#"<f:noFill lexical="&#65;"/>"#)
+            || !actual.contains(r#"<f:round lexical="&#66;"/>"#)
+        {
+            lost.push(index);
+        }
+    }
+    assert!(
+        lost.is_empty(),
+        "foreign property payload promoted or lost in actual kinds: {lost:?}"
+    );
+}
+
+#[test]
+fn fx211b_native_review_typed_writer_binding_conflicts_are_atomic() {
+    use rpptx::{Emu, Presentation, ShapeOwner};
+    let mut producer = Presentation::new().unwrap();
+    producer.add_slide(6).unwrap();
+    producer
+        .slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(1000000), Emu(500000))
+        .unwrap();
+    let original = producer.to_bytes().unwrap();
+    let mut accepted = Vec::new();
+    for (label, property) in [
+        (
+            "local line root",
+            r#"<p:spPr><q:ln xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:a="urn:opaque-a"/></p:spPr>"#,
+        ),
+        (
+            "inherited line root",
+            r#"<p:spPr xmlns:a="urn:opaque-a" xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/main"><q:ln/></p:spPr>"#,
+        ),
+        (
+            "local typed child",
+            r#"<p:spPr><a:ln><q:noFill xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:a="urn:opaque-a"/></a:ln></p:spPr>"#,
+        ),
+    ] {
+        let mut deck = Presentation::from_bytes(&original).unwrap();
+        let mut incoming =
+            String::from_utf8(deck.shape_xml_at(ShapeOwner::Slide(0), &[0]).unwrap()).unwrap();
+        let start = incoming.find("<p:spPr").unwrap();
+        let opening_end = start + incoming[start..].find('>').unwrap() + 1;
+        let end = if incoming[..opening_end].ends_with("/>") {
+            opening_end
+        } else {
+            opening_end + incoming[opening_end..].find("</p:spPr>").unwrap() + 9
+        };
+        incoming.replace_range(start..end, property);
+        let before = deck.to_bytes().unwrap();
+        if deck
+            .replace_shape_xml_at(ShapeOwner::Slide(0), &[0], &incoming)
+            .is_ok()
+        {
+            accepted.push(label);
+        } else {
+            assert_eq!(deck.to_bytes().unwrap(), before);
+        }
+    }
+    assert!(
+        accepted.is_empty(),
+        "typed writer namespace conflicts admitted: {accepted:?}"
+    );
+}
+
+#[test]
+fn fx211b_native_review_property_aliases_and_opaque_rebinding_survive() {
+    use rpptx::{Emu, Presentation, ShapeOwner};
+    let mut producer = Presentation::new().unwrap();
+    producer.add_slide(6).unwrap();
+    producer
+        .slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(1000000), Emu(500000))
+        .unwrap();
+    for properties in [
+        r#"<p:spPr><q:ln xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/main"><q:noFill/></q:ln></p:spPr>"#,
+        r#"<p:spPr><ln xmlns="http://schemas.openxmlformats.org/drawingml/2006/main"><noFill/></ln></p:spPr>"#,
+        r#"<p:spPr xmlns:f="urn:foreign-properties"><a:ln><f:keep xmlns:a="urn:opaque-a" qname="a:item" lexical="&#65;"/></a:ln></p:spPr>"#,
+    ] {
+        let mut deck = producer.clone();
+        let mut incoming =
+            String::from_utf8(deck.shape_xml_at(ShapeOwner::Slide(0), &[0]).unwrap()).unwrap();
+        let start = incoming.find("<p:spPr").unwrap();
+        let opening_end = start + incoming[start..].find('>').unwrap() + 1;
+        let end = if incoming[..opening_end].ends_with("/>") {
+            opening_end
+        } else {
+            opening_end + incoming[opening_end..].find("</p:spPr>").unwrap() + 9
+        };
+        incoming.replace_range(start..end, properties);
+        deck.replace_shape_xml_at(ShapeOwner::Slide(0), &[0], &incoming)
+            .unwrap();
+        let saved = deck.to_bytes().unwrap();
+        let reopened = Presentation::from_bytes(&saved).unwrap();
+        let actual =
+            String::from_utf8(reopened.shape_xml_at(ShapeOwner::Slide(0), &[0]).unwrap()).unwrap();
+        if properties.contains("f:keep") {
+            assert!(
+                actual
+                    .contains(r#"<f:keep xmlns:a="urn:opaque-a" qname="a:item" lexical="&#65;"/>"#)
+            );
+        } else {
+            assert!(actual.contains("<a:noFill/>"));
+        }
+        let before = deck.to_bytes().unwrap();
+        deck.replace_shape_xml_at(ShapeOwner::Slide(0), &[0], &actual)
+            .unwrap();
+        assert_eq!(deck.to_bytes().unwrap(), before);
+    }
+}
+
+#[test]
+fn fx211b_native_review_original_unsupported_media_is_owned_preservation() {
+    use oxml_opc::{
+        OpcPackage,
+        relationship::{Relationship, rel_types},
+    };
+    use rpptx::{Emu, Presentation, ShapeOwner};
+    let mut producer = Presentation::new().unwrap();
+    producer.add_slide(6).unwrap();
+    producer
+        .slide_mut(0)
+        .unwrap()
+        .add_textbox(Emu(0), Emu(0), Emu(1000000), Emu(500000))
+        .unwrap()
+        .set_text("source")
+        .unwrap();
+    let mut package =
+        OpcPackage::from_reader(std::io::Cursor::new(producer.to_bytes().unwrap())).unwrap();
+    let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1"/></svg>"#.to_vec();
+    package.set_part("/ppt/media/original.svg", svg.clone());
+    package
+        .content_types
+        .add_override("/ppt/media/original.svg", "image/svg+xml");
+    package
+        .get_or_create_part_rels("/ppt/slides/slide1.xml")
+        .items
+        .push(Relationship {
+            id: "rIdOriginalSvg".into(),
+            rel_type: rel_types::IMAGE.into(),
+            target: "../media/original.svg".into(),
+            target_mode: None,
+        });
+    let slide =
+        String::from_utf8(package.get_part("/ppt/slides/slide1.xml").unwrap().to_vec()).unwrap();
+    let slide = slide.replace(
+        "<a:t>source</a:t>",
+        r#"<a:rPr><a:blip r:embed="rIdOriginalSvg"/></a:rPr><a:t>source</a:t>"#,
+    );
+    package.set_part("/ppt/slides/slide1.xml", slide.into_bytes());
+    let mut original = std::io::Cursor::new(Vec::new());
+    package.write_to(&mut original).unwrap();
+    let mut deck = Presentation::from_bytes(&original.into_inner()).unwrap();
+    let run = String::from_utf8(
+        deck.run_xml_at(ShapeOwner::Slide(0), &[0], None, 0, 0)
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(run.contains("rIdOriginalSvg"));
+    deck.replace_run_xml_at(
+        ShapeOwner::Slide(0),
+        &[0],
+        None,
+        0,
+        0,
+        &run.replace(">source<", ">changed<"),
+    )
+    .unwrap();
+    let saved = deck.to_bytes().unwrap();
+    let actual = OpcPackage::from_reader(std::io::Cursor::new(&saved)).unwrap();
+    assert_eq!(
+        actual.get_part("/ppt/media/original.svg"),
+        Some(svg.as_slice())
+    );
+    let reopened = Presentation::from_bytes(&saved).unwrap();
+    assert_eq!(
+        reopened
+            .part_shape_at(ShapeOwner::Slide(0), &[0])
+            .unwrap()
+            .text()
+            .as_deref(),
+        Some("changed")
+    );
+}
+
+#[test]
+fn fx211b_native_text_body_real_consumer_namespace_tuples() {
+    use oxml_drawing::text::CT_TextBody;
+    use rpptx_oxml::diagram::CT_DiagramData;
+    const A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+    const DGM: &str = "http://schemas.openxmlformats.org/drawingml/2006/diagram";
+    const C: &str = "http://schemas.openxmlformats.org/drawingml/2006/chart";
+    const P188: &str = "http://schemas.microsoft.com/office/powerpoint/2018/8/main";
+    for (uri, local) in [(DGM, "t"), (C, "txPr"), (P188, "txBody")] {
+        for (open, close) in [
+            (
+                format!(r#"<q:{local} xmlns:q="{uri}" xmlns:a="{A}">"#),
+                format!("</q:{local}>"),
+            ),
+            (
+                format!(r#"<{local} xmlns="{uri}" xmlns:a="{A}">"#),
+                format!("</{local}>"),
+            ),
+        ] {
+            let xml = format!(
+                "{open}<a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>owned</a:t></a:r></a:p>{close}"
+            );
+            let body = CT_TextBody::from_xml_as(xml.as_bytes(), local.as_bytes()).unwrap();
+            assert_eq!(body.plain_text(), "owned");
+            let mut writer = quick_xml::Writer::new(Vec::new());
+            body.write_xml_as(&mut writer, &format!("q:{local}"))
+                .unwrap();
+            let saved = writer.into_inner();
+            assert_eq!(
+                CT_TextBody::from_xml_as(&saved, local.as_bytes())
+                    .unwrap()
+                    .plain_text(),
+                "owned"
+            );
+        }
+        let fragment = format!("<q:{local}><a:bodyPr/><a:p/></q:{local}>");
+        let bindings = vec![
+            ("q".to_owned(), uri.to_owned()),
+            ("a".to_owned(), A.to_owned()),
+        ];
+        assert!(
+            CT_TextBody::from_xml_as_with_namespaces(
+                fragment.as_bytes(),
+                local.as_bytes(),
+                &bindings
+            )
+            .is_ok()
+        );
+    }
+    let comment = format!(
+        r#"<q:cmLst xmlns:q="{P188}" xmlns:a="{A}"><q:cm id="{{22222222-2222-2222-2222-222222222222}}" authorId="{{11111111-1111-1111-1111-111111111111}}" created="2026-08-29T10:11:12Z"><q:unknownAnchor/><q:replyLst><q:reply id="{{33333333-3333-3333-3333-333333333333}}" authorId="{{11111111-1111-1111-1111-111111111111}}" created="2026-08-29T10:12:13Z"><q:txBody><a:bodyPr/><a:p><a:r><a:t>reply</a:t></a:r></a:p></q:txBody></q:reply></q:replyLst><q:txBody><a:bodyPr/><a:p><a:r><a:t>comment</a:t></a:r></a:p></q:txBody></q:cm></q:cmLst>"#
+    );
+    let comments = rpptx_oxml::comments::CommentList::from_xml(comment.as_bytes()).unwrap();
+    assert_eq!(comments.comments[0].text(), "comment");
+    assert_eq!(comments.comments[0].replies()[0].text(), "reply");
+    let saved = comments.to_xml().unwrap();
+    let reopened = rpptx_oxml::comments::CommentList::from_xml(&saved).unwrap();
+    assert_eq!(reopened.comments[0].text(), "comment");
+    assert_eq!(reopened.comments[0].replies()[0].text(), "reply");
+    let diagram = format!(
+        r#"<dgm:dataModel xmlns:dgm="{DGM}" xmlns:a="{A}"><dgm:ptLst><dgm:pt modelId="1"><dgm:t><a:bodyPr/><a:p><a:r><a:t>owned</a:t></a:r></a:p></dgm:t></dgm:pt></dgm:ptLst><dgm:cxnLst/></dgm:dataModel>"#
+    );
+    let data = CT_DiagramData::from_xml(diagram.as_bytes()).unwrap();
+    assert_eq!(
+        data.points()[0].text.as_ref().unwrap().plain_text(),
+        "owned"
+    );
+    let saved = data.to_xml().unwrap();
+    assert_eq!(
+        CT_DiagramData::from_xml(&saved).unwrap().points()[0]
+            .text
+            .as_ref()
+            .unwrap()
+            .plain_text(),
+        "owned"
+    );
+    let chart = format!(
+        r#"<c:chartSpace xmlns:c="{C}" xmlns:a="{A}"><c:chart><c:plotArea/></c:chart><c:txPr xmlns:c="{C}"><a:bodyPr/><a:p><a:r><a:t>owned</a:t></a:r></a:p></c:txPr></c:chartSpace>"#
+    );
+    let chart = oxml_chart::CT_ChartSpace::from_xml(chart.as_bytes()).unwrap();
+    assert_eq!(chart.tx_pr.as_ref().unwrap().plain_text(), "owned");
+    assert_eq!(
+        oxml_chart::CT_ChartSpace::from_xml(&chart.to_xml().unwrap())
+            .unwrap()
+            .tx_pr
+            .as_ref()
+            .unwrap()
+            .plain_text(),
+        "owned"
+    );
+}
+
+#[test]
+fn fx211b_native_text_body_consumer_tuples_do_not_allow_foreign_roots() {
+    use oxml_drawing::text::CT_TextBody;
+    const A: &str = "http://schemas.openxmlformats.org/drawingml/2006/main";
+    const DGM: &str = "http://schemas.openxmlformats.org/drawingml/2006/diagram";
+    const C: &str = "http://schemas.openxmlformats.org/drawingml/2006/chart";
+    const P188: &str = "http://schemas.microsoft.com/office/powerpoint/2018/8/main";
+    for (uri, local) in [
+        ("urn:foreign", "t"),
+        ("urn:foreign", "txPr"),
+        (DGM, "txPr"),
+        (C, "t"),
+        (DGM, "txBody"),
+        (C, "txBody"),
+        (C, "rich"),
+        (P188, "t"),
+        (P188, "txPr"),
+        (P188, "rich"),
+    ] {
+        let xml =
+            format!(r#"<q:{local} xmlns:q="{uri}" xmlns:a="{A}"><a:bodyPr/><a:p/></q:{local}>"#);
+        assert!(
+            CT_TextBody::from_xml_as(xml.as_bytes(), local.as_bytes()).is_err(),
+            "{uri} {local}"
+        );
+    }
+    for (uri, local) in [(DGM, "t"), (C, "txPr"), (P188, "txBody")] {
+        let xml = format!(
+            r#"<q:{local} xmlns:q="{uri}" xmlns:a="urn:foreign"><a:bodyPr/><a:p/></q:{local}>"#
+        );
+        assert!(CT_TextBody::from_xml_as(xml.as_bytes(), local.as_bytes()).is_err());
+    }
 }

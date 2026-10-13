@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, assert_type
 
 from rpptx import (
+    Element,
     BoundingBox,
     AutofitRefreshResult,
     AutofitUpdate,
@@ -80,6 +81,14 @@ def exercise_rpptx_types(path: Path) -> None:
         Inches(1), Inches(1), Inches(4), Inches(2)
     )
     shape.text = "typed"
+    element: Element = shape.element
+    snapshot: str = element.xml
+    assert_type(element.replace_xml(snapshot), None)
+    assert_type(slide.element.xml, str)
+    assert_type(layout.element.xml, str)
+    assert_type(presentation.slide_masters[0].element.xml, str)
+    assert_type(shape.text_frame.element.xml, str)
+
     shape_left: Length | None = shape.left
     shape_top: Length | None = shape.top
     shape_width: Length | None = shape.width

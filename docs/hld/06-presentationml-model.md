@@ -1484,3 +1484,21 @@ qualified retained XML relationship reference must resolve in its own scope.
 Unsupported selected dependencies refuse before publication. Empty layout
 mapping retains current slide links. Explicit mapping changes only the owning
 slide relationship target, preserving direct slide geometry, text and fields.
+
+## Checked XML owner replacement
+
+Paragraph, regular run, table, cell, shape, text body, slide, layout and master
+XML use complete namespace-qualified expected roots. Captured shape kinds
+remain fixed. Input checks reject duplicate modeled choices, invalid child
+sequence, wrong roots, trailing input, DTDs and entities before mutation.
+Foreign same-local-name shape and line properties remain exact opaque source,
+with their inherited namespace context retained. Unsupported fixed-writer
+namespace conflicts produce actionable errors instead of rebinding source.
+
+Equivalent fully modeled alias or default-namespace input can be a no-op.
+Unknown vocabulary and QName-valued opaque content require conservative source
+and binding equivalence. Arbitrary namespace normalization is not permitted.
+Shared text-body parsing admits only concrete qualified consumer tuples,
+including DiagramML t, chart txPr and modern-comment txBody containers. That
+parser compatibility does not authorize wrong-owner checked XML replacement.
+

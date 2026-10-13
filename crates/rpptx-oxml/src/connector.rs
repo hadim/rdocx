@@ -479,7 +479,10 @@ fn capture_root_child(
             *boundary = 1;
         }
         (Some(P_NS), b"spPr") if *boundary == 1 && shape_properties.is_none() => {
-            *shape_properties = Some(CT_ShapeProperties::from_xml(&raw).map_err(drawing_error)?);
+            *shape_properties = Some(
+                CT_ShapeProperties::from_xml_with_inherited_namespaces(&raw, &namespaces.entries())
+                    .map_err(drawing_error)?,
+            );
             *boundary = 2;
         }
         (Some(P_NS), b"style") if *boundary == 2 && style.is_none() => {

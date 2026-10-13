@@ -20,7 +20,6 @@ use std::path::Path;
 
 #[cfg(feature = "render")]
 use diagram::{DiagramResources, ScopedDiagramResources};
-#[cfg(feature = "render")]
 use oxml_chart::CT_ChartSpace;
 pub use oxml_chart::{ChartData, ChartKind, RgbColor};
 use oxml_core::OxmlError;
@@ -316,6 +315,339 @@ const MAX_SMARTART_TRANSFER_DIAGRAM_PARTS: usize = 128;
 
 /// A result returned by the `rpptx` read facade.
 pub type Result<T> = std::result::Result<T, Error>;
+
+// Decoding is validation only. Original owned bytes are exported unchanged.
+const SEMANTIC_MEDIA_BYTES: usize = 128 * 1024 * 1024;
+const SEMANTIC_DECODED_BYTES: usize = 64 * 1024 * 1024;
+const SEMANTIC_MEDIA_DIMENSION: usize = 16_384;
+const SEMANTIC_MEDIA_FRAMES: usize = 1_024;
+
+fn semantic_pixel_bytes(width: usize, height: usize) -> std::result::Result<usize, &'static str> {
+    let size = width.checked_mul(height).and_then(|n| n.checked_mul(4));
+    if width == 0
+        || height == 0
+        || width > SEMANTIC_MEDIA_DIMENSION
+        || height > SEMANTIC_MEDIA_DIMENSION
+        || size.is_none_or(|n| n > SEMANTIC_DECODED_BYTES)
+    {
+        return Err("picture dimensions exceed the bounded decode limit");
+    }
+    Ok(size.unwrap_or(0))
+}
+
+pub(crate) fn validate_semantic_picture(
+    data: &[u8],
+    format: oxml_media::ImageFormat,
+) -> std::result::Result<(), &'static str> {
+    use oxml_media::ImageFormat;
+    let invalid = || "invalid or unsupported picture body";
+    if data.len() > SEMANTIC_MEDIA_BYTES {
+        return Err("picture exceeds the compressed byte limit");
+    }
+    match format {
+        ImageFormat::Png => {
+            let info = oxml_media::probe(data).ok_or_else(invalid)?;
+            semantic_pixel_bytes(info.width_px as usize, info.height_px as usize)?;
+            // Check every chunk extent and CRC, including chunks after pixel data.
+            let mut position = 8usize;
+            let mut ended = false;
+            while position < data.len() {
+                let length = data.get(position..position + 4).ok_or_else(invalid)?;
+                let length = u32::from_be_bytes(length.try_into().map_err(|_| invalid())?) as usize;
+                let end = position
+                    .checked_add(12)
+                    .and_then(|n| n.checked_add(length))
+                    .filter(|n| *n <= data.len())
+                    .ok_or_else(invalid)?;
+                let kind = &data[position + 4..position + 8];
+                if matches!(kind, b"acTL" | b"fcTL" | b"fdAT") {
+                    return Err("animated PNG body is unsupported");
+                }
+                let mut crc = !0u32;
+                for byte in &data[position + 4..end - 4] {
+                    crc ^= u32::from(*byte);
+                    for _ in 0..8 {
+                        crc = (crc >> 1) ^ (0xedb88320 & 0u32.wrapping_sub(crc & 1));
+                    }
+                }
+                let expected =
+                    u32::from_be_bytes(data[end - 4..end].try_into().map_err(|_| invalid())?);
+                if !crc != expected {
+                    return Err(invalid());
+                }
+                if kind == b"IEND" {
+                    if length != 0 || end != data.len() {
+                        return Err(invalid());
+                    }
+                    ended = true;
+                }
+                position = end;
+            }
+            if !ended {
+                return Err(invalid());
+            }
+            tiny_skia::Pixmap::decode_png(data).map_err(|_| invalid())?;
+        }
+        ImageFormat::Jpeg => {
+            use zune_jpeg::zune_core::{bytestream::ZCursor, options::DecoderOptions};
+            if !semantic_jpeg_has_complete_scan(data) {
+                return Err(invalid());
+            }
+            let options = DecoderOptions::default()
+                .set_max_width(SEMANTIC_MEDIA_DIMENSION)
+                .set_max_height(SEMANTIC_MEDIA_DIMENSION)
+                .set_strict_mode(true)
+                .jpeg_set_max_scans(SEMANTIC_MEDIA_FRAMES);
+            let mut decoder = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(data), options);
+            decoder.decode_headers().map_err(|_| invalid())?;
+            let (width, height) = decoder.dimensions().ok_or_else(invalid)?;
+            semantic_pixel_bytes(width, height)?;
+            if decoder
+                .output_buffer_size()
+                .is_none_or(|n| n > SEMANTIC_DECODED_BYTES)
+            {
+                return Err(invalid());
+            }
+            decoder.decode().map_err(|_| invalid())?;
+        }
+        ImageFormat::Gif => {
+            let mut options = gif::DecodeOptions::new();
+            options.set_memory_limit(gif::MemoryLimit::Bytes(
+                std::num::NonZeroU64::new(SEMANTIC_DECODED_BYTES as u64).ok_or_else(invalid)?,
+            ));
+            options.check_frame_consistency(true);
+            options.set_color_output(gif::ColorOutput::RGBA);
+            let mut decoder = options
+                .read_info(std::io::Cursor::new(data))
+                .map_err(|_| invalid())?;
+            semantic_pixel_bytes(usize::from(decoder.width()), usize::from(decoder.height()))?;
+            let mut total = 0usize;
+            let mut frames = 0usize;
+            while let Some(frame) = decoder.next_frame_info().map_err(|_| invalid())? {
+                frames += 1;
+                let bytes =
+                    semantic_pixel_bytes(usize::from(frame.width), usize::from(frame.height))?;
+                total = total
+                    .checked_add(bytes)
+                    .filter(|n| *n <= SEMANTIC_DECODED_BYTES)
+                    .ok_or_else(invalid)?;
+                if frames > SEMANTIC_MEDIA_FRAMES {
+                    return Err(invalid());
+                }
+                let mut pixels = vec![0; bytes];
+                decoder
+                    .read_into_buffer(&mut pixels)
+                    .map_err(|_| invalid())?;
+            }
+            if frames == 0 || data.last() != Some(&0x3b) {
+                return Err(invalid());
+            }
+        }
+        ImageFormat::Tiff => {
+            let mut limits = tiff::decoder::Limits::default();
+            limits.decoding_buffer_size = SEMANTIC_DECODED_BYTES;
+            limits.intermediate_buffer_size = 16 * 1024 * 1024;
+            let mut decoder = tiff::decoder::Decoder::new(std::io::Cursor::new(data))
+                .map_err(|_| invalid())?
+                .with_limits(limits);
+            let mut total = 0usize;
+            for page in 0..SEMANTIC_MEDIA_FRAMES {
+                let (width, height) = decoder.dimensions().map_err(|_| invalid())?;
+                semantic_pixel_bytes(width as usize, height as usize)?;
+                let layout = decoder.image_buffer_layout().map_err(|_| invalid())?;
+                total = total
+                    .checked_add(layout.complete_len)
+                    .filter(|n| *n <= SEMANTIC_DECODED_BYTES)
+                    .ok_or_else(invalid)?;
+                let mut decoded = tiff::decoder::DecodingResult::U8(Vec::new());
+                let actual = decoder
+                    .read_image_to_buffer(&mut decoded)
+                    .map_err(|_| invalid())?;
+                if decoded.as_buffer(0).as_bytes().len() != actual.complete_len {
+                    return Err(invalid());
+                }
+                if !decoder.more_images() {
+                    return Ok(());
+                }
+                if page + 1 == SEMANTIC_MEDIA_FRAMES {
+                    return Err(invalid());
+                }
+                decoder.next_image().map_err(|_| invalid())?;
+            }
+        }
+        ImageFormat::Bmp => validate_semantic_bmp(data)?,
+        _ => return Err(invalid()),
+    }
+    Ok(())
+}
+
+// JPEG decoders may recover missing EOI even in strict mode. Walk declared
+// segments and escaped entropy bytes to require the actual scan terminator.
+fn semantic_jpeg_has_complete_scan(data: &[u8]) -> bool {
+    if data.get(..2) != Some(&[0xff, 0xd8]) {
+        return false;
+    }
+    let mut position = 2usize;
+    let mut scanned = false;
+    while position < data.len() {
+        if data[position] != 0xff {
+            return false;
+        }
+        while data.get(position) == Some(&0xff) {
+            position += 1;
+        }
+        let Some(&marker) = data.get(position) else {
+            return false;
+        };
+        position += 1;
+        if marker == 0xd9 {
+            return scanned;
+        }
+        if marker == 0x01 {
+            continue;
+        }
+        if matches!(marker, 0x00 | 0xd0..=0xd8) {
+            return false;
+        }
+        let Some(length) = data.get(position..position + 2) else {
+            return false;
+        };
+        let length = usize::from(u16::from_be_bytes([length[0], length[1]]));
+        let Some(end) = position
+            .checked_add(length)
+            .filter(|end| length >= 2 && *end <= data.len())
+        else {
+            return false;
+        };
+        position = end;
+        if marker != 0xda {
+            continue;
+        }
+        scanned = true;
+        loop {
+            let Some(&byte) = data.get(position) else {
+                return false;
+            };
+            if byte != 0xff {
+                position += 1;
+                continue;
+            }
+            let marker_start = position;
+            while data.get(position) == Some(&0xff) {
+                position += 1;
+            }
+            let Some(&marker) = data.get(position) else {
+                return false;
+            };
+            if marker == 0 || matches!(marker, 0xd0..=0xd7) {
+                position += 1;
+                continue;
+            }
+            position = marker_start;
+            break;
+        }
+    }
+    false
+}
+
+fn validate_semantic_bmp(data: &[u8]) -> std::result::Result<(), &'static str> {
+    let invalid = || "invalid or unsupported BMP pixel body";
+    let u16_at = |offset| -> std::result::Result<u16, &'static str> {
+        Ok(u16::from_le_bytes(
+            data.get(offset..offset + 2)
+                .ok_or_else(invalid)?
+                .try_into()
+                .map_err(|_| invalid())?,
+        ))
+    };
+    let u32_at = |offset| -> std::result::Result<u32, &'static str> {
+        Ok(u32::from_le_bytes(
+            data.get(offset..offset + 4)
+                .ok_or_else(invalid)?
+                .try_into()
+                .map_err(|_| invalid())?,
+        ))
+    };
+    let header = u32_at(14)? as usize;
+    let (width, height, planes, bits, palette_entry, colors) = if header == 12 {
+        (
+            usize::from(u16_at(18)?),
+            usize::from(u16_at(20)?),
+            u16_at(22)?,
+            u16_at(24)?,
+            3usize,
+            0usize,
+        )
+    } else if matches!(header, 40 | 52 | 56 | 108 | 124) {
+        if u32_at(30)? != 0 {
+            return Err("compressed BMP body is unsupported");
+        }
+        let width = i32::from_le_bytes(u32_at(18)?.to_le_bytes());
+        let height = i32::from_le_bytes(u32_at(22)?.to_le_bytes());
+        if width <= 0 || height == i32::MIN {
+            return Err(invalid());
+        }
+        (
+            width as usize,
+            height.unsigned_abs() as usize,
+            u16_at(26)?,
+            u16_at(28)?,
+            4usize,
+            u32_at(46)? as usize,
+        )
+    } else {
+        return Err(invalid());
+    };
+    semantic_pixel_bytes(width, height)?;
+    if planes != 1 || !matches!(bits, 1 | 4 | 8 | 16 | 24 | 32) {
+        return Err(invalid());
+    }
+    let palette = if bits <= 8 {
+        let maximum = 1usize << bits;
+        if colors > maximum {
+            return Err(invalid());
+        }
+        if colors == 0 { maximum } else { colors }
+    } else {
+        colors
+    };
+    let minimum = 14usize
+        .checked_add(header)
+        .and_then(|n| {
+            palette
+                .checked_mul(palette_entry)
+                .and_then(|p| n.checked_add(p))
+        })
+        .ok_or_else(invalid)?;
+    let offset = u32_at(10)? as usize;
+    let stride = width
+        .checked_mul(usize::from(bits))
+        .and_then(|n| n.checked_add(31))
+        .map(|n| n / 32 * 4)
+        .ok_or_else(invalid)?;
+    let end = height
+        .checked_mul(stride)
+        .and_then(|n| offset.checked_add(n))
+        .ok_or_else(invalid)?;
+    let declared = u32_at(2)? as usize;
+    if offset < minimum || end > data.len() || declared < end || declared > data.len() {
+        return Err(invalid());
+    }
+    if bits <= 8 {
+        for row in 0..height {
+            for column in 0..width {
+                let bit = column * usize::from(bits);
+                let value = data[offset + row * stride + bit / 8];
+                let shift = 8 - usize::from(bits) - bit % 8;
+                let index = usize::from((value >> shift) & ((1u16 << bits) - 1) as u8);
+                if index >= palette {
+                    return Err(invalid());
+                }
+            }
+        }
+    }
+    Ok(())
+}
 
 /// One relationship-resolved diagram part.
 #[derive(Clone, Debug, PartialEq)]
@@ -792,6 +1124,804 @@ pub enum ShapeOwner {
     Slide(usize),
     Layout(usize),
     Master(usize),
+}
+
+// Finite physical owner cases for the nine approved XML operations.
+#[derive(Clone, Copy)]
+enum PptXmlOwner<'a> {
+    Part(ShapeOwner),
+    Shape(ShapeOwner, &'a [usize]),
+    Table(ShapeOwner, &'a [usize]),
+    Cell(ShapeOwner, &'a [usize], usize, usize),
+    TextBody(ShapeOwner, &'a [usize], Option<(usize, usize)>),
+    Paragraph(ShapeOwner, &'a [usize], Option<(usize, usize)>, usize),
+    Run(
+        ShapeOwner,
+        &'a [usize],
+        Option<(usize, usize)>,
+        usize,
+        usize,
+    ),
+}
+
+impl PptXmlOwner<'_> {
+    fn part(self) -> ShapeOwner {
+        match self {
+            Self::Part(part)
+            | Self::Shape(part, _)
+            | Self::Table(part, _)
+            | Self::Cell(part, _, _, _)
+            | Self::TextBody(part, _, _)
+            | Self::Paragraph(part, _, _, _)
+            | Self::Run(part, _, _, _, _) => part,
+        }
+    }
+
+    fn root(self, presentation: &Presentation) -> Result<(&'static str, &'static [u8])> {
+        Ok(match self {
+            Self::Part(ShapeOwner::Slide(_)) => (P_NS, b"sld"),
+            Self::Part(ShapeOwner::Layout(_)) => (P_NS, b"sldLayout"),
+            Self::Part(ShapeOwner::Master(_)) => (P_NS, b"sldMaster"),
+            Self::Table(_, _) => (A_NS, b"tbl"),
+            Self::Cell(_, _, _, _) => (A_NS, b"tc"),
+            Self::TextBody(_, _, cell) => (if cell.is_some() { A_NS } else { P_NS }, b"txBody"),
+            Self::Paragraph(_, _, _, _) => (A_NS, b"p"),
+            Self::Run(_, _, _, _, _) => (A_NS, b"r"),
+            Self::Shape(part, path) => (
+                P_NS,
+                match presentation.part_shape_at(part, path)?.child {
+                    ShapeTreeChild::Shape(_) => b"sp",
+                    ShapeTreeChild::Picture(_) => b"pic",
+                    ShapeTreeChild::GraphicFrame(_) => b"graphicFrame",
+                    ShapeTreeChild::GroupShape(_) => b"grpSp",
+                    ShapeTreeChild::Connector(_) => b"cxnSp",
+                    ShapeTreeChild::AlternateContent(_) => {
+                        return Err(invalid_shape_mutation(
+                            "replace XML",
+                            "raw alternate shape owner is read only",
+                        ));
+                    }
+                },
+            ),
+        })
+    }
+}
+
+fn ppt_xml_close_namespaces(xml: &[u8]) -> Result<Vec<u8>> {
+    let mut reader = quick_xml::Reader::from_reader(xml);
+    loop {
+        let event = reader
+            .read_event()
+            .map_err(|error| invalid_shape_mutation("read XML", error.to_string()))?;
+        let empty = matches!(&event, XmlEvent::Empty(_));
+        match event {
+            XmlEvent::Start(mut root) | XmlEvent::Empty(mut root) => {
+                for (key, uri) in [("xmlns:a", A_NS), ("xmlns:p", P_NS), ("xmlns:r", R_NS)] {
+                    let present = root.attributes().any(|attribute| {
+                        attribute.is_ok_and(|attribute| attribute.key.as_ref() == key.as_bytes())
+                    });
+                    if !present {
+                        root.push_attribute((key, uri));
+                    }
+                }
+                let mut writer = XmlWriter::new(Vec::new());
+                writer
+                    .write_event(if empty {
+                        XmlEvent::Empty(root)
+                    } else {
+                        XmlEvent::Start(root)
+                    })
+                    .map_err(|error| invalid_shape_mutation("read XML", error.to_string()))?;
+                let mut result = writer.into_inner();
+                result.extend_from_slice(&xml[reader.buffer_position() as usize..]);
+                return Ok(result);
+            }
+            XmlEvent::Eof => return Err(invalid_shape_mutation("read XML", "owner XML is absent")),
+            _ => {}
+        }
+    }
+}
+
+fn ppt_xml_table(child: &ShapeTreeChild) -> Result<&CT_Table> {
+    if let ShapeTreeChild::GraphicFrame(frame) = child
+        && let GraphicDataPayload::Table(table) = frame.graphic_data.payload()
+    {
+        return Ok(table);
+    }
+    Err(invalid_shape_mutation(
+        "element XML",
+        "shape owner is not a table",
+    ))
+}
+
+fn ppt_xml_table_mut(child: &mut ShapeTreeChild) -> Result<&mut CT_Table> {
+    if let ShapeTreeChild::GraphicFrame(frame) = child
+        && let Some(table) = frame.graphic_data.table_mut()
+    {
+        return Ok(table);
+    }
+    Err(invalid_shape_mutation(
+        "element XML",
+        "shape owner is not a table",
+    ))
+}
+
+fn ppt_xml_body(child: &ShapeTreeChild, cell: Option<(usize, usize)>) -> Result<&CT_TextBody> {
+    let body = if let Some((row, column)) = cell {
+        ppt_xml_table(child)?
+            .rows
+            .get(row)
+            .and_then(|row| row.cells.get(column))
+            .and_then(|cell| cell.text_body.as_ref())
+    } else if let ShapeTreeChild::Shape(shape) = child {
+        shape.text_body.as_ref()
+    } else {
+        None
+    };
+    body.ok_or_else(|| invalid_shape_mutation("element XML", "physical text body owner is absent"))
+}
+
+fn ppt_xml_body_mut(
+    child: &mut ShapeTreeChild,
+    cell: Option<(usize, usize)>,
+) -> Result<&mut CT_TextBody> {
+    let body = if let Some((row, column)) = cell {
+        ppt_xml_table_mut(child)?
+            .rows
+            .get_mut(row)
+            .and_then(|row| row.cells.get_mut(column))
+            .and_then(|cell| cell.text_body.as_mut())
+    } else if let ShapeTreeChild::Shape(shape) = child {
+        shape.text_body.as_mut()
+    } else {
+        None
+    };
+    body.ok_or_else(|| invalid_shape_mutation("element XML", "physical text body owner is absent"))
+}
+
+// Order is checked only for modeled children in their real namespace. Foreign
+// payload is preserved, rather than treated as a same-local-name modeled child.
+fn ppt_xml_child_order(namespace: &str, parent: &[u8], child: &[u8]) -> Option<(usize, bool)> {
+    let (names, repeated): (&[&[u8]], &[&[u8]]) = match (namespace, parent) {
+        (A_NS, b"p") => (
+            &[b"pPr", b"r", b"br", b"fld", b"endParaRPr"],
+            &[b"r", b"br", b"fld"],
+        ),
+        (A_NS, b"r") => (&[b"rPr", b"t"], &[]),
+        (A_NS, b"rPr" | b"endParaRPr") => (
+            &[
+                b"ln",
+                b"noFill",
+                b"solidFill",
+                b"gradFill",
+                b"blipFill",
+                b"pattFill",
+                b"grpFill",
+                b"effectLst",
+                b"effectDag",
+                b"highlight",
+                b"uLnTx",
+                b"uLn",
+                b"uFillTx",
+                b"uFill",
+                b"latin",
+                b"ea",
+                b"cs",
+                b"sym",
+                b"hlinkClick",
+                b"hlinkMouseOver",
+                b"rtl",
+                b"extLst",
+            ],
+            &[],
+        ),
+        (P_NS, b"spPr") => (
+            &[
+                b"xfrm",
+                b"custGeom",
+                b"prstGeom",
+                b"noFill",
+                b"solidFill",
+                b"gradFill",
+                b"blipFill",
+                b"pattFill",
+                b"grpFill",
+                b"ln",
+                b"effectLst",
+                b"effectDag",
+                b"scene3d",
+                b"sp3d",
+                b"extLst",
+            ],
+            &[],
+        ),
+        (P_NS, b"grpSpPr") => (
+            &[b"xfrm", b"effectLst", b"effectDag", b"scene3d", b"extLst"],
+            &[],
+        ),
+        (A_NS, b"ln") => (
+            &[
+                b"noFill",
+                b"solidFill",
+                b"gradFill",
+                b"pattFill",
+                b"prstDash",
+                b"custDash",
+                b"round",
+                b"bevel",
+                b"miter",
+                b"headEnd",
+                b"tailEnd",
+                b"extLst",
+            ],
+            &[],
+        ),
+        (A_NS, b"tbl") => (&[b"tblPr", b"tblGrid", b"tr"], &[b"tr"]),
+        (A_NS, b"tr") => (&[b"tc"], &[b"tc"]),
+        (A_NS, b"tblGrid") => (&[b"gridCol"], &[b"gridCol"]),
+        (A_NS, b"graphic") => (&[b"graphicData"], &[]),
+        (A_NS, b"tc") => (&[b"txBody", b"tcPr"], &[]),
+        (A_NS | P_NS, b"txBody") => (&[b"bodyPr", b"lstStyle", b"p"], &[b"p"]),
+        (P_NS, b"cSld") => (
+            &[b"bg", b"spTree", b"custDataLst", b"controls", b"extLst"],
+            &[],
+        ),
+        (P_NS, b"spTree" | b"grpSp") => (
+            &[
+                b"nvGrpSpPr",
+                b"grpSpPr",
+                b"sp",
+                b"pic",
+                b"graphicFrame",
+                b"cxnSp",
+                b"grpSp",
+                b"extLst",
+            ],
+            &[b"sp", b"pic", b"graphicFrame", b"cxnSp", b"grpSp"],
+        ),
+        (P_NS, b"sp") => (&[b"nvSpPr", b"spPr", b"style", b"txBody", b"extLst"], &[]),
+        (P_NS, b"pic") => (
+            &[b"nvPicPr", b"blipFill", b"spPr", b"style", b"extLst"],
+            &[],
+        ),
+        (P_NS, b"cxnSp") => (&[b"nvCxnSpPr", b"spPr", b"style", b"extLst"], &[]),
+        (P_NS, b"graphicFrame") => (&[b"nvGraphicFramePr", b"xfrm", b"graphic", b"extLst"], &[]),
+        (P_NS, b"sld") => (
+            &[b"cSld", b"clrMapOvr", b"transition", b"timing", b"extLst"],
+            &[],
+        ),
+        (P_NS, b"sldLayout") => (
+            &[
+                b"cSld",
+                b"clrMapOvr",
+                b"transition",
+                b"timing",
+                b"hf",
+                b"extLst",
+            ],
+            &[],
+        ),
+        (P_NS, b"sldMaster") => (
+            &[
+                b"cSld",
+                b"clrMap",
+                b"sldLayoutIdLst",
+                b"transition",
+                b"timing",
+                b"hf",
+                b"txStyles",
+                b"extLst",
+            ],
+            &[],
+        ),
+        _ => return None,
+    };
+    names.iter().position(|name| *name == child).map(|index| {
+        let rank =
+            if namespace == A_NS && parent == b"p" {
+                match child {
+                    b"r" | b"br" | b"fld" => 1,
+                    b"endParaRPr" => 2,
+                    _ => 0,
+                }
+            } else if namespace == P_NS && parent == b"spPr" {
+                match child {
+                    b"xfrm" => 0,
+                    b"custGeom" | b"prstGeom" => 1,
+                    b"noFill" | b"solidFill" | b"gradFill" | b"blipFill" | b"pattFill"
+                    | b"grpFill" => 2,
+                    b"ln" => 3,
+                    b"effectLst" | b"effectDag" => 4,
+                    b"scene3d" => 5,
+                    b"sp3d" => 6,
+                    _ => 7,
+                }
+            } else if namespace == P_NS && parent == b"grpSpPr" {
+                match child {
+                    b"xfrm" => 0,
+                    b"effectLst" | b"effectDag" => 1,
+                    b"scene3d" => 2,
+                    _ => 3,
+                }
+            } else if namespace == A_NS && parent == b"ln" {
+                match child {
+                    b"noFill" | b"solidFill" | b"gradFill" | b"pattFill" => 0,
+                    b"prstDash" | b"custDash" => 1,
+                    b"round" | b"bevel" | b"miter" => 2,
+                    b"headEnd" => 3,
+                    b"tailEnd" => 4,
+                    _ => 5,
+                }
+            } else if namespace == A_NS && matches!(parent, b"rPr" | b"endParaRPr") {
+                match child {
+                    b"ln" => 0,
+                    b"noFill" | b"solidFill" | b"gradFill" | b"blipFill" | b"pattFill"
+                    | b"grpFill" => 1,
+                    b"effectLst" | b"effectDag" => 2,
+                    b"highlight" => 3,
+                    b"uLnTx" | b"uLn" => 4,
+                    b"uFillTx" | b"uFill" => 5,
+                    b"latin" => 6,
+                    b"ea" => 7,
+                    b"cs" => 8,
+                    b"sym" => 9,
+                    b"hlinkClick" => 10,
+                    b"hlinkMouseOver" => 11,
+                    b"rtl" => 12,
+                    _ => 13,
+                }
+            } else if namespace == P_NS && matches!(parent, b"spTree" | b"grpSp") {
+                match child {
+                    b"nvGrpSpPr" => 0,
+                    b"grpSpPr" => 1,
+                    b"extLst" => 3,
+                    _ => 2,
+                }
+            } else {
+                index
+            };
+        (rank, repeated.contains(&child))
+    })
+}
+
+fn check_ppt_xml_input(xml: &[u8], expected_namespace: &str, expected_local: &[u8]) -> Result<()> {
+    oxml_core::xml::validate_strict_xml_1_0(xml)
+        .map_err(|error| invalid_shape_mutation("replace XML", format!("{error:?}")))?;
+    let mut reader = NsReader::from_reader(xml);
+    type Frame = (
+        String,
+        Vec<u8>,
+        Option<usize>,
+        HashSet<Vec<u8>>,
+        bool,
+        usize,
+    );
+    let mut stack: Vec<Frame> = Vec::new();
+    let mut roots = 0;
+    loop {
+        let (namespace, event) = reader
+            .read_resolved_event()
+            .map_err(|error| invalid_shape_mutation("replace XML", error.to_string()))?;
+        let empty = matches!(&event, XmlEvent::Empty(_));
+        match event {
+            XmlEvent::Start(element) | XmlEvent::Empty(element) => {
+                let namespace = match namespace {
+                    XmlResolveResult::Bound(namespace) => {
+                        String::from_utf8(namespace.as_ref().to_vec()).map_err(|error| {
+                            invalid_shape_mutation("replace XML", error.to_string())
+                        })?
+                    }
+                    XmlResolveResult::Unbound => String::new(),
+                    _ => {
+                        return Err(invalid_shape_mutation(
+                            "replace XML",
+                            "element prefix is not bound",
+                        ));
+                    }
+                };
+                let local = element.local_name().as_ref().to_vec();
+                let mut modeled = true;
+                let mut nesting = 0;
+                if stack.is_empty() {
+                    roots += 1;
+                    if roots != 1 || namespace != expected_namespace || local != expected_local {
+                        return Err(invalid_shape_mutation(
+                            "replace XML",
+                            "expected one complete qualified owner root",
+                        ));
+                    }
+                } else if let Some((
+                    parent_namespace,
+                    parent,
+                    last,
+                    seen,
+                    parent_modeled,
+                    parent_nesting,
+                )) = stack.last_mut()
+                {
+                    nesting = *parent_nesting;
+                    let child_namespace = if parent_namespace == P_NS
+                        && (matches!(parent.as_slice(), b"txBody" | b"spPr" | b"grpSpPr")
+                            || parent == b"graphicFrame" && local == b"graphic")
+                    {
+                        A_NS
+                    } else {
+                        parent_namespace.as_str()
+                    };
+                    let order = (namespace == child_namespace)
+                        .then(|| ppt_xml_child_order(parent_namespace, parent, &local))
+                        .flatten();
+                    modeled = *parent_modeled
+                        && (order.is_some()
+                            || parent_namespace == A_NS
+                                && parent == b"graphicData"
+                                && namespace == A_NS
+                                && local == b"tbl"
+                            || parent_namespace
+                                == "http://schemas.openxmlformats.org/markup-compatibility/2006"
+                                && matches!(
+                                    parent.as_slice(),
+                                    b"AlternateContent" | b"Choice" | b"Fallback"
+                                )
+                                && (namespace == P_NS
+                                    || namespace
+                                        == "http://schemas.openxmlformats.org/markup-compatibility/2006")
+                            || parent_namespace == P_NS
+                                && matches!(parent.as_slice(), b"spTree" | b"grpSp")
+                                && namespace
+                                    == "http://schemas.openxmlformats.org/markup-compatibility/2006"
+                                && local == b"AlternateContent");
+                    if *parent_modeled && let Some((rank, repeated)) = order {
+                        if last.is_some_and(|last| rank < last || rank == last && !repeated)
+                            || (!seen.insert(local.clone()) && !repeated)
+                        {
+                            return Err(invalid_shape_mutation(
+                                "replace XML",
+                                "modeled XML child order or multiplicity is invalid",
+                            ));
+                        }
+                        *last = Some(rank);
+                    }
+                }
+                if modeled
+                    && namespace == A_NS
+                    && matches!(local.as_slice(), b"rPr" | b"endParaRPr")
+                {
+                    for attribute in element.attributes() {
+                        let attribute = attribute.map_err(|error| {
+                            invalid_shape_mutation("replace XML", error.to_string())
+                        })?;
+                        if attribute.key.as_ref() == b"cap" {
+                            let value = attribute
+                                .decoded_and_normalized_value(
+                                    XmlVersion::Implicit1_0,
+                                    reader.decoder(),
+                                )
+                                .map_err(|error| {
+                                    invalid_shape_mutation("replace XML", error.to_string())
+                                })?;
+                            if !matches!(value.as_ref(), "all" | "small" | "none") {
+                                return Err(invalid_shape_mutation(
+                                    "replace XML",
+                                    "known text cap attribute must be all, small or none",
+                                ));
+                            }
+                        }
+                    }
+                }
+                if modeled
+                    && (namespace == P_NS && local == b"grpSp"
+                        || namespace
+                            == "http://schemas.openxmlformats.org/markup-compatibility/2006"
+                            && local == b"AlternateContent")
+                {
+                    nesting += 1;
+                    if nesting > rpptx_oxml::MAX_PRESENTATION_NESTING {
+                        return Err(invalid_shape_mutation(
+                            "replace XML",
+                            "group and alternate content nesting exceeds limit 32",
+                        ));
+                    }
+                }
+                if modeled
+                    && empty
+                    && local == b"txBody"
+                    && matches!(namespace.as_str(), A_NS | P_NS)
+                {
+                    return Err(invalid_shape_mutation(
+                        "replace XML",
+                        "text body requires bodyPr and a physical paragraph",
+                    ));
+                }
+                if !empty {
+                    stack.push((namespace, local, None, HashSet::new(), modeled, nesting));
+                }
+            }
+            XmlEvent::End(_) => {
+                let (namespace, local, _, seen, modeled, _) = stack
+                    .pop()
+                    .ok_or_else(|| invalid_shape_mutation("replace XML", "unmatched owner end"))?;
+                if modeled
+                    && local == b"txBody"
+                    && matches!(namespace.as_str(), A_NS | P_NS)
+                    && (!seen.contains(b"bodyPr".as_slice()) || !seen.contains(b"p".as_slice()))
+                {
+                    return Err(invalid_shape_mutation(
+                        "replace XML",
+                        "text body requires bodyPr and a physical paragraph",
+                    ));
+                }
+            }
+            XmlEvent::DocType(_) => {
+                return Err(invalid_shape_mutation("replace XML", "DTD is forbidden"));
+            }
+            XmlEvent::Text(text)
+                if !text.iter().all(u8::is_ascii_whitespace)
+                    && stack
+                        .last()
+                        .is_some_and(|(namespace, local, _, _, modeled, _)| {
+                            *modeled && !(namespace == A_NS && local == b"t")
+                        }) =>
+            {
+                return Err(invalid_shape_mutation(
+                    "replace XML",
+                    "modeled container cannot contain character data",
+                ));
+            }
+            XmlEvent::CData(_) | XmlEvent::GeneralRef(_)
+                if stack
+                    .last()
+                    .is_some_and(|(namespace, local, _, _, modeled, _)| {
+                        *modeled && !(namespace == A_NS && local == b"t")
+                    }) =>
+            {
+                return Err(invalid_shape_mutation(
+                    "replace XML",
+                    "modeled container cannot contain character data",
+                ));
+            }
+            XmlEvent::Text(text)
+                if stack.is_empty() && !text.iter().all(u8::is_ascii_whitespace) =>
+            {
+                return Err(invalid_shape_mutation(
+                    "replace XML",
+                    "text outside owner root",
+                ));
+            }
+            XmlEvent::Eof => {
+                if roots != 1 || !stack.is_empty() {
+                    return Err(invalid_shape_mutation(
+                        "replace XML",
+                        "owner root is incomplete",
+                    ));
+                }
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
+}
+
+// Only concrete text/table vocabulary can establish an alias-only no-op.
+// Unknown nodes, attributes and foreign bindings decline equivalence. In
+// particular opaque QName values cannot lose their inherited namespace facts.
+fn ppt_xml_known_owner_equivalent(before: &[u8], incoming: &[u8]) -> Result<bool> {
+    fn tokens(xml: &[u8]) -> Result<Option<Vec<String>>> {
+        let mut reader = NsReader::from_reader(xml);
+        let mut out = Vec::new();
+        loop {
+            let (namespace, event) = reader
+                .read_resolved_event()
+                .map_err(|error| invalid_shape_mutation("replace XML", error.to_string()))?;
+            let empty = matches!(&event, XmlEvent::Empty(_));
+            match event {
+                XmlEvent::Start(element) | XmlEvent::Empty(element) => {
+                    let uri = match namespace {
+                        XmlResolveResult::Bound(uri) => {
+                            String::from_utf8_lossy(uri.as_ref()).into_owned()
+                        }
+                        _ => return Ok(None),
+                    };
+                    let name = element.local_name();
+                    let local = name.as_ref();
+                    if !matches!(uri.as_str(), A_NS | P_NS)
+                        || !matches!(
+                            local,
+                            b"p" | b"r"
+                                | b"t"
+                                | b"pPr"
+                                | b"rPr"
+                                | b"endParaRPr"
+                                | b"txBody"
+                                | b"bodyPr"
+                                | b"lstStyle"
+                                | b"tbl"
+                                | b"tblPr"
+                                | b"tblGrid"
+                                | b"gridCol"
+                                | b"tr"
+                                | b"tc"
+                                | b"tcPr"
+                                | b"latin"
+                                | b"ea"
+                                | b"cs"
+                                | b"sym"
+                                | b"hlinkClick"
+                                | b"hlinkMouseOver"
+                        )
+                    {
+                        return Ok(None);
+                    }
+                    let mut attributes = Vec::new();
+                    for attribute in element.attributes() {
+                        let attribute = attribute.map_err(|error| {
+                            invalid_shape_mutation("replace XML", error.to_string())
+                        })?;
+                        let value = attribute
+                            .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                            .map_err(|error| {
+                                invalid_shape_mutation("replace XML", error.to_string())
+                            })?;
+                        if attribute.key.as_ref() == b"xmlns"
+                            || attribute.key.as_ref().starts_with(b"xmlns:")
+                        {
+                            if !matches!(value.as_ref(), A_NS | P_NS | R_NS) {
+                                return Ok(None);
+                            }
+                            continue;
+                        }
+                        let (namespace, name) = reader.resolver().resolve_attribute(attribute.key);
+                        let attribute_uri = match namespace {
+                            XmlResolveResult::Bound(uri) => {
+                                String::from_utf8_lossy(uri.as_ref()).into_owned()
+                            }
+                            XmlResolveResult::Unbound => String::new(),
+                            _ => return Ok(None),
+                        };
+                        let known = attribute_uri.is_empty()
+                            && match local {
+                                b"rPr" | b"endParaRPr" => matches!(
+                                    name.as_ref(),
+                                    b"b" | b"i"
+                                        | b"sz"
+                                        | b"lang"
+                                        | b"altLang"
+                                        | b"kern"
+                                        | b"baseline"
+                                        | b"dirty"
+                                        | b"smtClean"
+                                ),
+                                b"pPr" => matches!(
+                                    name.as_ref(),
+                                    b"algn" | b"lvl" | b"marL" | b"marR" | b"indent" | b"rtl"
+                                ),
+                                b"gridCol" => name.as_ref() == b"w",
+                                b"tr" => name.as_ref() == b"h",
+                                b"tc" => matches!(
+                                    name.as_ref(),
+                                    b"rowSpan" | b"gridSpan" | b"hMerge" | b"vMerge"
+                                ),
+                                b"latin" | b"ea" | b"cs" | b"sym" => matches!(
+                                    name.as_ref(),
+                                    b"typeface" | b"panose" | b"pitchFamily" | b"charset"
+                                ),
+                                b"hlinkClick" | b"hlinkMouseOver" => matches!(
+                                    name.as_ref(),
+                                    b"action"
+                                        | b"tooltip"
+                                        | b"tgtFrame"
+                                        | b"history"
+                                        | b"highlightClick"
+                                        | b"endSnd"
+                                        | b"invalidUrl"
+                                ),
+                                _ => false,
+                            }
+                            || attribute_uri == R_NS
+                                && matches!(local, b"hlinkClick" | b"hlinkMouseOver")
+                                && name.as_ref() == b"id"
+                            || attribute_uri == "http://www.w3.org/XML/1998/namespace"
+                                && local == b"t"
+                                && name.as_ref() == b"space";
+                        if !known {
+                            return Ok(None);
+                        }
+                        attributes.push(format!(
+                            "{attribute_uri}\0{}\0{value}",
+                            String::from_utf8_lossy(name.as_ref())
+                        ));
+                    }
+                    attributes.sort();
+                    out.push(format!("start:{uri}:{}", String::from_utf8_lossy(local)));
+                    out.extend(attributes);
+                    out.push("attributes-end".to_owned());
+                    if empty {
+                        out.push(format!("end:{uri}:{}", String::from_utf8_lossy(local)));
+                    }
+                }
+                XmlEvent::End(element) => {
+                    let uri = match namespace {
+                        XmlResolveResult::Bound(uri) => {
+                            String::from_utf8_lossy(uri.as_ref()).into_owned()
+                        }
+                        _ => return Ok(None),
+                    };
+                    out.push(format!(
+                        "end:{uri}:{}",
+                        String::from_utf8_lossy(element.local_name().as_ref())
+                    ));
+                }
+                XmlEvent::Text(text) => {
+                    out.push(format!("text:{}", String::from_utf8_lossy(&text)))
+                }
+                XmlEvent::Eof => return Ok(Some(out)),
+                _ => return Ok(None),
+            }
+        }
+    }
+    Ok(
+        matches!((tokens(before)?, tokens(incoming)?), (Some(before), Some(incoming)) if before == incoming),
+    )
+}
+
+type PptXmlRelationshipFact = (String, String, String, String, Option<String>);
+
+fn ppt_xml_relationship_facts(xml: &[u8]) -> Result<Vec<PptXmlRelationshipFact>> {
+    let mut reader = NsReader::from_reader(xml);
+    let mut result = Vec::new();
+    loop {
+        let (namespace, event) = reader
+            .read_resolved_event()
+            .map_err(|error| invalid_shape_mutation("replace XML", error.to_string()))?;
+        match event {
+            XmlEvent::Start(element) | XmlEvent::Empty(element) => {
+                let uri = match namespace {
+                    XmlResolveResult::Bound(namespace) => {
+                        String::from_utf8_lossy(namespace.as_ref()).into_owned()
+                    }
+                    _ => String::new(),
+                };
+                let local = String::from_utf8_lossy(element.local_name().as_ref()).into_owned();
+                let action = element
+                    .attributes()
+                    .find_map(|attribute| {
+                        attribute
+                            .ok()
+                            .filter(|attribute| attribute.key.as_ref() == b"action")
+                    })
+                    .map(|attribute| {
+                        attribute
+                            .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                            .map(|value| value.into_owned())
+                    })
+                    .transpose()
+                    .map_err(|error| invalid_shape_mutation("replace XML", error.to_string()))?;
+                for attribute in element.attributes() {
+                    let attribute = attribute.map_err(|error| {
+                        invalid_shape_mutation("replace XML", error.to_string())
+                    })?;
+                    let (namespace, name) = reader.resolver().resolve_attribute(attribute.key);
+                    if xml_is(&namespace, R_NS) {
+                        let value = attribute
+                            .decoded_and_normalized_value(XmlVersion::Implicit1_0, reader.decoder())
+                            .map_err(|error| {
+                                invalid_shape_mutation("replace XML", error.to_string())
+                            })?
+                            .into_owned();
+                        result.push((
+                            uri.clone(),
+                            local.clone(),
+                            String::from_utf8_lossy(name.as_ref()).into_owned(),
+                            value,
+                            action.clone(),
+                        ));
+                    }
+                }
+            }
+            XmlEvent::Eof => return Ok(result),
+            _ => {}
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -3590,7 +4720,7 @@ impl Presentation {
         candidate.package.set_part(&part, changed_source);
         candidate.masters[master_index].master = Ok(master);
         candidate.masters[master_index].dirty = false;
-        candidate.commit_owned_parts()?;
+        candidate.commit_owned_parts(None)?;
         *self = candidate;
         Ok(())
     }
@@ -3737,7 +4867,7 @@ impl Presentation {
         }
         let previous = self.owner_relationship_ids(owner)?;
         candidate.release_unused_owner_images(owner, &previous)?;
-        candidate.commit_owned_parts()?;
+        candidate.commit_owned_parts(None)?;
         *self = candidate;
         Ok(())
     }
@@ -3771,7 +4901,7 @@ impl Presentation {
             }
             ShapeOwner::Master(_) => unreachable!(),
         }
-        candidate.commit_owned_parts()?;
+        candidate.commit_owned_parts(None)?;
         *self = candidate;
         Ok(())
     }
@@ -3852,6 +4982,656 @@ impl Presentation {
         Ok(())
     }
 
+    /// Reads the namespace-complete XML of a physical shape in its actual part.
+    pub fn shape_xml_at(&self, owner: ShapeOwner, path: &[usize]) -> Result<Vec<u8>> {
+        self.checked_owner_xml(PptXmlOwner::Shape(owner, path))
+    }
+
+    /// Replaces a shape without changing its captured physical kind or identity.
+    pub fn replace_shape_xml_at(
+        &mut self,
+        owner: ShapeOwner,
+        path: &[usize],
+        xml: &str,
+    ) -> Result<()> {
+        self.replace_checked_owner_xml(PptXmlOwner::Shape(owner, path), xml)
+    }
+
+    pub fn table_xml_at(&self, owner: ShapeOwner, path: &[usize]) -> Result<Vec<u8>> {
+        self.checked_owner_xml(PptXmlOwner::Table(owner, path))
+    }
+
+    pub fn replace_table_xml_at(
+        &mut self,
+        owner: ShapeOwner,
+        path: &[usize],
+        xml: &str,
+    ) -> Result<()> {
+        self.replace_checked_owner_xml(PptXmlOwner::Table(owner, path), xml)
+    }
+
+    pub fn cell_xml_at(
+        &self,
+        owner: ShapeOwner,
+        path: &[usize],
+        row: usize,
+        column: usize,
+    ) -> Result<Vec<u8>> {
+        self.checked_owner_xml(PptXmlOwner::Cell(owner, path, row, column))
+    }
+
+    pub fn replace_cell_xml_at(
+        &mut self,
+        owner: ShapeOwner,
+        path: &[usize],
+        row: usize,
+        column: usize,
+        xml: &str,
+    ) -> Result<()> {
+        self.replace_checked_owner_xml(PptXmlOwner::Cell(owner, path, row, column), xml)
+    }
+
+    pub fn text_body_xml_at(
+        &self,
+        owner: ShapeOwner,
+        path: &[usize],
+        cell: Option<(usize, usize)>,
+    ) -> Result<Vec<u8>> {
+        self.checked_owner_xml(PptXmlOwner::TextBody(owner, path, cell))
+    }
+
+    pub fn replace_text_body_xml_at(
+        &mut self,
+        owner: ShapeOwner,
+        path: &[usize],
+        cell: Option<(usize, usize)>,
+        xml: &str,
+    ) -> Result<()> {
+        self.replace_checked_owner_xml(PptXmlOwner::TextBody(owner, path, cell), xml)
+    }
+
+    pub fn paragraph_xml_at(
+        &self,
+        owner: ShapeOwner,
+        path: &[usize],
+        cell: Option<(usize, usize)>,
+        paragraph: usize,
+    ) -> Result<Vec<u8>> {
+        self.checked_owner_xml(PptXmlOwner::Paragraph(owner, path, cell, paragraph))
+    }
+
+    pub fn replace_paragraph_xml_at(
+        &mut self,
+        owner: ShapeOwner,
+        path: &[usize],
+        cell: Option<(usize, usize)>,
+        paragraph: usize,
+        xml: &str,
+    ) -> Result<()> {
+        self.replace_checked_owner_xml(PptXmlOwner::Paragraph(owner, path, cell, paragraph), xml)
+    }
+
+    pub fn run_xml_at(
+        &self,
+        owner: ShapeOwner,
+        path: &[usize],
+        cell: Option<(usize, usize)>,
+        paragraph: usize,
+        run: usize,
+    ) -> Result<Vec<u8>> {
+        self.checked_owner_xml(PptXmlOwner::Run(owner, path, cell, paragraph, run))
+    }
+
+    #[allow(clippy::too_many_arguments)] // Actual part, shape, cell, paragraph and regular-run operands.
+    pub fn replace_run_xml_at(
+        &mut self,
+        owner: ShapeOwner,
+        path: &[usize],
+        cell: Option<(usize, usize)>,
+        paragraph: usize,
+        run: usize,
+        xml: &str,
+    ) -> Result<()> {
+        self.replace_checked_owner_xml(PptXmlOwner::Run(owner, path, cell, paragraph, run), xml)
+    }
+
+    pub fn slide_xml(&self, index: usize) -> Result<Vec<u8>> {
+        self.checked_owner_xml(PptXmlOwner::Part(ShapeOwner::Slide(index)))
+    }
+
+    pub fn replace_slide_xml(&mut self, index: usize, xml: &str) -> Result<()> {
+        self.replace_checked_owner_xml(PptXmlOwner::Part(ShapeOwner::Slide(index)), xml)
+    }
+
+    pub fn layout_xml(&self, index: usize) -> Result<Vec<u8>> {
+        self.checked_owner_xml(PptXmlOwner::Part(ShapeOwner::Layout(index)))
+    }
+
+    pub fn replace_layout_xml(&mut self, index: usize, xml: &str) -> Result<()> {
+        self.replace_checked_owner_xml(PptXmlOwner::Part(ShapeOwner::Layout(index)), xml)
+    }
+
+    pub fn master_xml(&self, index: usize) -> Result<Vec<u8>> {
+        self.checked_owner_xml(PptXmlOwner::Part(ShapeOwner::Master(index)))
+    }
+
+    pub fn replace_master_xml(&mut self, index: usize, xml: &str) -> Result<()> {
+        self.replace_checked_owner_xml(PptXmlOwner::Part(ShapeOwner::Master(index)), xml)
+    }
+
+    fn checked_owner_xml(&self, owner: PptXmlOwner<'_>) -> Result<Vec<u8>> {
+        self.owner_data(owner.part())?;
+        let result = match owner {
+            PptXmlOwner::Part(ShapeOwner::Slide(index)) => self.slides[index].slide.to_xml(),
+            PptXmlOwner::Part(ShapeOwner::Layout(index)) => self.layouts[index].layout.to_xml(),
+            PptXmlOwner::Part(ShapeOwner::Master(index)) => self.masters[index]
+                .master
+                .as_ref()
+                .map_err(|message| invalid_shape_mutation("read XML", message))?
+                .to_xml(),
+            PptXmlOwner::Shape(part, path) => {
+                return ppt_xml_close_namespaces(&self.part_shape_at(part, path)?.xml()?);
+            }
+            PptXmlOwner::Table(part, path) => {
+                ppt_xml_table(self.part_shape_at(part, path)?.child)?.to_xml()
+            }
+            PptXmlOwner::Cell(part, path, row, column) => {
+                ppt_xml_table(self.part_shape_at(part, path)?.child)?
+                    .rows
+                    .get(row)
+                    .and_then(|row| row.cells.get(column))
+                    .ok_or_else(|| invalid_shape_mutation("read XML", "cell owner is absent"))?
+                    .to_xml()
+            }
+            PptXmlOwner::TextBody(part, path, cell) => {
+                let body = ppt_xml_body(self.part_shape_at(part, path)?.child, cell)?;
+                let mut writer = XmlWriter::new(Vec::new());
+                body.write_xml_as(
+                    &mut writer,
+                    if cell.is_some() {
+                        "a:txBody"
+                    } else {
+                        "p:txBody"
+                    },
+                )
+                .map_err(|error| invalid_shape_mutation("read XML", error.to_string()))?;
+                Ok(writer.into_inner())
+            }
+            PptXmlOwner::Paragraph(part, path, cell, index) => {
+                ppt_xml_body(self.part_shape_at(part, path)?.child, cell)?
+                    .paragraphs()
+                    .get(index)
+                    .ok_or_else(|| invalid_shape_mutation("read XML", "paragraph owner is absent"))?
+                    .to_xml()
+                    .map_err(|error| OxmlError::InvalidValue(error.to_string()))
+            }
+            PptXmlOwner::Run(part, path, cell, paragraph, index) => {
+                ppt_xml_body(self.part_shape_at(part, path)?.child, cell)?
+                    .paragraphs()
+                    .get(paragraph)
+                    .and_then(|paragraph| {
+                        paragraph
+                            .runs
+                            .iter()
+                            .filter_map(|run| match run {
+                                TextRun::Run(run) => Some(run),
+                                _ => None,
+                            })
+                            .nth(index)
+                    })
+                    .ok_or_else(|| {
+                        invalid_shape_mutation("read XML", "regular run owner is absent")
+                    })?
+                    .to_xml()
+                    .map_err(|error| OxmlError::InvalidValue(error.to_string()))
+            }
+        };
+        ppt_xml_close_namespaces(
+            &result.map_err(|error| invalid_shape_mutation("read XML", error.to_string()))?,
+        )
+    }
+
+    fn replace_checked_owner_xml(&mut self, owner: PptXmlOwner<'_>, xml: &str) -> Result<()> {
+        let before = self.checked_owner_xml(owner)?;
+        let (namespace, local) = owner.root(self)?;
+        check_ppt_xml_input(xml.as_bytes(), namespace, local)?;
+        self.check_xml_relationships(owner.part(), &before, xml.as_bytes())?;
+        if before == xml.as_bytes() || ppt_xml_known_owner_equivalent(&before, xml.as_bytes())? {
+            return Ok(());
+        }
+        self.validate_xml_part_model(owner.part())?;
+        let mut candidate = self.clone();
+        match owner {
+            PptXmlOwner::Part(ShapeOwner::Slide(index)) => {
+                candidate.assign_xml_slide(index, xml)?
+            }
+            PptXmlOwner::Part(ShapeOwner::Layout(index)) => {
+                candidate.assign_xml_layout(index, xml)?
+            }
+            PptXmlOwner::Part(ShapeOwner::Master(index)) => {
+                candidate.assign_xml_master(index, xml)?
+            }
+            PptXmlOwner::Shape(part, path) => candidate.assign_xml_shape(part, path, xml)?,
+            PptXmlOwner::Table(part, path) => candidate.assign_xml_table(part, path, xml)?,
+            PptXmlOwner::Cell(part, path, row, column) => {
+                candidate.assign_xml_cell(part, path, row, column, xml)?
+            }
+            PptXmlOwner::TextBody(part, path, cell) => {
+                candidate.assign_xml_body(part, path, cell, xml)?
+            }
+            PptXmlOwner::Paragraph(part, path, cell, index) => {
+                candidate.assign_xml_paragraph(part, path, cell, index, xml)?
+            }
+            PptXmlOwner::Run(part, path, cell, paragraph, index) => {
+                candidate.assign_xml_run(part, path, cell, paragraph, index, xml)?
+            }
+        }
+        candidate.validate_xml_part_model(owner.part())?;
+        // Compare the concrete modeled owner as well as retained source payload.
+        // Namespace spelling alone must not publish a needless mutation.
+        if candidate.checked_owner_xml(owner)? == before {
+            return Ok(());
+        }
+        candidate.commit_owned_parts(Some(owner.part()))?;
+        *self = candidate;
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn assign_xml_shape(&mut self, part: ShapeOwner, path: &[usize], xml: &str) -> Result<()> {
+        let parsed_error =
+            |error: OxmlError| invalid_shape_mutation("replace XML", error.to_string());
+
+        let old = child_at(&self.owner_data(part)?.shape_tree.children, path)
+            .ok_or_else(|| invalid_shape_mutation("replace XML", "shape owner is absent"))?;
+        let parsed = match old {
+            ShapeTreeChild::Shape(_) => {
+                ShapeTreeChild::Shape(CT_Shape::from_xml(xml.as_bytes()).map_err(parsed_error)?)
+            }
+            ShapeTreeChild::Picture(_) => {
+                ShapeTreeChild::Picture(CT_Picture::from_xml(xml.as_bytes()).map_err(parsed_error)?)
+            }
+            ShapeTreeChild::GraphicFrame(_) => ShapeTreeChild::GraphicFrame(Box::new(
+                CT_GraphicFrame::from_xml(xml.as_bytes()).map_err(parsed_error)?,
+            )),
+            ShapeTreeChild::GroupShape(_) => ShapeTreeChild::GroupShape(Box::new(
+                CT_GroupShape::from_xml(xml.as_bytes()).map_err(parsed_error)?,
+            )),
+            ShapeTreeChild::Connector(_) => ShapeTreeChild::Connector(
+                CT_ConnectionShape::from_xml(xml.as_bytes()).map_err(parsed_error)?,
+            ),
+            ShapeTreeChild::AlternateContent(_) => {
+                return Err(invalid_shape_mutation(
+                    "replace XML",
+                    "raw alternate shape owner is read only",
+                ));
+            }
+        };
+        if old.non_visual_id() != parsed.non_visual_id() {
+            return Err(invalid_shape_mutation(
+                "replace XML",
+                "shape identity cannot change",
+            ));
+        }
+        *child_at_mut(&mut self.owner_data_mut(part)?.shape_tree.children, path)
+            .ok_or_else(|| invalid_shape_mutation("replace XML", "shape owner is absent"))? =
+            parsed;
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn assign_xml_table(&mut self, part: ShapeOwner, path: &[usize], xml: &str) -> Result<()> {
+        let parsed_error =
+            |error: OxmlError| invalid_shape_mutation("replace XML", error.to_string());
+
+        let parsed = CT_Table::from_xml(xml.as_bytes()).map_err(parsed_error)?;
+        parsed.validate_grid_and_merges().map_err(parsed_error)?;
+        *ppt_xml_table_mut(self.xml_child_mut(part, path)?)? = parsed;
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn assign_xml_cell(
+        &mut self,
+        part: ShapeOwner,
+        path: &[usize],
+        row: usize,
+        column: usize,
+        xml: &str,
+    ) -> Result<()> {
+        let parsed_error =
+            |error: OxmlError| invalid_shape_mutation("replace XML", error.to_string());
+
+        let parsed = CT_TableCell::from_xml_fragment(xml.as_bytes()).map_err(parsed_error)?;
+        let table = ppt_xml_table_mut(self.xml_child_mut(part, path)?)?;
+        *table
+            .rows
+            .get_mut(row)
+            .and_then(|row| row.cells.get_mut(column))
+            .ok_or_else(|| invalid_shape_mutation("replace XML", "cell owner is absent"))? = parsed;
+        table.validate_grid_and_merges().map_err(parsed_error)?;
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn assign_xml_body(
+        &mut self,
+        part: ShapeOwner,
+        path: &[usize],
+        cell: Option<(usize, usize)>,
+        xml: &str,
+    ) -> Result<()> {
+        let parsed = CT_TextBody::from_xml(xml.as_bytes())
+            .map_err(|error| invalid_shape_mutation("replace XML", error.to_string()))?;
+        *ppt_xml_body_mut(self.xml_child_mut(part, path)?, cell)? = parsed;
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn assign_xml_paragraph(
+        &mut self,
+        part: ShapeOwner,
+        path: &[usize],
+        cell: Option<(usize, usize)>,
+        index: usize,
+        xml: &str,
+    ) -> Result<()> {
+        let parsed = CT_TextParagraph::from_xml(xml.as_bytes())
+            .map_err(|error| invalid_shape_mutation("replace XML", error.to_string()))?;
+        *ppt_xml_body_mut(self.xml_child_mut(part, path)?, cell)?
+            .paragraph_mut(index)
+            .ok_or_else(|| invalid_shape_mutation("replace XML", "paragraph owner is absent"))? =
+            parsed;
+        Ok(())
+    }
+
+    #[inline(never)]
+    #[allow(clippy::too_many_arguments)]
+    fn assign_xml_run(
+        &mut self,
+        part: ShapeOwner,
+        path: &[usize],
+        cell: Option<(usize, usize)>,
+        paragraph: usize,
+        index: usize,
+        xml: &str,
+    ) -> Result<()> {
+        let parsed = CT_RegularTextRun::from_xml(xml.as_bytes())
+            .map_err(|error| invalid_shape_mutation("replace XML", error.to_string()))?;
+        let paragraph = ppt_xml_body_mut(self.xml_child_mut(part, path)?, cell)?
+            .paragraph_mut(paragraph)
+            .ok_or_else(|| invalid_shape_mutation("replace XML", "paragraph owner is absent"))?;
+        *paragraph
+            .runs
+            .iter_mut()
+            .filter(|run| matches!(run, TextRun::Run(_)))
+            .nth(index)
+            .ok_or_else(|| {
+                invalid_shape_mutation("replace XML", "regular run owner is absent")
+            })? = TextRun::Run(parsed);
+        Ok(())
+    }
+
+    #[inline(never)]
+    fn assign_xml_slide(&mut self, index: usize, xml: &str) -> Result<()> {
+        self.slides[index].slide = CT_Slide::from_xml(xml.as_bytes())
+            .map_err(|error| invalid_shape_mutation("replace XML", error.to_string()))?;
+        Ok(())
+    }
+    #[inline(never)]
+    fn assign_xml_layout(&mut self, index: usize, xml: &str) -> Result<()> {
+        self.layouts[index].layout = CT_SlideLayout::from_xml(xml.as_bytes())
+            .map_err(|error| invalid_shape_mutation("replace XML", error.to_string()))?;
+        self.layouts[index].dirty = true;
+        Ok(())
+    }
+    #[inline(never)]
+    fn assign_xml_master(&mut self, index: usize, xml: &str) -> Result<()> {
+        self.masters[index].master = Ok(CT_SlideMaster::from_xml(xml.as_bytes())
+            .map_err(|error| invalid_shape_mutation("replace XML", error.to_string()))?);
+        self.masters[index].dirty = true;
+        Ok(())
+    }
+
+    fn xml_child_mut(&mut self, part: ShapeOwner, path: &[usize]) -> Result<&mut ShapeTreeChild> {
+        child_at_mut(&mut self.owner_data_mut(part)?.shape_tree.children, path)
+            .ok_or_else(|| invalid_shape_mutation("replace XML", "physical shape owner is absent"))
+    }
+
+    fn validate_xml_part_model(&self, part: ShapeOwner) -> Result<()> {
+        let data = self.owner_data(part)?;
+        rpptx_oxml::shape_tree::validate_shape_nesting(&data.shape_tree.children)
+            .map_err(|error| invalid_shape_mutation("replace XML", error.to_string()))?;
+        let mut ids = HashSet::new();
+        if let Some(id) = data.shape_tree.non_visual_id() {
+            ids.insert(id);
+        }
+        let mut pending = data.shape_tree.children.iter().collect::<Vec<_>>();
+        while let Some(child) = pending.pop() {
+            if child
+                .non_visual_id()
+                .is_some_and(|id| id == 0 || !ids.insert(id))
+            {
+                return Err(invalid_shape_mutation(
+                    "replace XML",
+                    "duplicate or zero shape identity",
+                ));
+            }
+            match child {
+                ShapeTreeChild::GroupShape(group) => pending.extend(group.children.iter()),
+                ShapeTreeChild::GraphicFrame(frame) => {
+                    if let GraphicDataPayload::Table(table) = frame.graphic_data.payload() {
+                        table.validate_grid_and_merges().map_err(|error| {
+                            invalid_shape_mutation("replace XML", error.to_string())
+                        })?;
+                    }
+                }
+                ShapeTreeChild::AlternateContent(alternate) => {
+                    if let Some(children) = alternate.selected_fallback() {
+                        pending.extend(children);
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.validate_owned_part(part)
+    }
+
+    fn check_xml_relationships(
+        &self,
+        part: ShapeOwner,
+        before: &[u8],
+        incoming: &[u8],
+    ) -> Result<()> {
+        let package = self.staged_package(true)?;
+        let source = self.owner_part_name(part)?;
+        let relations = package.get_part_rels(source);
+        let old = ppt_xml_relationship_facts(before)?;
+        for fact in ppt_xml_relationship_facts(incoming)? {
+            // The existing slide-removal provider retains its actual cleared
+            // click record without a relationship. Preserve only that source
+            // fact, never treat an arbitrary new empty ID as a relationship.
+            if fact.0 == A_NS
+                && matches!(
+                    fact.1.as_str(),
+                    "hlinkClick" | "hlinkMouseOver" | "hlinkHover"
+                )
+                && fact.2 == "id"
+                && fact.3.is_empty()
+                && fact.4.as_deref() == Some("ppaction://noaction")
+                && old.contains(&fact)
+            {
+                continue;
+            }
+            let relation = relations
+                .and_then(|relations| relations.get_by_id(&fact.3))
+                .ok_or_else(|| {
+                    invalid_shape_mutation(
+                        "replace XML",
+                        format!("relationship {} is absent from owner part {source}", fact.3),
+                    )
+                })?;
+            let expected = match (fact.0.as_str(), fact.1.as_str(), fact.2.as_str()) {
+                (A_NS, "hlinkClick" | "hlinkMouseOver", "id") => {
+                    Some(if fact.4.as_deref() == Some("ppaction://hlinksldjump") {
+                        &[rel_types::SLIDE][..]
+                    } else {
+                        &[rel_types::HYPERLINK][..]
+                    })
+                }
+                (A_NS, "blip", "embed" | "link") => Some(&[rel_types::IMAGE][..]),
+                (A_NS, "videoFile", "link") => Some(&[rel_types::VIDEO][..]),
+                (A_NS, "audioFile" | "wavAudioFile", "link" | "embed") => {
+                    Some(&[rel_types::AUDIO][..])
+                }
+                ("http://schemas.openxmlformats.org/drawingml/2006/chart", "chart", "id") => {
+                    Some(&[rel_types::CHART][..])
+                }
+                _ => None,
+            };
+            if expected.is_some_and(|types| !types.contains(&relation.rel_type.as_str()))
+                || (expected.is_none() && !old.contains(&fact))
+            {
+                return Err(invalid_shape_mutation(
+                    "replace XML",
+                    "relationship type or opaque source role is unsupported",
+                ));
+            }
+            let external = relationship_is_external(relation);
+            if relation.rel_type == rel_types::HYPERLINK {
+                if !external || relation.target.is_empty() {
+                    return Err(invalid_shape_mutation(
+                        "replace XML",
+                        "hyperlink relationship requires a nonempty external target",
+                    ));
+                }
+                continue;
+            }
+            if external {
+                if fact.2 == "embed"
+                    || matches!(
+                        relation.rel_type.as_str(),
+                        rel_types::SLIDE | rel_types::CHART
+                    )
+                {
+                    return Err(invalid_shape_mutation(
+                        "replace XML",
+                        "embedded media, slide and chart relationships require internal targets",
+                    ));
+                }
+                continue;
+            }
+            let target = if let Some(types) = expected {
+                require_internal_related_part(&package, source, &relation.id, types[0])?
+            } else {
+                OpcPackage::resolve_rel_target(source, &relation.target)
+            };
+            let bytes = required_part(&package, &target)?;
+            let content_type = package.content_types.content_type_for(&target);
+            match relation.rel_type.as_str() {
+                rel_types::SLIDE => {
+                    if content_type != Some(content_types::SLIDE) {
+                        return Err(invalid_shape_mutation(
+                            "replace XML",
+                            "slide relationship requires actual slide content type",
+                        ));
+                    }
+                    check_ppt_xml_input(bytes, P_NS, b"sld")?;
+                    CT_Slide::from_xml(bytes).map_err(|error| {
+                        invalid_shape_mutation("replace XML", error.to_string())
+                    })?;
+                }
+                rel_types::IMAGE => {
+                    let format = oxml_media::ImageFormat::sniff(bytes).ok_or_else(|| {
+                        invalid_shape_mutation(
+                            "replace XML",
+                            "image target format is not recognized",
+                        )
+                    })?;
+                    if content_type != Some(format.content_type()) {
+                        return Err(invalid_shape_mutation(
+                            "replace XML",
+                            "image target content type does not match its actual format",
+                        ));
+                    }
+                    if matches!(
+                        format,
+                        oxml_media::ImageFormat::Png
+                            | oxml_media::ImageFormat::Jpeg
+                            | oxml_media::ImageFormat::Gif
+                            | oxml_media::ImageFormat::Tiff
+                            | oxml_media::ImageFormat::Bmp
+                    ) {
+                        validate_semantic_picture(bytes, format)
+                            .map_err(|message| invalid_shape_mutation("replace XML", message))?;
+                    } else {
+                        // Unsupported original media stays opaque only when the
+                        // selected owner's exact role and original owned target
+                        // survive. This is source preservation, not decode proof.
+                        let original = self
+                            .package
+                            .get_part_rels(source)
+                            .and_then(|relations| relations.get_by_id(&relation.id));
+                        let unchanged = old.contains(&fact)
+                            && original.is_some_and(|original| {
+                                original.rel_type == relation.rel_type
+                                    && original.target == relation.target
+                                    && original.target_mode == relation.target_mode
+                            })
+                            && self.package.get_part(&target) == Some(bytes)
+                            && self.package.content_types.content_type_for(&target) == content_type;
+                        if !unchanged {
+                            return Err(invalid_shape_mutation(
+                                "replace XML",
+                                "new unsupported image format cannot be checked, only an exact original owned media fact may be preserved",
+                            ));
+                        }
+                    }
+                }
+                rel_types::CHART => {
+                    if content_type != Some(content_types::CHART) {
+                        return Err(invalid_shape_mutation(
+                            "replace XML",
+                            "chart relationship requires actual chart content type",
+                        ));
+                    }
+                    check_ppt_xml_input(
+                        bytes,
+                        "http://schemas.openxmlformats.org/drawingml/2006/chart",
+                        b"chartSpace",
+                    )?;
+                    CT_ChartSpace::from_xml(bytes).map_err(|error| {
+                        invalid_shape_mutation("replace XML", error.to_string())
+                    })?;
+                }
+                rel_types::AUDIO | rel_types::VIDEO => {
+                    let Some(content_type) = content_type else {
+                        return Err(invalid_shape_mutation(
+                            "replace XML",
+                            "media target has no content type",
+                        ));
+                    };
+                    let prefix = if relation.rel_type == rel_types::AUDIO {
+                        "audio/"
+                    } else {
+                        "video/"
+                    };
+                    if !content_type.starts_with(prefix)
+                        || oxml_media::audio_video_signature_matches(bytes, content_type)
+                            != Some(true)
+                    {
+                        return Err(invalid_shape_mutation(
+                            "replace XML",
+                            "media relationship requires supported actual content and mode",
+                        ));
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     fn validate_owned_part(&self, owner: ShapeOwner) -> Result<()> {
         let result = match owner {
             ShapeOwner::Slide(index) => self.slides[index].slide.to_xml(),
@@ -3880,20 +5660,38 @@ impl Presentation {
         let mut candidate = self.clone();
         candidate.layouts[index].layout.common_slide_data.name = name.map(str::to_owned);
         candidate.layouts[index].dirty = true;
-        candidate.commit_owned_parts()?;
+        candidate.commit_owned_parts(None)?;
         *self = candidate;
         Ok(())
     }
 
     /// Reopen validates the changed source before any live record is replaced.
-    fn commit_owned_parts(&mut self) -> Result<()> {
-        let package = self.staged_package(true)?;
+    fn commit_owned_parts(&mut self, xml_owner: Option<ShapeOwner>) -> Result<()> {
+        let mut package = self.staged_package(true)?;
+        let mut forced_changed = false;
+        if let Some(owner) = xml_owner {
+            // A checked XML edit may change retained root attributes which
+            // rendering-model equality intentionally does not compare.
+            // Force only this actual part, preserving all unrelated sources.
+            let name = self.owner_part_name(owner)?.to_owned();
+            let xml = self.checked_owner_xml(PptXmlOwner::Part(owner))?;
+            forced_changed = self.package.get_part(&name) != Some(xml.as_slice());
+            package.set_part(&name, xml);
+        }
+        let invalidated = self.package_signatures_invalidated
+            || self.retained_package_signature_would_be_invalidated()?
+            || forced_changed
+                && self
+                    .package
+                    .package_rels
+                    .get_by_type(rel_types::DIGITAL_SIGNATURE_ORIGIN)
+                    .is_some();
+        embedded::persist_invalidated_package_signature(&mut package, invalidated)?;
         let mut output = Cursor::new(Vec::new());
         package.write_to(&mut output)?;
         let mut reopened = Self::from_bytes(output.get_ref())?;
         reopened.embedded_invalidated_signatures = self.embedded_invalidated_signatures.clone();
-        reopened.package_signatures_invalidated = self.package_signatures_invalidated
-            || self.retained_package_signature_would_be_invalidated()?;
+        reopened.package_signatures_invalidated = invalidated;
         *self = reopened;
         Ok(())
     }
@@ -4117,7 +5915,7 @@ impl Presentation {
                 }
             }
         }
-        candidate.commit_owned_parts()?;
+        candidate.commit_owned_parts(None)?;
         *self = candidate;
         Ok(())
     }
@@ -4442,7 +6240,7 @@ impl Presentation {
         CT_OfficeStyleSheet::from_xml(&bytes).map_err(|error| footer_malformed(&part, error))?;
         let mut candidate = self.clone();
         candidate.package.set_part(&part, bytes);
-        candidate.commit_owned_parts()?;
+        candidate.commit_owned_parts(None)?;
         *self = candidate;
         Ok(())
     }
@@ -4493,7 +6291,7 @@ impl Presentation {
         CT_OfficeStyleSheet::from_xml(&bytes).map_err(|error| footer_malformed(&part, error))?;
         let mut candidate = self.clone();
         candidate.package.set_part(&part, bytes);
-        candidate.commit_owned_parts()?;
+        candidate.commit_owned_parts(None)?;
         *self = candidate;
         Ok(())
     }
@@ -4751,7 +6549,7 @@ impl Presentation {
             layout: record.layout.clone(),
             dirty: false,
         });
-        candidate.commit_owned_parts()?;
+        candidate.commit_owned_parts(None)?;
         let inserted = candidate
             .layouts
             .iter()
@@ -4844,7 +6642,7 @@ impl Presentation {
         candidate.layouts.remove(index);
         prune_unreachable_parts(&mut candidate.package, &media);
         candidate.media_store = MediaStore::scan(&candidate.package);
-        candidate.commit_owned_parts()?;
+        candidate.commit_owned_parts(None)?;
         *self = candidate;
         Ok(())
     }
@@ -6670,7 +8468,7 @@ impl Presentation {
         }
         let previous = self.owner_relationship_ids(owner.owner())?;
         candidate.release_unused_owner_images(owner.owner(), &previous)?;
-        candidate.commit_owned_parts()?;
+        candidate.commit_owned_parts(None)?;
         *self = candidate;
         Ok(())
     }
@@ -6721,7 +8519,7 @@ impl Presentation {
         candidate.assign_fill_at(owner, fill)?;
         let previous = self.owner_relationship_ids(owner.owner())?;
         candidate.release_unused_owner_images(owner.owner(), &previous)?;
-        candidate.commit_owned_parts()?;
+        candidate.commit_owned_parts(None)?;
         *self = candidate;
         Ok(())
     }
@@ -7031,7 +8829,7 @@ impl Presentation {
         if matches!(owner, ShapeOwner::Slide(_)) {
             self.commit_candidate(staged)
         } else {
-            staged.commit_owned_parts()?;
+            staged.commit_owned_parts(None)?;
             *self = staged;
             Ok(())
         }
@@ -7147,7 +8945,7 @@ impl Presentation {
         if matches!(owner, ShapeOwner::Slide(_)) {
             self.commit_candidate(staged)
         } else {
-            staged.commit_owned_parts()?;
+            staged.commit_owned_parts(None)?;
             *self = staged;
             Ok(())
         }
@@ -7470,7 +9268,7 @@ impl Presentation {
         candidate.package.set_part_rels(&part_name, relationships);
         prune_unreachable_parts(&mut candidate.package, &removed_parts);
         candidate.media_store = MediaStore::scan(&candidate.package);
-        candidate.commit_owned_parts()?;
+        candidate.commit_owned_parts(None)?;
         *self = candidate;
         Ok(())
     }

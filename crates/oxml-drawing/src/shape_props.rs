@@ -13,6 +13,9 @@ use crate::effect::{
 use crate::fill::{Fill, FillError};
 use crate::geometry::{CT_CustomGeometry2D, CT_PresetGeometry2D, GeometryError};
 use crate::line::{CT_LineProperties, LineError};
+use crate::namespace::{
+    property_is_drawing, property_namespace_scope, property_reject_writer_conflicts,
+};
 use crate::order::OrderedRawChildren;
 use crate::xfrm::{CT_Transform2D, TransformError};
 
@@ -116,6 +119,14 @@ pub struct CT_ShapeProperties {
 impl CT_ShapeProperties {
     /// Parses one complete `a:spPr` element with any namespace prefix.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
+        Self::from_xml_with_inherited_namespaces(xml, &[])
+    }
+
+    /// Parses a property fragment in its actual enclosing namespace scope.
+    pub fn from_xml_with_inherited_namespaces(
+        xml: &[u8],
+        inherited: &[(String, String)],
+    ) -> Result<Self> {
         let mut reader = Reader::from_reader(xml);
         let mut buffer = Vec::new();
         loop {
@@ -124,9 +135,14 @@ impl CT_ShapeProperties {
                 .map_err(OxmlError::from)?
             {
                 Event::Start(element) if matches_local_name(element.name().as_ref(), b"spPr") => {
-                    return Self::from_element(&mut reader, &element);
+                    let scope = property_namespace_scope(&element, inherited)?;
+                    property_reject_writer_conflicts(&scope)?;
+                    return Self::from_element(&mut reader, &element, &scope);
                 }
                 Event::Empty(element) if matches_local_name(element.name().as_ref(), b"spPr") => {
+                    property_reject_writer_conflicts(&property_namespace_scope(
+                        &element, inherited,
+                    )?)?;
                     return Self::from_start(&element);
                 }
                 Event::Start(element) | Event::Empty(element) => {
@@ -152,7 +168,11 @@ impl CT_ShapeProperties {
         })
     }
 
-    fn from_element(reader: &mut Reader<&[u8]>, start: &BytesStart<'_>) -> Result<Self> {
+    fn from_element(
+        reader: &mut Reader<&[u8]>,
+        start: &BytesStart<'_>,
+        namespaces: &[(String, String)],
+    ) -> Result<Self> {
         let mut properties = Self::from_start(start)?;
         let mut boundary = 0;
         let mut buffer = Vec::new();
@@ -164,26 +184,44 @@ impl CT_ShapeProperties {
             {
                 Event::Start(element) => {
                     let name = local_name(element.name().as_ref()).to_vec();
+                    let owned = property_is_drawing(&element, namespaces)?;
+                    let child_scope = property_namespace_scope(&element, namespaces)?;
                     let raw = capture_element(reader, &element)?;
-                    if properties.parse_modelled(&name, &raw)? {
+                    if owned && properties.parse_modelled(&name, &raw, &child_scope)? {
                         boundary = boundary.max(modelled_boundary(&name));
                     } else {
-                        properties
-                            .raw_children
-                            .push(boundary.max(raw_boundary_before(&name)), raw);
-                        boundary = boundary.max(raw_boundary_after(&name));
+                        properties.raw_children.push(
+                            if owned {
+                                boundary.max(raw_boundary_before(&name))
+                            } else {
+                                boundary
+                            },
+                            raw,
+                        );
+                        if owned {
+                            boundary = boundary.max(raw_boundary_after(&name));
+                        }
                     }
                 }
                 Event::Empty(element) => {
                     let name = local_name(element.name().as_ref()).to_vec();
+                    let owned = property_is_drawing(&element, namespaces)?;
+                    let child_scope = property_namespace_scope(&element, namespaces)?;
                     let raw = capture_empty_element(&element)?;
-                    if properties.parse_modelled(&name, &raw)? {
+                    if owned && properties.parse_modelled(&name, &raw, &child_scope)? {
                         boundary = boundary.max(modelled_boundary(&name));
                     } else {
-                        properties
-                            .raw_children
-                            .push(boundary.max(raw_boundary_before(&name)), raw);
-                        boundary = boundary.max(raw_boundary_after(&name));
+                        properties.raw_children.push(
+                            if owned {
+                                boundary.max(raw_boundary_before(&name))
+                            } else {
+                                boundary
+                            },
+                            raw,
+                        );
+                        if owned {
+                            boundary = boundary.max(raw_boundary_after(&name));
+                        }
                     }
                 }
                 Event::End(element) if matches_local_name(element.name().as_ref(), b"spPr") => {
@@ -197,7 +235,19 @@ impl CT_ShapeProperties {
         Ok(properties)
     }
 
-    fn parse_modelled(&mut self, name: &[u8], raw: &[u8]) -> Result<bool> {
+    fn parse_modelled(
+        &mut self,
+        name: &[u8],
+        raw: &[u8],
+        namespaces: &[(String, String)],
+    ) -> Result<bool> {
+        if matches!(
+            name,
+            b"xfrm" | b"custGeom" | b"prstGeom" | b"ln" | b"effectLst"
+        ) || is_fill(name)
+        {
+            property_reject_writer_conflicts(namespaces)?;
+        }
         match name {
             b"xfrm" if self.transform.is_none() => {
                 self.transform = Some(CT_Transform2D::from_xml(raw)?);
@@ -212,7 +262,9 @@ impl CT_ShapeProperties {
                 self.fill = Some(Fill::from_xml(raw)?);
             }
             b"ln" if self.line.is_none() => {
-                self.line = Some(CT_LineProperties::from_xml(raw)?);
+                self.line = Some(CT_LineProperties::from_xml_with_inherited_namespaces(
+                    raw, namespaces,
+                )?);
             }
             b"effectLst" if self.effects.is_none() => {
                 self.effects = Some(CT_EffectList::from_xml(raw)?);
@@ -439,7 +491,18 @@ mod tests {
 
     #[test]
     fn preset_geometry_round_trips_with_unknown_children_verbatim() {
-        let xml = br#"<p:spPr><u:before/><q:prstGeom prst="trapezoid"><u:first id="1"><u:nested/></u:first><q:avLst><u:inside/><q:gd name="adj" fmla="val 50000"/></q:avLst><u:last>keep &amp; stay</u:last></q:prstGeom><u:after/></p:spPr>"#;
+        let xml = br#"<p:spPr><u:before/><q:prstGeom xmlns:q="http://schemas.openxmlformats.org/drawingml/2006/main" prst="trapezoid"><u:first id="1"><u:nested/></u:first><q:avLst><u:inside/><q:gd name="adj" fmla="val 50000"/></q:avLst><u:last>keep &amp; stay</u:last></q:prstGeom><u:after/></p:spPr>"#;
+        for declaration in ["", " xmlns:q=\"urn:foreign\""] {
+            let raw = format!("<q:prstGeom{declaration} prst=\"trapezoid\"/>");
+            let source = format!("<p:spPr>{raw}</p:spPr>");
+            let opaque = CT_ShapeProperties::from_xml(source.as_bytes()).unwrap();
+            assert!(opaque.preset_geometry.is_none());
+            assert!(
+                String::from_utf8(opaque.to_xml().unwrap())
+                    .unwrap()
+                    .contains(&raw)
+            );
+        }
         let properties = CT_ShapeProperties::from_xml(xml).unwrap();
         let preset = properties.preset_geometry.as_ref().unwrap();
         assert_eq!(preset.preset, "trapezoid");

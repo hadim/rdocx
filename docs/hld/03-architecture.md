@@ -2055,3 +2055,20 @@ Python properties use in-place mutation.
 The native Word facade owns accepted-view text presentation and advisory package validation. Python and CLI callers consume the same TextReport and ValidationReport. The native crate has no CLI dependency. Plain text presentation groups readable related stories in physical inventory order and retains main text with one ordered omission diagnostic if extraction fails. Body counts use accepted content rather than presentation labels.
 
 Python template conversion admits explicit JSON scalar and container types before native mutation. Its existing workspace serde_json dependency edge introduces no separate converter model. Checked fragment publication and property mutation stage complete candidates, preserve the original on refusal and invalidate live handles only after changed publication. Markdown requests recursive physical-owner boundaries from the existing accepted projection. The default accepted view remains unchanged for its other consumers.
+
+## PowerPoint checked XML ownership
+
+The rpptx facade resolves checked XML against actual slide, layout or master
+parts and concrete physical owner paths. Existing rpptx-oxml and oxml-drawing
+parsers validate qualified roots and modeled child order. The facade stages
+package candidates, validates relationship target roles and MIME identities,
+and serializes and reparses before publication. Supported raster targets use
+the shared bounded PNG, JPEG, GIF, TIFF and BMP decoder in rpptx. Existing
+unsupported media facts may survive only with exact original target identity.
+
+The Python binding stages that native candidate and prepares returned handles
+and revision tokens before committing. Physical paragraph and run positions
+address current owners, never prove that removed children survived. Actual
+owner, text-body and XML-property child generations establish alias identity.
+Shared revision primitives remain owned by oxml-py-support.
+

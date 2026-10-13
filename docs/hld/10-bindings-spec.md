@@ -3662,3 +3662,22 @@ PictureOptions exposes checked metadata, crop and the supported inline and float
 Paragraph.add_internal_hyperlink and first-character # URLs use the same checked bookmark provider. Ordinary URL fragments remain external links. Tooltips retain native hyperlink formatting. Document.add_heading_hyperlink stages a suitable existing or unique valid supported heading bookmark and its source link together. Supported related-story source paragraphs use their actual owner. Bookmark grammar, owner origin and revision are validated before mutation. No external relationship is allocated for internal links.
 
 Scoped alternate text-box replacement maps each selected logical paragraph or descendant cell to every admitted physical Choice and Fallback counterpart. Independent occurrence counts, formatting and source ranges decide publication. Unselected owners and opaque XML remain exact. Ambiguous or asymmetric mapping refuses the whole operation, while logical zero-match and count behavior retain the existing provider contract.
+
+## PowerPoint Element XML surface
+
+The exported Element exposes immutable xml:str and replace_xml(xml:str)->None.
+Paragraph, regular Run, Table, Cell, Shape, TextFrame, Slide, SlideLayout and
+SlideMaster expose element. Legacy Shape.xml remains bytes. Reads capture the
+actual source owner and close required inherited namespace bindings. Public
+replacement validates the live owner before native resolution and publication.
+
+A checked replacement preserves its proven selected logical owner and retires
+unsafe former descendants, even when counts or values match. Table XML keeps
+the selected table owner but retires its old grid, cells and text bodies.
+Shape replacement retires replaced text-body and property views. Body XML
+keeps the selected body owner and retires paragraph, run and font descendants.
+Removed and recreated bodies cannot resurrect old handles. No-op, refusal and
+allocation failure preserve document bytes and live tokens. Ordinary supported
+setters retain their established lifetime behavior, while notes edits preserve
+unrelated shape and text owners.
+

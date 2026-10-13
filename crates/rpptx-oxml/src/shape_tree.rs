@@ -1545,7 +1545,7 @@ fn capture_shape_child(
                 ));
             }
             *shape_properties = Some(
-                CT_ShapeProperties::from_xml(&raw)
+                CT_ShapeProperties::from_xml_with_inherited_namespaces(&raw, &namespaces.entries())
                     .map_err(|error| OxmlError::InvalidValue(error.to_string()))?,
             );
             *boundary = 2;

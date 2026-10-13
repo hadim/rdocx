@@ -207,6 +207,23 @@ impl PyTable {
 #[pymethods]
 impl PyTable {
     #[getter]
+    fn element(&self, py: Python<'_>) -> PyResult<Py<crate::presentation::PyPptElement>> {
+        self.dimensions(py)?;
+        let presentation = self.presentation.borrow(py);
+        let current = presentation
+            .current_path(&self.path)
+            .ok_or_else(|| PyValueError::new_err("Element owner is absent"))?;
+        let path = presentation.capture_xml_children_path(current.segs)?;
+        drop(presentation);
+        crate::presentation::PyPptElement::new_checked(
+            py,
+            self.presentation.clone_ref(py),
+            path,
+            crate::presentation::PptElementKind::Table,
+        )
+    }
+
+    #[getter]
     fn first_row(&self, py: Python<'_>) -> PyResult<bool> {
         self.flag(py, |table| table.first_row())
     }
@@ -874,6 +891,23 @@ impl PyCell {
 
 #[pymethods]
 impl PyCell {
+    #[getter]
+    fn element(&self, py: Python<'_>) -> PyResult<Py<crate::presentation::PyPptElement>> {
+        self.read(py, |_| ())?;
+        let presentation = self.presentation.borrow(py);
+        let current = presentation
+            .current_path(&self.path)
+            .ok_or_else(|| PyValueError::new_err("Element owner is absent"))?;
+        let path = presentation.capture_path(current.segs, None)?;
+        drop(presentation);
+        crate::presentation::PyPptElement::new_checked(
+            py,
+            self.presentation.clone_ref(py),
+            path,
+            crate::presentation::PptElementKind::Cell,
+        )
+    }
+
     /// Direct a:tcPr anchor, independent of TextFrame a:bodyPr.
     #[getter]
     fn vertical_anchor(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
@@ -905,14 +939,23 @@ impl PyCell {
     #[getter]
     fn text_frame(&self, py: Python<'_>) -> PyResult<Py<PyTextFrame>> {
         self.read(py, |_| ())?;
-        let path = self.presentation.borrow(py).capture_path(
+        let has_body = self.read(py, |cell| cell.text_frame().is_some())?;
+        let current = self
+            .presentation
+            .borrow(py)
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("cell owner is absent"))?;
+        let path = if has_body {
             self.presentation
                 .borrow(py)
-                .current_path(&self.path)
-                .ok_or_else(|| PyIndexError::new_err("cell owner is absent"))?
-                .segs,
-            None,
-        )?;
+                .capture_text_body_path(current.segs, None)?
+        } else {
+            // The established absent-cell-body facade stays virtual. A real
+            // checked cell replacement retires it through this child token.
+            self.presentation
+                .borrow(py)
+                .capture_xml_children_path(current.segs)?
+        };
         Py::new(py, PyTextFrame::new(self.presentation.clone_ref(py), path))
     }
 
@@ -1075,13 +1118,18 @@ impl PyCell {
     #[getter]
     fn fill(&self, py: Python<'_>) -> PyResult<Py<PyFillFormat>> {
         self.read(py, |_| ())?;
+        let current = self
+            .presentation
+            .borrow(py)
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("owner is absent"))?;
+        let path = self
+            .presentation
+            .borrow(py)
+            .capture_xml_children_path(current.segs)?;
         Py::new(
             py,
-            PyFillFormat::new(
-                self.presentation.clone_ref(py),
-                self.path.clone(),
-                FillTarget::TableCell,
-            ),
+            PyFillFormat::new(self.presentation.clone_ref(py), path, FillTarget::TableCell),
         )
     }
 

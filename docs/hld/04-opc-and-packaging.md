@@ -1862,3 +1862,20 @@ use one candidate and checked final publication. Late count, owner or
 serialization failure cannot publish a partial native edit. New CLI mutation
 outputs use the existing extension-based package class and VBA/signature
 contracts, and success JSON follows file publication.
+
+## Checked PowerPoint XML transactions
+
+Checked replacement resolves relationships from the selected physical owner
+part. Internal slide targets must be actual slide parts. Image targets must
+match their actual format and registered content type, with bounded complete
+decoding for supported raster formats. New unsupported media facts refuse.
+Retained unsupported facts require unchanged relationship, type and target
+bytes. Arbitrary empty relationship IDs cannot bypass source ownership.
+
+The transaction preserves unrelated parts and opaque payloads. Actual
+inherited namespace bindings close standalone owner XML, including opaque
+prefixes. A changed selected owner forces emission of its owning part even
+when typed equality ignores source-root markup. Existing relationship,
+metadata and signature invalidation rules apply before candidate publication.
+Exact source no-ops do not rewrite package bytes.
+

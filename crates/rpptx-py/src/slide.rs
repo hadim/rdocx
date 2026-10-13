@@ -55,6 +55,21 @@ impl PySlideLayout {
 
 #[pymethods]
 impl PySlideLayout {
+    #[getter]
+    fn element(&self, py: Python<'_>) -> PyResult<Py<crate::presentation::PyPptElement>> {
+        let index = self.validate(py)?;
+        let path = self
+            .presentation
+            .borrow(py)
+            .capture_path(smallvec![PathSeg::Layout(index)], None)?;
+        crate::presentation::PyPptElement::new_checked(
+            py,
+            self.presentation.clone_ref(py),
+            path,
+            crate::presentation::PptElementKind::Layout,
+        )
+    }
+
     #[setter]
     fn set_name(&self, py: Python<'_>, name: Option<&str>) -> PyResult<()> {
         let index = self.validate(py)?;
@@ -111,7 +126,7 @@ impl PySlideLayout {
         let path = self
             .presentation
             .borrow(py)
-            .capture_path(smallvec![PathSeg::Layout(index)], None)?;
+            .capture_xml_children_path(smallvec![PathSeg::Layout(index)])?;
         Py::new(
             py,
             PyBackground {
@@ -188,7 +203,7 @@ impl PySlideLayout {
         let path = self
             .presentation
             .borrow(py)
-            .capture_path(smallvec![PathSeg::Layout(index)], None)?;
+            .capture_xml_children_path(smallvec![PathSeg::Layout(index)])?;
         Py::new(
             py,
             PyPlaceholderCollection::new(self.presentation.clone_ref(py), path),
@@ -201,7 +216,7 @@ impl PySlideLayout {
         let path = self
             .presentation
             .borrow(py)
-            .capture_path(smallvec![PathSeg::Layout(index)], None)?;
+            .capture_xml_children_path(smallvec![PathSeg::Layout(index)])?;
         Ok(PyShapeCollection::new(
             self.presentation.clone_ref(py),
             path,
@@ -439,6 +454,21 @@ impl PySlide {
 #[pymethods]
 impl PySlide {
     #[getter]
+    fn element(&self, py: Python<'_>) -> PyResult<Py<crate::presentation::PyPptElement>> {
+        let index = self.validate(py)?;
+        let path = self
+            .presentation
+            .borrow(py)
+            .capture_path(smallvec![PathSeg::Slide(index)], None)?;
+        crate::presentation::PyPptElement::new_checked(
+            py,
+            self.presentation.clone_ref(py),
+            path,
+            crate::presentation::PptElementKind::Slide,
+        )
+    }
+
+    #[getter]
     fn media<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
         let index = self.validate(py)?;
         let inventory = self
@@ -574,7 +604,10 @@ impl PySlide {
         self.validate(py)?;
         Ok(PySlideTransition {
             presentation: self.presentation.clone_ref(py),
-            path: self.path.clone(),
+            path: self
+                .presentation
+                .borrow(py)
+                .capture_xml_children_path(smallvec![PathSeg::Slide(self.validate(py)?)])?,
         })
     }
     #[getter]
@@ -584,7 +617,10 @@ impl PySlide {
             py,
             PyHeaderFooter {
                 presentation: self.presentation.clone_ref(py),
-                path: self.path.clone(),
+                path: self
+                    .presentation
+                    .borrow(py)
+                    .capture_xml_children_path(smallvec![PathSeg::Slide(self.validate(py)?)])?,
             },
         )
     }
@@ -603,7 +639,12 @@ impl PySlide {
         self.validate(py)?;
         Py::new(
             py,
-            PyShapeCollection::new(self.presentation.clone_ref(py), self.path.clone()),
+            PyShapeCollection::new(
+                self.presentation.clone_ref(py),
+                self.presentation
+                    .borrow(py)
+                    .capture_xml_children_path(smallvec![PathSeg::Slide(self.validate(py)?)])?,
+            ),
         )
     }
 
@@ -612,7 +653,12 @@ impl PySlide {
         self.validate(py)?;
         Py::new(
             py,
-            PyPlaceholderCollection::new(self.presentation.clone_ref(py), self.path.clone()),
+            PyPlaceholderCollection::new(
+                self.presentation.clone_ref(py),
+                self.presentation
+                    .borrow(py)
+                    .capture_xml_children_path(smallvec![PathSeg::Slide(self.validate(py)?)])?,
+            ),
         )
     }
 
@@ -781,7 +827,10 @@ impl PySlide {
             py,
             PyBackground {
                 presentation: self.presentation.clone_ref(py),
-                path: self.path.clone(),
+                path: self
+                    .presentation
+                    .borrow(py)
+                    .capture_xml_children_path(smallvec![PathSeg::Slide(self.validate(py)?)])?,
             },
         )
     }
@@ -1459,13 +1508,31 @@ impl PySlideMaster {
 #[pymethods]
 impl PySlideMaster {
     #[getter]
+    fn element(&self, py: Python<'_>) -> PyResult<Py<crate::presentation::PyPptElement>> {
+        let index = self.validate(py)?;
+        let path = self
+            .presentation
+            .borrow(py)
+            .capture_path(smallvec![PathSeg::Master(index)], None)?;
+        crate::presentation::PyPptElement::new_checked(
+            py,
+            self.presentation.clone_ref(py),
+            path,
+            crate::presentation::PptElementKind::Master,
+        )
+    }
+
+    #[getter]
     fn text_styles(&self, py: Python<'_>) -> PyResult<Py<crate::text::PyMasterTextStyles>> {
         self.validate(py)?;
         Py::new(
             py,
             crate::text::PyMasterTextStyles {
                 presentation: self.presentation.clone_ref(py),
-                path: self.path.clone(),
+                path: self
+                    .presentation
+                    .borrow(py)
+                    .capture_xml_children_path(smallvec![PathSeg::Master(self.validate(py)?)])?,
             },
         )
     }
@@ -1477,7 +1544,10 @@ impl PySlideMaster {
             py,
             PyBackground {
                 presentation: self.presentation.clone_ref(py),
-                path: self.path.clone(),
+                path: self
+                    .presentation
+                    .borrow(py)
+                    .capture_xml_children_path(smallvec![PathSeg::Master(self.validate(py)?)])?,
             },
         )
     }
@@ -1488,7 +1558,7 @@ impl PySlideMaster {
         let path = self
             .presentation
             .borrow(py)
-            .capture_path(smallvec![PathSeg::Master(index)], None)?;
+            .capture_xml_children_path(smallvec![PathSeg::Master(index)])?;
         Py::new(
             py,
             PyPlaceholderCollection::new(self.presentation.clone_ref(py), path),
@@ -1501,7 +1571,7 @@ impl PySlideMaster {
         let path = self
             .presentation
             .borrow(py)
-            .capture_path(smallvec![PathSeg::Master(index)], None)?;
+            .capture_xml_children_path(smallvec![PathSeg::Master(index)])?;
         Ok(PyShapeCollection::new(
             self.presentation.clone_ref(py),
             path,
@@ -1515,7 +1585,10 @@ impl PySlideMaster {
         Ok(PyTheme {
             presentation: self.presentation.clone_ref(py),
             part_name: self.part_name.clone(),
-            path: self.path.clone(),
+            path: self
+                .presentation
+                .borrow(py)
+                .capture_xml_children_path(smallvec![PathSeg::Master(self.validate(py)?)])?,
         })
     }
 

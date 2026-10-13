@@ -446,6 +446,18 @@ impl CT_Table {
             }
             buffer.clear();
         };
+        loop {
+            match reader.read_event()? {
+                Event::Eof => break,
+                Event::Comment(_) | Event::PI(_) => {}
+                Event::Text(text) if text.iter().all(u8::is_ascii_whitespace) => {}
+                _ => {
+                    return Err(OxmlError::InvalidValue(
+                        "trailing table XML content".to_owned(),
+                    ));
+                }
+            }
+        }
         for (prefix, uri) in inherited_namespaces {
             if prefix == "a" {
                 if uri != A_NS && local_a_namespace.as_deref() != Some(A_NS) {
@@ -780,6 +792,35 @@ impl CT_Table {
     /// Returns every merged rectangle by its origin, after checking that each
     /// row has one explicit cell per grid column and that every merge fits
     /// the grid.
+    /// Checks the explicit grid and every modeled merge continuation.
+    pub fn validate_grid_and_merges(&self) -> Result<()> {
+        let regions = self.merge_regions()?;
+        if self.grid.columns.is_empty() || self.rows.is_empty() {
+            return Err(missing("nonempty table grid and rows"));
+        }
+        for (row, source) in self.rows.iter().enumerate() {
+            for (column, cell) in source.cells.iter().enumerate() {
+                let mut covering = regions.iter().filter(|region| {
+                    region.rows().contains(&row) && region.columns().contains(&column)
+                });
+                let region = covering.next();
+                if covering.next().is_some() {
+                    return Err(OxmlError::InvalidValue(
+                        "overlapping table merges".to_owned(),
+                    ));
+                }
+                let horizontal = region.is_some_and(|region| column > region.left);
+                let vertical = region.is_some_and(|region| row > region.top);
+                if cell.horizontal_merge != horizontal || cell.vertical_merge != vertical {
+                    return Err(OxmlError::InvalidValue(
+                        "table merge continuation has no matching origin".to_owned(),
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn merge_regions(&self) -> Result<Vec<MergeRegion>> {
         let columns = self.grid.columns.len();
         if self.rows.iter().any(|row| row.cells.len() != columns) {
@@ -1594,6 +1635,37 @@ impl CT_TableRow {
 }
 
 impl CT_TableCell {
+    /// Parses one cell whose DrawingML namespace is explicitly qualified.
+    pub fn from_xml_fragment(xml: &[u8]) -> Result<Self> {
+        Self::from_xml(xml, &[])
+    }
+
+    /// Serializes the cell with a standalone DrawingML namespace.
+    pub fn to_xml(&self) -> Result<Vec<u8>> {
+        let xml = self.canonical_xml()?;
+        let mut reader = Reader::from_reader(xml.as_slice());
+        let mut writer = Writer::new(Vec::new());
+        let first = reader.read_event()?;
+        let Event::Start(mut root) = first else {
+            return Err(missing("a:tc"));
+        };
+        if !root
+            .attributes()
+            .any(|attribute| attribute.is_ok_and(|attribute| attribute.key.as_ref() == b"xmlns:a"))
+        {
+            root.push_attribute(("xmlns:a", A_NS));
+        }
+        writer.write_event(Event::Start(root))?;
+        loop {
+            let event = reader.read_event()?;
+            if matches!(event, Event::Eof) {
+                break;
+            }
+            writer.write_event(event)?;
+        }
+        Ok(writer.into_inner())
+    }
+
     fn canonical_xml(&self) -> Result<Vec<u8>> {
         let mut writer = Writer::new(Vec::new());
         self.write_xml(&mut writer)?;
@@ -1607,11 +1679,17 @@ impl CT_TableCell {
             match reader.read_event_into(&mut buffer)? {
                 Event::Start(start) if drawingml_child_name(&start, inherited)? == b"tc" => {
                     reject_conflicting_a_prefix(&start)?;
-                    return Self::from_element(&mut reader, &start, inherited);
+                    let cell = Self::from_element(&mut reader, &start, inherited)?;
+                    crate::text::paragraph::text_reject_trailing(&mut reader)
+                        .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
+                    return Ok(cell);
                 }
                 Event::Empty(start) if drawingml_child_name(&start, inherited)? == b"tc" => {
                     reject_conflicting_a_prefix(&start)?;
-                    return Self::from_start(&start, None, None, OrderedRawChildren::default());
+                    let cell = Self::from_start(&start, None, None, OrderedRawChildren::default())?;
+                    crate::text::paragraph::text_reject_trailing(&mut reader)
+                        .map_err(|error| OxmlError::InvalidValue(error.to_string()))?;
+                    return Ok(cell);
                 }
                 Event::Start(start) | Event::Empty(start) => return Err(unexpected(&start)),
                 Event::Eof => return Err(missing("a:tc")),

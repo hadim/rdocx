@@ -361,6 +361,23 @@ type Insets = (Option<Emu>, Option<Emu>, Option<Emu>, Option<Emu>);
 #[pymethods]
 impl PyTextFrame {
     #[getter]
+    fn element(&self, py: Python<'_>) -> PyResult<Py<crate::presentation::PyPptElement>> {
+        self.validate(py)?;
+        let presentation = self.presentation.borrow(py);
+        let current = presentation
+            .current_path(&self.path)
+            .ok_or_else(|| PyValueError::new_err("Element owner is absent"))?;
+        let path = presentation.capture_text_body_path(current.segs, None)?;
+        drop(presentation);
+        crate::presentation::PyPptElement::new_checked(
+            py,
+            self.presentation.clone_ref(py),
+            path,
+            crate::presentation::PptElementKind::TextBody,
+        )
+    }
+
+    #[getter]
     fn text(&self, py: Python<'_>) -> PyResult<String> {
         self.validate(py)?;
         text_frame_ref_at(&self.presentation.borrow(py), &self.path)
@@ -455,17 +472,26 @@ impl PyTextFrame {
         self.validate(py)?;
         Py::new(
             py,
-            PyParagraphCollection::new(
-                self.presentation.clone_ref(py),
-                self.presentation.borrow(py).capture_path(
-                    self.presentation
-                        .borrow(py)
-                        .current_path(&self.path)
-                        .ok_or_else(|| PyIndexError::new_err("owner is absent"))?
-                        .segs,
-                    Some(oxml_py_support::RevisionScope::Text),
-                )?,
-            ),
+            PyParagraphCollection::new(self.presentation.clone_ref(py), {
+                let presentation = self.presentation.borrow(py);
+                let current = presentation
+                    .current_path(&self.path)
+                    .ok_or_else(|| PyIndexError::new_err("owner is absent"))?;
+                if current
+                    .segs
+                    .iter()
+                    .any(|seg| matches!(seg, PathSeg::Shape(_)))
+                    && text_frame_ref_at(&presentation, &current).is_some()
+                {
+                    presentation.capture_text_body_path(
+                        current.segs,
+                        Some(oxml_py_support::RevisionScope::Text),
+                    )?
+                } else {
+                    presentation
+                        .capture_path(current.segs, Some(oxml_py_support::RevisionScope::Text))?
+                }
+            }),
         )
     }
 
@@ -543,7 +569,7 @@ impl PyTextFrame {
             frame.add_paragraph();
             index
         };
-        let survivors = presentation.text_changed_owners(&self.path)?;
+        let survivors = presentation.appended_text_owners(&self.path)?;
         let prepared = presentation.prepare_owners(
             &candidate,
             "TextFrame.add_paragraph",
@@ -554,11 +580,7 @@ impl PyTextFrame {
         )?;
         let mut segments = current.segs;
         segments.push(PathSeg::Para(index));
-        let path = presentation.capture_prepared_path(
-            &prepared,
-            segments,
-            Some(oxml_py_support::RevisionScope::Text),
-        )?;
+        let path = presentation.capture_prepared_path(&prepared, segments, None)?;
         let result = Py::new(py, PyParagraph::new(self.presentation.clone_ref(py), path))?;
         presentation.publish_owners(candidate, prepared)?;
         Ok(result)
@@ -802,6 +824,23 @@ fn alignment_from_value(value: i32) -> PyResult<TextAlignment> {
 #[pymethods]
 impl PyParagraph {
     #[getter]
+    fn element(&self, py: Python<'_>) -> PyResult<Py<crate::presentation::PyPptElement>> {
+        self.validate(py)?;
+        let presentation = self.presentation.borrow(py);
+        let current = presentation
+            .current_path(&self.path)
+            .ok_or_else(|| PyValueError::new_err("Element owner is absent"))?;
+        let path = presentation.capture_path(current.segs, None)?;
+        drop(presentation);
+        crate::presentation::PyPptElement::new_checked(
+            py,
+            self.presentation.clone_ref(py),
+            path,
+            crate::presentation::PptElementKind::Paragraph,
+        )
+    }
+
+    #[getter]
     fn text(&self, py: Python<'_>) -> PyResult<String> {
         let index = self.validate(py)?;
         text_frame_ref_at(&self.presentation.borrow(py), &self.path)
@@ -862,11 +901,20 @@ impl PyParagraph {
     #[getter]
     fn font(&self, py: Python<'_>) -> PyResult<Py<PyFont>> {
         self.validate(py)?;
+        let current = self
+            .presentation
+            .borrow(py)
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("owner is absent"))?;
+        let path = self
+            .presentation
+            .borrow(py)
+            .capture_xml_children_path(current.segs)?;
         Py::new(
             py,
             PyFont {
                 presentation: self.presentation.clone_ref(py),
-                path: self.path.clone(),
+                path,
             },
         )
     }
@@ -874,9 +922,18 @@ impl PyParagraph {
     #[getter]
     fn runs(&self, py: Python<'_>) -> PyResult<Py<PyRunCollection>> {
         self.validate(py)?;
+        let current = self
+            .presentation
+            .borrow(py)
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("paragraph owner is absent"))?;
+        let path = self
+            .presentation
+            .borrow(py)
+            .capture_path(current.segs, Some(oxml_py_support::RevisionScope::Text))?;
         Py::new(
             py,
-            PyRunCollection::new(self.presentation.clone_ref(py), self.path.clone()),
+            PyRunCollection::new(self.presentation.clone_ref(py), path),
         )
     }
 
@@ -928,7 +985,7 @@ impl PyParagraph {
                 text.as_deref(),
             )
             .map_err(|e| rpptx_to_pyerr(py, e))?;
-        let proofs = p.text_changed_owners(&self.path)?;
+        let proofs = p.appended_text_owners(&self.path)?;
         let prepared = p.prepare_owners(
             &candidate,
             "Paragraph.add_field",
@@ -958,7 +1015,7 @@ impl PyParagraph {
                 .ok_or_else(|| PyIndexError::new_err("paragraph index out of range"))?;
             paragraph.add_run(text);
         }
-        let survivors = presentation.text_changed_owners(&self.path)?;
+        let survivors = presentation.appended_text_owners(&self.path)?;
         let prepared = presentation.prepare_owners(
             &candidate,
             "Paragraph.add_run",
@@ -969,11 +1026,7 @@ impl PyParagraph {
         )?;
         let mut segments = current.segs;
         segments.push(PathSeg::Run(run));
-        let path = presentation.capture_prepared_path(
-            &prepared,
-            segments,
-            Some(oxml_py_support::RevisionScope::Text),
-        )?;
+        let path = presentation.capture_prepared_path(&prepared, segments, None)?;
         let result = Py::new(py, PyRun::new(self.presentation.clone_ref(py), path))?;
         presentation.publish_owners(candidate, prepared)?;
         Ok(result)
@@ -1344,10 +1397,7 @@ impl PyParagraphCollection {
             .ok_or_else(|| PyIndexError::new_err("owner is absent"))?
             .segs;
         segments.push(PathSeg::Para(index));
-        let path = self
-            .presentation
-            .borrow(py)
-            .capture_path(segments, Some(oxml_py_support::RevisionScope::Text))?;
+        let path = self.presentation.borrow(py).capture_path(segments, None)?;
         Py::new(py, PyParagraph::new(self.presentation.clone_ref(py), path))
     }
 }
@@ -1417,6 +1467,23 @@ impl PyRun {
 #[pymethods]
 impl PyRun {
     #[getter]
+    fn element(&self, py: Python<'_>) -> PyResult<Py<crate::presentation::PyPptElement>> {
+        validate_path(py, &self.presentation.borrow(py), &self.path, "run", "")?;
+        let presentation = self.presentation.borrow(py);
+        let current = presentation
+            .current_path(&self.path)
+            .ok_or_else(|| PyValueError::new_err("Element owner is absent"))?;
+        let path = presentation.capture_path(current.segs, None)?;
+        drop(presentation);
+        crate::presentation::PyPptElement::new_checked(
+            py,
+            self.presentation.clone_ref(py),
+            path,
+            crate::presentation::PptElementKind::Run,
+        )
+    }
+
+    #[getter]
     fn text(&self, py: Python<'_>) -> PyResult<String> {
         validate_path(py, &self.presentation.borrow(py), &self.path, "run", "")?;
         let paragraph = paragraph_index(&self.path)
@@ -1455,11 +1522,20 @@ impl PyRun {
     #[getter]
     fn font(&self, py: Python<'_>) -> PyResult<Py<PyFont>> {
         validate_path(py, &self.presentation.borrow(py), &self.path, "run", "")?;
+        let current = self
+            .presentation
+            .borrow(py)
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("owner is absent"))?;
+        let path = self
+            .presentation
+            .borrow(py)
+            .capture_xml_children_path(current.segs)?;
         Py::new(
             py,
             PyFont {
                 presentation: self.presentation.clone_ref(py),
-                path: self.path.clone(),
+                path,
             },
         )
     }
@@ -1467,11 +1543,20 @@ impl PyRun {
     #[getter]
     fn hyperlink(&self, py: Python<'_>) -> PyResult<Py<PyHyperlink>> {
         validate_path(py, &self.presentation.borrow(py), &self.path, "run", "")?;
+        let current = self
+            .presentation
+            .borrow(py)
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("owner is absent"))?;
+        let path = self
+            .presentation
+            .borrow(py)
+            .capture_xml_children_path(current.segs)?;
         Py::new(
             py,
             PyHyperlink {
                 presentation: self.presentation.clone_ref(py),
-                path: self.path.clone(),
+                path,
             },
         )
     }
@@ -1682,10 +1767,7 @@ impl PyRunCollection {
             .ok_or_else(|| PyIndexError::new_err("owner is absent"))?
             .segs;
         segments.push(PathSeg::Run(index));
-        let path = self
-            .presentation
-            .borrow(py)
-            .capture_path(segments, Some(oxml_py_support::RevisionScope::Text))?;
+        let path = self.presentation.borrow(py).capture_path(segments, None)?;
         Py::new(py, PyRun::new(self.presentation.clone_ref(py), path))
     }
 }

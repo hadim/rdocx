@@ -4019,3 +4019,21 @@ Table controls distinguish logical grid columns from physical cell vectors, refe
 Physical picture controls distinguish two occurrences sharing one relationship, preserve actual bytes and content type, and prove owner-local import and extent changes in body, cells, headers and text boxes. Options, aliases, foreign namespace lookalikes, source fingerprints, crop and anchors have positive and refusal controls. Internal links inspect actual anchors, tooltips, bookmark uniqueness, related source parts and absence of external link relationships. Current installed wheels require strict typing and stubtest with unchanged PowerPoint provenance. Native Word and pinned unattended LibreOffice captures remain independent evidence.
 
 Paired text-box controls inspect every physical counterpart, unequal typed run formatting, descendant cells, unselected owners and comment closure. Genuine logical counts, zero matches, asymmetric mapping, foreign MC and late failure determine atomicity. Passing a substring assertion or one selected branch never substitutes for complete physical-copy evidence.
+
+## PowerPoint checked XML qualification
+
+Native controls exercise all nine owners and five shape variants with actual
+source-part relationships, qualified aliases, opaque inherited namespaces,
+model child sequence and save/reopen facts. Negative controls verify wrong
+roots, media truncation and MIME mismatch, unsupported transitions and
+late failures without publication. Public controls use a fresh member-pinned
+installed wheel, strict typing and full stubtest. Real Element allocator
+refusals prove that prepublication MemoryError preserves bytes and held handles.
+
+Lifetime controls distinguish selected-owner survival from unsafe child
+retirement and test removed/recreated bodies, property views, unrelated owners,
+notes and existing setter compatibility. The full integration run retains
+missing historical timeline and SmartArt oracle fixtures as unqualified.
+Focused applicable feature gates do not infer oracle credit from early returns
+or substitute package inspection for native application acceptance.
+

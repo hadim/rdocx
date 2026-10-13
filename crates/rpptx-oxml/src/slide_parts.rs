@@ -1307,7 +1307,19 @@ fn parse_root(xml: &[u8], kind: RootKind) -> Result<ParsedRoot> {
                     return Err(unexpected(&start));
                 }
                 namespaces.reject_writer_conflicts(FIXED_MODEL_PREFIXES)?;
-                return parse_root_children(&mut reader, &start, &namespaces, kind);
+                let parsed = parse_root_children(&mut reader, &start, &namespaces, kind)?;
+                loop {
+                    match reader.read_event()? {
+                        Event::Eof => return Ok(parsed),
+                        Event::Comment(_) | Event::PI(_) => {}
+                        Event::Text(text) if text.iter().all(u8::is_ascii_whitespace) => {}
+                        _ => {
+                            return Err(OxmlError::InvalidValue(
+                                "trailing presentation part XML content".to_owned(),
+                            ));
+                        }
+                    }
+                }
             }
             Event::Empty(start) => {
                 let namespaces = NamespaceBindings::default().with_start(&start)?;

@@ -111,6 +111,16 @@ Depth33 returns a named
 checked error before descent or publication. Opaque foreign XML remains source,
 not another modeled owner or timing condition.
 
+### Checked PowerPoint XML access
+
+PowerPoint exposes checked XML reads and replacement for paragraph, regular
+run, table, cell, shape, text body, slide, layout and master owners. Shape XML
+keeps the captured sp, pic, grpSp, cxnSp or graphicFrame kind. Replacement does
+not import relationships or convert shape kinds. Regular runs do not become
+fields or breaks. Unsupported table-to-chart transitions refuse atomically.
+Opaque source survives supported edits. This bounded escape surface is not a
+full XSD validator or a generic mutable XML object model.
+
 ## Explicitly not in v1
 
 Each of these is **preserved verbatim on round-trip**. Nothing in this list

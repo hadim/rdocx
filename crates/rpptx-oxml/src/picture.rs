@@ -558,7 +558,10 @@ fn capture_picture_child(
                     "p:spPr must follow the p:pic blip-fill choice".to_owned(),
                 ));
             }
-            *shape_properties = Some(CT_ShapeProperties::from_xml(&raw).map_err(drawing_error)?);
+            *shape_properties = Some(
+                CT_ShapeProperties::from_xml_with_inherited_namespaces(&raw, &namespaces.entries())
+                    .map_err(drawing_error)?,
+            );
             *state = 3;
         }
         (Some(P_NS), b"style") if *state == 3 => {

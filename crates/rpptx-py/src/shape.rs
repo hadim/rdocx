@@ -412,6 +412,23 @@ impl PyShape {
 #[pymethods]
 impl PyShape {
     #[getter]
+    fn element(&self, py: Python<'_>) -> PyResult<Py<crate::presentation::PyPptElement>> {
+        self.read(py, |_| ())?;
+        let presentation = self.presentation.borrow(py);
+        let current = presentation
+            .current_path(&self.path)
+            .ok_or_else(|| PyValueError::new_err("Element owner is absent"))?;
+        let path = presentation.capture_path(current.segs, None)?;
+        drop(presentation);
+        crate::presentation::PyPptElement::new_checked(
+            py,
+            self.presentation.clone_ref(py),
+            path,
+            crate::presentation::PptElementKind::Shape,
+        )
+    }
+
+    #[getter]
     fn is_placeholder(&self, py: Python<'_>) -> PyResult<bool> {
         self.read(py, |shape| shape.placeholder_idx().is_some())
     }
@@ -421,9 +438,18 @@ impl PyShape {
         if !self.is_placeholder(py)? {
             return Err(PyValueError::new_err("shape is not a placeholder"));
         }
+        let current = self
+            .presentation
+            .borrow(py)
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("owner is absent"))?;
+        let path = self
+            .presentation
+            .borrow(py)
+            .capture_xml_children_path(current.segs)?;
         Ok(PyPlaceholderFormat {
             presentation: self.presentation.clone_ref(py),
-            path: self.path.clone(),
+            path,
         })
     }
 
@@ -610,11 +636,20 @@ impl PyShape {
     #[getter]
     fn click_action(&self, py: Python<'_>) -> PyResult<Py<PyShapeClickAction>> {
         self.validate(py)?;
+        let current = self
+            .presentation
+            .borrow(py)
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("owner is absent"))?;
+        let path = self
+            .presentation
+            .borrow(py)
+            .capture_xml_children_path(current.segs)?;
         Py::new(
             py,
             PyShapeClickAction {
                 presentation: self.presentation.clone_ref(py),
-                path: self.path.clone(),
+                path,
             },
         )
     }
@@ -845,11 +880,20 @@ impl PyShape {
         if self.read(py, |shape| shape.kind())? != rpptx::ShapeKind::Shape {
             return Err(PyValueError::new_err("shape has no adjustments"));
         }
+        let current = self
+            .presentation
+            .borrow(py)
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("owner is absent"))?;
+        let path = self
+            .presentation
+            .borrow(py)
+            .capture_xml_children_path(current.segs)?;
         Py::new(
             py,
             PyAdjustmentCollection {
                 presentation: self.presentation.clone_ref(py),
-                path: self.path.clone(),
+                path,
             },
         )
     }
@@ -857,26 +901,36 @@ impl PyShape {
     #[getter]
     fn fill(&self, py: Python<'_>) -> PyResult<Py<PyFillFormat>> {
         self.require_shape_properties(py, "fill")?;
+        let current = self
+            .presentation
+            .borrow(py)
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("owner is absent"))?;
+        let path = self
+            .presentation
+            .borrow(py)
+            .capture_xml_children_path(current.segs)?;
         Py::new(
             py,
-            PyFillFormat::new(
-                self.presentation.clone_ref(py),
-                self.path.clone(),
-                FillTarget::Shape,
-            ),
+            PyFillFormat::new(self.presentation.clone_ref(py), path, FillTarget::Shape),
         )
     }
 
     #[getter]
     fn line(&self, py: Python<'_>) -> PyResult<Py<PyLineFormat>> {
         self.require_shape_properties(py, "line")?;
+        let current = self
+            .presentation
+            .borrow(py)
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("owner is absent"))?;
+        let path = self
+            .presentation
+            .borrow(py)
+            .capture_xml_children_path(current.segs)?;
         Py::new(
             py,
-            PyLineFormat::new(
-                self.presentation.clone_ref(py),
-                self.path.clone(),
-                FillTarget::Line,
-            ),
+            PyLineFormat::new(self.presentation.clone_ref(py), path, FillTarget::Line),
         )
     }
 
@@ -899,9 +953,18 @@ impl PyShape {
                 return Err(PyValueError::new_err("shape has no shadow"));
             }
         }
+        let current = self
+            .presentation
+            .borrow(py)
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("owner is absent"))?;
+        let path = self
+            .presentation
+            .borrow(py)
+            .capture_xml_children_path(current.segs)?;
         Py::new(
             py,
-            PyShadowFormat::new(self.presentation.clone_ref(py), self.path.clone()),
+            PyShadowFormat::new(self.presentation.clone_ref(py), path),
         )
     }
 
@@ -1052,9 +1115,15 @@ impl PyShape {
     #[getter]
     fn shapes(&self, py: Python<'_>) -> PyResult<Py<PyShapeCollection>> {
         self.validate(py)?;
+        let presentation = self.presentation.borrow(py);
+        let current = presentation
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("group owner is absent"))?;
+        let path = presentation.capture_xml_children_path(current.segs)?;
+        drop(presentation);
         Py::new(
             py,
-            PyShapeCollection::new(self.presentation.clone_ref(py), self.path.clone()),
+            PyShapeCollection::new(self.presentation.clone_ref(py), path),
         )
     }
 
@@ -1111,10 +1180,16 @@ impl PyShape {
             return Err(PyValueError::new_err("shape has no text frame"));
         }
         drop(presentation);
-        Py::new(
-            py,
-            PyTextFrame::new(self.presentation.clone_ref(py), self.path.clone()),
-        )
+        let current = self
+            .presentation
+            .borrow(py)
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("owner is absent"))?;
+        let path = self
+            .presentation
+            .borrow(py)
+            .capture_text_body_path(current.segs, None)?;
+        Py::new(py, PyTextFrame::new(self.presentation.clone_ref(py), path))
     }
 
     #[getter]
@@ -1137,10 +1212,16 @@ impl PyShape {
             return Err(PyValueError::new_err("shape has no table"));
         }
         drop(presentation);
-        Py::new(
-            py,
-            PyTable::new(self.presentation.clone_ref(py), self.path.clone()),
-        )
+        let current = self
+            .presentation
+            .borrow(py)
+            .current_path(&self.path)
+            .ok_or_else(|| PyIndexError::new_err("owner is absent"))?;
+        let path = self
+            .presentation
+            .borrow(py)
+            .capture_xml_children_path(current.segs)?;
+        Py::new(py, PyTable::new(self.presentation.clone_ref(py), path))
     }
 }
 

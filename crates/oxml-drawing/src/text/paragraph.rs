@@ -3314,6 +3314,13 @@ impl CT_RegularTextRun {
         self.text.value = escape_invalid_xml_characters(text).into_owned();
     }
 
+    /// Serializes this regular run as a standalone DrawingML element.
+    pub fn to_xml(&self) -> Result<Vec<u8>> {
+        let mut writer = Writer::new(Vec::new());
+        self.write_xml(&mut writer)?;
+        text_close_generated_child(&writer.into_inner(), &[])
+    }
+
     /// Parses one complete `a:r` element with any prefix.
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
         Self::from_xml_with_namespaces(xml, &TextNamespaceScope::default())
@@ -4219,11 +4226,15 @@ fn parse_complete<T>(
         {
             Event::Start(element) if matches_local_name(element.name().as_ref(), expected) => {
                 text_validate_root(&element)?;
-                return parse_start(&mut reader, &element);
+                let parsed = parse_start(&mut reader, &element)?;
+                text_reject_trailing(&mut reader)?;
+                return Ok(parsed);
             }
             Event::Empty(element) if matches_local_name(element.name().as_ref(), expected) => {
                 text_validate_root(&element)?;
-                return parse_empty(&element);
+                let parsed = parse_empty(&element)?;
+                text_reject_trailing(&mut reader)?;
+                return Ok(parsed);
             }
             Event::Start(element) | Event::Empty(element) => return Err(unexpected(&element)),
             Event::Eof => {
@@ -4234,6 +4245,21 @@ fn parse_complete<T>(
             _ => {}
         }
         buffer.clear();
+    }
+}
+
+pub(crate) fn text_reject_trailing(reader: &mut Reader<&[u8]>) -> Result<()> {
+    loop {
+        match reader.read_event().map_err(OxmlError::from)? {
+            Event::Eof => return Ok(()),
+            Event::Comment(_) | Event::PI(_) => {}
+            Event::Text(text) if text.iter().all(u8::is_ascii_whitespace) => {}
+            _ => {
+                return Err(TextError::UnexpectedElement(
+                    "trailing XML content".to_owned(),
+                ));
+            }
+        }
     }
 }
 

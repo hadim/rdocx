@@ -1,6 +1,6 @@
 # F-X211b, PowerPoint checked XML owners
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X194, F-X206, F-X209, F-X200, F-X210 and F-X214 actual presentation part/text/topology providers. F-X211c owns final cross-family acceptance.
@@ -58,7 +58,7 @@ Use existing native integration and test_documented_examples/typing entrypoints.
 - docs/hld/12-testing-strategy.md
 - docs/hld/14-development-backlog.md
 
-Root applies each child's current intent to these exact shared files after reviewed composition. Workers do not duplicate HLD edits, archive measurement tuples or delivery totals.
+Root reconciles each child's current intent in these exact shared files after reviewed composition. This child worker prepares its authorized HLD edits and affected archive measurement tuples. Shared delivery totals remain integrator-owned.
 
 ## Risk routing
 
@@ -72,12 +72,12 @@ No default output delta is expected from additive XML, aliases, metrics or error
 
 ## Implementation checklist
 
-- [ ] Inventory actual nine owners and concrete parser/read gaps.
-- [ ] Complete native/public checked operations and compatible legacy reads.
-- [ ] Qualify DrawingML aliases and true part relationship ownership.
-- [ ] Qualify all nine cases/shape variants, atomicity and local retirement.
-- [ ] Complete declared scoped gates, root HLD/archive composition and clean independent microscope.
-- [ ] Prepare valid child handoff only after genuine completion.
+- [x] Inventory actual nine owners and concrete parser/read gaps.
+- [x] Complete native/public checked operations and compatible legacy reads.
+- [x] Qualify DrawingML aliases and true part relationship ownership.
+- [x] Qualify all nine cases/shape variants, atomicity and local retirement.
+- [x] Complete declared scoped gates, root HLD/archive composition and clean independent microscope.
+- [x] Prepare valid child handoff only after genuine completion.
 
 ## Open questions
 

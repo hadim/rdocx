@@ -32,7 +32,7 @@ pub use paragraph::{
 use body::{Result, missing_end};
 use paragraph::{
     TextNamespaceScope, text_capture_opaque_event, text_close_generated_child, text_fragment_scope,
-    text_owned_name, text_root_spellings_scoped,
+    text_namespace_scope, text_owned_name, text_reject_trailing, text_root_spellings_scoped,
 };
 
 #[derive(Clone, Debug)]
@@ -119,12 +119,35 @@ impl CT_TextBody {
                 Event::Start(element)
                     if matches_local_name(element.name().as_ref(), root_local_name) =>
                 {
-                    return Self::from_element(
+                    let scope = text_namespace_scope(&element, inherited)?;
+                    let name = element.name();
+                    let spelling = std::str::from_utf8(name.as_ref()).map_err(OxmlError::from)?;
+                    let prefix = spelling.split_once(':').map_or("", |(prefix, _)| prefix);
+                    if scope.iter().any(|(key, uri)| {
+                        key == prefix
+                            && uri != crate::namespace::A_NS
+                            && uri != "http://schemas.openxmlformats.org/presentationml/2006/main"
+                            && !(root_local_name == b"t"
+                                && uri
+                                    == "http://schemas.openxmlformats.org/drawingml/2006/diagram")
+                            && !(root_local_name == b"txPr"
+                                && uri == "http://schemas.openxmlformats.org/drawingml/2006/chart")
+                            && !(root_local_name == b"txBody"
+                                && uri
+                                    == "http://schemas.microsoft.com/office/powerpoint/2018/8/main")
+                    }) {
+                        return Err(TextError::UnexpectedElement(
+                            "foreign text body namespace".to_owned(),
+                        ));
+                    }
+                    let parsed = Self::from_element(
                         &mut reader,
                         root_local_name,
                         &element,
                         &TextNamespaceScope::inherited(inherited),
-                    );
+                    )?;
+                    text_reject_trailing(&mut reader)?;
+                    return Ok(parsed);
                 }
                 Event::Empty(element)
                     if matches_local_name(element.name().as_ref(), root_local_name) =>
