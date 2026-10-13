@@ -6,7 +6,7 @@
 **Depends on**: F-X206, F-X215
 **Issues**: 347, 348, 349
 **Test gate**: regression
-**Implementation**: not claimed, no code or execution
+**Implementation**: claimed on work/f-x216-codex at 5b0f63d95e4ea82a05a3082fe74a6d8e19d9f572, implementation and acceptance in progress
 
 ## Problem
 
@@ -17,6 +17,7 @@ Current Python `slides.import_slide` at rpptx-py/slide.rs605 publishes native mu
 ## Spec reference
 
 - docs/hld/04-opc-and-packaging.md, The package, Relationship types and owned graph transfer.
+- docs/hld/05-drawingml-model.md, Text body, paragraph and character properties, list defaults and preserved schema boundaries.
 - docs/hld/06-presentationml-model.md, Relationship remapping, Adding a slide and source order/z-order.
 - docs/hld/08-rendering-spec.md, Why Group is the whole design and inherited layout/transform output.
 - docs/hld/09-charts-spec.md, Why a chart needs three parts.
@@ -44,7 +45,13 @@ Python extends `slides.import_slide(slide, layout=None, index=None, *, keep_sour
 
 CLI exact required spelling: `rpptx slide import DEST SOURCE [--slides 1,3-5] [--at N] [--keep-source-formatting] -o OUT`. Existing commands/main.rs carry the implementation. CLI ranges and insertion positions are one-based, matching existing slide range conventions, with append as default and --at1 inserting before the first slide. Parse ranges, reject duplicates/out-of-range and never overwrite either input. Default selects every source slide. Diagnostics go to the existing structured/human channel. Save through the established atomic output path and validate before write.
 
-Existing carriers: rpptx/lib.rs, rpptx-oxml comments.rs/presentation.rs/relmap.rs and only necessary existing namespace/shape/timing carriers, oxml-opc existing package and relationships carriers, rpptx-py slide.rs/presentation.rs existing exports/stubs, rpptx-cli main.rs/commands.rs, and existing inline/integration/Python tests. F215 owns chart read/replace semantics. This story copies its accepted graph without reauthoring chart data. F206 owns group/live-handle operations. No new product file/module/crate/dependency or generic copy framework.
+Source presentation defaults are inherited into source-owned master text styles before graph comparison. Imported notes retain one destination global notes master. Materialize the source notes master appearance and source note content into the imported notes, including placeholder geometry, text defaults, colours and owned resources. Suppress destination master decorations for those imported notes using the existing notes display flag. Rendering respects that flag. Preserve first-note and destination-global state. Extra per-note masters are not accepted because the admitted native control requires repair.
+
+Concrete text inheritance belongs to the existing DrawingML property owners: `CT_TextCharacterProperties::with_inherited_defaults(&self, defaults: &Self) -> Result<Self>`, `CT_TextParagraphProperties::with_inherited_defaults(&self, defaults: &Self) -> Result<Self>` and `CT_TextListStyle::with_inherited_defaults(&self, defaults: &Self) -> Result<Self>`. Higher-priority known members overlay lower defaults. Retain opaque attributes and children with proven namespace context and schema boundaries. Refuse ambiguous opaque namespace conflicts before publication. Source-master defaults and local notes appearance are the two actual consumers. No reverse facade dependency or duplicate raw-child engine is introduced.
+
+The existing default-debug constructor also overflows at the claim Base. Isolate concrete boxed master-style parsing in its existing owner while retaining public signatures, lexical models and schema behavior. Qualify the actual existing constructor and new import controls on the default test stack. A stack-size override or a zero-test selector supplies no acceptance. Further model storage changes require a bounded diagnosis and plan revision before implementation.
+
+Existing carriers: oxml-drawing/src/text/paragraph.rs and list_style.rs, rpptx-oxml/src/slide_parts.rs, existing notes model and notes rendering carriers where required, rpptx/lib.rs, rpptx-oxml comments.rs/presentation.rs/relmap.rs and only necessary existing namespace/shape/timing carriers, oxml-opc existing package and relationships carriers, rpptx-py slide.rs/presentation.rs existing exports/stubs, rpptx-cli main.rs/commands.rs, and existing inline/integration/Python tests. F215 owns chart read/replace semantics. This story copies its accepted graph without reauthoring chart data. F206 owns group/live-handle operations. No new product file/module/crate/dependency or generic copy framework.
 
 ## Rejected alternatives
 
@@ -65,6 +72,9 @@ Existing carriers: rpptx/lib.rs, rpptx-oxml comments.rs/presentation.rs/relmap.r
 | regression | `fx216_merge_sections_count_order_notes_and_media` | Two pinned corpus decks, all and selected imports, count/order/notes/media reuse, section collisions and noncontiguous selection, same-deck and empty selection |
 | regression | `fx216_cli_slide_range_and_insertion_write_new_file` | Actual CLI --slides1,3-5 and --atN, output new, source hashes unchanged, error on invalid ranges, diagnostics and exact slide order |
 | regression | `fx216_installed_returned_slide_owners_and_refusal_atomicity` | Current provider factories before publication, stable unrelated owners, retired changed collection descendants, foreign inputs/overflow/Py allocation failure and no-op preserve source/revisions |
+| regression | `fx216_effective_text_defaults_preserve_opaque_namespace_and_precedence` | Source master and local notes inherit complete effective defaults, opaque bytes and namespace context, schema boundaries and atomic conflict refusal |
+| regression | `fx216_notes_local_appearance_suppresses_destination_master_decorations` | One global master, source decorations and placeholders retained, imported notes suppress destination decorations, untouched notes unchanged, actual native save/reopen |
+| regression | `add_table_round_trips_cells_formatting_banding_and_widths` | Existing constructor executes on the default debug test stack, retained actual Base overflow remains distinct from its successor |
 | differential | `fx216_imported_native_source_formatting_matches` | Source versus imported deterministic geometry/fonts/colours/render, comparison metric fixed before measured output, wrong destination-theme negative differs |
 
 Native PowerPoint opens each copied relationship kind and merged source-format deck without repair, normal save/reopen retains graph and comments/authors, actual source/imported slide renders are compared. Record exact application build and source/output hashes. Existing corpus manifests bind the actual two decks and their dependencies. Missing corpus/native work is uncredited, never a silent selfskip. Source-built fixtures supply all relationship kinds without new checked-in binary assets. Pin python-pptx1.0.2 only where its public model answers the comparison. Fresh binding wheel, exact installed nodes, strict typing/stubtest and CLI integration must execute against the reviewed current union. Native graphical evidence is not replaced by successful ZIP validation.
@@ -73,6 +83,7 @@ Native PowerPoint opens each copied relationship kind and merged source-format d
 
 - docs/hld/02-scope-and-non-goals.md
 - docs/hld/04-opc-and-packaging.md
+- docs/hld/05-drawingml-model.md
 - docs/hld/06-presentationml-model.md
 - docs/hld/08-rendering-spec.md
 - docs/hld/10-bindings-spec.md
@@ -81,7 +92,7 @@ Native PowerPoint opens each copied relationship kind and merged source-format d
 
 ## Risk routing
 
-Parser/serializer04/06: owned relationship remap, content types, schema ID lists, lossless opaque capture and namespace controls. Public API10: stated additive option/batch/diagnostic surface, old import signature/default unchanged, verified affected archives and10MiB limits. Bindings10: fresh installed provenance, strict types/stubs and both WASM graphs. Layout08: deterministic fonts and actual source-format equivalence. External oracles: pinned native PowerPoint/python-pptx, source-built/native comparison with declared tolerances. Dependency03: no reverse low-level facade dependency and no new generic graph framework. No new feature flag, bundled asset or version change. All ordinary scoped gates remain mandatory.
+Parser/serializer04/05/06: owned relationship remap, content types, schema ID lists, lossless opaque capture and namespace controls. Public API05/10: concrete staged text inheritance is additive, qualify affected oxml-drawing/rpptx-oxml archives and unchanged public parser signatures. Public API10: stated additive option/batch/diagnostic surface, old import signature/default unchanged, verified affected archives and10MiB limits. Bindings10: fresh installed provenance, strict types/stubs and both WASM graphs. Layout08: deterministic fonts and actual source-format equivalence. External oracles: pinned native PowerPoint/python-pptx, source-built/native comparison with declared tolerances. Dependency03: no reverse low-level facade dependency and no new generic graph framework. No new feature flag, bundled asset or version change. All ordinary scoped gates remain mandatory.
 
 ## Hash harness
 
@@ -98,7 +109,7 @@ Existing defaults and samples expected unchanged. Source-format option and expan
 
 ## Open questions
 
-No blocking product ambiguity. Defaults remain destination theme, append, no sections unless requested. Modern comment ID remapping is mandatory, not optional. Stable existing-slide mapping is explicit input and validated. F206 and F215 are unfinished in the current registered backlog, so draft design-all-first is permitted but implementation must not start before actual dependency completion.
+No blocking product ambiguity. Defaults remain destination theme, append, no sections unless requested. Modern comment ID remapping is mandatory, not optional. Stable existing-slide mapping is explicit input and validated. F-X206 and F-X215 are done in the registered backlog. The claimed implementation retains its exclusive source and build-resource leases.
 
 ## Batch approval, 2026-10-11
 
@@ -110,3 +121,7 @@ Implementation waits for completed dependencies and an exclusive resource wave.
 ## Contributor PR357 intake, 2026-10-11
 
 [PR357](https://github.com/tensorbee/rdocx/pull/357) at head 16ee45f3b7d521edb344c4d59105654907bf8a97 joins existing approved F-X216 for Issues 347, 348 and 349, complete slide import, source formatting and deck merge. Its exact captured patch is d1203c60f78a383f36b4f9cf6986fef08abc9b45fe9da40b08daed8133702b62 at /private/tmp/S91-PR357-intake/diff.patch. Read-only contribution assessment is complete at /private/tmp/S91-PR357-intake/assessment.md, SHA b8670bafe72fb39a1d15e39c5c55a9f364b81a39a4c587960607450e77d3eb8b. Reuse graph copying, source-format comparison and graph/merge controls. Complete classic comments, batch-wide sharing, duplicate selection/map rejection, qualified comment identity/remapping, sections and transactional returned handles. Preserve the approved diagnostics and source-format contract. Reuse qualifying contributor code and tests within the original approved acceptance and existing carriers. Contributor test claims, archive measurements, omitted acceptance and new product files do not replace local verification or grant additional structural approval. Implementation retains its dependency and exclusive source boundaries.
+
+## Implementation revision, 2026-10-13
+
+The existing source-format acceptance requires complete source-master text defaults and local notes appearance. Add DrawingML05 to the spec and completion impact, concrete inheritance in existing property owners, and default-debug constructor regression qualification. Native feasibility rejects per-note extra masters and admits local notes appearance only as an exploratory representation. Final current-source native and corpus acceptance remains mandatory. No new product file, module, crate, dependency, trait, feature flag or scope is authorized by this revision.
