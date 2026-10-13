@@ -19307,3 +19307,23 @@ push, main merge, tag or publication is claimed.
 **Spec sections touched.** Exactly HLD03,04,10,12 and14.
 
 **Notes for future sessions.** Keep work/f-x222-codex through sprint verification and close. Preserve required evidence before clean worker retirement. Bibliography remains S92. No GitHub closure, push, main merge, tag or publication is claimed.
+
+
+### F-X217, Import HTML and Markdown through public Word surfaces
+
+**Completed.** 2026-10-13, S91 scoped dependency-prefix checkpoint
+**Size.** L, actual not recorded
+
+**What was built.** Issues350 and351 and adapted PR359 expose native HTML and bounded CommonMark import in Python and CLI. Immutable diagnostics, explicit local resources, template section/header/footer ownership, nested numbering and canonical outbound Markdown use the existing Word model and publication provider.
+
+**Non-obvious choices.** The approved exact pulldown-cmark0.13.4 parser enables HTML projection, tables and strikethrough. Raw HTML is diagnosed and remote images are not fetched. Selected labelled corrections preserve actual hyperlinks, nested bullet/list table order, wrapped images and producing-run whitespace formatting. Original failures remain retained.
+
+**Tests.** Source-safe checkpoint fce4d7bd5d7c172f55b33a706859483e7a7c7356a34501d7910692a8adc74407 qualifies the real failing-before gate, native construct/round-trip controls, installed Python, CLI, typing, allocation refusal, dependency/MSRV/WASM, archive/policy and hash successors. Whole-feature and expectation reviews have zero defects and smells. Native Word16.113.2 build16.113.26092012 accepts both combined and template inputs without repair. Each passes distinct save/local printing PDF, known task close, normal reopen, second save/render and final known close. Content, formatting, numbering, owned resources and template section/header/footer/PAGE facts survive. Both pairs of PDF text, geometry and raster outputs agree.
+
+**Integrated evidence.** Sourceb3524916 and handoffd83096f9 integrate in be4af3ce. All3211 qualified source files are compared. Every product, dependency, toolchain and script carrier equals the worker. Six metadata differences preserve existing root records and non-overlapping HLD14 additions. No semantic conflict or integration-only behavior change occurs. Validated handoff and bounded composition record remain in /private/tmp/S91-F-X217-integration-1. Required505.8MB scratch, three current archives and progress are authenticated and preserved before worker retirement. Native artifact receipts f011ad5d3699fd1dadb76cdb2326f6191be9c3a6f7844941cda2244bd74e9a0f and ccd3e2470cd2471d648547844b9759ffc839021a37491247917715416553025f retain original pins, with final combined task-close observation recorded separately.
+
+**Hash harness.** Qualified scoped49 deterministic entries match unchanged baselines, with relevant product sources exact at integration. Final full integrated sprint verification and sprint review remain due.
+
+**Spec sections touched.** Exactly HLD02,03,04,10,12,14 and15, preserving existing F-X211 delivery children.
+
+**Notes for future sessions.** Keep work/f-x217-codex through final verification and close. F-X211a must reconcile new import constructors and the existing publisher once. Bibliography, navigation, standalone authoring and historical oracle fixture regeneration remain later work. No remote closure, push, main merge, tag or publication is claimed.

@@ -6,7 +6,7 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 retains twenty-nine top-level stories, twenty-two completed, five running,
+S91 retains twenty-nine top-level stories, twenty-three completed, four running,
 two approved pending implementation. F-X211 also has three delivery children
 for parallel Word and PowerPoint work followed by integrated compatibility. The latest bounded intake includes40 issues and30 PRs, plus final minor-release preparation.
 
@@ -51,7 +51,7 @@ for parallel Word and PowerPoint work followed by integrated compatibility. The 
 | F-X214 | Bound recursive PowerPoint parsing and traversal | L | done | - |
 | F-X215 | Create charts in Python and replace existing chart data | L | in-progress | codex |
 | F-X216 | Import complete slides and merge decks with source formatting | L | pending | - |
-| F-X217 | Import HTML and Markdown through public Word surfaces | L | in-progress | codex |
+| F-X217 | Import HTML and Markdown through public Word surfaces | L | done | - |
 | F-X218 | Export presentations as semantic HTML and Markdown | L | in-progress | codex |
 | F-X220 | Embed fonts through both native and public package families | L | in-progress | codex |
 | F-X221 | Prepare Word 0.17.0 and PowerPoint 0.15.0 minor releases | L | pending | - |
@@ -1188,3 +1188,10 @@ exact Word transfer. No original failure, contribution, corpus body, resource
 limit or application acceptance is waived by splitting. Shared token changes,
 HLD reconciliation, archive measurements and the hash baseline stay exclusive.
 Issue and PR counts remain40 and30. Issues264 and281 remain open.
+
+
+## F-X217 scoped prerequisite completion, 2026-10-13
+
+Issues350 and351 and PR359 have completed scoped implementation and acceptance. Native Word opened both source-built combined and template documents without repair, with distinct local save/render, normal close/reopen and second save/render. Root authenticated3211 source files against the prepared checkpoint. All product, dependency, toolchain and gate carriers equal the reviewed worker. Six differences are existing root-owned plan/sprint records and non-overlapping HLD14 composition. Product integration is be4af3ce. Original failed receipts remain retained. The final full sprint gate, review, remote issue/PR closure and release approval remain due.
+
+Twenty-three of29 top-level stories are complete. Six remain, F-X211, F-X215, F-X216, F-X218, F-X220 and F-X221. The parent F-X211 also retains its two running children and pending integrated compatibility child. Intake is closed at40 issues and30 PRs. Discussions264 and281 remain open. Bibliography, navigation and standalone authoring stay in S92. Historical movie/PNG oracle fixture regeneration is recorded at S92 and adds no S91 repair story.

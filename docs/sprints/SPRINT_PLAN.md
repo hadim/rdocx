@@ -2135,9 +2135,9 @@ review, package checks and exact-SHA publication approval remain required.
 #### Sprint S91, Contribution repairs
 
 **Goal**: finish completed stories and all included issue/PR repairs. The user
-parks the separate S90 bibliography and navigation carryovers at S92. Rolling
-intake includes thirty-eight issues and twenty-eight PRs, excluding only the
-requirements discussions264 and281.
+parks the separate S90 bibliography and navigation carryovers at S92. Intake
+is closed at forty issues and thirty PRs, excluding only the requirements
+discussions264 and281.
 
 | F-ID | Title | Size |
 |------|-------|------|
@@ -2169,9 +2169,10 @@ requirements discussions264 and281.
 | F-X218 | Export presentations as semantic HTML and Markdown | L |
 | F-X220 | Embed fonts through both native and public package families | L |
 | F-X221 | Prepare Word 0.17.0 and PowerPoint 0.15.0 minor releases | L |
+| F-X222 | Restore linear Word story range inventory and empty owners | M |
 
-**Current delivery checkpoint**: twenty-two of twenty-nine active stories are
-completed and integrated, F-X193 through F-X210, F-X212, F-X213, F-X214 and F-X222. Remaining issue and PR repairs follow
+**Current delivery checkpoint**: twenty-three of twenty-nine active stories are
+completed and integrated, F-X193 through F-X210, F-X212, F-X213, F-X214, F-X217 and F-X222. Remaining issue and PR repairs follow
 completed dependencies and exclusive source boundaries. CURRENT_SPRINT.md
 records active owners and execution states. F-X192 and F-283 remain at S92 with their contracts,
 dirty worker work, reviews and required evidence retained. Standalone authoring
@@ -2249,7 +2250,7 @@ The 2026-10-11 18:43 UTC refresh found no additions or changed PR heads.
 | [344](https://github.com/tensorbee/rdocx/issues/344) | [355](https://github.com/tensorbee/rdocx/pull/355) | F-X214 | Bounded PowerPoint parsing and traversal, completed with scoped acceptance. |
 | [345](https://github.com/tensorbee/rdocx/issues/345), [346](https://github.com/tensorbee/rdocx/issues/346) | [356](https://github.com/tensorbee/rdocx/pull/356) | F-X215 | Python chart creation and preservation-aware data replacement, approved pending implementation. |
 | [347](https://github.com/tensorbee/rdocx/issues/347), [348](https://github.com/tensorbee/rdocx/issues/348), [349](https://github.com/tensorbee/rdocx/issues/349) | [357](https://github.com/tensorbee/rdocx/pull/357) | F-X216 | Complete slide graph import, source formatting and deck merge, approved pending implementation. |
-| [350](https://github.com/tensorbee/rdocx/issues/350), [351](https://github.com/tensorbee/rdocx/issues/351) | [359](https://github.com/tensorbee/rdocx/pull/359) | F-X217 | Public Word HTML and CommonMark import, approved pending completed F-X200 and F-X203. |
+| [350](https://github.com/tensorbee/rdocx/issues/350), [351](https://github.com/tensorbee/rdocx/issues/351) | [359](https://github.com/tensorbee/rdocx/pull/359) | F-X217 | Public Word HTML and CommonMark import, completed with scoped installed, CLI and native Word open/save/reopen/render acceptance. Remote closure follows verified sprint close. |
 | [352](https://github.com/tensorbee/rdocx/issues/352), [353](https://github.com/tensorbee/rdocx/issues/353) | [358](https://github.com/tensorbee/rdocx/pull/358) | F-X218 | Semantic presentation HTML and Markdown export, approved pending completed F-X205 and F-X206. |
 
 PR343 entered at `c6a78f683f327be8d7674af509874f74945080f3`, based directly
@@ -2487,6 +2488,13 @@ and changes no acceptance contract.
 | F-288 | Legacy form field creation | M |
 | F-289 | Modern Word form authoring | L |
 | F-290 | Mail-merge package and data-source authoring | M |
+
+Restore the missing historical native PowerPoint timeline movie/frame and
+SmartArt PNG oracle inputs as later fixture infrastructure. Their four existing
+missing-input checks remain explicitly uncredited in S91. Regeneration must
+use actual independent producer output, with a separate infrastructure design
+when resumed. It adds no repair scope to the frozen S91 issue/PR set and does
+not waive applicable current source, schema, save/reopen or rendering gates.
 
 F-X178 is the explicit S90 carry for the user-excluded Issue264. Its next
 eligible planning target is S92. It remains pending and requires a separate
