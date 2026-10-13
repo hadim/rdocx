@@ -44,7 +44,7 @@ for parallel Word and PowerPoint work followed by integrated compatibility. The 
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | done | - |
 | F-X211 | Complete Python script compatibility and safe XML access | L | in-progress | - |
 | F-X211a | Word checked XML owners and resource admission | L | in-progress | codex |
-| F-X211b | PowerPoint checked XML owners | L | pending | - |
+| F-X211b | PowerPoint checked XML owners | L | in-progress | codex |
 | F-X211c | Integrated Python compatibility and causal errors | L | pending | - |
 | F-X212 | Align native accessibility with visible paragraph content | M | done | - |
 | F-X213 | Preserve TOC entry boundary paragraphs during rebuild | M | done | - |
