@@ -287,6 +287,7 @@ pub struct PyFont {
     path: ContentPath,
     run_path: rdocx::AcceptedRunPath,
     related: Option<rdocx::ContentLocation>,
+    owner: Option<oxml_py_support::RevisionState>,
 }
 
 impl PyFont {
@@ -295,12 +296,14 @@ impl PyFont {
         path: ContentPath,
         run_path: rdocx::AcceptedRunPath,
         related: Option<rdocx::ContentLocation>,
+        owner: Option<oxml_py_support::RevisionState>,
     ) -> Self {
         Self {
             document,
             path,
             run_path,
             related,
+            owner,
         }
     }
 
@@ -313,22 +316,21 @@ impl PyFont {
                 "Re-fetch it with paragraph.runs[i].font.",
             )
             .map_err(|error| stale_to_pyerr(py, error))?;
-        let run = self
-            .path
-            .segs
-            .iter()
-            .find_map(|segment| match segment {
-                oxml_py_support::PathSeg::Run(index) => Some(*index),
-                _ => None,
-            })
-            .ok_or_else(|| PyIndexError::new_err("run index is missing"))?;
-        Ok((
-            match &self.related {
-                Some(location) => ParagraphLocation::Related(location.clone()),
-                None => paragraph_location(&self.path)?,
+        let location = match &self.related {
+            Some(location) => match &self.owner {
+                Some(owner) => ParagraphLocation::Related(document.current_run_owner(owner)?.0),
+                None => ParagraphLocation::Related(location.clone()),
             },
-            run,
-        ))
+            None => paragraph_location(&self.path)?,
+        };
+        let index = location
+            .read(&document.inner, |paragraph| {
+                (0..paragraph.run_count())
+                    .find(|index| paragraph.run_path(*index).as_ref() == Some(&self.run_path))
+            })
+            .map_err(|error| crate::rdocx_to_pyerr(py, error))?
+            .ok_or_else(|| PyIndexError::new_err("font run physical owner is no longer present"))?;
+        Ok((location, index))
     }
 
     fn snapshot(&self, py: Python<'_>) -> PyResult<FontSnapshot> {
@@ -543,6 +545,7 @@ impl PyFont {
                 path: self.path.clone(),
                 run_path: self.run_path.clone(),
                 related: self.related.clone(),
+                owner: self.owner.clone(),
             },
         )
     }
@@ -657,6 +660,7 @@ pub struct PyColorFormat {
     path: ContentPath,
     run_path: rdocx::AcceptedRunPath,
     related: Option<rdocx::ContentLocation>,
+    owner: Option<oxml_py_support::RevisionState>,
 }
 
 impl PyColorFormat {
@@ -666,6 +670,7 @@ impl PyColorFormat {
             self.path.clone(),
             self.run_path.clone(),
             self.related.clone(),
+            self.owner.clone(),
         )
     }
 }
@@ -914,6 +919,7 @@ pub struct PyTabStops {
     document: Py<PyDocument>,
     path: ContentPath,
     related: Option<rdocx::ContentLocation>,
+    owner: Option<oxml_py_support::RevisionState>,
 }
 
 impl PyTabStops {
@@ -922,6 +928,7 @@ impl PyTabStops {
             self.document.clone_ref(py),
             self.path.clone(),
             self.related.clone(),
+            self.owner.clone(),
         )
     }
 
@@ -1010,6 +1017,7 @@ pub struct PyParagraphFormat {
     document: Py<PyDocument>,
     path: ContentPath,
     related: Option<rdocx::ContentLocation>,
+    owner: Option<oxml_py_support::RevisionState>,
 }
 
 impl PyParagraphFormat {
@@ -1017,11 +1025,13 @@ impl PyParagraphFormat {
         document: Py<PyDocument>,
         path: ContentPath,
         related: Option<rdocx::ContentLocation>,
+        owner: Option<oxml_py_support::RevisionState>,
     ) -> Self {
         Self {
             document,
             path,
             related,
+            owner,
         }
     }
 
@@ -1035,7 +1045,12 @@ impl PyParagraphFormat {
             )
             .map_err(|error| stale_to_pyerr(py, error))?;
         match &self.related {
-            Some(location) => Ok(ParagraphLocation::Related(location.clone())),
+            Some(location) => match &self.owner {
+                Some(owner) => document
+                    .current_paragraph_owner(owner)
+                    .map(ParagraphLocation::Related),
+                None => Ok(ParagraphLocation::Related(location.clone())),
+            },
             None => paragraph_location(&self.path),
         }
     }
@@ -1174,6 +1189,7 @@ impl PyParagraphFormat {
             document: self.document.clone_ref(py),
             path: self.path.clone(),
             related: self.related.clone(),
+            owner: self.owner.clone(),
         })
     }
 

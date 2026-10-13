@@ -582,7 +582,7 @@ impl CT_SdtPr {
 }
 
 /// A typed or preserved child of `w:sdtContent`.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum SdtContent {
     Paragraph(CT_P),
     Table(CT_Tbl),
@@ -591,6 +591,30 @@ pub enum SdtContent {
     Run(CT_R),
     ContentControl(CT_Sdt),
     RawXml(Vec<u8>),
+}
+
+impl Clone for SdtContent {
+    fn clone(&self) -> Self {
+        if let Self::ContentControl(control) = self {
+            return Self::ContentControl(control.clone());
+        }
+        clone_non_control_sdt_content(self)
+    }
+}
+
+// Keep the large modeled leaf variants out of the recursive control frame.
+// This helper remains exhaustive even though its current caller selects leaves.
+#[inline(never)]
+fn clone_non_control_sdt_content(content: &SdtContent) -> SdtContent {
+    match content {
+        SdtContent::Paragraph(paragraph) => SdtContent::Paragraph(paragraph.clone()),
+        SdtContent::Table(table) => SdtContent::Table(table.clone()),
+        SdtContent::Row(row) => SdtContent::Row(row.clone()),
+        SdtContent::Cell(cell) => SdtContent::Cell(cell.clone()),
+        SdtContent::Run(run) => SdtContent::Run(run.clone()),
+        SdtContent::ContentControl(control) => SdtContent::ContentControl(control.clone()),
+        SdtContent::RawXml(raw) => SdtContent::RawXml(raw.clone()),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -604,7 +628,7 @@ pub(crate) enum SdtOwner {
 }
 
 impl SdtOwner {
-    fn owns(self, local: &[u8]) -> bool {
+    pub(crate) fn owns(self, local: &[u8]) -> bool {
         match self {
             Self::Standalone => matches!(local, b"p" | b"tbl" | b"tr" | b"tc" | b"r"),
             Self::Body | Self::Cell => matches!(local, b"p" | b"tbl"),
@@ -1190,6 +1214,13 @@ impl CT_Sdt {
 
     /// Parse a content control at the reader's current `w:sdt` start.
     pub fn from_xml(reader: &mut Reader<&[u8]>, start: &BytesStart<'_>) -> Result<Self> {
+        let prefixes = word_prefixes_at(start, &["w".to_owned()])?;
+        crate::document::admit_word_reader(
+            reader,
+            &prefixes,
+            b"sdt",
+            Some(crate::namespace::W_NS),
+        )?;
         Self::from_xml_with_prefixes(reader, start, &["w".to_owned()], SdtOwner::Standalone)
     }
 
@@ -1216,6 +1247,9 @@ impl CT_Sdt {
     /// Whether a preserved control is admitted by the complete typed parser.
     #[doc(hidden)]
     pub fn story_raw_is_typed(raw: &[u8], inherited: &[String], owner: StorySdtOwner) -> bool {
+        if crate::document::admit_word_xml(raw, inherited, None).is_err() {
+            return false;
+        }
         Self::from_raw_with_context(raw, inherited, owner.into()).is_some()
     }
 
@@ -1316,7 +1350,15 @@ impl CT_Sdt {
             })
     }
 
+    /// Stored run originals are cloned even after the current run is edited.
+    pub(crate) fn original_resource_runs(&self) -> impl Iterator<Item = &CT_R> {
+        self.inline_run_sources
+            .iter()
+            .map(|source| &source.original)
+    }
+
     pub(crate) fn to_xml<W: Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        crate::document::admit_word_model(crate::document::WordOwner::Control(self))?;
         let mut start = BytesStart::new("w:sdt");
         for (name, value) in &self.extra_attributes {
             start.push_attribute((name.as_str(), value.as_str()));
@@ -1576,6 +1618,111 @@ fn set_nth_inline_legacy_form(
     field.set_nth_legacy_form_value_in_source_order(remaining, value)
 }
 
+// Keep by-value leaf model construction out of each recursive control frame.
+// This boundary addresses the measured ordinary-stack table/control overflow.
+#[inline(never)]
+fn append_modeled_content_child(
+    reader: &mut Reader<&[u8]>,
+    child: &BytesStart<'_>,
+    inherited: &[String],
+    empty: bool,
+    content: &mut Vec<SdtContent>,
+    inline_run_sources: &mut Vec<InlineRunSource>,
+) -> Result<()> {
+    let prefixes = word_prefixes_at(child, inherited)?;
+    match (child.local_name().as_ref(), empty) {
+        (b"p", false) => content.push(SdtContent::Paragraph(
+            CT_P::from_xml_with_prefixes_and_root(reader, &prefixes, Some(child))?,
+        )),
+        (b"p", true) => content.push(SdtContent::Paragraph(CT_P::from_empty_root(
+            child, &prefixes,
+        )?)),
+        (b"tbl", false) => {
+            let bindings = local_namespace_overrides(child, inherited)?;
+            let mut table =
+                CT_Tbl::from_xml_with_prefixes_and_owner_bindings(reader, &prefixes, &bindings)?;
+            table.retain_root_attributes(child, &prefixes)?;
+            content.push(SdtContent::Table(table));
+        }
+        (b"tbl", true) => {
+            let mut table = CT_Tbl::new();
+            table.retain_root_attributes(child, &prefixes)?;
+            content.push(SdtContent::Table(table));
+        }
+        (b"tr", false) => {
+            let bindings = local_namespace_overrides(child, inherited)?;
+            content.push(SdtContent::Row(
+                CT_Row::from_xml_with_prefixes_and_owner_bindings(
+                    reader,
+                    &prefixes,
+                    &bindings,
+                    Some(child),
+                )?,
+            ));
+        }
+        (b"tr", true) => content.push(SdtContent::Row(CT_Row::from_empty_root(child, &prefixes)?)),
+        (b"tc", false) => {
+            let bindings = local_namespace_overrides(child, inherited)?;
+            let mut cell =
+                CT_Tc::from_xml_with_prefixes_and_owner_bindings(reader, &prefixes, &bindings)?;
+            cell.retain_root_attributes(child, &prefixes)?;
+            content.push(SdtContent::Cell(cell));
+        }
+        (b"tc", true) => {
+            let mut cell = CT_Tc {
+                properties: None,
+                content: Vec::new(),
+                extra_xml: Vec::new(),
+            };
+            cell.retain_root_attributes(child, &prefixes)?;
+            content.push(SdtContent::Cell(cell));
+        }
+        (b"r", _) => {
+            let (run, raw_xml) = if empty {
+                (
+                    CT_R {
+                        properties: None,
+                        content: Vec::new(),
+                        extra_xml: Vec::new(),
+                        extra_xml_positions: Vec::new(),
+                        alt_drawings: Vec::new(),
+                    },
+                    capture_empty_element(child)?,
+                )
+            } else {
+                let raw = capture_element(reader, child)?;
+                (parse_inline_run(&raw, inherited)?, raw)
+            };
+            inline_run_sources.push(InlineRunSource {
+                content_index: content.len(),
+                original: run.clone(),
+                raw_xml,
+            });
+            content.push(SdtContent::Run(run));
+        }
+        _ => {
+            return Err(OxmlError::InvalidValue(
+                "unsupported modeled content-control child".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+// Variant construction reserves space for the largest modeled leaf. Keep it
+// outside the recursive control parser even for retained and nested children.
+#[inline(never)]
+fn append_retained_sdt_content(
+    content: &mut Vec<SdtContent>,
+    control: Option<CT_Sdt>,
+    raw: Vec<u8>,
+) {
+    content.push(match control {
+        Some(control) => SdtContent::ContentControl(control),
+        None => SdtContent::RawXml(raw),
+    });
+}
+
 fn parse_content(
     reader: &mut Reader<&[u8]>,
     inherited: &[String],
@@ -1599,62 +1746,30 @@ fn parse_content(
                 .into_iter()
                 .find(|local| is_word_element(child.name().as_ref(), local, &prefixes));
                 if owned_word_child.is_some_and(|local| !owner.owns(local)) {
-                    content.push(SdtContent::RawXml(capture_element(reader, &child)?));
-                } else if is_word_element(child.name().as_ref(), b"p", &prefixes) {
-                    content.push(SdtContent::Paragraph(
-                        CT_P::from_xml_with_prefixes_and_root(reader, &prefixes, Some(&child))?,
-                    ));
-                } else if is_word_element(child.name().as_ref(), b"tbl", &prefixes) {
-                    let owner_bindings = local_namespace_overrides(&child, inherited)?;
-                    content.push(SdtContent::Table(
-                        CT_Tbl::from_xml_with_prefixes_and_owner_bindings(
-                            reader,
-                            &prefixes,
-                            &owner_bindings,
-                        )?,
-                    ));
-                } else if is_word_element(child.name().as_ref(), b"tr", &prefixes) {
-                    let owner_bindings = local_namespace_overrides(&child, inherited)?;
-                    content.push(SdtContent::Row(
-                        CT_Row::from_xml_with_prefixes_and_owner_bindings(
-                            reader,
-                            &prefixes,
-                            &owner_bindings,
-                            Some(&child),
-                        )?,
-                    ));
-                } else if is_word_element(child.name().as_ref(), b"tc", &prefixes) {
-                    let owner_bindings = local_namespace_overrides(&child, inherited)?;
-                    content.push(SdtContent::Cell(
-                        CT_Tc::from_xml_with_prefixes_and_owner_bindings(
-                            reader,
-                            &prefixes,
-                            &owner_bindings,
-                        )?,
-                    ));
-                } else if is_word_element(child.name().as_ref(), b"r", &prefixes) {
-                    let raw_xml = capture_element(reader, &child)?;
-                    let run = parse_inline_run(&raw_xml, inherited)?;
-                    inline_run_sources.push(InlineRunSource {
-                        content_index: content.len(),
-                        original: run.clone(),
-                        raw_xml,
-                    });
-                    content.push(SdtContent::Run(run));
+                    append_retained_sdt_content(
+                        &mut content,
+                        None,
+                        capture_element(reader, &child)?,
+                    );
+                } else if owned_word_child.is_some() {
+                    append_modeled_content_child(
+                        reader,
+                        &child,
+                        inherited,
+                        false,
+                        &mut content,
+                        inline_run_sources,
+                    )?;
                 } else if is_word_element(child.name().as_ref(), b"sdt", &prefixes) {
                     let raw = capture_element(reader, &child)?;
                     let parsed = CT_Sdt::from_raw_with_context(&raw, &prefixes, owner);
-                    if let Some(sdt) = parsed {
-                        content.push(SdtContent::ContentControl(sdt));
-                    } else {
-                        content.push(SdtContent::RawXml(raw));
-                    }
+                    append_retained_sdt_content(&mut content, parsed, raw);
                 } else {
                     let raw = capture_element(reader, &child)?;
                     if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
                         revisions.push((content.len(), revision));
                     }
-                    content.push(SdtContent::RawXml(raw));
+                    append_retained_sdt_content(&mut content, None, raw);
                 }
             }
             Ok(Event::Empty(child)) => {
@@ -1669,48 +1784,29 @@ fn parse_content(
                 .into_iter()
                 .find(|local| is_word_element(child.name().as_ref(), local, &prefixes));
                 if owned_word_child.is_some_and(|local| !owner.owns(local)) {
-                    content.push(SdtContent::RawXml(capture_empty_element(&child)?));
-                } else if is_word_element(child.name().as_ref(), b"p", &prefixes) {
-                    content.push(SdtContent::Paragraph(CT_P::from_empty_root(
-                        &child, &prefixes,
-                    )?));
-                } else if is_word_element(child.name().as_ref(), b"tbl", &prefixes) {
-                    content.push(SdtContent::Table(CT_Tbl::new()));
-                } else if is_word_element(child.name().as_ref(), b"tr", &prefixes) {
-                    content.push(SdtContent::Row(CT_Row::from_empty_root(&child, &prefixes)?));
-                } else if is_word_element(child.name().as_ref(), b"tc", &prefixes) {
-                    content.push(SdtContent::Cell(CT_Tc {
-                        properties: None,
-                        content: Vec::new(),
-                        extra_xml: Vec::new(),
-                    }));
-                } else if is_word_element(child.name().as_ref(), b"r", &prefixes) {
-                    let run = CT_R {
-                        properties: None,
-                        content: Vec::new(),
-                        extra_xml: Vec::new(),
-                        extra_xml_positions: Vec::new(),
-                        alt_drawings: Vec::new(),
-                    };
-                    inline_run_sources.push(InlineRunSource {
-                        content_index: content.len(),
-                        original: run.clone(),
-                        raw_xml: capture_empty_element(&child)?,
-                    });
-                    content.push(SdtContent::Run(run));
+                    append_retained_sdt_content(&mut content, None, capture_empty_element(&child)?);
+                } else if owned_word_child.is_some() {
+                    append_modeled_content_child(
+                        reader,
+                        &child,
+                        inherited,
+                        true,
+                        &mut content,
+                        inline_run_sources,
+                    )?;
                 } else {
                     let raw = capture_empty_element(&child)?;
                     if let Some(revision) = CT_Revision::from_raw(raw.clone(), &prefixes) {
                         revisions.push((content.len(), revision));
                     }
-                    content.push(SdtContent::RawXml(raw));
+                    append_retained_sdt_content(&mut content, None, raw);
                 }
             }
             Ok(Event::End(end)) if matches_local_name(end.name().as_ref(), b"sdtContent") => break,
             Ok(Event::Eof) => {
                 return Err(OxmlError::MissingElement("w:sdtContent end".to_owned()));
             }
-            Ok(event) => content.push(SdtContent::RawXml(event_to_raw(event)?)),
+            Ok(event) => append_retained_sdt_content(&mut content, None, event_to_raw(event)?),
             Err(error) => return Err(error.into()),
         }
         buffer.clear();
@@ -2094,6 +2190,43 @@ mod tests {
             r#"<w:sdt><w:sdtPr><w:id w:val="not-an-integer"/></w:sdtPr><w:sdtContent><w:p/></w:sdtContent></w:sdt>"#,
         );
         assert!(matches!(malformed.body.content[0], BodyContent::RawXml(_)));
+    }
+
+    #[test]
+    fn fx211_clone_preserves_all_standalone_content_carriers() {
+        let raw = r#"<x:opaque x:key="one &amp; two"><x:child/><!--kept--></x:opaque>"#;
+        let xml = format!(
+            r#"<w:sdt xmlns:w="{W_NS}" xmlns:x="urn:producer" x:root="retained"><w:sdtPr><w:alias w:val="source"/><w:id w:val="42"/><w:tag w:val="kept"/></w:sdtPr><w:sdtContent x:content="retained"><w:p><w:r><w:t>paragraph</w:t></w:r></w:p><w:tbl><w:tblGrid><w:gridCol w:w="1440"/></w:tblGrid><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:tr><w:trPr><w:cantSplit/></w:trPr><w:tc><w:p/></w:tc></w:tr><w:tc><w:tcPr><w:shd w:fill="AABBCC"/></w:tcPr><w:p/></w:tc><w:r><w:rPr><w:b/></w:rPr><w:t>run</w:t></w:r><w:sdt><w:sdtPr><w:tag w:val="nested"/></w:sdtPr><w:sdtContent><w:p><w:r><w:t>nested</w:t></w:r></w:p></w:sdtContent></w:sdt>{raw}</w:sdtContent></w:sdt>"#
+        );
+        let original =
+            CT_Sdt::from_raw_with_context(xml.as_bytes(), &["w".to_owned()], SdtOwner::Standalone)
+                .unwrap();
+        assert_eq!(original.content.len(), 7);
+        assert!(matches!(original.content[0], SdtContent::Paragraph(_)));
+        assert!(matches!(original.content[1], SdtContent::Table(_)));
+        assert!(matches!(original.content[2], SdtContent::Row(_)));
+        assert!(matches!(original.content[3], SdtContent::Cell(_)));
+        assert!(matches!(original.content[4], SdtContent::Run(_)));
+        assert!(matches!(original.content[5], SdtContent::ContentControl(_)));
+        assert!(matches!(original.content[6], SdtContent::RawXml(_)));
+        let mut cloned = original.clone();
+        assert_eq!(cloned, original);
+        let mut before = Vec::new();
+        let mut after = Vec::new();
+        original.to_xml(&mut Writer::new(&mut before)).unwrap();
+        cloned.to_xml(&mut Writer::new(&mut after)).unwrap();
+        assert_eq!(after, before);
+        assert!(String::from_utf8(after).unwrap().contains(raw));
+        let SdtContent::RawXml(bytes) = &mut cloned.content[6] else {
+            panic!("raw carrier")
+        };
+        bytes.extend_from_slice(b"<!--clone-only-->");
+        assert_ne!(cloned, original);
+        let SdtContent::RawXml(bytes) = &original.content[6] else {
+            panic!("original raw carrier")
+        };
+        assert_eq!(bytes.as_slice(), raw.as_bytes());
+        assert_eq!(original.properties.as_ref().unwrap().id, Some(42));
     }
 
     #[test]

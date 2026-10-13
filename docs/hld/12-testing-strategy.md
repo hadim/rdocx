@@ -4136,3 +4136,21 @@ Python checks verify complete wheel provenance, detached result types, stubs,
 strict typing and current public behavior. Both CLI formats, resource modes,
 existing rendering paths and both WASM graphs are qualified. Verified affected
 archives, scoped checks and unchanged deterministic hashes complete the gate.
+
+## Word checked XML qualification
+
+Word XML controls use a freshly source-qualified release wheel with complete
+member and RECORD evidence, exact12 installed public and allocation controls,
+strict mypy and full stubtest. Native controls exercise parse, traversal,
+clone, save, reopen and drop on the ordinary 2 MiB consumer stack with the
+inclusive32 table and weighted256 control/text-box budgets, alongside
+recoverable before-construction and before-clone refusals. Source-local
+encoded namespace declarations and newly emitted inherited closure have
+different lexical oracles. Tests require exact opaque payload, expanded-name
+ownership, multi-save fixedpoints and real rollback. Regression namespace
+assertions derive actual qualified TextBox owners from preserved ancestor
+bindings. Genuine unsupported modified-root namespace publication remains a
+named atomic refusal. Both WASM graphs and49 unchanged hashes gate the current
+source. The immutable100-script cross-family measurement belongs the
+integrated compatibility child and retains the independently reviewed W-XML-02
+non-success conflict with W-LIFE-06.

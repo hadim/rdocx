@@ -1928,7 +1928,99 @@ fn rpr_slot_for_name(local: &[u8]) -> u8 {
     }
 }
 
-fn rpr_schema_slot(name: &[u8], word_prefixes: &[String]) -> Option<u8> {
+/// Validate modeled run-property leaves on checked replacement only.
+pub(crate) fn validate_checked_property_child(
+    element: &BytesStart<'_>,
+    prefixes: &[String],
+) -> Result<()> {
+    let local = element.local_name();
+    let name = local.as_ref();
+    let value = get_word_val_attr(element, prefixes)?;
+    if matches!(
+        name,
+        b"b" | b"bCs"
+            | b"i"
+            | b"iCs"
+            | b"caps"
+            | b"smallCaps"
+            | b"strike"
+            | b"dstrike"
+            | b"outline"
+            | b"shadow"
+            | b"emboss"
+            | b"imprint"
+            | b"noProof"
+            | b"snapToGrid"
+            | b"vanish"
+            | b"webHidden"
+            | b"rtl"
+            | b"cs"
+            | b"specVanish"
+            | b"oMath"
+    ) {
+        if value
+            .as_deref()
+            .is_some_and(|value| !matches!(value, "true" | "false" | "on" | "off" | "1" | "0"))
+        {
+            return Err(crate::error::OxmlError::InvalidValue(
+                "element XML run toggle has an invalid Word boolean".into(),
+            ));
+        }
+    } else if name == b"u" {
+        if value
+            .as_deref()
+            .is_some_and(|value| ST_Underline::from_str(value).is_err())
+        {
+            return Err(crate::error::OxmlError::InvalidValue(
+                "element XML underline has an invalid w:val".into(),
+            ));
+        }
+    } else if matches!(
+        name,
+        b"sz"
+            | b"szCs"
+            | b"kern"
+            | b"spacing"
+            | b"position"
+            | b"w"
+            | b"rStyle"
+            | b"highlight"
+            | b"vertAlign"
+            | b"color"
+    ) {
+        let value = value.ok_or_else(|| {
+            crate::error::OxmlError::InvalidValue(format!(
+                "element XML {} requires w:val",
+                String::from_utf8_lossy(name)
+            ))
+        })?;
+        let valid = match name {
+            b"sz" | b"szCs" | b"kern" | b"w" => {
+                parse_integer_measurement::<i32>(element.name().as_ref(), b"w:val", &value)
+                    .is_ok_and(|value| value >= 0)
+            }
+            b"spacing" | b"position" => {
+                parse_integer_measurement::<i32>(element.name().as_ref(), b"w:val", &value).is_ok()
+            }
+            b"highlight" => ST_HighlightColor::from_str(&value).is_ok(),
+            b"vertAlign" => matches!(value.as_str(), "baseline" | "superscript" | "subscript"),
+            b"color" => {
+                value == "auto"
+                    || (value.len() == 6 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
+            }
+            _ => !value.is_empty(),
+        };
+        if !valid {
+            return Err(crate::error::OxmlError::InvalidValue(format!(
+                "element XML {} has an invalid w:val",
+                String::from_utf8_lossy(name)
+            )));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn rpr_schema_slot(name: &[u8], word_prefixes: &[String]) -> Option<u8> {
     let local = name.rsplit(|byte| *byte == b':').next().unwrap_or(name);
     let slot = rpr_slot_for_name(local);
     (slot != RPR_END_SLOT && is_word_element(name, local, word_prefixes)).then_some(slot)

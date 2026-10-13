@@ -1850,6 +1850,23 @@ Document import closes the native fragment dependency graph before publication. 
 
 Checkbox admission and state selection use expanded Word2010 names, including qualified aliases and the default namespace. Only the selected qualified checked value changes. Foreign same-name elements, attributes, namespace declarations and opaque child order remain source-owned. The selected Unicode scalar and state font are admitted together before any matching control changes. Forbidden XML text and late invalid state values refuse the entire operation.
 
+Checked paragraph, regular-run, table, cell and section-property replacement
+first resolves the actual held physical owner. One complete expected expanded-
+name root, modeled sequence and known property profiles, relationship kind and
+target, introduced identifiers and owner-local section restrictions are
+admitted before staging. A reopened candidate publishes atomically. Identical
+source replacement preserves exact bytes and revisions. Source-bound namespace
+markers retain their actual producer identity and reject ambiguous
+reinterpretation. Consumed paragraph/run readers preserve the caller cursor
+and physical closing QName. Explicit foreign names remain opaque, and legacy
+assumed-run recognition is confined to consumed roots without a supplied Word
+namespace binding. Admission is linear before recursive construction. Modeled
+control paths use an inclusive budget256 with control cost1 and actual typed
+text-box cost16, resetting between siblings. Recognized tables retain the
+inclusive32 boundary. Iterative borrowed-model admission precedes staging
+clones and serialization. Opaque foreign routes do not consume modeled nesting
+authority.
+
 ## Picture extraction and one-shot publication
 
 Word picture occurrences retain physical story ownership separately from

@@ -1958,7 +1958,140 @@ fn ppr_slot_for_name(local: &[u8]) -> u8 {
     }
 }
 
-fn ppr_schema_slot(name: &[u8], word_prefixes: &[String]) -> Option<u8> {
+/// Validate known leaf attributes only for checked owner replacement.
+/// Ordinary source parsing retains its permissive preservation contract.
+pub(crate) fn validate_checked_property_child(
+    element: &BytesStart<'_>,
+    prefixes: &[String],
+) -> Result<()> {
+    let local = element.local_name();
+    let name = local.as_ref();
+    let value = get_word_val_attr(element, prefixes)?;
+    if matches!(
+        name,
+        b"keepNext"
+            | b"keepLines"
+            | b"pageBreakBefore"
+            | b"widowControl"
+            | b"suppressLineNumbers"
+            | b"suppressAutoHyphens"
+            | b"kinsoku"
+            | b"wordWrap"
+            | b"overflowPunct"
+            | b"topLinePunct"
+            | b"autoSpaceDE"
+            | b"autoSpaceDN"
+            | b"bidi"
+            | b"adjustRightInd"
+            | b"snapToGrid"
+            | b"contextualSpacing"
+            | b"mirrorIndents"
+            | b"suppressOverlap"
+    ) {
+        if value
+            .as_deref()
+            .is_some_and(|value| !matches!(value, "true" | "false" | "on" | "off" | "1" | "0"))
+        {
+            return Err(crate::error::OxmlError::InvalidValue(
+                "element XML paragraph toggle has an invalid Word boolean".into(),
+            ));
+        }
+    } else if matches!(
+        name,
+        b"pStyle"
+            | b"jc"
+            | b"outlineLvl"
+            | b"divId"
+            | b"cnfStyle"
+            | b"textDirection"
+            | b"textAlignment"
+            | b"textboxTightWrap"
+    ) {
+        let value = value.as_ref().ok_or_else(|| {
+            crate::error::OxmlError::InvalidValue(format!(
+                "element XML {} requires w:val",
+                String::from_utf8_lossy(name)
+            ))
+        })?;
+        let valid = match name {
+            b"jc" => ST_Jc::from_str(value).is_ok(),
+            b"outlineLvl" | b"divId" => value.parse::<u32>().is_ok(),
+            b"cnfStyle" => {
+                value.len() == 12 && value.bytes().all(|byte| matches!(byte, b'0' | b'1'))
+            }
+            b"textDirection" => matches!(
+                value.as_str(),
+                "lrTb" | "tbRl" | "btLr" | "lrTbV" | "tbRlV" | "tbLrV"
+            ),
+            b"textAlignment" => matches!(
+                value.as_str(),
+                "top" | "center" | "baseline" | "bottom" | "auto"
+            ),
+            b"textboxTightWrap" => matches!(
+                value.as_str(),
+                "none" | "allLines" | "firstAndLastLine" | "firstLineOnly" | "lastLineOnly"
+            ),
+            _ => !value.is_empty(),
+        };
+        if !valid {
+            return Err(crate::error::OxmlError::InvalidValue(format!(
+                "element XML {} has an invalid w:val",
+                String::from_utf8_lossy(name)
+            )));
+        }
+    }
+    if name == b"spacing" {
+        for attribute in element.attributes() {
+            let attribute = attribute?;
+            let key = attribute.key.as_ref();
+            let value = attribute.decoded_and_normalized_value(
+                quick_xml::XmlVersion::Implicit1_0,
+                element.decoder(),
+            )?;
+            let valid = if is_word_attribute(key, b"lineRule", prefixes) {
+                matches!(value.as_ref(), "auto" | "exact" | "atLeast")
+            } else if is_word_attribute(key, b"beforeAutospacing", prefixes)
+                || is_word_attribute(key, b"afterAutospacing", prefixes)
+            {
+                // The owning reader models only true/1 as enabled. Do not
+                // promise the valid on token while that reader treats it as false.
+                if value == "on" {
+                    return Err(crate::error::OxmlError::InvalidValue(
+                        "element XML spacing on boolean token is unsupported".into(),
+                    ));
+                }
+                matches!(value.as_ref(), "true" | "false" | "1" | "0" | "off")
+            } else {
+                true
+            };
+            if !valid {
+                return Err(crate::error::OxmlError::InvalidValue(
+                    "element XML spacing has an invalid modeled attribute".into(),
+                ));
+            }
+        }
+    }
+    if matches!(name, b"ilvl" | b"numId") {
+        let value = value.as_ref().ok_or_else(|| {
+            crate::error::OxmlError::InvalidValue(
+                "element XML numbering property requires w:val".into(),
+            )
+        })?;
+        let number = value.parse::<u32>().map_err(|_| {
+            crate::error::OxmlError::InvalidValue(
+                "element XML numbering property has an invalid integer".into(),
+            )
+        })?;
+        if name == b"ilvl" && number > 8 {
+            return Err(crate::error::OxmlError::InvalidValue(
+                "element XML numbering level above eight is unsupported".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn ppr_schema_slot(name: &[u8], word_prefixes: &[String]) -> Option<u8> {
     let local = name.rsplit(|byte| *byte == b':').next().unwrap_or(name);
     let slot = ppr_slot_for_name(local);
     (slot != PPR_END_SLOT && is_word_element(name, local, word_prefixes)).then_some(slot)

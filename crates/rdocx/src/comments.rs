@@ -2933,7 +2933,7 @@ impl Document {
         Ok(target)
     }
 
-    fn comment_source_inventory_at(
+    pub(crate) fn comment_source_inventory_at(
         &self,
         owner: &str,
     ) -> Result<BTreeMap<String, Vec<CommentSourceMarker>>> {

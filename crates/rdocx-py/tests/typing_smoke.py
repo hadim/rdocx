@@ -527,3 +527,25 @@ def fx215_chart_typing() -> None:
     document = Document()
     paragraph = document.add_chart(XL_CHART_TYPE.LINE, data, Inches(4), Inches(2))
     assert_type(paragraph, Paragraph)
+
+
+def fx211a_checked_word_element_types(document: Document) -> None:
+    paragraph = document.paragraphs[0]
+    assert_type(paragraph.element, Paragraph)
+    assert_type(paragraph.element.xml, str)
+    assert_type(paragraph.element.replace_xml(paragraph.element.xml), None)
+    run = paragraph.runs[0]
+    assert_type(run.element, Run)
+    assert_type(run.element.xml, str)
+    assert_type(run.element.replace_xml(run.element.xml), None)
+    table = document.tables[0]
+    assert_type(table.element, Table)
+    assert_type(table.element.xml, str)
+    assert_type(table.element.replace_xml(table.element.xml), None)
+    cell = table.cell(0, 0)
+    assert_type(cell.element, Cell)
+    assert_type(cell.element.xml, str)
+    assert_type(cell.element.replace_xml(cell.element.xml), None)
+    section = document.section(0)
+    assert_type(section.element.xml, str)
+    assert_type(section.element.replace_xml(section.element.xml), None)

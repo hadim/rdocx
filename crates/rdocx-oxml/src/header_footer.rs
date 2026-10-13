@@ -240,6 +240,7 @@ impl CT_HdrFtr {
 
     /// Parse from XML bytes (the content of header*.xml or footer*.xml).
     pub fn from_xml(xml: &[u8]) -> Result<Self> {
+        crate::document::admit_word_xml(xml, &["w".to_owned()], None)?;
         let watermarks = parse_vml_watermarks(xml);
         let mut reader = Reader::from_reader(xml);
         // A raw child is captured with the text events of this reader, so
@@ -345,6 +346,9 @@ impl CT_HdrFtr {
     }
 
     fn to_xml_root(&self, root_tag: &str) -> Result<Vec<u8>> {
+        for paragraph in &self.paragraphs {
+            crate::document::admit_word_model(crate::document::WordOwner::Paragraph(paragraph))?;
+        }
         let wp_ns = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
         let wp_root_is_canonical = self
             .extra_namespaces

@@ -7499,14 +7499,15 @@ all archive/baseline evidence from actual accepted source.
 
 ### F-X211a, Word checked XML owners and resource admission (L)
 
-Complete the five Word element cases, paragraph, run, table, cell and section
-properties, through checked native physical-owner operations and installed
-public bindings. Own Issues331 and337 resource admission, qualified namespaces,
-normal-stack accepted lifecycle and recoverable atomic refusal. Transfer the
-existing parent Word implementation and its immutable failures and reviews
-without reimplementation or promotion of historical evidence. Preserve opaque
-source and relationship identity, equivalent no-ops and family-local causal
-retirement. Root reconciles shared HLD and archive records once.
+Complete the five Word element cases through concrete checked native physical
+owners and installed public bindings. Require actual source namespace closure,
+introduced property and identifier admission, owner-local causal retirement,
+exact opaque preservation and equivalent no-ops. Resource admission and
+ordinary-stack parse, clone, save, reopen and drop retain inclusive
+weighted256 control/text-box and32 table boundaries. The Word implementation
+supplies eager current-owner publication, property-child retirement and
+source-qualified regression assertions. Final cross-family scripts and shared
+compatibility residuals remain owned by F-X211c.
 
 **Depends on**: F-X200, F-X201, F-X202, F-X206, F-X210, F-X222.
 **Test gate**: regression. Five installed Word XML cases, bounded native and

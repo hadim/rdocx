@@ -1,7 +1,7 @@
 //! Table elements: `CT_Tbl`, `CT_Row`, `CT_Tc` and related types.
 
 use quick_xml::events::{BytesEnd, BytesStart, Event};
-use quick_xml::{Reader, Writer};
+use quick_xml::{Reader, Writer, XmlVersion};
 
 use crate::borders::CT_BorderEdge;
 use crate::content_control::{CT_Sdt, SdtContent, SdtOwner};
@@ -26,7 +26,125 @@ use crate::text::{
 };
 use crate::units::Twips;
 
-const MAX_RECOGNIZED_TABLE_NESTING: usize = 32;
+pub(crate) const MAX_RECOGNIZED_TABLE_NESTING: usize = 32;
+/// Known sequence boundaries for the concrete table, row and cell owners.
+/// Unknown preserved children do not change a modeled boundary.
+pub(crate) fn checked_owner_child_slot(parent: &[u8], child: &[u8]) -> Result<Option<(u8, bool)>> {
+    let slot = match (parent, child) {
+        (b"tbl", b"tblPr") | (b"tr", b"tblPrEx") | (b"tc", b"tcPr") => Some((0, false)),
+        (b"tbl", b"tblGrid") | (b"tr", b"trPr") => Some((1, false)),
+        (b"tbl", b"tr" | b"sdt") | (b"tr", b"tc" | b"sdt") => Some((2, true)),
+        (b"tc", b"p" | b"tbl" | b"sdt") => Some((1, true)),
+        (
+            b"tbl" | b"tr" | b"tc",
+            b"p" | b"r" | b"tbl" | b"tr" | b"tc" | b"tblPr" | b"tblGrid" | b"tblPrEx" | b"trPr"
+            | b"tcPr" | b"pPr" | b"rPr" | b"sectPr",
+        ) => {
+            return Err(OxmlError::InvalidValue(
+                "element XML has a known child at the wrong table owner".into(),
+            ));
+        }
+        _ => None,
+    };
+    Ok(slot)
+}
+/// Check native table property values only on their actual checked owner route.
+/// Ordinary imported-source readers retain their preservation behavior.
+pub(crate) fn validate_checked_property_child(
+    element: &BytesStart<'_>,
+    prefixes: &[String],
+    parent: &[u8],
+) -> Result<bool> {
+    let name = element.local_name();
+    let local = name.as_ref();
+    let value = get_word_val_attr(element, prefixes)?;
+    let recognized = match (parent, local) {
+        (b"tblPr" | b"tblPrEx", b"jc") => {
+            if value
+                .as_deref()
+                .is_none_or(|value| ST_Jc::from_str(value).is_err())
+            {
+                return Err(OxmlError::InvalidValue(
+                    "element XML table justification requires a valid w:val".into(),
+                ));
+            }
+            true
+        }
+        (b"tcPr", b"gridSpan") => {
+            if value
+                .as_deref()
+                .and_then(|value| value.parse::<u32>().ok())
+                .is_none_or(|span| span == 0)
+            {
+                return Err(OxmlError::InvalidValue(
+                    "element XML cell gridSpan requires a positive w:val".into(),
+                ));
+            }
+            true
+        }
+        (b"tcPr", b"hMerge" | b"vMerge") => {
+            if value
+                .as_deref()
+                .is_some_and(|value| !matches!(value, "restart" | "continue"))
+            {
+                return Err(OxmlError::InvalidValue(
+                    "element XML cell merge has an invalid w:val".into(),
+                ));
+            }
+            true
+        }
+        (b"tcPr", b"vAlign") => {
+            if value
+                .as_deref()
+                .is_none_or(|value| !matches!(value, "top" | "center" | "bottom" | "both"))
+            {
+                return Err(OxmlError::InvalidValue(
+                    "element XML cell alignment requires a valid w:val".into(),
+                ));
+            }
+            true
+        }
+        (b"tblPr" | b"tblPrEx", b"tblW" | b"tblInd" | b"tblCellSpacing") | (b"tcPr", b"tcW") => {
+            for attribute in element.attributes() {
+                let attribute = attribute?;
+                if is_word_attribute(attribute.key.as_ref(), b"type", prefixes) {
+                    let value = attribute
+                        .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())?;
+                    if !matches!(value.as_ref(), "auto" | "nil" | "dxa" | "pct") {
+                        return Err(OxmlError::InvalidValue(
+                            "element XML table width has an invalid type".into(),
+                        ));
+                    }
+                }
+            }
+            true
+        }
+        (b"tblPr" | b"tblPrEx", b"tblLayout") => {
+            let mut found = false;
+            for attribute in element.attributes() {
+                let attribute = attribute?;
+                if is_word_attribute(attribute.key.as_ref(), b"type", prefixes) {
+                    let value = attribute
+                        .decoded_and_normalized_value(XmlVersion::Implicit1_0, element.decoder())?;
+                    if !matches!(value.as_ref(), "fixed" | "autofit") {
+                        return Err(OxmlError::InvalidValue(
+                            "element XML table layout has an invalid type".into(),
+                        ));
+                    }
+                    found = true;
+                }
+            }
+            if !found {
+                return Err(OxmlError::InvalidValue(
+                    "element XML table layout requires w:type".into(),
+                ));
+            }
+            true
+        }
+        _ => false,
+    };
+    Ok(recognized)
+}
 
 /// Write any captured raw XML that belongs immediately before position `pos`.
 ///
@@ -1978,6 +2096,49 @@ pub struct CT_Tc {
 
 #[allow(non_snake_case)]
 impl CT_Tc {
+    /// Parse one namespace-complete checked tc owner before staging.
+    #[doc(hidden)]
+    pub fn from_xml_fragment_checked(xml: &[u8]) -> Result<Self> {
+        crate::document::admit_word_xml(xml, &[], None)?;
+        crate::text::validate_word_owner_fragment(xml, b"tc", true)?;
+        let mut reader = Reader::from_reader(xml);
+        loop {
+            match reader.read_event()? {
+                Event::Start(root) => {
+                    let prefixes = word_prefixes_at(&root, &[])?;
+                    let bindings = local_namespace_overrides(&root, &[])?;
+                    let mut model = Self::from_xml_with_prefixes_and_owner_bindings(
+                        &mut reader,
+                        &prefixes,
+                        &bindings,
+                    )?;
+                    model.retain_root_attributes(&root, &prefixes)?;
+                    return Ok(model);
+                }
+                Event::Empty(root) => {
+                    let prefixes = word_prefixes_at(&root, &[])?;
+                    let mut model = Self::new();
+                    model.retain_root_attributes(&root, &prefixes)?;
+                    return Ok(model);
+                }
+                Event::Eof => return Err(OxmlError::MissingElement("element XML tc owner".into())),
+                _ => {}
+            }
+        }
+    }
+
+    /// Retain the actual source owner attributes in the existing raw carrier.
+    pub(crate) fn retain_root_attributes(
+        &mut self,
+        root: &BytesStart<'_>,
+        prefixes: &[String],
+    ) -> Result<()> {
+        if let Some(record) = capture_root_attribute_record(root, prefixes)? {
+            self.extra_xml.push((ROOT_ATTRIBUTES_POSITION, record));
+        }
+        Ok(())
+    }
+
     pub fn new() -> Self {
         CT_Tc {
             properties: None,
@@ -2014,6 +2175,12 @@ impl CT_Tc {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        crate::document::admit_word_reader(
+            reader,
+            &["w".to_owned()],
+            b"tc",
+            Some(crate::namespace::W_NS),
+        )?;
         Self::from_xml_with_prefixes_and_owner_bindings(reader, &["w".to_string()], &[])
     }
 
@@ -2062,14 +2229,14 @@ impl CT_Tc {
                     } else if is_word_element(name.as_ref(), b"tbl", &prefixes) {
                         let local_bindings = local_namespace_overrides(e, word_prefixes)?;
                         let table_bindings = merged_owner_bindings(owner_bindings, &local_bindings);
-                        content.push(CellContent::Table(
-                            CT_Tbl::from_xml_with_prefixes_and_owner_bindings_at_depth(
-                                reader,
-                                &prefixes,
-                                &table_bindings,
-                                table_depth.saturating_add(1),
-                            )?,
-                        ));
+                        let mut table = CT_Tbl::from_xml_with_prefixes_and_owner_bindings_at_depth(
+                            reader,
+                            &prefixes,
+                            &table_bindings,
+                            table_depth.saturating_add(1),
+                        )?;
+                        table.retain_root_attributes(e, &prefixes)?;
+                        content.push(CellContent::Table(table));
                     } else if is_word_element(name.as_ref(), b"sdt", &prefixes) {
                         let raw = crate::text::raw_with_external_bindings(
                             &capture_element(reader, e)?,
@@ -2129,7 +2296,14 @@ impl CT_Tc {
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
-        writer.write_event(Event::Start(BytesStart::new("w:tc")))?;
+        crate::document::admit_word_model(crate::document::WordOwner::Cell(self))?;
+        let mut start = BytesStart::new("w:tc");
+        for (position, raw) in &self.extra_xml {
+            if *position == ROOT_ATTRIBUTES_POSITION && is_root_attribute_record(raw) {
+                push_root_attribute_record(&mut start, raw, None)?;
+            }
+        }
+        writer.write_event(Event::Start(start))?;
 
         if let Some(ref props) = self.properties {
             props.to_xml(writer)?;
@@ -2255,6 +2429,12 @@ impl CT_Row {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        crate::document::admit_word_reader(
+            reader,
+            &["w".to_owned()],
+            b"tr",
+            Some(crate::namespace::W_NS),
+        )?;
         Self::from_xml_with_prefixes_and_owner_bindings(reader, &["w".to_string()], &[], None)
     }
 
@@ -2311,12 +2491,14 @@ impl CT_Row {
                     } else if is_word_element(name.as_ref(), b"tc", &prefixes) {
                         let local_bindings = local_namespace_overrides(e, word_prefixes)?;
                         let cell_bindings = merged_owner_bindings(owner_bindings, &local_bindings);
-                        cells.push(CT_Tc::from_xml_with_prefixes_and_owner_bindings_at_depth(
+                        let mut cell = CT_Tc::from_xml_with_prefixes_and_owner_bindings_at_depth(
                             reader,
                             &prefixes,
                             &cell_bindings,
                             table_depth,
-                        )?);
+                        )?;
+                        cell.retain_root_attributes(e, &prefixes)?;
+                        cells.push(cell);
                     } else if is_word_element(name.as_ref(), b"sdt", &prefixes) {
                         let raw = crate::text::raw_with_external_bindings(
                             &capture_element(reader, e)?,
@@ -2354,7 +2536,9 @@ impl CT_Row {
                             owner_bindings,
                         )?);
                     } else if is_word_element(name.as_ref(), b"tc", &prefixes) {
-                        cells.push(CT_Tc::new());
+                        let mut cell = CT_Tc::new();
+                        cell.retain_root_attributes(e, &prefixes)?;
+                        cells.push(cell);
                     } else if !is_word_element(name.as_ref(), b"trPr", &prefixes) {
                         extra_xml.push((
                             cells.len(),
@@ -2393,6 +2577,7 @@ impl CT_Row {
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        crate::document::admit_word_model(crate::document::WordOwner::Row(self))?;
         let mut start = BytesStart::new("w:tr");
         for (position, raw) in &self.extra_xml {
             if Self::raw_is_root_attributes(*position, raw) {
@@ -2501,6 +2686,51 @@ pub struct CT_Tbl {
 
 #[allow(non_snake_case)]
 impl CT_Tbl {
+    /// Parse one namespace-complete checked tbl owner before staging.
+    #[doc(hidden)]
+    pub fn from_xml_fragment_checked(xml: &[u8]) -> Result<Self> {
+        crate::document::admit_word_xml(xml, &[], None)?;
+        crate::text::validate_word_owner_fragment(xml, b"tbl", true)?;
+        let mut reader = Reader::from_reader(xml);
+        loop {
+            match reader.read_event()? {
+                Event::Start(root) => {
+                    let prefixes = word_prefixes_at(&root, &[])?;
+                    let bindings = local_namespace_overrides(&root, &[])?;
+                    let mut model = Self::from_xml_with_prefixes_and_owner_bindings(
+                        &mut reader,
+                        &prefixes,
+                        &bindings,
+                    )?;
+                    model.retain_root_attributes(&root, &prefixes)?;
+                    return Ok(model);
+                }
+                Event::Empty(root) => {
+                    let prefixes = word_prefixes_at(&root, &[])?;
+                    let mut model = Self::new();
+                    model.retain_root_attributes(&root, &prefixes)?;
+                    return Ok(model);
+                }
+                Event::Eof => {
+                    return Err(OxmlError::MissingElement("element XML tbl owner".into()));
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Retain the actual source owner attributes in the existing raw carrier.
+    pub(crate) fn retain_root_attributes(
+        &mut self,
+        root: &BytesStart<'_>,
+        prefixes: &[String],
+    ) -> Result<()> {
+        if let Some(record) = capture_root_attribute_record(root, prefixes)? {
+            self.extra_xml.push((ROOT_ATTRIBUTES_POSITION, record));
+        }
+        Ok(())
+    }
+
     pub fn new() -> Self {
         CT_Tbl {
             properties: None,
@@ -2534,6 +2764,12 @@ impl CT_Tbl {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
+        crate::document::admit_word_reader(
+            reader,
+            &["w".to_owned()],
+            b"tbl",
+            Some(crate::namespace::W_NS),
+        )?;
         Self::from_xml_with_prefixes_and_owner_bindings(reader, &["w".to_string()], &[])
     }
 
@@ -2685,7 +2921,14 @@ impl CT_Tbl {
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
-        writer.write_event(Event::Start(BytesStart::new("w:tbl")))?;
+        crate::document::admit_word_model(crate::document::WordOwner::Table(self))?;
+        let mut start = BytesStart::new("w:tbl");
+        for (position, raw) in &self.extra_xml {
+            if *position == ROOT_ATTRIBUTES_POSITION && is_root_attribute_record(raw) {
+                push_root_attribute_record(&mut start, raw, None)?;
+            }
+        }
+        writer.write_event(Event::Start(start))?;
 
         if let Some(ref props) = self.properties {
             props.to_xml(writer)?;
@@ -4213,6 +4456,161 @@ mod tests {
     /// Word and Google Docs write revision-save and paragraph identities on
     /// every row. A row used to be written back with a bare start tag, so any
     /// save of an edited model lost them.
+    #[test]
+    fn fx211_root_namespace_values_and_opaque_children_preserve_authority() {
+        let uri = crate::namespace::W_NS;
+        let mc = crate::namespace::MC_NS;
+        let mut failures = Vec::new();
+        for attribute in [
+            "mc:Ignorable=\"w\"",
+            "mc:ProcessContent=\"w:future\"",
+            "xsi:type=\"w:Future\"",
+        ] {
+            let xml = format!(
+                r#"<q:tc xmlns:q="{uri}" xmlns:w="urn:producer" w:keep="retained" xmlns:mc="{mc}" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" {attribute}><q:p/></q:tc>"#
+            );
+            let cell = CT_Tc::from_xml_fragment_checked(xml.as_bytes()).unwrap();
+            let mut output = Vec::new();
+            match cell.to_xml(&mut Writer::new(&mut output)) {
+                Err(error) if error.to_string().contains("namespace-valued") => {}
+                _ => failures.push(format!(
+                    "unsupported foreign-w QName value accepted: {attribute}"
+                )),
+            }
+        }
+        let xml = format!(
+            r#"<q:tc xmlns:q="{uri}" xmlns:w="urn:producer" w:keep="retained" xmlns:mc="{mc}" mc:Ignorable="rdocxProducer" xmlns:rdocxProducer="urn:qname-only" xmlns:x="urn:opaque-attribute" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" x:text="literal w:Future remains unchanged"><q:p><q:r><q:t>visible</q:t><w:opaque w:label="source"><w:child/></w:opaque><x:qnameOnly xsi:type="w:Future"/></q:r></q:p></q:tc>"#
+        );
+        let cell = CT_Tc::from_xml_fragment_checked(xml.as_bytes()).unwrap();
+        let mut output = Vec::new();
+        cell.to_xml(&mut Writer::new(&mut output)).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        if !output.contains("xmlns:rdocxProducer=\"urn:qname-only\"") {
+            failures.push(format!("QName-only binding hijacked: {output}"));
+        }
+        assert!(output.contains("literal w:Future remains unchanged"));
+        let wrapped =
+            format!(r#"<w:document xmlns:w="{uri}"><w:body>{output}</w:body></w:document>"#);
+        let mut reader = quick_xml::NsReader::from_str(&wrapped);
+        let mut buffer = Vec::new();
+        loop {
+            let (namespace, event) = reader.read_resolved_event_into(&mut buffer).unwrap();
+            if let Event::Start(ref element) = event
+                && element.local_name().as_ref() == b"opaque"
+                && !matches!(namespace, quick_xml::name::ResolveResult::Bound(quick_xml::name::Namespace(bound)) if bound == b"urn:producer")
+            {
+                failures.push(format!("opaque child lost producer namespace: {output}"));
+            }
+            if let Event::Empty(ref element) = event
+                && element.local_name().as_ref() == b"qnameOnly"
+            {
+                let (binding, _) = reader
+                    .resolver()
+                    .resolve_element(quick_xml::name::QName(b"w:Future"));
+                if !matches!(binding, quick_xml::name::ResolveResult::Bound(quick_xml::name::Namespace(bound)) if bound == b"urn:producer")
+                {
+                    failures.push(format!(
+                        "opaque QName-only child lost producer binding: {output}"
+                    ));
+                }
+            }
+            if matches!(event, Event::Eof) {
+                break;
+            }
+            buffer.clear();
+        }
+        assert!(
+            failures.is_empty(),
+            "namespace-value and opaque-source gaps: {failures:?}"
+        );
+    }
+
+    #[test]
+    fn fx211_table_cell_foreign_w_root_attributes_preserve_expanded_names() {
+        let uri = crate::namespace::W_NS;
+        let mut failures = Vec::new();
+        for local in ["tbl", "tc"] {
+            let content = if local == "tbl" {
+                "<q:tblGrid><q:gridCol q:w=\"1440\"/></q:tblGrid><q:tr><q:tc><q:p><q:r><q:t>value</q:t></q:r></q:p></q:tc></q:tr>"
+            } else {
+                "<q:p><q:r><q:t>value</q:t></q:r></q:p>"
+            };
+            let xml = format!(
+                r#"<q:{local} xmlns:q="{uri}" xmlns:w="urn:producer" w:keep="retained" xmlns:rdocxProducer="urn:other" rdocxProducer:keep="other">{content}</q:{local}>"#
+            );
+            let mut output = Vec::new();
+            if local == "tbl" {
+                CT_Tbl::from_xml_fragment_checked(xml.as_bytes())
+                    .unwrap()
+                    .to_xml(&mut Writer::new(&mut output))
+                    .unwrap();
+            } else {
+                CT_Tc::from_xml_fragment_checked(xml.as_bytes())
+                    .unwrap()
+                    .to_xml(&mut Writer::new(&mut output))
+                    .unwrap();
+            }
+            let output = String::from_utf8(output).unwrap();
+            let wrapped =
+                format!(r#"<w:document xmlns:w="{uri}"><w:body>{output}</w:body></w:document>"#);
+            let mut reader = quick_xml::NsReader::from_str(&wrapped);
+            let mut buffer = Vec::new();
+            let mut seen = false;
+            loop {
+                let (namespace, event) = reader.read_resolved_event_into(&mut buffer).unwrap();
+                if let Event::Start(ref element) = event
+                    && element.local_name().as_ref() == local.as_bytes()
+                {
+                    seen = true;
+                    if !matches!(namespace, quick_xml::name::ResolveResult::Bound(quick_xml::name::Namespace(bound)) if bound == uri.as_bytes())
+                    {
+                        failures.push(format!("{local} lost Word namespace: {output}"));
+                    }
+                    let mut producer = false;
+                    let mut other = false;
+                    for attribute in element.attributes() {
+                        let attribute = attribute.unwrap();
+                        let (namespace, name) = reader.resolver().resolve_attribute(attribute.key);
+                        if name.as_ref() == b"keep" {
+                            producer |= matches!(namespace, quick_xml::name::ResolveResult::Bound(quick_xml::name::Namespace(bound)) if bound == b"urn:producer")
+                                && attribute.value.as_ref() == b"retained";
+                            other |= matches!(namespace, quick_xml::name::ResolveResult::Bound(quick_xml::name::Namespace(bound)) if bound == b"urn:other")
+                                && attribute.value.as_ref() == b"other";
+                        }
+                    }
+                    assert!(producer && other, "{output}");
+                    break;
+                }
+                if matches!(event, Event::Eof) {
+                    break;
+                }
+                buffer.clear();
+            }
+            assert!(seen);
+        }
+        assert!(failures.is_empty(), "foreign root collision: {failures:?}");
+    }
+
+    #[test]
+    fn fx211_table_cell_root_attributes_survive_native_reopen() {
+        let xml = format!(
+            r#"<w:document xmlns:w="{}"><w:body><w:tbl xmlns:x="urn:producer" x:table='retained'><w:tblGrid><w:gridCol w:w="1440"/></w:tblGrid><w:tr><w:tc xmlns:y="urn:cell" y:cell='retained'><w:p><w:r><w:t>value</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>"#,
+            crate::namespace::W_NS
+        );
+        let document = crate::document::CT_Document::from_xml(xml.as_bytes()).unwrap();
+        let saved = String::from_utf8(document.to_xml().unwrap()).unwrap();
+        assert!(
+            saved.contains("x:table=\"retained\""),
+            "table attributes disappeared: {saved}"
+        );
+        assert!(
+            saved.contains("y:cell=\"retained\""),
+            "cell attributes disappeared: {saved}"
+        );
+        let reopened = crate::document::CT_Document::from_xml(saved.as_bytes()).unwrap();
+        assert_eq!(reopened.to_xml().unwrap(), saved.as_bytes());
+    }
+
     #[test]
     fn row_root_attributes_survive_serialization_in_source_order() {
         const IDENTITY: &str =

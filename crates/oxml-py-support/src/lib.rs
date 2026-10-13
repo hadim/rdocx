@@ -220,6 +220,7 @@ pub struct PreparedRevision {
     expected_generation: u64,
     next_generation: u64,
     operation: Option<&'static str>,
+    retire_document: bool,
     retired: Vec<RevisionState>,
     successors: Vec<RevisionState>,
     born: Vec<RevisionState>,
@@ -232,6 +233,11 @@ impl PreparedRevision {
     }
     pub fn committed_serial(&self) -> u64 {
         self.expected_serial + 1
+    }
+
+    /// The actual document state that this preparation will publish.
+    pub fn document_scope(&self) -> RevisionState {
+        self.successors[0].clone()
     }
     pub fn born(&self, index: usize) -> Option<RevisionState> {
         self.born.get(index).cloned()
@@ -279,6 +285,12 @@ impl RevisionCounter {
     }
     pub const fn current(&self) -> u64 {
         self.current
+    }
+
+    /// Capture the real document epoch after eager owner initialization.
+    /// Global commits retire this state, while local owner commits retain it.
+    pub fn current_document_scope(&self) -> RevisionState {
+        self.document.clone()
     }
 
     fn owns(&self, state: &RevisionState) -> bool {
@@ -385,7 +397,18 @@ impl RevisionCounter {
         scopes: &[RevisionState],
         born: &[RevisionScope],
     ) -> Result<PreparedRevision, RevisionError> {
-        self.prepare(Some(operation), scopes, born)
+        self.prepare(Some(operation), scopes, born, true)
+    }
+
+    /// Advance the commit serial while retiring only the supplied owner scopes.
+    /// Captured document authority stays live for checked local replacements.
+    pub fn prepare_local_scopes(
+        &self,
+        operation: &'static str,
+        scopes: &[RevisionState],
+        born: &[RevisionScope],
+    ) -> Result<PreparedRevision, RevisionError> {
+        self.prepare(Some(operation), scopes, born, false)
     }
 
     fn prepare(
@@ -393,12 +416,13 @@ impl RevisionCounter {
         operation: Option<&'static str>,
         scopes: &[RevisionState],
         born: &[RevisionScope],
+        retire_document: bool,
     ) -> Result<PreparedRevision, RevisionError> {
         self.current.checked_add(1).ok_or(RevisionError::Overflow)?;
         let total = scopes
             .len()
             .checked_add(born.len())
-            .and_then(|n| n.checked_add(1))
+            .and_then(|n| n.checked_add(usize::from(retire_document)))
             .ok_or(RevisionError::Overflow)?;
         let next_generation = self
             .next_generation
@@ -426,7 +450,11 @@ impl RevisionCounter {
             .try_reserve_exact(retired.len())
             .map_err(|_| RevisionError::Allocation)?;
         let mut generation = self.next_generation;
-        for old in &retired {
+        for (index, old) in retired.iter().enumerate() {
+            if index == 0 && !retire_document {
+                successors.push(old.clone());
+                continue;
+            }
             generation += 1;
             successors.push(self.state(generation, old.scope()));
         }
@@ -444,6 +472,7 @@ impl RevisionCounter {
             expected_generation: self.next_generation,
             next_generation,
             operation,
+            retire_document,
             retired,
             successors,
             born: births,
@@ -470,7 +499,11 @@ impl RevisionCounter {
             return Err(RevisionError::Retired);
         }
         let serial = self.current + 1;
-        for state in &prepared.retired {
+        for state in prepared
+            .retired
+            .iter()
+            .skip(usize::from(!prepared.retire_document))
+        {
             state
                 .0
                 .retired
@@ -490,7 +523,7 @@ impl RevisionCounter {
     /// Numeric compatibility. Migrated consumers prepare with the real public label.
     pub fn bump(&mut self) -> u64 {
         let prepared = self
-            .prepare(None, &[], &[])
+            .prepare(None, &[], &[], true)
             .expect("document revision counter overflowed");
         self.commit_scopes(prepared)
             .expect("legacy numeric transaction was just prepared")
@@ -719,6 +752,359 @@ mod tests {
 
         assert_eq!(before.revision, 0);
         assert_eq!(after.revision, 1);
+    }
+
+    #[test]
+    fn fx211_prepared_document_scope_captures_returned_owner_before_publication() {
+        let mut clock = RevisionCounter::new();
+        let owners = clock.initialize_scopes(&[RevisionScope::Owner]).unwrap();
+        let old = clock
+            .capture_scopes(
+                smallvec![PathSeg::Run(0)],
+                &[clock.current_document_scope(), owners[0].clone()],
+            )
+            .unwrap();
+        let prepared = clock
+            .prepare_scopes(
+                "Document.add_paragraph",
+                &[],
+                &[RevisionScope::Owner, RevisionScope::Text],
+            )
+            .unwrap();
+        // Validate the same origin and preparation serial before combining
+        // its actual document state with already allocated owner births.
+        clock.capture_prepared(&prepared, smallvec![]).unwrap();
+        let mut future = clock
+            .capture_scopes(
+                smallvec![PathSeg::Run(1)],
+                &[
+                    prepared.document_scope(),
+                    prepared.born(0).unwrap(),
+                    prepared.born(1).unwrap(),
+                ],
+            )
+            .unwrap();
+        future.revision = prepared.committed_serial();
+        let born = prepared.born(1).unwrap();
+        assert!(old.validate_scopes(&clock, "run", "refetch").is_ok());
+        clock.commit_scopes(prepared).unwrap();
+        assert_eq!(future.revision, clock.current());
+        assert!(future.validate_scopes(&clock, "run", "refetch").is_ok());
+        let local = clock
+            .prepare_local_scopes("Run.element.replace_xml", &[born], &[])
+            .unwrap();
+        clock.commit_scopes(local).unwrap();
+        assert!(
+            old.validate_scopes(&clock, "run", "refetch")
+                .unwrap_err()
+                .recovery_hint
+                .contains("Document.add_paragraph")
+        );
+        assert!(
+            future
+                .validate_scopes(&clock, "run", "refetch")
+                .unwrap_err()
+                .recovery_hint
+                .contains("Run.element.replace_xml")
+        );
+    }
+
+    #[test]
+    fn fx211_document_scope_accessor_keeps_global_and_owner_authority_distinct() {
+        let mut clock = RevisionCounter::new();
+        let states = clock
+            .initialize_scopes(&[RevisionScope::Owner, RevisionScope::Text])
+            .unwrap();
+        let document = clock.current_document_scope();
+        let owner = clock
+            .capture_scopes(smallvec![PathSeg::Para(0)], &states[..1])
+            .unwrap();
+        let run = clock
+            .capture_scopes(
+                smallvec![PathSeg::Para(0), PathSeg::Run(0)],
+                &[document.clone(), states[0].clone(), states[1].clone()],
+            )
+            .unwrap();
+        let append = clock
+            .prepare_scopes("Document.add_paragraph", &[], &[])
+            .unwrap();
+        clock.commit_scopes(append).unwrap();
+        assert!(
+            owner
+                .validate_scopes(&clock, "paragraph", "refetch")
+                .is_ok()
+        );
+        let later = clock
+            .prepare_local_scopes("Paragraph.element.replace_xml", &states[1..], &[])
+            .unwrap();
+        clock.commit_scopes(later).unwrap();
+        assert!(
+            owner
+                .validate_scopes(&clock, "paragraph", "refetch")
+                .is_ok()
+        );
+        let error = run.validate_scopes(&clock, "run", "refetch").unwrap_err();
+        assert!(error.recovery_hint.contains("Document.add_paragraph"));
+        assert!(
+            !error
+                .recovery_hint
+                .contains("Paragraph.element.replace_xml")
+        );
+        assert_eq!(document.first_cause().unwrap().serial, 1);
+        assert_eq!(states[1].first_cause().unwrap().serial, 2);
+        assert!(!clock.current_document_scope().same_state(&document));
+        let mut foreign = RevisionCounter::new();
+        foreign.initialize_scopes(&[]).unwrap();
+        assert!(matches!(
+            foreign.capture_scopes(smallvec![], &states[..1]),
+            Err(RevisionError::ForeignOwner)
+        ));
+        let mut early = RevisionCounter::new();
+        let early_document = early.current_document_scope();
+        assert!(matches!(
+            early.initialize_scopes(&[]),
+            Err(RevisionError::AlreadyInitialized)
+        ));
+        assert_eq!(early.current(), 0);
+        assert!(early_document.first_cause().is_none());
+    }
+
+    #[test]
+    fn fx211_local_owner_publication_keeps_document_and_ancestors_live() {
+        let mut clock = RevisionCounter::new();
+        let scopes = clock
+            .initialize_scopes(&[RevisionScope::Owner, RevisionScope::Text])
+            .unwrap();
+        let ancestor = clock.capture(smallvec![PathSeg::Para(0)]);
+        let child = clock
+            .capture_scopes(
+                smallvec![PathSeg::Para(0), PathSeg::Run(0)],
+                &[clock.document.clone(), scopes[0].clone(), scopes[1].clone()],
+            )
+            .unwrap();
+        let prepared = clock
+            .prepare_local_scopes("Paragraph.element.replace_xml", &scopes[1..], &[])
+            .unwrap();
+        let successor = prepared.successor(0).unwrap();
+        let future = clock.capture_prepared(&prepared, smallvec![]).unwrap();
+        clock.commit_scopes(prepared).unwrap();
+        assert_eq!(clock.current(), 1);
+        assert!(
+            ancestor
+                .validate_scopes(&clock, "paragraph", "refetch")
+                .is_ok()
+        );
+        assert!(scopes[0].first_cause().is_none());
+        assert!(
+            child
+                .validate_scopes(&clock, "run", "refetch")
+                .unwrap_err()
+                .recovery_hint
+                .contains("Paragraph.element.replace_xml")
+        );
+        assert!(
+            future
+                .validate_scopes(&clock, "paragraph", "refetch")
+                .is_ok()
+        );
+        assert!(successor.first_cause().is_none());
+        let later = clock
+            .prepare_scopes("Document.add_paragraph", &[], &[])
+            .unwrap();
+        clock.commit_scopes(later).unwrap();
+        assert!(
+            ancestor
+                .validate_scopes(&clock, "paragraph", "refetch")
+                .unwrap_err()
+                .recovery_hint
+                .contains("Document.add_paragraph")
+        );
+        assert!(
+            child
+                .validate_scopes(&clock, "run", "refetch")
+                .unwrap_err()
+                .recovery_hint
+                .contains("Paragraph.element.replace_xml")
+        );
+    }
+
+    #[test]
+    fn fx211_local_preparation_rejections_and_drops_publish_nothing() {
+        let mut clock = RevisionCounter::new();
+        let states = clock
+            .initialize_scopes(&[RevisionScope::Owner, RevisionScope::Text])
+            .unwrap();
+        let document = clock.document.clone();
+        let serial = clock.current;
+        let generation = clock.next_generation;
+        let count = std::sync::Arc::strong_count(&document.0);
+        let prepared = clock
+            .prepare_local_scopes(
+                "Run.element.replace_xml",
+                &states[1..],
+                &[RevisionScope::Owner],
+            )
+            .unwrap();
+        let successor = prepared.successor(0).unwrap();
+        let successor_weak = std::sync::Arc::downgrade(&successor.0);
+        let born = prepared.born(0).unwrap();
+        let born_weak = std::sync::Arc::downgrade(&born.0);
+        assert!(prepared.successors[0].same_state(&document));
+        drop(successor);
+        drop(born);
+        drop(prepared);
+        assert!(successor_weak.upgrade().is_none());
+        assert!(born_weak.upgrade().is_none());
+        assert_eq!(std::sync::Arc::strong_count(&document.0), count);
+        let mut other = RevisionCounter::new();
+        let foreign = other
+            .initialize_scopes(&[RevisionScope::Owner])
+            .unwrap()
+            .remove(0);
+        assert!(matches!(
+            clock.prepare_local_scopes("replace", &[foreign], &[]),
+            Err(RevisionError::ForeignOwner)
+        ));
+        assert!(matches!(
+            clock.prepare_local_scopes("replace", &[states[0].clone(), states[0].clone()], &[]),
+            Err(RevisionError::DuplicateScope)
+        ));
+        let prepared = clock
+            .prepare_local_scopes("replace", &states[1..], &[])
+            .unwrap();
+        assert_eq!(
+            other.commit_scopes(prepared),
+            Err(RevisionError::ForeignOwner)
+        );
+        assert_eq!((clock.current, clock.next_generation), (serial, generation));
+        assert!(clock.document.same_state(&document));
+        assert!(states.iter().all(|state| state.first_cause().is_none()));
+        let first = clock
+            .prepare_local_scopes("first", &states[1..], &[])
+            .unwrap();
+        let stale = clock
+            .prepare_local_scopes("later", &states[..1], &[])
+            .unwrap();
+        clock.commit_scopes(first).unwrap();
+        assert_eq!(
+            clock.commit_scopes(stale),
+            Err(RevisionError::StalePreparation)
+        );
+        assert!(states[0].first_cause().is_none());
+        assert!(matches!(
+            clock.prepare_local_scopes("replace", &states[1..], &[]),
+            Err(RevisionError::Retired)
+        ));
+        assert_eq!(states[1].first_cause().unwrap().operation, Some("first"));
+    }
+
+    #[test]
+    fn fx211_local_overflow_counts_only_allocated_successors_and_births() {
+        let mut clock = RevisionCounter::new();
+        let owner = clock
+            .initialize_scopes(&[RevisionScope::Owner])
+            .unwrap()
+            .remove(0);
+        let document = clock.document.clone();
+        clock.next_generation = u64::MAX;
+        assert!(matches!(
+            clock.prepare_local_scopes("replace", std::slice::from_ref(&owner), &[]),
+            Err(RevisionError::Overflow)
+        ));
+        assert!(matches!(
+            clock.prepare_local_scopes("add", &[], &[RevisionScope::Owner]),
+            Err(RevisionError::Overflow)
+        ));
+        let empty = clock.prepare_local_scopes("local", &[], &[]).unwrap();
+        clock.commit_scopes(empty).unwrap();
+        assert_eq!(clock.current, 1);
+        assert_eq!(clock.next_generation, u64::MAX);
+        assert!(clock.document.same_state(&document));
+        assert!(owner.first_cause().is_none());
+        clock.current = u64::MAX;
+        assert!(matches!(
+            clock.prepare_local_scopes("local", &[], &[]),
+            Err(RevisionError::Overflow)
+        ));
+        assert_eq!(clock.current, u64::MAX);
+        assert!(document.first_cause().is_none());
+    }
+
+    #[test]
+    fn fx211_local_future_capture_and_first_cause_use_existing_scope_authority() {
+        let mut clock = RevisionCounter::new();
+        let states = clock
+            .initialize_scopes(&[
+                RevisionScope::Owner,
+                RevisionScope::Text,
+                RevisionScope::Grid,
+            ])
+            .unwrap();
+        let document = clock.document.clone();
+        let child = clock
+            .capture_scopes(
+                smallvec![],
+                &[
+                    states[2].clone(),
+                    document.clone(),
+                    states[1].clone(),
+                    states[0].clone(),
+                ],
+            )
+            .unwrap();
+        let first = clock
+            .prepare_local_scopes("Text.replace_xml", &states[1..2], &[RevisionScope::Owner])
+            .unwrap();
+        assert_eq!(first.successor(0).unwrap().scope(), RevisionScope::Text);
+        assert!(first.successor(1).is_none());
+        assert!(first.successor(usize::MAX).is_none());
+        assert!(first.born(usize::MAX).is_none());
+        let born = first.born(0).unwrap();
+        let future = clock.capture_prepared(&first, smallvec![]).unwrap();
+        let born_path = clock
+            .capture_scopes(smallvec![], std::slice::from_ref(&born))
+            .unwrap();
+        let stale_capture = clock.prepare_local_scopes("pending", &[], &[]).unwrap();
+        let foreign = RevisionCounter::new();
+        assert!(matches!(
+            foreign.capture_prepared(&first, smallvec![]),
+            Err(RevisionError::ForeignOwner)
+        ));
+        clock.commit_scopes(first).unwrap();
+        assert!(matches!(
+            clock.capture_prepared(&stale_capture, smallvec![]),
+            Err(RevisionError::StalePreparation)
+        ));
+        assert_eq!(future.revision, 1);
+        assert!(future.validate_scopes(&clock, "parent", "refetch").is_ok());
+        assert!(
+            born_path
+                .validate_scopes(&clock, "owner", "refetch")
+                .is_ok()
+        );
+        let second = clock
+            .prepare_local_scopes(
+                "Grid.replace_xml",
+                &[states[0].clone(), states[2].clone()],
+                &[],
+            )
+            .unwrap();
+        clock.commit_scopes(second).unwrap();
+        assert!(
+            child
+                .validate_scopes(&clock, "run", "refetch")
+                .unwrap_err()
+                .recovery_hint
+                .contains("Text.replace_xml at committed revision 1")
+        );
+        assert_eq!(states[0].first_cause().unwrap().serial, 2);
+        assert_eq!(states[2].first_cause().unwrap().serial, 2);
+        assert!(clock.document.same_state(&document));
+        assert!(
+            ContentPath::new(smallvec![], 0)
+                .validate_scopes(&clock, "manual", "refetch")
+                .is_err()
+        );
     }
 
     #[test]

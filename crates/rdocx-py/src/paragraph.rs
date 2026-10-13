@@ -389,6 +389,8 @@ pub struct PyParagraph {
     pub(crate) document: Py<PyDocument>,
     path: ContentPath,
     related: Option<rdocx::ContentLocation>,
+    owner: Option<oxml_py_support::RevisionState>,
+    furniture_scope: Option<oxml_py_support::RevisionState>,
 }
 
 impl PyParagraph {
@@ -397,6 +399,8 @@ impl PyParagraph {
             document,
             path,
             related: None,
+            owner: None,
+            furniture_scope: None,
         }
     }
 
@@ -409,7 +413,71 @@ impl PyParagraph {
             document,
             path,
             related: Some(location),
+            owner: None,
+            furniture_scope: None,
         }
+    }
+
+    pub(crate) fn bind_current(
+        mut self,
+        py: Python<'_>,
+        furniture_scope: Option<oxml_py_support::RevisionState>,
+    ) -> PyResult<Self> {
+        self.furniture_scope = furniture_scope;
+        let location = self.related.as_ref().map_or_else(
+            || paragraph_location(&self.path),
+            |location| Ok(ParagraphLocation::Related(location.clone())),
+        )?;
+        {
+            let document = self.document.borrow(py);
+            match location.native(&document.inner) {
+                Ok(location) => {
+                    let (path, owner) = document.capture_owner(
+                        &crate::document::WordOwnerLocation::Paragraph(location),
+                        self.path.segs.clone(),
+                        crate::document::WordView::Owner,
+                        self.furniture_scope.as_ref(),
+                    )?;
+                    self.path = path;
+                    self.owner = Some(owner);
+                }
+                Err(_) => {
+                    // Ordinary facade reads retain unsupported legacy routes.
+                    // Their snapshot authority retires on every XML publication.
+                    self.path = document.capture_snapshot(self.path.segs.clone())?;
+                }
+            }
+        }
+        Ok(self)
+    }
+
+    pub(crate) fn bind_prepared(
+        mut self,
+        py: Python<'_>,
+        document: &PyDocument,
+        prepared: &crate::document::PreparedWordRevision,
+        candidate: &rdocx::Document,
+        furniture_scope: Option<oxml_py_support::RevisionState>,
+    ) -> PyResult<Self> {
+        self.furniture_scope =
+            document.prepared_furniture_scope(prepared, furniture_scope.as_ref())?;
+        let location = self.related.as_ref().map_or_else(
+            || paragraph_location(&self.path),
+            |location| Ok(ParagraphLocation::Related(location.clone())),
+        )?;
+        let location = location
+            .native(candidate)
+            .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
+        let (path, owner) = document.capture_prepared_owner(
+            prepared,
+            &crate::document::WordOwnerLocation::Paragraph(location),
+            self.path.segs.clone(),
+            crate::document::WordView::Owner,
+            self.furniture_scope.as_ref(),
+        )?;
+        self.path = path;
+        self.owner = Some(owner);
+        Ok(self)
     }
 
     pub(crate) fn validate(&self, py: Python<'_>) -> PyResult<ParagraphLocation> {
@@ -435,6 +503,11 @@ impl PyParagraph {
         self.path
             .validate_scopes(&document.revisions, "paragraph", &recovery_hint)
             .map_err(|error| stale_to_pyerr(py, error))?;
+        if let (Some(owner), ParagraphLocation::Related(_)) = (&self.owner, &location) {
+            return document
+                .current_paragraph_owner(owner)
+                .map(ParagraphLocation::Related);
+        }
         Ok(location)
     }
 
@@ -462,15 +535,17 @@ impl PyParagraph {
             .read_story_paragraph(&position.location, |p| p.run_path(position.run_index))
             .map_err(|error| crate::rdocx_to_pyerr(py, error))?
             .ok_or_else(|| PyIndexError::new_err("inserted link run was not found"))?;
-        let prepared = document
-            .revisions
-            .prepare_scopes("Paragraph.add_internal_hyperlink", &[], &[])
-            .map_err(oxml_py_support::revision_to_pyerr)?;
+        let prepared = document.prepare_word_revision(
+            py,
+            &candidate,
+            "Paragraph.add_internal_hyperlink",
+            crate::document::WordPublication::Conservative,
+        )?;
         let mut segments = self.path.segs.clone();
         segments.push(PathSeg::Run(position.run_index));
         let path = document
             .revisions
-            .capture_prepared(&prepared, segments)
+            .capture_prepared(&prepared.revision, segments)
             .map_err(oxml_py_support::revision_to_pyerr)?;
         let result = Py::new(
             py,
@@ -479,12 +554,16 @@ impl PyParagraph {
                 path,
                 run_path,
                 Some(position.location),
-            ),
+            )
+            .bind_prepared(
+                py,
+                &document,
+                &prepared,
+                &candidate,
+                self.furniture_scope.clone(),
+            )?,
         )?;
-        document
-            .revisions
-            .commit_scopes(prepared)
-            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document.commit_word_revision(prepared)?;
         document.inner = candidate;
         Ok(result)
     }
@@ -545,15 +624,17 @@ impl PyParagraph {
             } else {
                 "Paragraph.add_run"
             };
-            let prepared = document
-                .revisions
-                .prepare_scopes(operation, &[], &[])
-                .map_err(oxml_py_support::revision_to_pyerr)?;
+            let prepared = document.prepare_word_revision(
+                py,
+                &candidate,
+                operation,
+                crate::document::WordPublication::Conservative,
+            )?;
             let mut segments = self.path.segs.clone();
             segments.push(PathSeg::Run(run_index));
             let path = document
                 .revisions
-                .capture_prepared(&prepared, segments)
+                .capture_prepared(&prepared.revision, segments)
                 .map_err(oxml_py_support::revision_to_pyerr)?;
             let result = Py::new(
                 py,
@@ -562,12 +643,16 @@ impl PyParagraph {
                     path,
                     run_path,
                     self.related.clone(),
-                ),
+                )
+                .bind_prepared(
+                    py,
+                    &document,
+                    &prepared,
+                    &candidate,
+                    self.furniture_scope.clone(),
+                )?,
             )?;
-            document
-                .revisions
-                .commit_scopes(prepared)
-                .map_err(oxml_py_support::revision_to_pyerr)?;
+            document.commit_word_revision(prepared)?;
             document.inner = candidate;
             result
         };
@@ -577,6 +662,49 @@ impl PyParagraph {
 
 #[pymethods]
 impl PyParagraph {
+    #[getter]
+    fn element<'py>(slf: &Bound<'py, Self>) -> Bound<'py, Self> {
+        slf.clone()
+    }
+
+    #[getter]
+    fn xml(&self, py: Python<'_>) -> PyResult<String> {
+        self.validate(py)?;
+        let document = self.document.borrow(py);
+        let owner = self
+            .owner
+            .as_ref()
+            .ok_or_else(|| PyValueError::new_err("paragraph XML owner route is unsupported"))?;
+        let location = document.current_paragraph_owner(owner)?;
+        let bytes = document
+            .inner
+            .paragraph_element_xml(&location)
+            .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
+        String::from_utf8(bytes).map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
+    fn replace_xml(&self, py: Python<'_>, xml: &str) -> PyResult<()> {
+        self.validate(py)?;
+        let mut document = self.document.borrow_mut(py);
+        let owner = self
+            .owner
+            .as_ref()
+            .ok_or_else(|| PyValueError::new_err("paragraph XML owner route is unsupported"))?;
+        let location = document.current_paragraph_owner(owner)?;
+        let mut candidate = document.inner.clone_for_staging();
+        candidate
+            .replace_paragraph_xml(&location, xml)
+            .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
+        document.publish_owner_candidate(
+            py,
+            candidate,
+            "Paragraph.replace_xml",
+            crate::document::WordPublication::ElementXml(
+                crate::document::WordOwnerLocation::Paragraph(location),
+            ),
+        )
+    }
+
     fn equations<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyTuple>> {
         let location = self.validate(py)?;
         let document = self.document.borrow(py);
@@ -631,14 +759,13 @@ impl PyParagraph {
         location
             .edit(&mut candidate, |p| p.add_equation(equation))
             .map_err(|e| crate::rdocx_to_pyerr(py, e))?;
-        let prepared = document
-            .revisions
-            .prepare_scopes("Paragraph.add_equation", &[], &[])
-            .map_err(oxml_py_support::revision_to_pyerr)?;
-        document
-            .revisions
-            .commit_scopes(prepared)
-            .map_err(oxml_py_support::revision_to_pyerr)?;
+        let prepared = document.prepare_word_revision(
+            py,
+            &candidate,
+            "Paragraph.add_equation",
+            crate::document::WordPublication::Conservative,
+        )?;
+        document.commit_word_revision(prepared)?;
         document.inner = candidate;
         Ok(result)
     }
@@ -711,14 +838,16 @@ impl PyParagraph {
         location
             .edit(&mut candidate, |paragraph| paragraph.set_text(text))
             .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
-        let prepared = document
-            .revisions
-            .prepare_scopes("Paragraph.text", &[], &[])
-            .map_err(oxml_py_support::revision_to_pyerr)?;
-        document
-            .revisions
-            .commit_scopes(prepared)
-            .map_err(oxml_py_support::revision_to_pyerr)?;
+        let prepared = document.prepare_word_revision(
+            py,
+            &candidate,
+            "Paragraph.text",
+            location
+                .native(&document.inner)
+                .map(crate::document::WordPublication::ParagraphText)
+                .unwrap_or(crate::document::WordPublication::Conservative),
+        )?;
+        document.commit_word_revision(prepared)?;
         document.inner = candidate;
         Ok(())
     }
@@ -726,12 +855,30 @@ impl PyParagraph {
     #[getter]
     fn runs(&self, py: Python<'_>) -> PyResult<Py<PyRunCollection>> {
         self.validate(py)?;
+        let path = match &self.owner {
+            Some(owner) => {
+                let document = self.document.borrow(py);
+                document
+                    .capture_owner(
+                        &crate::document::WordOwnerLocation::Paragraph(
+                            document.current_paragraph_owner(owner)?,
+                        ),
+                        self.path.segs.clone(),
+                        crate::document::WordView::Content,
+                        self.furniture_scope.as_ref(),
+                    )?
+                    .0
+            }
+            None => self.path.clone(),
+        };
         Py::new(
             py,
             PyRunCollection::new(
                 self.document.clone_ref(py),
-                self.path.clone(),
+                path,
                 self.related.clone(),
+                self.owner.clone(),
+                self.furniture_scope.clone(),
             ),
         )
     }
@@ -806,12 +953,29 @@ impl PyParagraph {
         py: Python<'_>,
     ) -> PyResult<Py<crate::formatting::PyParagraphFormat>> {
         self.validate(py)?;
+        let path = match &self.owner {
+            Some(owner) => {
+                let document = self.document.borrow(py);
+                document
+                    .capture_owner(
+                        &crate::document::WordOwnerLocation::Paragraph(
+                            document.current_paragraph_owner(owner)?,
+                        ),
+                        self.path.segs.clone(),
+                        crate::document::WordView::Properties,
+                        self.furniture_scope.as_ref(),
+                    )?
+                    .0
+            }
+            None => self.path.clone(),
+        };
         Py::new(
             py,
             crate::formatting::PyParagraphFormat::new(
                 self.document.clone_ref(py),
-                self.path.clone(),
+                path,
                 self.related.clone(),
+                self.owner.clone(),
             ),
         )
     }
@@ -882,7 +1046,10 @@ impl PyParagraphCollection {
                 .revisions
                 .capture(smallvec![PathSeg::Body(0), PathSeg::Para(index)])
         };
-        Py::new(py, PyParagraph::new(self.document.clone_ref(py), path))
+        Py::new(
+            py,
+            PyParagraph::new(self.document.clone_ref(py), path).bind_current(py, None)?,
+        )
     }
 }
 
@@ -950,6 +1117,10 @@ impl PyParagraphIterator {
             .borrow(py)
             .revisions
             .capture(smallvec![PathSeg::Body(0), PathSeg::Para(index)]);
-        Py::new(py, PyParagraph::new(self.document.clone_ref(py), path)).map(Some)
+        Py::new(
+            py,
+            PyParagraph::new(self.document.clone_ref(py), path).bind_current(py, None)?,
+        )
+        .map(Some)
     }
 }

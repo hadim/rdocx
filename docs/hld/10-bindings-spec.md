@@ -3760,3 +3760,24 @@ rendering. Semantic flags refuse on PDF and image formats. The existing
 `--force` policy applies to the whole document/asset set and never permits
 replacing the input. Diagnostics are separate from exported text. WASM gains
 no semantic export entry point.
+
+## Word checked XML owner authority
+
+Word retains a finite current physical-owner inventory prepared before handle
+capture and candidate publication. Paragraph, table, cell and section handles
+bind actual owner and ancestor scopes. Supported append and owner-local
+replacement preserve only source-proven surviving owners. Unproven structural
+publishers retire current owners conservatively. Regular runs retain the
+document epoch, so Document.add_paragraph retires an older run with that first
+cause. Frozen Story and StoryItem captures also carry snapshot-inventory
+authority. Paragraph XML retires content and property children, Run XML
+retires Font and ColorFormat views, table XML retires grid descendants, cell
+XML retires content descendants, and section XML retires furniture-derived
+handles without retiring independent aliases of a shared physical header.
+Ordinary Paragraph.text preserves paragraph properties. Ordinary Run.text
+preserves the same run and rPr while retiring removed drawing and text-box
+descendants. No-op and refusal publish nothing. Candidate inventory, revision
+successors and returned Python allocations all complete before the single
+prepared publication. The five Word element objects return namespace-complete
+str and replace_xml(str) returns None through the concrete checked native
+operation.

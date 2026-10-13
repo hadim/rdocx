@@ -555,3 +555,11 @@ metadata, ordered replacement and read-only fit consume the presentation
 facade. Fit includes admitted owner contexts and refuses mandatory unsupported
 owners. Atomic editing and input-identity refusal apply to new commands.
 External image inventory is metadata only and performs no network fetch.
+
+## Word checked XML compatibility
+
+Word paragraph, regular run, table, cell and section-property handles expose a
+namespace-complete element.xml snapshot and checked element.replace_xml. This
+is a concrete owner boundary, not a mutable lxml tree. Unsupported owner
+profiles return named atomic refusals. General lxml compatibility remains
+outside scope.

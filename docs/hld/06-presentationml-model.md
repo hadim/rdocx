@@ -1555,3 +1555,14 @@ slide body. Unsupported payloads and omitted semantics produce ordered
 diagnostics. Text escaping preserves literal markup, whitespace and link
 targets. The projection reads source semantics independently of native slide
 rendering and changes no source XML, revisions or owner handles.
+
+## Word retained drawing namespace authority
+
+Word retained DrawingML source keeps its original opaque child bytes and the
+actual ancestor namespace dependencies lost by wrapper capture. Source-local
+declaration spelling remains distinct from newly emitted inherited closure.
+Generated Word, drawing and relationship prefixes retain their canonical
+authority when an actual typed writer uses them. Producer collisions are
+localized to the retained raw slot or receive a named refusal for unsupported
+namespace-valued root attributes. These Word source rules do not add a second
+mutable PresentationML model.

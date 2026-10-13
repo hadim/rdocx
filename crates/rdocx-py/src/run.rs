@@ -1,5 +1,5 @@
 use oxml_py_support::{ContentPath, PathSeg};
-use pyo3::exceptions::{PyIndexError, PyRuntimeError, PyTypeError};
+use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyList, PySlice};
 
@@ -7,22 +7,14 @@ use crate::document::PyDocument;
 use crate::paragraph::{ParagraphLocation, paragraph_location};
 use crate::{normalize_index, stale_to_pyerr};
 
-fn path_indices(path: &ContentPath) -> PyResult<(ParagraphLocation, usize)> {
-    let run = path.segs.iter().find_map(|segment| match segment {
-        PathSeg::Run(index) => Some(*index),
-        _ => None,
-    });
-    run.map(|run| paragraph_location(path).map(|paragraph| (paragraph, run)))
-        .transpose()?
-        .ok_or_else(|| PyRuntimeError::new_err("run path is incomplete"))
-}
-
 #[pyclass(name = "Run")]
 pub struct PyRun {
     document: Py<PyDocument>,
     path: ContentPath,
     run_path: rdocx::AcceptedRunPath,
     related: Option<rdocx::ContentLocation>,
+    owner: Option<oxml_py_support::RevisionState>,
+    furniture_scope: Option<oxml_py_support::RevisionState>,
 }
 
 impl PyRun {
@@ -37,7 +29,69 @@ impl PyRun {
             path,
             run_path,
             related,
+            owner: None,
+            furniture_scope: None,
         }
+    }
+
+    pub(crate) fn bind_current(
+        mut self,
+        py: Python<'_>,
+        furniture_scope: Option<oxml_py_support::RevisionState>,
+    ) -> PyResult<Self> {
+        self.furniture_scope = furniture_scope;
+        let paragraph = self.related.as_ref().map_or_else(
+            || paragraph_location(&self.path),
+            |location| Ok(ParagraphLocation::Related(location.clone())),
+        )?;
+        {
+            let document = self.document.borrow(py);
+            match paragraph.native(&document.inner) {
+                Ok(location) => {
+                    let (path, owner) = document.capture_owner(
+                        &crate::document::WordOwnerLocation::Run(location, self.run_path.clone()),
+                        self.path.segs.clone(),
+                        crate::document::WordView::Owner,
+                        self.furniture_scope.as_ref(),
+                    )?;
+                    self.path = path;
+                    self.owner = Some(owner);
+                }
+                Err(_) => {
+                    self.path = document.capture_snapshot(self.path.segs.clone())?;
+                }
+            }
+        }
+        Ok(self)
+    }
+
+    pub(crate) fn bind_prepared(
+        mut self,
+        py: Python<'_>,
+        document: &PyDocument,
+        prepared: &crate::document::PreparedWordRevision,
+        candidate: &rdocx::Document,
+        furniture_scope: Option<oxml_py_support::RevisionState>,
+    ) -> PyResult<Self> {
+        self.furniture_scope =
+            document.prepared_furniture_scope(prepared, furniture_scope.as_ref())?;
+        let paragraph = self.related.as_ref().map_or_else(
+            || paragraph_location(&self.path),
+            |location| Ok(ParagraphLocation::Related(location.clone())),
+        )?;
+        let location = paragraph
+            .native(candidate)
+            .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
+        let (path, owner) = document.capture_prepared_owner(
+            prepared,
+            &crate::document::WordOwnerLocation::Run(location, self.run_path.clone()),
+            self.path.segs.clone(),
+            crate::document::WordView::Owner,
+            self.furniture_scope.as_ref(),
+        )?;
+        self.path = path;
+        self.owner = Some(owner);
+        Ok(self)
     }
 
     pub(crate) fn validate(&self, py: Python<'_>) -> PyResult<(ParagraphLocation, usize)> {
@@ -49,14 +103,21 @@ impl PyRun {
                 "Re-fetch it with paragraph.runs[i].",
             )
             .map_err(|error| stale_to_pyerr(py, error))?;
-        let (_, index) = path_indices(&self.path)?;
-        Ok((
-            match &self.related {
-                Some(location) => ParagraphLocation::Related(location.clone()),
-                None => paragraph_location(&self.path)?,
+        let location = match &self.related {
+            Some(location) => match &self.owner {
+                Some(owner) => ParagraphLocation::Related(document.current_run_owner(owner)?.0),
+                None => ParagraphLocation::Related(location.clone()),
             },
-            index,
-        ))
+            None => paragraph_location(&self.path)?,
+        };
+        let index = location
+            .read(&document.inner, |paragraph| {
+                (0..paragraph.run_count())
+                    .find(|index| paragraph.run_path(*index).as_ref() == Some(&self.run_path))
+            })
+            .map_err(|error| crate::rdocx_to_pyerr(py, error))?
+            .ok_or_else(|| PyIndexError::new_err("run physical owner is no longer present"))?;
+        Ok((location, index))
     }
 
     pub(crate) fn belongs_to(&self, py: Python<'_>, document: &Py<PyDocument>) -> bool {
@@ -81,6 +142,66 @@ impl PyRun {
 #[pymethods]
 impl PyRun {
     #[getter]
+    fn element<'py>(slf: &Bound<'py, Self>) -> Bound<'py, Self> {
+        slf.clone()
+    }
+
+    #[getter]
+    fn xml(&self, py: Python<'_>) -> PyResult<String> {
+        self.validate(py)?;
+        let document = self.document.borrow(py);
+        let owner = self
+            .owner
+            .as_ref()
+            .ok_or_else(|| PyValueError::new_err("run XML owner route is unsupported"))?;
+        let (location, path) = document.current_run_owner(owner)?;
+        let bytes = document
+            .inner
+            .run_element_xml(&location, &path)
+            .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
+        String::from_utf8(bytes).map_err(|error| PyValueError::new_err(error.to_string()))
+    }
+
+    fn replace_xml(&self, py: Python<'_>, xml: &str) -> PyResult<()> {
+        self.validate(py)?;
+        let mut document = self.document.borrow_mut(py);
+        let owner = self
+            .owner
+            .as_ref()
+            .ok_or_else(|| PyValueError::new_err("run XML owner route is unsupported"))?;
+        let (location, path) = document.current_run_owner(owner)?;
+        let current = document
+            .inner
+            .story_range_paragraph_snapshot(&location)
+            .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
+        let paragraph = rdocx_oxml::CT_P::from_xml_fragment(current.xml())
+            .map_err(|error| crate::rdocx_to_pyerr(py, error.into()))?;
+        let run_index = paragraph
+            .accepted_run_paths()
+            .iter()
+            .position(|candidate| candidate == &path)
+            .ok_or_else(|| PyValueError::new_err("run XML owner is absent"))?;
+        let mut candidate = document.inner.clone_for_staging();
+        candidate
+            .replace_run_xml(
+                &rdocx::StoryRunPosition {
+                    location: location.clone(),
+                    run_index,
+                },
+                xml,
+            )
+            .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
+        document.publish_owner_candidate(
+            py,
+            candidate,
+            "Run.replace_xml",
+            crate::document::WordPublication::ElementXml(crate::document::WordOwnerLocation::Run(
+                location, path,
+            )),
+        )
+    }
+
+    #[getter]
     fn text(&self, py: Python<'_>) -> PyResult<String> {
         let (location, run_index) = self.validate(py)?;
         let document = self.document.borrow(py);
@@ -94,7 +215,24 @@ impl PyRun {
 
     #[setter]
     fn set_text(&self, py: Python<'_>, text: &str) -> PyResult<()> {
-        self.edit(py, |run| run.set_text(text))
+        let (location, _) = self.validate(py)?;
+        let mut document = self.document.borrow_mut(py);
+        let publication = match &self.owner {
+            Some(owner) => {
+                let (location, path) = document.current_run_owner(owner)?;
+                crate::document::WordPublication::RunText(crate::document::WordOwnerLocation::Run(
+                    location, path,
+                ))
+            }
+            None => crate::document::WordPublication::Conservative,
+        };
+        let mut candidate = document.inner.clone_for_staging();
+        location
+            .edit(&mut candidate, |paragraph| {
+                paragraph.edit_run(&self.run_path, |run| run.set_text(text))
+            })
+            .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
+        document.publish_owner_candidate(py, candidate, "Run.text", publication)
     }
 
     #[pyo3(signature = (data, filename=None, width=None, height=None, *, options=None))]
@@ -131,24 +269,20 @@ impl PyRun {
                 options.map(|o| o.inner.clone()),
             )
             .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
-        let prepared = document
-            .revisions
-            .prepare_scopes("Run.add_picture", &[], &[])
-            .map_err(oxml_py_support::revision_to_pyerr)?;
+        let prepared = document.prepare_word_revision(
+            py,
+            &candidate,
+            "Run.add_picture",
+            crate::document::WordPublication::Conservative,
+        )?;
         let result = Py::new(
             py,
             crate::document::PyPicture {
                 inner: picture,
-                binding: document
-                    .revisions
-                    .capture_prepared(&prepared, smallvec::smallvec![])
-                    .map_err(oxml_py_support::revision_to_pyerr)?,
+                binding: document.capture_prepared_snapshot(&prepared, smallvec::smallvec![])?,
             },
         )?;
-        document
-            .revisions
-            .commit_scopes(prepared)
-            .map_err(oxml_py_support::revision_to_pyerr)?;
+        document.commit_word_revision(prepared)?;
         document.inner = candidate;
         Ok(result)
     }
@@ -188,14 +322,13 @@ impl PyRun {
                 added
             })
             .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
-        let prepared = document
-            .revisions
-            .prepare_scopes("Run.add_field", &[], &[])
-            .map_err(oxml_py_support::revision_to_pyerr)?;
-        document
-            .revisions
-            .commit_scopes(prepared)
-            .map_err(oxml_py_support::revision_to_pyerr)?;
+        let prepared = document.prepare_word_revision(
+            py,
+            &candidate,
+            "Run.add_field",
+            crate::document::WordPublication::Conservative,
+        )?;
+        document.commit_word_revision(prepared)?;
         document.inner = candidate;
         Ok(())
     }
@@ -208,14 +341,13 @@ impl PyRun {
         location
             .edit(&mut candidate, |paragraph| paragraph.remove_run(run_index))
             .map_err(|error| crate::rdocx_to_pyerr(py, error))?;
-        let prepared = document
-            .revisions
-            .prepare_scopes("Run.remove", &[], &[])
-            .map_err(oxml_py_support::revision_to_pyerr)?;
-        document
-            .revisions
-            .commit_scopes(prepared)
-            .map_err(oxml_py_support::revision_to_pyerr)?;
+        let prepared = document.prepare_word_revision(
+            py,
+            &candidate,
+            "Run.remove",
+            crate::document::WordPublication::Conservative,
+        )?;
+        document.commit_word_revision(prepared)?;
         document.inner = candidate;
         Ok(())
     }
@@ -223,13 +355,29 @@ impl PyRun {
     #[getter]
     fn font(&self, py: Python<'_>) -> PyResult<Py<crate::formatting::PyFont>> {
         self.validate(py)?;
+        let path = match &self.owner {
+            Some(owner) => {
+                let document = self.document.borrow(py);
+                let (location, run_path) = document.current_run_owner(owner)?;
+                document
+                    .capture_owner(
+                        &crate::document::WordOwnerLocation::Run(location, run_path),
+                        self.path.segs.clone(),
+                        crate::document::WordView::Content,
+                        self.furniture_scope.as_ref(),
+                    )?
+                    .0
+            }
+            None => self.path.clone(),
+        };
         Py::new(
             py,
             crate::formatting::PyFont::new(
                 self.document.clone_ref(py),
-                self.path.clone(),
+                path,
                 self.run_path.clone(),
                 self.related.clone(),
+                self.owner.clone(),
             ),
         )
     }
@@ -258,6 +406,8 @@ pub struct PyRunCollection {
     document: Py<PyDocument>,
     paragraph_path: ContentPath,
     related: Option<rdocx::ContentLocation>,
+    paragraph_owner: Option<oxml_py_support::RevisionState>,
+    furniture_scope: Option<oxml_py_support::RevisionState>,
 }
 
 impl PyRunCollection {
@@ -265,11 +415,15 @@ impl PyRunCollection {
         document: Py<PyDocument>,
         paragraph_path: ContentPath,
         related: Option<rdocx::ContentLocation>,
+        paragraph_owner: Option<oxml_py_support::RevisionState>,
+        furniture_scope: Option<oxml_py_support::RevisionState>,
     ) -> Self {
         Self {
             document,
             paragraph_path,
             related,
+            paragraph_owner,
+            furniture_scope,
         }
     }
 
@@ -283,7 +437,12 @@ impl PyRunCollection {
             )
             .map_err(|error| stale_to_pyerr(py, error))?;
         match &self.related {
-            Some(location) => Ok(ParagraphLocation::Related(location.clone())),
+            Some(location) => match &self.paragraph_owner {
+                Some(owner) => document
+                    .current_paragraph_owner(owner)
+                    .map(ParagraphLocation::Related),
+                None => Ok(ParagraphLocation::Related(location.clone())),
+            },
             None => paragraph_location(&self.paragraph_path),
         }
     }
@@ -314,8 +473,12 @@ impl PyRunCollection {
                 self.document.clone_ref(py),
                 path,
                 run_path,
-                self.related.clone(),
-            ),
+                match &location {
+                    ParagraphLocation::Related(location) => Some(location.clone()),
+                    _ => None,
+                },
+            )
+            .bind_current(py, self.furniture_scope.clone())?,
         )
     }
 }
@@ -357,6 +520,8 @@ impl PyRunCollection {
                 document: self.document.clone_ref(py),
                 paragraph_path: self.paragraph_path.clone(),
                 related: self.related.clone(),
+                paragraph_owner: self.paragraph_owner.clone(),
+                furniture_scope: self.furniture_scope.clone(),
                 index: 0,
             },
         )
@@ -368,6 +533,8 @@ struct PyRunIterator {
     document: Py<PyDocument>,
     paragraph_path: ContentPath,
     related: Option<rdocx::ContentLocation>,
+    paragraph_owner: Option<oxml_py_support::RevisionState>,
+    furniture_scope: Option<oxml_py_support::RevisionState>,
     index: usize,
 }
 
@@ -382,6 +549,8 @@ impl PyRunIterator {
             self.document.clone_ref(py),
             self.paragraph_path.clone(),
             self.related.clone(),
+            self.paragraph_owner.clone(),
+            self.furniture_scope.clone(),
         );
         let len = collection.len(py)?;
         if self.index >= len {

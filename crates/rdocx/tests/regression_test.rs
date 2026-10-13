@@ -15813,19 +15813,50 @@ fn legacy_horizontal_rule_classification_participates_in_run_equality() {
 
 #[test]
 fn namespace_classification_metadata_exists_only_for_raw_children() {
-    let body = body_from_xml(
-        r#"<w:p xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><w:r><w:t>ordinary</w:t></w:r><w:r><w:pict><v:rect o:hr="true"/></w:pict></w:r></w:p>"#,
-    );
-    let BodyContent::Paragraph(paragraph) = &body.content[0] else {
-        panic!("expected paragraph");
-    };
-
-    assert!(paragraph.runs[0].extra_xml.is_empty());
-    assert!(paragraph.runs[0].extra_xml_positions.is_empty());
-    assert_eq!(paragraph.runs[1].extra_xml_positions.len(), 1);
-    assert!(CT_R::raw_child_is_legacy_horizontal_rule(
-        paragraph.runs[1].extra_xml_positions[0]
-    ));
+    let raw = r#"<w:pict><v:rect o:hr="true"/></w:pict>"#;
+    for namespace in ["urn:schemas-microsoft-com:vml", "urn:foreign-vml"] {
+        let source = format!(
+            r#"<w:p xmlns:v="{namespace}" xmlns:o="urn:schemas-microsoft-com:office:office"><w:r><w:t>ordinary</w:t></w:r><w:r>{raw}</w:r></w:p>"#
+        );
+        let model = CT_Document::from_xml(wrap_word_body(&source).as_bytes()).unwrap();
+        let verify = |model: &CT_Document| {
+            let BodyContent::Paragraph(paragraph) = &model.body.content[0] else {
+                panic!("expected paragraph");
+            };
+            assert!(paragraph.runs[0].extra_xml.is_empty());
+            assert!(paragraph.runs[0].extra_xml_positions.is_empty());
+            let run = &paragraph.runs[1];
+            let payloads: Vec<_> = run
+                .extra_xml_positions
+                .iter()
+                .zip(&run.extra_xml)
+                .filter(|(position, _)| !CT_R::raw_child_is_root_attributes(**position))
+                .collect();
+            assert_eq!(payloads.len(), 1);
+            assert_eq!(payloads[0].1.as_slice(), raw.as_bytes());
+            assert_eq!(CT_R::raw_child_position(*payloads[0].0), 0);
+            assert_eq!(
+                CT_R::raw_child_is_legacy_horizontal_rule(*payloads[0].0),
+                namespace == "urn:schemas-microsoft-com:vml"
+            );
+            let records: Vec<_> = run
+                .extra_xml_positions
+                .iter()
+                .zip(&run.extra_xml)
+                .filter(|(position, _)| CT_R::raw_child_is_root_attributes(**position))
+                .collect();
+            assert_eq!(records.len(), 1);
+            let record = std::str::from_utf8(records[0].1).unwrap();
+            assert!(record.contains(&format!("xmlns:v=\"{namespace}\"")));
+            assert!(record.contains("xmlns:o=\"urn:schemas-microsoft-com:office:office\""));
+        };
+        verify(&model);
+        let bytes = model.to_xml().unwrap();
+        assert_eq!(std::str::from_utf8(&bytes).unwrap().matches(raw).count(), 1);
+        let reopened = CT_Document::from_xml(&bytes).unwrap();
+        verify(&reopened);
+        assert_eq!(reopened.to_xml().unwrap(), bytes);
+    }
 }
 
 /// The body read walkers and the exporters see through content controls
@@ -28918,10 +28949,34 @@ fn story_revisions_scan_the_main_part_bytes_that_resolution_scans() {
     ));
     assert_eq!(listed_and_resolved(default_namespace), [body_row(30)]);
 
-    // The typed serialization drops `xmlns:x` from a modeled ancestor, so
-    // `stories()` reports no text box and the revision belongs to the body.
-    // A modified document replays the declaration on a paragraph or run and
-    // cannot be staged with it on the body, and the listing follows accept.
+    let textbox_row = |id, index| {
+        let mut row = body_row(id);
+        row.0 = StoryKind::TextBox;
+        row.2 = index;
+        row
+    };
+    let textbox_texts = |document: &Document| {
+        document
+            .stories()
+            .unwrap()
+            .into_iter()
+            .filter(|story| story.kind() == StoryKind::TextBox)
+            .map(|story| {
+                assert_eq!(story.part_name(), "/word/document.xml");
+                let text = document
+                    .story_items(&story)
+                    .unwrap()
+                    .into_iter()
+                    .filter(|item| item.kind() == StoryItemKind::Paragraph)
+                    .map(|item| item.text().unwrap().unwrap_or_default())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (story.owner_index(), text)
+            })
+            .collect::<Vec<_>>()
+    };
+    // Each ancestor explicitly binds x to Word. That qualified textbox is
+    // a real physical owner before staging, and retains revision31 afterward.
     for owner in ["body", "p", "r"] {
         let declaration = |element| {
             if element == owner {
@@ -28938,27 +28993,124 @@ fn story_revisions_scan_the_main_part_bytes_that_resolution_scans() {
         );
         let document = document_with_content_controls(&xml);
         assert!(document.revisions().is_empty());
-        assert_eq!(listed_and_resolved(document), [body_row(31)], "{xml}");
+        assert_eq!(textbox_texts(&document), [(0, "boxed".into())]);
+        assert_eq!(listed_and_resolved(document), [textbox_row(31, 0)], "{xml}");
+
+        let mut original = document_with_content_controls(&xml);
+        let original_bytes = original.to_bytes().unwrap();
+        let mut rejected_original = Document::from_bytes(&original_bytes).unwrap();
+        assert_eq!(rejected_original.reject_all().unwrap(), 1);
+        let rejected_original_bytes = rejected_original.to_bytes().unwrap();
+        let rejected_original = Document::from_bytes(&rejected_original_bytes).unwrap();
+        assert_eq!(textbox_texts(&rejected_original), [(0, "".into())]);
+        assert!(story_revision_rows(&rejected_original).is_empty());
+        for story in rejected_original
+            .stories()
+            .unwrap()
+            .into_iter()
+            .filter(|story| story.kind() == StoryKind::TextBox)
+        {
+            for item in rejected_original.story_items(&story).unwrap() {
+                let xml = item.xml().unwrap();
+                assert!(!xml.windows(b"boxed".len()).any(|bytes| bytes == b"boxed"));
+                assert!(!xml.windows(b"x:ins".len()).any(|bytes| bytes == b"x:ins"));
+            }
+        }
+        let mut accepted_original = Document::from_bytes(&original_bytes).unwrap();
+        assert_eq!(accepted_original.accept_all().unwrap(), 1);
+        let accepted_original_bytes = accepted_original.to_bytes().unwrap();
+        let accepted_original = Document::from_bytes(&accepted_original_bytes).unwrap();
+        assert_eq!(textbox_texts(&accepted_original), [(0, "boxed".into())]);
+        assert!(story_revision_rows(&accepted_original).is_empty());
 
         let mut modified = document_with_content_controls(&xml);
         modified.add_paragraph("after");
         if owner == "body" {
-            let listed = modified.story_revisions().expect_err("unstaged listing");
-            let accepted = modified.accept_all().expect_err("unstaged accept");
-            assert_eq!(listed.to_string(), accepted.to_string());
-        } else {
-            assert_eq!(listed_and_resolved(modified), [body_row(31)], "{xml}");
+            // Keep the existing unsupported modified-body scope refusal.
+            // A read-only listing's true TextBox owner does not authorize a
+            // body namespace relocation during an unrelated structural edit.
+            let listed = modified.story_revisions().unwrap_err().to_string();
+            let accepted = modified.accept_all().unwrap_err().to_string();
+            assert!(listed.contains("shadowed `x` namespace"), "{listed}");
+            assert_eq!(accepted, listed);
+            let directory = std::env::temp_dir().join(format!(
+                "rdocx-fx211a-namespace-refusal-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            assert!(!directory.exists());
+            let artifacts = F252OracleArtifacts::create(directory);
+            let target = artifacts.path().join("sentinel.docx");
+            std::fs::write(&target, b"untouched-output").unwrap();
+            assert!(
+                modified
+                    .save(&target)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("shadowed `x` namespace")
+            );
+            assert_eq!(std::fs::read(&target).unwrap(), b"untouched-output");
+            continue;
         }
+        let bytes = modified.to_bytes().unwrap();
+        let mut reopened = Document::from_bytes(&bytes).unwrap();
+        assert_eq!(reopened.paragraphs().last().unwrap().text(), "after");
+        assert_eq!(textbox_texts(&reopened), [(0, "boxed".into())]);
+        assert_eq!(story_revision_rows(&reopened), [textbox_row(31, 0)]);
+        assert_eq!(story_revision_resolution_counts(&mut reopened), (1, 1));
+        let mut rejected = Document::from_bytes(&bytes).unwrap();
+        assert_eq!(rejected.reject_all().unwrap(), 1);
+        let rejected_bytes = rejected.to_bytes().unwrap();
+        let rejected = Document::from_bytes(&rejected_bytes).unwrap();
+        assert_eq!(textbox_texts(&rejected), [(0, "".into())]);
+        assert!(story_revision_rows(&rejected).is_empty());
+        for story in rejected
+            .stories()
+            .unwrap()
+            .into_iter()
+            .filter(|story| story.kind() == StoryKind::TextBox)
+        {
+            for item in rejected.story_items(&story).unwrap() {
+                let xml = item.xml().unwrap();
+                assert!(!xml.windows(b"boxed".len()).any(|bytes| bytes == b"boxed"));
+                assert!(!xml.windows(b"x:ins".len()).any(|bytes| bytes == b"x:ins"));
+            }
+        }
+        assert_eq!(reopened.accept_all().unwrap(), 1);
+        let accepted_bytes = reopened.to_bytes().unwrap();
+        let accepted = Document::from_bytes(&accepted_bytes).unwrap();
+        assert_eq!(textbox_texts(&accepted), [(0, "boxed".into())]);
+        assert!(story_revision_rows(&accepted).is_empty());
     }
 
-    // A text box that both serializations report keeps its own story when
-    // one before it loses its binding.
+    // Both explicitly qualified text boxes keep distinct source-order owners.
     let mixed = document_with_content_controls(&format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="{word}"><w:body><w:p xmlns:x="{word}"><w:r><w:pict xmlns:v="urn:schemas-microsoft-com:vml"><v:shape id="lost"><v:textbox><x:txbxContent><x:p><x:ins x:id="31" x:author="Ada"><x:r><x:t>lost</x:t></x:r></x:ins></x:p></x:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p><w:p><w:r><w:pict xmlns:v="urn:schemas-microsoft-com:vml"><v:shape id="kept"><v:textbox><w:txbxContent><w:p><w:ins w:id="32" w:author="Ada"><w:r><w:t>kept</w:t></w:r></w:ins></w:p></w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p></w:body></w:document>"#
     ));
-    let mut kept = body_row(32);
-    kept.0 = StoryKind::TextBox;
-    assert_eq!(listed_and_resolved(mixed), [body_row(31), kept]);
+    assert_eq!(
+        textbox_texts(&mixed),
+        [(0, "lost".into()), (1, "kept".into())]
+    );
+    assert_eq!(
+        listed_and_resolved(mixed),
+        [textbox_row(31, 0), textbox_row(32, 1)]
+    );
+
+    // Neither absent nor explicitly foreign bindings authorize a textbox.
+    for declaration in ["", " xmlns:x=\"urn:foreign\""] {
+        let xml = format!(
+            r#"<w:document xmlns:w="{word}"><w:body><w:p{declaration}><w:r><w:pict xmlns:v="urn:schemas-microsoft-com:vml"><v:shape><v:textbox><x:txbxContent><x:p><x:ins x:id="91" x:author="Ada"><x:r><x:t>opaque</x:t></x:r></x:ins></x:p></x:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p></w:body></w:document>"#
+        );
+        let mut document = document_with_content_controls(&xml);
+        let before = document.to_bytes().unwrap();
+        assert!(textbox_texts(&document).is_empty());
+        assert!(story_revision_rows(&document).is_empty());
+        assert_eq!(document.accept_all().unwrap(), 0);
+        assert_eq!(document.to_bytes().unwrap(), before);
+        let reopened = Document::from_bytes(&before).unwrap();
+        assert!(textbox_texts(&reopened).is_empty());
+        assert!(story_revision_rows(&reopened).is_empty());
+    }
 }
 
 #[test]
@@ -60819,17 +60971,49 @@ fn comment_anchor_namespace_context_does_not_promote_or_guess_story_owners() {
         let mut document = Document::from_bytes(bytes.get_ref()).unwrap();
         let before = document.to_bytes().unwrap();
         let stories = document.stories().unwrap();
+        assert_eq!(
+            document.comment_anchor_text(id).unwrap().as_deref(),
+            Some("AB")
+        );
+        let anchor = document.comment_anchor(id).unwrap().unwrap();
+        let boxes: Vec<_> = stories
+            .iter()
+            .filter(|story| story.kind() == StoryKind::TextBox)
+            .collect();
+        assert_eq!(boxes.len(), usize::from(promoted));
         if promoted {
-            let error = document.comment_anchor_text(id).unwrap_err().to_string();
-            assert!(error.contains("changes story ownership"), "{error}");
-            assert!(document.comment_anchor(id).is_err());
-        } else {
-            assert_eq!(
-                document.comment_anchor_text(id).unwrap().as_deref(),
-                Some("AB")
-            );
-            assert!(document.comment_anchor(id).unwrap().is_some());
+            assert_eq!(boxes[0].part_name(), "/word/document.xml");
+            assert_eq!(boxes[0].owner_index(), 0);
+            let text = document
+                .story_items(boxes[0])
+                .unwrap()
+                .into_iter()
+                .filter(|item| item.kind() == StoryItemKind::Paragraph)
+                .map(|item| item.text().unwrap().unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(text, ["OTHER"]);
         }
+        let mut reopened = Document::from_bytes(&before).unwrap();
+        assert_eq!(
+            reopened.comment_anchor_text(id).unwrap().as_deref(),
+            Some("AB")
+        );
+        assert_eq!(reopened.comment_anchor(id).unwrap().unwrap(), anchor);
+        assert_eq!(reopened.stories().unwrap(), stories);
+        if promoted {
+            let story = f254_story(&reopened, StoryKind::TextBox);
+            assert_eq!(
+                reopened.story_items(&story).unwrap()[0]
+                    .text()
+                    .unwrap()
+                    .as_deref(),
+                Some("OTHER")
+            );
+            assert!(document_xml(&mut reopened).contains(payload));
+        } else {
+            assert!(document_xml(&mut reopened).contains(payload));
+        }
+        assert_eq!(reopened.to_bytes().unwrap(), before);
         assert_eq!(document.to_bytes().unwrap(), before);
         assert_eq!(document.stories().unwrap(), stories);
     }
@@ -61226,12 +61410,115 @@ fn scoped_replacement_refuses_namespace_owner_reinterpretation_without_publicati
     let mut document = fx187_from_body(&body);
     let before = document.to_bytes().unwrap();
     let location = document.paragraph_story_location(0).unwrap().unwrap();
-    assert!(
+    let owner_keys = |stories: &[StoryId]| {
+        stories
+            .iter()
+            .map(|story| {
+                (
+                    story.kind(),
+                    story.part_name().to_owned(),
+                    story.owner_index(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let stories = document.stories().unwrap();
+    let boxes: Vec<_> = stories
+        .iter()
+        .filter(|story| story.kind() == StoryKind::TextBox)
+        .collect();
+    assert_eq!(boxes.len(), 1);
+    assert_eq!(
+        (boxes[0].part_name(), boxes[0].owner_index()),
+        ("/word/document.xml", 0)
+    );
+    assert_eq!(
+        document.story_items(boxes[0]).unwrap()[0]
+            .text()
+            .unwrap()
+            .as_deref(),
+        Some("Version")
+    );
+    let mismatch = document
+        .try_replace_text_at(&location, "absent", "Release", Some(1))
+        .unwrap()
+        .unwrap_err();
+    assert_eq!((mismatch.expected, mismatch.found), (1, 0));
+    assert_eq!(document.to_bytes().unwrap(), before);
+    assert_eq!(
         document
-            .try_replace_text_at(&location, "Version", "Release", Some(1))
-            .is_err()
+            .try_replace_text_at(&location, "absent", "Release", Some(0))
+            .unwrap()
+            .unwrap(),
+        0
     );
     assert_eq!(document.to_bytes().unwrap(), before);
+    assert_eq!(
+        document
+            .try_replace_text_at(&location, "Version", "Release", Some(1))
+            .unwrap()
+            .unwrap(),
+        1
+    );
+    let changed_stories = document.stories().unwrap();
+    assert_eq!(owner_keys(&changed_stories), owner_keys(&stories));
+    assert_eq!(
+        changed_stories
+            .iter()
+            .find(|story| story.kind() == StoryKind::TextBox)
+            .unwrap(),
+        boxes[0]
+    );
+    assert_ne!(
+        changed_stories
+            .iter()
+            .find(|story| story.kind() == StoryKind::Body)
+            .unwrap(),
+        stories
+            .iter()
+            .find(|story| story.kind() == StoryKind::Body)
+            .unwrap()
+    );
+    assert_eq!(document.paragraphs()[0].text(), "Release");
+    assert_eq!(document.paragraphs()[1].text(), "Version");
+    assert_eq!(
+        document.story_items(boxes[0]).unwrap()[0]
+            .text()
+            .unwrap()
+            .as_deref(),
+        Some("Version")
+    );
+    let bytes = document.to_bytes().unwrap();
+    let before_package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&before)).unwrap();
+    let after_package = oxml_opc::OpcPackage::from_reader(std::io::Cursor::new(&bytes)).unwrap();
+    for (part, data) in &before_package.parts {
+        if part != "/word/document.xml" {
+            assert_eq!(
+                after_package.get_part(part),
+                Some(data.as_slice()),
+                "{part}"
+            );
+        }
+    }
+    let mut reopened = Document::from_bytes(&bytes).unwrap();
+    assert_eq!(
+        owner_keys(&reopened.stories().unwrap()),
+        owner_keys(&stories)
+    );
+    assert_eq!(reopened.paragraphs()[0].text(), "Release");
+    assert_eq!(reopened.paragraphs()[1].text(), "Version");
+    let nested = f254_story(&reopened, StoryKind::TextBox);
+    assert_eq!(
+        reopened.story_items(&nested).unwrap()[0]
+            .text()
+            .unwrap()
+            .as_deref(),
+        Some("Version")
+    );
+    let xml = document_xml(&mut reopened);
+    assert!(xml.contains("<q:txbxContent>"));
+    assert!(xml.contains(&format!("xmlns:q=\"{W_NS}\"")));
+    assert_eq!(reopened.to_bytes().unwrap(), bytes);
     let body = r#"<w:p><w:r><w:t>Version</w:t></w:r><w:r><w:object xmlns:w="urn:foreign"><w:txbxContent><w:p><w:r><w:t>Version</w:t></w:r></w:p></w:txbxContent></w:object></w:r></w:p><w:p><w:r><w:t>Version</w:t></w:r></w:p>"#.to_owned();
     let mut document = fx187_from_body(&body);
     let before = document.to_bytes().unwrap();

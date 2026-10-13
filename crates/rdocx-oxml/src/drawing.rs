@@ -11,6 +11,11 @@ use crate::numbering::namespace_bindings;
 use crate::raw_xml::capture_element;
 use crate::units::Emu;
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static FX211_DRAWING_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Namespaces used in drawing markup.
 pub mod drawing_ns {
     pub const WP: &str = "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing";
@@ -474,6 +479,14 @@ pub struct CT_Shape {
 /// The caller keeps the raw bytes for write back, so whatever comes out of
 /// here must not be serialised again or the element ends up duplicated.
 pub fn parse_alternate_content(raw: &[u8], inherited_prefixes: &[String]) -> Option<CT_Drawing> {
+    crate::document::admit_word_xml(raw, inherited_prefixes, None).ok()?;
+    parse_alternate_content_admitted(raw, inherited_prefixes)
+}
+
+pub(crate) fn parse_alternate_content_admitted(
+    raw: &[u8],
+    inherited_prefixes: &[String],
+) -> Option<CT_Drawing> {
     let raw = crate::text::raw_with_external_bindings(raw, &namespace_bindings(inherited_prefixes))
         .ok()?;
     let mut reader = NsReader::from_reader(raw.as_slice());
@@ -481,6 +494,7 @@ pub fn parse_alternate_content(raw: &[u8], inherited_prefixes: &[String]) -> Opt
     let mut buffer = Vec::new();
     let mut depth = 0_usize;
     let mut in_choice = false;
+    let mut choice_prefixes = Vec::new();
     loop {
         let offset = reader.buffer_position() as usize;
         let (namespace, event) = reader.read_resolved_event_into(&mut buffer).ok()?;
@@ -494,15 +508,33 @@ pub fn parse_alternate_content(raw: &[u8], inherited_prefixes: &[String]) -> Opt
                 {
                     return None;
                 }
+                let qualified_drawing = namespace_matches(&namespace, crate::namespace::W_NS, b"w")
+                    && local.as_ref() == b"drawing";
                 if depth == 1 {
                     in_choice = namespace_matches(&namespace, crate::namespace::MC_NS, b"mc")
                         && local.as_ref() == b"Choice";
+                    if in_choice {
+                        // Snapshot the actual qualified Choice parent once.
+                        // A later sibling End can leave a pending resolver pop,
+                        // so pre-read resolver state is not parent authority.
+                        choice_prefixes.clear();
+                        for (prefix, namespace) in reader.resolver().bindings() {
+                            let prefix = match prefix {
+                                PrefixDeclaration::Default => "",
+                                PrefixDeclaration::Named(prefix) => {
+                                    std::str::from_utf8(prefix).ok()?
+                                }
+                            };
+                            let namespace = quick_xml::escape::unescape(
+                                std::str::from_utf8(namespace.as_ref()).ok()?,
+                            )
+                            .ok()?;
+                            choice_prefixes
+                                .push(crate::numbering::namespace_binding(prefix, &namespace));
+                        }
+                    }
                 }
-                if depth == 2
-                    && in_choice
-                    && namespace_matches(&namespace, crate::namespace::W_NS, b"w")
-                    && local.as_ref() == b"drawing"
-                {
+                if depth == 2 && in_choice && qualified_drawing {
                     let mut bindings = Vec::new();
                     for (prefix, namespace) in reader.resolver().bindings() {
                         let prefix = match prefix {
@@ -567,9 +599,14 @@ pub fn parse_alternate_content(raw: &[u8], inherited_prefixes: &[String]) -> Opt
                     else {
                         return None;
                     };
-                    let prefixes = crate::numbering::word_prefixes_at(&start, &prefixes).ok()?;
-                    let drawing =
-                        CT_Drawing::from_xml_with_prefixes(&mut projection, &prefixes).ok()?;
+                    let drawing_prefixes =
+                        crate::numbering::word_prefixes_at(&start, &prefixes).ok()?;
+                    let drawing = CT_Drawing::from_xml_with_prefixes(
+                        &mut projection,
+                        &drawing_prefixes,
+                        &choice_prefixes,
+                    )
+                    .ok()?;
                     return (drawing.anchor.is_some() || drawing.inline.is_some())
                         .then_some(drawing);
                 }
@@ -926,6 +963,22 @@ impl CT_Anchor {
     }
 
     pub fn from_xml(reader: &mut NsReader<&[u8]>, start: &BytesStart) -> Result<Self> {
+        let prefixes: Vec<String> = reader
+            .resolver()
+            .bindings()
+            .map(|(prefix, uri)| {
+                let name = match prefix {
+                    PrefixDeclaration::Default => "",
+                    PrefixDeclaration::Named(name) => std::str::from_utf8(name).unwrap_or(""),
+                };
+                format!("\0{name}\0{}", String::from_utf8_lossy(uri.as_ref()))
+            })
+            .collect();
+        crate::document::admit_word_reader(reader, &prefixes, b"anchor", Some(drawing_ns::WP))?;
+        Self::from_xml_admitted(reader, start)
+    }
+
+    fn from_xml_admitted(reader: &mut NsReader<&[u8]>, start: &BytesStart) -> Result<Self> {
         let mut behind_doc = false;
         let mut relative_height = 0u32;
         let mut dist_t = Emu(0);
@@ -1123,7 +1176,6 @@ impl CT_Anchor {
                     } else if is_word_text_box {
                         let body = text_box_body(reader, e)?;
                         let shape = shape.get_or_insert_with(CT_Shape::default);
-                        shape.text = body.paragraphs().cloned().collect();
                         shape.text_body = Some(body);
                     } else if matches_local_name(ename.as_ref(), b"blip") {
                         reader.read_to_end_into(ename, &mut Vec::new())?;
@@ -1193,6 +1245,7 @@ impl CT_Anchor {
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        crate::document::admit_word_model(crate::document::WordOwner::Anchor(self))?;
         // If we have raw XML from parsing, use it for perfect round-trip
         if let Some(ref raw) = self.raw_xml {
             writer.write_indent()?;
@@ -1372,6 +1425,22 @@ impl CT_Inline {
     }
 
     pub fn from_xml(reader: &mut NsReader<&[u8]>) -> Result<Self> {
+        let prefixes: Vec<String> = reader
+            .resolver()
+            .bindings()
+            .map(|(prefix, uri)| {
+                let name = match prefix {
+                    PrefixDeclaration::Default => "",
+                    PrefixDeclaration::Named(name) => std::str::from_utf8(name).unwrap_or(""),
+                };
+                format!("\0{name}\0{}", String::from_utf8_lossy(uri.as_ref()))
+            })
+            .collect();
+        crate::document::admit_word_reader(reader, &prefixes, b"inline", Some(drawing_ns::WP))?;
+        Self::from_xml_admitted(reader)
+    }
+
+    fn from_xml_admitted(reader: &mut NsReader<&[u8]>) -> Result<Self> {
         let mut cx = Emu(0);
         let mut cy = Emu(0);
         let mut description = None;
@@ -2026,13 +2095,22 @@ impl CT_Drawing {
     }
 
     pub fn from_xml(reader: &mut Reader<&[u8]>) -> Result<Self> {
-        Self::from_xml_with_prefixes(reader, &[])
+        crate::document::admit_word_reader(
+            reader,
+            &["w".to_owned()],
+            b"drawing",
+            Some(crate::namespace::W_NS),
+        )?;
+        Self::from_xml_with_prefixes(reader, &[], &[])
     }
 
     pub(crate) fn from_xml_with_prefixes(
         reader: &mut Reader<&[u8]>,
         prefixes: &[String],
+        ancestor_prefixes: &[String],
     ) -> Result<Self> {
+        #[cfg(test)]
+        FX211_DRAWING_READS.with(|reads| reads.set(reads.get() + 1));
         let mut bindings = namespace_bindings(prefixes);
         // Fragment callers can supply implicit canonical Word semantics.
         // An explicit foreign rebinding removes that canonical prefix and
@@ -2043,6 +2121,20 @@ impl CT_Drawing {
             bindings.push(("w".to_owned(), crate::namespace::W_NS.to_owned()));
         }
 
+        // The drawing wrapper is regenerated, so only its introduced or
+        // rebound bindings disappear. Ancestor bindings remain where they were.
+        let ancestors = namespace_bindings(ancestor_prefixes);
+        let lost_bindings: Vec<_> = bindings
+            .iter()
+            .filter(|(prefix, namespace)| {
+                !ancestors
+                    .iter()
+                    .any(|(previous_prefix, previous_namespace)| {
+                        previous_prefix == prefix && previous_namespace == namespace
+                    })
+            })
+            .cloned()
+            .collect();
         let mut inline = None;
         let mut anchor = None;
         let mut buf = Vec::new();
@@ -2064,12 +2156,15 @@ impl CT_Drawing {
                                 Ok(Event::Start(ref ie))
                                     if matches_local_name(ie.name().as_ref(), b"inline") =>
                                 {
-                                    let mut inl = CT_Inline::from_xml(&mut re_reader)?;
+                                    let mut inl = CT_Inline::from_xml_admitted(&mut re_reader)?;
                                     inl.doc_pr_id = non_visual_drawing_id(&scoped_raw)?;
                                     (inl.embed_id, inl.link_id) =
                                         image_relationship_ids(&scoped_raw)?;
                                     inl.chart_rel_id = chart_relationship_id(&scoped_raw)?;
-                                    inl.raw_xml = Some(raw);
+                                    inl.raw_xml = Some(crate::text::raw_with_external_bindings(
+                                        &raw,
+                                        &lost_bindings,
+                                    )?);
                                     inline = Some(inl);
                                     break;
                                 }
@@ -2091,12 +2186,15 @@ impl CT_Drawing {
                                 Ok(Event::Start(ref ie))
                                     if matches_local_name(ie.name().as_ref(), b"anchor") =>
                                 {
-                                    let mut anc = CT_Anchor::from_xml(&mut re_reader, ie)?;
+                                    let mut anc = CT_Anchor::from_xml_admitted(&mut re_reader, ie)?;
                                     anc.doc_pr_id = non_visual_drawing_id(&scoped_raw)?;
                                     (anc.embed_id, anc.link_id) =
                                         image_relationship_ids(&scoped_raw)?;
                                     anc.chart_rel_id = chart_relationship_id(&scoped_raw)?;
-                                    anc.raw_xml = Some(raw);
+                                    anc.raw_xml = Some(crate::text::raw_with_external_bindings(
+                                        &raw,
+                                        &lost_bindings,
+                                    )?);
                                     // Projection scope excludes only prefixes absent from the
                                     // entire physical owner, including opaque values and text.
                                     // Default bindings and all referenced foreign bindings stay.
@@ -2148,6 +2246,7 @@ impl CT_Drawing {
     }
 
     pub fn to_xml<W: std::io::Write>(&self, writer: &mut Writer<W>) -> Result<()> {
+        crate::document::admit_word_model(crate::document::WordOwner::Drawing(self))?;
         let drawing = BytesStart::new("w:drawing");
         writer.write_event(Event::Start(drawing))?;
 
@@ -2202,6 +2301,131 @@ fn non_visual_drawing_id(xml: &[u8]) -> Result<u32> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn fx211_imported_drawing_retains_only_lost_wrapper_bindings() {
+        let ancestor = vec![
+            crate::numbering::namespace_binding("w", crate::namespace::W_NS),
+            crate::numbering::namespace_binding("wp", drawing_ns::WP),
+            crate::numbering::namespace_binding("a", drawing_ns::A),
+            crate::numbering::namespace_binding("x", "urn:ancestor"),
+        ];
+        for owner in ["inline", "anchor"] {
+            let raw = format!(
+                r#"<wp:{owner}><wp:docPr id="1"/><a:graphic><a:graphicData uri="urn:producer"/></a:graphic></wp:{owner}>"#
+            );
+            let xml = format!("<w:drawing>{raw}</w:drawing>");
+            let mut reader = Reader::from_str(&xml);
+            reader.read_event().unwrap();
+            let drawing =
+                CT_Drawing::from_xml_with_prefixes(&mut reader, &ancestor, &ancestor).unwrap();
+            let retained = drawing
+                .inline
+                .as_ref()
+                .and_then(|owner| owner.raw_xml.as_ref())
+                .or_else(|| {
+                    drawing
+                        .anchor
+                        .as_ref()
+                        .and_then(|owner| owner.raw_xml.as_ref())
+                })
+                .unwrap();
+            assert_eq!(
+                retained,
+                raw.as_bytes(),
+                "unchanged ancestor bindings must preserve exact raw"
+            );
+            let opaque = r#"<x:payload xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:type="x:Future"><payload value='keep'/></x:payload>"#;
+            let raw = format!(
+                r#"<wp:{owner}><wp:docPr id="1"/>{opaque}<a:graphic><a:graphicData uri="urn:producer"/></a:graphic></wp:{owner}>"#
+            );
+            let xml = format!(
+                r#"<w:drawing xmlns:wp="{}" xmlns:a="{}" xmlns:x="urn:local" xmlns="urn:default">{raw}</w:drawing>"#,
+                drawing_ns::WP,
+                drawing_ns::A
+            );
+            let parent = vec![
+                crate::numbering::namespace_binding("w", crate::namespace::W_NS),
+                crate::numbering::namespace_binding("wp", "urn:foreign-wp"),
+                crate::numbering::namespace_binding("a", "urn:foreign-a"),
+                crate::numbering::namespace_binding("x", "urn:ancestor"),
+            ];
+            let mut reader = Reader::from_str(&xml);
+            let Event::Start(start) = reader.read_event().unwrap() else {
+                unreachable!()
+            };
+            let scope = crate::numbering::word_prefixes_at(&start, &parent).unwrap();
+            let drawing = CT_Drawing::from_xml_with_prefixes(&mut reader, &scope, &parent).unwrap();
+            let retained = drawing
+                .inline
+                .as_ref()
+                .and_then(|owner| owner.raw_xml.as_ref())
+                .or_else(|| {
+                    drawing
+                        .anchor
+                        .as_ref()
+                        .and_then(|owner| owner.raw_xml.as_ref())
+                })
+                .unwrap();
+            let text = std::str::from_utf8(retained).unwrap();
+            assert!(text.contains(r#"xmlns:x="urn:local""#));
+            assert!(text.contains(r#"xmlns="urn:default""#));
+            assert!(text.contains(&format!(r#"xmlns:a="{}""#, drawing_ns::A)));
+            assert!(text.contains(&format!(r#"xmlns:wp="{}""#, drawing_ns::WP)));
+            assert!(
+                retained
+                    .windows(opaque.len())
+                    .any(|window| window == opaque.as_bytes())
+            );
+            let mut qualified = quick_xml::reader::NsReader::from_reader(retained.as_slice());
+            let mut buffer = Vec::new();
+            let mut checked = false;
+            loop {
+                let (namespace, event) = qualified.read_resolved_event_into(&mut buffer).unwrap();
+                match event {
+                    Event::Empty(ref node) if node.local_name().as_ref() == b"payload" => {
+                        assert!(
+                            matches!(namespace,quick_xml::name::ResolveResult::Bound(uri) if uri.as_ref()==b"urn:default")
+                        );
+                        checked = true;
+                    }
+                    Event::Eof => break,
+                    _ => {}
+                }
+                buffer.clear();
+            }
+            assert!(checked);
+        }
+    }
+
+    #[test]
+    fn fx211_choice_parent_scope_excludes_previous_sibling_bindings() {
+        let payload = r#"<x:payload><payload value='keep'/></x:payload>"#;
+        let raw = format!(
+            r#"<wp:inline><wp:docPr id="1"/>{payload}<a:graphic><a:graphicData uri="urn:producer"/></a:graphic></wp:inline>"#
+        );
+        let alternate = format!(
+            r#"<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:w="{}" xmlns:wp="{}" xmlns:a="{}" xmlns:x="urn:parent" xmlns="urn:parent-default"><mc:Choice Requires="foreign" xmlns:wp="urn:foreign" xmlns:x="urn:sibling" xmlns="urn:sibling-default"><x:ignored/></mc:Choice><mc:Choice Requires="wps"><w:drawing xmlns:x="urn:local" xmlns="urn:local-default">{raw}</w:drawing></mc:Choice></mc:AlternateContent>"#,
+            crate::namespace::W_NS,
+            drawing_ns::WP,
+            drawing_ns::A
+        );
+        let selected = parse_alternate_content(alternate.as_bytes(), &[]).unwrap();
+        let retained = selected.inline.unwrap().raw_xml.unwrap();
+        let expected = raw.replacen(
+            "<wp:inline>",
+            r#"<wp:inline xmlns:x="urn:local" xmlns="urn:local-default">"#,
+            1,
+        );
+        assert_eq!(retained, expected.as_bytes());
+        assert_eq!(
+            expected.split_once('>').unwrap().1,
+            raw.split_once('>').unwrap().1
+        );
+        assert!(!expected.contains("urn:sibling"));
+        assert!(!expected.contains("xmlns:wp"));
+        assert!(!expected.contains("xmlns:a"));
+    }
+
     fn parse_drawing(xml: &str) -> CT_Drawing {
         let mut valid_xml = xml.to_owned();
         if !valid_xml.contains("<wp:docPr") {
@@ -2228,7 +2452,7 @@ mod tests {
             }
             buf.clear();
         };
-        CT_Drawing::from_xml_with_prefixes(&mut reader, &prefixes).unwrap()
+        CT_Drawing::from_xml_with_prefixes(&mut reader, &prefixes, &[]).unwrap()
     }
 
     fn parse_inline_direct(xml: &str) -> CT_Inline {
@@ -2604,7 +2828,7 @@ mod tests {
                 unreachable!()
             };
             let prefixes = crate::numbering::word_prefixes_at(&root, &[]).unwrap();
-            let direct = CT_Drawing::from_xml_with_prefixes(&mut reader, &prefixes).unwrap();
+            let direct = CT_Drawing::from_xml_with_prefixes(&mut reader, &prefixes, &[]).unwrap();
             let alternate = format!(
                 r#"<mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"><mc:Choice Requires="wps">{raw}</mc:Choice><mc:Fallback><w:r xmlns:w="{}"><w:t>UNSELECTED</w:t></w:r></mc:Fallback></mc:AlternateContent>"#,
                 crate::namespace::W_NS
@@ -2621,7 +2845,9 @@ mod tests {
                     assert_eq!((anchor.extent_cx, anchor.extent_cy), (Emu(10), Emu(20)));
                     let shape = anchor.shape.unwrap();
                     assert_eq!(shape.preset.as_deref(), Some("rect"));
-                    let paragraph = &shape.text[0];
+                    assert!(shape.text.is_empty(), "parsed body is authoritative");
+                    let body = shape.text_body.as_ref().expect("typed shape body");
+                    let paragraph = body.paragraphs().next().expect("shape paragraph");
                     assert_eq!(
                         paragraph.text(),
                         "  leading  internal  trailing    cached  result  "
@@ -3015,7 +3241,13 @@ mod tests {
             parse_drawing(&declaration.replace(" xmlns:unused=\"urn:unused\"", ""));
         assert_eq!(parsed, without_unused);
         let parsed_anchor = parsed.anchor.as_ref().unwrap();
-        assert_eq!(parsed_anchor.raw_xml.as_deref(), Some(parse_raw.as_bytes()));
+        let expected = parse_raw.replace("<q:anchor>", &format!(r#"<q:anchor xmlns:q="{}" xmlns:g="{}" xmlns:p="http://schemas.openxmlformats.org/drawingml/2006/picture">"#, drawing_ns::WP, drawing_ns::A));
+        assert_eq!(parsed_anchor.raw_xml.as_deref(), Some(expected.as_bytes()));
+        assert!(!expected.contains("xmlns:unused"));
+        assert_eq!(
+            expected.split_once('>').unwrap().1,
+            parse_raw.split_once('>').unwrap().1
+        );
         assert_eq!(parsed_anchor.picture_effects(), Some((0.5, 30.0)));
         assert!(
             !parsed_anchor
@@ -3031,7 +3263,7 @@ mod tests {
         );
         assert_eq!(
             foreign_binding.anchor.as_ref().unwrap().raw_xml.as_deref(),
-            Some(parse_raw.as_bytes())
+            Some(parse_raw.replace("<q:anchor>", &format!(r#"<q:anchor xmlns:q="{}" xmlns:g="urn:foreign" xmlns:p="http://schemas.openxmlformats.org/drawingml/2006/picture">"#, drawing_ns::WP)).as_bytes())
         );
         let opaque_value = declaration.replace("<q:anchor>", "<q:anchor opaque=\"unused:fact\">");
         let opaque = parse_drawing(&opaque_value);
@@ -3124,14 +3356,43 @@ mod tests {
             assert_eq!(parsed.title.as_deref(), Some("literal title"));
             let mut out = Writer::new(Vec::new());
             parsed.to_xml(&mut out).unwrap();
-            assert!(source.contains(std::str::from_utf8(&out.into_inner()).unwrap()));
+            let emitted = out.into_inner();
+            let begin = source.find("<wp:inline").unwrap();
+            let end = source.find("</wp:inline>").unwrap() + "</wp:inline>".len();
+            let original = &source[begin..end];
+            let expected = original.replacen(
+                '>',
+                &format!(
+                    r#" xmlns:wp="{}" xmlns:r="{}">"#,
+                    drawing_ns::WP,
+                    drawing_ns::R
+                ),
+                1,
+            );
+            assert_eq!(emitted, expected.as_bytes());
+            assert_eq!(
+                expected.split_once('>').unwrap().1,
+                original.split_once('>').unwrap().1
+            );
         }
         let foreign = source.replace(DECORATIVE_NAMESPACE, "urn:foreign-decorative");
         let parsed = parse_drawing(&foreign).inline.unwrap();
         assert!(!parsed.decorative);
         let mut out = Writer::new(Vec::new());
         parsed.to_xml(&mut out).unwrap();
-        assert!(foreign.contains(std::str::from_utf8(&out.into_inner()).unwrap()));
+        let begin = foreign.find("<wp:inline").unwrap();
+        let end = foreign.find("</wp:inline>").unwrap() + "</wp:inline>".len();
+        let original = &foreign[begin..end];
+        let expected = original.replacen(
+            '>',
+            &format!(
+                r#" xmlns:wp="{}" xmlns:r="{}">"#,
+                drawing_ns::WP,
+                drawing_ns::R
+            ),
+            1,
+        );
+        assert_eq!(out.into_inner(), expected.as_bytes());
         let wrong_uri = source.replace("C183D7F6", "C183D7F7");
         assert!(!parse_drawing(&wrong_uri).inline.unwrap().decorative);
         let nested = source

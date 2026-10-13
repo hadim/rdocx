@@ -1,6 +1,6 @@
 # F-X211a, Word checked XML owners and resource admission
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X200, F-X201, F-X202, F-X206, F-X210 and F-X222 actual Word providers. F-X211c owns final cross-family acceptance.
@@ -8,7 +8,7 @@
 
 ## Problem
 
-The five Word XML cases and Issues331/337 require checked source-owned writes, bounded admission and an installed public surface. Transfer the exact current parent Word implementation and retained reviews/evidence under a root-authorized checkpoint, rather than reimplementing it. Namespace83's deciding native97 successor is qualified and independently clean. Original maximal transaction85 remains unresolved and unqualified. Neither statement establishes final public completion.
+The five Word XML cases and Issues331/337 require checked source-owned writes, bounded admission and an installed public surface. Transfer the exact current parent Word implementation and retained reviews/evidence under a root-authorized checkpoint, rather than reimplementing it. Namespace83's deciding native97 successor is qualified and independently clean. Original maximal transaction85 remains preserved and unqualified because its borrowed snapshot lacks standalone namespace closure. The independently qualified valid-root successor completes the ordinary-stack lifecycle. Current installed controls qualify the five public Word owners.
 
 ## Spec reference
 
@@ -72,13 +72,42 @@ No default output delta is expected from additive XML, aliases, metrics or error
 
 ## Implementation checklist
 
-- [ ] Transfer exact parent Word source/evidence and confirm provider ownership.
-- [ ] Preserve qualified native97 namespace successor and resolve remaining resource/transaction gaps causally.
-- [ ] Complete five native/public XML owners, stubs and local retirement.
-- [ ] Qualify installed surface, atomicity, source preservation and named risk gates.
-- [ ] Obtain clean independent microscope and root HLD/archive composition.
-- [ ] Prepare validated child handoff only after genuine scoped completion.
+- [x] Transfer exact parent Word source/evidence and confirm provider ownership.
+- [x] Preserve qualified native97 namespace successor and resolve remaining resource/transaction gaps causally.
+- [x] Complete five native/public XML owners, stubs and local retirement.
+- [x] Qualify installed surface, atomicity, source preservation and named risk gates.
+- [x] Obtain clean independent microscope and root HLD/archive composition.
+- [x] Prepare validated child handoff only after genuine scoped completion.
 
 ## Open questions
 
-No acceptance amendment is proposed. Shared DrawingML/token changes require root's explicit serial owner decision. Original maximal85 is still unqualified. Parent closure and final100 belong c after both family children close.
+No acceptance amendment is proposed. Shared DrawingML/token changes require root's explicit serial owner decision. Original maximal85 remains historical unqualified evidence. Its valid-root ordinary-stack successor is qualified independently. Parent closure and final100 belong c after both family children close.
+
+## Scoped completion evidence
+
+The concrete native and five-owner public implementation has a clean cumulative
+review in F-X211a-completion-implementation-pass-1.md. Native namespace
+remediation, four source-qualified regression oracles, exact formatter bridge,
+current artifacts and the three-carrier measured metadata composition each
+have their own independent clean review. All original failures remain in the
+worker progress evidence rather than being reported as full-suite success.
+
+Current release wheel124 and installed127 qualify exactly12 public and
+allocation controls, strict mypy, full stubtest, member and native origins.
+Both WASM graphs and49 unchanged document hashes qualify source123. Exact
+rustfmt reproduction bridges that source to129 without behavior changes.
+Two real verified package dry-runs qualify source129. Metadata131 changes
+only two measured records and the corresponding date, with inverse README
+proof reconstructing those qualified archive members. The two previously
+failed repository-policy selectors now pass against131. Earlier successful
+policy and native suites remain source-qualified, with affected successors
+for each subsequent change. No baseline or immutable script was edited.
+
+Shared HLD composition remains root-owned under this child's approved split.
+The reviewed seven-file proposal83e6deede33b1935d12ad6c1d3c7a3842b5c333cd82437bdfac4af17d1341bf2
+and composition reviewfb371c8946e8832c392cda7214de65a88daa8868b19db1bb74b0815641f0d420
+qualify prepared intent. Root applies those exact current intents once to the
+canonical HLD during actual source integration. Architecture03 needs no graph
+change. Worker preparation does not claim those shared files are already
+applied or the feature is already integrated. Final cross-family corpus,
+canonical artifact union and sprint verification remain integrator work.
