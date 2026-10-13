@@ -7747,13 +7747,13 @@ binary inputs require real EOF. Both CLIs use licensed font commands and staged
 outputs. The regression gate retains separate authentic producer/native-use,
 installed, deterministic render, hostile-input and verified archive evidence.
 
-### F-X221, Prepare Word 0.17.0 and PowerPoint 0.15.0 minor releases
+### F-X221, Prepare Word 0.16.1 and PowerPoint 0.14.1 patch releases
 
 **Size**: L
 **Depends on**: F-X193, F-X194, F-X195, F-X196, F-X197, F-X198, F-X199, F-X200, F-X201, F-X202, F-X203, F-X204, F-X205, F-X206, F-X207, F-X208, F-X209, F-X210, F-X211, F-X212, F-X213, F-X214, F-X215, F-X216, F-X217, F-X218, F-X220, F-X222
 **Test gate**: release regression
 
-Prepare matching minor Rust/CLI/Python families after every included S91 repair completes. Update exact stable seven-package Word family to0.17.0 and exact fifteen-package shared/PowerPoint family to0.15.0, with corresponding binding projects, internal pins/lock and meaningful authenticated family release notes. Use existing unified allowlists and release pipeline. Qualify current-source archives below10MiB, exact installed wheel/metadata/runtime/typing on Python3.9/3.12, both WASM graphs and reviewed-SHA build-only hosted artifacts. Current registry/tag facts are checked, then rechecked at release. Shared/PowerPoint publishes before Word consumes it. Preparation does not publish. Final integrated verification/review and close precede separate immediate exact-main-SHA release approvals for each family. Bibliography, navigation, full-range watermark and standalone authoring remain S92, and discussion264/281 stay open.
+Prepare matching patch Rust/CLI/Python families after every included S91 repair completes. Update exact stable seven-package Word family to0.16.1 and exact fifteen-package shared/PowerPoint family to0.14.1, with corresponding binding projects, internal pins/lock and meaningful authenticated family release notes. Use existing unified allowlists and release pipeline. Qualify current-source archives below10MiB, exact installed wheel/metadata/runtime/typing on Python3.9/3.12, both WASM graphs and reviewed-SHA build-only hosted artifacts. Current registry/tag facts are checked, then rechecked at release. Shared/PowerPoint publishes before Word consumes it. Preparation does not publish. Final integrated verification/review and close precede publication from the exact reviewed main SHA under the user's explicit corrected patch publication authority. Actual roles, publisher configuration and final assets remain mandatory. Final addressed issue and PR reconciliation follows successful publication. Bibliography, navigation, full-range watermark and standalone authoring remain S92, and discussion264/281 stay open.
 
 ### F-X222, Restore linear Word story range inventory and empty owners
 

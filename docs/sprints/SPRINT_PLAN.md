@@ -2168,7 +2168,7 @@ discussions264 and281.
 | F-X217 | Import HTML and Markdown through public Word surfaces | L |
 | F-X218 | Export presentations as semantic HTML and Markdown | L |
 | F-X220 | Embed fonts through both native and public package families | L |
-| F-X221 | Prepare Word 0.17.0 and PowerPoint 0.15.0 minor releases | L |
+| F-X221 | Prepare Word 0.16.1 and PowerPoint 0.14.1 patch releases | L |
 | F-X222 | Restore linear Word story range inventory and empty owners | M |
 
 **Current delivery checkpoint**: twenty-six of twenty-nine active stories are
@@ -3115,7 +3115,7 @@ The user explicitly folds Issue360 and PR361 plus updated PR357 and PR359 into S
 
 F-X220 owns font embedding across native Word/PowerPoint, both Python packages and CLIs, real producer-format/native font-use qualification, bounded decoding, source preservation and explicit license policy. Its admitted PR361 head is a5795f2219d1cde5c613890369df3d88a84fc242. F-X216 consumes PR357 incremental16ee45f3 to57011087. F-X217 consumes PR359 incremental7567b403 toe974ea22, preserving completed semantic mark/code/owner contracts. Existing assessments and failed runs remain retained, and contributor reported gates are not local qualification.
 
-F-X221 prepares both next minor families after all27 repair stories complete: Word crates/Python0.17.0 and shared/PowerPoint crates/Python0.15.0. Fresh registry/tag receipt verifies published0.16.0/0.14.0 and absent next versions/tags. Preparation uses existing exact7/15 crate allowlists, new matching wheels/metadata, meaningful authenticated family notes and reviewed-SHA build-only rehearsal. No versions are changed yet and no publication is claimed. Final full sprint verification, clean sprint review and close remain due. Publication follows the exact reviewed main merge through separate release approval for each family, shared/PowerPoint first.
+F-X221 prepares both patch families in the existing lines after all28 repair stories complete: Word crates/Python0.16.1 and shared/PowerPoint crates/Python0.14.1. Current primary registry and GitHub CLI receipt verifies absent0.16.1/0.14.1 across both exact families, PyPI and remote tags. Preparation uses existing exact7/15 crate allowlists, new matching wheels/metadata, meaningful authenticated family notes and reviewed-SHA build-only rehearsal. No versions are changed yet and no publication is claimed. Final full sprint verification, clean sprint review and close remain due. The user authorizes publication and final addressed issue and PR reconciliation after successful publication. Exact reviewed main provenance, verified roles, publisher registration and artifacts remain mandatory, shared/PowerPoint first.
 
 Twenty of28 active stories are complete. F-X204, F-X215 and F-X217 are running in isolated worktrees with disjoint file leases. F-X211, F-X216, F-X218, F-X220 and F-X221 remain approved and pending. Bibliography, navigation, standalone authoring and full-range text watermark work remain deferred to S92. Required evidence and carried dirty work are retained.
 
@@ -3128,7 +3128,7 @@ Twenty of28 active stories are complete. F-X204, F-X215 and F-X217 are running i
 
 ### Final release preparation boundary
 
-F-X221 depends on every included repair F-X193 through F-X218 and F-X220. It follows all source-sharing implementation waves and remains exclusive for versions, locks, manifests, notes, archive measurements and HLD release prose. Native and installed repair acceptance is not deferred to publication. Final versioned wheels are rebuilt once the complete source graph is fixed, then reviewed-SHA hosted artifacts and actual final integrated gates decide closure. The next commands after closure are /release rpptx-v0.15.0 followed by /release v0.17.0, each under separate immediate exact-main-SHA approval. Only /close-sprint merges main and creates the sprint tag. Only /release creates release tags or starts publication.
+F-X221 depends on every included repair F-X193 through F-X218 and F-X220 plus F-X222. It follows all source-sharing implementation waves and remains exclusive for versions, locks, manifests, notes, archive measurements and HLD release prose. Native and installed repair acceptance is not deferred to publication. Final versioned wheels are rebuilt once the complete source graph is fixed, then reviewed-SHA hosted artifacts and actual final integrated gates decide closure. The next commands after closure are /release rpptx-v0.14.1 followed by /release v0.16.1, under the user's explicit corrected patch publication authorization after exact-main-SHA and all release checks. Only /close-sprint merges main and creates the sprint tag. Only /release creates release tags or starts publication.
 
 ## User-admitted PR363 and Issue362 in S91
 
