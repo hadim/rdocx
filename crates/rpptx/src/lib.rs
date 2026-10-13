@@ -10244,7 +10244,7 @@ impl Presentation {
             &mut staged.package,
             &HashSet::from([old_chart, old_workbook]),
         );
-        staged.commit_owned_parts()?;
+        staged.commit_owned_parts(None)?;
         *self = staged;
         Ok(())
     }
