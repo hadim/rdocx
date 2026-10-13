@@ -37,7 +37,7 @@ Authenticated current123 receipt16bc04306369bc8eb3caf4172227e539ef5ed52bb9c1f193
 
 Authenticated source116 receipt e1a251a932f12bd5a5d23f6938b4bbf13010bf87b556659f827e5d0608661e39 and all nine raw logs. Its membership is all-target check, strict four-crate Clippy, release compilation and six exact native authority controls. Every row has actual exit0 and safe cleanup. The mixed-use local precedence RED115 remains separate. Prior namespace, retained qualification, clone and retained construction reviews remain precisely scoped, including their failed predecessors.
 
-Original maximal85 is not relabeled passed. The later ordinary-stack source-built32/256 transaction evidence and isolated clone/parse/construction positives retain their own fixture/source identities. Historical Word114 native616 passed,13 ignored and regression2392 passed, four failed, seven ignored remain historical. The full regression run remains failed; reviewed exact117/119/123 successors qualify only their stated original oracle/refusal obligations. No old OXML718 or Word suite result becomes an unrun current suite result.
+Original maximal85 is not relabeled passed. The later ordinary-stack source-built32/256 transaction evidence and isolated clone/parse/construction positives retain their own fixture/source identities. Historical Word114 native616 passed,13 ignored and regression2392 passed, four failed, seven ignored remain historical. The full regression run remains failed. Reviewed exact117/119/123 successors qualify only their stated original oracle/refusal obligations. No old OXML718 or Word suite result becomes an unrun current suite result.
 
 ## Completion boundary
 
