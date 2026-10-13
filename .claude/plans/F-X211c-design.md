@@ -82,3 +82,15 @@ No default output delta is expected from additive XML, aliases, metrics or error
 ## Open questions
 
 No acceptance amendment and no new required product file/module/dependency. Existing approvals and original hard safety/authority conditions persist. If a frozen lifetime assertion conflicts with provider survival semantics, reconcile against the approved parent contract before implementation, never rewrite the corpus. Read-only corpus/provider preparation may proceed during a/b, but shared production writes wait for composition.
+
+
+## Reviewed immutable Run specimen conflict
+
+Apply the parent's reviewed W-XML-02 versus W-LIFE-06 reconciliation. Preserve
+all frozen statements/support/digests and the100 denominator. Conservative
+Run retirement by Document.add_paragraph remains required. Classify the
+contradictory W-XML-02 setup as a deliberate non-success with independent
+actionable first-cause and atomic refusal evidence, not successful-file credit.
+All fourteen XML kinds still require their separate current-owner installed
+positive/negative/source/save-reopen gates. No injected refetch, body adaptation
+or caller-sensitive retirement policy is permitted.

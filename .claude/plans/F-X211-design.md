@@ -1140,3 +1140,31 @@ retained. F-X211b uses an isolated claimed worktree. F-X211c starts only after
 both children and its declared provider completion barriers. Family-local
 owner retirement belongs to the corresponding child. Shared token, parser,
 HLD, archive and baseline changes have one explicitly assigned writer.
+
+
+## Reviewed immutable Run specimen conflict
+
+Independent F-X211-corpus-contract-pass-1 authenticates a contradictory
+expectation between unchanged W-XML-02 and W-LIFE-06. Both capture a regular
+Run and append another paragraph. XML02 then edits the held Run, while LIFE06
+requires that append to be its first invalidating call. The later table append
+in LIFE06 cannot retroactively manufacture an earlier first cause. There is
+no legitimate physical-owner distinction or caller-sensitive policy that
+satisfies both expectations.
+
+Root adopts the existing approved deliberate-divergence route. Keep both
+original bodies, support,100 identities, denominator and recorded digests
+unchanged. Retain conservative Run retirement on Document.add_paragraph and
+its actual first cause. W-XML-02 is a reviewed deliberate non-success if that
+setup refuses the retired Run, never a successful-file credit or a removed
+denominator entry. Childc owns the final classification and per-area metric.
+Its expected actionable-error control must verify the actual append cause and
+unchanged bytes, tokens and saved source after the refused stale edit.
+
+All fourteen XML owner kinds remain mandatory positive, qualified-refusal,
+opaque-source and saved/reopened acceptance. Childa must independently qualify
+current regular Run element XML through the installed public surface in an
+existing test entrypoint. This independent current-owner control does not
+replace, refetch or adapt the frozen W-XML-02 specimen. No specimen is edited
+after observing execution, and no handle is revived by value, index, XML
+equality or the subsequent call being an XML operation.

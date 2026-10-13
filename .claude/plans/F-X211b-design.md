@@ -30,6 +30,8 @@ Use real ShapeOwner Slide/Layout/Master, physical group paths and existing part 
 
 Own existing rpptx facade/oxml carriers, oxml-drawing table/text parser carriers including actual qualified hyperlink alias behavior, necessary PPT Python carriers/stubs/tests. Shared DrawingML effects on Word are root-serialized with a. Shared revision primitive changes are root-only serial prerequisites.
 
+Reuse the independently reviewed F-X218 bounded image validator as an explicitly serialized source prerequisite. Transfer only its constants and helper region into the existing rpptx crate root, with the four dependency edges already approved for F-X218. This does not complete F-X218 or start its dependent stories. Exact supported raster MIME and complete bounded decoding are required for checked image relationships. New unsupported formats refuse. An existing unsupported image fact may survive only with the actual original relationship role, target bytes and content type unchanged, without claiming successful decoding. Malformed supported raster data never receives that exception. Preserve actual transfer preimages and qualify the XML caller independently.
+
 The approved F-X211 parent remains binding. This split transfers its acceptance once without adding or weakening app/manual obligations. Existing material approvals persist. Each child follows design/start/implement/microscope/scoped-verify/complete. Parent closes only after all three children close. No new product file, module, crate, dependency, feature flag, generic XML framework or revision registry is authorized. Normal child design records are workflow artifacts. Root alone updates shared ledgers, HLD/archive composition and the hash baseline. Workers retain original failed/unqualified evidence and use existing test entrypoints. Shared primitive changes are explicit root-serial prerequisites, never concurrent edits.
 
 ## Test plan
@@ -61,6 +63,8 @@ Root applies each child's current intent to these exact shared files after revie
 ## Risk routing
 
 Parser/serializer04/06: qualified complete roots, sequence, namespace preservation and correct actual part ownership. API10: source compatibility and affected archives. PyO3 10: native-backed installed provenance/typing, atomic allocations and WASM graphs. Dependency03: concrete ownership, no cross-family reversal. Unit/rendering01/08: canonical lengths and deterministic font evidence where changed behavior requires it. Oracle12: exact parent source authorities. Existing parsers are not described as full XSD validation.
+
+The shared image prerequisite also requires the approved dependency graph, MSRV, no-default-feature, WASM and affected package checks over the composed source. Its mechanical relocation review and focused source-export controls do not substitute for the checked XML image acceptance or final feature gates. Historical archives and installed wheels remain evidence for their original source only.
 
 ## Hash harness
 
