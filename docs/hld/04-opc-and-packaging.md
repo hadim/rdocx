@@ -251,6 +251,14 @@ section properties only among preserved nodes, so ordinary paragraphs and
 tables do not repeat namespace-prefix scans. One clone still performs one
 identity-freshening pass and one complete staged reopen.
 
+Python HTML insertion resolves a required live paragraph to its physical story
+and direct-child boundary. Foreign, stale and unsupported owners refuse before
+publication. Native conversion, package validation and detached diagnostic
+allocation finish on a staged candidate before document or revision changes.
+Empty insertion preserves existing handles. Markdown template import preserves
+style, numbering, header, footer and opaque package graphs while replacing the
+main body before its final section boundary.
+
 HTML fragment insertion uses the same transaction. `HtmlImageResource` maps an
 exact source string to caller-owned bytes and a filename. Data-URI images are
 decoded within the aggregate input bound. Raster headers must pass

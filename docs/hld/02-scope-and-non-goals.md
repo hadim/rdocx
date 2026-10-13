@@ -344,6 +344,12 @@ the package relationship owners, layout and render entry points, and the native,
 Python, WASM, and CLI surfaces. The audit found no capability that requires a
 second document model or an additional story beyond F-243 through F-310.
 
+Word HTML import is available through Rust, Python and CLI. Bounded CommonMark
+import includes GitHub tables and strikethrough, explicit pictures, nested lists,
+quotes and code blocks. An optional Word template retains its style and related
+story graphs while replacing its main body. Unsupported constructs produce
+diagnostics. Browser layout, scripts and network fetching remain outside scope.
+
 Bounded MHTML import and export is part of the post-v1 native Word interchange
 surface. It carries the supported document structure, contained PNG and JPEG
 resources, safe links, and ordered loss diagnostics through the existing Word

@@ -1076,6 +1076,12 @@ an `rdocx` development dependency for the 150 dpi SSIM oracle only. It receives
 explicit layout fonts, never system fonts, and does not enter the runtime graph
 or generated `rdocx` archive.
 
+`pulldown-cmark` is pinned to `=0.13.4` in the existing `rdocx` facade.
+Default features are disabled and only the HTML renderer feature is enabled.
+Runtime parser options enable tables and strikethrough. Its optional pinned
+`pulldown-cmark-escape` renderer edge stays inside that facade graph. Python and
+CLI use the same native importer, with no external Markdown executable.
+
 `scraper` 0.27 has two direct named consumers, the private inbound HTML
 importers inside `rdocx` and `rpptx`. The `rdocx` edge disables default
 features and enables `errors`. The optional `rpptx` edge is activated only by

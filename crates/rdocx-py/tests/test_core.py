@@ -5638,3 +5638,104 @@ def test_fx222_public_empty_comment_and_noop_fields_preserve_source():
     assert {comment.id for comment in reopened.comments} == set(comments)
     with zipfile.ZipFile(io.BytesIO(reopened.to_bytes())) as saved:
         assert saved.read("word/comments.xml") == original_comments
+
+
+def test_fx217_public_html_markdown_construct_open_and_diagnostics(tmp_path):
+    import rdocx
+    import xml.etree.ElementTree as ET
+
+    image = _one_pixel_png()
+    html = '<h1>Title</h1><p>Plain <strong>bold</strong> <em>italic</em> <mark>marked</mark></p><table><tr><td>cell</td></tr></table><p><img src="face.png" alt="specimen"></p>'
+    document, diagnostics = rdocx.Document.from_html(html, images=(("face.png", image, "face.png"),))
+    assert diagnostics == () and isinstance(diagnostics, tuple)
+    assert len(document.tables) == 1 and document.tables[0].cell(0, 0).text == "cell"
+    assert document.paragraphs[0].text == "Title"
+    assert len(document.pictures()) == 1 and document.pictures()[0].bytes == image
+    with zipfile.ZipFile(io.BytesIO(document.to_bytes())) as archive:
+        root = ET.fromstring(archive.read("word/document.xml"))
+    ns = {"w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main"}
+    assert root.find('.//w:b', ns) is not None and root.find('.//w:i', ns) is not None
+    shade = root.find('.//w:shd', ns)
+    assert shade is not None and shade.get('{'+ns['w']+'}fill') == 'FFFF00'
+    source = tmp_path / "source.html"
+    source.write_text(html)
+    opened, _ = rdocx.Document.open_html(source, images=(("face.png", image, "face.png"),))
+    assert opened.text() == document.text() and opened.pictures()[0].bytes == image
+    markdown = '# Title\n\n> Quote **bold**\n\n3. third\n4. fourth\n\n| A | B |\n| --- | --- |\n| x | y |\n\n```rust\nlet x = 1;\n```\n\n![specimen](face.png)\n\n<br>\n'
+    imported, notes = rdocx.Document.from_markdown(markdown, images=(("face.png", image, "face.png"),))
+    assert imported.paragraphs[0].text == "Title" and len(imported.tables) == 1
+    assert imported.pictures()[0].bytes == image and notes
+    assert all(isinstance(note, rdocx.HtmlDiagnostic) for note in notes)
+    assert all(note.location.startswith("bytes ") for note in notes)
+    with pytest.raises(AttributeError):
+        notes[0].message = "changed"
+    source = tmp_path / "source.md"
+    source.write_text(markdown)
+    opened, opened_notes = rdocx.Document.open_markdown(source, images=(("face.png", image, "face.png"),))
+    assert opened.text() == imported.text() and opened_notes == notes
+    canonical = rdocx.Document.from_bytes(imported.to_bytes()).to_markdown()
+    again, _ = rdocx.Document.from_markdown(canonical, images=(("face.png", image, "face.png"),))
+    assert rdocx.Document.from_bytes(again.to_bytes()).to_markdown() == canonical
+
+
+@pytest.mark.parametrize("owner", ("body", "cell", "header", "footer"))
+def test_fx217_public_insertion_has_checked_owner_and_atomic_failure(owner):
+    import rdocx
+    document = rdocx.Document()
+    document.add_paragraph("Target")
+    document.add_table(1, 1).cell(0, 0).text = "Cell target"
+    document.add_paragraph("End")
+    if owner == "body":
+        paragraph = document.paragraphs[0]
+    elif owner == "cell":
+        paragraph = document.tables[0].cell(0, 0).paragraphs[0]
+    else:
+        story = getattr(document.section(0), owner)
+        story.add_paragraph("Related target")
+        paragraph = story.paragraphs[-1]
+    before, text = document.to_bytes(), paragraph.text
+    foreign = rdocx.Document().add_paragraph("Foreign")
+    with pytest.raises(ValueError, match="live paragraph"):
+        document.insert_html("<p>must not insert</p>", after=foreign)
+    with pytest.raises(rdocx.RdocxError):
+        document.insert_html("<p>must not insert</p>", after=paragraph, images=(("bad", b"bad image", "bad.png"),))
+    assert document.to_bytes() == before and paragraph.text == text
+    assert document.insert_html("", after=paragraph) == ()
+    assert document.to_bytes() == before and paragraph.text == text
+    assert document.insert_html('<p>Inserted <strong>new</strong></p>', after=paragraph) == ()
+    reopened = rdocx.Document.from_bytes(document.to_bytes())
+    if owner == "body":
+        assert [p.text for p in reopened.paragraphs] == ["Target", "Inserted new", "End"]
+        assert reopened.tables[0].cell(0, 0).text == "Cell target"
+    elif owner == "cell":
+        assert [p.text for p in reopened.tables[0].cell(0, 0).paragraphs] == ["Cell target", "Inserted new"]
+    else:
+        assert [p.text for p in getattr(reopened.section(0), owner).paragraphs][-2:] == ["Related target", "Inserted new"]
+    with pytest.raises(rdocx.StaleElementError):
+        _ = paragraph.text
+
+
+def test_fx217_public_markdown_template_preserves_graph_and_inputs(tmp_path):
+    import rdocx
+    template = rdocx.Document()
+    template.add_paragraph("Discard template body")
+    template.section(0).header.add_paragraph("Keep header")
+    template.section(0).footer.add_paragraph("Keep footer")
+    before = template.to_bytes()
+    path = tmp_path / "template.docx"
+    path.write_bytes(before)
+    for supplied in (template, path):
+        imported, _ = rdocx.Document.from_markdown("# Replacement\n\nBody", template=supplied)
+        assert "Discard template body" not in imported.text() and imported.paragraphs[0].text == "Replacement"
+        assert imported.section(0).header.paragraphs[-1].text == "Keep header"
+        assert imported.section(0).footer.paragraphs[-1].text == "Keep footer"
+        with zipfile.ZipFile(io.BytesIO(before)) as old, zipfile.ZipFile(io.BytesIO(imported.to_bytes())) as new:
+            for name in old.namelist():
+                if name.startswith(("word/header", "word/footer")):
+                    assert old.read(name) == new.read(name)
+    assert template.to_bytes() == before and path.read_bytes() == before
+    invalid = tmp_path / "invalid.md"
+    invalid.write_bytes(b"\xff")
+    with pytest.raises(ValueError, match="UTF-8"):
+        rdocx.Document.open_markdown(invalid, template=template)
+    assert template.to_bytes() == before

@@ -3063,6 +3063,18 @@ required, and no binary fixture enters the repository.
 
 ## Binding tests
 
+Word HTML and CommonMark import controls exercise fresh installed constructors,
+file reads, immutable diagnostics and body, cell, header and footer insertion.
+Foreign and stale owners, invalid resources and an actual diagnostic allocation
+refusal preserve source bytes and held handles. Canonical round trips reopen
+DOCX before deriving Markdown. CLI controls require atomic output, preserved
+input and template bytes, bounded UTF-8 reads, explicit rendering-option
+refusals and local-image traversal, symlink and encoding checks. Native Word
+open without repair, distinct save and local render, normal close/reopen, and
+second save/render qualify the two source-built combined and template inputs.
+Content, styles, owned links and images, template section/header/footer/PAGE
+facts and rendered text/geometry must survive native normalization.
+
 MHTML remains native Rust only. The existing Python, WASM, and CLI surface
 inventories therefore assert no new method, error, dependency, or feature. The
 exhaustive Python error adapter maps native MHTML and invalid embedded-mutation

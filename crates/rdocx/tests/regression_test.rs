@@ -9821,6 +9821,14 @@ fn unsupported_html_css_is_diagnosed_without_dropping_supported_siblings() {
     );
     assert_eq!(parsed.document.paragraph(1).unwrap().text(), "form text");
     assert_eq!(parsed.document.paragraph(2).unwrap().text(), "repaired");
+    let paragraph = parsed.document.paragraph(0).unwrap();
+    let hyperlinks = paragraph.hyperlink_spans();
+    assert_eq!(hyperlinks.len(), 1);
+    let relationship_id = hyperlinks[0].2.expect("imported hyperlink relationship");
+    assert_eq!(
+        parsed.document.hyperlink_url(relationship_id).as_deref(),
+        Some("https://example.invalid/")
+    );
     assert!(parsed.diagnostics.iter().any(|diagnostic| {
         diagnostic.property.as_deref() == Some("unknown-value")
             && diagnostic.location == "html/body/p[1]/blink[1]"
@@ -9834,7 +9842,6 @@ fn unsupported_html_css_is_diagnosed_without_dropping_supported_siblings() {
         "CSS color",
         "CSS property",
         "external HTML stylesheet",
-        "link target",
         "script",
         "form semantics",
         "form control",
@@ -9861,10 +9868,11 @@ fn html_import_projects_nested_lists_and_spanned_tables() {
     let nested = parsed.document.paragraph(1).unwrap().numbering().unwrap();
     let restarted = parsed.document.paragraph(2).unwrap().numbering().unwrap();
     assert_eq!(first.1, 0);
-    assert_eq!(nested, (first.0, 1));
+    assert_eq!(nested.1, 1);
+    assert_ne!(nested.0, first.0);
     assert_ne!(restarted.0, first.0);
     assert_eq!(parsed.document.numbering_is_bullet(first.0), Some(false));
-    assert_eq!(parsed.document.numbering_is_bullet(nested.0), Some(false));
+    assert_eq!(parsed.document.numbering_is_bullet(nested.0), Some(true));
     assert_eq!(parsed.document.paragraph(3).unwrap().text(), "Caption");
     assert!(
         parsed
@@ -9934,11 +9942,30 @@ fn html_import_projects_nested_lists_and_spanned_tables() {
 
     let nested_table =
         Document::from_html("<ul><li>item<table><tr><td>nested table</td></tr></table></li></ul>")
-            .expect("unsupported nested table is recoverable");
-    assert!(nested_table.diagnostics.iter().any(|diagnostic| {
-        diagnostic.location.contains("table")
-            && diagnostic.message.contains("dropped nested HTML table")
-    }));
+            .expect("table within a list item is supported");
+    assert_eq!(nested_table.document.paragraph(0).unwrap().text(), "item");
+    assert_eq!(nested_table.document.table_count(), 1);
+    assert_eq!(
+        nested_table
+            .document
+            .table(0)
+            .unwrap()
+            .cell(0, 0)
+            .unwrap()
+            .text(),
+        "nested table"
+    );
+    let owners = nested_table.document.body_items().collect::<Vec<_>>();
+    assert!(matches!(
+        owners.as_slice(),
+        [BodyItemRef::Paragraph(_), BodyItemRef::Table(_)]
+    ));
+    assert!(
+        !nested_table
+            .diagnostics
+            .iter()
+            .any(|diagnostic| { diagnostic.message.contains("dropped nested HTML table") })
+    );
 }
 
 fn compatibility_page_elements(
@@ -16246,12 +16273,16 @@ mod content_control_read_walker_regressions {
         // header control must leave the output unchanged.
         let markdown = wrapped.to_markdown();
         assert_eq!(markdown, plain.to_markdown());
+        let picture = "![](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWNgYGD4DwABBAEAHnOcQAAAAABJRU5ErkJggg==)";
+        assert_eq!(markdown.matches(picture).count(), 4);
         assert_eq!(
             markdown,
-            "Plain before.\n\n# Wrapped heading\n\nInline **wrapped run** after.\n\n\
+            format!(
+                "Plain before.\n\n# Wrapped heading\n\nInline **wrapped run** after.\n\n\
              | Cell block | Cell inline | Wrapped cell |\n| --- | --- | --- |\n\
-             | Wrapped row |  |  |\n\nNested text\n\n\n\nTracked **inserted** text.\n\n\
-             Moved here\n\nTagged smart and custom\n\n\nAuthor Ada\n\nPlain after.\n\n"
+             | Wrapped row | {picture} |  |\n\nNested text\n\n{picture}\n\n{picture}\n\nTracked **inserted** text.\n\n\
+             Moved here\n\nTagged smart and custom\n\n{picture}\n\nAuthor Ada\n\nPlain after.\n\n"
+            )
         );
 
         let html = wrapped.to_html();

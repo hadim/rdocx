@@ -137,6 +137,7 @@ fn _rdocx(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PyDocument>()?;
     module.add_class::<document::PyPicture>()?;
     module.add_class::<document::PyPictureOptions>()?;
+    module.add_class::<document::PyHtmlDiagnostic>()?;
     module.add_class::<document::PyOdtDiagnostic>()?;
     module.add_class::<document::PyRtfDiagnostic>()?;
     module.add_class::<document::PyEpubDiagnostic>()?;

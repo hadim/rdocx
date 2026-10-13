@@ -688,6 +688,80 @@ fn collect_control_paragraphs(
     }
 }
 
+/// Import text into DOCX or retain the existing DOCX conversion routes.
+#[allow(clippy::too_many_arguments)]
+pub fn convert_input(
+    file: &Path,
+    to: Option<&str>,
+    template: Option<&Path>,
+    rendering_options: bool,
+    output: Option<&Path>,
+    force: bool,
+    dpi: u32,
+    font_dir: Option<&Path>,
+    revision_view: RevisionView,
+    image: ImageOptions<'_>,
+) -> Result<()> {
+    let extension = file
+        .extension()
+        .and_then(|v| v.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !matches!(extension.as_str(), "html" | "htm" | "md" | "markdown") {
+        if template.is_some() {
+            return Err("--template requires HTML or Markdown input".into());
+        }
+        return convert(
+            file,
+            to.ok_or("--to is required for DOCX input")?,
+            output,
+            force,
+            dpi,
+            font_dir,
+            revision_view,
+            image,
+        );
+    }
+    if to.unwrap_or("docx") != "docx" {
+        return Err("HTML and Markdown input supports only --to docx".into());
+    }
+    if rendering_options
+        || font_dir.is_some()
+        || revision_view != RevisionView::Accepted
+        || image.pages.is_some()
+        || image.transparent
+        || dpi != 150
+        || image.quality != 90
+    {
+        return Err("rendering options do not apply to HTML or Markdown input".into());
+    }
+    let destination = output.map_or_else(|| default_output_path(file, "docx"), Path::to_path_buf);
+    ensure_output_paths_allowed(std::slice::from_ref(&destination), file, force)?;
+    let loaded = template.map(Document::open).transpose()?;
+    if let Some(path) = template {
+        ensure_output_paths_allowed(std::slice::from_ref(&destination), path, force)?;
+    }
+    let mut imported = if matches!(extension.as_str(), "md" | "markdown") {
+        Document::open_markdown_with_local_images(file, loaded.as_ref())?
+    } else {
+        Document::open_html_with_local_images(file, loaded.as_ref())?
+    };
+    for diagnostic in &imported.diagnostics {
+        eprintln!(
+            "{}{}: {}",
+            diagnostic.location,
+            diagnostic
+                .property
+                .as_ref()
+                .map(|p| format!(" ({p})"))
+                .unwrap_or_default(),
+            diagnostic.message
+        );
+    }
+    let bytes = imported.document.to_bytes()?;
+    stage_and_publish(&[(destination, bytes)], force)
+}
+
 /// Convert a DOCX file to another format.
 #[allow(clippy::too_many_arguments)]
 pub fn convert(

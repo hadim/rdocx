@@ -46,6 +46,7 @@ class ReplacementCountError(RdocxError):
 
 
 from ._rdocx import (
+    HtmlDiagnostic,
     OdtDiagnostic,
     RtfDiagnostic,
     EpubDiagnostic,
@@ -121,6 +122,7 @@ from ._rdocx import (
 )
 
 __all__ = [
+    "HtmlDiagnostic",
     "OdtDiagnostic",
     "RtfDiagnostic",
     "EpubDiagnostic",

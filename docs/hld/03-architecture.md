@@ -120,6 +120,12 @@ It remains a leaf that anything can take cheaply without importing
 sniffed package metadata, and byte-first MIME inputs. The container checks do
 not claim a codec decoder.
 
+Inbound CommonMark also belongs to the `rdocx` facade. The pinned
+`pulldown-cmark` parser produces bounded events and an escaped HTML projection
+for the existing importer. Ordered diagnostics retain original source byte
+spans. Outbound Markdown derives from saved Word styles, numbering and content,
+without storing an input Markdown copy.
+
 **Inbound HTML belongs to the `rdocx` facade.** The private importer uses
 `scraper` for HTML5 document and fragment tree repair, then projects supported
 content directly into the one owned WordprocessingML document model. The edge

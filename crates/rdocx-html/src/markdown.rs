@@ -3,45 +3,108 @@
 use std::cmp::Reverse;
 use std::collections::HashMap;
 
-use rdocx_oxml::document::CT_Body;
 use rdocx_oxml::numbering::CT_Numbering;
 use rdocx_oxml::properties::CT_PPr;
 use rdocx_oxml::styles::CT_Styles;
 use rdocx_oxml::table::CT_Tbl;
 use rdocx_oxml::text::{BreakType, CT_P, CT_R, RunContent, SpecialCharacter};
 
-use crate::{Block, body_blocks, cell_blocks};
+use crate::{Block, HtmlInput, ImageData, body_blocks, cell_blocks};
 
 /// Emit the full body content as Markdown.
-pub(crate) fn emit_markdown(
-    body: &CT_Body,
-    styles: &CT_Styles,
-    numbering: Option<&CT_Numbering>,
-    hyperlink_urls: &HashMap<String, String>,
-) -> String {
+pub(crate) fn emit_markdown(input: &HtmlInput) -> String {
+    let styles = &input.styles;
+    let hyperlink_urls = &input.hyperlink_urls;
+    let images = &input.images;
     let mut out = String::new();
     // The open list levels, each with the column its item text starts at.
-    let mut list_levels: Vec<(u32, usize)> = Vec::new();
+    let mut list_levels: Vec<(u32, usize, u32)> = Vec::new();
 
-    for block in body_blocks(body, true) {
+    let mut previous_quote_owner = None;
+    for block in body_blocks(&input.document.body, true) {
+        let style_id = match &block {
+            Block::Paragraph(p, _) => p.properties.as_ref().and_then(|p| p.style_id.as_deref()),
+            Block::Table(t) => t.properties.as_ref().and_then(|p| p.style_id.as_deref()),
+        };
+        let owner = quote_owner(style_id, styles);
+        let shared_depth =
+            owner
+                .zip(previous_quote_owner)
+                .map_or(0, |(current, previous): (&str, &str)| {
+                    current
+                        .split('.')
+                        .zip(previous.split('.'))
+                        .take_while(|(a, b)| a == b)
+                        .count()
+                });
+        if shared_depth > 0 && out.ends_with("\n\n") {
+            out.pop();
+            let path = container_path(style_id, styles).unwrap_or_default();
+            if !path.starts_with('q')
+                && let Some((_, column, _)) = list_levels.last()
+            {
+                out.push_str(&" ".repeat(*column));
+            }
+            out.push_str(&"> ".repeat(shared_depth));
+            out.push('\n');
+        }
+        if previous_quote_owner.is_some() && owner != previous_quote_owner && shared_depth == 0 {
+            leave_list(&mut out, &mut list_levels);
+            if !out.ends_with("\n\n") {
+                out.push('\n');
+            }
+        }
+        previous_quote_owner = owner;
         match block {
             Block::Paragraph(p, boundaries) => {
-                emit_paragraph(
-                    &mut out,
-                    &p,
-                    &boundaries,
-                    styles,
-                    numbering,
-                    hyperlink_urls,
-                    &mut list_levels,
-                );
+                emit_paragraph(&mut out, &p, &boundaries, input, &mut list_levels);
             }
             Block::Table(tbl) => {
                 let mut table = String::new();
-                emit_table(&mut table, tbl, hyperlink_urls);
+                emit_table(&mut table, tbl, styles, hyperlink_urls, images);
                 if !table.is_empty() {
-                    leave_list(&mut out, &mut list_levels);
-                    out.push_str(&table);
+                    let path = container_path(
+                        tbl.properties.as_ref().and_then(|p| p.style_id.as_deref()),
+                        styles,
+                    )
+                    .unwrap_or_default();
+                    let outer_prefix = "> ".repeat(path.chars().take_while(|&c| c == 'q').count());
+                    if path.contains('q') {
+                        let prefix = "> ".repeat(path.chars().filter(|&c| c == 'q').count());
+                        table = table
+                            .lines()
+                            .map(|line| {
+                                if line.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!("{prefix}{line}")
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                            + "\n";
+                    }
+                    if tbl
+                        .properties
+                        .as_ref()
+                        .and_then(|properties| properties.indent.as_ref())
+                        .is_some_and(|indent| indent.width_type == "dxa" && indent.w > 0)
+                        && let Some((_, column, _)) = list_levels.last()
+                    {
+                        if !out.ends_with("\n\n") {
+                            out.push_str(&outer_prefix);
+                            out.push('\n');
+                        }
+                        for line in table.lines() {
+                            let line = line.strip_prefix(&outer_prefix).unwrap_or(line);
+                            out.push_str(&format!("{outer_prefix}{}{line}\n", " ".repeat(*column)));
+                        }
+                        out.push_str(&outer_prefix);
+                        out.push('\n');
+                    } else {
+                        leave_quoted_list(&mut out, &mut list_levels, &outer_prefix);
+                        out.push_str(&table);
+                    }
                 }
             }
         }
@@ -54,8 +117,16 @@ pub(crate) fn emit_markdown(
 ///
 /// A list item ends in a single newline, and a block that follows it without
 /// a blank line is read as a lazy continuation of the last item.
-fn leave_list(out: &mut String, list_levels: &mut Vec<(u32, usize)>) {
+fn leave_list(out: &mut String, list_levels: &mut Vec<(u32, usize, u32)>) {
     if !list_levels.is_empty() && !out.ends_with("\n\n") {
+        out.push('\n');
+    }
+    list_levels.clear();
+}
+
+fn leave_quoted_list(out: &mut String, list_levels: &mut Vec<(u32, usize, u32)>, prefix: &str) {
+    if !list_levels.is_empty() && !out.ends_with("\n\n") {
+        out.push_str(prefix);
         out.push('\n');
     }
     list_levels.clear();
@@ -88,7 +159,7 @@ fn detect_heading_level(ppr: Option<&CT_PPr>, styles: &CT_Styles) -> Option<u32>
 }
 
 /// Detect if a paragraph is a list item. Returns (is_ordered, ilvl).
-fn detect_list(para: &CT_P, numbering: Option<&CT_Numbering>) -> Option<(bool, u32)> {
+fn detect_list(para: &CT_P, numbering: Option<&CT_Numbering>) -> Option<(bool, u32, u32, u32)> {
     let ppr = para.properties.as_ref()?;
     let num_id = ppr.num_id?;
     let ilvl = ppr.num_ilvl.unwrap_or(0);
@@ -99,11 +170,8 @@ fn detect_list(para: &CT_P, numbering: Option<&CT_Numbering>) -> Option<(bool, u
 
     let numbering = numbering?;
 
-    let abstract_id = numbering
-        .nums
-        .iter()
-        .find(|n| n.num_id == num_id)
-        .map(|n| n.abstract_num_id)?;
+    let instance = numbering.nums.iter().find(|n| n.num_id == num_id)?;
+    let abstract_id = instance.abstract_num_id;
 
     let abstract_num = numbering
         .abstract_nums
@@ -128,7 +196,14 @@ fn detect_list(para: &CT_P, numbering: Option<&CT_Numbering>) -> Option<(bool, u
         Some(_) => return None,
     };
 
-    Some((is_ordered, ilvl))
+    let start = instance
+        .level_overrides
+        .iter()
+        .find(|item| item.ilvl == ilvl)
+        .and_then(|item| item.start_override)
+        .or(level.start)
+        .unwrap_or(1);
+    Some((is_ordered, ilvl, num_id, start))
 }
 
 /// Emit a paragraph as Markdown.
@@ -136,16 +211,137 @@ fn emit_paragraph(
     out: &mut String,
     para: &CT_P,
     boundaries: &[usize],
-    styles: &CT_Styles,
-    numbering: Option<&CT_Numbering>,
-    hyperlink_urls: &HashMap<String, String>,
-    list_levels: &mut Vec<(u32, usize)>,
+    input: &HtmlInput,
+    list_levels: &mut Vec<(u32, usize, u32)>,
 ) {
-    let heading_level = detect_heading_level(para.properties.as_ref(), styles);
+    let styles = &input.styles;
+    let numbering = input.numbering.as_ref();
+    let hyperlink_urls = &input.hyperlink_urls;
+    let images = &input.images;
+    let mut heading_level = detect_heading_level(para.properties.as_ref(), styles);
     let list_info = detect_list(para, numbering);
 
     // Collect inline text for the paragraph
-    let text = collect_paragraph_text(para, hyperlink_urls, boundaries);
+    let mut text = collect_paragraph_text(para, styles, hyperlink_urls, images, boundaries);
+
+    let style_id = para
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.style_id.as_deref());
+    let compound_quote = quote_owner(style_id, styles).is_some();
+    let container_path = container_path(style_id, styles).unwrap_or_default();
+    let outer_quotes = container_path.chars().take_while(|&c| c == 'q').count();
+    let style_id = style_id.and_then(|id| {
+        styles
+            .get_by_id(id)
+            .filter(|_| !container_path.is_empty())
+            .and_then(|style| style.based_on.as_deref())
+            .or(Some(id))
+    });
+    let style_name = style_id
+        .and_then(|id| styles.get_by_id(id))
+        .and_then(|style| style.name.as_deref());
+    let role = |id: &str, name: &str| {
+        style_id == Some(id)
+            || style_name.is_some_and(|existing| existing.eq_ignore_ascii_case(name))
+    };
+    let quoted_pre = role("HTMLQuotedPreformatted", "HTML Quoted Preformatted");
+    if role("HTMLThematicBreak", "HTML Thematic Break") {
+        text = "---".to_owned();
+    } else if role("HTMLPreformatted", "HTML Preformatted") || quoted_pre {
+        let (accepted, _) = para.accepted_view_with_field_owners();
+        let code = accepted.text();
+        let code = code.strip_suffix('\n').unwrap_or(&code);
+        let length = code
+            .split(|character| character != '`')
+            .map(str::len)
+            .max()
+            .unwrap_or(0);
+        let fence = "`".repeat((length + 1).max(3));
+        text = format!("{fence}\n{code}\n{fence}");
+    }
+    let inner_quotes = container_path
+        .rsplit('l')
+        .next()
+        .unwrap_or("")
+        .chars()
+        .filter(|&c| c == 'q')
+        .count()
+        .saturating_sub(if !container_path.contains('l') {
+            outer_quotes
+        } else {
+            0
+        });
+    let item_quotes =
+        container_path.chars().filter(|&c| c == 'q').count() - outer_quotes - inner_quotes;
+    let item_quote_prefix = "> ".repeat(item_quotes);
+    if inner_quotes > 0 || ((role("Quote", "Quote") || quoted_pre) && container_path.is_empty()) {
+        if let Some(level) = heading_level.take() {
+            text = format!("{} {}", "#".repeat(level.min(6) as usize), text.trim());
+        }
+        let depth = para
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.ind_left)
+            .map_or(1, |indent| (indent.0 / 360).clamp(1, 256) as usize);
+        let prefix = "> ".repeat(if container_path.is_empty() {
+            depth
+        } else {
+            inner_quotes
+        });
+        text = text
+            .split('\n')
+            .map(|line| format!("{prefix}{line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+
+    if let Some(level) = heading_level
+        && (list_info.is_some()
+            || para
+                .properties
+                .as_ref()
+                .is_some_and(|p| p.num_id == Some(0)))
+    {
+        text = format!(
+            "{} {}",
+            "#".repeat(level.min(6) as usize),
+            text.trim().replace(LINE_BREAK, "<br>")
+        );
+        heading_level = None;
+    }
+    let quote_prefix = "> ".repeat(outer_quotes);
+
+    if para
+        .properties
+        .as_ref()
+        .is_some_and(|properties| properties.num_id == Some(0))
+        && let Some(level) = para
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.num_ilvl)
+        && let Some(index) = list_levels
+            .iter()
+            .position(|&(current, _, _)| current == level)
+    {
+        let indent = list_levels[index].1;
+        let blank_prefix = if quote_prefix.is_empty() && inner_quotes > 0 && compound_quote {
+            format!("{}> ", " ".repeat(indent))
+        } else {
+            quote_prefix.clone()
+        };
+        list_levels.truncate(index + 1);
+        if !out.ends_with("\n\n") && !out.ends_with("> \n") {
+            out.push_str(&blank_prefix);
+            out.push('\n');
+        }
+        for line in text.lines() {
+            out.push_str(&format!("{quote_prefix}{}{line}\n", " ".repeat(indent)));
+        }
+        out.push_str(&blank_prefix);
+        out.push('\n');
+        return;
+    }
 
     // Skip empty paragraphs (but still emit blank line for spacing)
     if text.is_empty() && heading_level.is_none() && list_info.is_none() {
@@ -155,29 +351,127 @@ fn emit_paragraph(
 
     if let Some(level) = heading_level {
         // Heading
-        leave_list(out, list_levels);
+        leave_quoted_list(out, list_levels, &quote_prefix);
         // An ATX heading is one line, so a line break is an HTML one.
         let hashes = "#".repeat(level.min(6) as usize);
+        out.push_str(&quote_prefix);
         out.push_str(&hashes);
         out.push(' ');
         out.push_str(&text.trim().replace(LINE_BREAK, "<br>"));
         out.push_str("\n\n");
-    } else if let Some((is_ordered, ilvl)) = list_info {
+    } else if let Some((is_ordered, ilvl, num_id, start)) = list_info {
+        if item_quotes > 0 && !list_levels.is_empty() && !out.ends_with("\n\n") {
+            out.push('\n');
+        }
         // A nested item is indented to the text column of its parent item,
         // which is three columns after `1. ` and two after `- `.
-        while list_levels.last().is_some_and(|&(level, _)| level >= ilvl) {
+        let continued = list_levels
+            .iter()
+            .any(|&(level, _, id)| level == ilvl && id == num_id);
+        while list_levels
+            .last()
+            .is_some_and(|&(level, _, _)| level >= ilvl)
+        {
             list_levels.pop();
         }
-        let indent = list_levels.last().map_or(0, |&(_, column)| column);
-        let marker = if is_ordered { "1. " } else { "- " };
-        list_levels.push((ilvl, indent + marker.len()));
-        out.push_str(&format!("{}{marker}{}\n", " ".repeat(indent), text.trim()));
+        let indent = list_levels.last().map_or(0, |&(_, column, _)| column);
+        let marker = if is_ordered {
+            format!("{}. ", if continued { 1 } else { start })
+        } else {
+            "- ".to_owned()
+        };
+        list_levels.push((
+            ilvl,
+            indent + item_quote_prefix.len() + marker.len(),
+            num_id,
+        ));
+        let mut lines = text.trim_matches(|c: char| c.is_ascii_whitespace()).lines();
+        out.push_str(&format!(
+            "{quote_prefix}{}{item_quote_prefix}{marker}{}\n",
+            " ".repeat(indent),
+            lines.next().unwrap_or("")
+        ));
+        for line in lines {
+            out.push_str(&format!(
+                "{quote_prefix}{}{line}\n",
+                " ".repeat(indent + item_quote_prefix.len() + marker.len())
+            ));
+        }
     } else {
         // Retain original edge whitespace and terminal hard-break spelling.
-        leave_list(out, list_levels);
-        out.push_str(&text);
-        out.push_str("\n\n");
+        leave_quoted_list(out, list_levels, &quote_prefix);
+        if outer_quotes > 0 {
+            for line in text.split('\n') {
+                out.push_str(&quote_prefix);
+                out.push_str(line);
+                out.push('\n');
+            }
+            out.push('\n');
+        } else {
+            out.push_str(&text);
+            out.push_str("\n\n");
+        }
     }
+}
+
+fn container_path<'a>(id: Option<&str>, styles: &'a CT_Styles) -> Option<&'a str> {
+    let style = styles.get_by_id(id?)?;
+    if !style.style_id.starts_with("RDOCXHTMLContainers") {
+        return None;
+    }
+    let path = style
+        .name
+        .as_deref()?
+        .strip_prefix("RDOCX HTML containers ")?
+        .split('|')
+        .next()?;
+    (!path.is_empty() && path.len() <= 256 && path.bytes().all(|b| matches!(b, b'q' | b'l')))
+        .then_some(path)
+}
+
+fn quote_owner<'a>(id: Option<&str>, styles: &'a CT_Styles) -> Option<&'a str> {
+    let style = styles.get_by_id(id?)?;
+    if !style.style_id.starts_with("RDOCXHTMLContainers") {
+        return None;
+    }
+    let owner = style
+        .name
+        .as_deref()?
+        .strip_prefix("RDOCX HTML containers ")?
+        .split_once('|')?
+        .1;
+    (!owner.is_empty()
+        && owner
+            .split('.')
+            .all(|id| !id.is_empty() && id.bytes().all(|b| b.is_ascii_digit())))
+    .then_some(owner)
+}
+
+fn escape_block_starts(text: &str) -> String {
+    text.split('\n')
+        .map(|line| {
+            let offset = line.bytes().take_while(|&b| b == b' ').count().min(3);
+            let rest = &line[offset..];
+            let escaped = if rest.starts_with(['#', '>', '+', '-', '=']) {
+                Some(offset)
+            } else {
+                let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+                (digits > 0
+                    && digits <= 9
+                    && rest
+                        .as_bytes()
+                        .get(digits)
+                        .is_some_and(|b| matches!(b, b'.' | b')')))
+                .then_some(offset + digits)
+            };
+            if let Some(at) = escaped {
+                format!("{}\\{}", &line[..at], &line[at..])
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// A hard line break inside a paragraph.
@@ -261,7 +555,9 @@ impl Marks {
 /// formatting.
 fn collect_paragraph_text(
     para: &CT_P,
+    styles: &CT_Styles,
     hyperlink_urls: &HashMap<String, String>,
+    images: &HashMap<String, ImageData>,
     boundaries: &[usize],
 ) -> String {
     let mut out = String::new();
@@ -303,7 +599,7 @@ fn collect_paragraph_text(
             pieces.clear();
             current_link = in_link;
         }
-        collect_run_pieces(run, &mut pieces);
+        collect_run_pieces(run, styles, images, &mut pieces);
     }
     push_inline(&mut out, &pieces, current_link);
 
@@ -324,7 +620,7 @@ fn push_inline(out: &mut String, pieces: &[(String, Marks)], link: Option<&str>)
 }
 
 fn push_inline_segment(out: &mut String, pieces: &[(String, Marks)], link: Option<&str>) {
-    let text = render_inline(pieces);
+    let text = escape_block_starts(&render_inline(pieces));
     if text.is_empty() {
         return;
     }
@@ -386,15 +682,84 @@ fn push_escaped(text: &mut String, character: char) {
 }
 
 /// Collect the text of a single run as formatted pieces.
-fn collect_run_pieces(run: &CT_R, pieces: &mut Vec<(String, Marks)>) {
+fn collect_run_pieces(
+    run: &CT_R,
+    styles: &CT_Styles,
+    images: &HashMap<String, ImageData>,
+    pieces: &mut Vec<(String, Marks)>,
+) {
     let marks = Marks::from_rpr(run.properties.as_ref());
     let mut raw = String::new();
+    let code = run
+        .properties
+        .as_ref()
+        .and_then(|properties| properties.style_id.as_deref())
+        .is_some_and(|id| {
+            id == "HTMLCode"
+                || styles
+                    .get_by_id(id)
+                    .and_then(|style| style.name.as_deref())
+                    .is_some_and(|name| name.eq_ignore_ascii_case("HTML Code"))
+        });
+    if code {
+        for content in &run.content {
+            match content {
+                RunContent::Text(text) | RunContent::DeletedText(text) => raw.push_str(&text.text),
+                RunContent::Tab => raw.push('\t'),
+                _ => {}
+            }
+        }
+        let delimiter = "`".repeat(
+            raw.split(|character| character != '`')
+                .map(str::len)
+                .max()
+                .unwrap_or(0)
+                + 1,
+        );
+        let pad = raw.starts_with('`')
+            || raw.ends_with('`')
+            || (raw.starts_with(' ')
+                && raw.ends_with(' ')
+                && !raw.chars().all(|character| character == ' '));
+        let padding = if pad { " " } else { "" };
+        push_piece(
+            pieces,
+            &format!("{delimiter}{padding}{raw}{padding}{delimiter}"),
+            marks,
+        );
+        return;
+    }
 
     for content in &run.content {
         match content {
             RunContent::Text(t) | RunContent::DeletedText(t) => {
                 for character in t.text.chars() {
                     push_escaped(&mut raw, character);
+                }
+            }
+            RunContent::Drawing(drawing) => {
+                let picture = drawing
+                    .inline
+                    .as_ref()
+                    .map(|inline| (inline.embed_id.as_str(), inline.description.as_deref()))
+                    .or_else(|| {
+                        drawing
+                            .anchor
+                            .as_ref()
+                            .map(|anchor| (anchor.embed_id.as_str(), anchor.description.as_deref()))
+                    });
+                if let Some((relationship, description)) = picture
+                    && let Some(image) = images.get(relationship)
+                {
+                    let mut alt = String::new();
+                    for character in description.unwrap_or("").chars() {
+                        push_escaped(&mut alt, character);
+                    }
+                    raw.push_str(&format!(
+                        "![{alt}](data:{};base64,{})",
+                        image.content_type,
+                        crate::emitter::base64_encode(&image.data)
+                    ));
                 }
             }
             RunContent::Tab => raw.push('\t'),
@@ -454,7 +819,6 @@ fn collect_run_pieces(run: &CT_R, pieces: &mut Vec<(String, Marks)>) {
             // A symbol is font-encoded rather than Unicode, so there is no
             // portable Markdown spelling for it.
             RunContent::Symbol { .. }
-            | RunContent::Drawing(_)
             | RunContent::FootnoteRef { .. }
             | RunContent::EndnoteRef { .. }
             | RunContent::CommentReference { .. } => {}
@@ -727,7 +1091,13 @@ fn delimiters_hold(
 }
 
 /// Emit a table as a GFM pipe table.
-fn emit_table(out: &mut String, tbl: &CT_Tbl, hyperlink_urls: &HashMap<String, String>) {
+fn emit_table(
+    out: &mut String,
+    tbl: &CT_Tbl,
+    styles: &CT_Styles,
+    hyperlink_urls: &HashMap<String, String>,
+    images: &HashMap<String, ImageData>,
+) {
     if tbl.rows().is_empty() {
         return;
     }
@@ -744,7 +1114,7 @@ fn emit_table(out: &mut String, tbl: &CT_Tbl, hyperlink_urls: &HashMap<String, S
     {
         let mut cells: Vec<String> = Vec::new();
         for cell in row.cells() {
-            let text = collect_cell_text(cell, hyperlink_urls);
+            let text = collect_cell_text(cell, styles, hyperlink_urls, images);
             cells.push(text);
         }
         if cells.len() > max_cols {
@@ -773,8 +1143,24 @@ fn emit_table(out: &mut String, tbl: &CT_Tbl, hyperlink_urls: &HashMap<String, S
 
     // Emit separator
     out.push('|');
-    for _ in 0..max_cols {
-        out.push_str(" --- |");
+    let header_cells = tbl
+        .rows()
+        .into_iter()
+        .find(|row| !row.accepted_view_removes())
+        .map(|row| row.cells())
+        .unwrap_or_default();
+    for column in 0..max_cols {
+        let alignment = header_cells
+            .get(column)
+            .and_then(|cell| cell.paragraphs().first().copied())
+            .and_then(|paragraph| paragraph.properties.as_ref())
+            .and_then(|properties| properties.jc);
+        out.push_str(match alignment {
+            Some(rdocx_oxml::shared::ST_Jc::Center) => " :---: |",
+            Some(rdocx_oxml::shared::ST_Jc::Right | rdocx_oxml::shared::ST_Jc::End) => " ---: |",
+            Some(rdocx_oxml::shared::ST_Jc::Left | rdocx_oxml::shared::ST_Jc::Start) => " :--- |",
+            _ => " --- |",
+        });
     }
     out.push('\n');
 
@@ -793,7 +1179,9 @@ fn emit_table(out: &mut String, tbl: &CT_Tbl, hyperlink_urls: &HashMap<String, S
 /// Collect text from a table cell.
 fn collect_cell_text(
     cell: &rdocx_oxml::table::CT_Tc,
+    styles: &CT_Styles,
     hyperlink_urls: &HashMap<String, String>,
+    images: &HashMap<String, ImageData>,
 ) -> String {
     let mut parts = Vec::new();
 
@@ -804,7 +1192,7 @@ fn collect_cell_text(
                 // written as HTML line breaks. A pipe would end the cell, in
                 // a link destination too, so every pipe is escaped, and GFM
                 // removes the escape before it reads the cell's inlines.
-                let text = collect_paragraph_text(&p, hyperlink_urls, &boundaries)
+                let text = collect_paragraph_text(&p, styles, hyperlink_urls, images, &boundaries)
                     .replace(PAGE_BREAK, " ");
                 let trimmed = text.trim().replace(LINE_BREAK, "<br>").replace('|', "\\|");
                 if !trimmed.is_empty() {

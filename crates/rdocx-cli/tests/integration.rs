@@ -5950,3 +5950,193 @@ fn new_mutations_reject_input_aliases_and_output_collisions() {
     assert!(!result.status.success());
     assert_eq!(fs::read(output).unwrap(), b"keep");
 }
+
+#[test]
+fn fx217_cli_html_markdown_template_local_images_and_atomic_refusal() {
+    let ws = TempWorkspace::new("fx217-import");
+    let image = pixel_png();
+    fs::write(ws.path.join("face name.png"), &image).unwrap();
+    let mut template = Document::new();
+    template.add_paragraph("Discard template");
+    let template_path = ws.path.join("template.docx");
+    template.save(&template_path).unwrap();
+    for (extension, body) in [
+        (
+            "html",
+            r#"<h1>Title</h1><p><img src="face%20name.png" alt="specimen"></p>"#,
+        ),
+        ("md", "# Title\n\n![specimen](face%20name.png)\n"),
+    ] {
+        let source = ws.path.join(format!("source.{extension}"));
+        let output = ws.path.join(format!("result-{extension}.docx"));
+        fs::write(&source, body).unwrap();
+        let result = cli(&[
+            "convert",
+            source.to_str().unwrap(),
+            "-o",
+            output.to_str().unwrap(),
+            "--template",
+            template_path.to_str().unwrap(),
+        ]);
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let document = Document::open(&output).unwrap();
+        assert_eq!(document.paragraph(0).unwrap().text(), "Title");
+        assert!(!document.text().contains("Discard template"));
+        assert_eq!(document.pictures().unwrap().len(), 1);
+        assert_eq!(document.pictures().unwrap()[0].bytes, image);
+        let before = fs::read(&output).unwrap();
+        let collision = cli(&[
+            "convert",
+            source.to_str().unwrap(),
+            "--to",
+            "docx",
+            "-o",
+            output.to_str().unwrap(),
+        ]);
+        assert!(!collision.status.success());
+        assert_eq!(fs::read(&output).unwrap(), before);
+        assert_eq!(fs::read(&source).unwrap(), body.as_bytes());
+        for flags in [
+            &["--dpi", "150"][..],
+            &["--quality", "90"],
+            &["--revision-view", "accepted"],
+            &["--transparent"],
+        ] {
+            let refused = ws.path.join("refused.docx");
+            let mut args = vec![
+                "convert",
+                source.to_str().unwrap(),
+                "-o",
+                refused.to_str().unwrap(),
+            ];
+            args.extend_from_slice(flags);
+            assert!(!cli(&args).status.success());
+            assert!(!refused.exists());
+        }
+        let aliases = cli(&[
+            "convert",
+            source.to_str().unwrap(),
+            "-o",
+            source.to_str().unwrap(),
+            "--force",
+        ]);
+        assert!(!aliases.status.success());
+        assert_eq!(fs::read(&source).unwrap(), body.as_bytes());
+        let unsafe_input = ws.path.join(format!("unsafe.{extension}"));
+        fs::write(
+            &unsafe_input,
+            if extension == "md" {
+                "![unsafe](../face.png)"
+            } else {
+                r#"<img src="../face.png">"#
+            },
+        )
+        .unwrap();
+        let refused = ws.path.join("unsafe.docx");
+        assert!(
+            !cli(&[
+                "convert",
+                unsafe_input.to_str().unwrap(),
+                "-o",
+                refused.to_str().unwrap()
+            ])
+            .status
+            .success()
+        );
+        assert!(!refused.exists());
+    }
+    assert!(
+        Document::open(&template_path)
+            .unwrap()
+            .text()
+            .contains("Discard template")
+    );
+}
+
+#[test]
+fn fx217_cli_local_resources_are_bounded_and_owned() {
+    let ws = TempWorkspace::new("fx217-resource-bounds");
+    for (name, body) in [
+        ("encoding", r#"<img src="bad%ZZ.png">"#),
+        (
+            "network",
+            r#"<img src="https://example.invalid/image.png">"#,
+        ),
+    ] {
+        let input = ws.path.join(format!("{name}.html"));
+        let output = ws.path.join(format!("{name}.docx"));
+        fs::write(&input, body).unwrap();
+        assert!(
+            !cli(&[
+                "convert",
+                input.to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap()
+            ])
+            .status
+            .success()
+        );
+        assert!(!output.exists());
+        assert_eq!(fs::read_to_string(&input).unwrap(), body);
+    }
+    let missing = ws.path.join("missing.html");
+    let output = ws.path.join("missing.docx");
+    fs::write(&missing, r#"<p>Kept</p><img src="missing.png">"#).unwrap();
+    let result = cli(&[
+        "convert",
+        missing.to_str().unwrap(),
+        "-o",
+        output.to_str().unwrap(),
+    ]);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert!(!result.stderr.is_empty());
+    let document = Document::open(&output).unwrap();
+    assert!(document.text().contains("Kept"));
+    assert!(document.pictures().unwrap().is_empty());
+    let large = ws.path.join("large.html");
+    fs::File::create(&large)
+        .unwrap()
+        .set_len(64 * 1024 * 1024 + 1)
+        .unwrap();
+    let refused = ws.path.join("large.docx");
+    assert!(
+        !cli(&[
+            "convert",
+            large.to_str().unwrap(),
+            "-o",
+            refused.to_str().unwrap()
+        ])
+        .status
+        .success()
+    );
+    assert!(!refused.exists());
+    #[cfg(unix)]
+    {
+        let outside = TempWorkspace::new("fx217-outside-image");
+        let image = outside.path.join("outside.png");
+        fs::write(&image, pixel_png()).unwrap();
+        std::os::unix::fs::symlink(&image, ws.path.join("escape.png")).unwrap();
+        let input = ws.path.join("escape.html");
+        let output = ws.path.join("escape.docx");
+        fs::write(&input, r#"<img src="escape.png">"#).unwrap();
+        assert!(
+            !cli(&[
+                "convert",
+                input.to_str().unwrap(),
+                "-o",
+                output.to_str().unwrap()
+            ])
+            .status
+            .success()
+        );
+        assert!(!output.exists());
+    }
+}

@@ -603,7 +603,7 @@ fn count_vmerge_span(rows_below: &[&CT_Row], col_idx: usize) -> u32 {
 }
 
 /// Simple base64 encoding.
-fn base64_encode(data: &[u8]) -> String {
+pub(crate) fn base64_encode(data: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
     let mut result = String::with_capacity(data.len().div_ceil(3) * 4);

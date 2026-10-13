@@ -17,7 +17,7 @@ from semantic Word content without running pagination.
 
 | Measurement | Value | Version | Platform | Build mode | Input | Command | Statistic | Measured on |
 |---|---|---|---|---|---|---|---|---|
-| Crates.io archive: rdocx-html | 24,392 compressed bytes, 95,074 member bytes, 11 members | 0.16.0 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `rdocx-html` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-10-12 |
+| Crates.io archive: rdocx-html | 27,435 compressed bytes, 109,584 member bytes, 11 members | 0.16.0 | macOS 26.6.2, Apple M5 Max, arm64 | `cargo package --locked --no-verify` | Tracked `rdocx-html` package inventory | `python3 scripts/readme_doctests.py --record-measurements` | gzip archive bytes, tar member bytes, tar member count | 2026-10-13 |
 
 ## Use it when
 

@@ -3842,7 +3842,100 @@ fn content_control_type_name(
     }
 }
 
+#[pyclass(name = "HtmlDiagnostic", frozen, get_all, eq, skip_from_py_object)]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PyHtmlDiagnostic {
+    pub location: String,
+    pub property: Option<String>,
+    pub message: String,
+}
+
+fn html_diagnostics<'py>(
+    py: Python<'py>,
+    diagnostics: Vec<rdocx::HtmlDiagnostic>,
+) -> PyResult<Bound<'py, PyTuple>> {
+    let records = diagnostics
+        .into_iter()
+        .map(|value| {
+            Py::new(
+                py,
+                PyHtmlDiagnostic {
+                    location: value.location,
+                    property: value.property,
+                    message: value.message,
+                },
+            )
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    PyTuple::new(py, records)
+}
+
+fn read_import_text(path: PathBuf) -> PyResult<String> {
+    use std::io::Read;
+    const LIMIT: u64 = 64 * 1024 * 1024;
+    let file = std::fs::File::open(path)?;
+    if file.metadata()?.len() > LIMIT {
+        return Err(PyValueError::new_err(
+            "HTML or Markdown input exceeds the 64 MiB limit",
+        ));
+    }
+    let mut bytes = Vec::new();
+    file.take(LIMIT + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > LIMIT {
+        return Err(PyValueError::new_err(
+            "HTML or Markdown input exceeds the 64 MiB limit",
+        ));
+    }
+    String::from_utf8(bytes)
+        .map_err(|_| PyValueError::new_err("HTML or Markdown input must be UTF-8"))
+}
+
 impl PyDocument {
+    fn imported_text<'py>(
+        py: Python<'py>,
+        text: &str,
+        markdown: bool,
+        template: Option<&Bound<'py, PyAny>>,
+        images: &[(String, Py<PyBytes>, String)],
+    ) -> PyResult<(Py<Self>, Bound<'py, PyTuple>)> {
+        let resources = images
+            .iter()
+            .map(|(source, bytes, filename)| rdocx::HtmlImageResource {
+                source,
+                bytes: bytes.bind(py).as_bytes(),
+                filename,
+            })
+            .collect::<Vec<_>>();
+        let loaded;
+        let borrowed;
+        let template = match template {
+            None => None,
+            Some(value) if value.is_instance_of::<PyDocument>() => {
+                borrowed = value.extract::<PyRef<'_, Self>>()?;
+                Some(&borrowed.inner)
+            }
+            Some(value) => {
+                let path = value.extract::<PathBuf>()?;
+                loaded = rdocx::Document::open(path).map_err(|error| rdocx_to_pyerr(py, error))?;
+                Some(&loaded)
+            }
+        };
+        let result = py
+            .detach(|| {
+                if markdown {
+                    rdocx::Document::from_markdown_with_options(text, template, &resources)
+                } else {
+                    rdocx::Document::from_html_with_options(text, template, &resources)
+                }
+            })
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let diagnostics = html_diagnostics(py, result.diagnostics)?;
+        Ok((
+            Py::new(py, Self::from_document(result.document))?,
+            diagnostics,
+        ))
+    }
+
     fn publish_api_candidate(
         &mut self,
         py: Python<'_>,
@@ -4628,6 +4721,106 @@ impl PyDocument {
         rdocx::Document::from_bytes(bytes)
             .map(Self::from_document)
             .map_err(|error| rdocx_to_pyerr(py, error))
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (html, *, images=Vec::new()))]
+    fn from_html<'py>(
+        py: Python<'py>,
+        html: &str,
+        images: Vec<(String, Py<PyBytes>, String)>,
+    ) -> PyResult<(Py<Self>, Bound<'py, PyTuple>)> {
+        Self::imported_text(py, html, false, None, &images)
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (path, *, images=Vec::new()))]
+    fn open_html<'py>(
+        py: Python<'py>,
+        path: PathBuf,
+        images: Vec<(String, Py<PyBytes>, String)>,
+    ) -> PyResult<(Py<Self>, Bound<'py, PyTuple>)> {
+        Self::imported_text(py, &read_import_text(path)?, false, None, &images)
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (markdown, *, template=None, images=Vec::new()))]
+    fn from_markdown<'py>(
+        py: Python<'py>,
+        markdown: &str,
+        template: Option<&Bound<'py, PyAny>>,
+        images: Vec<(String, Py<PyBytes>, String)>,
+    ) -> PyResult<(Py<Self>, Bound<'py, PyTuple>)> {
+        Self::imported_text(py, markdown, true, template, &images)
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (path, *, template=None, images=Vec::new()))]
+    fn open_markdown<'py>(
+        py: Python<'py>,
+        path: PathBuf,
+        template: Option<&Bound<'py, PyAny>>,
+        images: Vec<(String, Py<PyBytes>, String)>,
+    ) -> PyResult<(Py<Self>, Bound<'py, PyTuple>)> {
+        Self::imported_text(py, &read_import_text(path)?, true, template, &images)
+    }
+
+    #[pyo3(signature = (html, *, after, images=Vec::new()))]
+    fn insert_html<'py>(
+        slf: Py<Self>,
+        py: Python<'py>,
+        html: &str,
+        after: PyRef<'_, PyParagraph>,
+        images: Vec<(String, Py<PyBytes>, String)>,
+    ) -> PyResult<Bound<'py, PyTuple>> {
+        if !after.belongs_to(py, &slf) {
+            return Err(PyValueError::new_err(
+                "after must be a live paragraph of this document",
+            ));
+        }
+        let paragraph = after.validate(py)?;
+        let mut document = slf.borrow_mut(py);
+        let location = paragraph
+            .native(&document.inner)
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let snapshots = document
+            .inner
+            .story_item_snapshots()
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let direct = snapshots
+            .iter()
+            .filter(|item| {
+                item.location().story() == location.story()
+                    && item.is_direct_child()
+                    && (location.story().kind() != rdocx::StoryKind::Body
+                        || item.direct_body_index().is_some())
+            })
+            .collect::<Vec<_>>();
+        let index = direct
+            .iter()
+            .position(|item| item.location() == &location)
+            .ok_or_else(|| {
+                PyValueError::new_err("after must be a supported direct-child paragraph")
+            })?;
+        let destination = direct.get(index + 1).map_or_else(
+            || rdocx::ContentLocation::end(location.story().clone()),
+            |item| item.location().clone(),
+        );
+        let resources = images
+            .iter()
+            .map(|(source, bytes, filename)| rdocx::HtmlImageResource {
+                source,
+                bytes: bytes.bind(py).as_bytes(),
+                filename,
+            })
+            .collect::<Vec<_>>();
+        let mut candidate = document.inner.clone_for_staging();
+        let result = py
+            .detach(|| candidate.insert_html_fragment(&destination, html, &resources))
+            .map_err(|error| rdocx_to_pyerr(py, error))?;
+        let diagnostics = html_diagnostics(py, result.diagnostics)?;
+        document.publish_api_candidate(py, candidate, "Document.insert_html")?;
+        Ok(diagnostics)
     }
 
     fn save(&mut self, path: PathBuf, py: Python<'_>) -> PyResult<()> {

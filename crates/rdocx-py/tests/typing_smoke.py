@@ -13,6 +13,7 @@ from rdocx import (
     ContentFragment,
     CoreProperties,
     Document,
+    HtmlDiagnostic,
     Font,
     HeaderFooterVariant,
     Hyperlink,
@@ -474,3 +475,13 @@ def fx204_shared_operation_types(document: Document) -> None:
     assert_type(fields_report.total_updated, int)
     assert_type(fields_report.diagnostics, tuple[str, ...])
     assert_type(fields_report.saved_cache_scope, str)
+
+
+def html_markdown_imports(source: Path, template: Document, paragraph: Paragraph, image: bytes) -> None:
+    created, notes = Document.from_html("<p>Body</p>", images=(("face.png", image, "face.png"),))
+    assert_type(created, Document)
+    assert_type(notes, tuple[HtmlDiagnostic, ...])
+    assert_type(Document.open_html(source), tuple[Document, tuple[HtmlDiagnostic, ...]])
+    assert_type(Document.from_markdown("# Title", template=template), tuple[Document, tuple[HtmlDiagnostic, ...]])
+    assert_type(Document.open_markdown(source, template=source), tuple[Document, tuple[HtmlDiagnostic, ...]])
+    assert_type(template.insert_html("<p>New</p>", after=paragraph), tuple[HtmlDiagnostic, ...])

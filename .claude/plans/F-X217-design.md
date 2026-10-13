@@ -1,12 +1,12 @@
 # F-X217, Import HTML and Markdown through public Word surfaces
 
-**Status**: approved
+**Status**: completed
 **Sprint**: S91
 **Size**: L
 **Depends on**: F-X200, F-X203
 **Issues**: 350, 351
 **Test gate**: regression
-**Implementation**: not claimed, no code or execution
+**Implementation**: reviewed native, installed Python and CLI import surfaces with qualified scoped gates and native Word acceptance
 
 ## Problem
 
@@ -84,19 +84,30 @@ Parser/serializer04/06: bounded syntax, exact unmodelled template preservation a
 
 ## Hash harness
 
-Existing sample defaults expected unchanged. Any outbound Markdown/HTML correction needed for the named round-trip is declared as selected construct behavior with source-built controls, never folded into a move. Any measured existing49 delta requires separate attribution, review and labelled commit before baseline change. No current gate or output claim.
+Existing sample defaults expected unchanged. Any outbound Markdown/HTML correction needed for the named round-trip is declared as selected construct behavior with source-built controls, never folded into a move. Any measured existing49 delta requires separate attribution, review and labelled commit before baseline change. The scoped49 hash gate is unchanged. The final integrated sprint hash gate remains pending.
+
+The selected behavior delta retains valid imported URL relationships instead of
+diagnosing and dropping their targets, gives nested unordered lists distinct
+bullet numbering inside ordered lists, preserves supported tables within list
+items in their actual body order, and exports the four accepted pictures
+in the existing wrapped-content Markdown fixture as data URI images, including
+the table cell. The original three regression failures are retained. Their
+successors assert actual owned hyperlinks, list kind and depth, exact image bytes
+and wrapped/plain equivalence. These are intentional F-X217 behavior changes,
+to be named in its labelled implementation commit. The existing49 deterministic
+sample outputs are still expected unchanged. No baseline change is authorized.
 
 ## Implementation checklist
 
-- [ ] Record approved exact parser dependency and canonical round-trip policy, wait for F200/F203 done.
-- [ ] Preserve real Base controls and expose native HTML surfaces once.
-- [ ] Implement bounded CommonMark projection, template/resource/diagnostic semantics and outbound coverage.
-- [ ] Complete installed/CLI/native per-construct and round-trip controls plus Word native open.
-- [ ] Run dependency/MSRV/WASM/package/hash/policy and zero-finding review, update listed HLD only.
+- [x] Record approved exact parser dependency and canonical round-trip policy, wait for F200/F203 done.
+- [x] Preserve real Base controls and expose native HTML surfaces once.
+- [x] Implement bounded CommonMark projection, template/resource/diagnostic semantics and outbound coverage.
+- [x] Complete installed/CLI/native per-construct and round-trip controls plus Word native open.
+- [x] Run dependency/MSRV/WASM/package/hash/policy and zero-finding review, update listed HLD only.
 
 ## Open questions
 
-The user approved the exact pinned external parser dependency and its optional HTML renderer dependency on2026-10-11. No blocking question remains. No new repository file/module is requested. Semantic canonical round-trip, bounded explicit images and template-body replacement are stated defaults for batch approval. F200/F203 are not done, so implementation remains barred until actual dependency completion.
+The user approved the exact pinned external parser dependency and its optional HTML renderer dependency on2026-10-11. No blocking question remains. No new repository file/module is requested. Semantic canonical round-trip, bounded explicit images and template-body replacement are stated defaults for batch approval. F200/F203 and the shared CLI owner provider F204 are completed. The reviewed native patch now runs on completed provider prefix38d1697b, including F222. Public consumer and native Word acceptance are qualified for this feature. Final integrated sprint verification and review remain pending.
 
 ## Batch approval, 2026-10-11
 
@@ -110,3 +121,32 @@ Implementation waits for completed dependencies and an exclusive resource wave.
 The 2026-10-11 21:07:23 UTC refresh found [PR359](https://github.com/tensorbee/rdocx/pull/359) at head 7567b4031cc2c247a74ebb61b45cf5ee367f739c. It joins existing approved F-X217 for Issues 350 and 351, Word HTML and Markdown import. Exact patch c6fe3fd750a6ec23391626b161ee6b2a92eff28a244cae904510e6337733ff4f is captured at /private/tmp/S91-PR359-intake/diff.patch. Contribution assessment is complete at /private/tmp/S91-PR359-intake/assessment.md, SHA6fc5a95a1e5a96ff9b114223778a17f435b05842873ae469d732462373638933. The seven new commits are isolated in f217-only.diff, SHAb025943ebe9bbf1882a1957ec01f04ca457a28549f7227e055c13f9f87ea1ef9. Reuse requires the approved exact dependency/features, bounded decoded resources, complete admitted constructs, preserved template graphs and transactional owner publication. The branch is stacked on PR354, whose export/constructor work stays with F-X203 and must be reused once rather than duplicated. The approved exact pulldown-cmark =0.13.4 dependency and original linked-issue acceptance remain controlling. Contributor omissions and reported checks do not replace local acceptance. No source adoption or duplicate story is recorded.
 
 There are 28 open PRs and 38 included issues. Only discussion Issue264 changed in this refresh and remains excluded alongside Issue281. No included issue or existing PR head changed. Exact refresh evidence is /private/tmp/S91-intake-refresh-20261011T210723Z/receipt.json.
+
+## Incremental PR359 formatted whitespace contract
+
+PR359 at e974ea2240691c0de581efa172ba8c88a77c054b corrects native HTML and
+Markdown import formatted whitespace ownership. A collapsed space retains
+the producing text run properties rather than acquiring the following
+span's font, bold, italic, underline, strikethrough or hyperlink. Highlight
+follows the actual source mark owner. Only ASCII HTML whitespace collapses.
+Nonbreaking spaces and CommonMark code-span internal spaces remain text.
+This repartition is an intentional formatting behavior correction, recorded
+in its own labelled commit and reviewed independently. Visible text remains
+unchanged. Existing semantic highlight, CSS precedence and no-leak controls
+remain required with exact reopened per-run formatting facts. The original
+14-pass and one-partition-failure receipt remains failed, and its successor
+is separate evidence. The bounded proposal is
+.claude/scratch/F-X217-start/formatted-whitespace-contract-proposal.json,
+SHA d69a2e4121b274c3c2a1ae7ac8b066625d1cb2f8f8f200d730af6412d21fac2f.
+ROOT admitted this amendment under the user's explicit advanced-PR intake
+instruction. Existing 49 baselines are expected unchanged. Any measured
+delta requires separate attribution and review before a baseline change.
+PPT HTML import donor changes remain outside this Word story.
+
+## Completion evidence
+
+The source-safe checkpoint `fce4d7bd5d7c172f55b33a706859483e7a7c7356a34501d7910692a8adc74407` qualifies the scoped feature gates and retains original failures with exact passing successors. Whole-feature and supplemental expectation/archive reviews have zero defects and smells. The unchanged49 hash gate and all named risk riders pass. The three corrected regression expectations retain the declared selected behavior delta, not a baseline change.
+
+Native Word16.113.2 build16.113.26092012 opened both actual source-built combined and template inputs without repair. Each was saved as a distinct DOCX and local printing PDF, closed, normally reopened, saved and exported again, then closed through the known task window. Combined artifact receipt `f011ad5d3699fd1dadb76cdb2326f6191be9c3a6f7844941cda2244bd74e9a0f` and template receipt `ccd3e2470cd2471d648547844b9759ffc839021a37491247917715416553025f` qualify preserved content, styles, numbering, owned links and images, template section/header/footer/PAGE facts, and identical first/reopened PDF text, geometry and rasters. The two DOCX inputs are the full native acceptance set. Attempt suffixes are not additional cases.
+
+The combined receipt pins the observation record before the final owned close. The current supplemental close observation is authenticated separately in the preparation checkpoint. Original timed-out AppleEvent attempts and their failed receipts remain unchanged. The historical installed Word pair remains credited only for its recorded gate. Final integrated source, package, hash and paired interpreter gates belong to the sprint integrator.

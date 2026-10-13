@@ -52,28 +52,31 @@ enum Command {
         file: PathBuf,
         /// Output format: pdf, html, md, png, jpeg, tiff
         #[arg(long, short = 't')]
-        to: String,
+        to: Option<String>,
         /// Output file path (defaults to input with new extension)
         #[arg(long, short = 'o')]
         output: Option<PathBuf>,
+        /// DOCX template for HTML or Markdown input
+        #[arg(long)]
+        template: Option<PathBuf>,
         /// Replace existing output files, but never the input file
         #[arg(long)]
         force: bool,
         /// DPI for image rendering (default: 150)
-        #[arg(long, default_value = "150")]
-        dpi: u32,
+        #[arg(long)]
+        dpi: Option<u32>,
         /// Directory containing caller font files (.ttf/.otf/.ttc)
         #[arg(long)]
         font_dir: Option<PathBuf>,
         /// Revision view for PDF and image output
-        #[arg(long, default_value = "accepted", value_parser = commands::parse_revision_view)]
-        revision_view: rdocx::RevisionView,
+        #[arg(long, value_parser = commands::parse_revision_view)]
+        revision_view: Option<rdocx::RevisionView>,
         /// One-based page range for image output, such as 1,3-5
         #[arg(long)]
         pages: Option<String>,
         /// JPEG quality from 1 through 100
-        #[arg(long, default_value = "90")]
-        quality: u8,
+        #[arg(long)]
+        quality: Option<u8>,
         /// Preserve unpainted PNG pixels as transparent
         #[arg(long)]
         transparent: bool,
@@ -632,6 +635,7 @@ fn run_cli() {
             file,
             to,
             output,
+            template,
             force,
             dpi,
             font_dir,
@@ -639,17 +643,24 @@ fn run_cli() {
             pages,
             quality,
             transparent,
-        } => commands::convert(
+        } => commands::convert_input(
             &file,
-            &to,
+            to.as_deref(),
+            template.as_deref(),
+            dpi.is_some()
+                || revision_view.is_some()
+                || quality.is_some()
+                || pages.is_some()
+                || transparent
+                || font_dir.is_some(),
             output.as_deref(),
             force,
-            dpi,
+            dpi.unwrap_or(150),
             font_dir.as_deref(),
-            revision_view,
+            revision_view.unwrap_or(rdocx::RevisionView::Accepted),
             commands::ImageOptions {
                 pages: pages.as_deref(),
-                quality,
+                quality: quality.unwrap_or(90),
                 transparent,
             },
         ),

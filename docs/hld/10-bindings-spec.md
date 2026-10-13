@@ -1628,8 +1628,23 @@ failures return `Error::Html` without publishing a partial document. The path
 constructor caps reads at 64 MiB even if the file changes after its metadata is
 read. The importer supports source-ordered paragraphs, runs, nested lists, and
 spanned tables plus the bounded inline and embedded CSS subset. It does not
-fetch external resources. Python, WASM, and CLI surfaces gain no HTML import
-entry point and retain their existing methods and error contracts.
+fetch external resources. Python `Document.from_html` and `open_html` return
+`(Document, tuple[HtmlDiagnostic, ...])` with immutable location, property and
+message records. `from_markdown` and `open_markdown` additionally accept an
+optional loaded Document or template path. Their explicit image map contains
+source, bytes and filename triples. Inputs are bounded UTF-8. WASM gains no
+import entry point.
+
+Python `Document.insert_html(html, *, after, images=())` accepts a required
+live paragraph of this document and returns detached diagnostics. It inserts
+after the checked physical direct child in a supported body, cell, header or
+footer. Refusal preserves the document and handles, while changed publication
+invalidates previous handles. CLI `rdocx convert` admits HTML and Markdown
+input with `--to docx` or a DOCX output path, and optional `--template`. It
+rejects rendering options, protects input and template paths and stages output
+atomically. Local image paths resolve only inside the input directory with
+bounded reads. Traversal, escaping symlinks and unsupported schemes refuse,
+while missing images retain the importer diagnostic policy.
 
 Native Rust callers can also insert rich HTML into an existing Word story with
 `Document::insert_html_fragment(&ContentLocation, &str,
@@ -1640,8 +1655,8 @@ body, cell, header, and footer destinations supported by the story API. Its
 child range, and ordered `HtmlDiagnostic` values. Links and images are scoped
 to the physical destination part. Unsupported or unresolved markup is
 diagnosed, while invalid locations, malformed resources, bound failures, and
-package failures leave the document unchanged. This surface remains native
-Rust only.
+package failures leave the document unchanged. Python exposes this transaction through its checked paragraph-relative
+`insert_html` method.
 
 Native Rust callers can import and export bounded MHTML through
 `Document::from_mhtml_bytes`, `Document::open_mhtml`,
