@@ -19347,3 +19347,23 @@ push, main merge, tag or publication is claimed.
 **Spec sections touched.** Exactly HLD02,03,04,06,10,12 and14, preserving completed F217 Word import intent and the parent frozen100 boundary.
 
 **Notes for future sessions.** Keep work/f-x211b-codex through final verification and close. Preserve required worker evidence before clean worktree retirement. Word XML child a and integrated compatibility child c remain unfinished, so parent F211 is not complete. No new blanket GUI gate or native application acceptance is inferred. Intake stays closed40issues/30PRs with264/281 open. No remote closure, push, main merge, tag or publication is claimed.
+
+
+### F-X220, Embed fonts through native and public package families
+
+**Completed.** 2026-10-13, S91 scoped dependency-prefix checkpoint
+**Size.** L, actual not recorded
+
+**What was built.** Issue360 and adapted PR361 add explicit licensed four-face font embedding, immutable listing/removal and tri-state settings across native Word/PowerPoint, Python and CLI. Checked source ownership, bounded input/decoding, preserved opaque graphs and caller-over-embedded font precedence use the existing providers.
+
+**Non-obvious choices.** Native PowerPoint uses qualified uncompressed EOT and genuine regular/bold faces. The user-approved native Word one-font-per-name boundary records synthetic bold and empty saved bold parts truthfully. All four API faces and genuine own-renderer selection remain required. Native Word multi-face interoperability is F-X223 in S92, outside S91 close acceptance.
+
+**Tests.** Source-qualified worker gates and ten original native Office cases remain authenticated with actual warnings and normalization. Current canonical checks pass changed10 all-target/all-feature compilation, formatting, focused native font/import/owner/CLI controls,62 installed tests, both strict typing consumers, both full stubtests, both WASM graphs and49 unchanged deterministic hashes. Eight current default-verified offline packages have exact ordinary members, generated inventories, README/catalog agreement, member totals/counts and sizes below10MiB. The unchanged64-byte gzip tolerance covers the disclosed compressed differences. Original failed receipts, exact successors and four absent historical movie/PNG oracles remain separate, with the latter deferred to S92 without acceptance credit.
+
+**Integrated evidence.** Feature4fe90dc5 and prepared tip59345683 integrate into fd501d6ac593ac443045d3b9f6930ebd0e449104. The validated handoff is consumed. Independent semantic, archive metadata and final evidence reviews report zero defects and smells. Durable current receipts are in canonical scratch F-X220-integration-verification-1, F-X220-integration-archives-1, F-X220-canonical-pair-1 and F-X220-canonical-current-final-gates-1. The actual paired node set is17 Word and45 PowerPoint tests. Current installed font/B/F217 qualification does not claim childa, F218 public or a newer F215 SmartML union.
+
+**Hash harness.** All49 current deterministic entries match unchanged baselines. Final full integrated sprint verification and review remain due.
+
+**Spec sections touched.** Exactly HLD03,04,06,08,10,12,14 and15, preserving completed PowerPoint XML owners, Word imports and the approved F223 boundary.
+
+**Notes for future sessions.** The clean worker was retired without force after integration. Its branch work/f-x220-codex remains through final verification and close. All required worker scratch evidence is preserved in /private/tmp/S91-F-X220-preserved-worker-evidence-1. Intake stays frozen40 issues/30 PRs with264/281 excluded and open. Bibliography, navigation and standalone authoring remain S92. No remote closure, push, main merge, tag or publication is claimed.

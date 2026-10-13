@@ -2171,8 +2171,8 @@ discussions264 and281.
 | F-X221 | Prepare Word 0.17.0 and PowerPoint 0.15.0 minor releases | L |
 | F-X222 | Restore linear Word story range inventory and empty owners | M |
 
-**Current delivery checkpoint**: twenty-three of twenty-nine active stories are
-completed and integrated, F-X193 through F-X210, F-X212, F-X213, F-X214, F-X217 and F-X222. Remaining issue and PR repairs follow
+**Current delivery checkpoint**: twenty-four of twenty-nine active stories are
+completed and integrated, F-X193 through F-X210, F-X212, F-X213, F-X214, F-X217, F-X220 and F-X222. Remaining issue and PR repairs follow
 completed dependencies and exclusive source boundaries. CURRENT_SPRINT.md
 records active owners and execution states. F-X192 and F-283 remain at S92 with their contracts,
 dirty worker work, reviews and required evidence retained. Standalone authoring
@@ -3146,4 +3146,4 @@ parent closes only after all three children close. This delivery partition
 keeps the frozen40 issues and30 PRs, all existing acceptance and the immutable
 100-script metric. Bibliography, navigation and standalone authoring stay S92.
 
-**Approved native Word font boundary, 2026-10-13**: F-X220 retains four API face kinds and genuine own-renderer and PowerPoint face selection. Native Word acceptance follows its documented one-font-per-name behavior, recording actual synthetic bold and empty native saved bold parts. The user moved native Word multi-face interoperability to F-X223 in S92. This does not move Issue360 or PR361 out of S91. Their remaining native, public, CLI, preservation and authorization acceptance remains due.
+**Approved native Word font boundary, 2026-10-13**: F-X220 retains four API face kinds and genuine own-renderer and PowerPoint face selection. Native Word acceptance follows its documented one-font-per-name behavior, recording actual synthetic bold and empty native saved bold parts. The user moved native Word multi-face interoperability to F-X223 in S92. This does not move Issue360 or PR361 out of S91. Their native, public, CLI, preservation and authorization gates are qualified at the scoped F-X220 checkpoint. Final integrated sprint gates remain due.

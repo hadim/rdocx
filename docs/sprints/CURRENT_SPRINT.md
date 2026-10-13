@@ -6,7 +6,7 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 retains twenty-nine top-level stories, twenty-three completed, four running,
+S91 retains twenty-nine top-level stories, twenty-four completed, three running,
 two approved pending implementation. F-X211 also has three delivery children
 for parallel Word and PowerPoint work followed by integrated compatibility. The latest bounded intake includes40 issues and30 PRs, plus final minor-release preparation.
 
@@ -53,7 +53,7 @@ for parallel Word and PowerPoint work followed by integrated compatibility. The 
 | F-X216 | Import complete slides and merge decks with source formatting | L | pending | - |
 | F-X217 | Import HTML and Markdown through public Word surfaces | L | done | - |
 | F-X218 | Export presentations as semantic HTML and Markdown | L | in-progress | codex |
-| F-X220 | Embed fonts through both native and public package families | L | in-progress | codex |
+| F-X220 | Embed fonts through both native and public package families | L | done | - |
 | F-X221 | Prepare Word 0.17.0 and PowerPoint 0.15.0 minor releases | L | pending | - |
 | F-X222 | Restore linear Word story range inventory and empty owners | M | done | - |
 
@@ -1202,3 +1202,10 @@ Twenty-three of29 top-level stories are complete. Six remain, F-X211, F-X215, F-
 The PowerPoint XML child completes at the scoped dependency-prefix checkpoint. Product integration1651119a preserves completed Word import and both dependency graphs. Whole-feature, completion-composition and independent integration reviews have zero defects and smells. Five actual composed archives verify and the complete README inventory/examples pass. Actual combined native/binding all-target/all-feature compilation, release-profile native nine-owner control,49 unchanged hashes and prose pass. The first root debug-profile test abort before XML editing remains failed and distinct from the qualified release successor at the same2MiB stack. The parent and children a/c remain unfinished. Top-level progress remains23 of29 complete. Final full sprint verification, review, close and publication remain due.
 
 **Approved font interoperability carryover, 2026-10-13**: Native Word multi-face embedding is F-X223 in S92, under the user-approved MS-OE376 one-font-per-name boundary. F-X220 keeps all four API face kinds, genuine own-renderer and PowerPoint face selection, and measured native Word single-face use with synthetic bold and save normalization recorded. Issue360 and PR361 remain in S91. No story completion is claimed by this scope amendment.
+
+
+## F-X220 scoped completion, 2026-10-13
+
+F-X220 completes its reviewed current font/B/F217 integration checkpoint. Native ten-case evidence,62 current installed controls, typing/fullstubs, eight verified packages, both WASM graphs and49 unchanged hashes are qualified within their recorded scopes. The approved native Word multi-face carryover F-X223 stays S92.
+
+Twenty-four of29 top-level stories are complete. F-X211, F-X215 and F-X218 remain running. F-X216 and F-X221 remain approved pending. The parent F-X211 retains its unfinished Word and compatibility children. Intake stays frozen40 issues/30 PRs, with264/281 excluded and open. Final full integrated verification, review and remote reconciliation remain due.
