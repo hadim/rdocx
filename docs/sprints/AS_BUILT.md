@@ -19367,3 +19367,63 @@ push, main merge, tag or publication is claimed.
 **Spec sections touched.** Exactly HLD03,04,06,08,10,12,14 and15, preserving completed PowerPoint XML owners, Word imports and the approved F223 boundary.
 
 **Notes for future sessions.** The clean worker was retired without force after integration. Its branch work/f-x220-codex remains through final verification and close. All required worker scratch evidence is preserved in /private/tmp/S91-F-X220-preserved-worker-evidence-1. Intake stays frozen40 issues/30 PRs with264/281 excluded and open. Bibliography, navigation and standalone authoring remain S92. No remote closure, push, main merge, tag or publication is claimed.
+
+
+### F-X211a, Word checked XML owners and resource admission
+
+**Completed.** 2026-10-13, S91 scoped dependency-prefix checkpoint
+**Size.** L, actual not recorded
+
+**What was built.** Five Word checked XML owners and concrete source-qualified publication, bounded ordinary-stack parser lifecycle, opaque namespace preservation and owner-local child retirement. Prepared returned Paragraph capture composes with chart creation, imports and fonts.
+
+**Tests.** Reviewed feature-local and native authorities retain their exact input boundaries. Current paired installed execution passes32 Word and53 PowerPoint controls. Current strict typing/fullstubs qualify through the explicit tiny final-annotation bridge. Five verified packages retain exact ordinary members and bounded generated inventories below10MiB. Strict nine-crate Clippy, both WASM graphs and49 unchanged hashes qualify the recorded prefix. Independent prefix and metadata reviews have zero defects and smells.
+
+**Policy checkpoint.** Actual README inventory/examples and immutable registry-graph successors pass at source106b, receipt17b34fb9e839ce65672ad613f2f978654a64e22a6c3346687d3e0b1dbf068982. Root authenticates both exit0 logs and safe cleanup. Earlier137 observed passing policy cases and2 platform skips remain historical. Original141 failures and focused inventory failure08f234 stay retained. This is the scoped composite, not a replayed full141 module.
+
+**Integrated evidence.** Source integration e90f273621fdd740c748d379a36f223347c12eee. Prepared worker handoff and independent semantic reconciliation remain recorded. Durable current proof is /private/tmp/S91-combined-current-prefix-preparation-1, S91-current-prefix-final-gates-1 and S91-combined-prefix-native-1. Original failed runner17d74 and genuine stub failure419292 remain failed. Producer/installed/archive successors retain separate source/head/member identities. No whole2392 regression green or frozen100 rate is claimed.
+
+**Hash harness.**49 unchanged deterministic outputs. Final full sprint verification and review remain due.
+
+**Spec sections touched.** Exactly HLD02,03,04,06,10,12 and14. Architecture03 requires no body change because no new edge or framework exists, preserving font/B/F217 and F223 contracts.
+
+**Notes for future sessions.** Keep worker branches through final verification and close and preserve required evidence before clean worktree retirement. Parent F-X211 remains running and compatibility child c remains pending. Frozen40 issues/30 PRs, excluded/open264/281 and S92 deferrals remain unchanged. No remote closure, push, main merge, tag or publication is claimed.
+
+
+### F-X215, Create charts in Python and replace existing chart data
+
+**Completed.** 2026-10-13, S91 scoped dependency-prefix checkpoint
+**Size.** L, actual not recorded
+
+**What was built.** Both-family Python chart creation and preservation-aware data replacement retain actual cache/workbook graphs, styles and owned relationships. Shared targets use copy-on-write. Chart views retire after checked frame XML replacement, and Word returned Paragraph allocation uses prepared owner authority. Native chart source/render acceptance remains attributed to its actual inputs.
+
+**Tests.** Reviewed feature-local and native authorities retain their exact input boundaries. Current paired installed execution passes32 Word and53 PowerPoint controls. Current strict typing/fullstubs qualify through the explicit tiny final-annotation bridge. Five verified packages retain exact ordinary members and bounded generated inventories below10MiB. Strict nine-crate Clippy, both WASM graphs and49 unchanged hashes qualify the recorded prefix. Independent prefix and metadata reviews have zero defects and smells.
+
+**Policy checkpoint.** Actual README inventory/examples and immutable registry-graph successors pass at source106b, receipt17b34fb9e839ce65672ad613f2f978654a64e22a6c3346687d3e0b1dbf068982. Root authenticates both exit0 logs and safe cleanup. Earlier137 observed passing policy cases and2 platform skips remain historical. Original141 failures and focused inventory failure08f234 stay retained. This is the scoped composite, not a replayed full141 module.
+
+**Integrated evidence.** Source integration 51d280bc. Prepared worker handoff and independent semantic reconciliation remain recorded. Durable current proof is /private/tmp/S91-combined-current-prefix-preparation-1, S91-current-prefix-final-gates-1 and S91-combined-prefix-native-1. Original failed runner17d74 and genuine stub failure419292 remain failed. Producer/installed/archive successors retain separate source/head/member identities. No whole2392 regression green or frozen100 rate is claimed.
+
+**Hash harness.**49 unchanged deterministic outputs. Final full sprint verification and review remain due.
+
+**Spec sections touched.** Exactly HLD02,04,09,10,12 and14, preserving font/B/F217 and F223 contracts.
+
+**Notes for future sessions.** Keep worker branches through final verification and close and preserve required evidence before clean worktree retirement. Parent F-X211 remains running and compatibility child c remains pending. Frozen40 issues/30 PRs, excluded/open264/281 and S92 deferrals remain unchanged. No remote closure, push, main merge, tag or publication is claimed.
+
+
+### F-X218, Export presentations as semantic HTML and Markdown
+
+**Completed.** 2026-10-13, S91 scoped dependency-prefix checkpoint
+**Size.** L, actual not recorded
+
+**What was built.** PowerPoint semantic HTML/Markdown export preserves supported source order, list/style/link/table/image/notes/hidden-slide semantics with immutable detached diagnostics/assets. Native atomic publication and one bounded image validator back Python and CLI. Two native source cycles qualify source semantics separately from HTML pixel parity.
+
+**Tests.** Reviewed feature-local and native authorities retain their exact input boundaries. Current paired installed execution passes32 Word and53 PowerPoint controls. Current strict typing/fullstubs qualify through the explicit tiny final-annotation bridge. Five verified packages retain exact ordinary members and bounded generated inventories below10MiB. Strict nine-crate Clippy, both WASM graphs and49 unchanged hashes qualify the recorded prefix. Independent prefix and metadata reviews have zero defects and smells.
+
+**Policy checkpoint.** Actual README inventory/examples and immutable registry-graph successors pass at source106b, receipt17b34fb9e839ce65672ad613f2f978654a64e22a6c3346687d3e0b1dbf068982. Root authenticates both exit0 logs and safe cleanup. Earlier137 observed passing policy cases and2 platform skips remain historical. Original141 failures and focused inventory failure08f234 stay retained. This is the scoped composite, not a replayed full141 module.
+
+**Integrated evidence.** Source integration 6581e3a51dff3f1ba6edc176fb42c7d4cab0dba7. Prepared worker handoff and independent semantic reconciliation remain recorded. Durable current proof is /private/tmp/S91-combined-current-prefix-preparation-1, S91-current-prefix-final-gates-1 and S91-combined-prefix-native-1. Original failed runner17d74 and genuine stub failure419292 remain failed. Producer/installed/archive successors retain separate source/head/member identities. No whole2392 regression green or frozen100 rate is claimed.
+
+**Hash harness.**49 unchanged deterministic outputs. Final full sprint verification and review remain due.
+
+**Spec sections touched.** Exactly HLD02,03,04,06,10,12 and14, preserving font/B/F217 and F223 contracts.
+
+**Notes for future sessions.** Keep worker branches through final verification and close and preserve required evidence before clean worktree retirement. Parent F-X211 remains running and compatibility child c remains pending. Frozen40 issues/30 PRs, excluded/open264/281 and S92 deferrals remain unchanged. No remote closure, push, main merge, tag or publication is claimed.

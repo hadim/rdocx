@@ -6,7 +6,7 @@
 and alternate text-box ownership issues and PRs, retaining completed stories.
 Issues264 and281 remain excluded and open. The user moved the separate S90
 bibliography and navigation carryovers, F-X192 and F-283, to S92.
-S91 retains twenty-nine top-level stories, twenty-four completed, three running,
+S91 retains twenty-nine top-level stories, twenty-six completed, one running,
 two approved pending implementation. F-X211 also has three delivery children
 for parallel Word and PowerPoint work followed by integrated compatibility. The latest bounded intake includes40 issues and30 PRs, plus final minor-release preparation.
 
@@ -43,16 +43,16 @@ for parallel Word and PowerPoint work followed by integrated compatibility. The 
 | F-X209 | Edit PowerPoint masters layouts and themes | L | done | - |
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | L | done | - |
 | F-X211 | Complete Python script compatibility and safe XML access | L | in-progress | - |
-| F-X211a | Word checked XML owners and resource admission | L | in-progress | codex |
+| F-X211a | Word checked XML owners and resource admission | L | done | - |
 | F-X211b | PowerPoint checked XML owners | L | done | - |
 | F-X211c | Integrated Python compatibility and causal errors | L | pending | - |
 | F-X212 | Align native accessibility with visible paragraph content | M | done | - |
 | F-X213 | Preserve TOC entry boundary paragraphs during rebuild | M | done | - |
 | F-X214 | Bound recursive PowerPoint parsing and traversal | L | done | - |
-| F-X215 | Create charts in Python and replace existing chart data | L | in-progress | codex |
+| F-X215 | Create charts in Python and replace existing chart data | L | done | - |
 | F-X216 | Import complete slides and merge decks with source formatting | L | pending | - |
 | F-X217 | Import HTML and Markdown through public Word surfaces | L | done | - |
-| F-X218 | Export presentations as semantic HTML and Markdown | L | in-progress | codex |
+| F-X218 | Export presentations as semantic HTML and Markdown | L | done | - |
 | F-X220 | Embed fonts through both native and public package families | L | done | - |
 | F-X221 | Prepare Word 0.17.0 and PowerPoint 0.15.0 minor releases | L | pending | - |
 | F-X222 | Restore linear Word story range inventory and empty owners | M | done | - |
@@ -1209,3 +1209,12 @@ The PowerPoint XML child completes at the scoped dependency-prefix checkpoint. P
 F-X220 completes its reviewed current font/B/F217 integration checkpoint. Native ten-case evidence,62 current installed controls, typing/fullstubs, eight verified packages, both WASM graphs and49 unchanged hashes are qualified within their recorded scopes. The approved native Word multi-face carryover F-X223 stays S92.
 
 Twenty-four of29 top-level stories are complete. F-X211, F-X215 and F-X218 remain running. F-X216 and F-X221 remain approved pending. The parent F-X211 retains its unfinished Word and compatibility children. Intake stays frozen40 issues/30 PRs, with264/281 excluded and open. Final full integrated verification, review and remote reconciliation remain due.
+
+
+## Word XML, charts and semantic export scoped completion, 2026-10-13
+
+F-X211a, F-X215 and F-X218 complete at the reviewed current dependency-prefix checkpoint after root policy admission. Current paired execution measures32 Word and53 PowerPoint controls, all85 passing. Typing/fullstubs qualify through the explicit final-annotation-only bridge. Five verified packages, strict nine-crate Clippy, both WASM graphs and49 unchanged hashes qualify their actual recorded scopes. Original failed runner, genuine stub failure and all prior failed commands remain separate from successful successors.
+
+**Policy checkpoint**: Actual README inventory/examples and immutable registry-graph successors pass at source106b, receipt17b34fb9e839ce65672ad613f2f978654a64e22a6c3346687d3e0b1dbf068982. Root authenticates both exit0 logs and safe cleanup. Earlier137 observed passing policy cases and2 platform skips remain historical. Original141 failures and focused inventory failure08f234 stay retained. This is the scoped composite, not a replayed full141 module.
+
+Twenty-six of29 top-level stories are complete. Parent F-X211 remains running. F-X216 and F-X221 remain approved pending. Word child a and PowerPoint child b are complete, while compatibility child c remains approved pending. No frozen100 score, whole2392 regression green, decoded-media/render authority, full workspace or sprint review is credited here. Intake stays frozen40 issues/30 PRs with264/281 excluded and open. Bibliography, navigation, standalone authoring, historical oracle regeneration and approved Word multi-face interoperability remain S92. No remote closure, main merge, tag, publication or push is claimed.

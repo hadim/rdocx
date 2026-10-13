@@ -40,8 +40,8 @@ regenerated, never hand-edited.
 | M22, Word depth | 12 | 12 | 0 | 0 |
 | M23, From-scratch business documents | 24 | 24 | 0 | 0 |
 | M24, Modern DOCX authoring completeness | 54 | 24 | 0 | 30 |
-| X, Cross-cutting | 236 | 221 | 5 | 6 |
-| **Total** | **561** | **495** | **5** | **57** |
+| X, Cross-cutting | 236 | 224 | 2 | 6 |
+| **Total** | **561** | **498** | **2** | **57** |
 <!-- AUTOGEN:backlog-summary END -->
 
 ## All F-IDs
@@ -770,16 +770,16 @@ HLD14 contract before adopting contributor changes.
 | F-X209 | Edit PowerPoint masters layouts and themes | S91 | L | done |
 | F-X210 | Extend metric-compatible fonts and bullet fallbacks | S91 | L | done |
 | F-X211 | Complete Python script compatibility and safe XML access | S91 | L | in-progress |
-| F-X211a | Word checked XML owners and resource admission | S91 | L | in-progress |
+| F-X211a | Word checked XML owners and resource admission | S91 | L | done |
 | F-X211b | PowerPoint checked XML owners | S91 | L | done |
 | F-X211c | Integrated Python compatibility and causal errors | S91 | L | pending |
 | F-X212 | Align native accessibility with visible paragraph content | S91 | M | done |
 | F-X213 | Preserve TOC entry boundary paragraphs during rebuild | S91 | M | done |
 | F-X214 | Bound recursive PowerPoint parsing and traversal | S91 | L | done |
-| F-X215 | Create charts in Python and replace existing chart data | S91 | L | in-progress |
+| F-X215 | Create charts in Python and replace existing chart data | S91 | L | done |
 | F-X216 | Import complete slides and merge decks with source formatting | S91 | L | pending |
 | F-X217 | Import HTML and Markdown through public Word surfaces | S91 | L | done |
-| F-X218 | Export presentations as semantic HTML and Markdown | S91 | L | in-progress |
+| F-X218 | Export presentations as semantic HTML and Markdown | S91 | L | done |
 | F-X219 | Qualify full-range text watermark interoperability | S92 | M | pending |
 | F-X220 | Embed fonts through both native and public package families | S91 | L | done |
 | F-X221 | Prepare Word 0.17.0 and PowerPoint 0.15.0 minor releases | S91 | L | pending |

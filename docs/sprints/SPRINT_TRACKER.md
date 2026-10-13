@@ -974,3 +974,12 @@ Issues264 and281 remain excluded and open.
 | F-X211b | S91 | L | not recorded | not recorded | 2026-10-13 | Scoped PowerPoint XML child completion, nine checked physical owners,24 native and31 installed controls, clean whole/composition/integration reviews, five verified composed archives and actual integrated compile/release-owner/hash49/prose checkpoint. Original debug abort and historical absent oracles retained. Parent211 and final full sprint gate remain due |
 
 | F-X220 | S91 | L | not recorded | not recorded | 2026-10-13 | Scoped licensed font embedding across native, Python and CLI families. Native ten-case evidence retains approved Word limit/F223 carryover, current62 installed tests plus typing/fullstubs, eight verified archives, both WASM and49 unchanged hashes. Independent integration and metadata reviews clean. Original failures retained. Full sprint gate remains due |
+
+
+| F-X211a | S91 | L | not recorded | not recorded | 2026-10-13 | Scoped dependency-prefix completion. Five Word checked XML owners and concrete source-qualified publication, bounded ordinary-stack parser lifecycle, opaque namespace preservation and owner-local child retirement. Prepared returned Paragraph capture composes with chart creation, imports and fonts. Parent/c and final full sprint gates remain due |
+
+
+| F-X215 | S91 | L | not recorded | not recorded | 2026-10-13 | Scoped dependency-prefix completion. Both-family Python chart creation and preservation-aware data replacement retain actual cache/workbook graphs, styles and owned relationships. Shared targets use copy-on-write. Chart views retire after checked frame XML replacement, and Word returned Paragraph allocation uses prepared owner authority. Native chart source/render acceptance remains attributed to its actual inputs. Parent/c and final full sprint gates remain due |
+
+
+| F-X218 | S91 | L | not recorded | not recorded | 2026-10-13 | Scoped dependency-prefix completion. PowerPoint semantic HTML/Markdown export preserves supported source order, list/style/link/table/image/notes/hidden-slide semantics with immutable detached diagnostics/assets. Native atomic publication and one bounded image validator back Python and CLI. Two native source cycles qualify source semantics separately from HTML pixel parity. Parent/c and final full sprint gates remain due |

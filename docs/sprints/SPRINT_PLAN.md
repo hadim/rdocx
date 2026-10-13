@@ -2171,8 +2171,8 @@ discussions264 and281.
 | F-X221 | Prepare Word 0.17.0 and PowerPoint 0.15.0 minor releases | L |
 | F-X222 | Restore linear Word story range inventory and empty owners | M |
 
-**Current delivery checkpoint**: twenty-four of twenty-nine active stories are
-completed and integrated, F-X193 through F-X210, F-X212, F-X213, F-X214, F-X217, F-X220 and F-X222. Remaining issue and PR repairs follow
+**Current delivery checkpoint**: twenty-six of twenty-nine active stories are
+completed and integrated, F-X193 through F-X210, F-X212, F-X213, F-X214, F-X215, F-X217, F-X218, F-X220 and F-X222. Remaining issue and PR repairs follow
 completed dependencies and exclusive source boundaries. CURRENT_SPRINT.md
 records active owners and execution states. F-X192 and F-283 remain at S92 with their contracts,
 dirty worker work, reviews and required evidence retained. Standalone authoring
@@ -3147,3 +3147,12 @@ keeps the frozen40 issues and30 PRs, all existing acceptance and the immutable
 100-script metric. Bibliography, navigation and standalone authoring stay S92.
 
 **Approved native Word font boundary, 2026-10-13**: F-X220 retains four API face kinds and genuine own-renderer and PowerPoint face selection. Native Word acceptance follows its documented one-font-per-name behavior, recording actual synthetic bold and empty native saved bold parts. The user moved native Word multi-face interoperability to F-X223 in S92. This does not move Issue360 or PR361 out of S91. Their native, public, CLI, preservation and authorization gates are qualified at the scoped F-X220 checkpoint. Final integrated sprint gates remain due.
+
+
+## Current dependency-prefix admission, 2026-10-13
+
+F-X211a, F-X215 and F-X218 complete at the reviewed current dependency-prefix checkpoint after root policy admission. Current paired execution measures32 Word and53 PowerPoint controls, all85 passing. Typing/fullstubs qualify through the explicit final-annotation-only bridge. Five verified packages, strict nine-crate Clippy, both WASM graphs and49 unchanged hashes qualify their actual recorded scopes. Original failed runner, genuine stub failure and all prior failed commands remain separate from successful successors.
+
+**Policy checkpoint**: Actual README inventory/examples and immutable registry-graph successors pass at source106b, receipt17b34fb9e839ce65672ad613f2f978654a64e22a6c3346687d3e0b1dbf068982. Root authenticates both exit0 logs and safe cleanup. Earlier137 observed passing policy cases and2 platform skips remain historical. Original141 failures and focused inventory failure08f234 stay retained. This is the scoped composite, not a replayed full141 module.
+
+Twenty-six of29 top-level stories are complete. Parent F-X211 remains running. F-X216 and F-X221 remain approved pending. Word child a and PowerPoint child b are complete, while compatibility child c remains approved pending. No frozen100 score, whole2392 regression green, decoded-media/render authority, full workspace or sprint review is credited here. Intake stays frozen40 issues/30 PRs with264/281 excluded and open. Bibliography, navigation, standalone authoring, historical oracle regeneration and approved Word multi-face interoperability remain S92. No remote closure, main merge, tag, publication or push is claimed.
